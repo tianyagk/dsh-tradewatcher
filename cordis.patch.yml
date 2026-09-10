@@ -1,0 +1,15 @@
+# dsh-tradewatcher bundle patch: inserts the dual-face plugin row into the
+# web profile roster. Applied as a profile bundle layer (the `dsh.bundle.patch`
+# manifest field) over the profile composition.
+#
+# The row is a bare plugin by package name: the node half (exports ".") runs in
+# the host process (quote relay + tradewatcher file store + agent tools +
+# /tradewatcher/* routes), and the `dsh.client` declaration in package.json
+# makes the browser half (exports "./client") load in the web GUI.
+#
+# Install from the repo root with either:
+#   dsh plugin --profile web add file:./dsh-tradewatcher      (or a link: path)
+# or the bundled helper:   bash scripts/install.sh
+- insert:
+    - id: tradewatcher
+      name: 'dsh-tradewatcher'
