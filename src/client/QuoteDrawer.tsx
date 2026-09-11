@@ -4,21 +4,21 @@
  * memoized client-side (host caches back it anyway).
  */
 import React, { useCallback, useEffect, useRef, useState } from 'react'
-import type { KlineData, StockDetail, TrendData } from '../shared/model.ts'
+import type { KlineData, StockDetail, TradeMark, TrendData } from '../shared/model.ts'
 import { api } from './api.ts'
 import { dirClass, fmtAmt, fmtBig, fmtPct, fmtPrice, fmtSigned } from './format.ts'
 import { Btn, ErrorNote, Skeleton } from './ui.tsx'
-import { CandleChart, MultiDayTrend, Sparkline, type CandleBar } from './charts.tsx'
+import { CandleChart, MultiDayTrend, Sparkline, type CandleBar, type CandleMarker, type SparkMarker } from './charts.tsx'
 
 type ChartTab = 'trend' | '5d' | 'day' | 'week' | 'month' | 'year'
 
 const TAB_LABEL: Record<ChartTab, string> = { trend: '分时', '5d': '五日', day: '日K', week: '周K', month: '月K', year: '年K' }
 
 const KLINE_PLAN: Record<'day' | 'week' | 'month' | 'year', { klt: 101 | 102 | 103 | 104; lmt: number }> = {
-  day: { klt: 101, lmt: 120 },
-  week: { klt: 102, lmt: 160 },
-  month: { klt: 103, lmt: 240 },
-  year: { klt: 104, lmt: 30 },
+  day: { klt: 101, lmt: 240 },
+  week: { klt: 102, lmt: 200 },
+  month: { klt: 103, lmt: 120 },
+  year: { klt: 104, lmt: 20 },
 }
 
 type ChartPayload =
@@ -79,6 +79,7 @@ export function QuoteDrawer(props: { secid: string; name: string; redUp: boolean
   const [detail, setDetail] = useState<StockDetail | null>(null)
   const [industry, setIndustry] = useState<{ name: string; pct: number | null } | null>(null)
   const [infoErr, setInfoErr] = useState(false)
+  const [trades, setTrades] = useState<TradeMark[]>([])
   const [retry, setRetry] = useState(0)
   const [containerRef, width] = useContainerWidth()
 
@@ -88,6 +89,7 @@ export function QuoteDrawer(props: { secid: string; name: string; redUp: boolean
     setInfoErr(false)
     api.detail(secid).then((r) => { if (alive) setDetail(r.detail) }).catch(() => { if (alive) setInfoErr(true) })
     api.industry(secid).then((r) => { if (alive) setIndustry(r.industry) }).catch(() => undefined)
+    api.trades(secid).then((r) => { if (alive) setTrades(r.trades) }).catch(() => { if (alive) setTrades([]) })
     return () => { alive = false }
   }, [secid, retry])
 
@@ -188,8 +190,23 @@ export function QuoteDrawer(props: { secid: string; name: string; redUp: boolean
       const t = payload.trend
       const points = t.points.map((p) => ({ t: p.t, value: p.price, label: p.label.slice(11) }))
       const lastUp = points.length > 1 ? points[points.length - 1].value >= (t.prePrice ?? points[0].value) : null
+      // 只在分时（当日）图上标 B/S：取交易时间落在当日区间内的流水
+      const dayMarkers: SparkMarker[] = []
+      if (tab === 'trend' && points.length > 0) {
+        const t0 = points[0].t
+        const t1 = points[points.length - 1].t
+        for (const tr of trades) {
+          if (tr.ts < t0 - 3_600_000 || tr.ts > t1 + 6 * 3_600_000) continue
+          dayMarkers.push({
+            t: tr.ts,
+            value: tr.price,
+            kind: tr.verb,
+            title: `${tr.verb === 'buy' ? '买入' : '卖出'} ${tr.qty} @ ${tr.price}${tr.posName !== null ? ` · ${tr.posName}` : ''}`,
+          })
+        }
+      }
       if (tab === 'trend') {
-        return React.createElement(Sparkline, { points, baseline: t.prePrice, width, height: chartHeight, up: lastUp !== false, upColor: 'var(--tw-up)', downColor: 'var(--tw-down)', timeLabels: true })
+        return React.createElement(Sparkline, { points, markers: dayMarkers, baseline: t.prePrice, width, height: chartHeight, up: lastUp !== false, upColor: 'var(--tw-up)', downColor: 'var(--tw-down)', timeLabels: true })
       }
       // 五日：按日期分组绘制
       const dayMap = new Map<string, { label: string; values: number[] }>()
@@ -202,11 +219,17 @@ export function QuoteDrawer(props: { secid: string; name: string; redUp: boolean
       return React.createElement(MultiDayTrend, { days: [...dayMap.values()], width, height: chartHeight, redUp })
     }
     const bars: CandleBar[] = payload.kline.days.map((d) => ({ date: d.date, open: d.open, close: d.close, high: d.high, low: d.low }))
-    return React.createElement(CandleChart, { bars, width, height: chartHeight, redUp })
+    const klineMarkers: CandleMarker[] = trades
+      .filter((tr) => bars.length > 0 && tr.ts >= Date.parse(`${bars[0].date}T00:00:00`) - 86_400_000 * 8)
+      .map((tr) => ({ date: new Date(tr.ts).toISOString().slice(0, 10), kind: tr.verb, qty: tr.qty, price: tr.price }))
+    return React.createElement(CandleChart, { bars, markers: klineMarkers, width, height: chartHeight, redUp })
   }
 
   // per-tab caption (period/range + baseline info)
   let note = ''
+  const buys = trades.filter((t) => t.verb === 'buy').length
+  const sells = trades.filter((t) => t.verb === 'sell').length
+  const legend = trades.length > 0 && tab !== '5d' ? ` · B 买入 ${buys} 笔 / S 卖出 ${sells} 笔（来自持仓流水）` : ''
   if (payload !== null && err === null) {
     if (payload.kind === 'trend') {
       const t = payload.trend
@@ -222,7 +245,9 @@ export function QuoteDrawer(props: { secid: string; name: string; redUp: boolean
       const k = payload.kline
       const first = k.days[0]
       const last = k.days[k.days.length - 1]
-      if (first !== undefined && last !== undefined) note = `共 ${k.days.length} 根 · ${first.date} ~ ${last.date}`
+      if (first !== undefined && last !== undefined) {
+        note = `共 ${k.days.length} 根 · ${first.date} ~ ${last.date}${k.stale === true ? ' · 缓存数据（上游暂不可用）' : ''}`
+      }
     }
   }
 
@@ -240,7 +265,9 @@ export function QuoteDrawer(props: { secid: string; name: string; redUp: boolean
       ),
       React.createElement('div', { ref: containerRef, className: 'tw-drawer-body' },
         chartBody(),
-        note !== '' ? React.createElement('div', { className: 'tw-chartnote' }, note) : null,
+        note !== '' || legend !== ''
+          ? React.createElement('div', { className: 'tw-chartnote' }, `${note}${legend}`)
+          : null,
       ),
       React.createElement('div', { className: 'tw-drawer-foot' },
         React.createElement('span', { className: 'tw-muted' }, `${name} · ${secid}`),

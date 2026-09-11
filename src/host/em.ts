@@ -391,39 +391,218 @@ export async function fetchTrend(secid: string, ndays = 1): Promise<TrendData | 
 
 // ───────────────────────────── daily kline ────────────────────────────────
 
-/** Last N bars of one period: klt 101=日K 102=周K 103=月K 104=年K. */
-export async function fetchKline(secid: string, klt: 101 | 102 | 103 | 104 = 101, lmt = 6): Promise<KlineData | null> {
-  if (!SECID_RE.test(secid)) return null
-  const fields2 = 'f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61'
-  const key = `kline:${secid}:${klt}:${lmt}`
-  const json = await ttlCache(key, 300_000, () =>
-    fetchAny(
-      HISTORY_HOSTS,
-      `/api/qt/stock/kline/get?secid=${encodeURIComponent(secid)}&klt=${klt}&fqt=0&lmt=${lmt}&end=20500101&fields1=f1,f2,f3&fields2=${fields2}`,
-    ),
-  )
-  const body = bodyOf(json)
-  const data = body?.data as { klines?: unknown } | undefined
-  const raw = Array.isArray(data?.klines) ? data.klines : []
-  const days: DayBar[] = []
-  for (const r of raw) {
-    if (typeof r !== 'string') continue
-    const p = r.split(',')
-    if (p.length < 6) continue
-    const close = num(p[2])
-    if (close === null) continue
-    days.push({
-      date: p[0],
-      open: num(p[1]) ?? close,
-      close,
-      high: num(p[3]) ?? close,
-      low: num(p[4]) ?? close,
-      vol: num(p[5]),
-      pct: num(p[8]),
-    })
+// ───────────────────────── kline cache & fetch ───────────────────────────
+/**
+ * K 线历史在本地按 (secid, 周期) 缓存：首次查看一次性拉全量，之后只拉最新几根
+ * 做增量合并，上游失败时直接吃本地缓存 —— 既省请求（push2his 限流严重），
+ * 也保证图表永远有数据。
+ *   101=日K  102=周K  103=月K  104=年K（由月K本地重采样，上游 104 实际是季K）
+ */
+const KLINE_FULL_LMT: Record<number, number> = { 101: 800, 102: 400, 103: 240 }
+const KLINE_RECENT_LMT: Record<number, number> = { 101: 10, 102: 5, 103: 3 }
+const KLINE_CAP: Record<number, number> = { 101: 1200, 102: 800, 103: 600 }
+
+interface KlineEntry {
+  bars: DayBar[]
+  loaded: boolean
+  updatedAt: number
+}
+
+const klineMem = new Map<string, KlineEntry>()
+
+function klineFile(secid: string, klt: number): string {
+  return join(dataHome(), 'klines', `${secid}_${klt}.json`)
+}
+
+async function loadKlineCache(secid: string, klt: number): Promise<KlineEntry> {
+  const key = `${secid}|${klt}`
+  const hit = klineMem.get(key)
+  if (hit !== undefined && hit.loaded) return hit
+  const entry: KlineEntry = hit ?? { bars: [], loaded: false, updatedAt: 0 }
+  try {
+    const raw = await readFile(klineFile(secid, klt), 'utf8')
+    const parsed = JSON.parse(raw) as { bars?: DayBar[]; updatedAt?: number }
+    if (Array.isArray(parsed.bars) && parsed.bars.length > 0) {
+      entry.bars = parsed.bars.filter((b) => b !== null && typeof b.date === 'string' && Number.isFinite(b.close))
+      entry.updatedAt = typeof parsed.updatedAt === 'number' ? parsed.updatedAt : 0
+    }
+  } catch {
+    /* 首次：无缓存文件 */
   }
-  if (days.length === 0) return null
-  return { secid, days }
+  entry.loaded = true
+  klineMem.set(key, entry)
+  return entry
+}
+
+async function saveKlineCache(secid: string, klt: number, bars: DayBar[]): Promise<void> {
+  try {
+    await mkdir(join(dataHome(), 'klines'), { recursive: true })
+    await writeFile(klineFile(secid, klt), JSON.stringify({ v: 1, secid, klt, updatedAt: Date.now(), bars }), 'utf8')
+  } catch (error) {
+    console.warn('[tradewatcher] 保存K线缓存失败:', String(error))
+  }
+}
+
+/** 按日期合并（新覆盖旧、排序、截断）——纯函数，便于测试。 */
+export function mergeBars(oldBars: readonly DayBar[], freshBars: readonly DayBar[], cap: number): DayBar[] {
+  const byDate = new Map<string, DayBar>()
+  for (const b of oldBars) byDate.set(b.date, b)
+  for (const b of freshBars) byDate.set(b.date, b)
+  const merged = [...byDate.values()].sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0))
+  return cap > 0 && merged.length > cap ? merged.slice(merged.length - cap) : merged
+}
+
+/** 月K → 年K 重采样（开盘取首月、收盘取末月、高低取极值、量额求和）。 */
+export function resampleYearly(monthly: readonly DayBar[]): DayBar[] {
+  const out: DayBar[] = []
+  let curYear = ''
+  let cur: DayBar | null = null
+  let prevClose: number | null = null
+  for (const b of monthly) {
+    const year = b.date.slice(0, 4)
+    if (cur === null || year !== curYear) {
+      if (cur !== null) out.push(cur)
+      cur = { date: b.date, open: b.open, close: b.close, high: b.high, low: b.low, vol: b.vol, pct: null }
+      curYear = year
+    } else {
+      cur.date = b.date
+      cur.close = b.close
+      cur.high = Math.max(cur.high, b.high)
+      cur.low = Math.min(cur.low, b.low)
+      cur.vol = (cur.vol ?? 0) + (b.vol ?? 0)
+    }
+  }
+  if (cur !== null) out.push(cur)
+  for (const bar of out) {
+    const base = prevClose ?? bar.open
+    bar.pct = base > 0 ? Math.round(((bar.close - base) / base) * 10000) / 100 : null
+    prevClose = bar.close
+  }
+  return out
+}
+
+/** 东财 secid → 腾讯代码（sh/sz/hk/us）；指数/期货等返回 null。 */
+function tencentSymbol(secid: string): string | null {
+  const dot = secid.indexOf('.')
+  if (dot <= 0) return null
+  const mkt = secid.slice(0, dot)
+  const code = secid.slice(dot + 1)
+  if (mkt === '1') return `sh${code}`
+  if (mkt === '0') return `sz${code}`
+  if (mkt === '116') return `hk${code}`
+  if (mkt === '105' || mkt === '106' || mkt === '107') return `us${code.toUpperCase()}`
+  return null
+}
+
+/**
+ * 腾讯历史 K 线兜底源（东财 push2his 限流严重时救命）。
+ * 统一走「不复权」，与东财 fqt=0 同口径，避免混源污染本地缓存。
+ * 行格式 [date, open, close, high, low, volume]。
+ */
+async function requestKlineFromTencent(secid: string, klt: number, lmt: number): Promise<DayBar[] | null> {
+  const sym = tencentSymbol(secid)
+  if (sym === null) return null
+  const period = klt === 101 ? 'day' : klt === 102 ? 'week' : 'month'
+  const path = `/appstock/app/fqkline/get?param=${sym},${period},,,${Math.min(1000, Math.max(5, lmt))},`
+  try {
+    const json = (await fetchFromHost('web.ifzq.gtimg.cn', path, 9000)) as {
+      data?: Record<string, Record<string, unknown>>
+    }
+    const node = json?.data?.[sym]
+    if (node === undefined) return null
+    const rows = (node[period] ?? node[`qfq${period}`]) as unknown
+    if (!Array.isArray(rows)) return null
+    const bars: DayBar[] = []
+    for (const r of rows) {
+      if (!Array.isArray(r) || r.length < 5) continue
+      const close = num(r[2])
+      const open = num(r[1])
+      if (close === null || open === null) continue
+      bars.push({
+        date: String(r[0]),
+        open,
+        close,
+        high: num(r[3]) ?? close,
+        low: num(r[4]) ?? close,
+        vol: r.length > 5 ? num(r[5]) : null,
+        pct: null,
+      })
+    }
+    return bars.length > 0 ? bars : null
+  } catch {
+    return null
+  }
+}
+
+/** 单主机取 K 线；空数组视为失败（push2delay/push2 会返回 200 + 空）。优先腾讯。 */
+async function requestKlineRaw(secid: string, klt: number, lmt: number): Promise<DayBar[] | null> {
+  const fromTencent = await requestKlineFromTencent(secid, klt, lmt)
+  if (fromTencent !== null) return fromTencent
+  const fields2 = 'f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61'
+  const path = `/api/qt/stock/kline/get?secid=${encodeURIComponent(secid)}&klt=${klt}&fqt=0&lmt=${lmt}&end=20500101&fields1=f1,f2,f3&fields2=${fields2}`
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    for (const host of HISTORY_HOSTS) {
+      try {
+        const json = await fetchFromHost(host, path, 9000)
+        const data = (bodyOf(json)?.data ?? null) as { klines?: unknown } | null
+        const raw = Array.isArray(data?.klines) ? data?.klines ?? [] : []
+        const bars: DayBar[] = []
+        for (const r of raw) {
+          if (typeof r !== 'string') continue
+          const p = r.split(',')
+          if (p.length < 6) continue
+          const close = num(p[2])
+          if (close === null) continue
+          bars.push({
+            date: p[0],
+            open: num(p[1]) ?? close,
+            close,
+            high: num(p[3]) ?? close,
+            low: num(p[4]) ?? close,
+            vol: num(p[5]),
+            pct: num(p[8]),
+          })
+        }
+        if (bars.length > 0) return bars
+      } catch {
+        /* 换主机 / 重试 */
+      }
+    }
+    if (attempt === 0) await new Promise((r) => setTimeout(r, 500))
+  }
+  return null
+}
+
+/** 取 K 线：命中本地缓存时只增量更新最新几根；上游不可用时回退缓存。 */
+export async function fetchKline(
+  secid: string,
+  klt: 101 | 102 | 103 | 104 = 101,
+  lmt = 6,
+): Promise<KlineData | null> {
+  if (!SECID_RE.test(secid)) return null
+  const baseKlt = klt === 104 ? 103 : klt
+  const entry = await loadKlineCache(secid, baseKlt)
+  const needFull = entry.bars.length === 0
+  const key = `kline:${secid}:${baseKlt}:${needFull ? 'full' : 'incr'}`
+  const fetched = await ttlCache<DayBar[] | null>(key, needFull ? 3600_000 : 120_000, () =>
+    requestKlineRaw(secid, baseKlt, needFull ? KLINE_FULL_LMT[baseKlt] : KLINE_RECENT_LMT[baseKlt]),
+  )
+  let stale = false
+  if (fetched !== null && fetched.length > 0) {
+    const before = entry.bars.length
+    const beforeLast = entry.bars[entry.bars.length - 1]?.date ?? ''
+    entry.bars = mergeBars(entry.bars, fetched, KLINE_CAP[baseKlt])
+    entry.updatedAt = Date.now()
+    const afterLast = entry.bars[entry.bars.length - 1]?.date ?? ''
+    if (before !== entry.bars.length || beforeLast !== afterLast) void saveKlineCache(secid, baseKlt, entry.bars)
+  } else if (entry.bars.length === 0) {
+    return null
+  } else {
+    stale = true
+  }
+  const series = baseKlt === 103 && klt === 104 ? resampleYearly(entry.bars) : entry.bars
+  const want = Math.max(1, Math.min(Math.round(lmt) || series.length, series.length))
+  return { secid, days: series.slice(series.length - want), stale }
 }
 
 // ─────────────────────────────── boards ───────────────────────────────────

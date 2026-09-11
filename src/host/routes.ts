@@ -132,8 +132,9 @@ export function makeTradeRoutes(store: DataStore, trustedHosts: readonly string[
           if (!SECID_RE.test(secid)) throw new Error('secid 非法')
           const rawKlt = Number(queryOf(req).get('klt') ?? 101)
           const klt = rawKlt === 102 || rawKlt === 103 || rawKlt === 104 ? (rawKlt as 101 | 102 | 103 | 104) : 101
-          const rawLmt = Number(queryOf(req).get('lmt') ?? 0) || 0
-          const lmt = Math.min(1000, Math.max(5, rawLmt)) || (klt === 101 ? 120 : klt === 102 ? 160 : klt === 103 ? 240 : 30)
+          const rawLmt = Number(queryOf(req).get('lmt') ?? 0)
+          const defLmt = klt === 101 ? 240 : klt === 102 ? 200 : klt === 103 ? 120 : 20
+          const lmt = Number.isFinite(rawLmt) && rawLmt >= 5 ? Math.min(1000, Math.round(rawLmt)) : defLmt
           const kline = await em.fetchKline(secid, klt, lmt)
           send(res, 200, { kline })
         } catch (error) {
@@ -263,6 +264,37 @@ export function makeTradeRoutes(store: DataStore, trustedHosts: readonly string[
             return
           }
           send(res, 405, { error: 'method not allowed' })
+        } catch (error) {
+          fail(res, error)
+        }
+      },
+    },
+    {
+      kind: 'exact',
+      path: '/tradewatcher/trades',
+      handler: async (req, res) => {
+        if (!needGate(req, res)) return
+        try {
+          const secid = String(queryOf(req).get('secid') ?? '').toUpperCase()
+          if (!SECID_RE.test(secid)) throw new Error('secid 非法')
+          await store.init()
+          const port = store.portData()
+          const groupName = new Map(port.groups.map((g) => [g.id, g.name]))
+          const posName = new Map(port.items.map((p) => [p.id, p.name]))
+          const trades = store
+            .ledgerEntries()
+            .filter((e) => (e.verb === 'buy' || e.verb === 'sell') && e.secid === secid && typeof e.price === 'number' && typeof e.qty === 'number')
+            .sort((a, b) => a.ts - b.ts)
+            .map((e) => ({
+              id: e.id,
+              ts: e.ts,
+              verb: e.verb as 'buy' | 'sell',
+              qty: e.qty as number,
+              price: e.price as number,
+              posName: e.posId !== undefined ? posName.get(e.posId) ?? e.name ?? null : null,
+              groupName: e.groupId !== undefined ? groupName.get(e.groupId) ?? null : null,
+            }))
+          send(res, 200, { trades })
         } catch (error) {
           fail(res, error)
         }

@@ -118,6 +118,19 @@ export interface DayBar {
 export interface KlineData {
   secid: string
   days: DayBar[]
+  /** true = 上游不可用，返回的是本地缓存（数据可能不是最新） */
+  stale?: boolean
+}
+
+/** 一笔买卖（图上的 B/S 标记，来自持仓流水）。 */
+export interface TradeMark {
+  id: string
+  ts: number
+  verb: 'buy' | 'sell'
+  qty: number
+  price: number
+  posName: string | null
+  groupName: string | null
 }
 
 /** A search candidate (EM suggest). */

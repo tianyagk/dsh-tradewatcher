@@ -12,6 +12,7 @@ import type {
   TrendData,
   WatchData,
   LedgerView,
+  TradeMark,
 } from '../shared/model.ts'
 
 export class ApiError extends Error {
@@ -56,6 +57,9 @@ export const api = {
   },
   kline(secid: string, klt: 101 | 102 | 103 | 104 = 101, lmt = 120): Promise<{ kline: KlineData | null }> {
     return request(`/tradewatcher/kline?secid=${encodeURIComponent(secid)}&klt=${klt}&lmt=${lmt}`)
+  },
+  trades(secid: string): Promise<{ trades: TradeMark[] }> {
+    return request(`/tradewatcher/trades?secid=${encodeURIComponent(secid)}`)
   },
   industry(secid: string): Promise<{ industry: { name: string; pct: number | null } | null }> {
     return request(`/tradewatcher/industry?secid=${encodeURIComponent(secid)}`)

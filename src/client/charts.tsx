@@ -16,8 +16,17 @@ function polylinePath(points: Array<[number, number]>): string {
   return points.map(([x, y], i) => `${i === 0 ? 'M' : 'L'}${x.toFixed(1)},${y.toFixed(1)}`).join(' ')
 }
 
+/** 图上的一笔买卖（B/S 标记） */
+export interface SparkMarker {
+  t: number
+  value: number
+  kind: 'buy' | 'sell'
+  title?: string
+}
+
 export interface SparklineProps {
   points: SparkPoint[]
+  markers?: SparkMarker[]
   /** baseline value (dashed line); pass null to hide */
   baseline?: number | null
   width: number
@@ -103,6 +112,41 @@ export function Sparkline(props: SparklineProps): React.ReactElement {
         })
       : null,
     React.createElement('circle', { cx: last[0], cy: last[1], r: 2.6, style: { fill: color, stroke: 'var(--tw-card)' }, strokeWidth: 1 }),
+    // B/S 标记：按压缩后的时间轴定位（与价格线同一坐标系）
+    ...(props.markers ?? []).map((m, i) => {
+      const idx = ((): number => {
+        const n = points.length
+        if (n === 0) return 0
+        if (m.t <= points[0].t) return 0
+        if (m.t >= points[n - 1].t) return n - 1
+        let lo = 0
+        let hi = n - 1
+        while (lo < hi) {
+          const mid = (lo + hi + 1) >> 1
+          if (points[mid].t <= m.t) lo = mid
+          else hi = mid - 1
+        }
+        return lo
+      })()
+      const mx = padX + (eff[idx] / effSpan) * innerW
+      const my = padTop + ((hi - m.value) / range) * innerH
+      const isBuy = m.kind === 'buy'
+      const mc = isBuy ? upColor : downColor
+      const label = isBuy ? 'B' : 'S'
+      const ty = isBuy ? Math.min(my + 16, padTop + innerH - 2) : Math.max(my - 7, padTop + 8)
+      return React.createElement('g', { key: `m${i}` },
+        React.createElement('line', { x1: mx, y1: my, x2: mx, y2: ty, style: { stroke: mc }, strokeWidth: 1, opacity: 0.7 }),
+        React.createElement('circle', { cx: mx, cy: my, r: 3, style: { fill: mc, stroke: 'var(--tw-card)' }, strokeWidth: 1 },
+          m.title !== undefined ? React.createElement('title', null, m.title) : null,
+        ),
+        React.createElement('text', {
+          x: mx,
+          y: isBuy ? ty + 9 : ty - 2,
+          textAnchor: 'middle',
+          style: { fill: mc, fontSize: 10, fontWeight: 700, paintOrder: 'stroke', stroke: 'var(--tw-card)', strokeWidth: 2.5 },
+        }, label),
+      )
+    }),
     timeLabels === true && points.length >= 2
       ? React.createElement('g', { style: { fontSize: 9 } },
           ...[0, 1].map((k) => {
@@ -237,11 +281,19 @@ export interface CandleBar {
   low: number
 }
 
+export interface CandleMarker {
+  date: string
+  kind: 'buy' | 'sell'
+  qty?: number
+  price?: number
+}
+
 export function CandleChart(props: {
   bars: CandleBar[]
   width: number
   height: number
   redUp: boolean
+  markers?: CandleMarker[]
 }): React.ReactElement {
   const { width, height, redUp } = props
   const bars = props.bars
@@ -284,6 +336,53 @@ export function CandleChart(props: {
       rx: 0.6,
     }))
   })
+  // B/S 标记：按日期归入所属 K 线（周/月/年 K 自动落到该周期的那根）
+  const barIndex = (date: string): number => {
+    if (date <= bars[0].date) return 0
+    if (date >= bars[bars.length - 1].date) return bars.length - 1
+    let lo = 0
+    let hi = bars.length - 1
+    while (lo < hi) {
+      const mid = (lo + hi + 1) >> 1
+      if (bars[mid].date <= date) lo = mid
+      else hi = mid - 1
+    }
+    return lo
+  }
+  const grouped = new Map<number, { buy: number; sell: number }>()
+  for (const m of props.markers ?? []) {
+    const i = barIndex(m.date)
+    const g = grouped.get(i) ?? { buy: 0, sell: 0 }
+    if (m.kind === 'buy') g.buy += 1
+    else g.sell += 1
+    grouped.set(i, g)
+  }
+  for (const [i, g] of grouped) {
+    const b = bars[i]
+    const x = padX + step * i + step / 2
+    const label = (n: number, kind: string): string => (n > 1 ? `${kind}${n}` : kind)
+    if (g.buy > 0) {
+      const my = Math.min(y(b.low) + 13, padTop + innerH - 1)
+      children.push(React.createElement('g', { key: `mb${i}` },
+        React.createElement('line', { x1: x, y1: y(b.low), x2: x, y2: my - 4, style: { stroke: redUp ? 'var(--tw-up)' : 'var(--tw-down)' }, strokeWidth: 1, opacity: 0.7 }),
+        React.createElement('text', {
+          x, y: my, textAnchor: 'middle',
+          style: { fill: redUp ? 'var(--tw-up)' : 'var(--tw-down)', fontSize: 9.5, fontWeight: 700, paintOrder: 'stroke', stroke: 'var(--tw-card)', strokeWidth: 2.5 },
+        }, label(g.buy, 'B')),
+      ))
+    }
+    if (g.sell > 0) {
+      const my = Math.max(y(b.high) - 8, padTop + 8)
+      children.push(React.createElement('g', { key: `ms${i}` },
+        React.createElement('line', { x1: x, y1: y(b.high), x2: x, y2: my + 4, style: { stroke: redUp ? 'var(--tw-down)' : 'var(--tw-up)' }, strokeWidth: 1, opacity: 0.7 }),
+        React.createElement('text', {
+          x, y: my, textAnchor: 'middle',
+          style: { fill: redUp ? 'var(--tw-down)' : 'var(--tw-up)', fontSize: 9.5, fontWeight: 700, paintOrder: 'stroke', stroke: 'var(--tw-card)', strokeWidth: 2.5 },
+        }, label(g.sell, 'S')),
+      ))
+    }
+  }
+
   const first = bars[0]
   const last = bars[bars.length - 1]
   const hiText = `高 ${hi >= 1e4 ? hi.toFixed(0) : hi.toFixed(2)}`

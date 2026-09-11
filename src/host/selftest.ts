@@ -8,7 +8,7 @@ import { join } from 'node:path'
 import { DataStore, replayPosition, dataHome } from './store.ts'
 import { assemblePortfolio, derivePosition, ledgerViews, shanghaiDayStart, verbLabel } from './portfolio.ts'
 import * as em from './em.ts'
-import { fillLastGood } from './em.ts'
+import { fillLastGood, mergeBars, resampleYearly } from './em.ts'
 import { losslessJson } from './tools.ts'
 import { TW_ROWS } from '../shared/model.ts'
 import type { QuoteRow } from '../shared/model.ts'
@@ -139,6 +139,27 @@ async function main(): Promise<void> {
       ok(row.dilutedCost !== null && Math.abs(row.dilutedCost - 12) < 1e-9, `摊薄成本 → 12 (got ${row.dilutedCost})`)
       ok(row.dilutedPnl !== null && Math.abs(row.dilutedPnl - -50) < 1e-6, `持仓盈亏(摊薄) → -50 (got ${row.dilutedPnl})`)
       ok(Math.abs((row.floatPnl + row.realized) - (row.dilutedPnl ?? 0)) < 1e-6, '摊薄盈亏 == 均价浮盈 + 已实现')
+    }
+
+    // K线合并与年K重采样（纯函数）
+    {
+      const d = (date: string, close: number, extra: Partial<{ open: number; high: number; low: number }> = {}) =>
+        ({ date, open: extra.open ?? close, close, high: extra.high ?? close, low: extra.low ?? close, vol: 1, pct: 0 })
+      const merged = mergeBars([d('2024-01-01', 10), d('2024-01-02', 11)], [d('2024-01-02', 12), d('2024-01-03', 13)], 10)
+      ok(merged.length === 3 && merged[1].close === 12 && merged[2].close === 13, `mergeBars 覆盖+追加 (got ${merged.map((b) => b.close).join(',')})`)
+      const capped = mergeBars([d('2024-01-01', 1), d('2024-01-02', 2)], [d('2024-01-03', 3)], 2)
+      ok(capped.length === 2 && capped[0].close === 2, 'mergeBars 截断保留最新')
+      const months = [
+        d('2025-01-31', 12, { open: 10, high: 13, low: 9 }),
+        d('2025-02-28', 11, { open: 12, high: 12.5, low: 10.5 }),
+        d('2026-01-30', 15, { open: 11, high: 16, low: 10 }),
+      ]
+      const years = resampleYearly(months)
+      ok(years.length === 2, `年K 聚合为 2 根 (got ${years.length})`)
+      ok(years[0].date === '2025-02-28' && years[0].open === 10 && years[0].close === 11 && years[0].high === 13 && years[0].low === 9,
+        `年K 首根 OHLC 正确 (got ${JSON.stringify(years[0])})`)
+      ok(years[1].close === 15 && years[1].pct !== null && Math.abs((years[1].pct as number) - 36.36) < 0.05,
+        `年K 次根涨跌幅基于上年收盘 (got ${years[1].pct})`)
     }
 
     // lossless-JSON sanitizer (agent tool output contract)
