@@ -22,9 +22,14 @@ const KLINE_PLAN: Record<'day' | 'week' | 'month' | 'year', { klt: 101 | 102 | 1
   year: { klt: 104, lmt: 20 },
 }
 
+type KlineTab = 'day' | 'week' | 'month' | 'year'
+
+/** payload 记住它属于哪个 tab —— 切周期时旧数据不会拿去渲染新周期 */
 type ChartPayload =
-  | { kind: 'trend'; trend: TrendData }
-  | { kind: 'kline'; kline: KlineData }
+  | { kind: 'trend'; tab: 'trend' | '5d'; trend: TrendData }
+  | { kind: 'kline'; tab: KlineTab; kline: KlineData }
+
+const isKlineTab = (t: ChartTab): t is KlineTab => t === 'day' || t === 'week' || t === 'month' || t === 'year'
 
 /** client-side memo: one resolved payload per secid+tab (host TTLs back it). */
 const payloadCache = new Map<string, { exp: number; value: ChartPayload | null }>()
@@ -37,17 +42,18 @@ function fetchPayload(secid: string, tab: ChartTab): Promise<ChartPayload | null
     if (tab === 'trend') {
       const { trend } = await api.trend(secid, 1)
       if (trend === null) return null
-      return { kind: 'trend', trend }
+      return { kind: 'trend', tab: 'trend', trend }
     }
     if (tab === '5d') {
       const { trend } = await api.trend(secid, 5)
       if (trend === null) return null
-      return { kind: 'trend', trend }
+      return { kind: 'trend', tab: '5d', trend }
     }
-    const plan = KLINE_PLAN[tab as 'day' | 'week' | 'month' | 'year']
+    if (!isKlineTab(tab)) return null
+    const plan = KLINE_PLAN[tab]
     const { kline } = await api.kline(secid, plan.klt, plan.lmt)
     if (kline === null) return null
-    return { kind: 'kline', kline }
+    return { kind: 'kline', tab, kline }
   })()
   void p.then((value) => {
     const ttl = tab === 'trend' || tab === '5d' ? 90_000 : 600_000
@@ -99,6 +105,7 @@ export function QuoteDrawer(props: { secid: string; name: string; redUp: boolean
     let alive = true
     setLoading(true)
     setErr(null)
+    setPayload((prev) => (prev !== null && prev.tab === tab ? prev : null))
     fetchPayload(secid, tab)
       .then((value) => {
         if (!alive) return
@@ -187,7 +194,11 @@ export function QuoteDrawer(props: { secid: string; name: string; redUp: boolean
         React.createElement(Btn, { onClick: () => setRetry((x) => x + 1) }, '重试'),
       )
     }
-    if (payload === null) return null
+    if (payload === null || payload.tab !== tab) {
+      // 旧周期的数据尚未被替换：显示骨架而不是拿它去渲染
+      return React.createElement('div', { 'aria-busy': true, 'aria-label': '图表加载中' },
+        React.createElement('div', { className: 'tw-skel', style: { height: chartHeight, width: '100%' } }))
+    }
     if (payload.kind === 'trend') {
       const t = payload.trend
       const points = t.points.map((p) => ({ t: p.t, value: p.price, label: p.label.slice(11) }))
@@ -219,6 +230,7 @@ export function QuoteDrawer(props: { secid: string; name: string; redUp: boolean
           macdH: 64,
         })
       }
+      if (tab !== '5d') return null
       // 五日：连续拼接（午休/隔夜已由压缩时间轴折叠），交易日之间画分隔线
       const pts = t.points.map((p) => ({ t: p.t, value: p.price, vol: p.vol, avg: p.avg, label: p.label }))
       const breaks: number[] = []
@@ -237,6 +249,8 @@ export function QuoteDrawer(props: { secid: string; name: string; redUp: boolean
         macdH: 62,
       })
     }
+    if (!isKlineTab(tab)) return null
+    const plan = KLINE_PLAN[tab]
     const bars = payload.kline.days.map((d) => ({ date: d.date, open: d.open, close: d.close, high: d.high, low: d.low, vol: d.vol }))
     const klineMarkers: CandleMarker[] = trades
       .filter((tr) => bars.length > 0 && tr.ts >= Date.parse(`${bars[0].date}T00:00:00`) - 86_400_000 * 8)
@@ -247,7 +261,7 @@ export function QuoteDrawer(props: { secid: string; name: string; redUp: boolean
       markers: klineMarkers,
       width,
       redUp,
-      klt: KLINE_PLAN[tab as 'day' | 'week' | 'month' | 'year'].klt,
+      klt: plan.klt,
       mainH: 230,
       volH: 54,
       macdH: 64,
