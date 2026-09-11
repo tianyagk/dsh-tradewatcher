@@ -10,6 +10,7 @@ import { assemblePortfolio, derivePosition, ledgerViews, shanghaiDayStart, verbL
 import * as em from './em.ts'
 import { fillLastGood, mergeBars, resampleYearly } from './em.ts'
 import { losslessJson } from './tools.ts'
+import { canonicalEconomy, macroEventsFromEm, macroImportance, parseEmDate } from './calendar.ts'
 import { TW_ROWS } from '../shared/model.ts'
 import type { QuoteRow } from '../shared/model.ts'
 
@@ -139,6 +140,31 @@ async function main(): Promise<void> {
       ok(row.dilutedCost !== null && Math.abs(row.dilutedCost - 12) < 1e-9, `摊薄成本 → 12 (got ${row.dilutedCost})`)
       ok(row.dilutedPnl !== null && Math.abs(row.dilutedPnl - -50) < 1e-6, `持仓盈亏(摊薄) → -50 (got ${row.dilutedPnl})`)
       ok(Math.abs((row.floatPnl + row.realized) - (row.dilutedPnl ?? 0)) < 1e-6, '摊薄盈亏 == 均价浮盈 + 已实现')
+    }
+
+    // 财经日历：东财宏观行解析（纯函数，fixture 取自真实返回）
+    {
+      const rows = [
+        { STARTDATE: '2026/9/17 2:00:00', ENDDATE: '2026/9/17 0:00:00', FINCODE: '1', FINNAME: '美国:联邦基金利率目标:上限(报告期:2026年09月)' },
+        { STARTDATE: '2026/9/16 2:00:00', ENDDATE: '2026/9/17 0:00:00', FINCODE: '2', FINNAME: '美联储议息会议' },
+        { STARTDATE: '2026/9/9 9:30:00', ENDDATE: '2026/9/9 0:00:00', FINCODE: '3', FINNAME: '中国:CPI:同比(报告期:2026年08月)' },
+        { STARTDATE: '2026/9/7 12:00:00', ENDDATE: '2026/9/7 0:00:00', FINCODE: '4', FINNAME: '泰国:CPI:同比(报告期:2026年08月)' },
+        { STARTDATE: '2026/8/30 0:00:00', ENDDATE: '2026/9/3 0:00:00', FINCODE: '5', FINNAME: '8月30日至9月3日,国家主席习近平出席2026年上海合作组织峰会' },
+      ]
+      const evs = macroEventsFromEm(rows)
+      const fed = evs.find((e) => e.title.includes('联邦基金利率'))!
+      const fomc = evs.find((e) => e.title === '美联储议息会议')!
+      const cn = evs.find((e) => e.title.startsWith('中国 CPI'))!
+      const summit = evs.find((e) => e.title.includes('上海合作组织'))!
+      ok(evs.length === 4, `非核心经济体被过滤 (got ${evs.length})`)
+      ok(evs.every((e) => e.autoKey !== undefined && e.autoKey.startsWith('macro:')), '宏观事件 autoKey 前缀')
+      ok(fed.category === 'macro-intl' && fed.time === '02:00' && fed.importance === 3, `美国利率决议 → 国际宏观/02:00/高 (got ${fed.category}/${String(fed.time)}/${fed.importance})`)
+      ok(fomc.category === 'macro-intl' && fomc.endDate === '2026-09-17' && fomc.time === '02:00', `美联储议息会议跨日 (got ${String(fomc.endDate)})`)
+      ok(cn.category === 'macro-cn' && cn.date === '2026-09-09', `中国 CPI → 国内宏观 (got ${cn.category})`)
+      ok(summit.category === 'other' && summit.endDate === '2026-09-03' && summit.time === undefined, `无国家前缀事件 → 其他且 00:00 视为未定时刻`)
+      ok(parseEmDate('2026/9/15 0:00:00', '2026/9/15 0:00:00')?.time === undefined, '00:00 省略时刻')
+      ok(canonicalEconomy('美国EIA原油库存') === '美国' && canonicalEconomy('欧元区19国') === '欧元区' && canonicalEconomy('泰国') === null, '经济体归一化')
+      ok(macroImportance('美国:非农就业人数:季调(报告期:2026年08月)') === 3 && macroImportance('中国：库存:铁矿石:46港') === 1, '重要性启发式')
     }
 
     // K线合并与年K重采样（纯函数）

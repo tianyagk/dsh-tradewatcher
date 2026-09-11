@@ -98,7 +98,9 @@ export function CalendarPage(_props: { prefs: PortPrefs }): React.ReactElement {
       list.push(e)
       m.set(e.date, list)
     }
-    for (const list of m.values()) list.sort((a, b) => b.importance - a.importance)
+    for (const list of m.values()) {
+      list.sort((a, b) => (b.importance - a.importance) || (a.time ?? '99:99').localeCompare(b.time ?? '99:99'))
+    }
     return m
   }, [visible])
 
@@ -132,7 +134,7 @@ export function CalendarPage(_props: { prefs: PortPrefs }): React.ReactElement {
     React.createElement('span', {
       key: e.id,
       className: 'tw-cal-pill',
-      title: `${e.title}${e.note !== undefined ? ` — ${e.note}` : ''}`,
+      title: `${e.time !== undefined ? `${e.time} ` : ''}${e.title}${e.note !== undefined ? ` — ${e.note}` : ''}`,
       style: { color: IMP_COLOR[e.importance], borderColor: IMP_COLOR[e.importance] },
       onClick: (ev: React.MouseEvent) => {
         ev.stopPropagation()
@@ -224,7 +226,8 @@ export function CalendarPage(_props: { prefs: PortPrefs }): React.ReactElement {
             React.createElement('div', { key: e.id, className: 'tw-wrow', style: { cursor: 'pointer' }, onClick: () => setDayOpen(e.date) },
               React.createElement('span', { className: 'tw-muted', style: { fontFamily: 'var(--tw-mono)', fontSize: 11 } }, e.date),
               React.createElement('div', { className: 'nm' },
-                React.createElement('b', { style: { color: IMP_COLOR[e.importance] } }, e.title),
+                React.createElement('b', { style: { color: IMP_COLOR[e.importance] } },
+                  `${e.time !== undefined ? `${e.time} ` : ''}${e.title}`),
                 React.createElement('small', null, `${CAL_CATEGORY_LABEL[e.category]}${e.symbol !== undefined ? ` · ${e.symbol}` : ''}${e.note !== undefined ? ` · ${e.note}` : ''}${e.source === 'auto' ? ' · 自动' : ''}`),
               ),
               React.createElement('span', { className: 'tw-badge', style: { color: IMP_COLOR[e.importance], borderColor: IMP_COLOR[e.importance] } }, IMP_LABEL[e.importance]),
@@ -270,8 +273,12 @@ function DayModal(props: {
       : props.events.map((e) =>
           React.createElement('div', { key: e.id, className: 'tw-cal-card', style: { borderLeftColor: IMP_COLOR[e.importance] } },
             React.createElement('div', { style: { display: 'flex', alignItems: 'baseline', gap: 8, flexWrap: 'wrap' } },
+              e.time !== undefined
+                ? React.createElement('span', { style: { fontFamily: 'var(--tw-mono)', fontSize: 11.5, color: 'var(--tw-fg-dim)' } }, e.time)
+                : null,
               React.createElement('b', { style: { color: IMP_COLOR[e.importance], fontSize: 13 } }, e.title),
               React.createElement('span', { className: 'tw-badge' }, `${CAL_CATEGORY_LABEL[e.category]} · ${IMP_LABEL[e.importance]}`),
+              e.endDate !== undefined ? React.createElement('span', { className: 'tw-badge' }, `至 ${e.endDate}`) : null,
               React.createElement('span', { className: 'tw-badge' }, e.source === 'auto' ? '自动同步' : '手动'),
               e.symbol !== undefined ? React.createElement('span', { className: 'tw-muted', style: { fontSize: 11 } }, e.symbol) : null,
             ),

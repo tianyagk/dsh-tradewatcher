@@ -49,7 +49,7 @@ export function apply(ctx: {
 }): void {
   ensureCss()
   try {
-    console.log('[dsh-tradewatcher] client v0.9.0 loaded (two-line rows + overflow menus + icon topbar)')
+    console.log('[dsh-tradewatcher] client v0.10.0 loaded (macro calendar auto-sync + event times)')
   } catch {
     /* console unavailable */
   }

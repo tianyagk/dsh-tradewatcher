@@ -143,6 +143,8 @@ export interface CalEvent {
   /** YYYY-MM-DD */
   date: string
   endDate?: string
+  /** HH:mm（北京时间；宏观数据公布时刻，未知则缺省） */
+  time?: string
   title: string
   category: CalCategory
   importance: CalImportance
