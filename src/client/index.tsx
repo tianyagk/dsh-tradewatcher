@@ -6,7 +6,7 @@
  * half over same-origin /tradewatcher/* routes.
  */
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
-import { TW_ROWS, type PortPrefs, type QuoteRow } from '../shared/model.ts'
+import { DEFAULT_PREFS, TW_ROWS, type PortPrefs, type QuoteRow } from '../shared/model.ts'
 import { api } from './api.ts'
 import { useQuoteEngine } from './useQuotes.ts'
 import { TopBar } from './TopBar.tsx'
@@ -48,7 +48,7 @@ export function apply(ctx: {
 }): void {
   ensureCss()
   try {
-    console.log('[dsh-tradewatcher] client v0.5.6 loaded (two-line rows + overflow menus + icon topbar)')
+    console.log('[dsh-tradewatcher] client v0.6.0 loaded (two-line rows + overflow menus + icon topbar)')
   } catch {
     /* console unavailable */
   }
@@ -91,7 +91,7 @@ function App(props: TabProps): React.ReactElement {
   }, [])
 
   const setPrefs = (patch: Partial<PortPrefs>): void => {
-    setPrefsState((prev) => ({ ...(prev ?? { theme: 'auto', refreshSec: 10, redUp: true }), ...patch }))
+    setPrefsState((prev) => ({ ...(prev ?? DEFAULT_PREFS), ...patch }))
     api.setPrefs(patch).catch(() => undefined)
   }
 
@@ -134,13 +134,14 @@ function App(props: TabProps): React.ReactElement {
       return React.createElement(PortfolioPage, {
         active: visible,
         refreshSec,
-        prefs: { redUp },
+        prefs: prefs ?? DEFAULT_PREFS,
+        setPrefs,
         quotes,
         onSymbols: onPortSymbols,
       })
     }
     if (page === 'market') {
-      return React.createElement(MarketPage, { quotes, prefs: { ...(prefs ?? { theme: 'auto', refreshSec: 10, redUp: true }) } })
+      return React.createElement(MarketPage, { quotes, prefs: prefs ?? DEFAULT_PREFS })
     }
     return React.createElement(CloudMap, null)
   }
@@ -160,7 +161,7 @@ function App(props: TabProps): React.ReactElement {
       ts: engine.ts,
       refreshing: engine.refreshing,
       onRefresh: engine.refresh,
-      prefs: prefs ?? { theme: 'auto', refreshSec: 10, redUp: true },
+      prefs: prefs ?? DEFAULT_PREFS,
       setPrefs,
     }),
     engine.error !== null

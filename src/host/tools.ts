@@ -101,11 +101,12 @@ export function makeAgentTools(store: DataStore): {
       render: (_args, value) => {
         const v = value as {
           view?: {
-            grand: { totalMv: number; floatPnl: number; dayPnl: number; realized: number }
+            grand: { totalMv: number; floatPnl: number; dilutedPnl?: number; dayPnl: number; realized: number }
             groups: Array<{ id: string; name: string; totalMv: number; floatPnl: number; dayPnl: number; realized: number; archived?: boolean }>
             positions: Array<{
               posId: string; groupId: string; secid: string; name: string; qty: number; avgCost: number
-              realized: number; mv: number | null; floatPnl: number | null; dayPnl: number | null
+              dilutedCost: number | null; realized: number; mv: number | null
+              floatPnl: number | null; dilutedPnl: number | null; dayPnl: number | null
               price: number | null; pct: number | null
             }>
           }
@@ -117,8 +118,8 @@ export function makeAgentTools(store: DataStore): {
         if (view === undefined) return textBlock('暂无数据。')
         const g = view.grand
         const head =
-          `【持仓总览】${pnlLine('总市值', g.totalMv)} | ${pnlLine('浮动盈亏', g.floatPnl)} | ` +
-          `${pnlLine('当日盈亏', g.dayPnl)} | ${pnlLine('累计已实现', g.realized)}` +
+          `【持仓总览】${pnlLine('总市值', g.totalMv)} | ${pnlLine('持仓盈亏(摊薄口径)', g.dilutedPnl ?? g.floatPnl)} | ` +
+          `${pnlLine('浮动盈亏(均价口径)', g.floatPnl)} | ${pnlLine('当日盈亏', g.dayPnl)} | ${pnlLine('累计已实现', g.realized)}` +
           (v.stale && v.stale > 0 ? `（${v.stale} 只持仓行情暂缺）` : '')
         const groupLines = view.groups
           .filter((x) => x.archived !== true)
@@ -129,8 +130,8 @@ export function makeAgentTools(store: DataStore): {
           const price = p.price ?? null
           const pct = price !== null && p.pct !== null ? `（${p.pct > 0 ? '+' : ''}${p.pct.toFixed(2)}%）` : ''
           posLines.push(
-            `  • ${p.name}（${p.secid}）数量 ${p.qty}  成本 ${fmtNum(p.avgCost)}  现价 ${fmtNum(price)}${pct}\n` +
-            `    市值 ${fmtMoney(p.mv)}  浮盈 ${fmtMoney(p.floatPnl)}  当日 ${fmtMoney(p.dayPnl)}  已实现 ${fmtMoney(p.realized)}`,
+            `  • ${p.name}（${p.secid}）数量 ${p.qty}  均价成本 ${fmtNum(p.avgCost, 4)}  摊薄成本 ${fmtNum(p.dilutedCost, 4)}  现价 ${fmtNum(price)}${pct}\n` +
+            `    市值 ${fmtMoney(p.mv)}  持仓盈亏(摊薄) ${fmtMoney(p.dilutedPnl)}  浮动盈亏(均价) ${fmtMoney(p.floatPnl)}  当日 ${fmtMoney(p.dayPnl)}  已实现 ${fmtMoney(p.realized)}`,
           )
         }
         const body = [
@@ -334,7 +335,7 @@ export function makeAgentTools(store: DataStore): {
       '数据文件在 ' + dataHome() + '（watch.json 自选 / positions.json 持仓与分组 / ledger.json 逐笔流水与操作记录 / prefs.json 偏好），' +
       '均为明文 JSON，可直接用文件工具读取分析。' +
       '会话内优先使用只读工具：' +
-      'tradewatcher_portfolio（持仓总览：分组市值/浮动盈亏/当日盈亏/已实现 + 每只持仓的成本数量与实时价，成本由买卖流水按移动加权自动核算、费用已计入）、' +
+      'tradewatcher_portfolio（持仓总览：分组市值/持仓盈亏(摊薄口径，等同券商App)/浮动盈亏(均价口径)/当日盈亏/已实现 + 每只持仓的数量、摊薄成本、均价成本与实时价，全部由买卖流水自动核算、费用已计入）、' +
       'tradewatcher_ledger（逐笔买卖与分组操作流水，支持按 posId/groupId 过滤）、' +
       'tradewatcher_watchlist（自选分组）、' +
       'tradewatcher_quotes（实时行情：cn/intl/commodity/all 预设或任意东财代码）、' +

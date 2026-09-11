@@ -6,7 +6,7 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { DataStore, replayPosition, dataHome } from './store.ts'
-import { assemblePortfolio, ledgerViews, shanghaiDayStart, verbLabel } from './portfolio.ts'
+import { assemblePortfolio, derivePosition, ledgerViews, shanghaiDayStart, verbLabel } from './portfolio.ts'
 import * as em from './em.ts'
 import { fillLastGood } from './em.ts'
 import { losslessJson } from './tools.ts'
@@ -126,6 +126,20 @@ async function main(): Promise<void> {
     // prefs
     await store2.setPrefs({ refreshSec: 30, theme: 'dark' })
     ok(store2.getPrefs().refreshSec === 30 && store2.getPrefs().theme === 'dark', 'prefs persisted')
+
+    // 摊薄成本（券商口径）：买入 100@10，卖出 50@8 → 摊薄成本 = (1000-400)/50 = 12
+    {
+      const entries2 = [
+        { id: 'd1', ts: 1, actor: 'web' as const, verb: 'buy' as const, posId: 'P1', secid: '1.000001', qty: 100, price: 10, fee: 0 },
+        { id: 'd2', ts: 2, actor: 'web' as const, verb: 'sell' as const, posId: 'P1', secid: '1.000001', qty: 50, price: 8, fee: 0 },
+      ]
+      const item = { id: 'P1', groupId: 'G1', secid: '1.000001', name: '测试', createdAt: 0 }
+      const row = derivePosition(entries2, item, { ...fakeQuote('1.000001', 11, 10) }, 3)
+      ok(Math.abs(row.avgCost - 10) < 1e-9, `均价成本 → 10 (got ${row.avgCost})`)
+      ok(row.dilutedCost !== null && Math.abs(row.dilutedCost - 12) < 1e-9, `摊薄成本 → 12 (got ${row.dilutedCost})`)
+      ok(row.dilutedPnl !== null && Math.abs(row.dilutedPnl - -50) < 1e-6, `持仓盈亏(摊薄) → -50 (got ${row.dilutedPnl})`)
+      ok(Math.abs((row.floatPnl + row.realized) - (row.dilutedPnl ?? 0)) < 1e-6, '摊薄盈亏 == 均价浮盈 + 已实现')
+    }
 
     // lossless-JSON sanitizer (agent tool output contract)
     {

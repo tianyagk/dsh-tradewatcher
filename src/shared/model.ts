@@ -249,9 +249,11 @@ export interface PortPrefs {
   theme: 'auto' | 'light' | 'dark'
   refreshSec: number
   redUp: boolean
+  /** 成本口径：diluted = 摊薄成本（券商 App 默认）；average = 买入均价 */
+  costBasis: 'diluted' | 'average'
 }
 
-export const DEFAULT_PREFS: PortPrefs = { theme: 'auto', refreshSec: 10, redUp: true }
+export const DEFAULT_PREFS: PortPrefs = { theme: 'auto', refreshSec: 10, redUp: true, costBasis: 'diluted' }
 
 /** One derived position row (accounting from ledger + live quote). */
 export interface PositionRow {
@@ -261,13 +263,19 @@ export interface PositionRow {
   name: string
   note?: string
   qty: number
+  /** 买入均价（移动加权，含买入费用；卖出不影响） */
   avgCost: number
+  /** 摊薄成本（券商口径）：(累计买入含费 − 累计卖出净额) ÷ 剩余数量 */
+  dilutedCost: number | null
   /** Realized P&L since inception (fees included). */
   realized: number
   mv: number
   floatPnl: number
   /** Total (floating) return % — floatPnl / (avgCost × qty). */
   floatPnlPct: number | null
+  /** 持仓盈亏（摊薄口径）— (price − dilutedCost) × qty，等于「均价口径浮盈 + 已实现」 */
+  dilutedPnl: number | null
+  dilutedPnlPct: number | null
   dayPnl: number
   /** Day return % — dayPnl / (overnight qty × prevClose + today's buy costs). */
   dayPnlPct: number | null
@@ -291,6 +299,8 @@ export interface GroupView {
   note?: string
   totalMv: number
   floatPnl: number
+  /** 摊薄口径的持仓盈亏合计（= floatPnl + realized） */
+  dilutedPnl: number
   dayPnl: number
   realized: number
   count: number
@@ -300,7 +310,7 @@ export interface PortfolioView {
   generatedAt: number
   groups: GroupView[]
   positions: PositionRow[]
-  grand: { totalMv: number; floatPnl: number; dayPnl: number; realized: number }
+  grand: { totalMv: number; floatPnl: number; dilutedPnl: number; dayPnl: number; realized: number }
 }
 
 /** One visible history row (verb display + payload). */

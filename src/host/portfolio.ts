@@ -29,6 +29,8 @@ export function shanghaiDayStart(now: number): number {
 }
 
 const round2 = (n: number): number => Math.round(n * 100) / 100
+/** 价格/成本保留 4 位小数（ETF、基金等低价标的 0.948 不能被抹成 0.95） */
+const round4 = (n: number): number => Math.round(n * 10000) / 10000
 
 interface DayTrade {
   verb: 'buy' | 'sell'
@@ -46,7 +48,7 @@ interface LedgerSlice {
 }
 
 function slicePosition(entries: readonly LedgerEntry[], posId: string, dayStart: number): LedgerSlice {
-  const slice: LedgerSlice = { entries: [], dayTrades: [], dayFees: 0, start: { qty: 0, avgCost: 0, realized: 0, fees: 0 } }
+  const slice: LedgerSlice = { entries: [], dayTrades: [], dayFees: 0, start: { qty: 0, avgCost: 0, netCost: 0, realized: 0, fees: 0 } }
   const pre: LedgerEntry[] = []
   for (const e of entries) {
     if (e.posId !== posId) continue
@@ -116,6 +118,14 @@ export function derivePosition(
       dayPnlPct = denom > 0 ? round2((dayPnl / denom) * 100) : null
     }
   }
+  // 摊薄成本（券商口径）：(累计买入含费 − 累计卖出净额) ÷ 剩余数量
+  const dilutedCost = total.qty > 1e-9 ? round4(total.netCost / total.qty) : null
+  const dilutedPnl =
+    price !== null && dilutedCost !== null ? round2((price - dilutedCost) * total.qty) : total.qty > 1e-9 ? null : 0
+  const dilutedPnlPct =
+    price !== null && dilutedCost !== null && Math.abs(dilutedCost) > 1e-9
+      ? round2(((price - dilutedCost) / Math.abs(dilutedCost)) * 100)
+      : null
   return {
     posId: pos.id,
     groupId: pos.groupId,
@@ -123,11 +133,14 @@ export function derivePosition(
     name: pos.name,
     note: pos.note,
     qty: total.qty,
-    avgCost: round2(total.avgCost),
+    avgCost: round4(total.avgCost),
+    dilutedCost,
     realized: round2(total.realized),
     mv,
     floatPnl,
     floatPnlPct,
+    dilutedPnl,
+    dilutedPnlPct,
     dayPnl,
     dayPnlPct,
     price,
@@ -164,6 +177,7 @@ export function assemblePortfolio(
     const rows = positions.filter((p) => p.groupId === g.id)
     let totalMv = 0
     let floatPnl = 0
+    let dilutedPnl = 0
     let dayPnl = 0
     let realized = 0
     let valued = 0
@@ -171,6 +185,7 @@ export function assemblePortfolio(
       if (r.mv === null && r.qty > 0) continue // no quote yet
       totalMv = add(totalMv, r.mv ?? 0)
       floatPnl = add(floatPnl, r.floatPnl)
+      dilutedPnl = add(dilutedPnl, r.dilutedPnl ?? 0)
       if (r.dayPnl !== null) dayPnl = add(dayPnl, r.dayPnl)
       realized = add(realized, r.realized)
       valued += 1
@@ -184,6 +199,7 @@ export function assemblePortfolio(
       note: g.note,
       totalMv: round2(totalMv),
       floatPnl: round2(floatPnl),
+      dilutedPnl: round2(dilutedPnl),
       dayPnl: round2(dayPnl),
       realized: round2(realized),
       count: rows.length,
@@ -193,12 +209,14 @@ export function assemblePortfolio(
 
   let grandMv = 0
   let grandFloat = 0
+  let grandDiluted = 0
   let grandDay = 0
   let grandRealized = 0
   for (const g of groupRows) {
     if (g.archived === true) continue
     grandMv += g.totalMv
     grandFloat += g.floatPnl
+    grandDiluted += g.dilutedPnl
     grandDay += g.dayPnl
     grandRealized += g.realized
   }
@@ -210,6 +228,7 @@ export function assemblePortfolio(
     grand: {
       totalMv: round2(grandMv),
       floatPnl: round2(grandFloat),
+      dilutedPnl: round2(grandDiluted),
       dayPnl: round2(grandDay),
       realized: round2(grandRealized),
     },

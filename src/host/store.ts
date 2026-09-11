@@ -56,7 +56,10 @@ interface LedgerFile {
 
 export interface TradeState {
   qty: number
+  /** 买入均价（移动加权，含买入费用） */
   avgCost: number
+  /** 资金净投入：买入 +（金额+费用），卖出 −（金额−费用）；用于摊薄成本 */
+  netCost: number
   realized: number
   /** Cumulative fees on trades that affected qty/cost (audit aid). */
   fees: number
@@ -70,12 +73,14 @@ export function applyTrade(state: TradeState, verb: 'buy' | 'sell' | 'adjust', q
     const total = state.qty + qty
     state.avgCost = total > 0 ? (state.qty * state.avgCost + qty * price + feeN) / total : state.avgCost
     state.qty = total
+    state.netCost += qty * price + feeN
     state.fees += feeN
   } else if (verb === 'sell') {
     if (qty <= 0 || !Number.isFinite(qty)) throw new Error('卖出数量必须大于 0')
     if (qty > state.qty + 1e-9) throw new Error(`卖出数量超过持仓（持有 ${state.qty}）`)
     state.realized += (price - state.avgCost) * qty - feeN
     state.qty = Math.max(0, state.qty - qty)
+    state.netCost -= qty * price - feeN
     state.fees += feeN
   } else {
     // adjust: set qty (target) and optionally rewrite avgCost; no P&L effect.
@@ -83,12 +88,14 @@ export function applyTrade(state: TradeState, verb: 'buy' | 'sell' | 'adjust', q
     if (qty > 1e9) throw new Error('调整数量过大')
     if (Number.isFinite(price) && price > 0) state.avgCost = price
     state.qty = Math.round(qty * 10 ** QTY_DECIMALS) / 10 ** QTY_DECIMALS
+    // 人工调整后重新基准化：摊薄成本与均价一致
+    state.netCost = state.qty * state.avgCost
   }
 }
 
 /** Replay one position's whole ledger into accounting state. */
 export function replayPosition(entries: readonly LedgerEntry[], posId: string): TradeState {
-  const state: TradeState = { qty: 0, avgCost: 0, realized: 0, fees: 0 }
+  const state: TradeState = { qty: 0, avgCost: 0, netCost: 0, realized: 0, fees: 0 }
   for (const e of entries) {
     if (e.posId !== posId) continue
     if (e.verb !== 'buy' && e.verb !== 'sell' && e.verb !== 'adjust') continue
@@ -567,6 +574,10 @@ export class DataStore {
       throw new Error('theme 必须是 auto/light/dark')
     }
     if (patch.theme !== undefined) this.prefs.theme = patch.theme
+    if (patch.costBasis !== undefined) {
+      if (patch.costBasis !== 'diluted' && patch.costBasis !== 'average') throw new Error('costBasis 必须是 diluted/average')
+      this.prefs.costBasis = patch.costBasis
+    }
     if (patch.refreshSec !== undefined) {
       const r = patch.refreshSec
       if (!isFiniteNumber(r) || r < 3 || r > 600) throw new Error('刷新间隔需在 3–600 秒之间')

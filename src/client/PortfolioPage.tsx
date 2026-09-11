@@ -5,6 +5,7 @@ import type {
   LedgerView,
   MutatePortBody,
   PortfolioView,
+  PortPrefs,
   PositionRow,
   QuoteRow,
   SuggestItem,
@@ -37,12 +38,15 @@ function verbLabel(verb: LedgerView['verb']): string {
 export function PortfolioPage(props: {
   active: boolean
   refreshSec: number
-  prefs: { redUp: boolean }
+  prefs: PortPrefs
+  setPrefs: (patch: Partial<PortPrefs>) => void
   quotes: Record<string, QuoteRow>
   onSymbols: (ids: string[]) => void
 }): React.ReactElement {
-  const { active, refreshSec, prefs, quotes, onSymbols } = props
+  const { active, refreshSec, prefs, setPrefs, quotes, onSymbols } = props
   const redUp = prefs.redUp
+  const basis = prefs.costBasis
+  const diluted = basis === 'diluted'
   const [view, setView] = useState<PortfolioView | null>(null)
   const [stale, setStale] = useState(0)
   const [error, setError] = useState<string | null>(null)
@@ -130,17 +134,23 @@ export function PortfolioPage(props: {
       React.createElement('div', { className: 'tw-panel-h' },
         React.createElement('span', { className: 't' }, '持仓总览（实时行情）'),
         stale > 0 ? React.createElement('span', { className: 'tw-badge' }, `${stale} 只行情暂缺`) : null,
+        React.createElement('div', { className: 'tw-seg', title: '成本口径：摊薄=卖出冲减成本（多数券商 App 口径）；均价=买入移动加权' },
+          React.createElement('button', { 'data-on': diluted, onClick: () => setPrefs({ costBasis: 'diluted' }) }, '摊薄口径'),
+          React.createElement('button', { 'data-on': !diluted, onClick: () => setPrefs({ costBasis: 'average' }) }, '均价口径'),
+        ),
         React.createElement('span', {
           className: 'tw-iconbtn',
           style: { cursor: 'help' },
-          title: '成本=移动加权含费用；当日盈亏=隔夜(现价−昨收)×数量+日内买卖差额，费用计入。分组可增删改，操作记录全部写入流水；会话中可用 tradewatcher_portfolio / tradewatcher_ledger 分析。',
+          title: diluted
+            ? '摊薄成本 = (累计买入含费 − 累计卖出净额) ÷ 剩余数量；持仓盈亏 = (现价 − 摊薄成本) × 数量（已把已实现盈亏计入）。当日盈亏 = 隔夜(现价−昨收)×数量 + 日内买卖差额 − 费用，与券商 App 一致。'
+            : '买入均价（移动加权含费）；浮动盈亏 = (现价 − 均价) × 数量，已实现盈亏单列。当日盈亏 = 隔夜(现价−昨收)×数量 + 日内买卖差额 − 费用，与券商 App 一致。',
           'aria-label': '口径说明',
         }, 'ⓘ'),
         React.createElement(Btn, { onClick: reload }, '刷新'),
       ),
       React.createElement('div', { className: 'tw-statrow' },
         stat('总市值', grand.totalMv, false),
-        stat('浮动盈亏', grand.floatPnl),
+        diluted ? stat('持仓盈亏', grand.dilutedPnl) : stat('浮动盈亏', grand.floatPnl),
         stat('当日盈亏', grand.dayPnl),
         stat('累计已实现', grand.realized),
       ),
@@ -187,7 +197,9 @@ export function PortfolioPage(props: {
           ),
           React.createElement('div', { className: 'tw-gh-metrics' },
             React.createElement('span', null, '市值 ', React.createElement('b', null, fmtAmt(grp.totalMv))),
-            React.createElement('span', { className: dirClass(grp.floatPnl, redUp) }, '浮盈 ', fmtSigned(grp.floatPnl)),
+            diluted
+              ? React.createElement('span', { className: dirClass(grp.dilutedPnl, redUp) }, '持仓盈亏 ', fmtSigned(grp.dilutedPnl))
+              : React.createElement('span', { className: dirClass(grp.floatPnl, redUp) }, '浮盈 ', fmtSigned(grp.floatPnl)),
             React.createElement('span', { className: dirClass(grp.dayPnl, redUp) }, '当日 ', fmtSigned(grp.dayPnl)),
             React.createElement('span', { className: 'tw-dim' }, '已实现 ', fmtSigned(grp.realized)),
           ),
@@ -201,6 +213,7 @@ export function PortfolioPage(props: {
                   key: row.posId,
                   row,
                   redUp,
+                  diluted,
                   quote: quotes[row.secid],
                   mini: minis[row.secid],
                   onTrade: (verb) => setModal({ kind: 'trade', verb, pos: row, groupName: grp.name }),
@@ -233,7 +246,7 @@ export function PortfolioPage(props: {
         )
       : null,
     ledgerTarget !== null
-      ? React.createElement(LedgerModal, { target: ledgerTarget, entries: ledgerEntries, redUp, onClose: () => openLedger(null) })
+      ? React.createElement(LedgerModal, { target: ledgerTarget, entries: ledgerEntries, redUp, diluted, onClose: () => openLedger(null) })
       : null,
     modal !== null
       ? React.createElement(PortModalHost, { modal, key: `${modal.kind}-${'pos' in modal ? modal.pos.posId : 'groupId' in modal ? modal.groupId : 'n'}`, redUp, quotes, onClose: () => setModal(null), mutate })
@@ -450,18 +463,24 @@ function PosEditModal(props: {
   )
 }
 
-function LedgerModal(props: { target: { mode: string; id: string; title: string; row?: PositionRow }; entries: LedgerView[] | null; redUp: boolean; onClose: () => void }): React.ReactElement {
+function LedgerModal(props: { target: { mode: string; id: string; title: string; row?: PositionRow }; entries: LedgerView[] | null; redUp: boolean; diluted: boolean; onClose: () => void }): React.ReactElement {
   const rows = props.entries ?? []
   const r = props.target.row
   const redUp = props.redUp
+  const diluted = props.diluted
   const chip = (verb: LedgerView['verb']): string =>
     verb === 'buy' ? 'tw-chip-up' : verb === 'sell' ? 'tw-chip-down' : 'tw-chip-flat'
   const pctStrip = (): React.ReactNode | null => {
     if (r === undefined) return null
+    const cost = diluted ? r.dilutedCost : r.avgCost
+    const pnl = diluted ? r.dilutedPnl : r.floatPnl
+    const pnlPct = diluted ? r.dilutedPnlPct : r.floatPnlPct
+    const fmtRate = (v: number | null | undefined): string =>
+      v === null || v === undefined ? '—' : `${v === 0 ? '' : v > 0 ? '▲' : '▼'}${Math.abs(v).toFixed(2)}%`
     return React.createElement('div', { className: 'tw-hint', style: { display: 'flex', gap: 14, flexWrap: 'wrap', margin: '0 0 8px', fontFamily: 'var(--tw-mono)' } },
-      React.createElement('span', null, `持仓 ${r.qty} · 成本 ${fmtPrice(r.avgCost)} · 现价 ${fmtPrice(r.price)}`),
-      React.createElement('span', { className: dirClass(r.floatPnl, redUp) }, `总盈亏 ${r.floatPnlPct === null || r.floatPnlPct === undefined ? '—' : (r.floatPnlPct === 0 ? '' : r.floatPnlPct > 0 ? '▲' : '▼') + Math.abs(r.floatPnlPct).toFixed(2) + '%'}`),
-      React.createElement('span', { className: dirClass(r.dayPnl, redUp) }, `当日 ${r.dayPnlPct === null || r.dayPnlPct === undefined ? '—' : (r.dayPnlPct === 0 ? '' : r.dayPnlPct > 0 ? '▲' : '▼') + Math.abs(r.dayPnlPct).toFixed(2) + '%'}`),
+      React.createElement('span', null, `持仓 ${r.qty} · ${diluted ? '摊薄成本' : '均价'} ${fmtPrice(cost)} · 现价 ${fmtPrice(r.price)}`),
+      React.createElement('span', { className: dirClass(pnl, redUp) }, `${diluted ? '持仓盈亏' : '浮动盈亏'} ${fmtSigned(pnl)} (${fmtRate(pnlPct)})`),
+      React.createElement('span', { className: dirClass(r.dayPnl, redUp) }, `当日 ${fmtSigned(r.dayPnl)} (${fmtRate(r.dayPnlPct)})`),
     )
   }
   return React.createElement(
@@ -505,6 +524,7 @@ function PosRow(props: {
   row: PositionRow
   quote: QuoteRow | undefined
   redUp: boolean
+  diluted: boolean
   mini: { values: number[]; up: boolean | null } | undefined
   onTrade: (verb: 'buy' | 'sell' | 'adjust') => void
   onDetail: () => void
@@ -512,10 +532,14 @@ function PosRow(props: {
   onEdit: () => void
   onRemove: () => void
 }): React.ReactElement {
-  const { row, redUp } = props
+  const { row, redUp, diluted } = props
   const price = row.price
   const pct = row.pct
   const priceCls = dirClass(row.chg ?? null, redUp)
+  // 口径选择：摊薄（券商）/ 均价
+  const showCost = diluted ? row.dilutedCost : row.avgCost
+  const showPnl = diluted ? row.dilutedPnl : row.floatPnl
+  const showPnlPct = diluted ? row.dilutedPnlPct : row.floatPnlPct
   const fmtQty = (n: number): string => (Number.isInteger(n) ? String(n) : String(Math.round(n * 10000) / 10000))
   const pps = (label: string, value: React.ReactNode, meta?: React.ReactNode): React.ReactElement =>
     React.createElement('div', { className: 'tw-pps' },
@@ -554,7 +578,7 @@ function PosRow(props: {
       ),
       React.createElement('div', { className: 'tw-pos-price' },
         React.createElement('span', { className: 'px ' + priceCls }, fmtPrice(price)),
-        React.createElement('span', { className: 'meta' }, `数量 ${fmtQty(row.qty)} · 成本 ${fmtPrice(row.avgCost)}${price === null ? ' · 行情暂缺' : ''}`),
+        React.createElement('span', { className: 'meta' }, `数量 ${fmtQty(row.qty)} · 成本 ${fmtPrice(showCost)}${price === null ? ' · 行情暂缺' : ''}`),
       ),
       React.createElement('div', { className: 'tw-actions' },
         React.createElement(Btn, { onClick: () => props.onTrade('buy') }, '买'),
@@ -574,12 +598,14 @@ function PosRow(props: {
       ),
     ),
     React.createElement('div', { className: 'tw-pos-grid' },
-      pps('市值', React.createElement('span', null, fmtAmt(row.mv))),
-      pps('浮动盈亏', React.createElement('span', { className: dirClass(row.floatPnl, redUp) }, fmtSigned(row.floatPnl)),
-        React.createElement('span', { className: dirClass(row.floatPnl, redUp) }, pctMeta(row.floatPnlPct, row.floatPnl))),
+      pps('市值', React.createElement('span', null, fmtAmt(row.mv)), `成本 ${fmtPrice(showCost)}`),
+      pps(diluted ? '持仓盈亏' : '浮动盈亏',
+        React.createElement('span', { className: dirClass(showPnl, redUp) }, fmtSigned(showPnl)),
+        React.createElement('span', { className: dirClass(showPnl, redUp) }, pctMeta(showPnlPct, showPnl))),
       pps('当日盈亏', React.createElement('span', { className: dirClass(row.dayPnl, redUp) }, fmtSigned(row.dayPnl)),
         React.createElement('span', { className: dirClass(row.dayPnl, redUp) }, pctMeta(row.dayPnlPct, row.dayPnl))),
-      pps('累计已实现', React.createElement('span', { className: 'tw-dim' }, fmtSigned(row.realized))),
+      pps(diluted ? '累计已实现（已计入上栏）' : '累计已实现',
+        React.createElement('span', { className: 'tw-dim' }, fmtSigned(row.realized))),
     ),
   )
 }
