@@ -48,7 +48,7 @@ export function apply(ctx: {
 }): void {
   ensureCss()
   try {
-    console.log('[dsh-tradewatcher] client v0.8.1 loaded (two-line rows + overflow menus + icon topbar)')
+    console.log('[dsh-tradewatcher] client v0.8.2 loaded (two-line rows + overflow menus + icon topbar)')
   } catch {
     /* console unavailable */
   }

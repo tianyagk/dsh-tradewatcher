@@ -361,17 +361,14 @@ function parseTrendRow(row: string): TrendPoint | null {
   }
 }
 
-/** Intraday series for the last `ndays` sessions (1 = today, 5 = five-day).
- *  Empty points → null data. */
-export async function fetchTrend(secid: string, ndays = 1): Promise<TrendData | null> {
-  if (!SECID_RE.test(secid)) return null
-  const days = Math.min(5, Math.max(1, Math.round(ndays)))
+/** 东财单日分时（trends2 实测只提供当日；ndays 参数被上游忽略）。 */
+async function fetchTrendSingleDay(secid: string): Promise<TrendData | null> {
   const fields2 = 'f51,f52,f53,f54,f55,f56,f57,f58'
-  const key = `trend:${secid}:${days}`
+  const key = `trend:${secid}:1`
   const json = await ttlCache(key, 60_000, () =>
     fetchAny(
       HISTORY_HOSTS,
-      `/api/qt/stock/trends2/get?secid=${encodeURIComponent(secid)}&fields1=f1,f2,f3,f4,f5,f6,f7,f8,f9,f10,f11,f12,f13&fields2=${fields2}&ndays=${days}&iscr=0`,
+      `/api/qt/stock/trends2/get?secid=${encodeURIComponent(secid)}&fields1=f1,f2,f3,f4,f5,f6,f7,f8,f9,f10,f11,f12,f13&fields2=${fields2}&ndays=1&iscr=0`,
     ),
   )
   const body = bodyOf(json)
@@ -387,6 +384,109 @@ export async function fetchTrend(secid: string, ndays = 1): Promise<TrendData | 
   if (points.length === 0) return null
   const pre = num(data.prePrice) ?? num(data.preClose) ?? null
   return { secid, prePrice: pre, points, last: points[points.length - 1]?.price ?? null }
+}
+
+/** 东财 secid → 新浪代码（仅 A股/深沪 ETF；港股/美股接口不适用）。 */
+function sinaSymbol(secid: string): string | null {
+  const dot = secid.indexOf('.')
+  if (dot <= 0) return null
+  const mkt = secid.slice(0, dot)
+  const code = secid.slice(dot + 1)
+  if (mkt === '1') return `sh${code}`
+  if (mkt === '0') return `sz${code}`
+  return null
+}
+
+interface MinuteBar {
+  t: number
+  label: string
+  price: number
+  vol: number | null
+}
+
+/** 新浪 5 分钟 K 线（一次可取多个交易日，用于「五日」视图）。 */
+async function fetchSina5Min(sym: string, datalen: number): Promise<MinuteBar[]> {
+  const url = `https://quotes.sina.cn/cn/api/json_v2.php/CN_MarketDataService.getKLineData?symbol=${sym}&scale=5&ma=no&datalen=${datalen}`
+  const res = await fetch(url, {
+    headers: { 'user-agent': UA, referer: 'https://finance.sina.com.cn' },
+    signal: AbortSignal.timeout(9000),
+  })
+  if (!res.ok) throw new Error(`HTTP ${res.status} from sina`)
+  const rows = (await res.json()) as Array<{ day?: unknown; close?: unknown; volume?: unknown }>
+  if (!Array.isArray(rows)) return []
+  const out: MinuteBar[] = []
+  for (const r of rows) {
+    const label = typeof r.day === 'string' ? r.day.slice(0, 16) : null
+    const price = num(r.close)
+    if (label === null || price === null) continue
+    const t = Date.parse(label.replace(' ', 'T'))
+    if (!Number.isFinite(t)) continue
+    out.push({ t, label, price, vol: num(r.volume) })
+  }
+  return out
+}
+
+/** 腾讯 5 分钟 K 线（新浪失败时的兜底，仅 A股/ETF）。 */
+async function fetchTencent5Min(sym: string, lmt: number): Promise<MinuteBar[]> {
+  const path = `/ifzqgtimg/appstock/app/kline/mkline?param=${sym},m5,,${lmt}`
+  const json = (await fetchFromHost('proxy.finance.qq.com', path, 9000)) as {
+    data?: Record<string, { m5?: unknown }>
+  }
+  const rows = json?.data?.[sym]?.m5
+  if (!Array.isArray(rows)) return []
+  const out: MinuteBar[] = []
+  for (const r of rows) {
+    if (!Array.isArray(r) || r.length < 3) continue
+    const raw = String(r[0]) // YYYYMMDDHHmm
+    if (raw.length < 12) continue
+    const label = `${raw.slice(0, 4)}-${raw.slice(4, 6)}-${raw.slice(6, 8)} ${raw.slice(8, 10)}:${raw.slice(10, 12)}`
+    const price = num(r[2])
+    if (price === null) continue
+    const t = Date.parse(label.replace(' ', 'T'))
+    if (!Number.isFinite(t)) continue
+    out.push({ t, label, price, vol: num(r[5]) })
+  }
+  return out
+}
+
+/** 多日分时（五日）：用 5 分钟 K 线拼出最近 N 个交易日。 */
+async function fetchMultiDayTrend(secid: string, days: number): Promise<TrendData | null> {
+  const sym = sinaSymbol(secid)
+  if (sym === null) return null
+  const datalen = Math.min(1000, days * 48 + 24)
+  const bars = await ttlCache<MinuteBar[]>(`trend-md:${sym}:${datalen}`, 90_000, async () => {
+    try {
+      const s = await fetchSina5Min(sym, datalen)
+      if (s.length > 0) return s
+    } catch {
+      /* 换腾讯 */
+    }
+    try {
+      return await fetchTencent5Min(sym, datalen)
+    } catch {
+      return []
+    }
+  })
+  if (bars.length === 0) return null
+  const dates = [...new Set(bars.map((b) => b.label.slice(0, 10)))].sort()
+  const keep = new Set(dates.slice(-days))
+  const points: TrendPoint[] = bars
+    .filter((b) => keep.has(b.label.slice(0, 10)))
+    .map((b) => ({ t: b.t, label: b.label, price: b.price, avg: null, vol: b.vol }))
+  if (points.length === 0) return null
+  return { secid, prePrice: null, points, last: points[points.length - 1]?.price ?? null }
+}
+
+/** 分时序列：ndays=1 用东财当日分时；ndays>1 优先 5 分钟 K 拼接（新浪/腾讯），
+ *  不支持的市场退回首日数据（客户端会如实显示交易日数量）。 */
+export async function fetchTrend(secid: string, ndays = 1): Promise<TrendData | null> {
+  if (!SECID_RE.test(secid)) return null
+  const days = Math.min(5, Math.max(1, Math.round(ndays)))
+  if (days > 1) {
+    const multi = await fetchMultiDayTrend(secid, days)
+    if (multi !== null && multi.points.length > 0) return multi
+  }
+  return fetchTrendSingleDay(secid)
 }
 
 // ───────────────────────────── daily kline ────────────────────────────────
