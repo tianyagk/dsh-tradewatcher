@@ -219,6 +219,14 @@ color-scheme:dark}
 @keyframes twshimmer{from{transform:translateX(-100%)}to{transform:translateX(100%)}}
 .tw-skel-stack{display:flex;flex-direction:column;gap:8px;padding:8px 2px}
 .tw-empty{display:flex;flex-direction:column;align-items:center;gap:8px;padding:26px 10px;color:var(--tw-muted);text-align:center}
+.tw-kline{display:flex;flex-direction:column;gap:2px}
+.tw-ma-legend{display:flex;gap:10px;flex-wrap:wrap}
+.tw-zoom{margin-top:6px;display:flex;flex-direction:column;gap:5px}
+.tw-zoom-track{position:relative;height:16px;border-radius:8px;background:var(--tw-card2);border:1px solid var(--tw-border);cursor:pointer}
+.tw-zoom-sel{position:absolute;top:0;bottom:0;background:var(--tw-accent-soft);border-left:1px solid var(--tw-accent);border-right:1px solid var(--tw-accent);pointer-events:none;border-radius:2px}
+.tw-zoom-h{position:absolute;top:-3px;width:12px;height:22px;border-radius:6px;background:var(--tw-card);border:1px solid var(--tw-border-strong);box-shadow:var(--tw-shadow-sm);cursor:ew-resize;touch-action:none}
+.tw-zoom-h::after{content:"";position:absolute;left:4.5px;top:6px;width:2px;height:9px;background:var(--tw-muted);border-radius:1px}
+.tw-zoom-bar{display:flex;align-items:center;gap:6px;font-size:10.5px;font-family:var(--tw-mono)}
 .tw-chartnote{display:flex;gap:12px;flex-wrap:wrap;color:var(--tw-muted);font-size:11px;margin:6px 0 2px;font-family:var(--tw-mono)}
 
 /* ── row mini trend + detail drawer ─────────────────────── */

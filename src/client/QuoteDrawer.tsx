@@ -8,7 +8,8 @@ import type { KlineData, StockDetail, TradeMark, TrendData } from '../shared/mod
 import { api } from './api.ts'
 import { dirClass, fmtAmt, fmtBig, fmtPct, fmtPrice, fmtSigned } from './format.ts'
 import { Btn, ErrorNote, Skeleton } from './ui.tsx'
-import { CandleChart, MultiDayTrend, Sparkline, type CandleBar, type CandleMarker, type SparkMarker } from './charts.tsx'
+import type { CandleMarker, SparkMarker } from './charts.tsx'
+import { KlineChart, TrendChart } from './kline.tsx'
 
 type ChartTab = 'trend' | '5d' | 'day' | 'week' | 'month' | 'year'
 
@@ -122,7 +123,8 @@ export function QuoteDrawer(props: { secid: string; name: string; redUp: boolean
   }, [onClose])
 
   const priceCls = dirClass(detail?.chg ?? null, redUp)
-  const chartHeight = 320
+  // 三窗格（主图 + 成交量 + MACD）
+  const chartHeight = 8 + 210 + 6 + 54 + 6 + 64 + 16
 
   const kv = (k: string, v: string, cls?: string, title?: string): React.ReactElement =>
     React.createElement('div', { className: 'tw-dkv', title },
@@ -206,23 +208,50 @@ export function QuoteDrawer(props: { secid: string; name: string; redUp: boolean
         }
       }
       if (tab === 'trend') {
-        return React.createElement(Sparkline, { points, markers: dayMarkers, baseline: t.prePrice, width, height: chartHeight, up: lastUp !== false, upColor: 'var(--tw-up)', downColor: 'var(--tw-down)', timeLabels: true })
+        return React.createElement(TrendChart, {
+          points: t.points.map((p) => ({ t: p.t, value: p.price, vol: p.vol, avg: p.avg, label: p.label })),
+          baseline: t.prePrice,
+          markers: dayMarkers,
+          width,
+          redUp,
+          mainH: 210,
+          volH: 54,
+          macdH: 64,
+        })
       }
-      // 五日：按日期分组绘制
-      const dayMap = new Map<string, { label: string; values: number[] }>()
-      for (const p of t.points) {
-        const date = p.label.slice(0, 10)
-        let d = dayMap.get(date)
-        if (d === undefined) { d = { label: date, values: [] }; dayMap.set(date, d) }
-        d.values.push(p.price)
+      // 五日：连续拼接（午休/隔夜已由压缩时间轴折叠），交易日之间画分隔线
+      const pts = t.points.map((p) => ({ t: p.t, value: p.price, vol: p.vol, avg: p.avg, label: p.label }))
+      const breaks: number[] = []
+      for (let i = 1; i < pts.length; i += 1) {
+        if (pts[i].label.slice(0, 10) !== pts[i - 1].label.slice(0, 10)) breaks.push(i)
       }
-      return React.createElement(MultiDayTrend, { days: [...dayMap.values()], width, height: chartHeight, redUp })
+      void lastUp
+      return React.createElement(TrendChart, {
+        points: pts,
+        baseline: null,
+        width,
+        redUp,
+        dayBreaks: breaks,
+        mainH: 200,
+        volH: 52,
+        macdH: 62,
+      })
     }
-    const bars: CandleBar[] = payload.kline.days.map((d) => ({ date: d.date, open: d.open, close: d.close, high: d.high, low: d.low }))
+    const bars = payload.kline.days.map((d) => ({ date: d.date, open: d.open, close: d.close, high: d.high, low: d.low, vol: d.vol }))
     const klineMarkers: CandleMarker[] = trades
       .filter((tr) => bars.length > 0 && tr.ts >= Date.parse(`${bars[0].date}T00:00:00`) - 86_400_000 * 8)
       .map((tr) => ({ date: new Date(tr.ts).toISOString().slice(0, 10), kind: tr.verb, qty: tr.qty, price: tr.price }))
-    return React.createElement(CandleChart, { bars, markers: klineMarkers, width, height: chartHeight, redUp })
+    return React.createElement(KlineChart, {
+      key: tab,
+      bars,
+      markers: klineMarkers,
+      width,
+      redUp,
+      klt: KLINE_PLAN[tab as 'day' | 'week' | 'month' | 'year'].klt,
+      mainH: 230,
+      volH: 54,
+      macdH: 64,
+    })
   }
 
   // per-tab caption (period/range + baseline info)
@@ -246,7 +275,7 @@ export function QuoteDrawer(props: { secid: string; name: string; redUp: boolean
       const first = k.days[0]
       const last = k.days[k.days.length - 1]
       if (first !== undefined && last !== undefined) {
-        note = `共 ${k.days.length} 根 · ${first.date} ~ ${last.date}${k.stale === true ? ' · 缓存数据（上游暂不可用）' : ''}`
+        note = `共 ${k.days.length} 根 · ${first.date} ~ ${last.date} · MA5/10/30/60 · 滚轮或拖动滑块缩放日期区间${k.stale === true ? ' · 缓存数据（上游暂不可用）' : ''}`
       }
     }
   }
