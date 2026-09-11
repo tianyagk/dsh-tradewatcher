@@ -8,11 +8,13 @@
  * tools read the live files + live quotes; the plain JSON is additionally
  * documented in README for file-tool based analysis.
  */
-import { TW_ROWS, type QuoteRow } from '../shared/model.ts'
+import { TW_ROWS, type CalEvent, type QuoteRow } from '../shared/model.ts'
 import { SECID_RE } from '../shared/model.ts'
 import * as em from './em.ts'
 import { assemblePortfolio, ledgerViews, verbLabel } from './portfolio.ts'
 import { DataStore, dataHome } from './store.ts'
+import { CalendarStore, calToday } from './calendar.ts'
+import { CAL_CATEGORY_LABEL, type CalCategory } from '../shared/model.ts'
 import type { PluginContext, PluginToolDefinition, PluginToolRuntime, PluginSystemPrompt } from './context.ts'
 
 const PREFIX = 'tradewatcher_'
@@ -68,7 +70,10 @@ function renderQuotes(items: Record<string, QuoteRow>): string {
 
 // ── tools ─────────────────────────────────────────────────────────────────
 
-export function makeAgentTools(store: DataStore): {
+export function makeAgentTools(
+  store: DataStore,
+  calendar?: CalendarStore,
+): {
   registerTools: (tools: PluginToolRuntime, prompt: PluginSystemPrompt | undefined) => () => void
 } {
   const defs: PluginToolDefinition[] = []
@@ -329,6 +334,105 @@ export function makeAgentTools(store: DataStore): {
     },
   })
 
+  // ── 财经日历：读取 ────────────────────────────────────────────────
+  defs.push({
+    name: `${PREFIX}calendar`,
+    description:
+      '读取 tradewatcher 财经日历（宏观事件、IPO/新股申购与上市、持仓与自选标的的财报预约披露、分红除权除息），' +
+      '按日期返回（默认今天起 30 天）。自动事件来自东方财富数据中心（6 小时缓存），手动事件由用户在侧边栏维护。' +
+      'Triggers: 看日历/近期财经事件/新股上市日期/财报披露时间/分红除权日.',
+    parameters: {
+      type: 'object', additionalProperties: false,
+      properties: {
+        from: { type: 'string', description: '起始日期 YYYY-MM-DD（默认今天）' },
+        to: { type: 'string', description: '结束日期 YYYY-MM-DD（默认 +30 天）' },
+        category: { type: 'string', description: '可选过滤：macro-intl/macro-cn/ipo/earnings/dividend/other' },
+      },
+    },
+    output: {
+      schema: { type: 'object', additionalProperties: true, properties: { events: { type: 'array', items: {} }, syncedAt: { type: 'number' } } },
+      render: (_a, value) => {
+        const v = value as { events?: CalEvent[]; syncedAt?: number; error?: string }
+        if (v.error !== undefined) return textBlock(`错误：${v.error}`)
+        const rows = v.events ?? []
+        if (rows.length === 0) return textBlock('该区间暂无事件。')
+        const mark = (i: number): string => (i === 3 ? '【高】' : i === 2 ? '【中】' : '')
+        const lines = rows.map((e) =>
+          `${e.date} ${mark(e.importance)}${e.title}（${CAL_CATEGORY_LABEL[e.category] ?? e.category}${e.source === 'auto' ? '·自动' : ''}）` +
+          (e.note !== undefined && e.note !== '' ? ` — ${e.note}` : ''),
+        )
+        return textBlock(`共 ${rows.length} 条：\n${lines.join('\n')}`)
+      },
+    },
+    async execute(args) {
+      if (calendar === undefined) return { error: '日历模块未挂载' }
+      try {
+        const from = typeof args.from === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(args.from) ? args.from : calToday(0)
+        const to = typeof args.to === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(args.to) ? args.to : calToday(30)
+        await calendar.init()
+        try {
+          const port = store.portData()
+          const codes = new Set<string>()
+          const push = (secid: string): void => {
+            const m = /^(\d{1,3})\.([A-Za-z0-9]+)$/.exec(secid)
+            if (m !== null && (m[1] === '0' || m[1] === '1')) codes.add(m[2])
+          }
+          for (const it of store.watchData().items) push(it.secid)
+          for (const it of port.items) push(it.secid)
+          await calendar.sync([...codes], false)
+        } catch {
+          /* 同步失败不影响读取 */
+        }
+        const cat = typeof args.category === 'string' && args.category !== '' ? args.category : null
+        let events = calendar.list(from, to)
+        if (cat !== null) events = events.filter((e) => e.category === cat)
+        return { events, syncedAt: calendar.syncedAt }
+      } catch (error) {
+        return { error: error instanceof Error ? error.message : String(error) }
+      }
+    },
+  })
+
+  // ── 财经日历：新增（手动事件） ──────────────────────────────────────
+  defs.push({
+    name: `${PREFIX}calendar_add`,
+    description:
+      '向 tradewatcher 财经日历写入一条**手动事件**（宏观会议/数据、未上市公司 IPO 与上市日期、自定义提醒等）。' +
+      'importance：3=高（红）2=中（橙）1=低。自动事件（新股/财报/分红）由数据源同步，不要手工重复添加。' +
+      'Triggers: 记到日历/加入日历/提醒我/记录某个日期.',
+    parameters: {
+      type: 'object', additionalProperties: false, required: ['date', 'title'],
+      properties: {
+        date: { type: 'string', description: '日期 YYYY-MM-DD' },
+        title: { type: 'string', description: '事件名（≤80 字，日历格子直接显示）' },
+        category: { type: 'string', description: 'macro-intl / macro-cn / ipo / earnings / dividend / other（默认 other）' },
+        importance: { type: 'number', description: '3=高 2=中 1=低（默认 2）' },
+        note: { type: 'string', description: '详情备注（≤500 字，详情卡显示）' },
+        symbol: { type: 'string', description: '关联标的代码（可选，如 688981 / 600938）' },
+      },
+    },
+    output: {
+      schema: { type: 'object', additionalProperties: true, properties: { ok: { type: 'boolean' }, event: {} } },
+      render: (_a, value) => {
+        const v = value as { ok?: boolean; error?: string; event?: CalEvent }
+        if (v.error !== undefined) return textBlock(`错误：${v.error}`)
+        const e = v.event
+        return textBlock(e === undefined ? '已写入' : `已加入日历：${e.date} ${e.title}（${CAL_CATEGORY_LABEL[e.category] ?? e.category}，重要度 ${e.importance}）`)
+      },
+    },
+    async execute(args) {
+      if (calendar === undefined) return { error: '日历模块未挂载' }
+      try {
+        const before = new Set((await calendar.init(), calendar.list(calToday(-365), calToday(365))).map((e) => e.id))
+        const events = await calendar.mutate({ ...args, op: 'add' })
+        const created = events.find((e) => !before.has(e.id))
+        return { ok: true, event: created }
+      } catch (error) {
+        return { error: error instanceof Error ? error.message : String(error) }
+      }
+    },
+  })
+
   function guidanceText(): string {
     return (
       '本机已安装 dsh-tradewatcher（盯盘）插件：' +
@@ -339,7 +443,9 @@ export function makeAgentTools(store: DataStore): {
       'tradewatcher_ledger（逐笔买卖与分组操作流水，支持按 posId/groupId 过滤）、' +
       'tradewatcher_watchlist（自选分组）、' +
       'tradewatcher_quotes（实时行情：cn/intl/commodity/all 预设或任意东财代码）、' +
-      'tradewatcher_search（证券搜索）。' +
+      'tradewatcher_search（证券搜索）、' +
+      'tradewatcher_calendar（财经日历：宏观/IPO/财报/分红，自动同步东财数据中心），' +
+      'tradewatcher_calendar_add（把用户提到的重要日期写入日历）。' +
       '持仓与流水由侧边栏「盯盘」页签维护；工具为只读，如需修改（如按建议调仓后补录）请在侧边栏页面操作。' +
       '主动调用规则：当用户询问持仓/仓位/盈亏/市值/某笔交易历史/自选行情/行情报价时，应主动用 tradewatcher_* 工具查询，不要臆造数据。'
     )

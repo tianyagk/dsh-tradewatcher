@@ -14,6 +14,7 @@ import { WatchlistPage } from './WatchlistPage.tsx'
 import { PortfolioPage } from './PortfolioPage.tsx'
 import { MarketPage } from './MarketPage.tsx'
 import { CloudMap } from './CloudMap.tsx'
+import { CalendarPage } from './CalendarPage.tsx'
 import { ensureCss } from './styles.ts'
 
 /** Structural face of ctx.betterSidebar (see dsh-better-sidebar service). */
@@ -48,7 +49,7 @@ export function apply(ctx: {
 }): void {
   ensureCss()
   try {
-    console.log('[dsh-tradewatcher] client v0.8.2 loaded (two-line rows + overflow menus + icon topbar)')
+    console.log('[dsh-tradewatcher] client v0.9.0 loaded (two-line rows + overflow menus + icon topbar)')
   } catch {
     /* console unavailable */
   }
@@ -67,7 +68,7 @@ export function apply(ctx: {
   )
 }
 
-type PageKey = 'watch' | 'portfolio' | 'market' | 'cloud'
+type PageKey = 'watch' | 'portfolio' | 'market' | 'cloud' | 'calendar'
 
 function App(props: TabProps): React.ReactElement {
   const visible = props.visible
@@ -143,6 +144,9 @@ function App(props: TabProps): React.ReactElement {
     if (page === 'market') {
       return React.createElement(MarketPage, { quotes, prefs: prefs ?? DEFAULT_PREFS })
     }
+    if (page === 'calendar') {
+      return React.createElement(CalendarPage, { prefs: prefs ?? DEFAULT_PREFS })
+    }
     return React.createElement(CloudMap, null)
   }
 
@@ -151,6 +155,7 @@ function App(props: TabProps): React.ReactElement {
     { key: 'portfolio', label: '持仓', full: '持仓账本（分组/流水/盈亏）' },
     { key: 'market', label: '大盘', full: 'A股大盘行情' },
     { key: 'cloud', label: '云图', full: '大盘云图（52etf 热力图）' },
+    { key: 'calendar', label: '日历', full: '财经日历（宏观/IPO/财报/分红）' },
   ]
 
   return React.createElement(

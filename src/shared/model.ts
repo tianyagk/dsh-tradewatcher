@@ -122,6 +122,45 @@ export interface KlineData {
   stale?: boolean
 }
 
+/** ── 财经日历 ─────────────────────────────────────────────────────────── */
+
+export type CalCategory = 'macro-intl' | 'macro-cn' | 'ipo' | 'earnings' | 'dividend' | 'other'
+
+export const CAL_CATEGORY_LABEL: Record<CalCategory, string> = {
+  'macro-intl': '国际宏观',
+  'macro-cn': '国内宏观',
+  ipo: 'IPO/新股',
+  earnings: '财报',
+  dividend: '分红',
+  other: '其他',
+}
+
+/** 重要性：3=高（红）2=中（橙）1=低（灰蓝） */
+export type CalImportance = 1 | 2 | 3
+
+export interface CalEvent {
+  id: string
+  /** YYYY-MM-DD */
+  date: string
+  endDate?: string
+  title: string
+  category: CalCategory
+  importance: CalImportance
+  note?: string
+  /** 关联标的（secid 或代码），可选 */
+  symbol?: string
+  source: 'auto' | 'manual'
+  /** 自动事件的稳定去重键 */
+  autoKey?: string
+}
+
+export interface CalPayload {
+  events: CalEvent[]
+  syncedAt: number
+  /** 自动同步覆盖的标的代码（来自自选+持仓） */
+  symbolCount: number
+}
+
 /** 一笔买卖（图上的 B/S 标记，来自持仓流水）。 */
 export interface TradeMark {
   id: string

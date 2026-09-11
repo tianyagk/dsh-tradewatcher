@@ -12,6 +12,7 @@ import { isTrustedApiRequest } from './fence.ts'
 import * as em from './em.ts'
 import { assemblePortfolio, ledgerViews } from './portfolio.ts'
 import { DataStore } from './store.ts'
+import { CalendarStore, calToday } from './calendar.ts'
 import { log, type PluginWebRoute, type PluginWebServer } from './context.ts'
 
 const MAX_BODY = 256 * 1024
@@ -66,7 +67,24 @@ async function portfolioWithQuotes(store: DataStore): Promise<{ view: unknown; s
   return { view, stale }
 }
 
-export function makeTradeRoutes(store: DataStore, trustedHosts: readonly string[]): TradeRoutes {
+/** 关注标的 → 6 位代码（仅 A股，供财报/分红数据源过滤） */
+function focusCodes(store: DataStore): string[] {
+  const codes = new Set<string>()
+  const push = (secid: string): void => {
+    const m = /^(\d{1,3})\.([A-Za-z0-9]+)$/.exec(secid)
+    if (m === null) return
+    if (m[1] === '0' || m[1] === '1') codes.add(m[2])
+  }
+  for (const it of store.watchData().items) push(it.secid)
+  for (const it of store.portData().items) push(it.secid)
+  return [...codes]
+}
+
+export function makeTradeRoutes(
+  store: DataStore,
+  trustedHosts: readonly string[],
+  calendar: CalendarStore,
+): TradeRoutes {
   const gate = (req: IncomingMessage): boolean => isTrustedApiRequest(req, trustedHosts)
   const fail = (res: ServerResponse, error: unknown): void => {
     const message = error instanceof Error ? error.message : String(error)
@@ -314,6 +332,42 @@ export function makeTradeRoutes(store: DataStore, trustedHosts: readonly string[
           const port = store.portData()
           const entries = ledgerViews(store.ledgerEntries(), port.groups, port.items, { groupId, posId, limit })
           send(res, 200, { entries })
+        } catch (error) {
+          fail(res, error)
+        }
+      },
+    },
+    {
+      kind: 'exact',
+      path: '/tradewatcher/calendar',
+      handler: async (req, res) => {
+        if (!needGate(req, res)) return
+        try {
+          await calendar.init()
+          if (req.method === 'GET') {
+            const p = queryOf(req)
+            const from = String(p.get('from') ?? calToday(-45))
+            const to = String(p.get('to') ?? calToday(400))
+            if (!/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to)) throw new Error('from/to 应为 YYYY-MM-DD')
+            const codes = focusCodes(store)
+            if (p.get('sync') !== '0') {
+              try {
+                await calendar.sync(codes, p.get('force') === '1')
+              } catch {
+                /* 同步失败仍返回本地事件 */
+              }
+            }
+            send(res, 200, { events: calendar.list(from, to), syncedAt: calendar.syncedAt, symbolCount: codes.length })
+            return
+          }
+          if (req.method === 'POST') {
+            const body = (await readBody(req)) as Record<string, unknown>
+            await calendar.mutate(body)
+            const events = calendar.list(calToday(-45), calToday(400))
+            send(res, 200, { ok: true, events, syncedAt: calendar.syncedAt })
+            return
+          }
+          send(res, 405, { error: 'method not allowed' })
         } catch (error) {
           fail(res, error)
         }

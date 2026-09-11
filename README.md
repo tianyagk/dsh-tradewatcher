@@ -20,6 +20,10 @@
   - **持仓**：分组 CRUD（同上归档语义）+ 组内证券的「买入/卖出/调整/编辑/移动/明细/移除」；每分组与总览显示**总市值、浮动盈亏、当日盈亏、累计已实现**；每行明细含 **浮动盈亏率与当日盈亏率**（口径见下）
   - **A股大盘**：六大指数 + 沪深两市涨跌家数/成交额统计；行业/概念板块涨跌排行与主力资金排行；ETF 排行；个股/基金搜索 + 详情卡（分时大图、换手/量比/市盈率/市值等）
   - **大盘云图**：见上
+  - **日历**：财经日历模块。月历网格按**重要性三色**标记事件（红=高 / 橙=中 / 蓝=低），格子里只显示事件名，点日期弹出**当天事件详情卡**（类别、重要度、来源、关联标的、备注），支持手动事件的增/删/改与自动事件的隐藏。数据来源：
+    - **自动同步**（东财数据中心，6 小时缓存）：新股申购/上市日历（全市场）、**自选 + 持仓标的**的财报预约披露日期、分红除权除息/股权登记日；
+    - **手动维护**：国际/国内宏观事件、未上市公司 IPO 与上市日期（如长鑫、长存、DeepSeek、SpaceX）、自定义提醒——可在页面新增，也可以直接让会话里的 agent 用 `tradewatcher_calendar_add` 写入。
+    事件库落在 `~/.dsh/dsh-tradewatcher/calendar.json`；会话工具 `tradewatcher_calendar` 可读取任意区间。
 
 ## 安装
 
@@ -74,7 +78,7 @@ bash scripts/install.sh
 
 ### HTTP 路由（同源，浏览器信任围栏保护，POST 校验 Origin）
 
-`GET /tradewatcher/health|quotes?ids=|trend?secid=|kline?secid=|detail?secid=|suggest?q=|board?scope=&sort=&pn=&pz=`、`GET|POST /tradewatcher/watch|portfolio|prefs`、`GET /tradewatcher/ledger`
+`GET /tradewatcher/health|quotes?ids=|trend?secid=|kline?secid=|detail?secid=|suggest?q=|board?scope=&sort=&pn=&pz=`、`GET|POST /tradewatcher/watch|portfolio|prefs|calendar`、`GET /tradewatcher/ledger`、`GET /tradewatcher/trades?secid=`、`GET /tradewatcher/industry|industries`
 
 ## 开发
 

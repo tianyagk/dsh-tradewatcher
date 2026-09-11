@@ -13,6 +13,7 @@ import type {
   WatchData,
   LedgerView,
   TradeMark,
+  CalEvent,
 } from '../shared/model.ts'
 
 export class ApiError extends Error {
@@ -57,6 +58,12 @@ export const api = {
   },
   kline(secid: string, klt: 101 | 102 | 103 | 104 = 101, lmt = 120): Promise<{ kline: KlineData | null }> {
     return request(`/tradewatcher/kline?secid=${encodeURIComponent(secid)}&klt=${klt}&lmt=${lmt}`)
+  },
+  calendar(from: string, to: string, force = false): Promise<{ events: CalEvent[]; syncedAt: number; symbolCount: number }> {
+    return request(`/tradewatcher/calendar?from=${from}&to=${to}${force ? '&force=1' : ''}`)
+  },
+  mutateCalendar(body: Record<string, unknown>): Promise<{ ok: boolean; events: CalEvent[]; syncedAt: number }> {
+    return request('/tradewatcher/calendar', { method: 'POST', body: JSON.stringify(body) })
   },
   trades(secid: string): Promise<{ trades: TradeMark[] }> {
     return request(`/tradewatcher/trades?secid=${encodeURIComponent(secid)}`)

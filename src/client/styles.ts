@@ -226,6 +226,20 @@ color-scheme:dark}
 .tw-zoom-sel{position:absolute;top:0;bottom:0;background:var(--tw-accent-soft);border-left:1px solid var(--tw-accent);border-right:1px solid var(--tw-accent);pointer-events:none;border-radius:2px}
 .tw-zoom-h{position:absolute;top:-3px;width:12px;height:22px;border-radius:6px;background:var(--tw-card);border:1px solid var(--tw-border-strong);box-shadow:var(--tw-shadow-sm);cursor:ew-resize;touch-action:none}
 .tw-zoom-h::after{content:"";position:absolute;left:4.5px;top:6px;width:2px;height:9px;background:var(--tw-muted);border-radius:1px}
+.tw-cal-bar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:2px 0 8px}
+.tw-cal-grid{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:4px}
+.tw-cal-dow{margin-bottom:2px}
+.tw-cal-dowcell{text-align:center;font-size:10.5px;color:var(--tw-muted);padding:2px 0}
+.tw-cal-cell{min-height:74px;border:1px solid var(--tw-border);border-radius:8px;background:var(--tw-card);padding:3px 4px;display:flex;flex-direction:column;gap:2px;overflow:hidden;cursor:pointer;transition:border-color .12s,background .12s}
+.tw-cal-cell:hover{border-color:var(--tw-accent);background:var(--tw-hover)}
+.tw-cal-cell.is-out{opacity:.45}
+.tw-cal-cell.is-today{border-color:var(--tw-accent);box-shadow:inset 0 0 0 1px var(--tw-accent-soft)}
+.tw-cal-day{display:flex;align-items:center;gap:4px;font-size:10.5px;font-family:var(--tw-mono);color:var(--tw-dim)}
+.tw-cal-cell.is-today .tw-cal-day{color:var(--tw-accent);font-weight:700}
+.tw-cal-count{margin-left:auto;font-size:9px;color:var(--tw-muted);border:1px solid var(--tw-border);border-radius:8px;padding:0 4px}
+.tw-cal-pill{font-size:10px;line-height:1.35;border:1px solid;border-radius:5px;padding:0 3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;cursor:pointer}
+.tw-cal-more{font-size:9.5px;color:var(--tw-muted);text-align:right;cursor:pointer}
+.tw-cal-card{border-left:3px solid var(--tw-accent);background:var(--tw-card2);border-radius:6px;padding:7px 9px;margin-bottom:8px}
 .tw-zoom-bar{display:flex;align-items:center;gap:6px;font-size:10.5px;font-family:var(--tw-mono)}
 .tw-chartnote{display:flex;gap:12px;flex-wrap:wrap;color:var(--tw-muted);font-size:11px;margin:6px 0 2px;font-family:var(--tw-mono)}
 
