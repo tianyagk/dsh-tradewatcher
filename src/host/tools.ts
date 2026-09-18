@@ -14,6 +14,8 @@ import * as em from './em.ts'
 import { assemblePortfolio, ledgerViews, verbLabel } from './portfolio.ts'
 import { DataStore, dataHome } from './store.ts'
 import { CalendarStore, calToday } from './calendar.ts'
+import { RescueMonitor } from './rescue.ts'
+import { RESCUE_LEVEL_LABEL } from '../shared/model.ts'
 import { CAL_CATEGORY_LABEL, type CalCategory } from '../shared/model.ts'
 import type { PluginContext, PluginToolDefinition, PluginToolRuntime, PluginSystemPrompt } from './context.ts'
 
@@ -73,6 +75,7 @@ function renderQuotes(items: Record<string, QuoteRow>): string {
 export function makeAgentTools(
   store: DataStore,
   calendar?: CalendarStore,
+  rescue?: RescueMonitor,
 ): {
   registerTools: (tools: PluginToolRuntime, prompt: PluginSystemPrompt | undefined) => () => void
 } {
@@ -433,6 +436,108 @@ export function makeAgentTools(
     },
   })
 
+
+  defs.push({
+    name: `${PREFIX}rescue`,
+    description:
+      '读取【护盘信号】监测：国家队潜在护盘行为的概率性信号（宽基 ETF 放量 + 超大单净流入 + 量价背离）。' +
+      '返回当前信号等级（平静/资金异动/疑似护盘/强护盘信号）、综合评分、六因子明细（实测值/阈值/是否命中）、' +
+      '各宽基通道明细（沪深300ETF/上证50ETF/中证500ETF/中证1000ETF/科创50ETF/创业板ETF 的量能倍数、超大单净额、' +
+      '脉冲倍数）、今日信号时间线与近 30 日历史。注意：汇金/国新/诚通不披露日内成交，' +
+      '这是行为模式识别而非身份确认，回答时不要断言「国家队已入场」。',
+    parameters: {
+      type: 'object',
+      properties: {
+        force: { type: 'boolean', description: 'true 时立即重新采样一次（默认返回最近一次采样快照）' },
+        day: { type: 'string', description: '历史回看某日（YYYY-MM-DD），返回当日信号时间线与 5 分钟抽样' },
+      },
+      additionalProperties: false,
+    },
+    output: {
+      schema: {
+        type: 'object',
+        additionalProperties: true,
+        properties: {
+          level: { type: 'number' },
+          levelLabel: { type: 'string' },
+          score: { type: 'number' },
+          summary: { type: 'string' },
+          factors: { type: 'array', items: {} },
+          etfs: { type: 'array', items: {} },
+          history: { type: 'array', items: {} },
+        },
+      },
+      render: (_args, value) => {
+        const v = value as {
+          error?: string
+          levelLabel?: string
+          score?: number
+          trading?: boolean
+          summary?: string
+          thresholdSource?: string
+          selfSampleDays?: number
+          indexPct?: number | null
+          gap?: boolean
+          factors?: Array<{ 因子: string; 实测: string; 得分: number; 命中: boolean }>
+          etfs?: Array<Record<string, unknown>>
+          history?: Array<{ day: string; maxLevel: number; maxScore: number; events: number; peakHhmm: string | null }>
+        }
+        if (v.error !== undefined) return textBlock(`护盘信号读取失败：${v.error}`)
+        const pct = (n: unknown): string => (typeof n === 'number' ? `${n.toFixed(2)}x` : '—')
+        const yi = (n: unknown): string => (typeof n === 'number' ? `${(n / 1e8).toFixed(2)}亿` : '—')
+        const lines = [
+          `护盘信号：${v.levelLabel ?? '—'}（评分 ${v.score ?? 0}/100，${v.trading === true ? '采样中' : '非交易时段'}）`,
+          `归因：${v.summary ?? '—'}`,
+          `阈值来源：${v.thresholdSource ?? '—'}（自建样本 ${v.selfSampleDays ?? 0} 天）  沪深300 ${typeof v.indexPct === 'number' ? `${v.indexPct.toFixed(2)}%` : '—'}${v.gap === true ? '  ⚠ 采样有缺口' : ''}`,
+          '因子：',
+          ...(v.factors ?? []).map((f) => `  ${f.命中 ? '●' : '○'} ${f.因子} 实测 ${f.实测} 得分 ${f.得分}`),
+          '通道：',
+          ...(v.etfs ?? []).map((e) =>
+            `  ${String(e.通道 ?? '')} 量能 ${pct(e['同时点量能倍数'])}  超大单 ${yi(e['超大单净额'])}（比20日均额 ${pct(e['超大单比20日均额'])}）  脉冲 ${pct(e['脉冲倍数'])}${e['自身触发'] === true ? '  ← 触发' : ''}`,
+          ),
+          `近 ${(v.history ?? []).length} 日最高等级：`,
+          ...(v.history ?? []).slice(0, 7).map((h) => `  ${h.day} 等级 ${h.maxLevel} 峰值 ${h.maxScore}${h.peakHhmm !== null ? ` @${h.peakHhmm}` : ''} 触发 ${h.events} 次`),
+        ]
+        return textBlock(lines.join('\n'))
+      },
+    },
+    execute: async (args: Record<string, unknown>) => {
+      if (rescue === undefined) return { error: '护盘监测未启用' }
+      try {
+        const snapshot = args.force === true ? await rescue.sampleNow() : rescue.snapshot()
+        const brief = {
+          ts: snapshot.ts,
+          trading: snapshot.trading,
+          level: snapshot.level,
+          levelLabel: RESCUE_LEVEL_LABEL[snapshot.level],
+          score: snapshot.score,
+          summary: snapshot.summary,
+          indexPct: snapshot.indexPct,
+          thresholdSource: snapshot.thresholdSource,
+          selfSampleDays: snapshot.selfSampleDays,
+          activeIntervalSec: snapshot.activeIntervalSec,
+          sampleCount: snapshot.sampleCount,
+          gap: snapshot.gap,
+          factors: snapshot.factors.map((f) => ({ 因子: f.label, 实测: f.actual, 得分: f.score, 权重: f.weight, 命中: f.hit, 阈值: f.threshold })),
+          etfs: snapshot.etfs.map((e) => ({
+            通道: `${e.name}(${e.secid})`, 涨跌: e.pct, 成交额: e.amount, 量比: e.volRatio,
+            同时点量能倍数: e.timeAdjMult, 超大单净额: e.superNet, 超大单占成交额: e.superShare,
+            超大单比20日均额: e.superVsAvg, 脉冲倍数: e.pulseMult, 活跃度: e.activity, 自身触发: e.triggered,
+          })),
+          todayEvents: snapshot.today,
+          history: rescue.history(30),
+        }
+        const day = typeof args.day === 'string' ? args.day : null
+        if (day !== null && /^\d{4}-\d{2}-\d{2}$/.test(day)) {
+          return { ...brief, day, dayEvents: rescue.eventsOf(day), dayIntraday: rescue.intradayOf(day) }
+        }
+        return brief
+      } catch (error) {
+        return { error: error instanceof Error ? error.message : String(error) }
+      }
+    },
+  })
+
   function guidanceText(): string {
     return (
       '本机已安装 dsh-tradewatcher（盯盘）插件：' +
@@ -445,9 +550,11 @@ export function makeAgentTools(
       'tradewatcher_quotes（实时行情：cn/intl/commodity/all 预设或任意东财代码）、' +
       'tradewatcher_search（证券搜索）、' +
       'tradewatcher_calendar（财经日历：宏观/IPO/财报/分红，自动同步东财数据中心），' +
-      'tradewatcher_calendar_add（把用户提到的重要日期写入日历）。' +
+      'tradewatcher_calendar_add（把用户提到的重要日期写入日历）、' +
+      'tradewatcher_rescue（护盘信号：宽基 ETF 放量+超大单净流入的概率性护盘识别，含六因子明细与历史回看），' +
       '持仓与流水由侧边栏「盯盘」页签维护；工具为只读，如需修改（如按建议调仓后补录）请在侧边栏页面操作。' +
-      '主动调用规则：当用户询问持仓/仓位/盈亏/市值/某笔交易历史/自选行情/行情报价时，应主动用 tradewatcher_* 工具查询，不要臆造数据。'
+      '主动调用规则：当用户询问持仓/仓位/盈亏/市值/某笔交易历史/自选行情/行情报价/护盘或国家队动向时，应主动用 tradewatcher_* 工具查询，不要臆造数据。' +
+      '护盘信号是行为模式识别（汇金/国新/诚通不披露日内成交），回答时不要断言「国家队已入场」。'
     )
   }
 

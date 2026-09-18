@@ -7,6 +7,7 @@ import { api } from './api.ts'
 import { dirClass, fmtAmt, fmtBig, fmtPct, fmtPrice, fmtSigned } from './format.ts'
 import { Btn, ErrorNote, Modal, SuggestInput } from './ui.tsx'
 import { Sparkline } from './charts.tsx'
+import { RescuePanel } from './RescuePanel.tsx'
 import type { PortPrefs } from '../shared/model.ts'
 
 type Scope = 'industry' | 'concept' | 'etf'
@@ -17,6 +18,7 @@ const SCOPE_LABEL: Record<Scope, string> = { industry: '行业板块', concept: 
 export function MarketPage(props: {
   quotes: Record<string, QuoteRow>
   prefs: PortPrefs
+  onPrefs?: (prefs: PortPrefs) => void
 }): React.ReactElement {
   const { quotes, prefs } = props
   const redUp = prefs.redUp
@@ -162,6 +164,7 @@ export function MarketPage(props: {
         ),
       ),
     ),
+    React.createElement(RescuePanel, { prefs, redUp, onPrefs: props.onPrefs }),
     React.createElement('div', { className: 'tw-panel' },
       React.createElement('div', { className: 'tw-panel-h' },
         React.createElement('span', { className: 't' }, '板块 / 资金 / ETF'),

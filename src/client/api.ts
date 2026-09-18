@@ -7,6 +7,10 @@ import type {
   PortPrefs,
   PortfolioView,
   QuoteRow,
+  RescueDaySummary,
+  RescueIntradayPoint,
+  RescueSignalEvent,
+  RescueSnapshot,
   StockDetail,
   SuggestItem,
   TrendData,
@@ -84,6 +88,12 @@ export const api = {
   },
   board(scope: 'industry' | 'concept' | 'etf', sort: 'pct' | 'money' | 'amount', pn = 1): Promise<{ total: number; rows: BoardRow[] }> {
     return request(`/tradewatcher/board?scope=${scope}&sort=${sort}&pn=${pn}&pz=40`)
+  },
+  rescue(force = false): Promise<{ snapshot: RescueSnapshot; history: RescueDaySummary[]; calibration?: unknown }> {
+    return request(`/tradewatcher/rescue${force ? '?force=1' : ''}`)
+  },
+  rescueDay(day: string): Promise<{ snapshot: RescueSnapshot; dayEvents: RescueSignalEvent[]; dayIntraday: RescueIntradayPoint[] }> {
+    return request(`/tradewatcher/rescue?day=${encodeURIComponent(day)}`)
   },
   watch(): Promise<{ watch: WatchData }> {
     return request('/tradewatcher/watch')

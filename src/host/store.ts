@@ -12,6 +12,7 @@ import { join } from 'node:path'
 import {
   ACTOR_WEB,
   DEFAULT_PREFS,
+  RESCUE_ETF_CATALOG,
   SECID_RE,
   isFiniteNumber,
   type LedgerEntry,
@@ -21,6 +22,7 @@ import {
   type PortGroup,
   type PortItem,
   type PortPrefs,
+  type RescueConfig,
   type WatchData,
   type WatchGroup,
   type WatchItem,
@@ -162,7 +164,8 @@ export class DataStore {
       this.watch = await this.readJson<WatchFile>('watch.json', { v: 1, groups: [], items: [] })
       this.port = await this.readJson<PortFile>('positions.json', { v: 1, groups: [], items: [] })
       this.ledger = await this.readJson<LedgerFile>('ledger.json', { v: 1, entries: [] })
-      this.prefs = { ...DEFAULT_PREFS, ...(await this.readJson<Partial<PortPrefs>>('prefs.json', {})) }
+      const loaded = await this.readJson<Partial<PortPrefs>>('prefs.json', {})
+      this.prefs = { ...DEFAULT_PREFS, ...loaded, rescue: { ...DEFAULT_PREFS.rescue, ...(loaded.rescue ?? {}) } }
       // Coherence: drop descriptors that reference missing groups (never drop ledger).
       const groupIds = new Set(this.port.groups.map((g) => g.id))
       this.port.items = this.port.items.filter((p) => groupIds.has(p.groupId))
@@ -584,6 +587,7 @@ export class DataStore {
       this.prefs.refreshSec = Math.round(r)
     }
     if (patch.redUp !== undefined) this.prefs.redUp = patch.redUp === true
+    if (patch.rescue !== undefined) this.prefs.rescue = normalizeRescuePrefs(patch.rescue, this.prefs.rescue)
     await this.commit([['prefs.json', this.prefs]])
     return this.getPrefs()
   }
@@ -597,4 +601,29 @@ export function money(n: number | null | undefined): number | null {
 
 export function clampMoney(n: number): number {
   return roundMoney(n)
+}
+
+/** 护盘信号配置校验：频率 5–600s、尾盘时刻 HH:mm、标的池限白名单 */
+export function normalizeRescuePrefs(patch: Partial<RescueConfig>, base: RescueConfig): RescueConfig {
+  const out: RescueConfig = { ...base }
+  if (patch.enabled !== undefined) out.enabled = patch.enabled === true
+  const sec = (v: unknown, fallback: number): number => {
+    if (!isFiniteNumber(v) || v < 5 || v > 600) return fallback
+    return Math.round(v)
+  }
+  if (patch.intervalSec !== undefined) out.intervalSec = sec(patch.intervalSec, base.intervalSec)
+  if (patch.tailIntervalSec !== undefined) out.tailIntervalSec = sec(patch.tailIntervalSec, base.tailIntervalSec)
+  if (patch.tailFrom !== undefined) {
+    const t = String(patch.tailFrom)
+    const m = /^(\d{2}):(\d{2})$/.exec(t)
+    if (m === null || Number(m[1]) > 23 || Number(m[2]) > 59) throw new Error('尾盘时刻应为 00:00–23:59 之间的 HH:mm')
+    out.tailFrom = t
+  }
+  if (patch.universe !== undefined) {
+    if (!Array.isArray(patch.universe)) throw new Error('universe 应为 secid 数组')
+    const allowed = new Set(RESCUE_ETF_CATALOG.map((e) => e.secid))
+    const picked = patch.universe.map(String).filter((s) => allowed.has(s))
+    out.universe = picked
+  }
+  return out
 }

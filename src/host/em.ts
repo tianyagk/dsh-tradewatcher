@@ -358,6 +358,7 @@ function parseTrendRow(row: string): TrendPoint | null {
     price,
     avg: num(parts[7]),
     vol: num(parts[5]),
+    amount: num(parts[6]),
   }
 }
 

@@ -49,7 +49,7 @@ export function apply(ctx: {
 }): void {
   ensureCss()
   try {
-    console.log('[dsh-tradewatcher] client v0.10.0 loaded (macro calendar auto-sync + event times)')
+    console.log('[dsh-tradewatcher] client v0.11.0 loaded (rescue-signal monitor + macro calendar)')
   } catch {
     /* console unavailable */
   }
@@ -142,7 +142,7 @@ function App(props: TabProps): React.ReactElement {
       })
     }
     if (page === 'market') {
-      return React.createElement(MarketPage, { quotes, prefs: prefs ?? DEFAULT_PREFS })
+      return React.createElement(MarketPage, { quotes, prefs: prefs ?? DEFAULT_PREFS, onPrefs: (p) => setPrefsState(p) })
     }
     if (page === 'calendar') {
       return React.createElement(CalendarPage, { prefs: prefs ?? DEFAULT_PREFS })

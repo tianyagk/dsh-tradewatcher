@@ -13,6 +13,7 @@ import * as em from './em.ts'
 import { assemblePortfolio, ledgerViews } from './portfolio.ts'
 import { DataStore } from './store.ts'
 import { CalendarStore, calToday } from './calendar.ts'
+import { RescueMonitor } from './rescue.ts'
 import { log, type PluginWebRoute, type PluginWebServer } from './context.ts'
 
 const MAX_BODY = 256 * 1024
@@ -84,6 +85,7 @@ export function makeTradeRoutes(
   store: DataStore,
   trustedHosts: readonly string[],
   calendar: CalendarStore,
+  rescue?: RescueMonitor,
 ): TradeRoutes {
   const gate = (req: IncomingMessage): boolean => isTrustedApiRequest(req, trustedHosts)
   const fail = (res: ServerResponse, error: unknown): void => {
@@ -339,6 +341,42 @@ export function makeTradeRoutes(
     },
     {
       kind: 'exact',
+      path: '/tradewatcher/rescue',
+      handler: async (req, res) => {
+        if (!needGate(req, res)) return
+        try {
+          if (rescue === undefined) {
+            send(res, 200, { error: '护盘监测未启用', snapshot: null, history: [] })
+            return
+          }
+          if (req.method === 'GET') {
+            const p = queryOf(req)
+            const wantsForce = p.get('force') === '1'
+            const day = p.get('day')
+            const snapshot = wantsForce ? await rescue.sampleNow() : rescue.snapshot()
+            if (day !== null && /^\d{4}-\d{2}-\d{2}$/.test(day)) {
+              send(res, 200, {
+                snapshot,
+                history: rescue.history(30),
+                day,
+                dayEvents: rescue.eventsOf(day),
+                dayIntraday: rescue.intradayOf(day),
+                calibrated: rescue.calibratedInfo,
+                calibration: rescue.calibrationInfo,
+              })
+              return
+            }
+            send(res, 200, { snapshot, history: rescue.history(30), calibrated: rescue.calibratedInfo, calibration: rescue.calibrationInfo })
+            return
+          }
+          send(res, 405, { error: 'method not allowed' })
+        } catch (error) {
+          fail(res, error)
+        }
+      },
+    },
+    {
+      kind: 'exact',
       path: '/tradewatcher/calendar',
       handler: async (req, res) => {
         if (!needGate(req, res)) return
@@ -391,6 +429,7 @@ export function makeTradeRoutes(
               throw new Error('patch 必须是对象')
             }
             const prefs = await store.setPrefs(patch as Parameters<DataStore['setPrefs']>[0])
+            rescue?.setConfig(prefs.rescue)
             send(res, 200, { prefs })
             return
           }

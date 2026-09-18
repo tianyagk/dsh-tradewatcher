@@ -93,6 +93,8 @@ export interface TrendPoint {
   price: number
   avg: number | null
   vol: number | null
+  /** 每分钟成交额（东财 trends2 提供；其它源可能缺省） */
+  amount?: number | null
 }
 
 export interface TrendData {
@@ -305,9 +307,17 @@ export interface PortPrefs {
   redUp: boolean
   /** 成本口径：diluted = 摊薄成本（券商 App 默认）；average = 买入均价 */
   costBasis: 'diluted' | 'average'
+  /** 护盘信号监测配置 */
+  rescue: RescueConfig
 }
 
-export const DEFAULT_PREFS: PortPrefs = { theme: 'auto', refreshSec: 10, redUp: true, costBasis: 'diluted' }
+export const DEFAULT_PREFS: PortPrefs = {
+  theme: 'auto',
+  refreshSec: 10,
+  redUp: true,
+  costBasis: 'diluted',
+  rescue: { enabled: true, intervalSec: 30, tailIntervalSec: 15, tailFrom: '14:30', universe: [] },
+}
 
 /** One derived position row (accounting from ledger + live quote). */
 export interface PositionRow {
@@ -434,4 +444,178 @@ export const ACTOR_WEB = 'web' as const
 /** Reject unreasonable numeric inputs (server-side guard). */
 export function isFiniteNumber(v: unknown): v is number {
   return typeof v === 'number' && Number.isFinite(v)
+}
+
+/** ── 护盘信号 ─────────────────────────────────────────────────────────────
+ * 识别「符合国家队历史行为模式」的宽基 ETF 放量 + 超大单净流入。
+ * 注意：汇金/国新/诚通不披露日内成交，本模块输出的是**概率性信号**，
+ * 不等于证明买入方身份。所有阈值来源都在 UI 上标注（标定 / 自建样本 / 经验）。
+ */
+
+/** 0 平静 · 1 资金异动 · 2 疑似护盘 · 3 强护盘信号 */
+export type RescueLevel = 0 | 1 | 2 | 3
+
+export const RESCUE_LEVEL_LABEL: Record<RescueLevel, string> = {
+  0: '平静',
+  1: '资金异动',
+  2: '疑似护盘',
+  3: '强护盘信号',
+}
+
+export const RESCUE_LEVEL_DESC: Record<RescueLevel, string> = {
+  0: '宽基 ETF 量能与资金流均在常态区间',
+  1: '出现放量或超大单流入，但尚不构成护盘特征',
+  2: '量能放大 + 超大单净流入 + 指数承压，具备护盘特征',
+  3: '多通道共振的天量买入，符合历史上国家队护盘的行为模式',
+}
+
+/** 阈值来源：calibrated = 历史分位数标定；self = 自建样本分位；empirical = 经验值 */
+export type RescueThresholdSource = 'calibrated' | 'self' | 'empirical'
+
+export interface RescueFactor {
+  id: 'volume' | 'superflow' | 'pulse' | 'persistence' | 'divergence' | 'resonance'
+  label: string
+  /** 0–100 */
+  score: number
+  weight: number
+  /** 实测值（人类可读） */
+  actual: string
+  /** 阈值口径说明 */
+  threshold: string
+  hit: boolean
+}
+
+export interface RescueEtfView {
+  secid: string
+  name: string
+  /** 对应宽基指数（共振按指数去重） */
+  index: string
+  price: number | null
+  pct: number | null
+  /** 当日累计成交额（元） */
+  amount: number | null
+  /** 东财量比 */
+  volRatio: number | null
+  /** 同时点量能倍数 = 当日累计额 ÷ (20日均额 × 日内进度) */
+  timeAdjMult: number | null
+  /** 20 日均成交额（元） */
+  avgAmt20: number | null
+  /** 超大单净额 */
+  superNet: number | null
+  /** 主力净额 */
+  mainNet: number | null
+  /** 超大单净额 ÷ 当日成交额 */
+  superShare: number | null
+  /** 超大单净额 ÷ 20日均成交额 */
+  superVsAvg: number | null
+  /** 最近 5 分钟成交额 ÷ 同时点基准 5 分钟额 */
+  pulseMult: number | null
+  /** 综合活跃度 0–100（仅用于排序/着色） */
+  activity: number
+  /** 该通道是否自身触发 */
+  triggered: boolean
+}
+
+export interface RescueSignalEvent {
+  ts: number
+  /** HH:mm */
+  hhmm: string
+  level: RescueLevel
+  score: number
+  reason: string
+}
+
+/** 当日每 5 分钟抽样点（用于当日信号曲线回放） */
+export interface RescueIntradayPoint {
+  hhmm: string
+  level: RescueLevel
+  score: number
+  timeAdjMult: number | null
+  superVsAvg: number | null
+}
+
+export interface RescueConfig {
+  enabled: boolean
+  /** 常态采样间隔（秒） */
+  intervalSec: number
+  /** 尾盘采样间隔（秒） */
+  tailIntervalSec: number
+  /** 尾盘起始时刻 HH:mm，之后切到 tailIntervalSec */
+  tailFrom: string
+  /** 自定义标的池（空 = 默认核心 6 只） */
+  universe: string[]
+}
+
+export interface RescueEtfMeta {
+  secid: string
+  name: string
+  index: string
+  core: boolean
+}
+
+/** 护盘通道池：核心 6 只默认开启，扩展标的可在面板里勾选 */
+export const RESCUE_ETF_CATALOG: RescueEtfMeta[] = [
+  { secid: '1.510300', name: '沪深300ETF华泰柏瑞', index: '沪深300', core: true },
+  { secid: '1.510050', name: '上证50ETF华夏', index: '上证50', core: true },
+  { secid: '1.510500', name: '中证500ETF南方', index: '中证500', core: true },
+  { secid: '1.512100', name: '中证1000ETF华夏', index: '中证1000', core: true },
+  { secid: '1.588000', name: '科创50ETF华夏', index: '科创50', core: true },
+  { secid: '0.159915', name: '创业板ETF易方达', index: '创业板指', core: true },
+  { secid: '1.510310', name: '沪深300ETF易方达', index: '沪深300', core: false },
+  { secid: '1.510330', name: '沪深300ETF华夏', index: '沪深300', core: false },
+  { secid: '0.159919', name: '沪深300ETF嘉实', index: '沪深300', core: false },
+  { secid: '1.588080', name: '科创50ETF易方达', index: '科创50', core: false },
+]
+
+export function rescueUniverseMeta(universe: string[]): RescueEtfMeta[] {
+  if (universe.length === 0) return RESCUE_ETF_CATALOG.filter((e) => e.core)
+  const want = new Set(universe)
+  const picked = RESCUE_ETF_CATALOG.filter((e) => want.has(e.secid))
+  return picked.length > 0 ? picked : RESCUE_ETF_CATALOG.filter((e) => e.core)
+}
+
+export interface RescueSnapshot {
+  ts: number
+  /** 是否处于采样时段 */
+  trading: boolean
+  level: RescueLevel
+  score: number
+  /** 一句话归因 */
+  summary: string
+  factors: RescueFactor[]
+  etfs: RescueEtfView[]
+  /** 基准指数（沪深300）当日涨跌幅 */
+  indexPct: number | null
+  indexName: string
+  /** 时点系数 */
+  timeCoef: number
+  thresholdSource: RescueThresholdSource
+  /** 自建样本天数（<20 时使用经验锚点） */
+  selfSampleDays: number
+  config: RescueConfig
+  /** 当前生效的采样间隔（秒） */
+  activeIntervalSec: number
+  /** 今日信号时间线 */
+  today: RescueSignalEvent[]
+  /** 今日 5 分钟抽样曲线 */
+  intraday: RescueIntradayPoint[]
+  sampleCount: number
+  lastSampleTs: number | null
+  /** 是否出现采样缺口（上游失败） */
+  gap: boolean
+  /** 无实时数据时的说明 */
+  note?: string
+}
+
+export interface RescueDaySummary {
+  day: string
+  maxLevel: RescueLevel
+  maxScore: number
+  events: number
+  peakHhmm: string | null
+}
+
+export interface RescuePayload {
+  snapshot: RescueSnapshot
+  history: RescueDaySummary[]
 }

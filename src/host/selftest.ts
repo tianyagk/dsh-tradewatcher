@@ -11,6 +11,11 @@ import * as em from './em.ts'
 import { fillLastGood, mergeBars, resampleYearly } from './em.ts'
 import { losslessJson } from './tools.ts'
 import { canonicalEconomy, macroEventsFromEm, macroImportance, parseEmDate } from './calendar.ts'
+import {
+  PULSE_ANCHORS, divergenceScore, interpScore, persistenceScore, progressAt, quantile,
+  resonanceScore, scoreRescue, sessionElapsed, timeCoefficient,
+} from './rescue.ts'
+import { RESCUE_CALIBRATION } from './rescue-thresholds.ts'
 import { TW_ROWS } from '../shared/model.ts'
 import type { QuoteRow } from '../shared/model.ts'
 
@@ -165,6 +170,37 @@ async function main(): Promise<void> {
       ok(parseEmDate('2026/9/15 0:00:00', '2026/9/15 0:00:00')?.time === undefined, '00:00 省略时刻')
       ok(canonicalEconomy('美国EIA原油库存') === '美国' && canonicalEconomy('欧元区19国') === '欧元区' && canonicalEconomy('泰国') === null, '经济体归一化')
       ok(macroImportance('美国:非农就业人数:季调(报告期:2026年08月)') === 3 && macroImportance('中国：库存:铁矿石:46港') === 1, '重要性启发式')
+    }
+
+    // 护盘信号：阈值/评分纯函数
+    {
+      const curve = RESCUE_CALIBRATION.progressCurve
+      const p10 = progressAt(curve, 30)
+      const p1130 = progressAt(curve, 120)
+      const p1430 = progressAt(curve, 210)
+      ok(Math.abs(p1130 - 0.609) < 0.02 && p10 < p1130 && p1130 < p1430, `日内进度曲线单调且 11:30≈60.9% (got ${(p1130 * 100).toFixed(1)}%)`)
+      ok(progressAt(curve, 240) === 1, '收盘进度 = 100%')
+      ok(sessionElapsed('12:00') === 120 && sessionElapsed('09:00') === 0 && sessionElapsed('15:30') === 240, '交易时段分钟折算（含午休）')
+      const anchors: [number, number, number] = [RESCUE_CALIBRATION.f1.mid, RESCUE_CALIBRATION.f1.high, RESCUE_CALIBRATION.f1.extreme]
+      ok(interpScore(anchors[0], anchors) === 40 && interpScore(anchors[1], anchors) === 70 && interpScore(anchors[2], anchors) === 100, '量能倍数锚点 → 40/70/100')
+      ok(interpScore(0, anchors) === 0 && interpScore(anchors[2] * 3, anchors) === 100, '量能倍数记分边界')
+      ok(divergenceScore(-1.2) === 100 && divergenceScore(-0.5) === 80 && divergenceScore(0.2) === 35 && divergenceScore(2) === 20, '量价背离阶梯')
+      ok(persistenceScore(0) === 0 && persistenceScore(2) === 60 && persistenceScore(4) === 100, '持续性记分')
+      ok(resonanceScore(0) === 0 && resonanceScore(1) === 40 && resonanceScore(2) === 70 && resonanceScore(3) === 100, '共振记分')
+      ok(timeCoefficient(30) === 0.4 && timeCoefficient(200) === 1.1, '时点系数（早盘低/尾盘高）')
+      ok(quantile([1, 2, 3, 4, 5], 50) === 3, '分位数取中位')
+      const f2: [number, number, number] = [RESCUE_CALIBRATION.f2.watch, RESCUE_CALIBRATION.f2.mid, RESCUE_CALIBRATION.f2.strong]
+      const base = { f2Anchors: f2, f2Source: 'empirical' as const, timeCoef: 1 }
+      const calm = scoreRescue({ ...base, timeAdjMult: 0.9, superVsAvg: 0.05, pulseMult: 1, streak: 0, indexPct: 0.2, resonance: 0 })
+      const typical = scoreRescue({ ...base, timeCoef: 1.1, timeAdjMult: 3, superVsAvg: 1.4, pulseMult: 5, streak: 5, indexPct: -1.4, resonance: 3 })
+      const capped = scoreRescue({ ...base, timeCoef: 1.1, timeAdjMult: 3, superVsAvg: 1.4, pulseMult: 5, streak: 5, indexPct: 2, resonance: 3 })
+      const thin = scoreRescue({ ...base, timeCoef: 1.1, timeAdjMult: 3, superVsAvg: 0.3, pulseMult: 5, streak: 5, indexPct: -1.2, resonance: 3 })
+      ok(calm.level === 0, `平淡日 → 平静 (got ${calm.level}, ${calm.score} 分)`)
+      ok(typical.level === 3 && typical.score >= 75, `典型护盘日 → 强护盘信号 (got ${typical.level}, ${typical.score} 分)`)
+      ok(capped.level === 1 && capped.summary.includes('追涨'), `指数+2% 的天量 → 封顶资金异动，归因写明追涨 (got ${capped.level})`)
+      ok(thin.level === 2, `超大单偏弱 → 降为疑似护盘 (got ${thin.level})`)
+      ok(typical.factors.length === 6 && Math.abs(typical.factors.reduce((a, f) => a + f.weight, 0) - 1) < 1e-9, '六因子权重合计 = 1')
+      ok(PULSE_ANCHORS.length === 3 && typical.factors[2].threshold.includes('同时点基准'), '脉冲因子口径写明同时点基准')
     }
 
     // K线合并与年K重采样（纯函数）
