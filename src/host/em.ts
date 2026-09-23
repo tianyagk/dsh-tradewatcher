@@ -44,6 +44,8 @@ interface CacheSlot {
 const inflight = new Map<string, Promise<unknown>>()
 
 async function ttlCache<T>(key: string, ttlMs: number, loader: () => Promise<T>): Promise<T> {
+  const slot = cache.get(key)
+  if (slot !== undefined && Date.now() < slot.exp) return slot.value as T
   const pending = inflight.get(key)
   if (pending !== undefined) return pending as Promise<T>
   const run = (async () => {
@@ -88,13 +90,38 @@ async function fetchFromHost(host: string, pathAndQuery: string, timeoutMs = 700
   return parsed
 }
 
+/**
+ * 上游中继：多主机 + 多轮重试。
+ *
+ * 实测本机到东财的连接会随机被立刻关闭（UND_ERR_SOCKET，瞬时失败率 20–75%，
+ * 与响应大小无关），单次尝试的成功率无法接受，因此按「轮 × 主机」重试，
+ * 并用总体截止时间兜住延迟。任何一次成功即返回。
+ */
+const FETCH_ROUNDS = 3
+const FETCH_ATTEMPTS_PER_HOST = 2
+const FETCH_DEADLINE_MS = 12_000
+
 async function fetchAny(hosts: readonly string[], pathAndQuery: string, timeoutMs = 7000): Promise<unknown> {
+  const deadline = Date.now() + FETCH_DEADLINE_MS
   let lastError: unknown = null
-  for (const host of hosts) {
-    try {
-      return await fetchFromHost(host, pathAndQuery, timeoutMs)
-    } catch (error) {
-      lastError = error
+  for (let round = 0; round < FETCH_ROUNDS; round++) {
+    for (const host of hosts) {
+      for (let attempt = 0; attempt < FETCH_ATTEMPTS_PER_HOST; attempt++) {
+        const left = deadline - Date.now()
+        if (left <= 250) {
+          throw lastError instanceof Error ? lastError : new Error('上游请求超时')
+        }
+        try {
+          return await fetchFromHost(host, pathAndQuery, Math.min(timeoutMs, left))
+        } catch (error) {
+          lastError = error
+          // 握手/连接被立刻关闭：短退避后立刻重试；HTTP 4xx 之类不重试
+          const message = error instanceof Error ? error.message : String(error)
+          if (/HTTP 4\d\d/.test(message)) break
+          // 抖动：并发的多个 worker 不要同步重试
+          await new Promise((r) => setTimeout(r, 60 + attempt * 120 + Math.random() * 140))
+        }
+      }
     }
   }
   throw lastError instanceof Error ? lastError : new Error(String(lastError))
@@ -362,29 +389,133 @@ function parseTrendRow(row: string): TrendPoint | null {
   }
 }
 
+/**
+ * 分时序列的 last-known-good：上游瞬时失败时用最近一次成功结果兜底，
+ * 避免缩略图在「有 / 无」之间闪烁（与 quotes-lkg.json 同一思路）。
+ * 文件：<dataHome>/trends-lkg.json
+ */
+const trendLkg = new Map<string, { at: number; trend: TrendData }>()
+let trendLkgLoaded: Promise<void> | null = null
+let trendLkgDirty = false
+let trendLkgLastWrite = 0
+const TREND_LKG_PERSIST_MS = 5000
+const TREND_LKG_MAX = 400
+
+function trendKey(secid: string, ndays: number): string {
+  return `${secid}|${ndays}`
+}
+
+async function loadTrendLkg(): Promise<void> {
+  if (trendLkgLoaded !== null) return trendLkgLoaded
+  trendLkgLoaded = (async () => {
+    try {
+      const raw = await readFile(join(dataHome(), 'trends-lkg.json'), 'utf8')
+      const parsed = JSON.parse(raw) as { entries?: Array<{ key?: string; at?: number; trend?: TrendData }> }
+      for (const e of Array.isArray(parsed?.entries) ? parsed.entries : []) {
+        if (typeof e?.key !== 'string' || typeof e?.at !== 'number') continue
+        const t = e.trend
+        if (t === null || typeof t !== 'object' || !Array.isArray(t.points) || t.points.length < 2) continue
+        trendLkg.set(e.key, { at: e.at, trend: t })
+      }
+    } catch {
+      /* 首次：无缓存文件 */
+    }
+  })()
+  return trendLkgLoaded
+}
+
+function persistTrendLkg(): void {
+  if (!trendLkgDirty) return
+  const now = Date.now()
+  if (now - trendLkgLastWrite < TREND_LKG_PERSIST_MS) return
+  trendLkgLastWrite = now
+  trendLkgDirty = false
+  if (trendLkg.size > TREND_LKG_MAX) {
+    let drop = trendLkg.size - TREND_LKG_MAX
+    for (const key of trendLkg.keys()) {
+      if (drop <= 0) break
+      trendLkg.delete(key)
+      drop -= 1
+    }
+  }
+  const entries = [...trendLkg.entries()].map(([key, v]) => ({ key, at: v.at, trend: v.trend }))
+  void (async () => {
+    try {
+      await mkdir(dataHome(), { recursive: true })
+      await writeFile(join(dataHome(), 'trends-lkg.json'), JSON.stringify({ ts: Date.now(), entries }), 'utf8')
+    } catch (error) {
+      console.warn('[tradewatcher] persist trends-lkg failed:', String(error))
+    }
+  })()
+}
+
+function rememberTrend(secid: string, ndays: number, trend: TrendData): void {
+  if (trend.points.length < 2) return
+  trendLkg.set(trendKey(secid, ndays), { at: Date.now(), trend })
+  trendLkgDirty = true
+  persistTrendLkg()
+}
+
+/** 取兜底快照；maxAgeMs 为 Infinity 时表示「只要有过就用」 */
+export function lastGoodTrend(secid: string, ndays: number, maxAgeMs = Infinity): TrendData | null {
+  const hit = trendLkg.get(trendKey(secid, ndays))
+  if (hit === undefined) return null
+  if (Date.now() - hit.at > maxAgeMs) return null
+  return { ...hit.trend, staleAt: hit.at }
+}
+
+/** 分时取数统一入口：内存新鲜缓存 → 上游（带重试）→ last-known-good */
+async function trendWithFallback(
+  secid: string,
+  ndays: number,
+  loader: () => Promise<TrendData | null>,
+): Promise<TrendData | null> {
+  await loadTrendLkg()
+  const key = `trend:${secid}:${ndays}`
+  const fresh = peekCache<TrendData>(key, 45_000)
+  if (fresh !== undefined) return fresh
+  try {
+    const data = await loader()
+    if (data === null || data.points.length < 2) {
+      return lastGoodTrend(secid, ndays) ?? data
+    }
+    cache.set(key, { exp: Date.now() + 60_000, value: data })
+    rememberTrend(secid, ndays, data)
+    return data
+  } catch (error) {
+    const lkg = lastGoodTrend(secid, ndays)
+    if (lkg !== null) {
+      // 短缓存兜底结果：断网期间避免每行请求都重新跑满重试（行数多时会形成风暴），
+      // 20s 后再试上游，恢复后立刻回到实时数据
+      cache.set(key, { exp: Date.now() + 20_000, value: lkg })
+      return lkg
+    }
+    throw error
+  }
+}
+
 /** 东财单日分时（trends2 实测只提供当日；ndays 参数被上游忽略）。 */
 async function fetchTrendSingleDay(secid: string): Promise<TrendData | null> {
   const fields2 = 'f51,f52,f53,f54,f55,f56,f57,f58'
-  const key = `trend:${secid}:1`
-  const json = await ttlCache(key, 60_000, () =>
-    fetchAny(
+  return trendWithFallback(secid, 1, async () => {
+    const json = await fetchAny(
       HISTORY_HOSTS,
       `/api/qt/stock/trends2/get?secid=${encodeURIComponent(secid)}&fields1=f1,f2,f3,f4,f5,f6,f7,f8,f9,f10,f11,f12,f13&fields2=${fields2}&ndays=1&iscr=0`,
-    ),
-  )
-  const body = bodyOf(json)
-  const data = body?.data as { prePrice?: unknown; preClose?: unknown; trends?: unknown } | undefined
-  if (!data) return null
-  const raw = Array.isArray(data.trends) ? data.trends : []
-  const points: TrendPoint[] = []
-  for (const r of raw) {
-    if (typeof r !== 'string') continue
-    const p = parseTrendRow(r)
-    if (p !== null) points.push(p)
-  }
-  if (points.length === 0) return null
-  const pre = num(data.prePrice) ?? num(data.preClose) ?? null
-  return { secid, prePrice: pre, points, last: points[points.length - 1]?.price ?? null }
+    )
+    const body = bodyOf(json)
+    const data = body?.data as { prePrice?: unknown; preClose?: unknown; trends?: unknown } | undefined
+    if (!data) return null
+    const raw = Array.isArray(data.trends) ? data.trends : []
+    const points: TrendPoint[] = []
+    for (const r of raw) {
+      if (typeof r !== 'string') continue
+      const p = parseTrendRow(r)
+      if (p !== null) points.push(p)
+    }
+    if (points.length === 0) return null
+    const pre = num(data.prePrice) ?? num(data.preClose) ?? null
+    return { secid, prePrice: pre, points, last: points[points.length - 1]?.price ?? null }
+  })
 }
 
 /** 东财 secid → 新浪代码（仅 A股/深沪 ETF；港股/美股接口不适用）。 */
@@ -484,8 +615,11 @@ export async function fetchTrend(secid: string, ndays = 1): Promise<TrendData | 
   if (!SECID_RE.test(secid)) return null
   const days = Math.min(5, Math.max(1, Math.round(ndays)))
   if (days > 1) {
-    const multi = await fetchMultiDayTrend(secid, days)
-    if (multi !== null && multi.points.length > 0) return multi
+    const multi = await trendWithFallback(secid, days, async () => {
+      const got = await fetchMultiDayTrend(secid, days)
+      return got !== null && got.points.length > 0 ? got : null
+    })
+    if (multi !== null && multi.points.length > 1) return multi
   }
   return fetchTrendSingleDay(secid)
 }

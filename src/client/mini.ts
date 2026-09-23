@@ -3,6 +3,10 @@
  * secid with bounded concurrency; results memoized module-wide (90s) so
  * remounting pages doesn't refetch, and a slow 150s refresh keeps them warm
  * while the page stays open.
+ *
+ * 稳定性：上游到东财的连接会随机被立刻关闭（瞬时失败率可达数十个百分点），
+ * 因此失败**不会**抹掉已有缩略图 —— 保留上一份 good 数据继续显示，失败只短缓存
+ * 15s 便于尽快重试；主机侧另有重试与 last-known-good 双保险。
  */
 import { useEffect, useMemo, useState } from 'react'
 import { api } from './api.ts'
@@ -15,25 +19,34 @@ export interface MiniData {
 
 const miniCache = new Map<string, { exp: number; data: MiniData | null }>()
 const MINI_TTL = 90_000
+/** 失败结果的短缓存：只挡住同一轮里的重复请求，不长时间污染显示 */
+const MINI_FAIL_TTL = 15_000
 const MAX_ROWS = 80
 
 async function fetchMini(secid: string): Promise<MiniData | null> {
   const hit = miniCache.get(secid)
   if (hit !== undefined && Date.now() < hit.exp) return hit.data
-  let data: MiniData | null = null
   try {
     const { trend } = await api.trend(secid, 1)
     if (trend !== null && trend.points.length >= 2) {
       const values = trend.points.map((p) => p.price)
       const first = values[0]
       const last = values[values.length - 1]
-      data = { values, up: last >= first }
+      const data: MiniData = { values, up: last >= first }
+      miniCache.set(secid, { exp: Date.now() + MINI_TTL, data })
+      return data
     }
   } catch {
-    data = null
+    /* 交给下面的兜底 */
   }
-  miniCache.set(secid, { exp: Date.now() + MINI_TTL, data })
-  return data
+  // 失败：保留上一次 good（若有），仅在完全没数据时记录短失败缓存
+  const prev = miniCache.get(secid)
+  if (prev !== undefined && prev.data !== null) {
+    miniCache.set(secid, { exp: Date.now() + MINI_FAIL_TTL, data: prev.data })
+    return prev.data
+  }
+  miniCache.set(secid, { exp: Date.now() + MINI_FAIL_TTL, data: null })
+  return null
 }
 
 async function runPool(secids: string[], sink: (secid: string, data: MiniData | null) => void): Promise<void> {

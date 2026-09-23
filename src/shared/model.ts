@@ -104,6 +104,8 @@ export interface TrendData {
   points: TrendPoint[]
   /** Last point price (== today's current) when available. */
   last: number | null
+  /** 该序列来自 last-known-good 时，记录快照时间（上游瞬时失败兜底） */
+  staleAt?: number
 }
 
 /** One daily bar (kline fallback). */
