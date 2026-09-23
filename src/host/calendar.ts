@@ -7,7 +7,7 @@
  *
  * 数据文件：<dataHome>/calendar.json
  */
-import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { CalCategory, CalEvent, CalImportance } from '../shared/model.ts'
 import { dataHome } from './store.ts'
@@ -264,8 +264,8 @@ export class CalendarStore {
       const tmp = `${this.path()}.tmp`
       await mkdir(this.dir, { recursive: true }).catch(() => undefined)
       await writeFile(tmp, JSON.stringify(this.file, null, 1), 'utf8')
-      await writeFile(this.path(), JSON.stringify(this.file, null, 1), 'utf8')
-      void tmp
+      // 原子替换：既避免写入中途被读到半截文件，也不再残留 .tmp（旧实现是双写）
+      await rename(tmp, this.path())
     })
     this.writeChain = run.catch(() => undefined)
     return run

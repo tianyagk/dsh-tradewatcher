@@ -49,7 +49,7 @@ export function apply(ctx: {
 }): void {
   ensureCss()
   try {
-    console.log('[dsh-tradewatcher] client v0.11.1 loaded (upstream retry + trend LKG, no more blank sparklines)')
+    console.log('[dsh-tradewatcher] client v0.11.2 loaded (retry + trend LKG; sparklines no longer blank)')
   } catch {
     /* console unavailable */
   }

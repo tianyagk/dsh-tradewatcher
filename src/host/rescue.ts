@@ -281,20 +281,36 @@ export function quantile(sorted: readonly number[], p: number): number | null {
 
 /** ── 网络取数 ──────────────────────────────────────────────────────────── */
 
+/** 与 em.fetchAny 同策略：本机到东财的连接会随机被立刻关闭（瞬时失败率可达数十个百分点），
+ *  采样器一次丢样本就会形成「缺口」，因此按「轮 × 主机」重试并加抖动退避。 */
+const FETCH_ROUNDS = 3
+const FETCH_ATTEMPTS_PER_HOST = 2
+const FETCH_DEADLINE_MS = 12_000
+
 async function fetchAny(hosts: readonly string[], pathAndQuery: string, timeoutMs = 8000): Promise<Record<string, unknown>> {
+  const deadline = Date.now() + FETCH_DEADLINE_MS
   let lastErr: unknown = null
-  for (const host of hosts) {
-    try {
-      const res = await fetch(`https://${host}${pathAndQuery}`, {
-        headers: { 'user-agent': UA, referer: 'https://quote.eastmoney.com/' },
-        signal: AbortSignal.timeout(timeoutMs),
-      })
-      if (!res.ok) throw new Error(`HTTP ${res.status}`)
-      const j = (await res.json()) as { data?: unknown }
-      if (j?.data === null || j?.data === undefined) throw new Error('data null')
-      return j.data as Record<string, unknown>
-    } catch (e) {
-      lastErr = e
+  for (let round = 0; round < FETCH_ROUNDS; round++) {
+    for (const host of hosts) {
+      for (let attempt = 0; attempt < FETCH_ATTEMPTS_PER_HOST; attempt++) {
+        const left = deadline - Date.now()
+        if (left <= 250) throw lastErr instanceof Error ? lastErr : new Error('上游请求超时')
+        try {
+          const res = await fetch(`https://${host}${pathAndQuery}`, {
+            headers: { 'user-agent': UA, referer: 'https://quote.eastmoney.com/' },
+            signal: AbortSignal.timeout(Math.min(timeoutMs, left)),
+          })
+          if (!res.ok) throw new Error(`HTTP ${res.status}`)
+          const j = (await res.json()) as { data?: unknown }
+          if (j?.data === null || j?.data === undefined) throw new Error('data null')
+          return j.data as Record<string, unknown>
+        } catch (e) {
+          lastErr = e
+          const message = e instanceof Error ? e.message : String(e)
+          if (/HTTP 4\d\d/.test(message)) break
+          await new Promise((r) => setTimeout(r, 60 + attempt * 120 + Math.random() * 140))
+        }
+      }
     }
   }
   throw lastErr instanceof Error ? lastErr : new Error('all hosts failed')

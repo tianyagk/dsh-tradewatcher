@@ -91,13 +91,28 @@ export function useMiniTrends(secids: string[], enabled: boolean): Record<string
       }
     }
     seed()
-    const first = runPool(ids, sink)
+    let retries = 0
+    let retryTimer = 0
+    // 首轮拉取；若仍有缺口（首次就撞上上游抖动），20s 后补拉，最多两次，
+    // 避免冷启动失败的缩略图要等 150s 的常规刷新才出现
+    const fill = async (): Promise<void> => {
+      await runPool(ids, sink)
+      if (!alive) return
+      const missing = ids.filter((secid) => miniCache.get(secid)?.data == null)
+      if (missing.length > 0 && retries < 2) {
+        retries += 1
+        retryTimer = window.setTimeout(() => void fill(), 20_000)
+      }
+    }
+    void fill()
     const t = setInterval(() => {
-      void first.then(() => runPool(ids, sink))
+      retries = 0
+      void fill()
     }, 150_000)
     return () => {
       alive = false
       clearInterval(t)
+      if (retryTimer !== 0) window.clearTimeout(retryTimer)
     }
   }, [key, enabled, ids.join('|')]) // eslint-disable-line react-hooks/exhaustive-deps
 
