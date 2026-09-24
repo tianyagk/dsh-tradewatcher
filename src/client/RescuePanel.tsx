@@ -290,7 +290,9 @@ export function RescuePanel(props: { prefs: PortPrefs; redUp: boolean; onPrefs?:
   }
 
   const level = snapshot?.level ?? 0
-  const expanded = manualOpen ?? level >= 2
+  // 无实时数据时也展开：此时展开区里的分时图、今日时间线、抽样条、历史回看
+  // 都是真实记录，折叠起来会让人以为"面板内容越来越少"
+  const expanded = manualOpen ?? (level >= 2 || (snapshot?.etfs.length ?? 1) === 0)
   const lanes: RescueEtfMeta[] = rescueUniverseMeta(config.universe)
   const laneBase = snapshot?.etfs.find((e) => e.secid === lane)?.avgAmt20 ?? null
 
@@ -365,6 +367,22 @@ export function RescuePanel(props: { prefs: PortPrefs; redUp: boolean; onPrefs?:
           React.createElement('div', { className: 'tw-sub-h' }, `当日通道复盘（${snapshot.fallback.day}）`,
             React.createElement('span', { style: { flex: 1 } }),
             React.createElement('span', { className: 'tw-muted', style: { fontSize: 10.5 } }, '超大单净额 ÷ 20日均额 的当日峰值'),
+          ),
+          // 当日真实记录（来自采样日志，与实时快照无关）：采样次数 / 最高评分 / 最大量能 / 触发次数
+          React.createElement('div', { className: 'tw-rescue-resonance', style: { marginBottom: 6 } },
+            React.createElement('span', { className: 'tw-muted' }, '当日记录'),
+            React.createElement('span', null, `采样 ${snapshot.sampleCount} 次`),
+            React.createElement('span', null, `5 分钟抽样 ${snapshot.intraday.length} 点`),
+            (() => {
+              const peak = snapshot.intraday.reduce<null | (typeof snapshot.intraday)[number]>((a, p) => (a === null || p.score > a.score ? p : a), null)
+              if (peak === null) return React.createElement('span', { className: 'tw-muted' }, '当日无抽样')
+              return React.createElement('span', null,
+                `最高评分 ${peak.score} @${peak.hhmm}（${RESCUE_LEVEL_LABEL[peak.level]}）`,
+                peak.timeAdjMult !== null ? ` · 量能峰值 ${peak.timeAdjMult.toFixed(2)}x` : '',
+                peak.superVsAvg !== null ? ` · 超大单峰值 ${peak.superVsAvg.toFixed(3)}x` : '',
+              )
+            })(),
+            React.createElement('span', null, `触发事件 ${snapshot.today.filter((e) => e.level >= 1).length} 次`),
           ),
           React.createElement('table', { className: 'tw-rescue-factor' },
             React.createElement('thead', null, React.createElement('tr', null,
