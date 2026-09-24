@@ -321,7 +321,7 @@ export function RescuePanel(props: { prefs: PortPrefs; redUp: boolean; onPrefs?:
         : null,
       snapshot !== null
         ? React.createElement('span', { className: 'tw-muted', style: { fontSize: 10.5 } },
-            `${snapshot.trading ? '采样中' : snapshot.pulseBand.phase === 'closed' ? '已收盘' : '非交易时段'} · ${snapshot.activeIntervalSec}s` +
+            `${snapshot.trading ? `采样中 · ${snapshot.activeIntervalSec}s` : snapshot.pulseBand.phase === 'closed' ? '已收盘' : '非交易时段'}` +
             `${snapshot.lastSampleTs !== null ? ` · ${new Date(snapshot.lastSampleTs).toLocaleTimeString('zh-CN', { hour12: false })}` : ''}` +
             `${snapshot.gap ? ' · ⚠ 缺口' : ''}`,
           )
