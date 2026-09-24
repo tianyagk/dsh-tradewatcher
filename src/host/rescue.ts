@@ -59,6 +59,25 @@ export function isTailElapsed(elapsedMin: number): boolean {
   return elapsedMin >= TAIL_FROM_ELAPSED
 }
 
+/** 交易阶段：盘前 / 上午 / 午间 / 午后 / 尾盘 / 已收盘 */
+export type RescuePhase = 'pre' | 'am' | 'noon' | 'pm' | 'tail' | 'closed'
+
+export function phaseOf(hhmm: string): RescuePhase {
+  if (hhmm < '09:15') return 'pre'
+  if (hhmm <= '11:30') return 'am'
+  if (hhmm < '13:00') return 'noon'
+  if (hhmm < '14:30') return 'pm'
+  if (hhmm <= '15:05') return 'tail'
+  return 'closed'
+}
+
+/** 脉冲因子的名称随阶段变化（盘后不再叫「尾盘突袭」，避免误读为刚发生） */
+export function pulseFactorLabel(phase: RescuePhase): string {
+  if (phase === 'tail') return '尾盘突袭'
+  if (phase === 'closed') return '脉冲（盘后）'
+  return '盘中脉冲'
+}
+
 /** 取当前时段的脉冲锚点（P75/P90/P95 → 40/70/100） */
 export function pulseAnchorsFor(elapsedMin: number): [number, number, number] {
   const bands = RESCUE_CALIBRATION.pulseBands
@@ -77,6 +96,8 @@ export function pulseBandLabel(elapsedMin: number): string {
 export const SELF_SAMPLE_MIN_DAYS = 20
 const KEEP_DAYS = 60
 const SAMPLE_RING = 40
+/** 写入事件记录的引擎版本（用于在面板上识别旧口径历史事件） */
+export const ENGINE_VERSION = '0.13.0'
 const INDEX_SECID = '1.000300'
 const INDEX_NAME = '沪深300'
 
@@ -201,6 +222,15 @@ export interface RescueFactorInput {
   pulseAnchors?: [number, number, number]
   /** 当前时段标签（早盘/午后/尾盘…） */
   bandLabel?: string
+  /** 交易阶段（用于脉冲命名与完整度说明） */
+  phase?: RescuePhase
+}
+
+/** 因子可用度：数据缺失（如冷启动回填失败）时如实标注，不假装完整 */
+export interface RescueCompleteness {
+  available: number
+  total: number
+  missing: string[]
 }
 
 export interface RescueScoreResult {
@@ -208,6 +238,7 @@ export interface RescueScoreResult {
   level: RescueLevel
   factors: RescueFactor[]
   summary: string
+  completeness: RescueCompleteness
 }
 
 const fmt = (v: number | null, unit: string, digits = 2): string => (v === null ? '—' : `${v.toFixed(digits)}${unit}`)
@@ -227,6 +258,7 @@ export function scoreRescue(input: RescueFactorInput): RescueScoreResult {
   const pulseAnchors = input.pulseAnchors ?? PULSE_ANCHORS
   const isTail = input.isTail ?? false
   const bandLabel = input.bandLabel ?? (isTail ? '尾盘' : '盘中')
+  const phase: RescuePhase = input.phase ?? (isTail ? 'tail' : 'pm')
 
   const f1 = interpScore(input.timeAdjMult ?? 0, [RESCUE_CALIBRATION.f1.mid, RESCUE_CALIBRATION.f1.high, RESCUE_CALIBRATION.f1.extreme])
 
@@ -266,7 +298,7 @@ export function scoreRescue(input: RescueFactorInput): RescueScoreResult {
       hit: f2 >= 40,
     },
     {
-      id: 'pulse', label: isTail ? '尾盘突袭' : '盘中脉冲', score: f3, weight: RESCUE_WEIGHTS.pulse,
+      id: 'pulse', label: pulseFactorLabel(phase), score: f3, weight: RESCUE_WEIGHTS.pulse,
       actual: `${fmt(input.pulseMult, 'x')}${isTail ? '' : '（打 0.6 折）'}`,
       threshold: `${bandLabel} 时段锚点 ${pulseAnchors[0].toFixed(2)}/${pulseAnchors[1].toFixed(2)}/${pulseAnchors[2].toFixed(2)}x（P75/P90/P95 分档标定）；命中线 ${PULSE_HIT_SCORE} 分`,
       hit: f3 >= PULSE_HIT_SCORE,
@@ -337,10 +369,23 @@ export function scoreRescue(input: RescueFactorInput): RescueScoreResult {
     caps.push('超大单无有效净流入且持续性不足 → 降为资金异动')
   }
 
+  // 因子可用度：脉冲/持续性在冷启动回填失败时会缺，必须如实标注而不是假装完整
+  const availability: Array<[string, boolean]> = [
+    ['量能放大', input.timeAdjMult !== null],
+    ['超大单强度', core !== null || peri !== null],
+    ['脉冲', input.pulseMult !== null],
+    ['持续性', input.persistShare !== null],
+    ['量价背离', input.indexPct !== null],
+    ['全池共振', true],
+  ]
+  const missing = availability.filter(([, ok]) => !ok).map(([label]) => label)
+  const completeness: RescueCompleteness = { available: availability.length - missing.length, total: availability.length, missing }
+
   const hits = factors.filter((f) => f.hit).map((f) => `${f.label} ${f.actual}`).join(' · ')
   const base = level === 0 || hits === '' ? '宽基 ETF 量能与资金流均在常态区间（无异动）' : hits
-  const summary = `${base}${caps.length > 0 ? ` —— ${caps.join('；')}` : ''}（评分 ${score}，时点系数 ${coef}）`
-  return { score, level, factors, summary }
+  const incomplete = missing.length > 0 ? `；因子 ${completeness.available}/${completeness.total}（缺 ${missing.join('、')}，评分偏保守）` : ''
+  const summary = `${base}${caps.length > 0 ? ` —— ${caps.join('；')}` : ''}（评分 ${score}，时点系数 ${coef}${incomplete}）`
+  return { score, level, factors, summary, completeness }
 }
 
 function hhmmOf(ts: number): string {
@@ -581,6 +626,75 @@ async function fetchProgressCurve(metas: RescueEtfMeta[]): Promise<{ curve: numb
   return { curve, days: curves.length }
 }
 
+/** ── 冷启动回填 ──────────────────────────────────────────────────────────
+ * 采样环（内存）在进程启动时是空的，而「脉冲」与「持续性」都需要 ≥5 分钟的历史，
+ * 于是**盘中重启**后这两个因子会长时间显示为空 —— 若重启发生在收盘前 5 分钟内，
+ * 当天就再也算不出来（实测 9/24 14:44 重启即如此）。
+ * 因此首轮采样时用当日分钟数据回填采样环：
+ *   - 东财 trends2：每分钟成交额 → 累计成交额
+ *   - 东财 fflow klt=1：每分钟累计超大单/主力净额
+ * 两者都是当日全量（约 240 点），回填后脉冲/持续性立即可算。
+ * ──────────────────────────────────────────────────────────────────────── */
+
+export interface MinuteFlowPoint {
+  ts: number
+  /** 当日累计成交额 */
+  amount: number
+  /** 当日累计超大单净额 */
+  superNet: number
+  /** 当日累计主力净额 */
+  mainNet: number
+}
+
+/** 解析 "YYYY-MM-DD HH:mm" → epoch ms（本地时区，与趋势接口一致） */
+function parseMinuteStamp(text: string): number {
+  const t = Date.parse(`${text.slice(0, 10)}T${text.slice(11, 16)}:00`)
+  return Number.isFinite(t) ? t : NaN
+}
+
+export async function fetchMinuteSeries(secid: string): Promise<MinuteFlowPoint[]> {
+  const [trends, flow] = await Promise.all([
+    fetchAny(KLINE_HOSTS, `/api/qt/stock/trends2/get?secid=${encodeURIComponent(secid)}&fields1=f1,f2,f3&fields2=f51,f52,f53,f54,f55,f56,f57,f58&ndays=1&iscr=0`).catch(() => null),
+    fetchAny(QUOTE_HOSTS, `/api/qt/stock/fflow/kline/get?lmt=0&klt=1&secid=${encodeURIComponent(secid)}&fields1=f1,f2,f3,f7&fields2=f51,f52,f53,f54,f55,f56`).catch(() => null),
+  ])
+  // 每分钟成交额 → 累计
+  const amountByTs = new Map<number, number>()
+  const trendRows = (trends as { trends?: unknown } | null)?.trends
+  if (Array.isArray(trendRows)) {
+    for (const row of trendRows) {
+      if (typeof row !== 'string') continue
+      const c = row.split(',')
+      const ts = parseMinuteStamp(c[0] ?? '')
+      const amt = Number(c[6])
+      if (!Number.isFinite(ts) || !Number.isFinite(amt)) continue
+      amountByTs.set(ts, amt)
+    }
+  }
+  // 每分钟累计超大单/主力
+  const flowRows = (flow as { klines?: unknown } | null)?.klines
+  const cumFlow = new Map<number, { superNet: number; mainNet: number }>()
+  if (Array.isArray(flowRows)) {
+    for (const row of flowRows) {
+      if (typeof row !== 'string') continue
+      const c = row.split(',')
+      const ts = parseMinuteStamp(c[0] ?? '')
+      const main = Number(c[1])
+      const sup = Number(c[5])
+      if (!Number.isFinite(ts)) continue
+      cumFlow.set(ts, { superNet: Number.isFinite(sup) ? sup : 0, mainNet: Number.isFinite(main) ? main : 0 })
+    }
+  }
+  const stamps = [...amountByTs.keys()].filter((ts) => cumFlow.has(ts)).sort((a, b) => a - b)
+  const points: MinuteFlowPoint[] = []
+  let cumAmount = 0
+  for (const ts of stamps) {
+    cumAmount += amountByTs.get(ts) ?? 0
+    const f = cumFlow.get(ts)!
+    points.push({ ts, amount: cumAmount, superNet: f.superNet, mainNet: f.mainNet })
+  }
+  return points
+}
+
 /** ── 采样器 ────────────────────────────────────────────────────────────── */
 
 export class RescueMonitor {
@@ -599,6 +713,9 @@ export class RescueMonitor {
   private lastIntradayMin = -1
   private calibrating = false
   private calibratedDay = ''
+  /** 每个交易日每个标的只回填一次 */
+  private bootstrapped = new Set<string>()
+  private bootstrappedCount = 0
 
   constructor(dir: string = dataHome(), config?: RescueConfig) {
     this.dir = dir
@@ -644,6 +761,7 @@ export class RescueMonitor {
   private rollDay(): void {
     const key = dayOf(Date.now())
     if (this.todayKey === key) return
+    this.bootstrapped.clear()
     this.todayKey = key
     this.today = this.file.days[key] ?? { events: [], intraday: [], samples: 0, gap: false }
     this.file.days[key] = this.today
@@ -740,6 +858,18 @@ export class RescueMonitor {
       this.calibratedDay = this.todayKey
       void this.calibrate(metas).catch(() => undefined)
     }
+    // 冷启动回填：盘中重启后立刻具备脉冲/持续性所需的历史
+    if (inTradingWindow(Date.now())) {
+      const short = metas.filter((m) => {
+        const ring = this.ring[m.secid] ?? []
+        if (ring.length < 2) return true
+        const span = ring[ring.length - 1].ts - ring[0].ts
+        return span < FLOW_WINDOW_MS - 30_000
+      })
+      if (short.length > 0 && !short.every((m) => this.bootstrapped.has(`${this.todayKey}|${m.secid}`))) {
+        await this.bootstrapRings(short).catch(() => undefined)
+      }
+    }
     const ts = Date.now()
     const elapsed = sessionElapsed(hhmmOf(ts))
     const curve = this.file.progressCurve ?? RESCUE_CALIBRATION.progressCurve
@@ -748,7 +878,9 @@ export class RescueMonitor {
     const etfs: RescueEtfView[] = []
     const isCoreIndex = (index: string): boolean => CORE_INDEXES.includes(index)
     const pulseAnchors = pulseAnchorsFor(elapsed)
-    const tail = isTailElapsed(elapsed)
+    const phase = phaseOf(hhmmOf(ts))
+    // 盘后不再按「尾盘」命名（否则收盘后打开面板会误读为刚发生尾盘突袭）
+    const tail = isTailElapsed(elapsed) && inTradingWindow(ts)
     let maxMult: number | null = null
     let coreSuperVsAvg: number | null = null
     let peripheralSuperVsAvg: number | null = null
@@ -766,7 +898,7 @@ export class RescueMonitor {
         etfs.push({
           secid: meta.secid, name: meta.name, index: meta.index, price: null, pct: null, amount: null, volRatio: null,
           timeAdjMult: null, avgAmt20: base, superNet: null, mainNet: null, superShare: null, superVsAvg: null,
-          pulseMult: null, activity: 0, triggered: false,
+          pulseMult: null, activity: 0, triggered: false, flowDirection: 'unknown',
         })
         continue
       }
@@ -846,13 +978,14 @@ export class RescueMonitor {
       f2Anchors: anchors, f2Source: this.f2Source(),
       // 时点系数此前没有传进来，运行时恒等于 1（早盘噪音最大的时段拿到满权重）
       timeCoef: timeCoefficient(elapsed),
-      isTail: tail, pulseAnchors, bandLabel: pulseBandLabel(elapsed),
+      isTail: tail, pulseAnchors, bandLabel: pulseBandLabel(elapsed), phase,
     })
     etfs.sort((a, b) => b.activity - a.activity)
     // 事件去抖：仅记录等级升级，以及从有信号回落到平静（形成完整时间线）
     if (scored.level > this.lastLevel || (scored.level === 0 && this.lastLevel > 0)) {
       this.today.events.push({
         ts, hhmm: hhmmOf(ts), level: scored.level, score: scored.score,
+        engine: ENGINE_VERSION,
         reason: scored.level === 0 ? '信号回落：量能与超大单流入回到常态' : scored.summary,
       })
       if (this.today.events.length > 60) this.today.events.splice(0, this.today.events.length - 60)
@@ -879,7 +1012,11 @@ export class RescueMonitor {
         peripheral: peripheralTriggered.length,
         intensity: triggeredIndexes.size === 0 ? 'none' : coreTriggered.length > 0 ? 'systemic' : 'local',
       },
-      pulseBand: { elapsed, label: pulseBandLabel(elapsed), isTail: tail, anchors: pulseAnchors },
+      pulseBand: {
+        elapsed, label: phase === 'closed' ? '已收盘' : pulseBandLabel(elapsed), isTail: tail,
+        anchors: pulseAnchors, phase,
+      },
+      completeness: scored.completeness,
       thresholdSource: this.f2Source(), selfSampleDays: this.selfSampleDays(),
       config: this.getConfig(), activeIntervalSec: this.activeIntervalSec(ts),
       today: [...this.today.events].reverse(), intraday: [...this.today.intraday],
@@ -887,6 +1024,35 @@ export class RescueMonitor {
       note: elapsed <= 0 ? '尚未开盘，量能倍数按全天口径显示为 0' : undefined,
     }
     void this.persist()
+  }
+
+  /**
+   * 用当日分钟数据回填采样环（每个交易日每标的只做一次）。
+   * 只补历史、不覆盖已采到的实时样本，因此不会与实时采样冲突。
+   */
+  private async bootstrapRings(metas: RescueEtfMeta[]): Promise<void> {
+    let filled = 0
+    for (const meta of metas) {
+      const key = `${this.todayKey}|${meta.secid}`
+      if (this.bootstrapped.has(key)) continue
+      this.bootstrapped.add(key)
+      try {
+        const points = await fetchMinuteSeries(meta.secid)
+        if (points.length < 3) continue
+        const ring = this.ring[meta.secid] ?? []
+        const newest = ring.length > 0 ? ring[ring.length - 1].ts : 0
+        const seeded: Sample[] = points
+          .filter((p) => p.ts > newest)
+          .slice(-SAMPLE_RING)
+          .map((p) => ({ ts: p.ts, amount: p.amount, superNet: p.superNet, mainNet: p.mainNet }))
+        if (seeded.length === 0) continue
+        this.ring[meta.secid] = [...ring, ...seeded].slice(-SAMPLE_RING)
+        filled += 1
+      } catch {
+        /* 单只失败不影响其它 */
+      }
+    }
+    if (filled > 0) this.bootstrappedCount += filled
   }
 
   /**
@@ -983,10 +1149,12 @@ export class RescueMonitor {
       resonance: { lanes: [], core: 0, peripheral: 0, intensity: 'none' },
       pulseBand: {
         elapsed: sessionElapsed(hhmmOf(Date.now())),
-        label: pulseBandLabel(sessionElapsed(hhmmOf(Date.now()))),
-        isTail: isTailElapsed(sessionElapsed(hhmmOf(Date.now()))),
+        label: phaseOf(hhmmOf(Date.now())) === 'closed' ? '已收盘' : pulseBandLabel(sessionElapsed(hhmmOf(Date.now()))),
+        isTail: isTailElapsed(sessionElapsed(hhmmOf(Date.now()))) && inTradingWindow(Date.now()),
         anchors: pulseAnchorsFor(sessionElapsed(hhmmOf(Date.now()))),
+        phase: phaseOf(hhmmOf(Date.now())),
       },
+      completeness: { available: 0, total: 6, missing: ['量能放大', '超大单强度', '脉冲', '持续性', '量价背离'] },
       thresholdSource: this.f2Source(),
       selfSampleDays: this.selfSampleDays(), config: this.getConfig(), activeIntervalSec: this.activeIntervalSec(),
       today: [...this.today.events].reverse(), intraday: [...this.today.intraday], sampleCount: this.today.samples,

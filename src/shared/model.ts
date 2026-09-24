@@ -496,6 +496,8 @@ export interface RescuePulseBand {
   label: string
   isTail: boolean
   anchors: [number, number, number]
+  /** 交易阶段：pre/am/noon/pm/tail/closed */
+  phase?: 'pre' | 'am' | 'noon' | 'pm' | 'tail' | 'closed'
 }
 
 export interface RescueFactor {
@@ -540,6 +542,8 @@ export interface RescueEtfView {
   activity: number
   /** 该通道是否自身触发 */
   triggered: boolean
+  /** 资金方向：超大单占比 ≥+15% 为吸纳，≤−15% 为撤离（避免把「大额净流出」误读成哑火） */
+  flowDirection?: 'in' | 'out' | 'flat' | 'unknown'
 }
 
 export interface RescueSignalEvent {
@@ -549,6 +553,15 @@ export interface RescueSignalEvent {
   level: RescueLevel
   score: number
   reason: string
+  /** 记录该事件的引擎版本；缺失表示旧口径（评分逻辑与当前不同） */
+  engine?: string
+}
+
+/** 因子可用度：数据缺失时如实标注 */
+export interface RescueCompleteness {
+  available: number
+  total: number
+  missing: string[]
 }
 
 /** 当日每 5 分钟抽样点（用于当日信号曲线回放） */
@@ -621,6 +634,8 @@ export interface RescueSnapshot {
   resonance: RescueResonance
   /** 当前脉冲时段与锚点 */
   pulseBand: RescuePulseBand
+  /** 本次快照的因子可用度 */
+  completeness?: RescueCompleteness
   thresholdSource: RescueThresholdSource
   /** 自建样本天数（<20 时使用经验锚点） */
   selfSampleDays: number

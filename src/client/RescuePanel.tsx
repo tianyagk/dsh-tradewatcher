@@ -165,6 +165,11 @@ function EtfCard(props: { etf: RescueEtfView; redUp: boolean }): React.ReactElem
     React.createElement('div', { className: 'tw-rescue-card-f' },
       React.createElement('span', { className: 'tw-muted', style: { fontSize: 10.5 } }, `活跃度 ${etf.activity}`),
       React.createElement(ScoreBar, { value: etf.activity, color: LEVEL_COLOR[etf.activity >= 60 ? 3 : etf.activity >= 35 ? 2 : 1], width: 90 }),
+      etf.flowDirection === 'out'
+        ? React.createElement('span', { className: 'tw-badge', title: '超大单净流出占成交额 ≥15%：不是「哑火」，是资金在撤', style: { color: 'var(--tw-down)', borderColor: 'var(--tw-down)' } }, `撤离 ${fmtYi(etf.superNet)}`)
+        : etf.flowDirection === 'in'
+          ? React.createElement('span', { className: 'tw-badge', style: { color: 'var(--tw-up)', borderColor: 'var(--tw-up)' } }, `吸纳 ${fmtYi(etf.superNet)}`)
+          : null,
       etf.triggered ? React.createElement('span', { className: 'tw-badge', style: { color: LEVEL_COLOR[2], borderColor: LEVEL_COLOR[2] } }, '触发') : null,
     ),
   )
@@ -294,9 +299,16 @@ export function RescuePanel(props: { prefs: PortPrefs; redUp: boolean; onPrefs?:
         ? React.createElement('span', { className: 'tw-muted', style: { fontFamily: 'var(--tw-mono)', fontSize: 11 } }, `${snapshot.score}/100`)
         : null,
       React.createElement('span', { style: { flex: 1 } }),
+      snapshot !== null && (snapshot.completeness?.missing.length ?? 0) > 0
+        ? React.createElement('span', {
+            className: 'tw-badge',
+            title: `本次快照缺少因子：${snapshot.completeness?.missing.join('、')}（评分偏保守；冷启动回填完成或盘中采样 5 分钟后自动补齐）`,
+            style: { color: LEVEL_COLOR[2], borderColor: LEVEL_COLOR[2] },
+          }, `因子 ${snapshot.completeness?.available}/${snapshot.completeness?.total}`)
+        : null,
       snapshot !== null
         ? React.createElement('span', { className: 'tw-muted', style: { fontSize: 10.5 } },
-            `${snapshot.trading ? '采样中' : '非交易时段'} · ${snapshot.activeIntervalSec}s` +
+            `${snapshot.trading ? '采样中' : snapshot.pulseBand.phase === 'closed' ? '已收盘' : '非交易时段'} · ${snapshot.activeIntervalSec}s` +
             `${snapshot.lastSampleTs !== null ? ` · ${new Date(snapshot.lastSampleTs).toLocaleTimeString('zh-CN', { hour12: false })}` : ''}` +
             `${snapshot.gap ? ' · ⚠ 缺口' : ''}`,
           )
@@ -315,7 +327,9 @@ export function RescuePanel(props: { prefs: PortPrefs; redUp: boolean; onPrefs?:
           React.createElement('span', { style: { color: LEVEL_COLOR[level], fontWeight: 600, flex: 'none' } }, RESCUE_LEVEL_LABEL[level]),
           React.createElement('span', { className: 'tw-muted', style: { flex: 1, minWidth: 0 } }, snapshot.summary),
           React.createElement('span', { className: 'tw-muted', style: { fontSize: 10.5, flex: 'none' } },
-            `${snapshot.indexName} ${fmtPct(snapshot.indexPct)} · ${snapshot.pulseBand.label}${snapshot.pulseBand.isTail ? '（满分权重）' : '（脉冲打 0.6 折）'} · 阈值来源 ${
+            `${snapshot.indexName} ${fmtPct(snapshot.indexPct)} · ${snapshot.pulseBand.label}${
+              snapshot.pulseBand.phase === 'closed' ? '' : snapshot.pulseBand.isTail ? '（满分权重）' : '（脉冲打 0.6 折）'
+            } · 阈值来源 ${
               snapshot.thresholdSource === 'self' ? `自建分位（${snapshot.selfSampleDays} 天）` : snapshot.thresholdSource === 'calibrated' ? '历史标定' : `经验锚点（自建样本 ${snapshot.selfSampleDays}/20 天）`
             }`,
           ),
@@ -376,10 +390,15 @@ export function RescuePanel(props: { prefs: PortPrefs; redUp: boolean; onPrefs?:
                       React.createElement('div', { key: `${e.ts}-${e.level}`, className: 'tw-rescue-tl-row' },
                         React.createElement('span', { style: { fontFamily: 'var(--tw-mono)', color: LEVEL_COLOR[e.level] } }, e.hhmm),
                         React.createElement('span', { className: 'tw-badge', style: { color: LEVEL_COLOR[e.level], borderColor: LEVEL_COLOR[e.level] } }, RESCUE_LEVEL_LABEL[e.level]),
+                        e.engine === undefined
+                          ? React.createElement('span', { className: 'tw-badge', title: '该事件由更早的评分口径记录（因子构成与当前不同，仅作历史留痕）' }, '旧口径')
+                          : null,
                         React.createElement('span', { className: 'tw-muted', style: { fontSize: 10.5, flex: 1, minWidth: 0 } }, e.reason),
                       ),
                     ),
                   ),
+              React.createElement('div', { className: 'tw-hint', style: { fontSize: 10.5 } },
+                '注：「旧口径」标记的事件是升级前记录的，其评分逻辑与当前不同（例如尾盘脉冲口径、时点系数未接入），不要与今天的信号直接比较。'),
               React.createElement('div', { className: 'tw-sub-h', style: { marginTop: 8 } }, `今日 5 分钟抽样（${snapshot.intraday.length}）`),
               snapshot.intraday.length === 0
                 ? React.createElement('div', { className: 'tw-hint' }, '尚未累积当日抽样点。')

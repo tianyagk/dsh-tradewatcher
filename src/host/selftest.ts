@@ -14,7 +14,7 @@ import { canonicalEconomy, macroEventsFromEm, macroImportance, parseEmDate } fro
 import {
   CORE_OUTFLOW_VETO, PERSIST_ANCHORS, PULSE_HIT_SCORE, divergenceScore, interpScore, isTailElapsed,
   progressAt, pulseAnchorsFor, pulseBandLabel, quantile, resonanceScore, scoreRescue, sessionElapsed,
-  timeCoefficient, windowFlowStats,
+  phaseOf, pulseFactorLabel, timeCoefficient, windowFlowStats,
 } from './rescue.ts'
 import { RESCUE_CALIBRATION } from './rescue-thresholds.ts'
 import { TW_ROWS } from '../shared/model.ts'
@@ -234,6 +234,17 @@ async function main(): Promise<void> {
       ok(typical.factors[0].id === 'volume' && typical.factors.length === 6 && Math.abs(typical.factors.reduce((a, f) => a + f.weight, 0) - 1) < 1e-9, '六因子权重合计 = 1')
       ok(typical.factors[2].label === '尾盘突袭' && typical.factors[2].score > 0 && !!typical.factors[3].threshold.includes('窗口成交额'), 'F3 尾盘命名与 F4 窗口口径')
       ok(PULSE_HIT_SCORE === 70 && PERSIST_ANCHORS[0] === 0.05, '脉冲命中线 = P90，持续性锚点以窗口成交额归一')
+
+      // 阶段语义：收盘后不得再叫「尾盘突袭」，避免误读为刚发生
+      ok(phaseOf('09:40') === 'am' && phaseOf('12:10') === 'noon' && phaseOf('13:30') === 'pm' && phaseOf('14:45') === 'tail' && phaseOf('15:30') === 'closed', '交易阶段判定')
+      ok(pulseFactorLabel('tail') === '尾盘突袭' && pulseFactorLabel('am') === '盘中脉冲' && pulseFactorLabel('closed') === '脉冲（盘后）', '脉冲因子名称随阶段变化')
+
+      // 完整度：因子缺失如实标注（冷启动回填失败时会出现）
+      const partial = scoreRescue({ ...strongInput, pulseMult: null, persistShare: null })
+      ok(partial.completeness.total === 6 && partial.completeness.available === 4, `脉冲与持续性缺失 → 因子 4/6（got ${partial.completeness.available}/${partial.completeness.total}）`)
+      ok(partial.completeness.missing.join(',') === '脉冲,持续性', `缺失项列出：${partial.completeness.missing.join('、')}`)
+      ok(partial.summary.includes('评分偏保守'), '归因里注明因子不完整且评分偏保守')
+      ok(typical.completeness.available === 6 && typical.summary.includes('评分偏保守') === false, '因子齐全时不显示完整度说明')
 
       // F4 窗口统计（纯函数）：稳定净流入 / 无参考点 / 反复进出
       const t0 = 1_700_000_000_000

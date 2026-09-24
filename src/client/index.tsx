@@ -49,7 +49,7 @@ export function apply(ctx: {
 }): void {
   ensureCss()
   try {
-    console.log('[dsh-tradewatcher] client v0.12.0 loaded (rescue-signal logic revisions: timeCoef wired, core-lane veto, banded pulse anchors)')
+    console.log('[dsh-tradewatcher] client v0.13.0 loaded (rescue cold-start bootstrap + completeness/phase labels)')
   } catch {
     /* console unavailable */
   }
