@@ -359,6 +359,33 @@ export function RescuePanel(props: { prefs: PortPrefs; redUp: boolean; onPrefs?:
       ? React.createElement('div', { className: 'tw-hint', style: { padding: '2px 10px 8px' } },
           `${RESCUE_LEVEL_DESC[level]}${level >= 2 ? '' : '（信号达到「疑似护盘」时本面板会自动展开）'}`)
       : null,
+    // 上游不可用且无卡片时：渲染当日复盘表，避免整块空白
+    snapshot !== null && snapshot.etfs.length === 0 && snapshot.fallback !== undefined
+      ? React.createElement('div', { className: 'tw-panel', style: { padding: '6px 8px' } },
+          React.createElement('div', { className: 'tw-sub-h' }, `当日通道复盘（${snapshot.fallback.day}）`,
+            React.createElement('span', { style: { flex: 1 } }),
+            React.createElement('span', { className: 'tw-muted', style: { fontSize: 10.5 } }, '超大单净额 ÷ 20日均额 的当日峰值'),
+          ),
+          React.createElement('table', { className: 'tw-rescue-factor' },
+            React.createElement('thead', null, React.createElement('tr', null,
+              React.createElement('th', null, '通道'), React.createElement('th', null, '指数'),
+              React.createElement('th', null, '当日峰值'), React.createElement('th', null, '状态'),
+            )),
+            React.createElement('tbody', null,
+              ...snapshot.fallback.peaks.map((p) => {
+                const v = p.peakSuperVsAvg
+                return React.createElement('tr', { key: p.secid, 'data-hit': (v ?? 0) >= 0.2 },
+                  React.createElement('td', null, p.name),
+                  React.createElement('td', { className: 'tw-muted' }, p.index),
+                  React.createElement('td', { style: { fontFamily: 'var(--tw-mono)' } }, v === null ? '—' : `${v.toFixed(3)}x`),
+                  React.createElement('td', { className: 'tw-muted', style: { fontSize: 10.5 } },
+                    v === null ? '当日无样本' : v >= 0.2 ? '曾达异动线' : v <= -0.15 ? '当日净流出' : '常态'),
+                )
+              }),
+            ),
+          ),
+        )
+      : null,
     expanded && snapshot !== null
       ? React.createElement(React.Fragment, null,
           React.createElement('div', { className: 'tw-rescue-resonance' },
@@ -373,13 +400,17 @@ export function RescuePanel(props: { prefs: PortPrefs; redUp: boolean; onPrefs?:
                 ? React.createElement('span', { className: 'tw-badge' }, '局部（仅外围通道）')
                 : null,
           ),
-          React.createElement('div', { className: 'tw-rescue-cards' },
-            ...snapshot.etfs.map((e) => React.createElement(EtfCard, { key: e.secid, etf: e, redUp: props.redUp })),
-          ),
+          snapshot.etfs.length > 0
+            ? React.createElement('div', { className: 'tw-rescue-cards' },
+                ...snapshot.etfs.map((e) => React.createElement(EtfCard, { key: e.secid, etf: e, redUp: props.redUp })),
+              )
+            : null,
           React.createElement('div', { className: 'tw-rescue-split' },
             React.createElement('div', null,
               React.createElement('div', { className: 'tw-sub-h' }, '因子明细（实测值 / 阈值 / 贡献）'),
-              React.createElement(FactorTable, { factors: snapshot.factors }),
+              snapshot.factors.length > 0
+                ? React.createElement(FactorTable, { factors: snapshot.factors })
+                : React.createElement('div', { className: 'tw-hint' }, '无实时数据：本次快照没有因子得分（上游不可用时只提供复盘数据）。'),
             ),
             React.createElement('div', null,
               React.createElement('div', { className: 'tw-sub-h' },

@@ -49,7 +49,7 @@ export function apply(ctx: {
 }): void {
   ensureCss()
   try {
-    console.log('[dsh-tradewatcher] client v0.13.2 loaded (upstream circuit breaker + day-log fallback)')
+    console.log('[dsh-tradewatcher] client v0.13.3 loaded (day-log fallback table now actually rendered)')
   } catch {
     /* console unavailable */
   }
