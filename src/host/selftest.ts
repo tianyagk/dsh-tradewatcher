@@ -12,6 +12,7 @@ import { fillLastGood, mergeBars, resampleYearly } from './em.ts'
 import { losslessJson } from './tools.ts'
 import { canonicalEconomy, macroEventsFromEm, macroImportance, parseEmDate } from './calendar.ts'
 import { RescueMonitor } from './rescue.ts'
+import { CircuitBreaker } from './breaker.ts'
 import {
   CORE_OUTFLOW_VETO, PERSIST_ANCHORS, PULSE_HIT_SCORE, divergenceScore, interpScore, isTailElapsed,
   progressAt, pulseAnchorsFor, pulseBandLabel, quantile, resonanceScore, scoreRescue, sessionElapsed,
@@ -290,6 +291,39 @@ async function main(): Promise<void> {
       ok((snap.note ?? '').includes('上次成功采样'), 'LKG 快照注明为上次成功采样')
       ok(mon.hasFreshData === false, 'hasFreshData 反映本会话尚未采到数据')
       rmSync(lkgDir, { recursive: true, force: true })
+    }
+
+    // 上游熔断：连续失败即停手（避免把限流推成封锁），成功即复位
+    {
+      const b = new CircuitBreaker({ threshold: 3, baseMs: 60_000, maxMs: 900_000 })
+      ok(b.allow() === true, '熔断器初始放行')
+      b.recordFailure(new Error('fetch failed'))
+      b.recordFailure(new Error('fetch failed'))
+      ok(b.allow() === true, '未达阈值仍放行')
+      b.recordFailure(new Error('fetch failed'))
+      ok(b.allow() === false && b.state.trips === 1, '连续 3 次失败 → 打开熔断')
+      ok(b.minutesLeft() >= 1 && (b.state.lastError ?? '').includes('fetch failed'), '熔断期间给出剩余时间与原因')
+      b.recordSuccess()
+      ok(b.allow() === true && b.state.trips === 0, '成功后完全复位')
+    }
+
+    // 上游不可用时的当日复盘兜底：不再让标的卡整块消失
+    {
+      const fbDir = mkdtempSync(join(tmpdir(), 'tw-fb-'))
+      const today = new Date().toISOString().slice(0, 10)
+      const peaks = { '1.510300': -0.011, '1.510050': 0.245, '1.510500': 0.094, '1.512100': -0.001, '1.588000': 0.003, '0.159915': 0.004 }
+      writeFileSync(join(fbDir, 'rescue-log.json'), JSON.stringify({
+        v: 1, baselines: {}, selfSamples: {}, lastSnapshot: null, updatedAt: Date.now(),
+        days: { [today]: { events: [], intraday: [], samples: 177, gap: false, etfPeak: peaks } },
+      }), 'utf8')
+      const mon = new RescueMonitor(fbDir, { enabled: true, intervalSec: 60, tailIntervalSec: 15, tailFrom: '14:30', universe: [] })
+      await mon.init()
+      const snap = mon.snapshot()
+      ok(snap.etfs.length === 0 && snap.fallback !== undefined && snap.fallback.peaks.length === 6, `无 LKG 时给出当日峰值复盘 ${snap.fallback?.peaks.length ?? 0} 行（而非空白）`)
+      ok(snap.stale === true && (snap.note ?? '').includes('暂不可用'), '复盘兜底标注来源为上游不可用')
+      const sh50 = snap.fallback?.peaks.find((p) => p.secid === '1.510050')
+      ok(sh50 !== undefined && Math.abs((sh50.peakSuperVsAvg ?? 0) - 0.245) < 1e-9, '复盘表带当日真实峰值（上证50 0.245x）')
+      rmSync(fbDir, { recursive: true, force: true })
     }
 
     // K线合并与年K重采样（纯函数）

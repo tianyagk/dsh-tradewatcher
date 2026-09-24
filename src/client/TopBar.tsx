@@ -296,7 +296,7 @@ export function TopBar(props: {
     'div',
     { ref: hostRef, className: 'tw-topbar' },
     React.createElement('div', { className: 'tw-topmeta' },
-      React.createElement('span', { className: 'tw-title', title: 'dsh-tradewatcher v0.13.1' }, '实时行情'),
+      React.createElement('span', { className: 'tw-title', title: 'dsh-tradewatcher v0.13.2' }, '实时行情'),
       React.createElement('span', { className: 'tw-uptime' },
         ts !== null ? `更新 ${fmtClock(ts)} · 每 ${prefs.refreshSec}s` : '加载中…',
       ),

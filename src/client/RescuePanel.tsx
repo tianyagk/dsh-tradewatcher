@@ -37,6 +37,8 @@ interface RescueData {
   snapshot: RescueSnapshot
   history: RescueDaySummary[]
   calibration?: Calibration
+  breaker?: { open: boolean; until: number; trips: number; minutesLeft: number; lastError: string | null }
+  staleNote?: string
 }
 
 const fmtX = (v: number | null | undefined, digits = 2): string => (typeof v === 'number' && Number.isFinite(v) ? `${v.toFixed(digits)}x` : '—')
@@ -334,6 +336,11 @@ export function RescuePanel(props: { prefs: PortPrefs; redUp: boolean; onPrefs?:
         : null,
     ),
     React.createElement(ErrorNote, { error }),
+    data?.breaker?.open === true
+      ? React.createElement('div', { className: 'tw-hint', style: { color: LEVEL_COLOR[2], padding: '2px 2px 4px' } },
+          `上游行情暂时不可用（连续失败已熔断，约 ${data.breaker.minutesLeft} 分钟后自动重试）：` +
+          `期间不发起请求以免加重封锁，面板显示当日复盘数据。最后错误：${data.breaker.lastError ?? '—'}`)
+      : null,
     loading && data === null ? React.createElement(Skeleton, { lines: 3, height: 20 }) : null,
     snapshot !== null
       ? React.createElement('div', { className: 'tw-rescue-summary' },

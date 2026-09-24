@@ -652,6 +652,12 @@ export interface RescueSnapshot {
   gap: boolean
   /** 本快照是否来自 last-known-good（上游暂不可用时的旧数据） */
   stale?: boolean
+  /** 上游不可用时的当日复盘兜底数据 */
+  fallback?: {
+    day: string
+    peaks: Array<{ secid: string; name: string; index: string; peakSuperVsAvg: number | null }>
+    note?: string
+  }
   /** 无实时数据时的说明 */
   note?: string
 }

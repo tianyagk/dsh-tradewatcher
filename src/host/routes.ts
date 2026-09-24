@@ -14,6 +14,7 @@ import { assemblePortfolio, ledgerViews } from './portfolio.ts'
 import { DataStore } from './store.ts'
 import { CalendarStore, calToday } from './calendar.ts'
 import { RescueMonitor } from './rescue.ts'
+import { quoteBreaker } from './breaker.ts'
 import { log, type PluginWebRoute, type PluginWebServer } from './context.ts'
 
 const MAX_BODY = 256 * 1024
@@ -369,7 +370,12 @@ export function makeTradeRoutes(
               })
               return
             }
-            send(res, 200, { snapshot, history: rescue.history(30), calibrated: rescue.calibratedInfo, calibration: rescue.calibrationInfo })
+            const b = quoteBreaker.state
+            send(res, 200, {
+              snapshot, history: rescue.history(30), calibrated: rescue.calibratedInfo,
+              calibration: rescue.calibrationInfo,
+              breaker: { open: b.open, until: b.until, trips: b.trips, minutesLeft: quoteBreaker.minutesLeft(), lastError: b.lastError },
+            })
             return
           }
           send(res, 405, { error: 'method not allowed' })

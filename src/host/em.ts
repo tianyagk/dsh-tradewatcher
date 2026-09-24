@@ -23,6 +23,7 @@ import type {
 } from '../shared/model.ts'
 import { SECID_RE } from '../shared/model.ts'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { quoteBreaker } from './breaker.ts'
 import { join } from 'node:path'
 import { dataHome } from './store.ts'
 
@@ -97,11 +98,15 @@ async function fetchFromHost(host: string, pathAndQuery: string, timeoutMs = 700
  * 与响应大小无关），单次尝试的成功率无法接受，因此按「轮 × 主机」重试，
  * 并用总体截止时间兜住延迟。任何一次成功即返回。
  */
-const FETCH_ROUNDS = 3
+const FETCH_ROUNDS = 2
 const FETCH_ATTEMPTS_PER_HOST = 2
-const FETCH_DEADLINE_MS = 12_000
+const FETCH_DEADLINE_MS = 9_000
 
 async function fetchAny(hosts: readonly string[], pathAndQuery: string, timeoutMs = 7000): Promise<unknown> {
+  // 熔断冷却期内直接快失败：此时重试只会加重上游对本机 IP 的封锁（实测失败率会被推到 100%）
+  if (!quoteBreaker.allow()) {
+    throw new Error(`上游行情暂时不可用（熔断中，约 ${quoteBreaker.minutesLeft()} 分钟后自动重试）`)
+  }
   const deadline = Date.now() + FETCH_DEADLINE_MS
   let lastError: unknown = null
   for (let round = 0; round < FETCH_ROUNDS; round++) {
@@ -112,7 +117,9 @@ async function fetchAny(hosts: readonly string[], pathAndQuery: string, timeoutM
           throw lastError instanceof Error ? lastError : new Error('上游请求超时')
         }
         try {
-          return await fetchFromHost(host, pathAndQuery, Math.min(timeoutMs, left))
+          const ok = await fetchFromHost(host, pathAndQuery, Math.min(timeoutMs, left))
+          quoteBreaker.recordSuccess()
+          return ok
         } catch (error) {
           lastError = error
           // 握手/连接被立刻关闭：短退避后立刻重试；HTTP 4xx 之类不重试
@@ -124,6 +131,7 @@ async function fetchAny(hosts: readonly string[], pathAndQuery: string, timeoutM
       }
     }
   }
+  quoteBreaker.recordFailure(lastError)
   throw lastError instanceof Error ? lastError : new Error(String(lastError))
 }
 
@@ -490,7 +498,10 @@ async function trendWithFallback(
       cache.set(key, { exp: Date.now() + 20_000, value: lkg })
       return lkg
     }
-    throw error
+    // 没有兜底数据时返回 null（而不是抛错）：路由回 200 + trend:null，
+    // 客户端按"暂无分时"降级，避免整页错误提示与日志刷屏
+    void error
+    return null
   }
 }
 

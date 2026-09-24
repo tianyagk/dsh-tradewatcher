@@ -24,6 +24,7 @@ import type {
 } from '../shared/model.ts'
 import { RESCUE_CORE_OUTFLOW_VETO, RESCUE_CORE_INDEXES, RESCUE_PERIPHERAL_FLOW_DISCOUNT, rescueUniverseMeta } from '../shared/model.ts'
 import { RESCUE_CALIBRATION } from './rescue-thresholds.ts'
+import { quoteBreaker } from './breaker.ts'
 import { dataHome } from './store.ts'
 
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
@@ -140,6 +141,8 @@ interface DayLog {
   gap: boolean
   /** 当日各标的的超大单净额/20日均额 峰值（供 F2 自建分位升级） */
   etfPeak?: Record<string, number>
+  /** 当日各通道最后一次成功采样的完整视图（上游中断时用于复盘展示） */
+  etfLast?: Record<string, RescueEtfView>
 }
 
 interface LogFile {
@@ -488,11 +491,15 @@ export function quantile(sorted: readonly number[], p: number): number | null {
 
 /** 与 em.fetchAny 同策略：本机到东财的连接会随机被立刻关闭（瞬时失败率可达数十个百分点），
  *  采样器一次丢样本就会形成「缺口」，因此按「轮 × 主机」重试并加抖动退避。 */
-const FETCH_ROUNDS = 3
+const FETCH_ROUNDS = 2
 const FETCH_ATTEMPTS_PER_HOST = 2
-const FETCH_DEADLINE_MS = 12_000
+const FETCH_DEADLINE_MS = 9_000
 
 async function fetchAny(hosts: readonly string[], pathAndQuery: string, timeoutMs = 8000): Promise<Record<string, unknown>> {
+  // 与行情中继共用熔断器：冷却期内不发起任何请求，由 LKG/复盘数据兜底
+  if (!quoteBreaker.allow()) {
+    throw new Error(`上游行情暂时不可用（熔断中，约 ${quoteBreaker.minutesLeft()} 分钟后自动重试）`)
+  }
   const deadline = Date.now() + FETCH_DEADLINE_MS
   let lastErr: unknown = null
   for (let round = 0; round < FETCH_ROUNDS; round++) {
@@ -508,6 +515,7 @@ async function fetchAny(hosts: readonly string[], pathAndQuery: string, timeoutM
           if (!res.ok) throw new Error(`HTTP ${res.status}`)
           const j = (await res.json()) as { data?: unknown }
           if (j?.data === null || j?.data === undefined) throw new Error('data null')
+          quoteBreaker.recordSuccess()
           return j.data as Record<string, unknown>
         } catch (e) {
           lastErr = e
@@ -518,6 +526,7 @@ async function fetchAny(hosts: readonly string[], pathAndQuery: string, timeoutM
       }
     }
   }
+  quoteBreaker.recordFailure(lastErr)
   throw lastErr instanceof Error ? lastErr : new Error('all hosts failed')
 }
 
@@ -1035,6 +1044,12 @@ export class RescueMonitor {
       })
       if (this.today.intraday.length > 120) this.today.intraday.splice(0, this.today.intraday.length - 120)
     }
+    // 记住每通道最后一次成功值：上游中断/收盘后重启时，面板可据此复盘而不是空白
+    {
+      const last = this.today.etfLast ?? {}
+      for (const e of etfs) last[e.secid] = e
+      this.today.etfLast = last
+    }
     this.today.samples += 1
     this.today.gap = false
     this.lastSnapshot = {
@@ -1191,6 +1206,27 @@ export class RescueMonitor {
         gap: this.today.gap,
       }
     }
+    const fb = this.fallbackFromDayLog()
+    if (fb !== null) {
+      return {
+        ts: Date.now(), trading: inTradingWindow(Date.now()), level: 0, score: 0,
+        summary: fb.note, factors: [], etfs: fb.etfs,
+        indexPct: null, indexName: INDEX_NAME,
+        timeCoef: timeCoefficient(sessionElapsed(hhmmOf(Date.now()))),
+        resonance: { lanes: [], core: 0, peripheral: 0, intensity: 'none' },
+        pulseBand: {
+          elapsed: sessionElapsed(hhmmOf(Date.now())),
+          label: phaseOf(hhmmOf(Date.now())) === 'closed' ? '已收盘' : pulseBandLabel(sessionElapsed(hhmmOf(Date.now()))),
+          isTail: false, anchors: pulseAnchorsFor(sessionElapsed(hhmmOf(Date.now()))), phase: phaseOf(hhmmOf(Date.now())),
+        },
+        completeness: { available: 0, total: 6, missing: ['量能放大', '超大单强度', '脉冲', '持续性', '量价背离'] },
+        thresholdSource: this.f2Source(), selfSampleDays: this.selfSampleDays(),
+        config: this.getConfig(), activeIntervalSec: this.activeIntervalSec(),
+        today: [...this.today.events].reverse(), intraday: [...this.today.intraday],
+        sampleCount: this.today.samples, lastSampleTs: null, gap: true, stale: true,
+        note: fb.note, fallback: fb.meta,
+      }
+    }
     return {
       ts: Date.now(), trading: inTradingWindow(Date.now()), level: 0, score: 0,
       summary: '尚未采样（打开页面后会自动开始）', factors: [], etfs: [], indexPct: null, indexName: INDEX_NAME,
@@ -1209,6 +1245,30 @@ export class RescueMonitor {
       today: [...this.today.events].reverse(), intraday: [...this.today.intraday], sampleCount: this.today.samples,
       lastSampleTs: null, gap: this.today.gap, note: '等待首次采样',
     }
+  }
+
+  /**
+   * 上游不可用时的当日复盘兜底：
+   *   - 优先用当日各通道「最后一次成功采样」的完整视图（可渲染卡片）
+   *   - 退化时用当日峰值（只有超大单/20日均额），面板渲染为复盘表
+   */
+  private fallbackFromDayLog(): { etfs: RescueEtfView[]; meta: RescueSnapshot['fallback']; note: string } | null {
+    const last = this.today.etfLast ?? {}
+    const peaks = this.today.etfPeak ?? {}
+    const lastEtfs = Object.values(last)
+    if (lastEtfs.length === 0 && Object.keys(peaks).length === 0) return null
+    const metas = rescueUniverseMeta(this.config.universe)
+    const meta = {
+      day: this.todayKey,
+      peaks: metas.map((m) => ({
+        secid: m.secid, name: m.name, index: m.index,
+        peakSuperVsAvg: typeof peaks[m.secid] === 'number' ? peaks[m.secid] : null,
+      })),
+    }
+    const note = lastEtfs.length > 0
+      ? `上游行情暂不可用：显示当日最后一次成功采样（${lastEtfs.length} 个通道）`
+      : '上游行情暂不可用：显示当日各通道峰值（复盘口径，无实时价与成交额）'
+    return { etfs: lastEtfs.length > 0 ? lastEtfs : [], meta, note }
   }
 
   /** 近 60 天每日摘要（历史回看） */
