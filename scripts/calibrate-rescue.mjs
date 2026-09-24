@@ -91,6 +91,24 @@ function dayProgress(bars) {
 
 let progressCurve = null
 let progressDays = 0
+
+/**
+ * 脉冲比按时段分档标定。
+ * 口径与插件运行时一致：ratio = 该 5 分钟成交额 ÷ (20日均额 × 标定进度增量)
+ * 目的：单一锚点（如固定 1.5/2.5/4x）会让早盘/尾盘的自然波动被读成「脉冲」，
+ * 必须用每个时段自己的分位数做锚点。
+ */
+const PULSE_BANDS = [
+  { key: '09:30-10:00', label: '早盘', from: 5, to: 30 },
+  { key: '10:00-10:30', label: '上午前段', from: 35, to: 60 },
+  { key: '10:30-11:30', label: '上午后段', from: 65, to: 120 },
+  { key: '13:00-14:00', label: '午后', from: 125, to: 180 },
+  { key: '14:00-14:30', label: '尾盘前', from: 185, to: 210 },
+  { key: '14:30-15:00', label: '尾盘', from: 215, to: 240 },
+]
+const pulseSamples = Object.fromEntries(PULSE_BANDS.map((b) => [b.key, []]))
+/** 第一趟：收集每只 ETF 每个交易日的槽位成交额与日均额（比值留到合并曲线算出后再算） */
+const pulseSources = []
 {
   const curves = []
   for (const u of UNIVERSE) {
@@ -103,9 +121,30 @@ let progressDays = 0
         k.push(b)
         byDay.set(d, k)
       }
-      for (const arr of byDay.values()) {
+      const dayTotals = []
+      const slotsByDay = new Map()
+      for (const [d, arr] of byDay.entries()) {
+        const slots = new Map()
+        for (const b of arr) {
+          const hm = String(b.day).slice(11, 16)
+          const [h, m] = hm.split(':').map(Number)
+          if (!Number.isFinite(h) || !Number.isFinite(m)) continue
+          const mins = h * 60 + m
+          const el = mins <= 690 ? mins - 570 : mins >= 780 ? 120 + (mins - 780) : -1
+          if (el <= 0 || el > 240 || el % 5 !== 0) continue
+          slots.set(el, (slots.get(el) ?? 0) + Number(b.volume || 0) * Number(b.close || 0))
+        }
+        if (slots.size < 40) continue
+        slotsByDay.set(d, slots)
+        dayTotals.push([...slots.values()].reduce((a, b) => a + b, 0))
+      }
+      const dayAvgAmt = avg(dayTotals)
+      for (const [d, arr] of byDay.entries()) {
         const c = dayProgress(arr)
         if (c !== null) curves.push(c)
+        const slots = slotsByDay.get(d)
+        if (slots === undefined || dayAvgAmt === null || !(dayAvgAmt > 0)) continue
+        pulseSources.push({ dayAvgAmt, slots })
       }
     } catch (e) {
       console.log(`  ${u.secid} 新浪 5 分钟线失败: ${e.message}`)
@@ -123,6 +162,36 @@ let progressDays = 0
     console.log(`\n日内累计成交进度曲线（${progressDays} 个交易日样本）：`)
     for (const m of SINA_PROGRESS_MARKS) console.log(`  ${m}  累计占全天 ${(at(m) * 100).toFixed(1)}%`)
   }
+  // 第二趟：用合并进度曲线的槽位增量做分母（与插件运行时口径一致）
+  if (progressCurve !== null) {
+    for (const src of pulseSources) {
+      for (const [el, amt] of src.slots) {
+        const i = el / 5
+        const delta = progressCurve[i] - progressCurve[i - 1]
+        if (!(delta > 0)) continue
+        const band = PULSE_BANDS.find((b) => el >= b.from && el <= b.to)
+        if (band === undefined) continue
+        pulseSamples[band.key].push(amt / (src.dayAvgAmt * delta))
+      }
+    }
+  }
+}
+
+// 脉冲锚点：按时段取 P75/P90/P95 → 40/70/100 分
+const pulseBands = PULSE_BANDS.map((b) => {
+  const arr = pulseSamples[b.key]
+  const band = {
+    key: b.key, label: b.label, from: b.from, to: b.to, samples: arr.length,
+    p75: pct(arr, 75), p90: pct(arr, 90), p95: pct(arr, 95),
+  }
+  return band
+}).filter((b) => b.samples >= 100 && b.p75 !== null)
+console.log('\n脉冲比按时段分档（ratio = 5分钟成交额 ÷ (20日均额 × 标定进度增量)）：')
+console.log('时段           样本    P50    P75    P90    P95   ≥1.5x占比')
+for (const b of pulseBands) {
+  const arr = pulseSamples[b.key]
+  const over = ((arr.filter((v) => v >= 1.5).length / arr.length) * 100).toFixed(1) + '%'
+  console.log(`  ${b.key.padEnd(13)} ${String(b.samples).padStart(5)}  ${String(pct(arr, 50).toFixed(2)).padStart(5)}  ${b.p75.toFixed(2).padStart(5)}  ${b.p90.toFixed(2).padStart(5)}  ${b.p95.toFixed(2).padStart(5)}   ${over.padStart(6)}`)
 }
 
 const perEtf = []
@@ -168,6 +237,7 @@ const out = {
   f2,
   progressCurve,
   progressDays,
+  pulseBands,
   perEtf: Object.fromEntries(perEtf.map((e) => [e.secid, e.mult])),
 }
 const here = dirname(fileURLToPath(import.meta.url))
@@ -191,6 +261,8 @@ export interface RescueCalibration {
   f2: { watch: number; mid: number; strong: number }
   /** 日内累计成交占比曲线，索引 i = 开盘后 i*5 分钟（0..48） */
   progressCurve: number[]
+  /** 脉冲锚点按时段分档（P75/P90/P95 → 40/70/100 分） */
+  pulseBands: Array<{ key: string; label: string; from: number; to: number; samples: number; p75: number; p90: number; p95: number }>
   progressDays: number
   pooled: { p50: number; p75: number; p90: number; p95: number; p99: number }
   universe: Array<{ secid: string; name: string; avgAmt20: number }>
@@ -203,6 +275,7 @@ export const RESCUE_CALIBRATION: RescueCalibration = ${JSON.stringify(
     f2: { watch: out.f2.watch, mid: out.f2.mid, strong: out.f2.strong },
     progressCurve: out.progressCurve ?? [],
     progressDays: out.progressDays ?? 0,
+    pulseBands: out.pulseBands ?? [],
     pooled: out.pooled,
     universe: out.universe,
   },

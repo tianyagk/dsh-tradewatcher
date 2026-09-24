@@ -22,7 +22,7 @@ import type {
   RescueConfig, RescueDaySummary, RescueEtfMeta, RescueEtfView, RescueFactor, RescueIntradayPoint,
   RescueLevel, RescueSignalEvent, RescueSnapshot, RescueThresholdSource,
 } from '../shared/model.ts'
-import { rescueUniverseMeta } from '../shared/model.ts'
+import { RESCUE_CORE_OUTFLOW_VETO, RESCUE_CORE_INDEXES, RESCUE_PERIPHERAL_FLOW_DISCOUNT, rescueUniverseMeta } from '../shared/model.ts'
 import { RESCUE_CALIBRATION } from './rescue-thresholds.ts'
 import { dataHome } from './store.ts'
 
@@ -40,8 +40,39 @@ export const RESCUE_WEIGHTS = {
   resonance: 0.08,
 } as const
 
-/** 尾盘脉冲锚点（同时点口径，已用标定曲线消除集合竞价的自然放大） */
+/** 兜底脉冲锚点（标定数据缺失时才用；正常走 RESCUE_CALIBRATION.pulseBands） */
 export const PULSE_ANCHORS: [number, number, number] = [1.5, 2.5, 4]
+/** 尾盘起点（开盘后分钟数）：14:30 */
+export const TAIL_FROM_ELAPSED = 180
+/** 盘中脉冲的打折系数（真尾盘的大单才更能代表主力意图） */
+export const INTRADAY_PULSE_DISCOUNT = 0.6
+/** 脉冲「命中」线（分）：对应该时段 P90】 */
+export const PULSE_HIT_SCORE = 70
+/** 持续性锚点：5 分钟内超大单净增 ÷ 该窗口成交额 → 40/70/100 分 */
+export const PERSIST_ANCHORS: [number, number, number] = [0.05, 0.12, 0.25]
+/** 核心护盘通道与阈值：定义在 shared，客户端也要用于标注与展示 */
+export const CORE_INDEXES = RESCUE_CORE_INDEXES
+export const CORE_OUTFLOW_VETO = RESCUE_CORE_OUTFLOW_VETO
+export const PERIPHERAL_FLOW_DISCOUNT = RESCUE_PERIPHERAL_FLOW_DISCOUNT
+
+export function isTailElapsed(elapsedMin: number): boolean {
+  return elapsedMin >= TAIL_FROM_ELAPSED
+}
+
+/** 取当前时段的脉冲锚点（P75/P90/P95 → 40/70/100） */
+export function pulseAnchorsFor(elapsedMin: number): [number, number, number] {
+  const bands = RESCUE_CALIBRATION.pulseBands
+  if (!Array.isArray(bands) || bands.length === 0) return PULSE_ANCHORS
+  const hit = bands.find((b) => elapsedMin >= b.from && elapsedMin <= b.to)
+  const b = hit ?? bands[bands.length - 1]
+  return [b.p75, b.p90, b.p95]
+}
+
+export function pulseBandLabel(elapsedMin: number): string {
+  const bands = RESCUE_CALIBRATION.pulseBands
+  const hit = Array.isArray(bands) ? bands.find((b) => elapsedMin >= b.from && elapsedMin <= b.to) : undefined
+  return hit?.label ?? (isTailElapsed(elapsedMin) ? '尾盘' : '盘中')
+}
 /** 自建样本满该天数后，F2 改用自建分位数 */
 export const SELF_SAMPLE_MIN_DAYS = 20
 const KEEP_DAYS = 60
@@ -123,15 +154,6 @@ export function divergenceScore(indexPct: number | null): number {
   return 20
 }
 
-/** 持续性：超大单净额连续递增的采样次数（30s 一档） */
-export function persistenceScore(streak: number): number {
-  if (streak >= 4) return 100
-  if (streak >= 3) return 80
-  if (streak >= 2) return 60
-  if (streak >= 1) return 30
-  return 0
-}
-
 /** 全池共振：同时触发的宽基通道数 */
 export function resonanceScore(count: number): number {
   if (count >= 3) return 100
@@ -151,16 +173,34 @@ export function timeCoefficient(elapsedMin: number): number {
 
 export interface RescueFactorInput {
   timeAdjMult: number | null
-  superVsAvg: number | null
+  /** 核心通道的最大 超大单/20日均额（F2 以核心通道为主） */
+  coreSuperVsAvg: number | null
+  /** 外围通道的最大 超大单/20日均额（单独净流入时打折） */
+  peripheralSuperVsAvg: number | null
   pulseMult: number | null
-  streak: number
+  /** 持续性：最近窗口内 超大单净增 ÷ 该窗口成交额 */
+  persistShare: number | null
+  /** 该窗口内单次最大回撤 ÷ 净增（>0.5 说明反复进出，打折） */
+  retraceRatio: number | null
   indexPct: number | null
+  /** 共振：总只数 / 核心通道命中数 / 外围通道命中数 / 命中通道名 */
   resonance: number
+  coreResonance?: number
+  peripheralResonance?: number
+  resonanceLanes?: string[]
+  /** 核心通道中最差的 超大单占比（用于否决） */
+  coreWorstShare?: number | null
   /** F2 锚点（可被自建分位数覆盖） */
   f2Anchors: [number, number, number]
   f2Source: RescueThresholdSource
   /** 时点系数；缺省 1（纯函数不读时钟，便于自检） */
   timeCoef?: number
+  /** 当前是否为尾盘（14:30 后） */
+  isTail?: boolean
+  /** 当前时段的脉冲锚点 */
+  pulseAnchors?: [number, number, number]
+  /** 当前时段标签（早盘/午后/尾盘…） */
+  bandLabel?: string
 }
 
 export interface RescueScoreResult {
@@ -173,56 +213,100 @@ export interface RescueScoreResult {
 const fmt = (v: number | null, unit: string, digits = 2): string => (v === null ? '—' : `${v.toFixed(digits)}${unit}`)
 const fmtYi = (v: number | null): string => (v === null ? '—' : `${(v / 1e8).toFixed(2)}亿`)
 
-/** 六因子合成：S = Σ w·f × 时点系数；并施加「强信号须有真实超大单」的防误报约束 */
+/**
+ * 六因子合成：S = Σ w·f × 时点系数，再施加防误报封顶。
+ *
+ * P0 修订（针对「早盘噪音被读成护盘」「脉冲过松」「持续性无门槛」）：
+ *  - 时点系数**真正接入**（此前 tick 未传，运行时恒为 1 → 早盘满权重）
+ *  - F2 以**核心通道**为主：只有外围通道净流入时打折；核心通道大额净流出直接否决
+ *  - F3 改名并分档：尾盘（14:30 后）为「尾盘突袭」满分权重，盘中为「盘中脉冲」并打折
+ *  - F4 从「连续递增次数」改为**时间 + 幅度**：窗口内净增 ÷ 窗口成交额
+ *  - 三级（强护盘）要求核心通道参与共振
+ */
 export function scoreRescue(input: RescueFactorInput): RescueScoreResult {
+  const pulseAnchors = input.pulseAnchors ?? PULSE_ANCHORS
+  const isTail = input.isTail ?? false
+  const bandLabel = input.bandLabel ?? (isTail ? '尾盘' : '盘中')
+
   const f1 = interpScore(input.timeAdjMult ?? 0, [RESCUE_CALIBRATION.f1.mid, RESCUE_CALIBRATION.f1.high, RESCUE_CALIBRATION.f1.extreme])
-  const f2 = interpScore(input.superVsAvg ?? 0, input.f2Anchors)
-  const f3 = interpScore(input.pulseMult ?? 0, PULSE_ANCHORS)
-  const f4 = persistenceScore(input.streak)
+
+  // F2：核心通道优先。核心有净流入则以其为准；只有外围在买 → 打折（外围单买不足以证明系统性托底）
+  const core = input.coreSuperVsAvg ?? null
+  const peri = input.peripheralSuperVsAvg ?? null
+  const corePositive = core !== null && core > 0
+  const f2Value = corePositive ? (peri !== null ? Math.max(core, peri) : core) : peri !== null ? peri * PERIPHERAL_FLOW_DISCOUNT : 0
+  const f2Basis = corePositive ? (peri !== null && peri > core ? '外围主导（已折算）' : '核心通道') : '外围通道（打 0.7 折）'
+  const f2 = interpScore(f2Value, input.f2Anchors)
+
+  // F3：脉冲。盘中打折，尾盘满分；命中线为该时段 P90
+  const rawPulse = interpScore(input.pulseMult ?? 0, pulseAnchors)
+  const f3 = Math.round(rawPulse * (isTail ? 1 : INTRADAY_PULSE_DISCOUNT))
+
+  // F4：持续性 = 窗口内净增 ÷ 窗口成交额（自归一，与采样间隔无关）；反复进出打折
+  let f4 = interpScore(input.persistShare ?? 0, PERSIST_ANCHORS)
+  const retrace = input.retraceRatio
+  if (f4 > 0 && retrace !== null && retrace > 0.5) f4 = Math.round(f4 * 0.6)
+
   const f5 = divergenceScore(input.indexPct)
   const f6 = resonanceScore(input.resonance)
+  const coreRes = input.coreResonance ?? 0
+  const periRes = input.peripheralResonance ?? 0
+
   const factors: RescueFactor[] = [
     {
       id: 'volume', label: '量能放大', score: f1, weight: RESCUE_WEIGHTS.volume,
-      actual: fmt(input.timeAdjMult, 'x'), threshold: `同时点量能倍数（P75/P90/P95 ${RESCUE_CALIBRATION.f1.mid}/${RESCUE_CALIBRATION.f1.high}/${RESCUE_CALIBRATION.f1.extreme}x 历史标定）`,
+      actual: fmt(input.timeAdjMult, 'x'),
+      threshold: `同时点量能倍数（P75/P90/P95 ${RESCUE_CALIBRATION.f1.mid}/${RESCUE_CALIBRATION.f1.high}/${RESCUE_CALIBRATION.f1.extreme}x 历史标定）`,
       hit: f1 >= 40,
     },
     {
       id: 'superflow', label: '超大单强度', score: f2, weight: RESCUE_WEIGHTS.superflow,
-      actual: fmt(input.superVsAvg, 'x'), threshold: `超大单净额/20日均额（${input.f2Anchors[0]}/${input.f2Anchors[1]}/${input.f2Anchors[2]}x，来源 ${input.f2Source === 'self' ? '自建样本分位' : '经验锚点'}）`,
+      actual: `${fmt(f2Value, 'x')}（${f2Basis}）`,
+      threshold: `核心通道优先：超大单净额/20日均额（${input.f2Anchors[0]}/${input.f2Anchors[1]}/${input.f2Anchors[2]}x，来源 ${input.f2Source === 'self' ? '自建样本分位' : '经验锚点'}）；仅外围净流入打 0.7 折`,
       hit: f2 >= 40,
     },
     {
-      id: 'pulse', label: '尾盘脉冲', score: f3, weight: RESCUE_WEIGHTS.pulse,
-      actual: fmt(input.pulseMult, 'x'), threshold: `最近5分钟成交额/同时点基准（${PULSE_ANCHORS[0]}/${PULSE_ANCHORS[1]}/${PULSE_ANCHORS[2]}x）`,
-      hit: f3 >= 40,
+      id: 'pulse', label: isTail ? '尾盘突袭' : '盘中脉冲', score: f3, weight: RESCUE_WEIGHTS.pulse,
+      actual: `${fmt(input.pulseMult, 'x')}${isTail ? '' : '（打 0.6 折）'}`,
+      threshold: `${bandLabel} 时段锚点 ${pulseAnchors[0].toFixed(2)}/${pulseAnchors[1].toFixed(2)}/${pulseAnchors[2].toFixed(2)}x（P75/P90/P95 分档标定）；命中线 ${PULSE_HIT_SCORE} 分`,
+      hit: f3 >= PULSE_HIT_SCORE,
     },
     {
       id: 'persistence', label: '持续性', score: f4, weight: RESCUE_WEIGHTS.persistence,
-      actual: `${input.streak} 次`, threshold: '超大单净额连续递增的采样次数（≥2 起算）',
+      actual: input.persistShare === null ? '—' : `${(input.persistShare * 100).toFixed(1)}%${retrace !== null && retrace > 0.5 ? `（回撤 ${(retrace * 100).toFixed(0)}% 打折）` : ''}`,
+      threshold: `最近 5 分钟超大单净增 ÷ 该窗口成交额（${PERSIST_ANCHORS[0]}/${PERSIST_ANCHORS[1]}/${PERSIST_ANCHORS[2]}），窗口内单次回撤 >50% 净增时打 0.6 折`,
       hit: f4 >= 40,
     },
     {
       id: 'divergence', label: '量价背离', score: f5, weight: RESCUE_WEIGHTS.divergence,
-      actual: fmt(input.indexPct, '%'), threshold: `${INDEX_NAME} 跌 ≥1.0% 满分；上涨时权重打折（追涨天量不是护盘）`,
+      actual: fmt(input.indexPct, '%'),
+      threshold: `${INDEX_NAME} 跌 ≥1.0% 满分；上涨时封顶（追涨天量不是护盘）`,
       hit: f5 >= 60,
     },
     {
       id: 'resonance', label: '全池共振', score: f6, weight: RESCUE_WEIGHTS.resonance,
-      actual: `${input.resonance} 只`, threshold: '同时触发的宽基通道数（按指数去重）',
+      actual: `${input.resonance} 只（核心 ${coreRes} / 外围 ${periRes}）${(input.resonanceLanes ?? []).length > 0 ? `：${(input.resonanceLanes ?? []).join('、')}` : ''}`,
+      threshold: '同时触发的宽基通道数（按指数去重）；核心通道 = 沪深300/上证50',
       hit: f6 >= 40,
     },
   ]
+
   const raw = factors.reduce((a, f) => a + f.weight * f.score, 0)
   const coef = input.timeCoef ?? 1
   const score = Math.max(0, Math.min(100, Math.round(raw * coef)))
   const scaled: RescueLevel = score >= 75 ? 3 : score >= 55 ? 2 : score >= 35 ? 1 : 0
-  // 防误报约束（每条都会写进归因，不做静默降级）：
-  //  1) 护盘的前提是市场承压 —— 指数明显上涨时的天量更可能是追涨，指数大涨直接封顶
-  //  2) 强信号必须有真实的超大单净流入
-  //  3) 既没有资金流入也没有脉冲时，最多算「异动」
+
+  // 防误报约束（每条都写进归因，不做静默降级）
   const caps: string[] = []
   let level = scaled
+
+  // 0) 核心通道否决：沪深300/上证50 出现大额超大单净流出时，不论其它通道如何都不给「疑似护盘」
+  const worst = input.coreWorstShare ?? null
+  if (worst !== null && worst <= CORE_OUTFLOW_VETO && level > 1) {
+    level = 1
+    caps.push(`核心通道（${CORE_INDEXES.join('/')}）超大单净流出达成交额的 ${(worst * 100).toFixed(1)}%，与托底特征相反 → 封顶为资金异动`)
+  }
+  // 1) 护盘的前提是市场承压：指数大涨时的天量更可能是追涨
   const idx = input.indexPct
   if (idx !== null && Number.isFinite(idx)) {
     if (idx > 1.0 && level > 1) {
@@ -233,25 +317,33 @@ export function scoreRescue(input: RescueFactorInput): RescueScoreResult {
       caps.push(`指数仍上涨 ${idx.toFixed(2)}%，量价背离不成立 → 封顶为疑似护盘`)
     }
   }
+  // 2) 强信号必须由核心通道参与
+  if (level === 3 && coreRes < 1) {
+    level = 2
+    caps.push('核心通道（沪深300/上证50）未参与共振 → 降为疑似护盘（外围单买不足以认定系统性护盘）')
+  }
+  // 3) 强信号必须有真实的超大单净流入
   if (level === 3 && f2 < 70) {
     level = 2
     caps.push('超大单强度未达强信号门槛 → 降为疑似护盘')
   }
+  // 4) 疑似信号至少要有量能或资金之一
   if (level === 2 && f2 < 40 && f1 < 70) {
     level = 1
     caps.push('量能与资金流入均未达中档 → 降为资金异动')
   }
-  if (f2 < 15 && f3 < 40 && level > 1) {
+  if (f2 < 15 && f4 < 40 && level > 1) {
     level = 1
-    caps.push('无有效超大单净流入且无脉冲 → 降为资金异动')
+    caps.push('超大单无有效净流入且持续性不足 → 降为资金异动')
   }
+
   const hits = factors.filter((f) => f.hit).map((f) => `${f.label} ${f.actual}`).join(' · ')
-  const base = level === 0 ? '宽基 ETF 量能与资金流均在常态区间（无异动）' : `${hits}`
+  const base = level === 0 || hits === '' ? '宽基 ETF 量能与资金流均在常态区间（无异动）' : hits
   const summary = `${base}${caps.length > 0 ? ` —— ${caps.join('；')}` : ''}（评分 ${score}，时点系数 ${coef}）`
   return { score, level, factors, summary }
 }
 
-export function hhmmOf(ts: number): string {
+function hhmmOf(ts: number): string {
   const d = new Date(ts)
   const p = (n: number): string => String(n).padStart(2, '0')
   return `${p(d.getHours())}:${p(d.getMinutes())}`
@@ -613,12 +705,19 @@ export class RescueMonitor {
     const progress = progressAt(curve, elapsed)
     const indexPct = quotes[INDEX_SECID]?.pct ?? null
     const etfs: RescueEtfView[] = []
+    const isCoreIndex = (index: string): boolean => CORE_INDEXES.includes(index)
+    const pulseAnchors = pulseAnchorsFor(elapsed)
+    const tail = isTailElapsed(elapsed)
     let maxMult: number | null = null
-    let maxSuperVsAvg: number | null = null
+    let coreSuperVsAvg: number | null = null
+    let peripheralSuperVsAvg: number | null = null
     let maxPulse: number | null = null
-    let maxAmount = 0
+    let persistBest: number | null = null
+    let retraceWorst: number | null = null
+    let coreWorstShare: number | null = null
     const triggeredIndexes = new Set<string>()
-    let streakBest = 0
+    const coreTriggered: string[] = []
+    const peripheralTriggered: string[] = []
     for (const meta of metas) {
       const q = quotes[meta.secid]
       const base = this.file.baselines[meta.secid]?.avgAmt20 ?? RESCUE_CALIBRATION.universe.find((u) => u.secid === meta.secid)?.avgAmt20 ?? null
@@ -649,20 +748,39 @@ export class RescueMonitor {
           if (expected > 0 && actual5 > 0) pulseMult = actual5 / expected
         }
       }
-      const streak = amount !== null && superNet !== null ? this.pushSample(meta.secid, { ts, amount, superNet, mainNet: q.mainNet ?? 0 }) : 0
-      streakBest = Math.max(streakBest, streak)
+      const flow = amount !== null && superNet !== null
+        ? this.pushSample(meta.secid, { ts, amount, superNet, mainNet: q.mainNet ?? 0 })
+        : { persistShare: null, retraceRatio: null }
+      if (flow.persistShare !== null && (persistBest === null || flow.persistShare > persistBest)) persistBest = flow.persistShare
+      if (flow.retraceRatio !== null && (retraceWorst === null || flow.retraceRatio > retraceWorst)) retraceWorst = flow.retraceRatio
       if (timeAdjMult !== null) maxMult = Math.max(maxMult ?? 0, timeAdjMult)
-      if (superVsAvg !== null) maxSuperVsAvg = Math.max(maxSuperVsAvg ?? -Infinity, superVsAvg)
+      if (superVsAvg !== null) {
+        if (isCoreIndex(meta.index)) {
+          // 核心护盘通道：F2 以它们为主，并记录最差的超大单占比用于否决
+          coreSuperVsAvg = Math.max(coreSuperVsAvg ?? -Infinity, superVsAvg)
+          if (superShare !== null && (coreWorstShare === null || superShare < coreWorstShare)) coreWorstShare = superShare
+        } else {
+          peripheralSuperVsAvg = Math.max(peripheralSuperVsAvg ?? -Infinity, superVsAvg)
+        }
+      }
       if (pulseMult !== null) maxPulse = Math.max(maxPulse ?? 0, pulseMult)
-      if (amount !== null) maxAmount = Math.max(maxAmount, amount)
       if (superVsAvg !== null) {
         const peaks = this.today.etfPeak ?? {}
         if (!(meta.secid in peaks) || superVsAvg > peaks[meta.secid]) peaks[meta.secid] = superVsAvg
         this.today.etfPeak = peaks
       }
-      const selfTrigger = (timeAdjMult !== null && timeAdjMult >= RESCUE_CALIBRATION.f1.mid && superVsAvg !== null && superVsAvg >= this.f2Anchors()[0]) ||
-        (pulseMult !== null && pulseMult >= PULSE_ANCHORS[1])
-      if (selfTrigger) triggeredIndexes.add(meta.index)
+      // 资金流入是必要条件：只有量能或脉冲、没有净流入，不构成托底证据
+      //（9/24 09:48 那次「疑似护盘」正是 F2=0 却因量能+脉冲+持续性凑分所致）
+      const flowOk = superVsAvg !== null && superVsAvg >= this.f2Anchors()[0]
+      const selfTrigger = flowOk && (
+        (timeAdjMult !== null && timeAdjMult >= RESCUE_CALIBRATION.f1.mid) ||
+        (pulseMult !== null && pulseMult >= pulseAnchors[1])
+      )
+      if (selfTrigger) {
+        triggeredIndexes.add(meta.index)
+        const bucket = isCoreIndex(meta.index) ? coreTriggered : peripheralTriggered
+        if (!bucket.includes(meta.index)) bucket.push(meta.index)
+      }
       const activity = Math.max(0, Math.min(100, Math.round(
         0.4 * interpScore(timeAdjMult ?? 0, [RESCUE_CALIBRATION.f1.mid, RESCUE_CALIBRATION.f1.high, RESCUE_CALIBRATION.f1.extreme]) +
         0.4 * interpScore(superVsAvg ?? 0, this.f2Anchors()) +
@@ -676,8 +794,18 @@ export class RescueMonitor {
     }
     const anchors = this.f2Anchors()
     const scored = scoreRescue({
-      timeAdjMult: maxMult, superVsAvg: maxSuperVsAvg, pulseMult: maxPulse, streak: streakBest,
-      indexPct, resonance: triggeredIndexes.size, f2Anchors: anchors, f2Source: this.f2Source(),
+      timeAdjMult: maxMult,
+      coreSuperVsAvg, peripheralSuperVsAvg,
+      pulseMult: maxPulse,
+      persistShare: persistBest, retraceRatio: retraceWorst,
+      indexPct, resonance: triggeredIndexes.size,
+      coreResonance: coreTriggered.length, peripheralResonance: peripheralTriggered.length,
+      resonanceLanes: [...coreTriggered, ...peripheralTriggered],
+      coreWorstShare,
+      f2Anchors: anchors, f2Source: this.f2Source(),
+      // 时点系数此前没有传进来，运行时恒等于 1（早盘噪音最大的时段拿到满权重）
+      timeCoef: timeCoefficient(elapsed),
+      isTail: tail, pulseAnchors, bandLabel: pulseBandLabel(elapsed),
     })
     etfs.sort((a, b) => b.activity - a.activity)
     // 事件去抖：仅记录等级升级，以及从有信号回落到平静（形成完整时间线）
@@ -695,7 +823,7 @@ export class RescueMonitor {
       this.lastIntradayMin = minuteMark
       this.today.intraday.push({
         hhmm: hhmmOf(ts), level: scored.level, score: scored.score,
-        timeAdjMult: maxMult, superVsAvg: maxSuperVsAvg,
+        timeAdjMult: maxMult, superVsAvg: coreSuperVsAvg ?? peripheralSuperVsAvg, persistShare: persistBest,
       })
       if (this.today.intraday.length > 120) this.today.intraday.splice(0, this.today.intraday.length - 120)
     }
@@ -704,6 +832,13 @@ export class RescueMonitor {
     this.lastSnapshot = {
       ts, trading: inTradingWindow(ts), level: scored.level, score: scored.score, summary: scored.summary,
       factors: scored.factors, etfs, indexPct, indexName: INDEX_NAME, timeCoef: timeCoefficient(elapsed),
+      resonance: {
+        lanes: [...coreTriggered, ...peripheralTriggered],
+        core: coreTriggered.length,
+        peripheral: peripheralTriggered.length,
+        intensity: triggeredIndexes.size === 0 ? 'none' : coreTriggered.length > 0 ? 'systemic' : 'local',
+      },
+      pulseBand: { elapsed, label: pulseBandLabel(elapsed), isTail: tail, anchors: pulseAnchors },
       thresholdSource: this.f2Source(), selfSampleDays: this.selfSampleDays(),
       config: this.getConfig(), activeIntervalSec: this.activeIntervalSec(ts),
       today: [...this.today.events].reverse(), intraday: [...this.today.intraday],
@@ -713,21 +848,39 @@ export class RescueMonitor {
     void this.persist()
   }
 
-  /** 采样环 + 超大单净额连续递增次数 */
-  private pushSample(secid: string, s: Sample): number {
+  /**
+   * 采样环 + 窗口内资金流统计。
+   *
+   * 旧实现用「超大单净额连续递增的次数」——严格大于就计一次、没有幅度门槛，
+   * 而东财超大单以 ~0.01 亿步长抖动，于是几乎必然出现"连续递增"，配合可配置的
+   * 采样间隔（30s/60s 语义还不同）会大量误报。改为**时间 + 幅度**口径：
+   *   persistShare = 窗口内净增 ÷ 该窗口成交额（自归一，与采样间隔无关）
+   *   retraceRatio = 窗口内单次最大回撤 ÷ 净增（揭示反复进出）
+   */
+  private pushSample(secid: string, s: Sample): { persistShare: number | null; retraceRatio: number | null } {
     const ring = this.ring[secid] ?? []
-    const last = ring.length > 0 ? ring[ring.length - 1] : null
-    const rising = last !== null && s.superNet > last.superNet
     ring.push(s)
     if (ring.length > SAMPLE_RING) ring.splice(0, ring.length - SAMPLE_RING)
     this.ring[secid] = ring
-    if (!rising) return 0
-    let streak = 1
-    for (let i = ring.length - 1; i > 0; i--) {
-      if (ring[i].superNet > ring[i - 1].superNet) streak += 1
-      else break
+    const window = 5 * 60_000
+    const target = s.ts - window
+    let ref: Sample | null = null
+    for (const x of ring) {
+      if (x.ts <= target + 15_000 && (ref === null || x.ts > ref.ts)) ref = x
     }
-    return Math.min(8, streak)
+    if (ref === null || ref.ts >= s.ts - 60_000) return { persistShare: null, retraceRatio: null }
+    const netIncrease = s.superNet - ref.superNet
+    const windowAmount = s.amount - ref.amount
+    const persistShare = windowAmount > 0 ? netIncrease / windowAmount : null
+    // 窗口内单次最大回撤（相对净增）
+    let maxDrop = 0
+    const seg = ring.filter((x) => x.ts >= ref.ts)
+    for (let i = 1; i < seg.length; i++) {
+      const drop = seg[i - 1].superNet - seg[i].superNet
+      if (drop > maxDrop) maxDrop = drop
+    }
+    const retraceRatio = netIncrease > 0 ? maxDrop / netIncrease : null
+    return { persistShare, retraceRatio }
   }
 
   private selfSampleDays(): number {
@@ -803,7 +956,15 @@ export class RescueMonitor {
     return {
       ts: Date.now(), trading: inTradingWindow(Date.now()), level: 0, score: 0,
       summary: '尚未采样（打开页面后会自动开始）', factors: [], etfs: [], indexPct: null, indexName: INDEX_NAME,
-      timeCoef: timeCoefficient(sessionElapsed(hhmmOf(Date.now()))), thresholdSource: this.f2Source(),
+      timeCoef: timeCoefficient(sessionElapsed(hhmmOf(Date.now()))),
+      resonance: { lanes: [], core: 0, peripheral: 0, intensity: 'none' },
+      pulseBand: {
+        elapsed: sessionElapsed(hhmmOf(Date.now())),
+        label: pulseBandLabel(sessionElapsed(hhmmOf(Date.now()))),
+        isTail: isTailElapsed(sessionElapsed(hhmmOf(Date.now()))),
+        anchors: pulseAnchorsFor(sessionElapsed(hhmmOf(Date.now()))),
+      },
+      thresholdSource: this.f2Source(),
       selfSampleDays: this.selfSampleDays(), config: this.getConfig(), activeIntervalSec: this.activeIntervalSec(),
       today: [...this.today.events].reverse(), intraday: [...this.today.intraday], sampleCount: this.today.samples,
       lastSampleTs: null, gap: this.today.gap, note: '等待首次采样',

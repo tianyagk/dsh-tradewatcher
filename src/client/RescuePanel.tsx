@@ -12,7 +12,7 @@ import type {
   PortPrefs, RescueConfig, RescueDaySummary, RescueEtfMeta, RescueEtfView, RescueFactor,
   RescueIntradayPoint, RescueLevel, RescueSignalEvent, RescueSnapshot, TrendData,
 } from '../shared/model'
-import { RESCUE_ETF_CATALOG, RESCUE_LEVEL_DESC, RESCUE_LEVEL_LABEL, rescueUniverseMeta } from '../shared/model'
+import { RESCUE_CORE_INDEXES, RESCUE_ETF_CATALOG, RESCUE_LEVEL_DESC, RESCUE_LEVEL_LABEL, rescueUniverseMeta } from '../shared/model'
 import { api } from './api'
 import { Btn, ErrorNote, Field, Modal, Skeleton } from './ui'
 
@@ -141,6 +141,9 @@ function EtfCard(props: { etf: RescueEtfView; redUp: boolean }): React.ReactElem
   },
     React.createElement('div', { className: 'tw-rescue-card-h' },
       React.createElement('b', null, etf.name),
+      RESCUE_CORE_INDEXES.includes(etf.index)
+        ? React.createElement('span', { className: 'tw-badge', title: '核心护盘通道：F2 以核心通道为主，且大额净流出会封顶信号等级' }, '核心')
+        : null,
       React.createElement('span', { style: { color: pctColor(etf.pct, redUp), fontFamily: 'var(--tw-mono)' } }, fmtPct(etf.pct)),
     ),
     React.createElement('div', { className: 'tw-rescue-card-grid' },
@@ -312,7 +315,7 @@ export function RescuePanel(props: { prefs: PortPrefs; redUp: boolean; onPrefs?:
           React.createElement('span', { style: { color: LEVEL_COLOR[level], fontWeight: 600, flex: 'none' } }, RESCUE_LEVEL_LABEL[level]),
           React.createElement('span', { className: 'tw-muted', style: { flex: 1, minWidth: 0 } }, snapshot.summary),
           React.createElement('span', { className: 'tw-muted', style: { fontSize: 10.5, flex: 'none' } },
-            `${snapshot.indexName} ${fmtPct(snapshot.indexPct)} · 阈值来源 ${
+            `${snapshot.indexName} ${fmtPct(snapshot.indexPct)} · ${snapshot.pulseBand.label}${snapshot.pulseBand.isTail ? '（满分权重）' : '（脉冲打 0.6 折）'} · 阈值来源 ${
               snapshot.thresholdSource === 'self' ? `自建分位（${snapshot.selfSampleDays} 天）` : snapshot.thresholdSource === 'calibrated' ? '历史标定' : `经验锚点（自建样本 ${snapshot.selfSampleDays}/20 天）`
             }`,
           ),
@@ -324,6 +327,18 @@ export function RescuePanel(props: { prefs: PortPrefs; redUp: boolean; onPrefs?:
       : null,
     expanded && snapshot !== null
       ? React.createElement(React.Fragment, null,
+          React.createElement('div', { className: 'tw-rescue-resonance' },
+            React.createElement('span', { className: 'tw-muted' }, '共振'),
+            snapshot.resonance.intensity === 'none'
+              ? React.createElement('span', { className: 'tw-muted' }, '无通道触发')
+              : React.createElement('span', null,
+                  `${snapshot.resonance.lanes.join('、')}（核心 ${snapshot.resonance.core} / 外围 ${snapshot.resonance.peripheral}）`),
+            snapshot.resonance.intensity === 'systemic'
+              ? React.createElement('span', { className: 'tw-badge', style: { color: LEVEL_COLOR[3], borderColor: LEVEL_COLOR[3] } }, '系统性（核心通道参与）')
+              : snapshot.resonance.intensity === 'local'
+                ? React.createElement('span', { className: 'tw-badge' }, '局部（仅外围通道）')
+                : null,
+          ),
           React.createElement('div', { className: 'tw-rescue-cards' },
             ...snapshot.etfs.map((e) => React.createElement(EtfCard, { key: e.secid, etf: e, redUp: props.redUp })),
           ),

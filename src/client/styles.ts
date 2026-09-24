@@ -263,6 +263,7 @@ color-scheme:dark}
 .tw-rescue{display:flex;flex-direction:column;gap:6px}
 .tw-rescue-dot{width:9px;height:9px;border-radius:50%;flex:none;transition:background .2s}
 .tw-rescue-summary{display:flex;align-items:center;gap:8px;padding:6px 8px;border:1px solid var(--tw-border);border-radius:8px;background:var(--tw-bg);font-size:12px;flex-wrap:wrap}
+.tw-rescue-resonance{display:flex;align-items:center;gap:8px;font-size:11.5px;padding:4px 8px;border:1px solid var(--tw-border);border-radius:8px;background:var(--tw-bg);flex-wrap:wrap}
 .tw-rescue-cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(232px,1fr));gap:8px}
 .tw-rescue-card{border:1px solid var(--tw-border);border-radius:9px;padding:7px 9px;background:var(--tw-card);transition:border-color .15s}
 .tw-rescue-card-h{display:flex;align-items:baseline;justify-content:space-between;gap:6px;margin-bottom:5px}

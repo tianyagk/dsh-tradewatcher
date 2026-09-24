@@ -12,8 +12,8 @@ import { fillLastGood, mergeBars, resampleYearly } from './em.ts'
 import { losslessJson } from './tools.ts'
 import { canonicalEconomy, macroEventsFromEm, macroImportance, parseEmDate } from './calendar.ts'
 import {
-  PULSE_ANCHORS, divergenceScore, interpScore, persistenceScore, progressAt, quantile,
-  resonanceScore, scoreRescue, sessionElapsed, timeCoefficient,
+  CORE_OUTFLOW_VETO, PERSIST_ANCHORS, PULSE_HIT_SCORE, divergenceScore, interpScore, isTailElapsed,
+  progressAt, pulseAnchorsFor, pulseBandLabel, quantile, resonanceScore, scoreRescue, sessionElapsed, timeCoefficient,
 } from './rescue.ts'
 import { RESCUE_CALIBRATION } from './rescue-thresholds.ts'
 import { TW_ROWS } from '../shared/model.ts'
@@ -185,22 +185,54 @@ async function main(): Promise<void> {
       ok(interpScore(anchors[0], anchors) === 40 && interpScore(anchors[1], anchors) === 70 && interpScore(anchors[2], anchors) === 100, '量能倍数锚点 → 40/70/100')
       ok(interpScore(0, anchors) === 0 && interpScore(anchors[2] * 3, anchors) === 100, '量能倍数记分边界')
       ok(divergenceScore(-1.2) === 100 && divergenceScore(-0.5) === 80 && divergenceScore(0.2) === 35 && divergenceScore(2) === 20, '量价背离阶梯')
-      ok(persistenceScore(0) === 0 && persistenceScore(2) === 60 && persistenceScore(4) === 100, '持续性记分')
       ok(resonanceScore(0) === 0 && resonanceScore(1) === 40 && resonanceScore(2) === 70 && resonanceScore(3) === 100, '共振记分')
       ok(timeCoefficient(30) === 0.4 && timeCoefficient(200) === 1.1, '时点系数（早盘低/尾盘高）')
       ok(quantile([1, 2, 3, 4, 5], 50) === 3, '分位数取中位')
+
+      // 脉冲锚点按时段分档（P0）：早盘锚点必须低于尾盘，且命中线为 P90
+      const early = pulseAnchorsFor(20)
+      const tailA = pulseAnchorsFor(225)
+      ok(early[1] < tailA[1] && early[0] > 1 && tailA[2] > early[2], `脉冲锚点分档：早盘 P90 ${early[1].toFixed(2)}x < 尾盘 ${tailA[1].toFixed(2)}x`)
+      ok(pulseBandLabel(20) === '早盘' && pulseBandLabel(225) === '尾盘' && isTailElapsed(190) === true && isTailElapsed(120) === false, '时段标签与尾盘判定')
+      ok(interpScore(early[1], early) === 70 && interpScore(tailA[1], tailA) === 70, '分档锚点的 P90 均对应 70 分')
+
       const f2: [number, number, number] = [RESCUE_CALIBRATION.f2.watch, RESCUE_CALIBRATION.f2.mid, RESCUE_CALIBRATION.f2.strong]
-      const base = { f2Anchors: f2, f2Source: 'empirical' as const, timeCoef: 1 }
-      const calm = scoreRescue({ ...base, timeAdjMult: 0.9, superVsAvg: 0.05, pulseMult: 1, streak: 0, indexPct: 0.2, resonance: 0 })
-      const typical = scoreRescue({ ...base, timeCoef: 1.1, timeAdjMult: 3, superVsAvg: 1.4, pulseMult: 5, streak: 5, indexPct: -1.4, resonance: 3 })
-      const capped = scoreRescue({ ...base, timeCoef: 1.1, timeAdjMult: 3, superVsAvg: 1.4, pulseMult: 5, streak: 5, indexPct: 2, resonance: 3 })
-      const thin = scoreRescue({ ...base, timeCoef: 1.1, timeAdjMult: 3, superVsAvg: 0.3, pulseMult: 5, streak: 5, indexPct: -1.2, resonance: 3 })
+      const base = {
+        f2Anchors: f2, f2Source: 'empirical' as const, timeCoef: 1, pulseAnchors: tailA,
+        isTail: true, bandLabel: '尾盘', retraceRatio: 0, coreResonance: 1, resonanceLanes: ['沪深300'],
+      }
+      const strongInput = {
+        ...base, timeCoef: 1.1, timeAdjMult: 3, coreSuperVsAvg: 1.4, peripheralSuperVsAvg: 1.2,
+        pulseMult: 5, persistShare: 0.4, indexPct: -1.4, resonance: 3, coreResonance: 2,
+      }
+      const calm = scoreRescue({ ...base, timeAdjMult: 0.9, coreSuperVsAvg: 0.05, peripheralSuperVsAvg: 0.04, pulseMult: 1, persistShare: 0.01, indexPct: 0.2, resonance: 0 })
+      const typical = scoreRescue(strongInput)
+      const capped = scoreRescue({ ...strongInput, indexPct: 2 })
+      const thin = scoreRescue({ ...strongInput, coreSuperVsAvg: 0.3, peripheralSuperVsAvg: 0.3, persistShare: 0.3, indexPct: -1.2 })
       ok(calm.level === 0, `平淡日 → 平静 (got ${calm.level}, ${calm.score} 分)`)
       ok(typical.level === 3 && typical.score >= 75, `典型护盘日 → 强护盘信号 (got ${typical.level}, ${typical.score} 分)`)
-      ok(capped.level === 1 && capped.summary.includes('追涨'), `指数+2% 的天量 → 封顶资金异动，归因写明追涨 (got ${capped.level})`)
+      ok(capped.level === 1 && capped.summary.includes('追涨'), `指数+2% 的天量 → 封顶资金异动 (got ${capped.level})`)
       ok(thin.level === 2, `超大单偏弱 → 降为疑似护盘 (got ${thin.level})`)
-      ok(typical.factors.length === 6 && Math.abs(typical.factors.reduce((a, f) => a + f.weight, 0) - 1) < 1e-9, '六因子权重合计 = 1')
-      ok(PULSE_ANCHORS.length === 3 && typical.factors[2].threshold.includes('同时点基准'), '脉冲因子口径写明同时点基准')
+
+      // P0-① 时点系数必须真正作用到评分（此前 tick 未传，运行时恒为 1）
+      const sameButEarly = scoreRescue({ ...strongInput, timeCoef: 0.4 })
+      ok(sameButEarly.score < typical.score && sameButEarly.score <= 40, `同一盘面在早盘被时点系数压到 ${sameButEarly.score} 分（尾盘 ${typical.score} 分）`)
+
+      // P0-② 核心通道大额净流出 → 硬封顶「资金异动」（复现 9/24 沪深300 −38.9% 那类场景）
+      const veto = scoreRescue({ ...strongInput, coreWorstShare: -0.389 })
+      ok(veto.level === 1 && veto.summary.includes('与托底特征相反'), `核心通道净流出 ${(CORE_OUTFLOW_VETO * 100).toFixed(0)}% 阈值 → 封顶资金异动 (got ${veto.level})`)
+
+      // P0-③ 强信号必须核心通道参与；④ 仅外围净流入时 F2 打折
+      const periOnly = scoreRescue({ ...strongInput, coreResonance: 0, resonanceLanes: ['科创50'], coreSuperVsAvg: -0.1, peripheralSuperVsAvg: 0.3 })
+      ok(periOnly.level <= 2 && periOnly.summary.includes('核心通道'), `核心未参与共振 → 至多疑似护盘 (got ${periOnly.level})`)
+      // 同样的 0.3x 幅度：核心通道得 50 分，仅外围净流入打 0.7 折后 → 0.21x ≈ 41 分
+      const coreSame = scoreRescue({ ...strongInput, coreSuperVsAvg: 0.3, peripheralSuperVsAvg: 0.3 })
+      const f2Core = coreSame.factors.find((f) => f.id === 'superflow')!
+      const f2Peri = periOnly.factors.find((f) => f.id === 'superflow')!
+      ok(f2Core.score > f2Peri.score + 5, `同样 0.3x：核心通道 ${f2Core.score} 分 > 仅外围 ${f2Peri.score} 分（打 0.7 折）`)
+      ok(typical.factors[0].id === 'volume' && typical.factors.length === 6 && Math.abs(typical.factors.reduce((a, f) => a + f.weight, 0) - 1) < 1e-9, '六因子权重合计 = 1')
+      ok(typical.factors[2].label === '尾盘突袭' && typical.factors[2].score > 0 && !!typical.factors[3].threshold.includes('窗口成交额'), 'F3 尾盘命名与 F4 窗口口径')
+      ok(PULSE_HIT_SCORE === 70 && PERSIST_ANCHORS[0] === 0.05, '脉冲命中线 = P90，持续性锚点以窗口成交额归一')
     }
 
     // K线合并与年K重采样（纯函数）

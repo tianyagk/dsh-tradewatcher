@@ -454,6 +454,13 @@ export function isFiniteNumber(v: unknown): v is number {
  * 不等于证明买入方身份。所有阈值来源都在 UI 上标注（标定 / 自建样本 / 经验）。
  */
 
+/** 核心护盘通道（按指数）：系统性护盘必须由它们体现，F2 以核心通道为主 */
+export const RESCUE_CORE_INDEXES = ['沪深300', '上证50']
+/** 外围通道单独净流入时的强度折扣 */
+export const RESCUE_PERIPHERAL_FLOW_DISCOUNT = 0.7
+/** 核心通道大额净流出阈值（超大单净额 ÷ 成交额）→ 封顶为「资金异动」 */
+export const RESCUE_CORE_OUTFLOW_VETO = -0.15
+
 /** 0 平静 · 1 资金异动 · 2 疑似护盘 · 3 强护盘信号 */
 export type RescueLevel = 0 | 1 | 2 | 3
 
@@ -473,6 +480,23 @@ export const RESCUE_LEVEL_DESC: Record<RescueLevel, string> = {
 
 /** 阈值来源：calibrated = 历史分位数标定；self = 自建样本分位；empirical = 经验值 */
 export type RescueThresholdSource = 'calibrated' | 'self' | 'empirical'
+
+/** 全池共振分层：核心通道（沪深300/上证50）是否参与，决定是否算「系统性护盘」 */
+export interface RescueResonance {
+  /** 命中通道的指数名 */
+  lanes: string[]
+  core: number
+  peripheral: number
+  intensity: 'systemic' | 'local' | 'none'
+}
+
+/** 当前脉冲时段（锚点按时段分档） */
+export interface RescuePulseBand {
+  elapsed: number
+  label: string
+  isTail: boolean
+  anchors: [number, number, number]
+}
 
 export interface RescueFactor {
   id: 'volume' | 'superflow' | 'pulse' | 'persistence' | 'divergence' | 'resonance'
@@ -534,6 +558,8 @@ export interface RescueIntradayPoint {
   score: number
   timeAdjMult: number | null
   superVsAvg: number | null
+  /** 窗口内超大单净增 ÷ 该窗口成交额 */
+  persistShare?: number | null
 }
 
 export interface RescueConfig {
@@ -589,8 +615,12 @@ export interface RescueSnapshot {
   /** 基准指数（沪深300）当日涨跌幅 */
   indexPct: number | null
   indexName: string
-  /** 时点系数 */
+  /** 时点系数（0.4 早盘 ~ 1.1 尾盘，已接入评分） */
   timeCoef: number
+  /** 全池共振分层 */
+  resonance: RescueResonance
+  /** 当前脉冲时段与锚点 */
+  pulseBand: RescuePulseBand
   thresholdSource: RescueThresholdSource
   /** 自建样本天数（<20 时使用经验锚点） */
   selfSampleDays: number
