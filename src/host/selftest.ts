@@ -5,11 +5,12 @@
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { DataStore, replayPosition, dataHome } from './store.ts'
+import { DataStore, normalizeRescuePrefs, replayPosition, dataHome } from './store.ts'
 import { assemblePortfolio, derivePosition, ledgerViews, shanghaiDayStart, verbLabel } from './portfolio.ts'
 import * as em from './em.ts'
 import { fillLastGood, mergeBars, resampleYearly } from './em.ts'
 import { losslessJson } from './tools.ts'
+import { DEFAULT_PREFS } from '../shared/model.ts'
 import { canonicalEconomy, macroEventsFromEm, macroImportance, parseEmDate } from './calendar.ts'
 import { RescueMonitor } from './rescue.ts'
 import { CircuitBreaker } from './breaker.ts'
@@ -19,7 +20,7 @@ import {
   phaseOf, pulseFactorLabel, timeCoefficient, windowFlowStats,
 } from './rescue.ts'
 import { RESCUE_CALIBRATION } from './rescue-thresholds.ts'
-import { TW_ROWS } from '../shared/model.ts'
+import { TW_ROWS, rescueUniverseMeta } from '../shared/model.ts'
 import type { QuoteRow } from '../shared/model.ts'
 
 let failures = 0
@@ -293,6 +294,42 @@ async function main(): Promise<void> {
       rmSync(lkgDir, { recursive: true, force: true })
     }
 
+    // 自定义通道：解析、分组与评分离（板块 ETF 不计入护盘评分与共振）
+    {
+      const custom = [{ secid: '1.512480', name: '半导体ETF', index: '半导体' }, { secid: '1.512000', name: '券商ETF' }]
+      const metas = rescueUniverseMeta([], custom)
+      ok(metas.length === 8, `默认 6 只宽基 + 2 只自定义通道 (got ${metas.length})`)
+      ok(metas.filter((m) => m.group === 'custom').length === 2, '自定义通道分组为 custom')
+      ok(metas.filter((m) => m.group === 'core').length === 2 && metas.filter((m) => m.group === 'peripheral').length === 4, '宽基按核心/外围分组（核心 2 / 外围 4）')
+      ok(rescueUniverseMeta([], []).length === 6, '未配置自定义通道时仍为默认 6 只')
+      const dup = rescueUniverseMeta([], [{ secid: '1.510300', name: '重复的沪深300' }])
+      ok(dup.length === 6 && dup.filter((m) => m.secid === '1.510300').length === 1, '与宽基重复的自定义通道被忽略')
+
+      const parsed = normalizeRescuePrefs({ custom }, DEFAULT_PREFS.rescue)
+      ok(parsed.custom?.length === 2 && parsed.custom[1].index === undefined, '自定义通道经 store 校验后入库')
+      let rejected = 0
+      for (const bad of [[{ secid: 'X1', name: 'ok' }], [{ secid: '1.510300', name: '' }], [{ secid: '1.510300', name: 'x'.repeat(30) }]]) {
+        try { normalizeRescuePrefs({ custom: bad }, DEFAULT_PREFS.rescue) } catch { rejected += 1 }
+      }
+      ok(rejected === 3, `非法自定义通道全部被拒（${rejected}/3）`)
+    }
+
+    // 备用源（腾讯）只有量能与价格：资金流缺失时必须封顶，不能凭空判定"护盘"
+    {
+      const f2: [number, number, number] = [RESCUE_CALIBRATION.f2.watch, RESCUE_CALIBRATION.f2.mid, RESCUE_CALIBRATION.f2.strong]
+      const strong = {
+        f2Anchors: f2, f2Source: 'empirical' as const, timeCoef: 1.1, pulseAnchors: pulseAnchorsFor(225),
+        isTail: true, bandLabel: '尾盘', retraceRatio: 0, coreResonance: 2, resonanceLanes: ['沪深300', '上证50'],
+        timeAdjMult: 3, coreSuperVsAvg: 1.4, peripheralSuperVsAvg: 1.2, pulseMult: 5, persistShare: 0.4,
+        indexPct: -1.4, resonance: 3,
+      }
+      const noFlow = scoreRescue({ ...strong, flowAvailable: false, coreSuperVsAvg: null, peripheralSuperVsAvg: null })
+      ok(noFlow.level <= 1 && noFlow.summary.includes('分单资金流数据不可用'), `备用源下封顶为资金异动 (got ${noFlow.level})`)
+      ok(noFlow.completeness.missing.includes('超大单强度'), '资金流缺失计入因子完整度')
+      const withFlow = scoreRescue({ ...strong, flowAvailable: true })
+      ok(withFlow.level === 3, '东财可用时不受该封顶影响')
+    }
+
     // 上游熔断：连续失败即停手（避免把限流推成封锁），成功即复位
     {
       const b = new CircuitBreaker({ threshold: 3, baseMs: 60_000, maxMs: 900_000 })
@@ -319,7 +356,8 @@ async function main(): Promise<void> {
       const mon = new RescueMonitor(fbDir, { enabled: true, intervalSec: 60, tailIntervalSec: 15, tailFrom: '14:30', universe: [] })
       await mon.init()
       const snap = mon.snapshot()
-      ok(snap.etfs.length === 0 && snap.fallback !== undefined && snap.fallback.peaks.length === 6, `无 LKG 时给出当日峰值复盘 ${snap.fallback?.peaks.length ?? 0} 行（而非空白）`)
+      ok(snap.etfs.length === 6 && snap.fallback !== undefined && snap.fallback.peaks.length === 6, `无 LKG 时按当日峰值合成 ${snap.etfs.length} 张复盘卡片（而非空白/表格）`)
+      ok(snap.etfs.every((e) => e.provisional === true), '复盘卡片标记 provisional（与实时快照区分）')
       ok(snap.stale === true && (snap.note ?? '').includes('暂不可用'), '复盘兜底标注来源为上游不可用')
       const sh50 = snap.fallback?.peaks.find((p) => p.secid === '1.510050')
       ok(sh50 !== undefined && Math.abs((sh50.peakSuperVsAvg ?? 0) - 0.245) < 1e-9, '复盘表带当日真实峰值（上证50 0.245x）')

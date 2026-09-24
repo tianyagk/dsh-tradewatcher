@@ -542,6 +542,8 @@ export interface RescueEtfView {
   activity: number
   /** 该通道是否自身触发 */
   triggered: boolean
+  /** 复盘数据（上游不可用时的当日峰值）而非实时快照 */
+  provisional?: boolean
   /** 资金方向：超大单占比 ≥+15% 为吸纳，≤−15% 为撤离（避免把「大额净流出」误读成哑火） */
   flowDirection?: 'in' | 'out' | 'flat' | 'unknown'
 }
@@ -575,6 +577,14 @@ export interface RescueIntradayPoint {
   persistShare?: number | null
 }
 
+/** 自定义监测通道（通常为某板块 ETF）；仅作展示与量能/脉冲观察，不计入护盘评分 */
+export interface RescueCustomChannel {
+  secid: string
+  name: string
+  /** 备注/板块名，缺省显示「自定义」 */
+  index?: string
+}
+
 export interface RescueConfig {
   enabled: boolean
   /** 常态采样间隔（秒） */
@@ -585,6 +595,8 @@ export interface RescueConfig {
   tailFrom: string
   /** 自定义标的池（空 = 默认核心 6 只） */
   universe: string[]
+  /** 用户添加的自定义通道（板块 ETF 等），不计入护盘评分 */
+  custom?: RescueCustomChannel[]
 }
 
 export interface RescueEtfMeta {
@@ -592,27 +604,38 @@ export interface RescueEtfMeta {
   name: string
   index: string
   core: boolean
+  /** core = 沪深300/上证50；peripheral = 其他宽基；custom = 用户添加（不计入评分） */
+  group: 'core' | 'peripheral' | 'custom'
 }
 
 /** 护盘通道池：核心 6 只默认开启，扩展标的可在面板里勾选 */
 export const RESCUE_ETF_CATALOG: RescueEtfMeta[] = [
-  { secid: '1.510300', name: '沪深300ETF华泰柏瑞', index: '沪深300', core: true },
-  { secid: '1.510050', name: '上证50ETF华夏', index: '上证50', core: true },
-  { secid: '1.510500', name: '中证500ETF南方', index: '中证500', core: true },
-  { secid: '1.512100', name: '中证1000ETF华夏', index: '中证1000', core: true },
-  { secid: '1.588000', name: '科创50ETF华夏', index: '科创50', core: true },
-  { secid: '0.159915', name: '创业板ETF易方达', index: '创业板指', core: true },
-  { secid: '1.510310', name: '沪深300ETF易方达', index: '沪深300', core: false },
-  { secid: '1.510330', name: '沪深300ETF华夏', index: '沪深300', core: false },
-  { secid: '0.159919', name: '沪深300ETF嘉实', index: '沪深300', core: false },
-  { secid: '1.588080', name: '科创50ETF易方达', index: '科创50', core: false },
+  { secid: '1.510300', name: '沪深300ETF华泰柏瑞', index: '沪深300', core: true, group: 'core' },
+  { secid: '1.510050', name: '上证50ETF华夏', index: '上证50', core: true, group: 'core' },
+  { secid: '1.510500', name: '中证500ETF南方', index: '中证500', core: true, group: 'peripheral' },
+  { secid: '1.512100', name: '中证1000ETF华夏', index: '中证1000', core: true, group: 'peripheral' },
+  { secid: '1.588000', name: '科创50ETF华夏', index: '科创50', core: true, group: 'peripheral' },
+  { secid: '0.159915', name: '创业板ETF易方达', index: '创业板指', core: true, group: 'peripheral' },
+  { secid: '1.510310', name: '沪深300ETF易方达', index: '沪深300', core: false, group: 'core' },
+  { secid: '1.510330', name: '沪深300ETF华夏', index: '沪深300', core: false, group: 'core' },
+  { secid: '0.159919', name: '沪深300ETF嘉实', index: '沪深300', core: false, group: 'core' },
+  { secid: '1.588080', name: '科创50ETF易方达', index: '科创50', core: false, group: 'peripheral' },
 ]
 
-export function rescueUniverseMeta(universe: string[]): RescueEtfMeta[] {
-  if (universe.length === 0) return RESCUE_ETF_CATALOG.filter((e) => e.core)
-  const want = new Set(universe)
-  const picked = RESCUE_ETF_CATALOG.filter((e) => want.has(e.secid))
-  return picked.length > 0 ? picked : RESCUE_ETF_CATALOG.filter((e) => e.core)
+/**
+ * 监测通道 = 选中的宽基（参与护盘评分） + 用户自定义通道（仅展示，不计入评分）。
+ * 自定义通道通常是板块 ETF（半导体、券商、医药…），与「国家队托底」不是一回事，
+ * 混进评分会污染共振与量能口径，因此严格隔离。
+ */
+export function rescueUniverseMeta(universe: string[], custom: RescueCustomChannel[] = []): RescueEtfMeta[] {
+  const picked = universe.length === 0
+    ? RESCUE_ETF_CATALOG.filter((e) => e.core)
+    : RESCUE_ETF_CATALOG.filter((e) => universe.includes(e.secid))
+  const broad = picked.length > 0 ? picked : RESCUE_ETF_CATALOG.filter((e) => e.core)
+  const extra: RescueEtfMeta[] = custom
+    .filter((c) => !broad.some((b) => b.secid === c.secid))
+    .map((c) => ({ secid: c.secid, name: c.name, index: c.index ?? '自定义', core: false, group: 'custom' as const }))
+  return [...broad, ...extra]
 }
 
 export interface RescueSnapshot {
@@ -636,6 +659,8 @@ export interface RescueSnapshot {
   pulseBand: RescuePulseBand
   /** 本次快照的因子可用度 */
   completeness?: RescueCompleteness
+  /** 快照数据来源：em = 含分单资金流；tencent = 仅量能与价格（备用源） */
+  flowSource?: 'em' | 'tencent'
   thresholdSource: RescueThresholdSource
   /** 自建样本天数（<20 时使用经验锚点） */
   selfSampleDays: number

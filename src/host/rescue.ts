@@ -25,6 +25,7 @@ import type {
 import { RESCUE_CORE_OUTFLOW_VETO, RESCUE_CORE_INDEXES, RESCUE_PERIPHERAL_FLOW_DISCOUNT, rescueUniverseMeta } from '../shared/model.ts'
 import { RESCUE_CALIBRATION } from './rescue-thresholds.ts'
 import { quoteBreaker } from './breaker.ts'
+import { fetchTencentMinutes, fetchTencentQuotes } from './tencent.ts'
 import { dataHome } from './store.ts'
 
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
@@ -241,6 +242,8 @@ export interface RescueFactorInput {
   resonanceLanes?: string[]
   /** 核心通道中最差的 超大单占比（用于否决） */
   coreWorstShare?: number | null
+  /** 分单资金流是否可得（腾讯备用源下为 false） */
+  flowAvailable?: boolean
   /** F2 锚点（可被自建分位数覆盖） */
   f2Anchors: [number, number, number]
   f2Source: RescueThresholdSource
@@ -362,7 +365,12 @@ export function scoreRescue(input: RescueFactorInput): RescueScoreResult {
   const caps: string[] = []
   let level = scaled
 
-  // 0) 核心通道否决：沪深300/上证50 出现大额超大单净流出时，不论其它通道如何都不给「疑似护盘」
+  // 0) 资金流数据缺失（备用源只有量能与价格）：无法证明"有资金在托底"，封顶为资金异动
+  if (input.flowAvailable === false && level > 1) {
+    level = 1
+    caps.push('分单资金流数据不可用（备用源仅提供量能与价格）→ 无法确认托底资金，封顶为资金异动')
+  }
+  // 0b) 核心通道否决：沪深300/上证50 出现大额超大单净流出时，不论其它通道如何都不给「疑似护盘」
   const worst = input.coreWorstShare ?? null
   if (worst !== null && worst <= CORE_OUTFLOW_VETO && level > 1) {
     level = 1
@@ -676,10 +684,10 @@ export interface MinuteFlowPoint {
   ts: number
   /** 当日累计成交额 */
   amount: number
-  /** 当日累计超大单净额 */
-  superNet: number
-  /** 当日累计主力净额 */
-  mainNet: number
+  /** 当日累计超大单净额（腾讯备用源无此数据 → null） */
+  superNet: number | null
+  /** 当日累计主力净额（腾讯备用源无此数据 → null） */
+  mainNet: number | null
 }
 
 /** 解析 "YYYY-MM-DD HH:mm" → epoch ms（本地时区，与趋势接口一致） */
@@ -731,6 +739,40 @@ export async function fetchMinuteSeries(secid: string): Promise<MinuteFlowPoint[
   return points
 }
 
+/** 分钟序列（含成交额与分单资金流）：东财优先，失败回落腾讯（后者只有成交额） */
+export async function fetchMinuteSeriesAny(secid: string): Promise<MinuteFlowPoint[]> {
+  try {
+    const em = await fetchMinuteSeries(secid)
+    if (em.length >= 3) return em
+  } catch {
+    /* 回落腾讯 */
+  }
+  const tx = await fetchTencentMinutes(secid)
+  return tx.map((p) => ({ ts: p.ts, amount: p.amount, superNet: null, mainNet: null }))
+}
+
+/** 快照数据来源：em = 含分单资金流；tencent = 只有量能与价格 */
+export type QuoteSource = 'em' | 'tencent'
+
+/** 批量快照：东财优先，失败回落腾讯（后者无超大单/主力净额） */
+export async function fetchQuoteSource(secids: string[]): Promise<{ rows: Record<string, RescueQuoteRow>; source: QuoteSource }> {
+  try {
+    const rows = await fetchRescueQuotes(secids)
+    if (Object.keys(rows).length > 0) return { rows, source: 'em' }
+  } catch {
+    /* 回落腾讯 */
+  }
+  const tx = await fetchTencentQuotes(secids)
+  const rows: Record<string, RescueQuoteRow> = {}
+  for (const [secid, q] of Object.entries(tx)) {
+    rows[secid] = {
+      secid, price: q.price, pct: q.pct, amount: q.amount, turnover: null, volRatio: null,
+      mainNet: null, superNet: null,
+    }
+  }
+  return { rows, source: 'tencent' }
+}
+
 /** ── 采样器 ────────────────────────────────────────────────────────────── */
 
 export class RescueMonitor {
@@ -752,6 +794,13 @@ export class RescueMonitor {
   /** 每个交易日每个标的只回填一次 */
   private bootstrapped = new Set<string>()
   private bootstrappedCount = 0
+  /** 正在后台补算基准的通道（避免重复请求） */
+  private baselinePending = new Set<string>()
+  /** 当日分钟序列缓存（脉冲计算用；东财或腾讯） */
+  private minutes: Record<string, MinuteFlowPoint[]> = {}
+  private lastMinuteRefresh = 0
+  /** 本次快照的数据来源 */
+  private quoteSource: QuoteSource = 'em'
 
   constructor(dir: string = dataHome(), config?: RescueConfig) {
     this.dir = dir
@@ -881,19 +930,42 @@ export class RescueMonitor {
   private async tick(force = false): Promise<void> {
     await this.init()
     this.rollDay()
-    const metas = rescueUniverseMeta(this.config.universe)
+    const metas = rescueUniverseMeta(this.config.universe, this.config.custom ?? [])
     const secids = [INDEX_SECID, ...metas.map((m) => m.secid)]
     let quotes: Record<string, RescueQuoteRow>
+    let source: QuoteSource = 'em'
     try {
-      quotes = await fetchRescueQuotes(secids)
+      const got = await fetchQuoteSource(secids)
+      quotes = got.rows
+      source = got.source
     } catch {
       this.today.gap = true
       if (this.lastSnapshot !== null) this.lastSnapshot = { ...this.lastSnapshot, gap: true, ts: Date.now() }
       return
     }
+    this.quoteSource = source
     if (this.calibratedDay !== this.todayKey) {
       this.calibratedDay = this.todayKey
       void this.calibrate(metas).catch(() => undefined)
+    }
+    // 缺少 20 日均额基准的通道（例如刚加入的自定义通道）立即后台补算，
+    // 否则它们的量能倍数/脉冲会一直显示为空
+    const missingBase = metas.filter((m) => this.file.baselines[m.secid]?.avgAmt20 === undefined && !this.baselinePending.has(m.secid))
+    if (missingBase.length > 0 && quoteBreaker.allow()) {
+      for (const m of missingBase) this.baselinePending.add(m.secid)
+      void (async () => {
+        for (const m of missingBase) {
+          try {
+            const got = await fetchAvgAmount20(m.secid)
+            if (got !== null) this.file.baselines[m.secid] = { avgAmt20: got.avg, day: this.todayKey, source: got.source }
+          } catch {
+            /* 稍后再试 */
+          } finally {
+            this.baselinePending.delete(m.secid)
+          }
+        }
+        await this.persist(true)
+      })().catch(() => undefined)
     }
     // 冷启动回填：盘中重启或收盘后复盘，都应立刻具备脉冲/持续性所需的历史
     if (phaseOf(hhmmOf(Date.now())) !== 'pre') {
@@ -913,6 +985,9 @@ export class RescueMonitor {
     const progress = progressAt(curve, elapsed)
     const indexPct = quotes[INDEX_SECID]?.pct ?? null
     const etfs: RescueEtfView[] = []
+    // 自定义通道（板块 ETF）只作展示与量能/脉冲观察，不进入护盘评分池：
+    // 它们与「国家队托底」不是一回事，混入会污染共振与量能口径
+    const scoring = new Set(metas.filter((m) => m.group !== 'custom').map((m) => m.secid))
     const isCoreIndex = (index: string): boolean => CORE_INDEXES.includes(index)
     const pulseAnchors = pulseAnchorsFor(elapsed)
     const phase = phaseOf(hhmmOf(ts))
@@ -921,9 +996,13 @@ export class RescueMonitor {
     const trading = inTradingWindow(ts)
     // 盘后/非交易时段：不写入新样本，改以「环内最后一个盘中样本」为评估时点，
     // 否则「最近 5 分钟」会错配成「收盘到现在」这一整段空窗
+    // 评估基准取「采样环」与「分钟序列」中较新的一个：
+    // 腾讯备用源下采样环为空（无分单资金流），但分钟序列仍有累计成交额
     const ringTail = Math.max(0, ...metas.map((m) => this.ring[m.secid]?.at(-1)?.ts ?? 0))
-    const evalTs = trading ? ts : ringTail > ts - 12 * 3600_000 ? ringTail : ts
-    const allowPulse = trading || (phase === 'closed' && ringTail > 0)
+    const minuteTail = Math.max(0, ...metas.map((m) => this.minutes[m.secid]?.at(-1)?.ts ?? 0))
+    const tailRef = Math.max(ringTail, minuteTail)
+    const evalTs = trading ? ts : tailRef > ts - 12 * 3600_000 ? tailRef : ts
+    const allowPulse = trading || phase === 'closed'
     let maxMult: number | null = null
     let coreSuperVsAvg: number | null = null
     let peripheralSuperVsAvg: number | null = null
@@ -952,25 +1031,45 @@ export class RescueMonitor {
       const superShare = superNet !== null && amount !== null && amount > 0 ? superNet / amount : null
       // 脉冲：最近 5 分钟成交额 ÷ 同时点基准 5 分钟额
       let pulseMult: number | null = null
-      const ring = this.ring[meta.secid] ?? []
-      if (allowPulse && amount !== null && base !== null && base > 0 && ring.length > 0) {
-        const target = ts - 5 * 60_000
-        let ref: Sample | null = null
-        for (const s of ring) if (s.ts <= target + 15_000 && (ref === null || s.ts > ref.ts)) ref = s
-        if (ref !== null) {
-          const actual5 = amount - ref.amount
-          const elapsedRef = sessionElapsed(hhmmOf(ref.ts))
-          const expected = base * (progress - progressAt(curve, elapsedRef))
+      if (allowPulse && base !== null && base > 0) {
+        // 优先用当日分钟序列（东财 trends2 或腾讯分钟线都能提供累计成交额）
+        const series = this.minutes[meta.secid] ?? []
+        const evalAt = series.length > 0 ? Math.min(evalTs, series[series.length - 1].ts) : evalTs
+        const windowMs = 5 * 60_000
+        let refPoint: MinuteFlowPoint | null = null
+        for (const p of series) {
+          if (p.ts <= evalAt - windowMs + 30_000 && (refPoint === null || p.ts > refPoint.ts)) refPoint = p
+        }
+        if (refPoint !== null) {
+          const actual5 = (amount ?? 0) - refPoint.amount
+          const elapsedRef = sessionElapsed(hhmmOf(refPoint.ts))
+          const expected = base * (progressAt(curve, sessionElapsed(hhmmOf(evalAt))) - progressAt(curve, elapsedRef))
           if (expected > 0 && actual5 > 0) pulseMult = actual5 / expected
+        }
+        // 无分钟序列时退回采样环口径
+        if (pulseMult === null) {
+          const ring = this.ring[meta.secid] ?? []
+          const target = evalTs - windowMs
+          let ref: Sample | null = null
+          for (const x of ring) if (x.ts <= target + 15_000 && (ref === null || x.ts > ref.ts)) ref = x
+          if (ref !== null && amount !== null) {
+            const actual5 = amount - ref.amount
+            const elapsedRef = sessionElapsed(hhmmOf(ref.ts))
+            const expected = base * (progress - progressAt(curve, elapsedRef))
+            if (expected > 0 && actual5 > 0) pulseMult = actual5 / expected
+          }
         }
       }
       const flow = amount !== null && superNet !== null
         ? this.pushSample(meta.secid, trading ? { ts, amount, superNet, mainNet: q.mainNet ?? 0 } : null, evalTs)
         : { persistShare: null, retraceRatio: null }
-      if (flow.persistShare !== null && (persistBest === null || flow.persistShare > persistBest)) persistBest = flow.persistShare
-      if (flow.retraceRatio !== null && (retraceWorst === null || flow.retraceRatio > retraceWorst)) retraceWorst = flow.retraceRatio
-      if (timeAdjMult !== null) maxMult = Math.max(maxMult ?? 0, timeAdjMult)
-      if (superVsAvg !== null) {
+      const inPool = scoring.has(meta.secid)
+      if (inPool) {
+        if (flow.persistShare !== null && (persistBest === null || flow.persistShare > persistBest)) persistBest = flow.persistShare
+        if (flow.retraceRatio !== null && (retraceWorst === null || flow.retraceRatio > retraceWorst)) retraceWorst = flow.retraceRatio
+        if (timeAdjMult !== null) maxMult = Math.max(maxMult ?? 0, timeAdjMult)
+      }
+      if (superVsAvg !== null && inPool) {
         if (isCoreIndex(meta.index)) {
           // 核心护盘通道：F2 以它们为主，并记录最差的超大单占比用于否决
           coreSuperVsAvg = Math.max(coreSuperVsAvg ?? -Infinity, superVsAvg)
@@ -979,8 +1078,8 @@ export class RescueMonitor {
           peripheralSuperVsAvg = Math.max(peripheralSuperVsAvg ?? -Infinity, superVsAvg)
         }
       }
-      if (pulseMult !== null) maxPulse = Math.max(maxPulse ?? 0, pulseMult)
-      if (superVsAvg !== null) {
+      if (inPool && pulseMult !== null) maxPulse = Math.max(maxPulse ?? 0, pulseMult)
+      if (inPool && superVsAvg !== null) {
         const peaks = this.today.etfPeak ?? {}
         if (!(meta.secid in peaks) || superVsAvg > peaks[meta.secid]) peaks[meta.secid] = superVsAvg
         this.today.etfPeak = peaks
@@ -988,7 +1087,7 @@ export class RescueMonitor {
       // 资金流入是必要条件：只有量能或脉冲、没有净流入，不构成托底证据
       //（9/24 09:48 那次「疑似护盘」正是 F2=0 却因量能+脉冲+持续性凑分所致）
       const flowOk = superVsAvg !== null && superVsAvg >= this.f2Anchors()[0]
-      const selfTrigger = flowOk && (
+      const selfTrigger = inPool && flowOk && (
         (timeAdjMult !== null && timeAdjMult >= RESCUE_CALIBRATION.f1.mid) ||
         (pulseMult !== null && pulseMult >= pulseAnchors[1])
       )
@@ -1018,6 +1117,7 @@ export class RescueMonitor {
       coreResonance: coreTriggered.length, peripheralResonance: peripheralTriggered.length,
       resonanceLanes: [...coreTriggered, ...peripheralTriggered],
       coreWorstShare,
+      flowAvailable: source === 'em',
       f2Anchors: anchors, f2Source: this.f2Source(),
       // 时点系数此前没有传进来，运行时恒等于 1（早盘噪音最大的时段拿到满权重）
       timeCoef: timeCoefficient(elapsed),
@@ -1066,6 +1166,7 @@ export class RescueMonitor {
         anchors: pulseAnchors, phase,
       },
       completeness: scored.completeness,
+      flowSource: source,
       thresholdSource: this.f2Source(), selfSampleDays: this.selfSampleDays(),
       config: this.getConfig(), activeIntervalSec: this.activeIntervalSec(ts),
       today: [...this.today.events].reverse(), intraday: [...this.today.intraday],
@@ -1087,14 +1188,17 @@ export class RescueMonitor {
       if (this.bootstrapped.has(key)) continue
       this.bootstrapped.add(key)
       try {
-        const points = await fetchMinuteSeries(meta.secid)
+        const points = await fetchMinuteSeriesAny(meta.secid)
         if (points.length < 3) continue
+        this.minutes[meta.secid] = points
         const ring = this.ring[meta.secid] ?? []
         const newest = ring.length > 0 ? ring[ring.length - 1].ts : 0
+        this.lastMinuteRefresh = Date.now()
+        // 腾讯备用源没有分单资金流：此时不写入采样环（持续性须真实资金数据支撑）
         const seeded: Sample[] = points
-          .filter((p) => p.ts > newest)
+          .filter((p) => p.ts > newest && p.superNet !== null)
           .slice(-SAMPLE_RING)
-          .map((p) => ({ ts: p.ts, amount: p.amount, superNet: p.superNet, mainNet: p.mainNet }))
+          .map((p) => ({ ts: p.ts, amount: p.amount, superNet: p.superNet as number, mainNet: p.mainNet ?? 0 }))
         if (seeded.length === 0) continue
         this.ring[meta.secid] = [...ring, ...seeded].slice(-SAMPLE_RING)
         filled += 1
@@ -1257,7 +1361,7 @@ export class RescueMonitor {
     const peaks = this.today.etfPeak ?? {}
     const lastEtfs = Object.values(last)
     if (lastEtfs.length === 0 && Object.keys(peaks).length === 0) return null
-    const metas = rescueUniverseMeta(this.config.universe)
+    const metas = rescueUniverseMeta(this.config.universe, this.config.custom ?? [])
     const meta = {
       day: this.todayKey,
       peaks: metas.map((m) => ({
@@ -1265,10 +1369,20 @@ export class RescueMonitor {
         peakSuperVsAvg: typeof peaks[m.secid] === 'number' ? peaks[m.secid] : null,
       })),
     }
+    // 无「最后一次成功采样」时，用当日峰值合成卡片（其余字段留空），
+    // 保持与正常态一致的卡片布局，而不是退回一张表
+    const synth: RescueEtfView[] = lastEtfs.length > 0
+      ? lastEtfs
+      : metas.map((m) => ({
+          secid: m.secid, name: m.name, index: m.index, price: null, pct: null, amount: null,
+          volRatio: null, timeAdjMult: null, avgAmt20: null, superNet: null, mainNet: null,
+          superShare: null, superVsAvg: typeof peaks[m.secid] === 'number' ? peaks[m.secid] : null,
+          pulseMult: null, activity: 0, triggered: false, flowDirection: 'unknown', provisional: true,
+        }))
     const note = lastEtfs.length > 0
       ? `上游行情暂不可用：显示当日最后一次成功采样（${lastEtfs.length} 个通道）`
-      : '上游行情暂不可用：显示当日各通道峰值（复盘口径，无实时价与成交额）'
-    return { etfs: lastEtfs.length > 0 ? lastEtfs : [], meta, note }
+      : '上游行情暂不可用：通道按当日峰值复盘展示（无实时价与成交额）'
+    return { etfs: synth, meta, note }
   }
 
   /** 近 60 天每日摘要（历史回看） */

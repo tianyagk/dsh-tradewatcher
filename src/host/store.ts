@@ -23,6 +23,7 @@ import {
   type PortItem,
   type PortPrefs,
   type RescueConfig,
+  type RescueCustomChannel,
   type WatchData,
   type WatchGroup,
   type WatchItem,
@@ -618,6 +619,22 @@ export function normalizeRescuePrefs(patch: Partial<RescueConfig>, base: RescueC
     const m = /^(\d{2}):(\d{2})$/.exec(t)
     if (m === null || Number(m[1]) > 23 || Number(m[2]) > 59) throw new Error('尾盘时刻应为 00:00–23:59 之间的 HH:mm')
     out.tailFrom = t
+  }
+  if (patch.custom !== undefined) {
+    if (!Array.isArray(patch.custom)) throw new Error('custom 应为数组')
+    const seen = new Set<string>()
+    const out2: RescueCustomChannel[] = []
+    for (const raw of patch.custom.slice(0, 20)) {
+      const secid = String((raw as { secid?: unknown })?.secid ?? '').toUpperCase()
+      const name = String((raw as { name?: unknown })?.name ?? '').trim()
+      if (!SECID_RE.test(secid)) throw new Error(`自定义通道代码非法：${secid}`)
+      if (name === '' || name.length > 24) throw new Error('自定义通道名称必填且 ≤ 24 字')
+      if (seen.has(secid)) continue
+      seen.add(secid)
+      const index = String((raw as { index?: unknown })?.index ?? '').trim().slice(0, 16)
+      out2.push({ secid, name, index: index === '' ? undefined : index })
+    }
+    out.custom = out2
   }
   if (patch.universe !== undefined) {
     if (!Array.isArray(patch.universe)) throw new Error('universe 应为 secid 数组')

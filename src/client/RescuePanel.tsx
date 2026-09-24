@@ -13,6 +13,7 @@ import type {
   RescueIntradayPoint, RescueLevel, RescueSignalEvent, RescueSnapshot, TrendData,
 } from '../shared/model'
 import { RESCUE_CORE_INDEXES, RESCUE_ETF_CATALOG, RESCUE_LEVEL_DESC, RESCUE_LEVEL_LABEL, rescueUniverseMeta } from '../shared/model'
+import type { RescueCustomChannel } from '../shared/model'
 import { api } from './api'
 import { Btn, ErrorNote, Field, Modal, Skeleton } from './ui'
 
@@ -145,6 +146,12 @@ function EtfCard(props: { etf: RescueEtfView; redUp: boolean }): React.ReactElem
       React.createElement('b', null, etf.name),
       RESCUE_CORE_INDEXES.includes(etf.index)
         ? React.createElement('span', { className: 'tw-badge', title: '核心护盘通道：F2 以核心通道为主，且大额净流出会封顶信号等级' }, '核心')
+        : null,
+      etf.provisional === true
+        ? React.createElement('span', { className: 'tw-badge', title: '上游不可用：这张卡是当日峰值的复盘数据，非实时快照' }, '复盘')
+        : null,
+      etf.secid !== '' && !RESCUE_ETF_CATALOG.some((c) => c.secid === etf.secid)
+        ? React.createElement('span', { className: 'tw-badge', title: '自定义通道（通常为板块 ETF）：仅作量能与脉冲观察，不计入护盘评分与共振' }, '板块')
         : null,
       React.createElement('span', { style: { color: pctColor(etf.pct, redUp), fontFamily: 'var(--tw-mono)' } }, fmtPct(etf.pct)),
     ),
@@ -361,47 +368,22 @@ export function RescuePanel(props: { prefs: PortPrefs; redUp: boolean; onPrefs?:
       ? React.createElement('div', { className: 'tw-hint', style: { padding: '2px 10px 8px' } },
           `${RESCUE_LEVEL_DESC[level]}${level >= 2 ? '' : '（信号达到「疑似护盘」时本面板会自动展开）'}`)
       : null,
-    // 上游不可用且无卡片时：渲染当日复盘表，避免整块空白
-    snapshot !== null && snapshot.etfs.length === 0 && snapshot.fallback !== undefined
-      ? React.createElement('div', { className: 'tw-panel', style: { padding: '6px 8px' } },
-          React.createElement('div', { className: 'tw-sub-h' }, `当日通道复盘（${snapshot.fallback.day}）`,
-            React.createElement('span', { style: { flex: 1 } }),
-            React.createElement('span', { className: 'tw-muted', style: { fontSize: 10.5 } }, '超大单净额 ÷ 20日均额 的当日峰值'),
-          ),
-          // 当日真实记录（来自采样日志，与实时快照无关）：采样次数 / 最高评分 / 最大量能 / 触发次数
-          React.createElement('div', { className: 'tw-rescue-resonance', style: { marginBottom: 6 } },
-            React.createElement('span', { className: 'tw-muted' }, '当日记录'),
-            React.createElement('span', null, `采样 ${snapshot.sampleCount} 次`),
-            React.createElement('span', null, `5 分钟抽样 ${snapshot.intraday.length} 点`),
-            (() => {
-              const peak = snapshot.intraday.reduce<null | (typeof snapshot.intraday)[number]>((a, p) => (a === null || p.score > a.score ? p : a), null)
-              if (peak === null) return React.createElement('span', { className: 'tw-muted' }, '当日无抽样')
-              return React.createElement('span', null,
-                `最高评分 ${peak.score} @${peak.hhmm}（${RESCUE_LEVEL_LABEL[peak.level]}）`,
-                peak.timeAdjMult !== null ? ` · 量能峰值 ${peak.timeAdjMult.toFixed(2)}x` : '',
-                peak.superVsAvg !== null ? ` · 超大单峰值 ${peak.superVsAvg.toFixed(3)}x` : '',
-              )
-            })(),
-            React.createElement('span', null, `触发事件 ${snapshot.today.filter((e) => e.level >= 1).length} 次`),
-          ),
-          React.createElement('table', { className: 'tw-rescue-factor' },
-            React.createElement('thead', null, React.createElement('tr', null,
-              React.createElement('th', null, '通道'), React.createElement('th', null, '指数'),
-              React.createElement('th', null, '当日峰值'), React.createElement('th', null, '状态'),
-            )),
-            React.createElement('tbody', null,
-              ...snapshot.fallback.peaks.map((p) => {
-                const v = p.peakSuperVsAvg
-                return React.createElement('tr', { key: p.secid, 'data-hit': (v ?? 0) >= 0.2 },
-                  React.createElement('td', null, p.name),
-                  React.createElement('td', { className: 'tw-muted' }, p.index),
-                  React.createElement('td', { style: { fontFamily: 'var(--tw-mono)' } }, v === null ? '—' : `${v.toFixed(3)}x`),
-                  React.createElement('td', { className: 'tw-muted', style: { fontSize: 10.5 } },
-                    v === null ? '当日无样本' : v >= 0.2 ? '曾达异动线' : v <= -0.15 ? '当日净流出' : '常态'),
-                )
-              }),
-            ),
-          ),
+    // 上游不可用时的「当日记录」条：通道本身由常规卡片区渲染（含复盘态）
+    snapshot !== null && snapshot.fallback !== undefined
+      ? React.createElement('div', { className: 'tw-rescue-resonance' },
+          React.createElement('span', { className: 'tw-muted' }, `当日记录（${snapshot.fallback.day}）`),
+          React.createElement('span', null, `采样 ${snapshot.sampleCount} 次`),
+          React.createElement('span', null, `5 分钟抽样 ${snapshot.intraday.length} 点`),
+          (() => {
+            const peak = snapshot.intraday.reduce<null | (typeof snapshot.intraday)[number]>((a, p) => (a === null || p.score > a.score ? p : a), null)
+            if (peak === null) return React.createElement('span', { className: 'tw-muted' }, '当日无抽样')
+            return React.createElement('span', null,
+              `最高评分 ${peak.score} @${peak.hhmm}（${RESCUE_LEVEL_LABEL[peak.level]}）`,
+              peak.timeAdjMult !== null ? ` · 量能峰值 ${peak.timeAdjMult.toFixed(2)}x` : '',
+              peak.superVsAvg !== null ? ` · 超大单峰值 ${peak.superVsAvg.toFixed(3)}x` : '',
+            )
+          })(),
+          React.createElement('span', null, `触发事件 ${snapshot.today.filter((e) => e.level >= 1).length} 次`),
         )
       : null,
     expanded && snapshot !== null
@@ -527,6 +509,10 @@ function SettingsModal(props: {
   const [tailIntervalSec, setTailIntervalSec] = React.useState(String(props.config.tailIntervalSec))
   const [tailFrom, setTailFrom] = React.useState(props.config.tailFrom)
   const [universe, setUniverse] = React.useState<string[]>(props.config.universe)
+  const [custom, setCustom] = React.useState<RescueCustomChannel[]>(props.config.custom ?? [])
+  const [newSecid, setNewSecid] = React.useState('')
+  const [newName, setNewName] = React.useState('')
+  const [newIndex, setNewIndex] = React.useState('')
   const [err, setErr] = React.useState<string | null>(null)
 
   const toggle = (secid: string): void => {
@@ -549,7 +535,13 @@ function SettingsModal(props: {
       setErr('尾盘起始时刻应为 00:00–23:59 之间的 HH:mm')
       return
     }
-    props.onSave({ enabled, intervalSec: Math.round(iv), tailIntervalSec: Math.round(tv), tailFrom, universe })
+    for (const c of custom) {
+      if (!/^[0-9]\.[A-Za-z0-9]{4,8}$/.test(c.secid)) {
+        setErr(`自定义通道代码格式应为「市场.代码」，如 1.512480（半导体ETF）：${c.secid}`)
+        return
+      }
+    }
+    props.onSave({ enabled, intervalSec: Math.round(iv), tailIntervalSec: Math.round(tv), tailFrom, universe, custom })
     props.onClose()
   }
 
@@ -579,6 +571,39 @@ function SettingsModal(props: {
             `${m.name} · ${m.index}`,
           ),
         ),
+      ),
+    ),
+    React.createElement(Field, { label: '自定义通道（板块 ETF 等；仅展示量能与脉冲，不计入护盘评分与共振）' },
+      React.createElement('div', { className: 'tw-rescue-pool' },
+        ...custom.map((c) =>
+          React.createElement('label', { key: c.secid, className: 'tw-rescue-pool-item', 'data-on': true },
+            React.createElement('span', null, `${c.name}（${c.secid}）${c.index !== undefined ? ` · ${c.index}` : ''}`),
+            React.createElement(Btn, {
+              onClick: () => setCustom((prev) => prev.filter((x) => x.secid !== c.secid)),
+            }, '移除'),
+          ),
+        ),
+        custom.length === 0 ? React.createElement('span', { className: 'tw-muted', style: { fontSize: 11 } }, '尚未添加自定义通道') : null,
+      ),
+      React.createElement('div', { style: { display: 'flex', gap: 6, marginTop: 6, flexWrap: 'wrap' } },
+        React.createElement('input', { className: 'tw-input', style: { width: 110 }, placeholder: '1.512480', value: newSecid, onChange: (e) => setNewSecid(e.target.value) }),
+        React.createElement('input', { className: 'tw-input', style: { width: 130 }, placeholder: '半导体ETF', value: newName, onChange: (e) => setNewName(e.target.value) }),
+        React.createElement('input', { className: 'tw-input', style: { width: 96 }, placeholder: '板块备注', value: newIndex, onChange: (e) => setNewIndex(e.target.value) }),
+        React.createElement(Btn, {
+          onClick: () => {
+            const secid = newSecid.trim().toUpperCase()
+            const name = newName.trim()
+            if (!/^[0-9]\.[A-Za-z0-9]{4,8}$/.test(secid)) { setErr('代码格式应为「市场.代码」，如 1.512480'); return }
+            if (name === '') { setErr('请填写通道名称'); return }
+            if (custom.some((c) => c.secid === secid)) { setErr('该通道已存在'); return }
+            setCustom((prev) => [...prev, { secid, name, index: newIndex.trim() === '' ? undefined : newIndex.trim() }])
+            setNewSecid(''); setNewName(''); setNewIndex(''); setErr(null)
+          },
+        }, '添加'),
+      ),
+      React.createElement('div', { className: 'tw-hint', style: { marginTop: 4 } },
+        '代码取自东财 secid 前缀：沪市 1.（如 1.512480 半导体ETF）、深市 0.（如 0.159915）。' +
+        '自定义通道与宽基分开统计，避免板块异动被误读为国家队护盘。',
       ),
     ),
     React.createElement('div', { className: 'tw-hint' },
