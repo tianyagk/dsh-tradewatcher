@@ -13,7 +13,8 @@ import { losslessJson } from './tools.ts'
 import { canonicalEconomy, macroEventsFromEm, macroImportance, parseEmDate } from './calendar.ts'
 import {
   CORE_OUTFLOW_VETO, PERSIST_ANCHORS, PULSE_HIT_SCORE, divergenceScore, interpScore, isTailElapsed,
-  progressAt, pulseAnchorsFor, pulseBandLabel, quantile, resonanceScore, scoreRescue, sessionElapsed, timeCoefficient,
+  progressAt, pulseAnchorsFor, pulseBandLabel, quantile, resonanceScore, scoreRescue, sessionElapsed,
+  timeCoefficient, windowFlowStats,
 } from './rescue.ts'
 import { RESCUE_CALIBRATION } from './rescue-thresholds.ts'
 import { TW_ROWS } from '../shared/model.ts'
@@ -233,6 +234,26 @@ async function main(): Promise<void> {
       ok(typical.factors[0].id === 'volume' && typical.factors.length === 6 && Math.abs(typical.factors.reduce((a, f) => a + f.weight, 0) - 1) < 1e-9, '六因子权重合计 = 1')
       ok(typical.factors[2].label === '尾盘突袭' && typical.factors[2].score > 0 && !!typical.factors[3].threshold.includes('窗口成交额'), 'F3 尾盘命名与 F4 窗口口径')
       ok(PULSE_HIT_SCORE === 70 && PERSIST_ANCHORS[0] === 0.05, '脉冲命中线 = P90，持续性锚点以窗口成交额归一')
+
+      // F4 窗口统计（纯函数）：稳定净流入 / 无参考点 / 反复进出
+      const t0 = 1_700_000_000_000
+      const steady = [0, 60, 120, 180, 240, 300].map((m, i) => ({ ts: t0 + m * 1000, amount: (i + 1) * 1e8, superNet: i * 2e7 }))
+      const steadyOut = windowFlowStats(steady, t0 + 300_000)
+      ok(steadyOut.persistShare !== null && Math.abs(steadyOut.persistShare - 0.2) < 1e-9, `稳定净流入 → 净增/窗口成交额 = 20% (got ${steadyOut.persistShare?.toFixed(3)})`)
+      ok(steadyOut.retraceRatio === 0, '单调净流入 → 无回撤')
+      const fresh = [{ ts: t0, amount: 1e8, superNet: 1e7 }, { ts: t0 + 30_000, amount: 1.3e8, superNet: 1.4e7 }]
+      ok(windowFlowStats(fresh, t0 + 30_000).persistShare === null, '窗口历史不足 → null（不拿 30 秒当 5 分钟）')
+      const choppy = [
+        { ts: t0, amount: 1e8, superNet: 0 },
+        { ts: t0 + 60_000, amount: 2e8, superNet: 3e7 },
+        { ts: t0 + 120_000, amount: 3e8, superNet: 1e7 },
+        { ts: t0 + 300_000, amount: 6e8, superNet: 3.2e7 },
+      ]
+      const choppyOut = windowFlowStats(choppy, t0 + 300_000)
+      ok(choppyOut.retraceRatio !== null && choppyOut.retraceRatio > 0.5, `反复进出 → 回撤比 ${choppyOut.retraceRatio?.toFixed(2)} > 0.5（触发打折）`)
+      const choppyScore = scoreRescue({ ...strongInput, persistShare: choppyOut.persistShare, retraceRatio: choppyOut.retraceRatio })
+      const cleanScore = scoreRescue({ ...strongInput, persistShare: choppyOut.persistShare, retraceRatio: 0 })
+      ok(choppyScore.factors[3].score < cleanScore.factors[3].score, '回撤比 >0.5 时 F4 打折生效')
     }
 
     // K线合并与年K重采样（纯函数）

@@ -364,6 +364,47 @@ export function inTradingWindow(ts: number): boolean {
   return (hhmm >= '09:25' && hhmm <= '11:35') || (hhmm >= '12:55' && hhmm <= '15:05')
 }
 
+/** 采样点（窗口资金流统计的输入） */
+export interface FlowSample {
+  ts: number
+  amount: number
+  superNet: number
+}
+
+export const FLOW_WINDOW_MS = 5 * 60_000
+
+/**
+ * 窗口内资金流统计（纯函数，便于自检）。
+ *   persistShare = 窗口内超大单净增 ÷ 该窗口成交额（自归一，与采样间隔无关）
+ *   retraceRatio = 窗口内单次最大回撤 ÷ 净增（>0.5 说明反复进出）
+ * 参考点取「不晚于 now − 窗口长」的最新样本；窗口内样本不足时返回 null。
+ */
+export function windowFlowStats(
+  samples: readonly FlowSample[],
+  nowTs: number,
+  windowMs = FLOW_WINDOW_MS,
+): { persistShare: number | null; retraceRatio: number | null } {
+  const target = nowTs - windowMs
+  let ref: FlowSample | null = null
+  for (const x of samples) {
+    if (x.ts <= target + 15_000 && (ref === null || x.ts > ref.ts)) ref = x
+  }
+  if (ref === null) return { persistShare: null, retraceRatio: null }
+  const last = samples[samples.length - 1]
+  if (last === undefined) return { persistShare: null, retraceRatio: null }
+  const netIncrease = last.superNet - ref.superNet
+  const windowAmount = last.amount - ref.amount
+  const persistShare = windowAmount > 0 ? netIncrease / windowAmount : null
+  let maxDrop = 0
+  for (let i = 1; i < samples.length; i++) {
+    if (samples[i].ts < ref.ts) continue
+    const drop = samples[i - 1].superNet - samples[i].superNet
+    if (drop > maxDrop) maxDrop = drop
+  }
+  const retraceRatio = netIncrease > 0 ? maxDrop / netIncrease : null
+  return { persistShare, retraceRatio }
+}
+
 /** 自建样本分位数（升序数组的线性插值分位） */
 export function quantile(sorted: readonly number[], p: number): number | null {
   if (sorted.length === 0) return null
@@ -862,25 +903,7 @@ export class RescueMonitor {
     ring.push(s)
     if (ring.length > SAMPLE_RING) ring.splice(0, ring.length - SAMPLE_RING)
     this.ring[secid] = ring
-    const window = 5 * 60_000
-    const target = s.ts - window
-    let ref: Sample | null = null
-    for (const x of ring) {
-      if (x.ts <= target + 15_000 && (ref === null || x.ts > ref.ts)) ref = x
-    }
-    if (ref === null || ref.ts >= s.ts - 60_000) return { persistShare: null, retraceRatio: null }
-    const netIncrease = s.superNet - ref.superNet
-    const windowAmount = s.amount - ref.amount
-    const persistShare = windowAmount > 0 ? netIncrease / windowAmount : null
-    // 窗口内单次最大回撤（相对净增）
-    let maxDrop = 0
-    const seg = ring.filter((x) => x.ts >= ref.ts)
-    for (let i = 1; i < seg.length; i++) {
-      const drop = seg[i - 1].superNet - seg[i].superNet
-      if (drop > maxDrop) maxDrop = drop
-    }
-    const retraceRatio = netIncrease > 0 ? maxDrop / netIncrease : null
-    return { persistShare, retraceRatio }
+    return windowFlowStats(ring, s.ts)
   }
 
   private selfSampleDays(): number {
