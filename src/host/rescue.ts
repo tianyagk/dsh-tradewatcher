@@ -299,7 +299,7 @@ export function scoreRescue(input: RescueFactorInput): RescueScoreResult {
     },
     {
       id: 'pulse', label: pulseFactorLabel(phase), score: f3, weight: RESCUE_WEIGHTS.pulse,
-      actual: `${fmt(input.pulseMult, 'x')}${isTail ? '' : '（打 0.6 折）'}`,
+      actual: `${fmt(input.pulseMult, 'x')}${input.pulseMult !== null && !isTail ? '（打 0.6 折）' : ''}`,
       threshold: `${bandLabel} 时段锚点 ${pulseAnchors[0].toFixed(2)}/${pulseAnchors[1].toFixed(2)}/${pulseAnchors[2].toFixed(2)}x（P75/P90/P95 分档标定）；命中线 ${PULSE_HIT_SCORE} 分`,
       hit: f3 >= PULSE_HIT_SCORE,
     },
@@ -858,8 +858,8 @@ export class RescueMonitor {
       this.calibratedDay = this.todayKey
       void this.calibrate(metas).catch(() => undefined)
     }
-    // 冷启动回填：盘中重启后立刻具备脉冲/持续性所需的历史
-    if (inTradingWindow(Date.now())) {
+    // 冷启动回填：盘中重启或收盘后复盘，都应立刻具备脉冲/持续性所需的历史
+    if (phaseOf(hhmmOf(Date.now())) !== 'pre') {
       const short = metas.filter((m) => {
         const ring = this.ring[m.secid] ?? []
         if (ring.length < 2) return true
