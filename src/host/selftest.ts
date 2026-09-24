@@ -2,7 +2,7 @@
  * Host-half self-test: pure accounting + store round-trip + live Eastmoney
  * probes. Run:  npm run selftest   (node type-stripping; no build needed)
  */
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { DataStore, replayPosition, dataHome } from './store.ts'
@@ -11,6 +11,7 @@ import * as em from './em.ts'
 import { fillLastGood, mergeBars, resampleYearly } from './em.ts'
 import { losslessJson } from './tools.ts'
 import { canonicalEconomy, macroEventsFromEm, macroImportance, parseEmDate } from './calendar.ts'
+import { RescueMonitor } from './rescue.ts'
 import {
   CORE_OUTFLOW_VETO, PERSIST_ANCHORS, PULSE_HIT_SCORE, divergenceScore, interpScore, isTailElapsed,
   progressAt, pulseAnchorsFor, pulseBandLabel, quantile, resonanceScore, scoreRescue, sessionElapsed,
@@ -265,6 +266,30 @@ async function main(): Promise<void> {
       const choppyScore = scoreRescue({ ...strongInput, persistShare: choppyOut.persistShare, retraceRatio: choppyOut.retraceRatio })
       const cleanScore = scoreRescue({ ...strongInput, persistShare: choppyOut.persistShare, retraceRatio: 0 })
       ok(choppyScore.factors[3].score < cleanScore.factors[3].score, '回撤比 >0.5 时 F4 打折生效')
+    }
+
+    // 护盘快照 LKG：本会话没有数据时回落到落盘的上次成功快照
+    {
+      const lkgDir = mkdtempSync(join(tmpdir(), 'tw-lkg-'))
+      const good = {
+        ts: Date.now() - 3600_000, level: 2 as const, score: 63, summary: '（fixture）',
+        factors: [], etfs: [{ secid: '1.510300', name: '沪深300ETF华泰柏瑞', index: '沪深300' }],
+        indexPct: -1.2, indexName: '沪深300', timeCoef: 1.1,
+        resonance: { lanes: ['沪深300'], core: 1, peripheral: 0, intensity: 'systemic' as const },
+        pulseBand: { elapsed: 200, label: '尾盘', isTail: true, anchors: [1.26, 1.91, 2.43] as [number, number, number], phase: 'tail' as const },
+        completeness: { available: 6, total: 6, missing: [] },
+        thresholdSource: 'empirical' as const, selfSampleDays: 5,
+        config: { enabled: true, intervalSec: 60, tailIntervalSec: 15, tailFrom: '14:30', universe: [] },
+        activeIntervalSec: 15,
+      }
+      writeFileSync(join(lkgDir, 'rescue-log.json'), JSON.stringify({ v: 1, days: {}, baselines: {}, selfSamples: {}, lastSnapshot: good }), 'utf8')
+      const mon = new RescueMonitor(lkgDir, { enabled: true, intervalSec: 60, tailIntervalSec: 15, tailFrom: '14:30', universe: [] })
+      await mon.init()
+      const snap = mon.snapshot()
+      ok(snap.etfs.length === 1 && snap.level === 2 && snap.stale === true, `本会话无数据 → 回落落盘 LKG（etfs ${snap.etfs.length}，stale ${String(snap.stale)}）`)
+      ok((snap.note ?? '').includes('上次成功采样'), 'LKG 快照注明为上次成功采样')
+      ok(mon.hasFreshData === false, 'hasFreshData 反映本会话尚未采到数据')
+      rmSync(lkgDir, { recursive: true, force: true })
     }
 
     // K线合并与年K重采样（纯函数）

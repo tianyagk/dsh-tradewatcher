@@ -220,7 +220,13 @@ export function RescuePanel(props: { prefs: PortPrefs; redUp: boolean; onPrefs?:
     api
       .rescue(force)
       .then((r) => {
-        setData(r as RescueData)
+        const next = r as RescueData
+        // 空快照（上游取数失败/尚未采样）不要抹掉已有数据 —— 与行情「不因一次失败清空」同一原则
+        setData((prev) => {
+          const empty = (next.snapshot?.etfs.length ?? 0) === 0
+          const have = (prev?.snapshot?.etfs.length ?? 0) > 0
+          return empty && have ? { ...prev!, staleNote: '本次刷新未取到数据，显示上一次结果' } as RescueData : next
+        })
         setError(null)
       })
       .catch((e: Error) => {
@@ -299,6 +305,13 @@ export function RescuePanel(props: { prefs: PortPrefs; redUp: boolean; onPrefs?:
         ? React.createElement('span', { className: 'tw-muted', style: { fontFamily: 'var(--tw-mono)', fontSize: 11 } }, `${snapshot.score}/100`)
         : null,
       React.createElement('span', { style: { flex: 1 } }),
+      snapshot !== null && (snapshot.stale === true || (data as { staleNote?: string })?.staleNote !== undefined)
+        ? React.createElement('span', {
+            className: 'tw-badge',
+            title: snapshot.note ?? (data as { staleNote?: string })?.staleNote ?? '',
+            style: { color: LEVEL_COLOR[1], borderColor: LEVEL_COLOR[1] },
+          }, `上次数据 ${snapshot.lastSampleTs !== null ? new Date(snapshot.lastSampleTs).toLocaleTimeString('zh-CN', { hour12: false }).slice(0, 5) : ''}`)
+        : null,
       snapshot !== null && (snapshot.completeness?.missing.length ?? 0) > 0
         ? React.createElement('span', {
             className: 'tw-badge',

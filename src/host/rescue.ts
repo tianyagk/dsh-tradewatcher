@@ -108,6 +108,31 @@ interface Sample {
   mainNet: number
 }
 
+/** 落盘的快照（去掉当日时间线/抽样这些已经在 days 里的重复内容） */
+interface PersistedSnapshot {
+  ts: number
+  level: RescueLevel
+  score: number
+  summary: string
+  factors: RescueFactor[]
+  etfs: RescueEtfView[]
+  indexPct: number | null
+  indexName: string
+  timeCoef: number
+  resonance: RescueSnapshot['resonance']
+  pulseBand: RescueSnapshot['pulseBand']
+  completeness: RescueSnapshot['completeness']
+  thresholdSource: RescueThresholdSource
+  selfSampleDays: number
+  config: RescueConfig
+  activeIntervalSec: number
+}
+
+function stripSnapshot(s: RescueSnapshot): PersistedSnapshot {
+  const { ts, level, score, summary, factors, etfs, indexPct, indexName, timeCoef, resonance, pulseBand, completeness, thresholdSource, selfSampleDays, config, activeIntervalSec } = s
+  return { ts, level, score, summary, factors, etfs, indexPct, indexName, timeCoef, resonance, pulseBand, completeness, thresholdSource, selfSampleDays, config, activeIntervalSec }
+}
+
 interface DayLog {
   events: RescueSignalEvent[]
   intraday: RescueIntradayPoint[]
@@ -120,6 +145,8 @@ interface DayLog {
 interface LogFile {
   v: number
   days: Record<string, DayLog>
+  /** 最后一次成功采样的快照（轻量版）：采样失败时作为 last-known-good 兜底 */
+  lastSnapshot?: PersistedSnapshot | null
   /** 每只 ETF 的 20 日均成交额基准 */
   baselines: Record<string, { avgAmt20: number; day: string; source: 'em' | 'tencent' | 'calibrated' }>
   /** 自建样本：每只 ETF 每日收盘的超大单净额/20日均额（用于升级 F2 阈值） */
@@ -699,7 +726,7 @@ export async function fetchMinuteSeries(secid: string): Promise<MinuteFlowPoint[
 
 export class RescueMonitor {
   private dir: string
-  private file: LogFile = { v: 1, days: {}, baselines: {}, selfSamples: {}, progressCurve: null, progressDays: 0, updatedAt: 0 }
+  private file: LogFile = { v: 1, days: {}, lastSnapshot: null, baselines: {}, selfSamples: {}, progressCurve: null, progressDays: 0, updatedAt: 0 }
   private loaded: Promise<void> | null = null
   private config: RescueConfig
   private ring: Record<string, Sample[]> = {}
@@ -736,6 +763,7 @@ export class RescueMonitor {
         this.file = {
           v: 1,
           days: parsed.days ?? {},
+          lastSnapshot: parsed.lastSnapshot ?? null,
           baselines: parsed.baselines ?? {},
           selfSamples: parsed.selfSamples ?? {},
           progressCurve: Array.isArray(parsed.progressCurve) && parsed.progressCurve.length === 49 ? parsed.progressCurve : null,
@@ -1029,6 +1057,7 @@ export class RescueMonitor {
       sampleCount: this.today.samples, lastSampleTs: ts, gap: false,
       note: elapsed <= 0 ? '尚未开盘，量能倍数按全天口径显示为 0' : undefined,
     }
+    this.file.lastSnapshot = stripSnapshot(this.lastSnapshot)
     void this.persist()
   }
 
@@ -1140,6 +1169,17 @@ export class RescueMonitor {
   }
 
   snapshot(): RescueSnapshot {
+    if (this.lastSnapshot === null && this.file.lastSnapshot != null) {
+      // 兜底：本次会话还没采到数据（例如收盘后重启），用上次成功快照，注明为旧数据
+      const p = this.file.lastSnapshot
+      return {
+        ...p, trading: inTradingWindow(Date.now()), stale: true, lastSampleTs: p.ts,
+        today: [...this.today.events].reverse(), intraday: [...this.today.intraday],
+        sampleCount: this.today.samples, gap: true,
+        note: `上游暂不可用，显示上次成功采样（${hhmmOf(p.ts)}）的数据`,
+        config: this.getConfig(), activeIntervalSec: this.activeIntervalSec(), selfSampleDays: this.selfSampleDays(),
+      }
+    }
     if (this.lastSnapshot !== null) {
       return {
         ...this.lastSnapshot,
@@ -1190,6 +1230,31 @@ export class RescueMonitor {
 
   eventsOf(day: string): RescueSignalEvent[] {
     return this.file.days[day]?.events ?? []
+  }
+
+  /** 本会话是否还没有成功快照（收盘后重启即属此情形） */
+  get hasFreshData(): boolean {
+    return this.lastSnapshot !== null
+  }
+
+  /** 自动补采冷却：避免前端轮询把上游打爆 */
+  private lastAutoTry = 0
+  private static readonly AUTO_TRY_COOLDOWN_MS = 20_000
+
+  /** 无新鲜数据时按冷却自动采一次（供路由使用）；返回是否真的采了 */
+  async ensureFresh(): Promise<boolean> {
+    if (this.hasFreshData) return false
+    const now = Date.now()
+    if (now - this.lastAutoTry < RescueMonitor.AUTO_TRY_COOLDOWN_MS) return false
+    this.lastAutoTry = now
+    await this.init()
+    if (phaseOf(hhmmOf(now)) === 'pre') return false
+    try {
+      await this.tick(true)
+    } catch {
+      /* 失败则交由 LKG 兜底 */
+    }
+    return true
   }
 
   /** 采样健康度：最近一次采样距今是否超过 2 个间隔 */

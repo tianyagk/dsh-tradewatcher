@@ -353,6 +353,9 @@ export function makeTradeRoutes(
             const p = queryOf(req)
             const wantsForce = p.get('force') === '1'
             const day = p.get('day')
+            // 收盘后重启等情形下本会话还没有快照：自动补采一次（带冷却），
+            // 否则前端拿到的是空快照 —— 标的卡与因子表会整块消失
+            if (!wantsForce) await rescue.ensureFresh()
             const snapshot = wantsForce ? await rescue.sampleNow() : rescue.snapshot()
             if (day !== null && /^\d{4}-\d{2}-\d{2}$/.test(day)) {
               send(res, 200, {

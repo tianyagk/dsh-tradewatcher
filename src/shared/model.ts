@@ -650,6 +650,8 @@ export interface RescueSnapshot {
   lastSampleTs: number | null
   /** 是否出现采样缺口（上游失败） */
   gap: boolean
+  /** 本快照是否来自 last-known-good（上游暂不可用时的旧数据） */
+  stale?: boolean
   /** 无实时数据时的说明 */
   note?: string
 }
