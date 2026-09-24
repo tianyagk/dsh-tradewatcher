@@ -881,6 +881,12 @@ export class RescueMonitor {
     const phase = phaseOf(hhmmOf(ts))
     // 盘后不再按「尾盘」命名（否则收盘后打开面板会误读为刚发生尾盘突袭）
     const tail = isTailElapsed(elapsed) && inTradingWindow(ts)
+    const trading = inTradingWindow(ts)
+    // 盘后/非交易时段：不写入新样本，改以「环内最后一个盘中样本」为评估时点，
+    // 否则「最近 5 分钟」会错配成「收盘到现在」这一整段空窗
+    const ringTail = Math.max(0, ...metas.map((m) => this.ring[m.secid]?.at(-1)?.ts ?? 0))
+    const evalTs = trading ? ts : ringTail > ts - 12 * 3600_000 ? ringTail : ts
+    const allowPulse = trading || (phase === 'closed' && ringTail > 0)
     let maxMult: number | null = null
     let coreSuperVsAvg: number | null = null
     let peripheralSuperVsAvg: number | null = null
@@ -910,7 +916,7 @@ export class RescueMonitor {
       // 脉冲：最近 5 分钟成交额 ÷ 同时点基准 5 分钟额
       let pulseMult: number | null = null
       const ring = this.ring[meta.secid] ?? []
-      if (inTradingWindow(ts) && amount !== null && base !== null && base > 0 && ring.length > 0) {
+      if (allowPulse && amount !== null && base !== null && base > 0 && ring.length > 0) {
         const target = ts - 5 * 60_000
         let ref: Sample | null = null
         for (const s of ring) if (s.ts <= target + 15_000 && (ref === null || s.ts > ref.ts)) ref = s
@@ -922,7 +928,7 @@ export class RescueMonitor {
         }
       }
       const flow = amount !== null && superNet !== null
-        ? this.pushSample(meta.secid, { ts, amount, superNet, mainNet: q.mainNet ?? 0 })
+        ? this.pushSample(meta.secid, trading ? { ts, amount, superNet, mainNet: q.mainNet ?? 0 } : null, evalTs)
         : { persistShare: null, retraceRatio: null }
       if (flow.persistShare !== null && (persistBest === null || flow.persistShare > persistBest)) persistBest = flow.persistShare
       if (flow.retraceRatio !== null && (retraceWorst === null || flow.retraceRatio > retraceWorst)) retraceWorst = flow.retraceRatio
@@ -1064,12 +1070,15 @@ export class RescueMonitor {
    *   persistShare = 窗口内净增 ÷ 该窗口成交额（自归一，与采样间隔无关）
    *   retraceRatio = 窗口内单次最大回撤 ÷ 净增（揭示反复进出）
    */
-  private pushSample(secid: string, s: Sample): { persistShare: number | null; retraceRatio: number | null } {
+  private pushSample(secid: string, s: Sample | null, evalTs: number): { persistShare: number | null; retraceRatio: number | null } {
     const ring = this.ring[secid] ?? []
-    ring.push(s)
-    if (ring.length > SAMPLE_RING) ring.splice(0, ring.length - SAMPLE_RING)
-    this.ring[secid] = ring
-    return windowFlowStats(ring, s.ts)
+    if (s !== null) {
+      ring.push(s)
+      if (ring.length > SAMPLE_RING) ring.splice(0, ring.length - SAMPLE_RING)
+      this.ring[secid] = ring
+    }
+    if (ring.length < 2) return { persistShare: null, retraceRatio: null }
+    return windowFlowStats(ring, evalTs)
   }
 
   private selfSampleDays(): number {
