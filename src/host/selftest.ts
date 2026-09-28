@@ -16,6 +16,7 @@ import { DEFAULT_PREFS } from '../shared/model.ts'
 import { canonicalEconomy, macroEventsFromEm, macroImportance, parseEmDate } from './calendar.ts'
 import { RescueMonitor } from './rescue.ts'
 import { CircuitBreaker } from './breaker.ts'
+import { calibratePooled, computePattern, computePosition, laneOutcomeStats, patternScore, positionScore } from './bottom.ts'
 import {
   CORE_OUTFLOW_VETO, PERSIST_ANCHORS, PULSE_HIT_SCORE, divergenceScore, interpScore, isTailElapsed,
   progressAt, pulseAnchorsFor, pulseBandLabel, quantile, resonanceScore, scoreRescue, sessionElapsed,
@@ -294,6 +295,50 @@ async function main(): Promise<void> {
       ok((snap.note ?? '').includes('上次成功采样'), 'LKG 快照注明为上次成功采样')
       ok(mon.hasFreshData === false, 'hasFreshData 反映本会话尚未采到数据')
       rmSync(lkgDir, { recursive: true, force: true })
+    }
+
+    // 底部：位置 / 形态 / 概率（含"跨品种污染"的回归断言）
+    {
+      const mk = (close: number, high: number, low: number, vol: number, i: number): { date: string; open: number; close: number; high: number; low: number; vol: number } =>
+        ({ date: `2026-01-${String((i % 28) + 1).padStart(2, '0')}`, open: close, close, high, low, vol })
+      // 位置：价格落在区间底部
+      // 前 57 根上行，最后 3 根连续下跌收在区间低位（这样既在底部、又有连跌）
+      const rising = Array.from({ length: 60 }, (_, i) => {
+        const close = i < 57 ? 100 + i : 156 - (i - 56) * 19
+        return mk(close, close * 1.01, close * 0.99, 1e6, i)
+      })
+      const atLow = computePosition(rising, rising[rising.length - 1].close)
+      ok(atLow.percentile60 !== null && atLow.percentile60 <= 0.05, `价格在区间底部 → 分位 ≈ 0（got ${atLow.percentile60?.toFixed(2)}）`)
+      ok(atLow.downStreak >= 1 && atLow.aboveLow60 !== null && atLow.aboveLow60 <= 0.02, `贴近 60 日低点、含连跌 (got ${atLow.aboveLow60?.toFixed(3)})`)
+      const atHigh = computePosition(rising, Math.max(...rising.map((b) => b.close)))
+      ok(atHigh.percentile60 === 1, '价格在区间高点 → 分位 = 100%')
+      ok(positionScore(atLow) > positionScore(atHigh), `位置分随位置走（低位 ${positionScore(atLow)} > 高位 ${positionScore(atHigh)}）`)
+
+      // 形态：回升/下影线/收回前低
+      const pat = computePattern({ price: 10, open: 10.5, high: 11, low: 9, prevLow20: 9.5, atNewLow60: true })
+      ok(pat.bouncePct !== null && Math.abs(pat.bouncePct - 11.11) < 0.05, `日内回升 ${pat.bouncePct?.toFixed(2)}%`)
+      ok(pat.lowerShadow !== null && Math.abs(pat.lowerShadow - 0.5) < 1e-9, `下影线比例 ${pat.lowerShadow}`)
+      ok(pat.reclaimedPrevLow === true && pat.newLowReclaimed === true, '破前低后收回 / 创新低后收回')
+      const weak = computePattern({ price: 9.05, open: 10, high: 10.1, low: 9, prevLow20: 8, atNewLow60: false })
+      ok(patternScore(pat) > patternScore(weak), `形态分：强形态 ${patternScore(pat)} > 弱形态 ${patternScore(weak)}`)
+
+      // 概率：只在"低位 + 放量"的样本上统计，并且必须逐通道计算（回归：合并多品种日线会得出 +105% 之类荒唐值）
+      const laneA: ReturnType<typeof mk>[] = []
+      const laneB: ReturnType<typeof mk>[] = []
+      for (let i = 0; i < 120; i++) {
+        const base = 10 + (i % 7 === 0 ? -1.2 : 0.3) // 制造低位形态
+        const up = i % 7 === 0
+        laneA.push(mk(up ? base : base, up ? base * 1.05 : base * 0.99, up ? base * 0.98 : base * 0.95, up ? 3e6 : 1e6, i))
+        laneB.push(mk((up ? base : base) * 100, (up ? base * 1.05 : base * 0.99) * 100, (up ? base * 0.98 : base * 0.95) * 100, up ? 3e6 : 1e6, i))
+      }
+      const st = laneOutcomeStats(laneA, { percentileMax: 0.3, volumeMin: 1.0, horizon: 5, targets: [0.02] })
+      ok(st.n > 0 && st.baseN > st.n, `逐通道样本：同类 ${st.n} / 基线 ${st.baseN}`)
+      const pooled = calibratePooled([laneA, laneB], { horizon: 5, targets: [0.02] })
+      ok(pooled.lanes === 2 && pooled.n === st.n * 2, `跨通道合并统计（覆盖 ${pooled.lanes} 通道，N=${pooled.n}）`)
+      ok(pooled.medianForward !== null && Math.abs(pooled.medianForward) < 0.5, `前向收益中位数不被跨品种价格污染（got ${pooled.medianForward === null ? '—' : (pooled.medianForward * 100).toFixed(2) + '%'}）`)
+      ok(pooled.targets[0]?.baseRate !== null && pooled.targets[0]?.prob !== null, '概率与无条件基线同时给出')
+      const cal = calibratePooled([])
+      ok(cal.n === 0 && cal.targets[0]?.prob === null, '无样本时概率为 null（不给伪结论）')
     }
 
     // 行情备用源（腾讯）：代码映射、时间戳解析、行转换（东财不可用时自选/持仓仍能刷新）

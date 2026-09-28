@@ -70,6 +70,8 @@ const REQUIRED_CLIENT_SNIPPETS = [
   '今日信号时间线',          // 时间线（曾在守卫里被误隐藏）
   '分时量能',
   '护盘信号',
+  '底部位置 / 形态 / 概率',   // 底部视图面板
+  '历史同类情形的频率',        // 概率口径说明（防止被当成预测）
 ]
 
 const clientBundle = readFileSync('lib/client.js', 'utf8')

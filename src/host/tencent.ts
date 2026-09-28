@@ -167,6 +167,26 @@ export function suggestKindFromTencent(marketKey: string, rawKind: string): stri
   return '股票'
 }
 
+/** 日线（腾讯 fqkline，前复权）；用于位置与底部概率回算 */
+export async function fetchTencentDaily(secid: string, count = 320): Promise<Array<{ date: string; open: number; close: number; high: number; low: number; vol: number }>> {
+  const code = tencentCode(secid)
+  if (code === null) return []
+  const res = await fetch(`https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param=${code},day,,,${count},qfq`, {
+    headers: { 'user-agent': UA, referer: 'https://gu.qq.com/' },
+    signal: AbortSignal.timeout(15000),
+  })
+  if (!res.ok) throw new Error(`HTTP ${res.status} from web.ifzq.gtimg.cn`)
+  const j = (await res.json()) as { data?: Record<string, { qfqday?: string[][]; day?: string[][] }> }
+  const arr = j?.data?.[code]?.qfqday ?? j?.data?.[code]?.day ?? []
+  const out: Array<{ date: string; open: number; close: number; high: number; low: number; vol: number }> = []
+  for (const r of arr) {
+    const bar = { date: String(r[0]), open: Number(r[1]), close: Number(r[2]), high: Number(r[3]), low: Number(r[4]), vol: Number(r[5]) }
+    if (!Number.isFinite(bar.close) || !(bar.close > 0) || !(bar.vol > 0)) continue
+    out.push(bar)
+  }
+  return out
+}
+
 export interface TencentSuggestRow {
   secid: string
   code: string

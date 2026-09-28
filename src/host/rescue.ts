@@ -19,13 +19,14 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import type {
-  RescueConfig, RescueDaySummary, RescueEtfMeta, RescueEtfView, RescueFactor, RescueIntradayPoint,
-  RescueLevel, RescueSignalEvent, RescueSnapshot, RescueThresholdSource,
+  DailyBarLite, RescueBottomLane, RescueConfig, RescueDaySummary, RescueEtfMeta, RescueEtfView, RescueFactor,
+  RescueIntradayPoint, RescueLevel, RescueSignalEvent, RescueSnapshot, RescueThresholdSource,
 } from '../shared/model.ts'
 import { RESCUE_CORE_OUTFLOW_VETO, RESCUE_CORE_INDEXES, RESCUE_PERIPHERAL_FLOW_DISCOUNT, rescueUniverseMeta } from '../shared/model.ts'
 import { RESCUE_CALIBRATION } from './rescue-thresholds.ts'
 import { quoteBreaker } from './breaker.ts'
-import { fetchTencentMinutes, fetchTencentQuotes } from './tencent.ts'
+import { fetchTencentDaily, fetchTencentMinutes, fetchTencentQuoteRows } from './tencent.ts'
+import { buildBottomLane, calibrateAcross } from './bottom.ts'
 import { dataHome } from './store.ts'
 
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
@@ -547,13 +548,17 @@ export interface RescueQuoteRow {
   volRatio: number | null
   mainNet: number | null
   superNet: number | null
+  /** 当日开盘/最高/最低（形态计算用） */
+  open: number | null
+  high: number | null
+  low: number | null
 }
 
 const num = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null)
 
 /** 批量快照（含 ETF 资金流字段；ETF 的 f62/f66 东财同样提供） */
 export async function fetchRescueQuotes(secids: string[]): Promise<Record<string, RescueQuoteRow>> {
-  const data = await fetchAny(QUOTE_HOSTS, `/api/qt/ulist.np/get?fltt=2&invt=2&secids=${secids.join(',')}&fields=f12,f13,f14,f2,f3,f6,f8,f10,f62,f66,f184`)
+  const data = await fetchAny(QUOTE_HOSTS, `/api/qt/ulist.np/get?fltt=2&invt=2&secids=${secids.join(',')}&fields=f12,f13,f14,f2,f3,f4,f6,f8,f10,f15,f16,f17,f62,f66,f184`)
   const diff = Array.isArray(data.diff) ? (data.diff as Array<Record<string, unknown>>) : []
   const out: Record<string, RescueQuoteRow> = {}
   for (const r of diff) {
@@ -570,6 +575,9 @@ export async function fetchRescueQuotes(secids: string[]): Promise<Record<string
       volRatio: num(r.f10),
       mainNet: num(r.f62),
       superNet: num(r.f66),
+      open: num(r.f17),
+      high: num(r.f15),
+      low: num(r.f16),
     }
   }
   return out
@@ -762,12 +770,12 @@ export async function fetchQuoteSource(secids: string[]): Promise<{ rows: Record
   } catch {
     /* 回落腾讯 */
   }
-  const tx = await fetchTencentQuotes(secids)
+  const tx = await fetchTencentQuoteRows(secids)
   const rows: Record<string, RescueQuoteRow> = {}
   for (const [secid, q] of Object.entries(tx)) {
     rows[secid] = {
       secid, price: q.price, pct: q.pct, amount: q.amount, turnover: null, volRatio: null,
-      mainNet: null, superNet: null,
+      mainNet: null, superNet: null, open: q.open, high: q.high, low: q.low,
     }
   }
   return { rows, source: 'tencent' }
@@ -796,6 +804,12 @@ export class RescueMonitor {
   private bootstrappedCount = 0
   /** 正在后台补算基准的通道（避免重复请求） */
   private baselinePending = new Set<string>()
+  /** 日线缓存（位置/底部概率用，按日刷新） */
+  private dailyBars: Record<string, DailyBarLite[]> = {}
+  private dailyDay = ''
+  /** 底部概率校准结果（跨通道合并，按日缓存） */
+  private bottomCal: ReturnType<typeof calibrateAcross> | null = null
+  private bottomComputing = false
   /** 当日分钟序列缓存（脉冲计算用；东财或腾讯） */
   private minutes: Record<string, MinuteFlowPoint[]> = {}
   private lastMinuteRefresh = 0
@@ -967,6 +981,26 @@ export class RescueMonitor {
         await this.persist(true)
       })().catch(() => undefined)
     }
+    // 日线（位置 / 底部概率）：每个交易日拉一次，后台进行
+    if (this.dailyDay !== this.todayKey && !this.bottomComputing) {
+      this.dailyDay = this.todayKey
+      this.bottomComputing = true
+      void (async () => {
+        const bars: Record<string, DailyBarLite[]> = {}
+        for (const m of metas) {
+          try {
+            const got = await fetchTencentDaily(m.secid, 320)
+            if (got.length > 80) bars[m.secid] = got
+          } catch {
+            /* 单只失败不影响 */
+          }
+        }
+        this.dailyBars = bars
+        this.bottomCal = calibrateAcross(Object.values(bars).map((b) => b as DailyBarLite[]))
+      })().finally(() => {
+        this.bottomComputing = false
+      })
+    }
     // 冷启动回填：盘中重启或收盘后复盘，都应立刻具备脉冲/持续性所需的历史
     if (phaseOf(hhmmOf(Date.now())) !== 'pre') {
       const short = metas.filter((m) => {
@@ -1021,6 +1055,7 @@ export class RescueMonitor {
           secid: meta.secid, name: meta.name, index: meta.index, price: null, pct: null, amount: null, volRatio: null,
           timeAdjMult: null, avgAmt20: base, superNet: null, mainNet: null, superShare: null, superVsAvg: null,
           pulseMult: null, activity: 0, triggered: false, flowDirection: 'unknown',
+          open: null, high: null, low: null,
         })
         continue
       }
@@ -1105,6 +1140,9 @@ export class RescueMonitor {
         secid: meta.secid, name: meta.name, index: meta.index,
         price: q.price, pct: q.pct, amount, volRatio: q.volRatio, timeAdjMult, avgAmt20: base,
         superNet, mainNet: q.mainNet, superShare, superVsAvg, pulseMult, activity, triggered: selfTrigger,
+        // 当日开/高/低：底部形态（日内回升、下影线、收回前低）计算所需
+        open: q.open, high: q.high, low: q.low,
+        flowDirection: superShare === null ? 'unknown' : superShare >= 0.15 ? 'in' : superShare <= -0.15 ? 'out' : 'flat',
       })
     }
     const anchors = this.f2Anchors()
@@ -1167,6 +1205,7 @@ export class RescueMonitor {
       },
       completeness: scored.completeness,
       flowSource: source,
+      bottom: this.buildBottom(etfs),
       thresholdSource: this.f2Source(), selfSampleDays: this.selfSampleDays(),
       config: this.getConfig(), activeIntervalSec: this.activeIntervalSec(ts),
       today: [...this.today.events].reverse(), intraday: [...this.today.intraday],
@@ -1383,6 +1422,35 @@ export class RescueMonitor {
       ? `上游行情暂不可用：显示当日最后一次成功采样（${lastEtfs.length} 个通道）`
       : '上游行情暂不可用：通道按当日峰值复盘展示（无实时价与成交额）'
     return { etfs: synth, meta, note }
+  }
+
+  /**
+   * 底部视图：位置 + 日内形态 + 概率（概率来自跨通道合并的历史频率校准）。
+   * 概率与形态分开呈现 —— 日内形态没有可回算的历史分钟数据，不进入概率。
+   */
+  private buildBottom(etfs: RescueEtfView[]): RescueSnapshot['bottom'] {
+    const lanes = etfs.filter((e) => this.dailyBars[e.secid] !== undefined).slice(0, 8)
+    if (lanes.length === 0) return undefined
+    const cal = this.bottomCal ?? calibrateAcross(Object.values(this.dailyBars).map((b) => b as DailyBarLite[]))
+    const views: RescueBottomLane[] = lanes.map((e) => {
+      const bars = this.dailyBars[e.secid] ?? []
+      const minutes = this.minutes[e.secid] ?? []
+      return buildBottomLane({
+        secid: e.secid, name: e.name, bars, price: e.price,
+        open: e.open ?? null, high: e.high ?? null, low: e.low ?? null,
+        minutes, volumeRatio: e.timeAdjMult, calibration: cal,
+      })
+    })
+    // 用行情快照里的开高低补全日内形态（日线只有收盘）
+    return {
+      lanes: views,
+      model:
+        `${cal.rule}；口径为前向 ${cal.horizon} 日内最高价达到当日收盘 × (1+目标) 的历史频率，` +
+        `同类样本 ${cal.n}（基线 ${cal.baseN}，覆盖 ${cal.lanes} 个通道）；` +
+        `前向收盘收益中位数 ${cal.medianForward === null ? '—' : (cal.medianForward * 100).toFixed(2) + '%'}，` +
+        `期间最大回撤中位数 ${cal.medianDrawdown === null ? '—' : (cal.medianDrawdown * 100).toFixed(2) + '%'}`,
+      asOf: this.todayKey,
+    }
   }
 
   /** 近 60 天每日摘要（历史回看） */

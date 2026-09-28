@@ -450,6 +450,68 @@ export function isFiniteNumber(v: unknown): v is number {
   return typeof v === 'number' && Number.isFinite(v)
 }
 
+/** 日线（轻量，用于位置/概率计算） */
+export interface DailyBarLite {
+  date: string
+  open: number
+  close: number
+  high: number
+  low: number
+  vol: number
+}
+
+/** 位置特征 */
+export interface BottomPosition {
+  drawdown60: number | null
+  drawdown250: number | null
+  aboveLow60: number | null
+  percentile60: number | null
+  downStreak: number
+  atNewLow60: boolean
+}
+
+/** 日内形态特征 */
+export interface BottomPattern {
+  bouncePct: number | null
+  lowerShadow: number | null
+  /** 当日最低点出现的时间戳（供界面显示 HH:mm） */
+  lowAtTs: number | null
+  reclaimedPrevLow: boolean
+  newLowReclaimed: boolean
+}
+
+/** 底部概率（历史频率口径） */
+export interface BottomCalibrationView {
+  rule: string
+  n: number
+  baseN: number
+  lanes: number
+  targets: Array<{ targetPct: number; prob: number | null; baseRate: number | null }>
+  medianForward: number | null
+  medianDrawdown: number | null
+  horizon: number
+}
+
+/** 单通道底部视图 */
+export interface RescueBottomLane {
+  secid: string
+  name: string
+  price: number | null
+  position: BottomPosition
+  pattern: BottomPattern
+  volumeRatio: number | null
+  positionScore: number
+  patternScore: number
+  calibration: BottomCalibrationView
+}
+
+export interface RescueBottomView {
+  lanes: RescueBottomLane[]
+  /** 概率口径说明（含类比规则与样本量） */
+  model: string
+  asOf: string
+}
+
 /** ── 护盘信号 ─────────────────────────────────────────────────────────────
  * 识别「符合国家队历史行为模式」的宽基 ETF 放量 + 超大单净流入。
  * 注意：汇金/国新/诚通不披露日内成交，本模块输出的是**概率性信号**，
@@ -546,6 +608,10 @@ export interface RescueEtfView {
   triggered: boolean
   /** 复盘数据（上游不可用时的当日峰值）而非实时快照 */
   provisional?: boolean
+  /** 当日开/高/低（底部形态计算与展示用） */
+  open?: number | null
+  high?: number | null
+  low?: number | null
   /** 资金方向：超大单占比 ≥+15% 为吸纳，≤−15% 为撤离（避免把「大额净流出」误读成哑火） */
   flowDirection?: 'in' | 'out' | 'flat' | 'unknown'
 }
@@ -663,6 +729,8 @@ export interface RescueSnapshot {
   completeness?: RescueCompleteness
   /** 快照数据来源：em = 含分单资金流；tencent = 仅量能与价格（备用源） */
   flowSource?: 'em' | 'tencent'
+  /** 底部位置 / 形态 / 概率（核心通道 + 最强通道） */
+  bottom?: RescueBottomView
   thresholdSource: RescueThresholdSource
   /** 自建样本天数（<20 时使用经验锚点） */
   selfSampleDays: number
