@@ -24,6 +24,7 @@ import type {
 import { SECID_RE } from '../shared/model.ts'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { quoteBreaker } from './breaker.ts'
+import { fetchTencentMinutes, fetchTencentQuoteRows, tencentCode, type TencentQuoteFull } from './tencent.ts'
 import { join } from 'node:path'
 import { dataHome } from './store.ts'
 
@@ -319,6 +320,72 @@ async function rawQuotes(list: string[]): Promise<Map<string, QuoteRow>> {
   return rows
 }
 
+/**
+ * 腾讯备用源的批量行情（自选/持仓的行情链路）。
+ *
+ * 东财行情主机遇限流时，此前只能吃 last-known-good（价格冻在旧值，用户看到的就是
+ * "无法加载最新数据"）。这里把腾讯作为实时兜底：EM 拿不到的标的用腾讯补齐，
+ * 结果带 source='tencent' 以便界面如实标注来源。仅覆盖沪/深/港股；
+ * 美股、国际指数、商品无法映射，仍只有东财源。
+ */
+export function quoteFromTencent(secid: string, q: TencentQuoteFull): QuoteRow | null {
+  if (q.price === null || !(q.price > 0)) return null
+  const prev = q.prev
+  const chg = q.price !== null && prev !== null ? q.price - prev : null
+  const pct = q.pct ?? (chg !== null && prev !== null && prev > 0 ? (chg / prev) * 100 : null)
+  return {
+    secid,
+    code: secid.split('.')[1] ?? secid,
+    name: q.name === '' ? secid : q.name,
+    price: q.price,
+    chg,
+    pct,
+    prev,
+    open: q.open,
+    high: q.high,
+    low: q.low,
+    vol: q.vol,
+    amount: q.amount,
+    up: null,
+    down: null,
+    even: null,
+    time: q.ts,
+    source: 'tencent',
+  }
+}
+
+async function tencentQuoteRows(list: readonly string[]): Promise<Map<string, QuoteRow>> {
+  const out = new Map<string, QuoteRow>()
+  const usable = list.filter((secid) => tencentCode(secid) !== null)
+  if (usable.length === 0) return out
+  const rows = await fetchTencentQuoteRows([...usable])
+  for (const [secid, q] of Object.entries(rows)) {
+    const row = quoteFromTencent(secid, q)
+    if (row !== null) out.set(secid, row)
+  }
+  return out
+}
+
+/** 用腾讯补齐缺失或价格为空的标的（EM 部分丢码时也走这里） */
+async function fillFromTencent(list: readonly string[], rows: Map<string, QuoteRow>): Promise<void> {
+  const need = list.filter((secid) => {
+    const row = rows.get(secid)
+    return row === undefined || row.price === null
+  })
+  if (need.length === 0) return
+  try {
+    const tx = await tencentQuoteRows(need)
+    for (const [secid, row] of tx) {
+      const cur = rows.get(secid)
+      if (cur === undefined || cur.price === null) rows.set(secid, row)
+      // 价格已有但缺成交额/涨跌幅时，用腾讯补字段（保留 EM 的其它字段）
+      else if (cur.amount === null && row.amount !== null) rows.set(secid, { ...cur, amount: row.amount })
+    }
+  } catch {
+    /* 腾讯也不可用时交给 LKG */
+  }
+}
+
 function rowsToRecord(rows: Map<string, QuoteRow>): Record<string, QuoteRow> {
   const out: Record<string, QuoteRow> = {}
   for (const row of rows.values()) out[row.secid] = row
@@ -336,10 +403,20 @@ export async function fetchQuotes(secids: string[]): Promise<Record<string, Quot
   if (quick !== undefined) {
     const map = new Map<string, QuoteRow>()
     for (const [k, v] of Object.entries(quick)) map.set(k, v)
+    const gap = list.some((secid) => {
+      const row = map.get(secid)
+      return row === undefined || row.price === null
+    })
+    if (gap) await fillFromTencent(list, map)
     fillLastGood(list, map)
     return rowsToRecord(map)
   }
-  const rows = await ttlCache<Map<string, QuoteRow>>(key, 2500, () => rawQuotes(list))
+  const rows = await ttlCache<Map<string, QuoteRow>>(key, 2500, async () => {
+    const got = await rawQuotes(list)
+    // 东财整体不可用或部分丢码时，用腾讯把缺口补上（避免价格停在 last-known-good）
+    await fillFromTencent(list, got)
+    return got
+  })
   fillLastGood(list, rows)
   return rowsToRecord(rows)
 }
@@ -498,10 +575,38 @@ async function trendWithFallback(
       cache.set(key, { exp: Date.now() + 20_000, value: lkg })
       return lkg
     }
-    // 没有兜底数据时返回 null（而不是抛错）：路由回 200 + trend:null，
-    // 客户端按"暂无分时"降级，避免整页错误提示与日志刷屏
+    // 没有 last-known-good 时用腾讯分钟线兜底（自选/持仓的缩略图与抽屉图）
+    const viaTencent = await tencentTrend(secid).catch(() => null)
+    if (viaTencent !== null) {
+      cache.set(key, { exp: Date.now() + 30_000, value: viaTencent })
+      rememberTrend(secid, ndays, viaTencent)
+      return viaTencent
+    }
     void error
+    // 仍然拿不到：返回 null（路由回 200 + trend:null），客户端按"暂无分时"降级
     return null
+  }
+}
+
+/** 腾讯分钟线 → 分时序列（价格 + 当日均价 VWAP），供东财不可用时兜底 */
+async function tencentTrend(secid: string): Promise<TrendData | null> {
+  const points = await fetchTencentMinutes(secid)
+  if (points.length < 5) return null
+  const trendPoints: TrendPoint[] = points
+    .filter((p) => typeof p.price === 'number' && p.price > 0)
+    .map((p) => {
+      const cumVol = p.cumVol ?? null
+      const avg = cumVol !== null && cumVol > 0 ? p.amount / (cumVol * 100) : null
+      const label = new Date(p.ts).toISOString().slice(0, 10) + ' ' + new Date(p.ts).toTimeString().slice(0, 5)
+      return { t: p.ts, label, price: p.price as number, avg, vol: cumVol, amount: null }
+    })
+  if (trendPoints.length < 5) return null
+  return {
+    secid,
+    prePrice: null,
+    points: trendPoints,
+    last: trendPoints[trendPoints.length - 1]?.price ?? null,
+    staleAt: undefined,
   }
 }
 

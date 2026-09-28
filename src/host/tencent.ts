@@ -13,12 +13,17 @@
  */
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
 
-/** 东财 secid(1.510300) → 腾讯代码(sh510300) */
+/**
+ * 东财 secid → 腾讯代码。
+ * 覆盖：沪市(1.)、深市(0.)、港股(116.)。美股(105/106/107)、国际指数(100.)、
+ * 商品/期货(101/113/114) 无法稳定映射，返回 null（这些标的仍只有东财源）。
+ */
 export function tencentCode(secid: string): string | null {
   const [market, code] = secid.split('.')
   if (market === undefined || code === undefined || code === '') return null
   if (market === '1') return `sh${code}`
   if (market === '0') return `sz${code}`
+  if (market === '116') return `hk${code.padStart(5, '0')}`
   return null
 }
 
@@ -78,18 +83,84 @@ export async function fetchTencentQuotes(secids: string[]): Promise<Record<strin
   return out
 }
 
-/** "20260924161456" → epoch ms */
-function parseTencentStamp(text: string | undefined): number | null {
-  if (text === undefined || text.length < 14) return null
-  const iso = `${text.slice(0, 4)}-${text.slice(4, 6)}-${text.slice(6, 8)}T${text.slice(8, 10)}:${text.slice(10, 12)}:${text.slice(12, 14)}`
-  const t = Date.parse(iso)
-  return Number.isFinite(t) ? t : null
+/** 时间戳：A股/ETF/指数为 "20260924161456"，港股为 "2026/09/24 16:14:56" */
+export function parseTencentStamp(text: string | undefined): number | null {
+  if (text === undefined) return null
+  const t = text.trim()
+  if (t.includes('/')) {
+    const parsed = Date.parse(t.replace(/\//g, '-'))
+    return Number.isFinite(parsed) ? parsed : null
+  }
+  if (t.length < 14) return null
+  const iso = `${t.slice(0, 4)}-${t.slice(4, 6)}-${t.slice(6, 8)}T${t.slice(8, 10)}:${t.slice(10, 12)}:${t.slice(12, 14)}`
+  const parsed = Date.parse(iso)
+  return Number.isFinite(parsed) ? parsed : null
+}
+
+export interface TencentQuoteFull extends TencentQuote {
+  name: string
+  open: number | null
+  high: number | null
+  low: number | null
+  /** 成交量（手；港股为股） */
+  vol: number | null
+}
+
+/** 完整批量行情（含名称/开高低/量），供自选与持仓的行情链路兜底使用 */
+export async function fetchTencentQuoteRows(secids: string[]): Promise<Record<string, TencentQuoteFull>> {
+  const map = new Map<string, string>()
+  for (const secid of secids) {
+    const code = tencentCode(secid)
+    if (code !== null) map.set(code, secid)
+  }
+  if (map.size === 0) return {}
+  const res = await fetch(`https://qt.gtimg.cn/q=${[...map.keys()].join(',')}`, {
+    headers: { 'user-agent': UA, referer: 'https://gu.qq.com/' },
+    signal: AbortSignal.timeout(8000),
+  })
+  if (!res.ok) throw new Error(`HTTP ${res.status} from qt.gtimg.cn`)
+  const buf = await res.arrayBuffer()
+  let text: string
+  try {
+    text = new TextDecoder('gbk').decode(buf)
+  } catch {
+    text = new TextDecoder('latin1').decode(buf)
+  }
+  const out: Record<string, TencentQuoteFull> = {}
+  for (const line of text.split(';')) {
+    const eq = line.indexOf('=')
+    if (eq < 0) continue
+    const code = line.slice(0, eq).trim().replace(/^v_/, '')
+    const secid = map.get(code)
+    if (secid === undefined) continue
+    const raw = line.slice(eq + 1).trim().replace(/^"/, '').replace(/"$/, '')
+    const f = raw.split('~')
+    const tri = (f[35] ?? '').split('/')
+    out[secid] = {
+      secid,
+      name: (f[1] ?? '').trim(),
+      price: num(f[3]),
+      prev: num(f[4]),
+      open: num(f[5]),
+      pct: num(f[32]),
+      high: num(f[33]),
+      low: num(f[34]),
+      vol: num(f[6]),
+      amount: num(tri[2]) ?? (num(f[37]) !== null ? (num(f[37]) as number) * 1e4 : null),
+      ts: parseTencentStamp(f[30]),
+    }
+  }
+  return out
 }
 
 export interface TencentMinutePoint {
   ts: number
   /** 当日累计成交额（元） */
   amount: number
+  /** 该分钟价格（分时图兜底用） */
+  price?: number
+  /** 当日累计成交量（手） */
+  cumVol?: number
 }
 
 /** 当日分钟线 → 累计成交额序列（HHmm 从 09:30 至 15:00） */
@@ -116,7 +187,7 @@ export async function fetchTencentMinutes(secid: string): Promise<TencentMinuteP
     const amount = num(parts[3]) // 累计成交额（不是每分钟增量）
     if (amount === null || !(amount > 0)) continue
     const t = Date.parse(`${day}T${hhmm.slice(0, 2)}:${hhmm.slice(2, 4)}:00`)
-    if (Number.isFinite(t)) points.push({ ts: t, amount })
+    if (Number.isFinite(t)) points.push({ ts: t, amount, price: num(parts[1]), cumVol: num(parts[2]) })
   }
   return points
 }

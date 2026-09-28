@@ -8,7 +8,8 @@ import { join } from 'node:path'
 import { DataStore, normalizeRescuePrefs, replayPosition, dataHome } from './store.ts'
 import { assemblePortfolio, derivePosition, ledgerViews, shanghaiDayStart, verbLabel } from './portfolio.ts'
 import * as em from './em.ts'
-import { fillLastGood, mergeBars, resampleYearly } from './em.ts'
+import { fillLastGood, mergeBars, quoteFromTencent, resampleYearly } from './em.ts'
+import { parseTencentStamp, tencentCode } from './tencent.ts'
 import { losslessJson } from './tools.ts'
 import { DEFAULT_PREFS } from '../shared/model.ts'
 import { canonicalEconomy, macroEventsFromEm, macroImportance, parseEmDate } from './calendar.ts'
@@ -292,6 +293,23 @@ async function main(): Promise<void> {
       ok((snap.note ?? '').includes('上次成功采样'), 'LKG 快照注明为上次成功采样')
       ok(mon.hasFreshData === false, 'hasFreshData 反映本会话尚未采到数据')
       rmSync(lkgDir, { recursive: true, force: true })
+    }
+
+    // 行情备用源（腾讯）：代码映射、时间戳解析、行转换（东财不可用时自选/持仓仍能刷新）
+    {
+      ok(tencentCode('1.510300') === 'sh510300' && tencentCode('0.159915') === 'sz159915', '沪/深 secid → 腾讯代码')
+      ok(tencentCode('116.00148') === 'hk00148' && tencentCode('116.00100') === 'hk00100', '港股 secid → 腾讯代码（补零到 5 位）')
+      ok(tencentCode('100.SX5E') === null && tencentCode('105.AAPL') === null, '国际指数/美股无腾讯映射（诚实返回 null）')
+      const a = parseTencentStamp('20260924093817')
+      const b = parseTencentStamp('2026/09/24 09:38:17')
+      ok(a !== null && b !== null && Math.abs(a - b) < 1000, '两种时间戳格式解析一致（A股 14 位 / 港股带斜杠）')
+      ok(parseTencentStamp('') === null, '空时间戳返回 null')
+      const row = quoteFromTencent('1.510300', {
+        secid: '1.510300', name: '沪深300ETF华泰柏瑞', price: 4.47, prev: 4.515, open: 4.51,
+        pct: -1.0, high: 4.52, low: 4.46, vol: 1000, amount: 5.25e8, ts: 1_700_000_000_000,
+      })
+      ok(row !== null && row.source === 'tencent' && row.price === 4.47 && row.chg !== null && Math.abs(row.chg + 0.045) < 1e-9, '腾讯行转换：价/涨跌/来源标记正确')
+      ok(quoteFromTencent('1.510300', { secid: '1.510300', name: '', price: null, prev: 1, open: null, pct: null, high: null, low: null, vol: null, amount: null, ts: null }) === null, '无有效价格的行被丢弃（不污染显示）')
     }
 
     // 自定义通道：解析、分组与评分离（板块 ETF 不计入护盘评分与共振）

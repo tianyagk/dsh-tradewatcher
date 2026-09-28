@@ -49,7 +49,7 @@ export function apply(ctx: {
 }): void {
   ensureCss()
   try {
-    console.log('[dsh-tradewatcher] client v0.14.0 loaded (Tencent fallback source + card layout + custom channels)')
+    console.log('[dsh-tradewatcher] client v0.14.1 loaded (Tencent fallback for watch/portfolio quotes + sparklines)')
   } catch {
     /* console unavailable */
   }

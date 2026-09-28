@@ -83,6 +83,8 @@ export interface QuoteRow {
   even: number | null
   /** Feed update time (ms epoch) when reported. */
   time: number | null
+  /** 数据来源：em（东财，默认）或 tencent（备用源，东财不可用时） */
+  source?: 'em' | 'tencent'
 }
 
 /** One intraday point (EM trends2 row). */

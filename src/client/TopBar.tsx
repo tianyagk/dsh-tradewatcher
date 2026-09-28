@@ -296,10 +296,21 @@ export function TopBar(props: {
     'div',
     { ref: hostRef, className: 'tw-topbar' },
     React.createElement('div', { className: 'tw-topmeta' },
-      React.createElement('span', { className: 'tw-title', title: 'dsh-tradewatcher v0.14.0' }, '实时行情'),
+      React.createElement('span', { className: 'tw-title', title: 'dsh-tradewatcher v0.14.1' }, '实时行情'),
       React.createElement('span', { className: 'tw-uptime' },
         ts !== null ? `更新 ${fmtClock(ts)} · 每 ${prefs.refreshSec}s` : '加载中…',
       ),
+      // 东财行情不可用时部分标的走腾讯备用源：如实标注，避免误以为是东财数据
+      (() => {
+        const rows = Object.values(quotes)
+        const tx = rows.filter((r) => r.source === 'tencent').length
+        if (tx === 0) return null
+        return React.createElement('span', {
+          className: 'tw-badge',
+          title: `其中 ${tx} 个标的来自腾讯备用源（东财行情接口暂不可用）；美股/国际指数/商品无腾讯映射，仍显示最近一次成功数据`,
+          style: { fontSize: 9.5 },
+        }, `备用源 ${tx}`)
+      })(),
       React.createElement('button', {
         className: 'tw-iconbtn',
         onClick: themeBtn,
