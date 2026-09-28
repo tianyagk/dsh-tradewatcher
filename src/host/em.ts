@@ -42,6 +42,12 @@ const SEARCH_HOST = 'searchapi.eastmoney.com'
 interface CacheSlot {
   exp: number
   value: unknown
+  /**
+   * peek 的额外宽限（ms）。新鲜数据允许小幅过期复用（省上游请求）；
+   * 而 last-known-good 兜底项必须**显式 grace: 0** —— 否则 "20s 短缓存"
+   * 会被 peekCache 的 45s 宽限吞掉，真实陈旧窗口变成 ~65s（README 曾据此写错）。
+   */
+  grace?: number
 }
 
 const inflight = new Map<string, Promise<unknown>>()
@@ -69,7 +75,8 @@ const cache = new Map<string, CacheSlot>()
 function peekCache<T>(key: string, maxAgeMs: number): T | undefined {
   const slot = cache.get(key)
   if (slot === undefined) return undefined
-  if (Date.now() > slot.exp + maxAgeMs) return undefined
+  const grace = slot.grace ?? maxAgeMs
+  if (Date.now() > slot.exp + grace) return undefined
   return slot.value as T
 }
 
@@ -110,10 +117,18 @@ async function fetchAny(hosts: readonly string[], pathAndQuery: string, timeoutM
   if (live.length === 0) {
     throw new Error(`上游暂时不可用（熔断中，约 ${minutesToRecover(hosts)} 分钟后自动重试）`)
   }
+  // 半开期只放行一个探针，其余调用快速失败走兜底
+  const claimed = live.filter((h) => breakerFor(h).claimProbe())
+  if (claimed.length === 0) {
+    throw new Error(`上游熔断半开探测中（约 ${minutesToRecover(hosts)} 分钟后重试）`)
+  }
   const deadline = Date.now() + FETCH_DEADLINE_MS
   let lastError: unknown = null
+  /** 本次调用中从未成功过的主机 —— 只对它们记失败，避免误熔健康主机 */
+  const neverSucceeded = new Set<string>(claimed)
+  try {
   for (let round = 0; round < FETCH_ROUNDS; round++) {
-    for (const host of live) {
+    for (const host of claimed) {
       for (let attempt = 0; attempt < FETCH_ATTEMPTS_PER_HOST; attempt++) {
         const left = deadline - Date.now()
         if (left <= 250) {
@@ -122,6 +137,7 @@ async function fetchAny(hosts: readonly string[], pathAndQuery: string, timeoutM
         try {
           const ok = await fetchFromHost(host, pathAndQuery, Math.min(timeoutMs, left))
           breakerFor(host).recordSuccess()
+          neverSucceeded.delete(host)
           return ok
         } catch (error) {
           lastError = error
@@ -134,9 +150,13 @@ async function fetchAny(hosts: readonly string[], pathAndQuery: string, timeoutM
       }
     }
   }
-  const failed = hosts[hosts.length - 1] ?? 'unknown'
-  breakerFor(failed).recordFailure(lastError)
+  // 只对「本次尝试中从未成功过」的主机记失败
+  for (const host of neverSucceeded) breakerFor(host).recordFailure(lastError)
+  console.warn('[tradewatcher] upstream failed', hosts.join('/'), String(lastError).slice(0, 120))
   throw lastError instanceof Error ? lastError : new Error(String(lastError))
+  } finally {
+    for (const host of claimed) breakerFor(host).releaseProbe()
+  }
 }
 
 /** Parse an EM scalar: '-' / '' / null → null, else Number. */
@@ -304,21 +324,28 @@ function rowsFrom(json: unknown): Map<string, QuoteRow> {
   return rows
 }
 
+/**
+ * 批量行情（自选/持仓的主路径，每 refreshSec 秒一次）。
+ *
+ * 此前这里是「每主机单次尝试 + 静默 catch」——全项目最高频的路径反而最不受保护，
+ * 且行情主机被限流时仍会持续打请求（熔断器形同虚设）。现改为：
+ *   - 复用 fetchAny（多轮 + 抖动退避 + 总截止 + 按主机熔断 + 半开探针）
+ *   - 主机只丢一部分标的时，对缺口再试一轮（最多两轮，避免放大请求量）
+ *   - 失败必打日志（含主机与错误），不再静默
+ */
 async function rawQuotes(list: string[]): Promise<Map<string, QuoteRow>> {
   const rows = new Map<string, QuoteRow>()
-  const q = `secids=${encodeURIComponent(list.join(','))}&fltt=2&invt=2&fields=${QUOTE_FIELDS}`
-  // Host-per-request retry: when a host silently drops part of the batch
-  // (observed for tens of seconds at a time), try the next host for the
-  // remainder before LKG fallback kicks in.
-  for (const host of QUOTE_HOSTS) {
-    try {
-      const json = await fetchFromHost(host, `/api/qt/ulist.np/get?${q}`)
-      for (const [secid, row] of rowsFrom(json)) rows.set(secid, row)
-    } catch {
-      /* next host */
-    }
+  for (let pass = 0; pass < 2; pass++) {
     const missing = list.filter((secid) => !rows.has(secid))
     if (missing.length === 0) break
+    const q = `secids=${encodeURIComponent(missing.join(','))}&fltt=2&invt=2&fields=${QUOTE_FIELDS}`
+    try {
+      const json = await fetchAny(QUOTE_HOSTS, `/api/qt/ulist.np/get?${q}`)
+      for (const [secid, row] of rowsFrom(json)) rows.set(secid, row)
+    } catch (error) {
+      console.warn('[tradewatcher] quotes batch failed', `pass ${pass + 1}`, `${missing.length} symbols`, String(error).slice(0, 120))
+      break
+    }
   }
   return rows
 }
@@ -444,7 +471,9 @@ function persistBoardLkg(): void {
 /** Batch quotes with a 2.5 s TTL + last-known-good on every return path
  *  (fresh fetch, TTL hit and peek hit alike). */
 export async function fetchQuotes(secids: string[]): Promise<Record<string, QuoteRow>> {
-  const list = [...new Set(secids)]
+  // 归一化：去重 + 大写 + 排序 —— 同一批标的无论以何顺序/大小写传入都命中同一缓存槽，
+  // 否则 /portfolio（插入序）与 /quotes（排序后）会各占一个槽、各自打一次上游
+  const list = [...new Set(secids.map((s) => s.trim().toUpperCase()))].sort()
   if (list.length === 0) return {}
   await loadLastGood()
   const key = `quotes:${list.join(',')}`
@@ -621,7 +650,8 @@ async function trendWithFallback(
     if (lkg !== null) {
       // 短缓存兜底结果：断网期间避免每行请求都重新跑满重试（行数多时会形成风暴），
       // 20s 后再试上游，恢复后立刻回到实时数据
-      cache.set(key, { exp: Date.now() + 20_000, value: lkg })
+      // 兜底项不享受 peek 宽限：20s 后必须重新回源试探（此前被 45s 宽限吞掉）
+      cache.set(key, { exp: Date.now() + 20_000, value: lkg, grace: 0 })
       return lkg
     }
     // 没有 last-known-good 时用腾讯分钟线兜底（自选/持仓的缩略图与抽屉图）

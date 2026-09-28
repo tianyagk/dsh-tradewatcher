@@ -5,9 +5,13 @@
  * 会升级为**持续不可达**（实测一天内失败率从 25% 一路爬到 100%，同时东财数据中心与
  * 腾讯/新浪仍正常 —— 属于针对本机 IP 的限流/封锁）。此时"重试 12 次"只会加重封锁，
  * 因此这里做进程级熔断：
- *   - 连续 N 次调用失败 → 打开熔断，冷却期内**不再发起任何请求**（由调用方走兜底数据）
+ *   - 连续 N 次**调用**失败 → 打开熔断，冷却期内**不再发起任何请求**（由调用方走兜底数据）
  *   - 冷却时间指数增长（2 分钟 → 4 → 8 → 上限 15 分钟）
- *   - 冷却结束后放一次"半开"试探：成功即完全恢复，失败则继续加倍冷却
+ *   - 冷却结束后放"半开"试探：**同一时刻只放行一个探针**（claimProbe），
+ *     成功即完全恢复，失败则继续加倍冷却
+ *
+ * 失败记账按**实际失败的主机**：调用方须把本次调用中从未成功过的每台主机各自记一次，
+ * 不能笼统记到主机列表最后一项（那会误熔健康主机）。
  */
 export interface BreakerState {
   /** 是否处于熔断（冷却中） */
@@ -36,6 +40,8 @@ export class CircuitBreaker {
   private trips = 0
   private until = 0
   private lastError: string | null = null
+  /** 半开期是否已有探针在飞（避免冷却结束瞬间多请求同时试探） */
+  private probing = false
   private readonly threshold: number
   private readonly baseMs: number
   private readonly maxMs: number
@@ -50,9 +56,30 @@ export class CircuitBreaker {
     return { open: Date.now() < this.until, until: this.until, fails: this.fails, trips: this.trips, lastError: this.lastError }
   }
 
-  /** 是否允许发起请求（熔断冷却中返回 false，调用方应直接走兜底） */
+  /** 是否允许发起请求（纯判定，无副作用：熔断冷却中返回 false，调用方应直接走兜底） */
   allow(): boolean {
     return Date.now() >= this.until
+  }
+
+  /** 是否处于半开期（曾熔断、冷却已到、等待探针验证） */
+  get inHalfOpen(): boolean {
+    return this.trips > 0 && Date.now() >= this.until
+  }
+
+  /**
+   * 领取半开探针名额。非半开态恒为 true；半开期只放行一个调用，
+   * 其余调用快速失败走兜底 —— 否则冷却一结束，所有并发请求会同时打向刚被封锁的主机。
+   * 领取方必须在结束时调用 releaseProbe()（成功/失败记账也会释放）。
+   */
+  claimProbe(): boolean {
+    if (!this.inHalfOpen) return true
+    if (this.probing) return false
+    this.probing = true
+    return true
+  }
+
+  releaseProbe(): void {
+    this.probing = false
   }
 
   recordSuccess(): void {
@@ -60,9 +87,11 @@ export class CircuitBreaker {
     this.trips = 0
     this.until = 0
     this.lastError = null
+    this.probing = false
   }
 
   recordFailure(error: unknown): void {
+    this.probing = false
     this.lastError = error instanceof Error ? error.message : String(error)
     this.fails += 1
     if (this.fails < this.threshold) return

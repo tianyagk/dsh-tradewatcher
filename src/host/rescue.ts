@@ -16,7 +16,7 @@
  * 数据文件：<dataHome>/rescue-log.json（60 天滚动）
  * 采样节奏：常态 30s，尾盘（默认 14:30 后）15s，仅交易时段活跃，每次采样 1 个批量请求。
  */
-import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import type {
   DailyBarLite, RescueBottomLane, RescueConfig, RescueDaySummary, RescueEtfMeta, RescueEtfView, RescueFactor,
@@ -795,6 +795,8 @@ export class RescueMonitor {
   private timer: ReturnType<typeof setTimeout> | null = null
   private running = false
   private lastPersist = 0
+  /** 落盘串行化（tmp+rename 之外的并发保护） */
+  private writeChain: Promise<void> = Promise.resolve()
   private lastLevel: RescueLevel = 0
   private lastIntradayMin = -1
   private calibrating = false
@@ -870,23 +872,37 @@ export class RescueMonitor {
     this.lastLevel = this.today.events.length > 0 ? this.today.events[this.today.events.length - 1].level : 0
   }
 
-  private async persist(force = false): Promise<void> {
-    const now = Date.now()
-    if (!force && now - this.lastPersist < 60_000) return
-    this.lastPersist = now
-    const days = Object.keys(this.file.days).sort()
-    while (days.length > KEEP_DAYS) {
-      const drop = days.shift()
-      if (drop !== undefined) delete this.file.days[drop]
-    }
-    this.file.updatedAt = now
-    const payload = JSON.stringify(this.file)
-    try {
-      await mkdir(this.dir, { recursive: true }).catch(() => undefined)
-      await writeFile(this.path(), payload, 'utf8')
-    } catch {
-      /* 磁盘失败不影响内存态 */
-    }
+  /**
+   * 落盘：tmp + rename 原子替换，并用 writeChain 串行化。
+   *
+   * 此前是裸 writeFile，且本文件已有 4 处 persist 调用点（基准补算 / tick / 周期 / calibrate），
+   * 并发写同一文件一旦交错或被中断，init() 解析失败即静默空库，随后一次 persist 覆盖
+   * → 60 天历史 + 自建样本 + 进度曲线 + 基准全部永久丢失。
+   */
+  private persist(force = false): Promise<void> {
+    const run = this.writeChain.then(async () => {
+      const now = Date.now()
+      if (!force && now - this.lastPersist < 60_000) return
+      this.lastPersist = now
+      const days = Object.keys(this.file.days).sort()
+      while (days.length > KEEP_DAYS) {
+        const drop = days.shift()
+        if (drop !== undefined) delete this.file.days[drop]
+      }
+      this.file.updatedAt = now
+      const payload = JSON.stringify(this.file)
+      const target = this.path()
+      const tmp = `${target}.tmp`
+      try {
+        await mkdir(this.dir, { recursive: true }).catch(() => undefined)
+        await writeFile(tmp, payload, 'utf8')
+        await rename(tmp, target)
+      } catch (error) {
+        console.warn('[tradewatcher] rescue persist failed:', String(error))
+      }
+    })
+    this.writeChain = run.catch(() => undefined)
+    return run
   }
 
   getConfig(): RescueConfig {
@@ -1472,6 +1488,11 @@ export class RescueMonitor {
 
   eventsOf(day: string): RescueSignalEvent[] {
     return this.file.days[day]?.events ?? []
+  }
+
+  /** 立即落盘（跳过节流）：受控入口，供测试与需要"写完再回"的调用方使用 */
+  async flush(): Promise<void> {
+    await this.persist(true)
   }
 
   /** 本会话是否还没有成功快照（收盘后重启即属此情形） */

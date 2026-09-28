@@ -31,6 +31,136 @@ import {
 import { log } from './context.ts'
 
 const NAME_MAX = 40
+
+/**
+ * 持久文件的**结构归一**：只做形状校验与补全，不做业务校验。
+ *
+ * 背景：此前 readJson 只做 JSON.parse 的 try/catch，任何"合法 JSON 但缺字段"的
+ * 文件（例如 ledger.json = {"v":1}）会让 `this.ledger.entries.slice()` 抛
+ * TypeError —— /portfolio、/ledger、所有持仓写操作全部 400 且**永不自愈**，
+ * 而且下一次落盘会用空库覆盖原文件，等于静默丢弃用户唯一的交易记录。
+ * 现在：形状不合法 → 先 quarantine 备份、再从空库开始，且绝不覆盖原文件。
+ */
+function isRecord(v: unknown): v is Record<string, unknown> {
+  return typeof v === 'object' && v !== null && !Array.isArray(v)
+}
+
+function str(v: unknown, max = 64): string | null {
+  return typeof v === 'string' && v !== '' && v.length <= max ? v : null
+}
+
+function numOrNull(v: unknown): number | null {
+  return typeof v === 'number' && Number.isFinite(v) ? v : null
+}
+
+const LEDGER_VERBS = new Set([
+  'buy', 'sell', 'adjust', 'add', 'remove', 'gcreate', 'grename', 'gdelete', 'grestore', 'gmove', 'pnote',
+])
+
+/** 归一化一条流水；非法则返回 null（跳过该条，而不是整个子系统崩掉） */
+function normalizeLedgerEntry(raw: unknown): LedgerEntry | null {
+  if (!isRecord(raw)) return null
+  const id = str(raw.id)
+  const ts = numOrNull(raw.ts)
+  const verb = typeof raw.verb === 'string' && LEDGER_VERBS.has(raw.verb) ? (raw.verb as LedgerEntry['verb']) : null
+  if (id === null || ts === null || verb === null) return null
+  const entry: LedgerEntry = {
+    id,
+    ts,
+    actor: raw.actor === 'tool' ? 'tool' : 'web',
+    verb,
+  }
+  const groupId = str(raw.groupId)
+  const posId = str(raw.posId)
+  const secid = str(raw.secid, 32)
+  const name = str(raw.name, NAME_MAX)
+  if (groupId !== null) entry.groupId = groupId
+  if (posId !== null) entry.posId = posId
+  if (secid !== null) entry.secid = secid
+  if (name !== null) entry.name = name
+  const qty = numOrNull(raw.qty)
+  const price = numOrNull(raw.price)
+  const fee = numOrNull(raw.fee)
+  if (qty !== null) entry.qty = qty
+  if (price !== null) entry.price = price
+  if (fee !== null) entry.fee = fee
+  if (typeof raw.note === 'string') entry.note = raw.note.slice(0, 200)
+  if (isRecord(raw.meta)) entry.meta = raw.meta
+  return entry
+}
+
+export function normalizeLedger(raw: unknown): LedgerFile | null {
+  if (!isRecord(raw) || !Array.isArray(raw.entries)) return null
+  const entries: LedgerEntry[] = []
+  for (const e of raw.entries) {
+    const ok = normalizeLedgerEntry(e)
+    if (ok !== null) entries.push(ok)
+  }
+  return { v: numOrNull(raw.v) ?? 1, entries }
+}
+
+export function normalizePortFile(raw: unknown): PortFile | null {
+  if (!isRecord(raw) || !Array.isArray(raw.groups) || !Array.isArray(raw.items)) return null
+  const groups: PortGroup[] = []
+  for (const g of raw.groups) {
+    if (!isRecord(g)) continue
+    const id = str(g.id)
+    const name = str(g.name, NAME_MAX)
+    if (id === null || name === null) continue
+    const group: PortGroup = { id, name, order: numOrNull(g.order) ?? groups.length }
+    if (g.archived === true) group.archived = true
+    if (typeof g.note === 'string') group.note = g.note.slice(0, 200)
+    groups.push(group)
+  }
+  const items: PortItem[] = []
+  for (const it of raw.items) {
+    if (!isRecord(it)) continue
+    const id = str(it.id)
+    const groupId = str(it.groupId)
+    const secid = str(it.secid, 32)
+    if (id === null || groupId === null || secid === null || !SECID_RE.test(secid)) continue
+    const item: PortItem = { id, groupId, secid, name: str(it.name, NAME_MAX) ?? secid, createdAt: numOrNull(it.createdAt) ?? 0 }
+    if (typeof it.note === 'string') item.note = it.note.slice(0, 200)
+    items.push(item)
+  }
+  return { v: numOrNull(raw.v) ?? 1, groups, items }
+}
+
+export function normalizeWatchFile(raw: unknown): WatchFile | null {
+  if (!isRecord(raw) || !Array.isArray(raw.groups) || !Array.isArray(raw.items)) return null
+  const groups: WatchGroup[] = []
+  for (const g of raw.groups) {
+    if (!isRecord(g)) continue
+    const id = str(g.id)
+    const name = str(g.name, NAME_MAX)
+    if (id === null || name === null) continue
+    const group: WatchGroup = { id, name, order: numOrNull(g.order) ?? groups.length }
+    if (g.archived === true) group.archived = true
+    if (typeof g.note === 'string') group.note = g.note.slice(0, 200)
+    groups.push(group)
+  }
+  const items: WatchItem[] = []
+  for (const it of raw.items) {
+    if (!isRecord(it)) continue
+    const id = str(it.id)
+    const groupId = str(it.groupId)
+    const secid = str(it.secid, 32)
+    if (id === null || groupId === null || secid === null || !SECID_RE.test(secid)) continue
+    const item: WatchItem = { id, groupId, secid, name: str(it.name, NAME_MAX) ?? secid, createdAt: numOrNull(it.createdAt) ?? 0 }
+    if (typeof it.note === 'string') item.note = it.note.slice(0, 200)
+    items.push(item)
+  }
+  return { v: numOrNull(raw.v) ?? 1, groups, items }
+}
+
+/**
+ * 流水排序的**唯一口径**：ts 升序，同 ts 时按 id 稳定排序。
+ * 校验（store）与展示（portfolio）必须共用它，否则"补录过去某天的交易"之后
+ * 校验用的数量与用户看到/操作的数量会分叉（误拒超卖或错误放行）。
+ */
+export function sortLedger(entries: readonly LedgerEntry[]): LedgerEntry[] {
+  return [...entries].sort((a, b) => (a.ts - b.ts) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+}
 const NOTE_MAX = 240
 const QTY_DECIMALS = 4
 const PRICE_MAX = 1e9
@@ -138,16 +268,54 @@ export class DataStore {
 
   // ---- io ----
 
-  private async readJson<T>(file: string, fallback: T): Promise<T> {
+  /**
+   * 读入 + **结构归一** + 损坏隔离。
+   * 形状不合法（含"合法 JSON 但缺字段"）时：先把原文件改名隔离备份，
+   * 再从空库开始 —— 绝不静默覆盖用户数据，也绝不让子系统整体 400。
+   */
+  private async readNormalized<T>(
+    file: string,
+    normalize: (raw: unknown) => T | null,
+    fallback: T,
+  ): Promise<T> {
+    let text: string
     try {
-      const text = await readFile(join(this.dir, file), 'utf8')
-      const parsed = JSON.parse(text)
-      return parsed as T
+      text = await readFile(join(this.dir, file), 'utf8')
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return fallback
-      log(`corrupt store file ${file}, starting fresh:`, String(error))
+      log(`store read failed ${file}:`, String(error))
       return fallback
     }
+    let parsed: unknown
+    try {
+      parsed = JSON.parse(text)
+    } catch (error) {
+      await this.quarantine(file)
+      log(`corrupt store file ${file} (bad JSON) — quarantined:`, String(error))
+      return fallback
+    }
+    const normalized = normalize(parsed)
+    if (normalized === null) {
+      await this.quarantine(file)
+      log(`invalid store shape ${file} — quarantined, starting from empty`)
+      return fallback
+    }
+    return normalized
+  }
+
+  /** 把无法解析的文件改名隔离（保留原字节，便于人工恢复），避免下一步落盘覆盖 */
+  private async quarantine(file: string): Promise<void> {
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-')
+    try {
+      await rename(join(this.dir, file), join(this.dir, `${file}.corrupt-${stamp}`))
+    } catch (error) {
+      log(`quarantine failed ${file}:`, String(error))
+    }
+  }
+
+  /** 与校验/展示共用的排序口径（见 sortLedger 说明） */
+  private sortedLedger(): LedgerEntry[] {
+    return sortLedger(this.ledger.entries)
   }
 
   private async persist(file: string, value: unknown): Promise<void> {
@@ -162,10 +330,10 @@ export class DataStore {
     if (this.loaded !== null) return this.loaded
     this.loaded = (async () => {
       await mkdir(this.dir, { recursive: true })
-      this.watch = await this.readJson<WatchFile>('watch.json', { v: 1, groups: [], items: [] })
-      this.port = await this.readJson<PortFile>('positions.json', { v: 1, groups: [], items: [] })
-      this.ledger = await this.readJson<LedgerFile>('ledger.json', { v: 1, entries: [] })
-      const loaded = await this.readJson<Partial<PortPrefs>>('prefs.json', {})
+      this.watch = await this.readNormalized<WatchFile>('watch.json', normalizeWatchFile, { v: 1, groups: [], items: [] })
+      this.port = await this.readNormalized<PortFile>('positions.json', normalizePortFile, { v: 1, groups: [], items: [] })
+      this.ledger = await this.readNormalized<LedgerFile>('ledger.json', normalizeLedger, { v: 1, entries: [] })
+      const loaded = await this.readNormalized<Partial<PortPrefs>>('prefs.json', (raw) => (isRecord(raw) ? (raw as Partial<PortPrefs>) : null), {})
       this.prefs = { ...DEFAULT_PREFS, ...loaded, rescue: { ...DEFAULT_PREFS.rescue, ...(loaded.rescue ?? {}) } }
       // Coherence: drop descriptors that reference missing groups (never drop ledger).
       const groupIds = new Set(this.port.groups.map((g) => g.id))
@@ -387,7 +555,7 @@ export class DataStore {
     const fee = this.sanitizeFee(body.fee)
     const note = this.sanitizeOptional(body.note, NOTE_MAX)
     // Validate against current derived state before writing anything.
-    const state = replayPosition(this.ledger.entries, pos.id)
+    const state = replayPosition(this.sortedLedger(), pos.id)
     const rule = (verb: 'buy' | 'sell'): void => {
       if (verb === 'sell' && qty > state.qty + 1e-9) {
         throw new Error(`卖出数量超过当前持仓（持有 ${state.qty}）`)
@@ -503,7 +671,7 @@ export class DataStore {
       }
       case 'removePos': {
         const p = this.posOf(this.requireId(body.posId))
-        const state = replayPosition(this.ledger.entries, p.id)
+        const state = replayPosition(this.sortedLedger(), p.id)
         if (state.qty > 1e-9) {
           throw new Error(`请先卖出全部持仓（当前持有 ${state.qty}）再移除，以保留完整交易记录`)
         }
@@ -529,7 +697,7 @@ export class DataStore {
         const price = body.price === undefined ? 0 : this.sanitizePrice(body.price, true)
         const fee = this.sanitizeFee(body.fee)
         const note = this.sanitizeOptional(body.note, NOTE_MAX)
-        const state = replayPosition(this.ledger.entries, pos.id)
+        const state = replayPosition(this.sortedLedger(), pos.id)
         // Copy current avg when no cost override given.
         const avg = body.price === undefined ? state.avgCost : price
         this.ledgerEntry('adjust', {

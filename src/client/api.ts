@@ -92,7 +92,7 @@ export const api = {
     /** 上游不可用时回落上次成功结果 */
     stale?: boolean
     asOf?: number
-    source?: 'em' | 'tencent' | 'lkg'
+    source?: 'em' | 'tencent' | 'sina' | 'lkg'
   }> {
     return request(`/tradewatcher/board?scope=${scope}&sort=${sort}&pn=${pn}&pz=40`)
   },

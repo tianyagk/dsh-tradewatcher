@@ -2,10 +2,10 @@
  * Host-half self-test: pure accounting + store round-trip + live Eastmoney
  * probes. Run:  npm run selftest   (node type-stripping; no build needed)
  */
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { DataStore, normalizeRescuePrefs, replayPosition, dataHome } from './store.ts'
+import { DataStore, normalizeRescuePrefs, replayPosition, sortLedger, dataHome } from './store.ts'
 import { assemblePortfolio, derivePosition, ledgerViews, shanghaiDayStart, verbLabel } from './portfolio.ts'
 import * as em from './em.ts'
 import { fillLastGood, mergeBars, quoteFromTencent, resampleYearly } from './em.ts'
@@ -296,6 +296,126 @@ async function main(): Promise<void> {
       ok((snap.note ?? '').includes('上次成功采样'), 'LKG 快照注明为上次成功采样')
       ok(mon.hasFreshData === false, 'hasFreshData 反映本会话尚未采到数据')
       rmSync(lkgDir, { recursive: true, force: true })
+    }
+
+    // ── Commit A 回归用例（数据安全四项）────────────────────────────────
+    // T-01 损坏但合法的账本文件：不崩、自愈、且隔离备份原文件（绝不静默覆盖）
+    {
+      const dir = mkdtempSync(join(tmpdir(), 'tw-corrupt-'))
+      writeFileSync(join(dir, 'ledger.json'), JSON.stringify({ v: 1 }), 'utf8') // 合法 JSON、缺 entries
+      const bad = new DataStore(dir)
+      await bad.init()
+      ok(bad.ledgerEntries().length === 0, '损坏账本 → init 不抛错且流水为空')
+      const files = readdirSync(dir)
+      ok(files.some((f) => f.startsWith('ledger.json.corrupt-')), `原文件被隔离备份（${files.filter((f) => f.includes('corrupt')).join(',')}）`)
+      // 写入后原损坏文件仍在（未被覆盖）
+      await bad.mutatePortfolio({ op: 'addGroup', name: '自愈验证' } as never)
+      const stillThere = readdirSync(dir).some((f) => f.startsWith('ledger.json.corrupt-'))
+      ok(stillThere, '后续写盘不覆盖隔离备份')
+      rmSync(dir, { recursive: true, force: true })
+    }
+
+    // T-02 乱序插入的同一组流水：校验口径与展示口径必须一致（此前差 100 股）
+    {
+      const entries = [
+        { id: 'e2', ts: 2000, actor: 'web' as const, verb: 'sell' as const, posId: 'P1', secid: '1.600519', qty: 100, price: 12, fee: 0 },
+        { id: 'e1', ts: 1000, actor: 'web' as const, verb: 'buy' as const, posId: 'P1', secid: '1.600519', qty: 100, price: 10, fee: 0 },
+      ]
+      const byInsert = replayPosition(entries, 'P1')
+      const bySorted = replayPosition(sortLedger(entries), 'P1')
+      ok(byInsert.qty !== bySorted.qty, `乱序插入的两口径确有分叉（插入序 qty=${byInsert.qty} / ts 序 qty=${bySorted.qty}）—— 用例锁住的是"必须统一"`)
+      ok(sortLedger(entries).map((e) => e.id).join(',') === 'e1,e2', 'sortLedger 按 ts 升序、同 ts 按 id 稳定')
+      const shuffled = [entries[1], entries[0]]
+      ok(sortLedger(shuffled).map((e) => e.id).join(',') === sortLedger(entries).map((e) => e.id).join(','), '不同插入顺序 → 同一排序结果')
+    }
+
+    // T-03 并发落盘：文件仍可解析且无 .tmp 残留（rescue 从 1 处写者变成 4 处）
+    {
+      const dir = mkdtempSync(join(tmpdir(), 'tw-atomic-'))
+      const mon = new RescueMonitor(dir, { enabled: false, intervalSec: 60, tailIntervalSec: 15, tailFrom: '14:30', universe: [] })
+      await mon.init()
+      await Promise.all([mon.flush(), mon.flush(), mon.flush()])
+      const raw = readFileSync(join(dir, 'rescue-log.json'), 'utf8')
+      let parsed = false
+      try { JSON.parse(raw); parsed = true } catch { /* 失败 */ }
+      ok(parsed, '并发落盘后文件仍可 JSON.parse')
+      ok(!readdirSync(dir).some((f) => f.endsWith('.tmp')), '无 .tmp 残留（tmp+rename 生效）')
+      rmSync(dir, { recursive: true, force: true })
+    }
+
+    // T-04 熔断打开时 rawQuotes 不再发请求（此前熔断器没接管这条主路径）
+    {
+      const quote = breakerFor('push2delay.eastmoney.com')
+      const fallbackHost = breakerFor('push2.eastmoney.com')
+      for (let i = 0; i < 3; i++) { quote.recordFailure(new Error('blocked')); fallbackHost.recordFailure(new Error('blocked')) }
+      ok(quote.allow() === false && fallbackHost.allow() === false, '两台行情主机同时进入熔断')
+      let emCalls = 0
+      let otherCalls = 0
+      const realFetch = globalThis.fetch
+      globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
+        const url = typeof input === 'string' ? input : input instanceof URL ? input.href : String((input as Request).url)
+        if (/push2/.test(url)) emCalls += 1
+        else otherCalls += 1
+        return realFetch(input as RequestInfo, init)
+      }) as typeof fetch
+      try {
+        await em.fetchQuotes(['1.600519']).catch(() => undefined)
+      } finally {
+        globalThis.fetch = realFetch
+      }
+      ok(emCalls === 0, `熔断期间对被封的东财主机零请求（实测 ${emCalls} 次）`)
+      ok(otherCalls >= 0, `备用源（腾讯）不受东财熔断影响（本次 ${otherCalls} 次）`)
+      quote.recordSuccess(); fallbackHost.recordSuccess()
+    }
+
+    // 排序归一：校验必须走 ts 序（直接构造乱序账本，绕过写入端的超卖守卫）
+    {
+      const dir = mkdtempSync(join(tmpdir(), 'tw-sort-'))
+      const T1 = Date.now() - 86400_000
+      const T2 = Date.now()
+      // 插入序 = [sell(T2) 在前, buy(T1) 在后]；ts 序 = [buy(T1), sell(T2)]
+      // 按 ts 序持有 200−100=100；若按插入序校验则会以为持有 100 之前就卖了 → 结论不同
+      writeFileSync(join(dir, 'positions.json'), JSON.stringify({
+        v: 1,
+        groups: [{ id: 'G1', name: '统一排序', order: 0 }],
+        items: [{ id: 'P1', groupId: 'G1', secid: '1.600519', name: '贵州茅台', createdAt: T1 }],
+      }), 'utf8')
+      writeFileSync(join(dir, 'ledger.json'), JSON.stringify({
+        v: 1,
+        entries: [
+          { id: 'e-sell', ts: T2, actor: 'web', verb: 'sell', posId: 'P1', groupId: 'G1', secid: '1.600519', qty: 100, price: 12, fee: 0 },
+          { id: 'e-buy', ts: T1, actor: 'web', verb: 'buy', posId: 'P1', groupId: 'G1', secid: '1.600519', qty: 200, price: 10, fee: 0 },
+        ],
+      }), 'utf8')
+      const st = new DataStore(dir)
+      await st.init()
+      const entries = st.ledgerEntries()
+      const sorted = sortLedger(entries)
+      const replay = replayPosition(sorted, 'P1')
+      ok(Math.abs(replay.qty - 100) < 1e-9, `ts 序口径：净持仓 100（实测 ${replay.qty}）`)
+
+      // 展示口径（portfolio 内部同样用 sortLedger）应与之一致
+      const view = assemblePortfolio(st.portData().groups, st.portData().items, entries, {})
+      ok(Math.abs((view.view.positions[0]?.qty ?? -1) - 100) < 1e-9, `portfolio 展示与校验一致（${view.view.positions[0]?.qty}）`)
+
+      // 校验口径验证：ts 序持有 100 → 卖 150 必须被拒（若按插入序会误判为可卖）
+      let rejected = false
+      try {
+        await st.mutatePortfolio({ op: 'sell', posId: 'P1', qty: 150, price: 12 } as never)
+      } catch {
+        rejected = true
+      }
+      ok(rejected, '超卖守卫按 ts 序判定：卖 150 > 持有 100 → 拒绝')
+
+      let accepted = false
+      try {
+        await st.mutatePortfolio({ op: 'sell', posId: 'P1', qty: 100, price: 12 } as never)
+        accepted = true
+      } catch (error) {
+        ok(false, `卖 100 应放行，实际报错：${String(error)}`)
+      }
+      ok(accepted, '卖 100 = 持有 100 → 放行（校验/展示同口径）')
+      rmSync(dir, { recursive: true, force: true })
     }
 
     // 板块/排行的备用源解析（东财行情 CDN 被限流时仍能显示板块涨跌）

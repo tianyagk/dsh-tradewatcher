@@ -41,6 +41,8 @@ export function PortfolioPage(props: {
   prefs: PortPrefs
   setPrefs: (patch: Partial<PortPrefs>) => void
   quotes: Record<string, QuoteRow>
+  /** 共享行情引擎最近一次成功更新的时间戳（单一取数源用） */
+  quoteTs?: number | null
   onSymbols: (ids: string[]) => void
 }): React.ReactElement {
   const { active, refreshSec, prefs, setPrefs, quotes, onSymbols } = props
@@ -70,6 +72,8 @@ export function PortfolioPage(props: {
     onSymbols(ids)
   }, [view, onSymbols])
 
+  const lastAtRef = useRef<number | null>(null)
+
   const reload = useCallback(() => {
     api
       .portfolio()
@@ -81,12 +85,29 @@ export function PortfolioPage(props: {
       .catch((e: Error) => setError(e.message))
   }, [])
 
+  // 单一取数源：持仓明细依赖行情（市值/盈亏都按最新价算），因此**跟随共享行情引擎的
+  // 更新节拍**刷新，而不是自己再跑一个定时器 —— 两路各自打上游会造成重复请求，
+  // 且两路不同步时首屏数字会短暂不一致。仍保留"最迟 N 秒兜底"：上游持续失败时
+  // 引擎的 ts 不更新，这里按 3×refreshSec 兜一次，避免持仓页停刷。
+  const quoteTs = props.quoteTs ?? null
   useEffect(() => {
     if (!active) return
     reload()
-    const t = setInterval(reload, refreshSec * 1000)
+    let last = Date.now()
+    const t = setInterval(() => {
+      if (quoteTs !== null && quoteTs !== lastAtRef.current) {
+        lastAtRef.current = quoteTs
+        last = Date.now()
+        reload()
+        return
+      }
+      if (Date.now() - last >= refreshSec * 3000) {
+        last = Date.now()
+        reload()
+      }
+    }, Math.max(1000, refreshSec * 1000))
     return () => clearInterval(t)
-  }, [active, refreshSec, reload])
+  }, [active, refreshSec, reload, quoteTs])
 
   const mutate = (body: MutatePortBody, done?: () => void): void => {
     setError(null)

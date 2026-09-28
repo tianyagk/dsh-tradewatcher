@@ -139,6 +139,7 @@ function App(props: TabProps): React.ReactElement {
         setPrefs,
         quotes,
         onSymbols: onPortSymbols,
+        quoteTs: engine.ts,
       })
     }
     if (page === 'market') {

@@ -13,7 +13,7 @@ import type {
   PositionRow,
   QuoteRow,
 } from '../shared/model.ts'
-import { replayPosition, type TradeState } from './store.ts'
+import { replayPosition, type TradeState, sortLedger } from './store.ts'
 
 /** ms epoch of 00:00:00 Asia/Shanghai for the trading day containing `now`. */
 export function shanghaiDayStart(now: number): number {
@@ -165,7 +165,8 @@ export function assemblePortfolio(
   quotes: Readonly<Record<string, QuoteRow>>,
 ): PortfolioAssembly {
   // Ledger replay must be chronological: sort a copy by (ts, id).
-  const sorted = [...entries].sort((a, b) => (a.ts - b.ts) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+  // 与 store 的校验口径共用同一排序（单一来源），避免"校验用插入序、展示用 ts 序"分叉
+  const sorted = sortLedger(entries)
   const dayStart = shanghaiDayStart(Date.now())
 
   const positions: PositionRow[] = []
