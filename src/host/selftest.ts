@@ -9,7 +9,8 @@ import { DataStore, normalizeRescuePrefs, replayPosition, dataHome } from './sto
 import { assemblePortfolio, derivePosition, ledgerViews, shanghaiDayStart, verbLabel } from './portfolio.ts'
 import * as em from './em.ts'
 import { fillLastGood, mergeBars, quoteFromTencent, resampleYearly } from './em.ts'
-import { parseTencentStamp, tencentCode } from './tencent.ts'
+import { parseTencentStamp, parseTencentSuggest, suggestKindFromTencent, tencentCode, unescapeUnicode } from './tencent.ts'
+import { breakerFor, hostsAllowed } from './breaker.ts'
 import { losslessJson } from './tools.ts'
 import { DEFAULT_PREFS } from '../shared/model.ts'
 import { canonicalEconomy, macroEventsFromEm, macroImportance, parseEmDate } from './calendar.ts'
@@ -310,6 +311,29 @@ async function main(): Promise<void> {
       })
       ok(row !== null && row.source === 'tencent' && row.price === 4.47 && row.chg !== null && Math.abs(row.chg + 0.045) < 1e-9, '腾讯行转换：价/涨跌/来源标记正确')
       ok(quoteFromTencent('1.510300', { secid: '1.510300', name: '', price: null, prev: 1, open: null, pct: null, high: null, low: null, vol: null, amount: null, ts: null }) === null, '无有效价格的行被丢弃（不污染显示）')
+    }
+
+    // 搜索备用源（腾讯 smartbox）：转义还原、类型词表与解析
+    {
+      ok(unescapeUnicode('\\u6caa\\u6df1300ETF') === '沪深300ETF', 'smartbox 的 \\uXXXX 转义还原为中文')
+      ok(suggestKindFromTencent('hk', 'GP') === '港股' && suggestKindFromTencent('sh', 'ETF') === 'ETF' && suggestKindFromTencent('sh', 'ZS') === '指数' && suggestKindFromTencent('sh', 'GP-A') === '股票', '类型词表对齐东财口径')
+      const payload = 'v_hint="sh~510300~\\u6caa\\u6df1300ETF\\u534e\\u6cf0\\u67cf\\u745e~hs300etfhtbr~ETF^sz~159915~\\u521b\\u4e1a\\u677fETF\\u6613\\u65b9\\u8fbe~cybetf~ETF^us~AAPL~\\u82f9\\u679c~pg~GP"'
+      const rows = parseTencentSuggest(payload)
+      ok(rows.length === 2, `解析 smartbox：保留 A股/港股、丢弃无映射的美股（${rows.length} 条）`)
+      ok(rows[0]?.secid === '1.510300' && rows[0]?.name === '沪深300ETF华泰柏瑞' && rows[0]?.kind === 'ETF', '首条：secid/中文名/类型正确')
+      ok(rows[1]?.secid === '0.159915', '深市前缀映射为 0.')
+      ok(parseTencentSuggest('v_hint=""').length === 0, '空结果返回空数组')
+    }
+
+    // 熔断按主机隔离：行情主机被限流不得连坐搜索
+    {
+      const quote = breakerFor('push2delay.eastmoney.com')
+      for (let i = 0; i < 3; i++) quote.recordFailure(new Error('fetch failed'))
+      ok(quote.allow() === false, '行情主机进入熔断')
+      ok(hostsAllowed(['searchapi.eastmoney.com']).length === 1, '搜索主机不受行情熔断影响（关键修复）')
+      ok(breakerFor('searchapi.eastmoney.com').allow() === true, '搜索主机自身仍放行')
+      quote.recordSuccess()
+      ok(quote.allow() === true, '行情恢复后复位')
     }
 
     // 自定义通道：解析、分组与评分离（板块 ETF 不计入护盘评分与共振）

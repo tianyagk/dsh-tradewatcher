@@ -153,6 +153,81 @@ export async function fetchTencentQuoteRows(secids: string[]): Promise<Record<st
   return out
 }
 
+/** smartbox 返回的是带 \uXXXX 转义的 JS 字符串字面量，需反转义才能显示中文 */
+export function unescapeUnicode(text: string): string {
+  return text.replace(/\\u([0-9a-fA-F]{4})/g, (_m, hex: string) => String.fromCharCode(parseInt(hex, 16)))
+}
+
+/** 腾讯类型词表 → 与东财 suggestKind 对齐的展示口径 */
+export function suggestKindFromTencent(marketKey: string, rawKind: string): string {
+  if (marketKey === 'hk') return '港股'
+  if (/ETF/i.test(rawKind)) return 'ETF'
+  if (/ZS/i.test(rawKind)) return '指数'
+  if (/LOF|FUND|JJ/i.test(rawKind)) return '基金'
+  return '股票'
+}
+
+export interface TencentSuggestRow {
+  secid: string
+  code: string
+  name: string
+  kind: string
+  market: string
+}
+
+/** 腾讯市场前缀 → 东财市场号（只覆盖能稳定映射的：沪/深/港股） */
+const SUGGEST_MARKET: Record<string, { secid: string; market: string }> = {
+  sh: { secid: '1', market: '1' },
+  sz: { secid: '0', market: '0' },
+  hk: { secid: '116', market: '116' },
+}
+
+/**
+ * 腾讯智慧搜索（东财 searchapi 不可用时的备用源）。
+ * 响应形如 `v_hint="sh~510300~沪深300ETF华泰柏瑞~hs300etfhtbr~ETF^sz~159919~…"`
+ * 字段：市场~代码~名称~拼音~类型；多行以 ^ 分隔。
+ */
+export async function fetchTencentSuggest(query: string, limit = 10): Promise<TencentSuggestRow[]> {
+  const q = query.trim()
+  if (q === '') return []
+  const res = await fetch(`https://smartbox.gtimg.cn/s3/?v=2&q=${encodeURIComponent(q)}&t=all`, {
+    headers: { 'user-agent': UA, referer: 'https://stockapp.finance.qq.com/' },
+    signal: AbortSignal.timeout(8000),
+  })
+  if (!res.ok) throw new Error(`HTTP ${res.status} from smartbox.gtimg.cn`)
+  const buf = await res.arrayBuffer()
+  let text: string
+  try {
+    text = new TextDecoder('gbk').decode(buf)
+  } catch {
+    text = new TextDecoder('latin1').decode(buf)
+  }
+  return parseTencentSuggest(text, limit)
+}
+
+/** 解析 smartbox 响应（纯函数，便于自检） */
+export function parseTencentSuggest(payload: string, limit = 10): TencentSuggestRow[] {
+  const m = /v_hint="([^"]*)"/.exec(payload)
+  if (m === null) return []
+  const out: TencentSuggestRow[] = []
+  const seen = new Set<string>()
+  for (const raw of m[1].split('^')) {
+    const f = raw.split('~')
+    const marketKey = (f[0] ?? '').toLowerCase()
+    const code = (f[1] ?? '').trim()
+    const name = unescapeUnicode((f[2] ?? '').trim())
+    const kind = suggestKindFromTencent(marketKey, (f[4] ?? '').trim())
+    const mapped = SUGGEST_MARKET[marketKey]
+    if (mapped === undefined || code === '' || name === '' || !/^[A-Za-z0-9]{1,10}$/.test(code)) continue
+    const secid = `${mapped.secid}.${code}`
+    if (seen.has(secid)) continue
+    seen.add(secid)
+    out.push({ secid, code, name, kind, market: mapped.market })
+    if (out.length >= limit) break
+  }
+  return out
+}
+
 export interface TencentMinutePoint {
   ts: number
   /** 当日累计成交额（元） */

@@ -23,8 +23,8 @@ import type {
 } from '../shared/model.ts'
 import { SECID_RE } from '../shared/model.ts'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
-import { quoteBreaker } from './breaker.ts'
-import { fetchTencentMinutes, fetchTencentQuoteRows, tencentCode, type TencentQuoteFull } from './tencent.ts'
+import { breakerFor, hostsAllowed, minutesToRecover } from './breaker.ts'
+import { fetchTencentMinutes, fetchTencentQuoteRows, fetchTencentSuggest, tencentCode, type TencentQuoteFull } from './tencent.ts'
 import { join } from 'node:path'
 import { dataHome } from './store.ts'
 
@@ -104,14 +104,15 @@ const FETCH_ATTEMPTS_PER_HOST = 2
 const FETCH_DEADLINE_MS = 9_000
 
 async function fetchAny(hosts: readonly string[], pathAndQuery: string, timeoutMs = 7000): Promise<unknown> {
-  // 熔断冷却期内直接快失败：此时重试只会加重上游对本机 IP 的封锁（实测失败率会被推到 100%）
-  if (!quoteBreaker.allow()) {
-    throw new Error(`上游行情暂时不可用（熔断中，约 ${quoteBreaker.minutesLeft()} 分钟后自动重试）`)
+  // 熔断冷却期内跳过该主机；整组都在冷却才快速失败（重试只会加重上游对本机 IP 的封锁）
+  const live = hostsAllowed(hosts)
+  if (live.length === 0) {
+    throw new Error(`上游暂时不可用（熔断中，约 ${minutesToRecover(hosts)} 分钟后自动重试）`)
   }
   const deadline = Date.now() + FETCH_DEADLINE_MS
   let lastError: unknown = null
   for (let round = 0; round < FETCH_ROUNDS; round++) {
-    for (const host of hosts) {
+    for (const host of live) {
       for (let attempt = 0; attempt < FETCH_ATTEMPTS_PER_HOST; attempt++) {
         const left = deadline - Date.now()
         if (left <= 250) {
@@ -119,7 +120,7 @@ async function fetchAny(hosts: readonly string[], pathAndQuery: string, timeoutM
         }
         try {
           const ok = await fetchFromHost(host, pathAndQuery, Math.min(timeoutMs, left))
-          quoteBreaker.recordSuccess()
+          breakerFor(host).recordSuccess()
           return ok
         } catch (error) {
           lastError = error
@@ -132,7 +133,8 @@ async function fetchAny(hosts: readonly string[], pathAndQuery: string, timeoutM
       }
     }
   }
-  quoteBreaker.recordFailure(lastError)
+  const failed = hosts[hosts.length - 1] ?? 'unknown'
+  breakerFor(failed).recordFailure(lastError)
   throw lastError instanceof Error ? lastError : new Error(String(lastError))
 }
 
@@ -1113,17 +1115,28 @@ export async function searchSymbols(query: string): Promise<SuggestItem[]> {
   if (q === '') return []
   if (q.length > 40) return []
   const key = `suggest:${q}`
-  const json = await ttlCache(key, 8000, () =>
-    fetchAny(
-      [SEARCH_HOST],
-      `/api/suggest/get?input=${encodeURIComponent(q)}&type=14&token=${SUGGEST_TOKEN}&count=14`,
-    ),
-  )
-  const body = json as {
-    QuotationCodeTable?: { Data?: Array<Record<string, unknown>> }
+  let data: Array<Record<string, unknown>> = []
+  try {
+    const json = await ttlCache(key, 8000, () =>
+      fetchAny(
+        [SEARCH_HOST],
+        `/api/suggest/get?input=${encodeURIComponent(q)}&type=14&token=${SUGGEST_TOKEN}&count=14`,
+      ),
+    )
+    const body = json as { QuotationCodeTable?: { Data?: Array<Record<string, unknown>> } }
+    data = Array.isArray(body?.QuotationCodeTable?.Data) ? (body.QuotationCodeTable.Data as Array<Record<string, unknown>>) : []
+  } catch {
+    data = []
   }
-  const data = body?.QuotationCodeTable?.Data
-  if (!Array.isArray(data)) return []
+  // 东财搜索不可用时回落腾讯智慧搜索（搜索与行情是不同主机，不能一起熔断）
+  if (data.length === 0) {
+    try {
+      const tx = await fetchTencentSuggest(q, 10)
+      if (tx.length > 0) return tx
+    } catch {
+      /* 交给下面返回空列表 */
+    }
+  }
   const out: SuggestItem[] = []
   const seen = new Set<string>()
   for (const it of data) {

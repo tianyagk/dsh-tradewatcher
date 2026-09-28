@@ -78,5 +78,35 @@ export class CircuitBreaker {
   }
 }
 
-/** 全局共享的行情主机熔断器（em.ts 与护盘采样器共用，避免各自打满） */
-export const quoteBreaker = new CircuitBreaker({ threshold: 3, baseMs: 120_000, maxMs: 900_000 })
+/**
+ * 按主机维护熔断器。
+ *
+ * 教训：最初所有东财请求共用**一个**熔断器，结果行情主机（push2 系列）被限流时，
+ * 搜索（searchapi.eastmoney.com）被一起拦下 —— 而它当时完全正常，
+ * 表现为"自选/持仓搜不出任何标的"。限流是按主机/接口的，熔断也必须按主机隔离。
+ */
+const breakers = new Map<string, CircuitBreaker>()
+
+export function breakerFor(host: string): CircuitBreaker {
+  let b = breakers.get(host)
+  if (b === undefined) {
+    b = new CircuitBreaker({ threshold: 3, baseMs: 120_000, maxMs: 900_000 })
+    breakers.set(host, b)
+  }
+  return b
+}
+
+/** 某组主机整体是否可用（全部处于熔断冷却时才判定为不可用） */
+export function hostsAllowed(hosts: readonly string[]): string[] {
+  return hosts.filter((h) => breakerFor(h).allow())
+}
+
+/** 该组主机中最短的恢复时间（分钟），供 UI 提示 */
+export function minutesToRecover(hosts: readonly string[]): number {
+  const open = hosts.map((h) => breakerFor(h)).filter((b) => !b.allow())
+  if (open.length === 0) return 0
+  return Math.max(...open.map((b) => b.minutesLeft()))
+}
+
+/** 行情主机熔断器（供护盘采样器与行情中继共用；搜索/数据中心各自独立） */
+export const quoteBreaker = breakerFor('push2delay.eastmoney.com')
