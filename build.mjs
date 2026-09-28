@@ -72,6 +72,8 @@ const REQUIRED_CLIENT_SNIPPETS = [
   '护盘信号',
   '底部位置 / 形态 / 概率',   // 底部视图面板
   '历史同类情形的频率',        // 概率口径说明（防止被当成预测）
+  '板块涨跌来自腾讯备用源',     // 板块栏的来源标注
+  '「主力净流入」仅东财提供',   // 备用源下资金流不可用的说明
 ]
 
 const clientBundle = readFileSync('lib/client.js', 'utf8')

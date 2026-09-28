@@ -29,6 +29,7 @@ export function MarketPage(props: {
   const [page, setPage] = useState(1)
   const [boardLoading, setBoardLoading] = useState(false)
   const [boardError, setBoardError] = useState<string | null>(null)
+  const [boardMeta, setBoardMeta] = useState<{ stale?: boolean; asOf?: number; source?: 'em' | 'tencent' | 'sina' | 'lkg' } | null>(null)
   const [pick, setPick] = useState<{ secid: string } | null>(null)
   const [detail, setDetail] = useState<StockDetail | null>(null)
   const [trend, setTrend] = useState<TrendData | null>(null)
@@ -40,6 +41,7 @@ export function MarketPage(props: {
     api
       .board(s, sortBy, pn)
       .then((r) => {
+        setBoardMeta({ stale: r.stale, asOf: r.asOf, source: r.source })
         setBoardError(null)
         setTotal(r.total)
         setRows((prev) => (append ? [...prev, ...r.rows] : r.rows))
@@ -185,6 +187,16 @@ export function MarketPage(props: {
             ),
       ),
       React.createElement(ErrorNote, { error: boardError }),
+      // 数据来源与新鲜度：东财行情 CDN 被限流时这里会显示备用源或上次成功结果，
+      // 且明确标注"主力净流入不可用"（该列仅东财提供）
+      boardMeta !== null && (boardMeta.stale === true || boardMeta.source === 'tencent' || boardMeta.source === 'sina')
+        ? React.createElement('div', { className: 'tw-hint', style: { padding: '2px 2px 4px' } },
+            boardMeta.source === 'tencent' || boardMeta.source === 'sina'
+              ? `东财行情接口暂不可用，${boardMeta.source === 'sina' ? 'ETF 排行来自新浪备用源' : '板块涨跌来自腾讯备用源'}；`
+              : `东财行情接口暂不可用，显示上次成功数据（${boardMeta.asOf !== undefined ? new Date(boardMeta.asOf).toLocaleTimeString('zh-CN', { hour12: false }).slice(0, 5) : '—'}）；`,
+            scope === 'etf' ? 'ETF 排行的备用源不含资金流。' : '「主力净流入」仅东财提供，备用源下显示为 —。',
+          )
+        : null,
       React.createElement('div', { className: 'tw-tablewrap' },
         React.createElement('table', { className: 'tw-table', style: { minWidth: scope === 'etf' ? 500 : 640 } },
           React.createElement('thead', null,
@@ -225,7 +237,7 @@ export function MarketPage(props: {
                 React.createElement('td', { className: cls }, scope === 'etf' ? `${fmtPrice(r.price)} ${fmtSigned(r.chg)}` : fmtSigned(r.chg)),
                 React.createElement('td', null, React.createElement('span', { className: `tw-chg-chip ${r.pct === null ? 'tw-chip-flat' : (r.pct >= 0) === redUp ? 'tw-chip-up' : 'tw-chip-down'}` }, fmtPct(r.pct ?? null))),
                 scope === 'etf'
-                  ? [React.createElement('td', { key: 'a' }, fmtAmt(r.amount ?? null)), React.createElement('td', { key: 't' }, r.leader !== null ? r.leader : '—')]
+                  ? [React.createElement('td', { key: 'a' }, fmtAmt(r.amount ?? null)), React.createElement('td', { key: 't' }, r.turnover !== null && r.turnover !== undefined ? `${r.turnover.toFixed(2)}%` : '—')]
                   : [
                       React.createElement('td', { key: 'u', className: 'tw-dim' },
                         r.up !== null

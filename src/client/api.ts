@@ -86,7 +86,14 @@ export const api = {
   suggest(q: string): Promise<{ hits: SuggestItem[] }> {
     return request(`/tradewatcher/suggest?q=${encodeURIComponent(q)}`)
   },
-  board(scope: 'industry' | 'concept' | 'etf', sort: 'pct' | 'money' | 'amount', pn = 1): Promise<{ total: number; rows: BoardRow[] }> {
+  board(scope: 'industry' | 'concept' | 'etf', sort: 'pct' | 'money' | 'amount', pn = 1): Promise<{
+    total: number
+    rows: BoardRow[]
+    /** 上游不可用时回落上次成功结果 */
+    stale?: boolean
+    asOf?: number
+    source?: 'em' | 'tencent' | 'lkg'
+  }> {
     return request(`/tradewatcher/board?scope=${scope}&sort=${sort}&pn=${pn}&pz=40`)
   },
   rescue(force = false): Promise<{ snapshot: RescueSnapshot; history: RescueDaySummary[]; calibration?: unknown }> {

@@ -187,6 +187,48 @@ export async function fetchTencentDaily(secid: string, count = 320): Promise<Arr
   return out
 }
 
+/** 腾讯板块排行（t=01 行业 / 02 概念 / 03 地域） */
+export interface TencentBoardRow {
+  code: string
+  name: string
+  /** 板块指数涨跌幅（%） */
+  pct: number | null
+  /** 板块指数点位 */
+  price: number | null
+  leader: string | null
+  leaderPct: number | null
+}
+
+/**
+ * 腾讯板块排行。东财行情 CDN（push2 系列）被限流/封锁时，板块与概念排行用它兜底；
+ * 注意：**没有主力净流入**（资金流排行仅东财提供），该列会显示为 —
+ */
+export async function fetchTencentBoards(kind: 'industry' | 'concept', limit = 40): Promise<TencentBoardRow[]> {
+  const t = kind === 'industry' ? '01/averatio' : '02/averatio'
+  const res = await fetch(`https://proxy.finance.qq.com/ifzqgtimg/appstock/app/mktHs/rank?l=${limit}&p=1&t=${t}&ordertype=&o=0`, {
+    headers: { 'user-agent': UA, referer: 'https://stockapp.finance.qq.com/' },
+    signal: AbortSignal.timeout(10000),
+  })
+  if (!res.ok) throw new Error(`HTTP ${res.status} from proxy.finance.qq.com`)
+  const j = (await res.json()) as { code?: number; data?: Array<Record<string, unknown>> }
+  if (j?.code !== 0 || !Array.isArray(j.data)) return []
+  const out: TencentBoardRow[] = []
+  for (const it of j.data) {
+    const name = String(it.bd_name ?? '').trim()
+    const code = String(it.bd_code ?? '').trim()
+    if (name === '' || code === '') continue
+    out.push({
+      code,
+      name,
+      pct: num(it.bd_zdf as string | undefined),
+      price: num(it.bd_zxj as string | undefined),
+      leader: it.nzg_name === undefined || it.nzg_name === '' ? null : String(it.nzg_name),
+      leaderPct: num(it.nzg_zdf as string | undefined),
+    })
+  }
+  return out
+}
+
 export interface TencentSuggestRow {
   secid: string
   code: string

@@ -24,7 +24,8 @@ import type {
 import { SECID_RE } from '../shared/model.ts'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { breakerFor, hostsAllowed, minutesToRecover } from './breaker.ts'
-import { fetchTencentMinutes, fetchTencentQuoteRows, fetchTencentSuggest, tencentCode, type TencentQuoteFull } from './tencent.ts'
+import { fetchSinaEtfRanking } from './sina.ts'
+import { fetchTencentBoards, fetchTencentMinutes, fetchTencentQuoteRows, fetchTencentSuggest, tencentCode, type TencentQuoteFull } from './tencent.ts'
 import { join } from 'node:path'
 import { dataHome } from './store.ts'
 
@@ -392,6 +393,52 @@ function rowsToRecord(rows: Map<string, QuoteRow>): Record<string, QuoteRow> {
   const out: Record<string, QuoteRow> = {}
   for (const row of rows.values()) out[row.secid] = row
   return out
+}
+
+/**
+ * 板块/排行数据的 last-known-good。
+ *
+ * 这一栏只在你打开面板或切换 scope/sort 时才请求，属"冷连接"请求；东财行情 CDN
+ * 被限流时它几乎必然失败（行情/护盘因为持续轮询才养着热连接）。因此失败时回落到
+ * 上一次成功结果并标注时间，而不是让整块面板显示"不可用"。
+ */
+const boardLkg = new Map<string, { ts: number; total: number; rows: BoardRow[] }>()
+let boardLkgLoaded: Promise<void> | null = null
+let boardLkgDirty = false
+let boardLkgLastWrite = 0
+
+async function loadBoardLkg(): Promise<void> {
+  if (boardLkgLoaded !== null) return boardLkgLoaded
+  boardLkgLoaded = (async () => {
+    try {
+      const raw = await readFile(join(dataHome(), 'board-lkg.json'), 'utf8')
+      const parsed = JSON.parse(raw) as { entries?: Array<{ key?: string; ts?: number; total?: number; rows?: BoardRow[] }> }
+      for (const e of Array.isArray(parsed?.entries) ? parsed.entries : []) {
+        if (typeof e?.key !== 'string' || typeof e?.ts !== 'number' || !Array.isArray(e?.rows)) continue
+        boardLkg.set(e.key, { ts: e.ts, total: typeof e.total === 'number' ? e.total : e.rows.length, rows: e.rows })
+      }
+    } catch {
+      /* 首次 */
+    }
+  })()
+  return boardLkgLoaded
+}
+
+function persistBoardLkg(): void {
+  if (!boardLkgDirty) return
+  const now = Date.now()
+  if (now - boardLkgLastWrite < 10_000) return
+  boardLkgLastWrite = now
+  boardLkgDirty = false
+  const entries = [...boardLkg.entries()].slice(-40).map(([key, v]) => ({ key, ts: v.ts, total: v.total, rows: v.rows }))
+  void (async () => {
+    try {
+      await mkdir(dataHome(), { recursive: true })
+      await writeFile(join(dataHome(), 'board-lkg.json'), JSON.stringify({ ts: Date.now(), entries }), 'utf8')
+    } catch (error) {
+      console.warn('[tradewatcher] persist board-lkg failed:', String(error))
+    }
+  })()
 }
 
 /** Batch quotes with a 2.5 s TTL + last-known-good on every return path
@@ -975,13 +1022,60 @@ export async function fetchBoard(
   sort: 'pct' | 'money' | 'amount',
   pn = 1,
   pz = 40,
-): Promise<{ total: number; rows: BoardRow[] }> {
+): Promise<{ total: number; rows: BoardRow[]; stale?: boolean; asOf?: number; source?: 'em' | 'tencent' | 'sina' | 'lkg' }> {
+  try {
+    return await fetchBoardLive(scope, sort, pn, pz)
+  } catch (error) {
+    // 东财与腾讯都不可用（或 ETF 排行无替代源）：回落上一次成功结果并标注时间
+    await loadBoardLkg()
+    const hit = boardLkg.get(`board:${scope}:${sort}:${pn}:${pz}`)
+    if (hit !== undefined) return { total: hit.total, rows: hit.rows, stale: true, asOf: hit.ts, source: 'lkg' }
+    throw error
+  }
+}
+
+async function fetchBoardLive(
+  scope: BoardScope,
+  sort: 'pct' | 'money' | 'amount',
+  pn = 1,
+  pz = 40,
+): Promise<{ total: number; rows: BoardRow[]; source?: 'em' | 'tencent' | 'sina' }> {
+  await loadBoardLkg()
+  const lkgKey = `board:${scope}:${sort}:${pn}:${pz}`
   const fs = scope === 'etf' ? ETF_FS : BOARD_FS[scope]
   const fid = sort === 'money' ? 'f62' : sort === 'amount' ? 'f6' : 'f3'
   const po = sort === 'money' || sort === 'amount' ? 1 : 1 // all descending by chosen fid
   const q = `pn=${pn}&pz=${pz}&po=${po}&np=1&fltt=2&invt=2&fid=${fid}&fs=${encodeURIComponent(fs)}&fields=${BOARD_FIELDS}`
   const key = `board:${scope}:${sort}:${pn}:${pz}`
-  const json = await ttlCache(key, 30_000, () => fetchAny(QUOTE_HOSTS, `/api/qt/clist/get?${q}`))
+  const json = await ttlCache(key, 30_000, async () => {
+    try {
+      return await fetchAny(QUOTE_HOSTS, `/api/qt/clist/get?${q}`)
+    } catch (error) {
+      // 东财行情 CDN 被限流/封锁时的备用源：
+      //   行业 / 概念 → 腾讯板块排行；ETF → 新浪 ETF 排行（后者只提供涨跌/价/成交额/换手，无资金流）
+      if (pn === 1) {
+        try {
+          if (scope === 'etf') {
+            const rows = await fetchSinaEtfRanking(sort === 'amount' ? 'amount' : 'pct', pz)
+            if (rows.length > 0) {
+              return {
+                data: {
+                  diff: rows.map((r) => ({ f12: r.code, f13: r.secid.split('.')[0], f14: r.name, f2: r.price, f3: r.pct, f6: r.amount, f8: r.turnover })),
+                  total: rows.length, fallback: 'sina',
+                },
+              }
+            }
+          } else {
+            const tx = await fetchTencentBoards(scope === 'concept' ? 'concept' : 'industry', pz)
+            if (tx.length > 0) return { data: { diff: tx.map((b) => ({ f12: b.code, f14: b.name, f3: b.pct, f2: b.price, f128: b.leader, f136: b.leaderPct })), total: tx.length, fallback: 'tencent' } }
+          }
+        } catch {
+          /* 交给 LKG */
+        }
+      }
+      throw error
+    }
+  })
   const body = bodyOf(json)
   const rows: BoardRow[] = diffList(json).map((it) => {
     const code = String(it.f12 ?? '')
@@ -1001,9 +1095,18 @@ export async function fetchBoard(
       money: num(it.f62),
       vol: num(it.f5),
       amount: num(it.f6),
+      turnover: num(it.f8),
     }
   })
   const total = num(body?.data?.total as unknown) ?? rows.length
+  if (rows.length > 0) {
+    boardLkg.set(key, { ts: Date.now(), total, rows })
+    boardLkgDirty = true
+    persistBoardLkg()
+    const fb = (body as { data?: { fallback?: string } } | undefined)?.data?.fallback
+    const source = fb === 'tencent' ? 'tencent' : fb === 'sina' ? 'sina' : 'em'
+    return { total, rows, source }
+  }
   return { total, rows }
 }
 

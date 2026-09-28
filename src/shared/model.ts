@@ -206,6 +206,8 @@ export interface BoardRow {
   money: number | null
   vol: number | null
   amount: number | null
+  /** 换手率（%），ETF 排行使用 */
+  turnover?: number | null
 }
 
 /** Stock/ETF detail card data. */

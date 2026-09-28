@@ -10,6 +10,7 @@ import { assemblePortfolio, derivePosition, ledgerViews, shanghaiDayStart, verbL
 import * as em from './em.ts'
 import { fillLastGood, mergeBars, quoteFromTencent, resampleYearly } from './em.ts'
 import { parseTencentStamp, parseTencentSuggest, suggestKindFromTencent, tencentCode, unescapeUnicode } from './tencent.ts'
+import { parseSinaEtfRanking } from './sina.ts'
 import { breakerFor, hostsAllowed } from './breaker.ts'
 import { losslessJson } from './tools.ts'
 import { DEFAULT_PREFS } from '../shared/model.ts'
@@ -295,6 +296,21 @@ async function main(): Promise<void> {
       ok((snap.note ?? '').includes('上次成功采样'), 'LKG 快照注明为上次成功采样')
       ok(mon.hasFreshData === false, 'hasFreshData 反映本会话尚未采到数据')
       rmSync(lkgDir, { recursive: true, force: true })
+    }
+
+    // 板块/排行的备用源解析（东财行情 CDN 被限流时仍能显示板块涨跌）
+    {
+      const payload = JSON.stringify([
+        { symbol: 'sh511360', code: '511360', name: '短融ETF海富通', trade: '100.02', changepercent: '0.011', amount: '44987000000', turnoverratio: '53.52' },
+        { symbol: 'sz159915', code: '159915', name: '创业板ETF易方达', trade: '3.31', changepercent: '-4.8', amount: '6019000000', turnoverratio: '9.57' },
+        { symbol: 'bad', code: 'x', name: '无效行' },
+      ])
+      const rows = parseSinaEtfRanking(payload)
+      ok(rows.length === 2, `新浪 ETF 排行解析：保留沪/深、丢弃无效行（${rows.length} 条）`)
+      ok(rows[0]?.secid === '1.511360' && rows[0]?.code === '511360', '沪市 symbol → secid 1.xxxxxx')
+      ok(rows[1]?.secid === '0.159915' && Math.abs((rows[1].pct ?? 0) + 4.8) < 1e-9, '深市映射与涨跌幅解析')
+      ok(Math.abs((rows[0].turnover ?? 0) - 53.52) < 1e-9 && Math.abs((rows[0].amount ?? 0) - 4.4987e10) < 1, '成交额与换手率解析（ETF 排行两列）')
+      ok(parseSinaEtfRanking('not json').length === 0 && parseSinaEtfRanking('{"a":1}').length === 0, '异常响应返回空数组（不抛错）')
     }
 
     // 底部：位置 / 形态 / 概率（含"跨品种污染"的回归断言）
