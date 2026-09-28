@@ -812,6 +812,10 @@ export class RescueMonitor {
   /** 底部概率校准结果（跨通道合并，按日缓存） */
   private bottomCal: ReturnType<typeof calibrateAcross> | null = null
   private bottomComputing = false
+  /** 校准失败后的冷却时间戳：避免日线拉取失败时每个 tick 重跑全量回测 */
+  private bottomCalRetryAfter = 0
+  /** 底部视图缓存（按节流刷新，避免每 tick 重算位置/形态） */
+  private bottomCache: { at: number; key: string; view: RescueSnapshot['bottom'] } | null = null
   /** 当日分钟序列缓存（脉冲计算用；东财或腾讯） */
   private minutes: Record<string, MinuteFlowPoint[]> = {}
   private lastMinuteRefresh = 0
@@ -1012,7 +1016,13 @@ export class RescueMonitor {
           }
         }
         this.dailyBars = bars
-        this.bottomCal = calibrateAcross(Object.values(bars).map((b) => b as DailyBarLite[]))
+        if (Object.keys(bars).length > 0) {
+          this.bottomCal = calibrateAcross(Object.values(bars).map((b) => b as DailyBarLite[]))
+          this.bottomCache = null
+        } else {
+          // 日线全失败：进入冷却，30 分钟内不再重试（否则上游抖动会把 O(通道×日线) 计算拉到每 tick）
+          this.bottomCalRetryAfter = Date.now() + 30 * 60_000
+        }
       })().finally(() => {
         this.bottomComputing = false
       })
@@ -1447,7 +1457,18 @@ export class RescueMonitor {
   private buildBottom(etfs: RescueEtfView[]): RescueSnapshot['bottom'] {
     const lanes = etfs.filter((e) => this.dailyBars[e.secid] !== undefined).slice(0, 8)
     if (lanes.length === 0) return undefined
-    const cal = this.bottomCal ?? calibrateAcross(Object.values(this.dailyBars).map((b) => b as DailyBarLite[]))
+    // 节流：位置/形态/概率都基于日线与当日快照，没必要每个 tick 重算（15–60s 一次足够）
+    const cacheKey = `${this.todayKey}|${lanes.map((l) => `${l.secid}:${l.price ?? 0}`).join(',')}`
+    const now = Date.now()
+    if (this.bottomCache !== null && this.bottomCache.key === cacheKey && now - this.bottomCache.at < 60_000) {
+      return this.bottomCache.view
+    }
+    // 校准失败（日线拉取失败）后进入冷却，避免每 tick 重跑全量回测
+    const cal =
+      this.bottomCal ??
+      (Date.now() < this.bottomCalRetryAfter
+        ? null
+        : calibrateAcross(Object.values(this.dailyBars).map((b) => b as DailyBarLite[])))
     const views: RescueBottomLane[] = lanes.map((e) => {
       const bars = this.dailyBars[e.secid] ?? []
       const minutes = this.minutes[e.secid] ?? []
@@ -1458,7 +1479,8 @@ export class RescueMonitor {
       })
     })
     // 用行情快照里的开高低补全日内形态（日线只有收盘）
-    return {
+    if (cal === null) return undefined
+    const view: RescueSnapshot['bottom'] = {
       lanes: views,
       model:
         `${cal.rule}；口径为前向 ${cal.horizon} 日内最高价达到当日收盘 × (1+目标) 的历史频率，` +
@@ -1467,6 +1489,8 @@ export class RescueMonitor {
         `期间最大回撤中位数 ${cal.medianDrawdown === null ? '—' : (cal.medianDrawdown * 100).toFixed(2) + '%'}`,
       asOf: this.todayKey,
     }
+    this.bottomCache = { at: now, key: cacheKey, view }
+    return view
   }
 
   /** 近 60 天每日摘要（历史回看） */

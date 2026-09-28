@@ -137,8 +137,22 @@ src/
 ```
 
 - 构建：`npm run build`（esbuild → `lib/index.js` ESM、`lib/client.js` CJS + `__ModuleLoader__` 工厂）
-- 自测：`npm run selftest`（node 原生 TS，无需构建）
+- 门禁：`npm run check` = `typecheck` → `test` → `selftest` → `build`
+  - `typecheck`：`tsc --noEmit`；**`build.mjs` 构建前会先跑它，失败即中断**（可用 `TW_SKIP_TYPECHECK=1` 临时跳过）
+  - `test`：`node --test --experimental-strip-types`，当前覆盖客户端纯函数（指标计算与格式化）
+  - `selftest`：host 侧集成自测（纯函数断言为硬失败，真实网络探针为 soft）；**会把 `DSH_HOME` 指向临时目录**，不再写用户真实数据目录
+  - 版本号单源：`package.json.version` 经 esbuild `define` 注入客户端（`__TW_VERSION__`），构建期校验产物确实含该版本号
 - 客户端在浏览器中的 `react`/`react-dom`/`cordis` 由 web shell 模块表提供（externals）；其余全部内联
+
+## 明确不做的项（附理由，避免反复评估）
+
+外部代码评审（v0.15.1 基线）还提出若干结构性优化，经实测后**明确不做或推迟**，理由如下：
+
+- **账务单遍分组（O(P×N) → O(N)）**：实测本机账本为 103 条流水 × 10 只持仓 = 1030 次遍历，`/portfolio` 响应 0.28s 且主要耗时在上游行情等待。此规模下优化遍历无收益。
+- **流水改 JSONL 追加写、模块级缓存加 LRU、上游加令牌桶限流**：单用户单进程、标的不满百；上游全挂的主要风险已由按主机熔断覆盖。
+- **拆分 em.ts / rescue.ts / tools.ts 为多文件、把模块级单例改工厂注入**：功能仍在演进期，拆分与并行开发的冲突成本大于收益；新增模块按 `bottom.ts` 的方式办（纯函数、单主题、有断言）。
+- **引入 vitest / husky / CI 供应商**：改用零依赖的 `node --test`；本机单机项目不引入 CI 服务。
+- **信任边界的完整加固（CSRF token 等）**：实测服务只监听 `127.0.0.1`，局域网不可达；仅保留 Content-Type 断言与本文档说明。
 
 ## 已知边界与免责
 

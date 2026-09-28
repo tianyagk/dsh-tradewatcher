@@ -45,6 +45,10 @@ function fakeQuote(secid: string, price: number, prev: number): QuoteRow {
 }
 
 async function main(): Promise<void> {
+  // 隔离：本文件含真实网络探针，会触发 LKG / K线缓存落盘。若不重定向 DSH_HOME，
+  // 会写进用户真实的数据目录（~/.dsh/dsh-tradewatcher）。所有落盘路径都经由
+  // dataHome()，它在调用时读该环境变量，因此这里设置即可生效。
+  process.env.DSH_HOME ??= mkdtempSync(join(tmpdir(), 'tw-selftest-home-'))
   console.log('== tradewatcher host selftest ==')
   console.log('dataHome:', dataHome())
   console.log('-- store & accounting --')

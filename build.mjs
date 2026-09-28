@@ -1,5 +1,24 @@
 import { build } from 'esbuild'
+import { execFileSync } from 'node:child_process'
 import { readFileSync, rmSync } from 'node:fs'
+
+/**
+ * 类型门禁：构建前先 tsc --noEmit，失败即中断。
+ * 此前 build.mjs 只用 esbuild（不做类型检查），而 typecheck 脚本无人调用 ——
+ * 双端共享契约漂移（例如 api.ts 的 source 联合类型漏了 'sina'）没有任何编译期保护。
+ * 需要临时跳过（例如调试构建）时设 TW_SKIP_TYPECHECK=1。
+ */
+if (process.env.TW_SKIP_TYPECHECK !== '1') {
+  try {
+    execFileSync('node_modules/.bin/tsc', ['--noEmit', '-p', 'tsconfig.json'], { stdio: 'inherit' })
+  } catch {
+    console.error('\n构建中断：类型检查未通过（tsc --noEmit）。修好后再构建，或设 TW_SKIP_TYPECHECK=1 临时跳过。\n')
+    process.exit(1)
+  }
+}
+
+const pkg = JSON.parse(readFileSync('package.json', 'utf8'))
+const TW_VERSION = String(pkg.version ?? '0.0.0')
 
 rmSync('lib', { recursive: true, force: true })
 
@@ -30,7 +49,7 @@ await build({
   format: 'esm',
   target: 'es2022',
   sourcemap: false,
-  define: { 'process.env.NODE_ENV': '"production"' },
+  define: { 'process.env.NODE_ENV': '"production"', __TW_VERSION__: JSON.stringify(TW_VERSION) },
 })
 
 await build({
@@ -43,7 +62,7 @@ await build({
   sourcemap: false,
   external: CLIENT_EXTERNALS,
   jsx: 'transform',
-  define: { 'process.env.NODE_ENV': '"production"' },
+  define: { 'process.env.NODE_ENV': '"production"', __TW_VERSION__: JSON.stringify(TW_VERSION) },
   banner: { js: banner },
   footer: { js: footer },
 })
@@ -77,6 +96,11 @@ const REQUIRED_CLIENT_SNIPPETS = [
 ]
 
 const clientBundle = readFileSync('lib/client.js', 'utf8')
+// 版本号必须真的注入客户端包（esbuild define 生效）
+if (!clientBundle.includes(TW_VERSION)) {
+  console.error(`\n构建校验失败：lib/client.js 未包含版本号 ${TW_VERSION}（__TW_VERSION__ 注入未生效）\n`)
+  process.exit(1)
+}
 const missing = REQUIRED_CLIENT_SNIPPETS.filter(
   (snippet) => !clientBundle.includes(snippet) && !clientBundle.includes(escapeUpper(snippet)),
 )
@@ -86,4 +110,4 @@ if (missing.length > 0) {
   process.exit(1)
 }
 
-console.log(`built lib/index.js + lib/client.js （客户端片段校验通过：${REQUIRED_CLIENT_SNIPPETS.length} 项）`)
+console.log(`built lib/index.js + lib/client.js （v${TW_VERSION}，客户端片段校验通过：${REQUIRED_CLIENT_SNIPPETS.length} 项）`)

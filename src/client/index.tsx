@@ -49,7 +49,7 @@ export function apply(ctx: {
 }): void {
   ensureCss()
   try {
-    console.log('[dsh-tradewatcher] client v0.15.1 loaded (board fallbacks: Tencent industry/concept + Sina ETF + LKG)')
+    console.log(`[dsh-tradewatcher] client v${__TW_VERSION__} loaded (board fallbacks: Tencent industry/concept + Sina ETF + LKG)`)
   } catch {
     /* console unavailable */
   }

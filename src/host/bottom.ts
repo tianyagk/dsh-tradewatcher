@@ -44,16 +44,38 @@ export interface PatternMetrics {
 
 const num = (v: number | null | undefined): v is number => typeof v === 'number' && Number.isFinite(v)
 
+/** 单遍求极值（避免 Math.max(...arr) 的参数展开，且只接受有限数值） */
+function extremes(bars: readonly DailyBarLite[]): { hi: number; lo: number; n: number } | null {
+  let hi = -Infinity
+  let lo = Infinity
+  let n = 0
+  for (const b of bars) {
+    if (!num(b.high) || !num(b.low) || !num(b.close)) continue
+    if (b.high > hi) hi = b.high
+    if (b.low < lo) lo = b.low
+    n += 1
+  }
+  return n > 0 && Number.isFinite(hi) && Number.isFinite(lo) ? { hi, lo, n } : null
+}
+
+/** 过滤掉含非有限数值的日线（一根 NaN 会一路污染到视图） */
+export function sanitizeBars(bars: readonly DailyBarLite[]): DailyBarLite[] {
+  return bars.filter((b) => num(b.open) && num(b.close) && num(b.high) && num(b.low) && num(b.vol) && b.vol > 0 && b.close > 0)
+}
+
 /** 位置特征（bars 为截至当日的历史，price 为现价或当日收盘） */
 export function computePosition(bars: readonly DailyBarLite[], price: number): PositionMetrics {
   const empty: PositionMetrics = { drawdown60: null, drawdown250: null, aboveLow60: null, percentile60: null, downStreak: 0, atNewLow60: false }
   if (bars.length < 20 || !(price > 0)) return empty
-  const win60 = bars.slice(-60)
-  const win250 = bars.slice(-250)
-  const hi60 = Math.max(...win60.map((b) => b.high))
-  const hi250 = Math.max(...win250.map((b) => b.high))
-  const lo60 = Math.min(...win60.map((b) => b.low))
-  const closes = [...win60.map((b) => b.close)].sort((a, b) => a - b)
+  const win60 = sanitizeBars(bars.slice(-60))
+  const win250 = sanitizeBars(bars.slice(-250))
+  const ex60 = extremes(win60)
+  const ex250 = extremes(win250)
+  if (ex60 === null || ex250 === null) return empty
+  const hi60 = ex60.hi
+  const hi250 = ex250.hi
+  const lo60 = ex60.lo
+  const closes = win60.map((b) => b.close).sort((a, b) => a - b)
   const rank = closes.filter((c) => c <= price).length / closes.length
   let downStreak = 0
   for (let i = bars.length - 1; i > 0; i--) {
