@@ -93,8 +93,12 @@ export class CircuitBreaker {
   recordFailure(error: unknown): void {
     this.probing = false
     this.lastError = error instanceof Error ? error.message : String(error)
+    // 半开探针失败：说明主机仍未恢复，必须**立即重熔并延长冷却**。
+    // 否则 fails 已被归零、未达阈值就直接返回，until 停在过去时 → allow() 变 true，
+    // 主机立刻重新可探（真实节奏下每 2.5s 一次），正是熔断要避免的"重试加重封锁"。
+    const wasHalfOpen = this.trips > 0 && Date.now() >= this.until
     this.fails += 1
-    if (this.fails < this.threshold) return
+    if (!wasHalfOpen && this.fails < this.threshold) return
     const backoff = Math.min(this.maxMs, this.baseMs * 2 ** this.trips)
     this.trips += 1
     this.fails = 0

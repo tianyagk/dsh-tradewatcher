@@ -8,7 +8,7 @@ import { dirClass, fmtAmt, fmtBig, fmtPct, fmtPrice, fmtSigned } from './format.
 import { Btn, ErrorNote, Modal, SuggestInput } from './ui.tsx'
 import { Sparkline } from './charts.tsx'
 import { RescuePanel } from './RescuePanel.tsx'
-import type { PortPrefs } from '../shared/model.ts'
+import type { PortPrefs, QuoteSource } from '../shared/model.ts'
 
 type Scope = 'industry' | 'concept' | 'etf'
 type Sort = 'pct' | 'money' | 'amount'
@@ -29,7 +29,7 @@ export function MarketPage(props: {
   const [page, setPage] = useState(1)
   const [boardLoading, setBoardLoading] = useState(false)
   const [boardError, setBoardError] = useState<string | null>(null)
-  const [boardMeta, setBoardMeta] = useState<{ stale?: boolean; asOf?: number; source?: 'em' | 'tencent' | 'sina' | 'lkg' } | null>(null)
+  const [boardMeta, setBoardMeta] = useState<{ stale?: boolean; asOf?: number; source?: QuoteSource } | null>(null)
   const [pick, setPick] = useState<{ secid: string } | null>(null)
   const [detail, setDetail] = useState<StockDetail | null>(null)
   const [trend, setTrend] = useState<TrendData | null>(null)

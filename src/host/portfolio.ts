@@ -14,18 +14,14 @@ import type {
   QuoteRow,
 } from '../shared/model.ts'
 import { replayPosition, type TradeState, sortLedger } from './store.ts'
+import { shanghaiDayStart as shDayStart } from './time.ts'
 
-/** ms epoch of 00:00:00 Asia/Shanghai for the trading day containing `now`. */
+/**
+ * ms epoch of 00:00:00 Asia/Shanghai for the trading day containing `now`.
+ * 实现统一在 host/time.ts —— 全插件的时间口径只有这一套（Asia/Shanghai）。
+ */
 export function shanghaiDayStart(now: number): number {
-  const fmt = new Intl.DateTimeFormat('en-CA', {
-    timeZone: 'Asia/Shanghai',
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-  })
-  const [y, m, d] = fmt.format(now).split('-').map(Number)
-  // Shanghai is UTC+8 year-round (no DST).
-  return Date.UTC(y, m - 1, d) - 8 * 3600_000
+  return shDayStart(now)
 }
 
 const round2 = (n: number): number => Math.round(n * 100) / 100

@@ -11,6 +11,7 @@ import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { CalCategory, CalEvent, CalImportance } from '../shared/model.ts'
 import { dataHome } from './store.ts'
+import { calToday as shCalToday } from './time.ts'
 
 const AUTO_SYNC_TTL = 6 * 3600_000
 const KEEP_PAST_DAYS = 60
@@ -39,10 +40,9 @@ export function calToday(offsetDays = 0): string {
   return todayStr(offsetDays)
 }
 
+/** 北京时间的今天（可偏移）：财经日历的"今日/±N 天"与归档日期一律用该口径 */
 function todayStr(offsetDays = 0): string {
-  const d = new Date(Date.now() + offsetDays * 86_400_000)
-  const p = (n: number): string => String(n).padStart(2, '0')
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`
+  return shCalToday(offsetDays)
 }
 
 function dayOf(v: unknown): string | null {

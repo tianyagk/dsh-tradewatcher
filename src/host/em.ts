@@ -24,7 +24,7 @@ import type {
 import { SECID_RE } from '../shared/model.ts'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { breakerFor, hostsAllowed, minutesToRecover } from './breaker.ts'
-import { fetchSinaEtfRanking } from './sina.ts'
+import { fetchSinaEtfRanking, fetchSinaQuotes } from './sina.ts'
 import { fetchTencentBoards, fetchTencentMinutes, fetchTencentQuoteRows, fetchTencentSuggest, tencentCode, type TencentQuoteFull } from './tencent.ts'
 import { join } from 'node:path'
 import { dataHome } from './store.ts'
@@ -397,22 +397,60 @@ async function tencentQuoteRows(list: readonly string[]): Promise<Map<string, Qu
 }
 
 /** 用腾讯补齐缺失或价格为空的标的（EM 部分丢码时也走这里） */
-async function fillFromTencent(list: readonly string[], rows: Map<string, QuoteRow>): Promise<void> {
-  const need = list.filter((secid) => {
+/**
+ * 兜底链：**腾讯（沪/深/港 + 美股指数）→ 新浪（国际指数、国内期货、外盘商品）**。
+ *
+ * 此前只有腾讯，于是「国际市场 + 大宗商品」共 17 只标的在东财不可用时**代码层就没有任何兜底**
+ * （客户端只能吃 LKG 旧值）—— 实测 23 只预设里只有 6 只可解析。现补新浪一档：
+ * 国际指数 int_*（含日经/德国/富时，腾讯没有）、国内期货 nf_*、外盘商品 hf_*。
+ */
+async function fillFromFallbacks(list: readonly string[], rows: Map<string, QuoteRow>): Promise<void> {
+  const need = (): string[] => list.filter((secid) => {
     const row = rows.get(secid)
     return row === undefined || row.price === null
   })
-  if (need.length === 0) return
+  const missing = need()
+  if (missing.length === 0) return
   try {
-    const tx = await tencentQuoteRows(need)
+    const tx = await tencentQuoteRows(missing)
     for (const [secid, row] of tx) {
       const cur = rows.get(secid)
       if (cur === undefined || cur.price === null) rows.set(secid, row)
-      // 价格已有但缺成交额/涨跌幅时，用腾讯补字段（保留 EM 的其它字段）
-      else if (cur.amount === null && row.amount !== null) rows.set(secid, { ...cur, amount: row.amount })
+      // 字段级混源：价格来自东财、成交额来自腾讯（两者快照时刻不同）→ 明确标注 amountSource
+      else if (cur.amount === null && row.amount !== null) rows.set(secid, { ...cur, amount: row.amount, amountSource: 'tencent' })
     }
   } catch {
-    /* 腾讯也不可用时交给 LKG */
+    /* 继续尝试新浪 */
+  }
+  const still = need()
+  if (still.length === 0) return
+  try {
+    const sx = await fetchSinaQuotes(still)
+    for (const [secid, q] of Object.entries(sx)) {
+      const cur = rows.get(secid)
+      if (cur !== undefined && cur.price !== null) continue
+      rows.set(secid, {
+        secid,
+        code: secid.split('.')[1] ?? secid,
+        name: q.name,
+        price: q.price,
+        chg: q.prev !== null ? q.price - q.prev : null,
+        pct: q.pct,
+        prev: q.prev,
+        open: q.open,
+        high: q.high,
+        low: q.low,
+        vol: null,
+        amount: null,
+        up: null,
+        down: null,
+        even: null,
+        time: null,
+        source: 'sina',
+      })
+    }
+  } catch {
+    /* 三个源都不可用时交给 LKG */
   }
 }
 
@@ -471,12 +509,14 @@ function persistBoardLkg(): void {
 /** Batch quotes with a 2.5 s TTL + last-known-good on every return path
  *  (fresh fetch, TTL hit and peek hit alike). */
 export async function fetchQuotes(secids: string[]): Promise<Record<string, QuoteRow>> {
-  // 归一化：去重 + 大写 + 排序 —— 同一批标的无论以何顺序/大小写传入都命中同一缓存槽，
-  // 否则 /portfolio（插入序）与 /quotes（排序后）会各占一个槽、各自打一次上游
-  const list = [...new Set(secids.map((s) => s.trim().toUpperCase()))].sort()
+  // 去重 + 排序：同一批标的无论以何顺序传入都命中同一缓存槽（否则 /portfolio 与 /quotes
+  // 会各占一个槽、各自打一次上游）。**但必须保留原始大小写**：`113.rbm` / `114.lhm`
+  // 这类商品 secid 后缀区分大小写，整体 toUpperCase 会让上游请求与备用源映射双双落空
+  // （曾因此在东财不可用时把 4 个期货整批丢掉）。
+  const list = [...new Set(secids.map((s) => s.trim()))].sort((a, b) => (a.toUpperCase() < b.toUpperCase() ? -1 : a.toUpperCase() > b.toUpperCase() ? 1 : 0))
   if (list.length === 0) return {}
   await loadLastGood()
-  const key = `quotes:${list.join(',')}`
+  const key = `quotes:${list.map((s) => s.toUpperCase()).join(',')}`
   const quick = peekCache<Record<string, QuoteRow>>(key, 40_000)
   if (quick !== undefined) {
     const map = new Map<string, QuoteRow>()
@@ -485,14 +525,14 @@ export async function fetchQuotes(secids: string[]): Promise<Record<string, Quot
       const row = map.get(secid)
       return row === undefined || row.price === null
     })
-    if (gap) await fillFromTencent(list, map)
+    if (gap) await fillFromFallbacks(list, map)
     fillLastGood(list, map)
     return rowsToRecord(map)
   }
   const rows = await ttlCache<Map<string, QuoteRow>>(key, 2500, async () => {
     const got = await rawQuotes(list)
     // 东财整体不可用或部分丢码时，用腾讯把缺口补上（避免价格停在 last-known-good）
-    await fillFromTencent(list, got)
+    await fillFromFallbacks(list, got)
     return got
   })
   fillLastGood(list, rows)

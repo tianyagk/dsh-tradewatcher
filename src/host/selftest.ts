@@ -10,7 +10,7 @@ import { assemblePortfolio, derivePosition, ledgerViews, shanghaiDayStart, verbL
 import * as em from './em.ts'
 import { fillLastGood, mergeBars, quoteFromTencent, resampleYearly } from './em.ts'
 import { parseTencentStamp, parseTencentSuggest, suggestKindFromTencent, tencentCode, unescapeUnicode } from './tencent.ts'
-import { parseSinaEtfRanking } from './sina.ts'
+import { parseSinaEtfRanking, parseSinaHq, sinaCovered, sinaSymbol } from './sina.ts'
 import { breakerFor, hostsAllowed } from './breaker.ts'
 import { losslessJson } from './tools.ts'
 import { DEFAULT_PREFS } from '../shared/model.ts'
@@ -24,7 +24,7 @@ import {
   phaseOf, pulseFactorLabel, timeCoefficient, windowFlowStats,
 } from './rescue.ts'
 import { RESCUE_CALIBRATION } from './rescue-thresholds.ts'
-import { TW_ROWS, rescueUniverseMeta } from '../shared/model.ts'
+import { TW_ALL_SECIDS, TW_ROWS, rescueUniverseMeta } from '../shared/model.ts'
 import type { QuoteRow } from '../shared/model.ts'
 
 let failures = 0
@@ -422,6 +422,28 @@ async function main(): Promise<void> {
       rmSync(dir, { recursive: true, force: true })
     }
 
+    // 备用源覆盖：国际指数与大宗商品必须有兜底（此前 17 只无任何兜底）
+    {
+      const presets = TW_ALL_SECIDS
+      const covered = presets.filter((s) => sinaSymbol(s) !== null || tencentCode(s) !== null)
+      ok(presets.length === 23, `预设标的数 ${presets.length}`)
+      ok(covered.length >= 20, `可用兜底的预设数 ${covered.length}/23（要求 ≥20）`)
+      ok(sinaCovered(presets) >= 13, `新浪专供（国际指数 + 期货/外盘商品）${sinaCovered(presets)} 只`)
+      ok(sinaSymbol('113.rbm') === 'nf_RB0' && sinaSymbol('122.XAU') === 'hf_XAU' && sinaSymbol('100.N225') === 'int_nikkei', '商品/国际指数映射正确')
+      ok(sinaSymbol('100.KOSPI200') === null, '韩国 KOSPI200 无兜底 → 如实返回 null（不编代码）')
+      // 解析：int_ / nf_ / hf_ 三种布局（字段下标按实测）
+      const payload = [
+        'var hq_str_int_nikkei="日经指数,44946.64,-408.35,-0.90";',
+        'var hq_str_nf_RB0="螺纹钢连续,150000,3110.000,3122.000,3096.000,3105.000,3105.000,3106.000,3108.000";',
+        'var hq_str_hf_XAU="4157.83,4114.930,4157.83,4158.18,4161.20,4113.30,19:36:00,4114.93";',
+      ].join('\n')
+      const parsed = parseSinaHq(payload)
+      ok(parsed.int_nikkei?.price === 44946.64 && parsed.int_nikkei?.pct === -0.9, 'int_* 布局：最新与涨跌幅')
+      ok(parsed.nf_RB0?.price === 3108 && parsed.nf_RB0?.prev === 3105, 'nf_* 布局：最新取 [8]、昨收取 [5]')
+      ok(parsed.hf_XAU?.price === 4157.83 && parsed.hf_XAU?.prev === 4114.93, 'hf_* 布局：最新取 [0]、昨收取 [7]')
+      ok(parseSinaHq('var hq_str_hf_XAU="4157.83,4114.930,4157.83,4158.18,4161.20,4113.30,19:36:00,999999.0";').hf_XAU?.pct === null, '昨收异常（涨跌幅 >25%）→ 不给结论')
+    }
+
     // 板块/排行的备用源解析（东财行情 CDN 被限流时仍能显示板块涨跌）
     {
       const payload = JSON.stringify([
@@ -569,6 +591,40 @@ async function main(): Promise<void> {
       ok(b.minutesLeft() >= 1 && (b.state.lastError ?? '').includes('fetch failed'), '熔断期间给出剩余时间与原因')
       b.recordSuccess()
       ok(b.allow() === true && b.state.trips === 0, '成功后完全复位')
+    }
+
+    // 半开探针失败 → 立即重熔并延长冷却（此前 until 停在过去时，主机每 2.5s 被探一次）
+    {
+      const b = new CircuitBreaker({ threshold: 3, baseMs: 50, maxMs: 1000 })
+      for (let i = 0; i < 3; i++) b.recordFailure(new Error('blocked'))
+      ok(b.allow() === false, '先打开熔断')
+      await new Promise((r) => setTimeout(r, 70))
+      ok(b.allow() === true && b.inHalfOpen === true, '冷却到期进入半开')
+      ok(b.claimProbe() === true, '半开期领取探针')
+      ok(b.claimProbe() === false, '半开期第二个调用不得并发探测')
+      b.recordFailure(new Error('probe failed'))
+      ok(b.allow() === false && b.minutesLeft() >= 1, `半开失败 → 立即重熔并延长冷却（trips=${b.state.trips}）`)
+      b.recordSuccess()
+      ok(b.allow() === true, '真正恢复后复位')
+    }
+
+    // 账本单条非法：隔离原件 + 保留可用条目（绝不静默丢数据）
+    {
+      const dir = mkdtempSync(join(tmpdir(), 'tw-badentry-'))
+      writeFileSync(join(dir, 'ledger.json'), JSON.stringify({
+        v: 1,
+        entries: [
+          { id: 'ok1', ts: 1000, actor: 'web', verb: 'add', posId: 'P1', secid: '1.600519', name: '贵州茅台' },
+          { id: 'bad', actor: 'web', verb: 'buy' },                      // 缺 ts
+          { id: 'future', ts: 3000, actor: 'web', verb: 'futuristic' },  // 未知 verb：保留不丢弃
+        ],
+      }), 'utf8')
+      const st = new DataStore(dir)
+      await st.init()
+      const entries = st.ledgerEntries()
+      ok(entries.length === 2, `保留可用条目 + 未知 verb（${entries.length} 条）`)
+      ok(entries.some((e) => (e.verb as string) === 'futuristic'), '未知 verb 原样保留（避免降级丢数据）')
+      ok(readdirSync(dir).some((f) => f.startsWith('ledger.json.corrupt-')), '单条非法同样隔离原件备份')
     }
 
     // 上游不可用时的当日复盘兜底：不再让标的卡整块消失

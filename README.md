@@ -144,6 +144,19 @@ src/
   - 版本号单源：`package.json.version` 经 esbuild `define` 注入客户端（`__TW_VERSION__`），构建期校验产物确实含该版本号
 - 客户端在浏览器中的 `react`/`react-dom`/`cordis` 由 web shell 模块表提供（externals）；其余全部内联
 
+## 时间口径（v0.17.0 起统一）
+
+全插件的时间标签**只有一套口径：`Asia/Shanghai`**（`src/host/time.ts`）。此前 `rescue.ts` / `calendar.ts`
+用宿主本地时间、而 `portfolio.ts` 用 `Asia/Shanghai`，两套并存——实测在 **TZ=UTC**（Docker / 云主机 /
+CI 的默认值）下，北京时间 10:00 会被判成"盘前"，**护盘采样一次都不触发**，且时点系数、阶段语义、
+脉冲锚点全部错位（晚间盘面按"早盘"给 0.4 折）。现在 `hhmmOf` / `dayOf` / `weekdayOf` / `calToday` /
+`shanghaiDayStart` 全部来自同一实现，并在 **4 个时区**（Asia/Shanghai、UTC、America/New_York、
+Australia/Sydney）下断言一致；`npm test` 会把这套断言跑两遍（宿主 TZ 与 TZ=UTC），
+因为只有显式切 TZ 才锁得住时区回归。
+
+注意：`inTradingWindow` 里的**星期**也必须按北京时间——北京时间周一 10:00 在
+`TZ=America/New_York` 下是周日 22:00，用宿主星期会把真实交易日判成休市。
+
 ## 明确不做的项（附理由，避免反复评估）
 
 外部代码评审（v0.15.1 基线）还提出若干结构性优化，经实测后**明确不做或推迟**，理由如下：
@@ -153,6 +166,9 @@ src/
 - **拆分 em.ts / rescue.ts / tools.ts 为多文件、把模块级单例改工厂注入**：功能仍在演进期，拆分与并行开发的冲突成本大于收益；新增模块按 `bottom.ts` 的方式办（纯函数、单主题、有断言）。
 - **引入 vitest / husky / CI 供应商**：改用零依赖的 `node --test`；本机单机项目不引入 CI 服务。
 - **信任边界的完整加固（CSRF token 等）**：实测服务只监听 `127.0.0.1`，局域网不可达；仅保留 Content-Type 断言与本文档说明。
+- **待办（尚未实施的复核项）**：`/quotes` 回传真实 `asOf`/`stale` 并在 TopBar 消费；`tick()` 重入守卫；
+  `buildBottom` 校准不可用时保留上次视图（而不是整块消失）；概率回测路径的日线有限性校验；
+  错误语义分级（400 → 400/413/503）；熔断状态聚合展示（现只反映单主机）。
 
 ## 已知边界与免责
 

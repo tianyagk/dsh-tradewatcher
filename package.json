@@ -1,6 +1,6 @@
 {
   "name": "dsh-tradewatcher",
-  "version": "0.16.0",
+  "version": "0.17.0",
   "description": "dsh-tradewatcher（盯盘）: a DeepSeek Harness web plugin that registers an AIDP-style market dashboard sidebar tab through ctx.betterSidebar — TopBar index/global/commodity strips with hover intraday charts, embedded 52etf cloud map, grouped watchlist, ledger-driven portfolio groups with market value / float P&L / day P&L, and host-side read-only agent tools + JSON files exposing every portfolio record for in-session analysis.",
   "type": "module",
   "engines": {
@@ -25,7 +25,7 @@
   "scripts": {
     "build": "node build.mjs",
     "typecheck": "tsc --noEmit -p tsconfig.json",
-    "test": "node --test --experimental-strip-types \"src/**/*.test.ts\"",
+    "test": "node --test --experimental-strip-types \"src/**/*.test.ts\" && TZ=UTC node --test --experimental-strip-types \"src/**/*.test.ts\"",
     "check": "npm run typecheck && npm run test && npm run selftest && npm run build",
     "selftest": "node src/host/selftest.ts",
     "install:profile": "bash scripts/install.sh",

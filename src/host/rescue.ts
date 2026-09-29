@@ -26,6 +26,7 @@ import { RESCUE_CORE_OUTFLOW_VETO, RESCUE_CORE_INDEXES, RESCUE_PERIPHERAL_FLOW_D
 import { RESCUE_CALIBRATION } from './rescue-thresholds.ts'
 import { quoteBreaker } from './breaker.ts'
 import { fetchTencentDaily, fetchTencentMinutes, fetchTencentQuoteRows } from './tencent.ts'
+import { dayOf as shDayOf, hhmmOf as shHhmmOf, weekdayOf as shWeekdayOf } from './time.ts'
 import { buildBottomLane, calibrateAcross } from './bottom.ts'
 import { dataHome } from './store.ts'
 
@@ -427,22 +428,20 @@ export function scoreRescue(input: RescueFactorInput): RescueScoreResult {
   return { score, level, factors, summary, completeness }
 }
 
-function hhmmOf(ts: number): string {
-  const d = new Date(ts)
-  const p = (n: number): string => String(n).padStart(2, '0')
-  return `${p(d.getHours())}:${p(d.getMinutes())}`
-}
+/**
+ * HH:mm（**北京时间**）—— 护盘的采样时段、阶段语义、时点系数全部基于它。
+ * 必须钉死 Asia/Shanghai：宿主为 UTC（Docker/云主机/CI 默认）时，
+ * 用本地时间会把真实盘中判成"盘前"→ 采样一次都不触发（见 host/time.ts）。
+ */
+const hhmmOf = (ts: number): string => shHhmmOf(ts)
 
-function dayOf(ts: number): string {
-  const d = new Date(ts)
-  const p = (n: number): string => String(n).padStart(2, '0')
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`
-}
+/** YYYY-MM-DD（北京时间自然日）：驱动 todayKey / rollDay / 60 日归档 */
+const dayOf = (ts: number): string => shDayOf(ts)
 
 /** 是否处于采样时段（含开盘前 5 分钟与收盘后 5 分钟收口） */
 export function inTradingWindow(ts: number): boolean {
-  const d = new Date(ts)
-  const dow = d.getDay()
+  // 星期也必须按北京时间（宿主时区下的星期会错位一天）
+  const dow = shWeekdayOf(ts)
   if (dow === 0 || dow === 6) return false
   const hhmm = hhmmOf(ts)
   return (hhmm >= '09:25' && hhmm <= '11:35') || (hhmm >= '12:55' && hhmm <= '15:05')

@@ -62,7 +62,8 @@ function normalizeLedgerEntry(raw: unknown): LedgerEntry | null {
   if (!isRecord(raw)) return null
   const id = str(raw.id)
   const ts = numOrNull(raw.ts)
-  const verb = typeof raw.verb === 'string' && LEDGER_VERBS.has(raw.verb) ? (raw.verb as LedgerEntry['verb']) : null
+  // 未知 verb **不丢弃**：保留原样回写，避免"新版写新动词、旧版一读就删"的数据丢失
+  const verb = typeof raw.verb === 'string' && raw.verb !== '' ? (raw.verb as LedgerEntry['verb']) : null
   if (id === null || ts === null || verb === null) return null
   const entry: LedgerEntry = {
     id,
@@ -89,14 +90,22 @@ function normalizeLedgerEntry(raw: unknown): LedgerEntry | null {
   return entry
 }
 
-export function normalizeLedger(raw: unknown): LedgerFile | null {
+/** 归一化账本；同时报出被丢弃的条数（调用方据此决定是否隔离原件并告警） */
+export function normalizeLedgerDetailed(raw: unknown): { file: LedgerFile; dropped: number; total: number } | null {
   if (!isRecord(raw) || !Array.isArray(raw.entries)) return null
   const entries: LedgerEntry[] = []
+  let dropped = 0
   for (const e of raw.entries) {
     const ok = normalizeLedgerEntry(e)
-    if (ok !== null) entries.push(ok)
+    if (ok === null) dropped += 1
+    else entries.push(ok)
   }
-  return { v: numOrNull(raw.v) ?? 1, entries }
+  return { file: { v: numOrNull(raw.v) ?? 1, entries }, dropped, total: raw.entries.length }
+}
+
+export function normalizeLedger(raw: unknown): LedgerFile | null {
+  const d = normalizeLedgerDetailed(raw)
+  return d === null ? null : d.file
 }
 
 export function normalizePortFile(raw: unknown): PortFile | null {
@@ -313,6 +322,40 @@ export class DataStore {
     }
   }
 
+  /**
+   * 读入账本：整文件形状非法 → 隔离；**单条非法 → 同样隔离并告警**（此前只跳过该条，
+   * 下一次写盘即永久丢失且无备份）。
+   */
+  private async readLedger(): Promise<LedgerFile> {
+    let text: string
+    try {
+      text = await readFile(join(this.dir, 'ledger.json'), 'utf8')
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { v: 1, entries: [] }
+      log('ledger read failed:', String(error))
+      return { v: 1, entries: [] }
+    }
+    let parsed: unknown
+    try {
+      parsed = JSON.parse(text)
+    } catch (error) {
+      await this.quarantine('ledger.json')
+      log('corrupt ledger.json (bad JSON) — quarantined:', String(error))
+      return { v: 1, entries: [] }
+    }
+    const detailed = normalizeLedgerDetailed(parsed)
+    if (detailed === null) {
+      await this.quarantine('ledger.json')
+      log('invalid ledger shape — quarantined, starting from empty')
+      return { v: 1, entries: [] }
+    }
+    if (detailed.dropped > 0) {
+      await this.quarantine('ledger.json')
+      log(`ledger.json 有 ${detailed.dropped}/${detailed.total} 条无法解析 —— 已隔离原件备份，本次仅载入可用条目`)
+    }
+    return detailed.file
+  }
+
   /** 与校验/展示共用的排序口径（见 sortLedger 说明） */
   private sortedLedger(): LedgerEntry[] {
     return sortLedger(this.ledger.entries)
@@ -332,7 +375,8 @@ export class DataStore {
       await mkdir(this.dir, { recursive: true })
       this.watch = await this.readNormalized<WatchFile>('watch.json', normalizeWatchFile, { v: 1, groups: [], items: [] })
       this.port = await this.readNormalized<PortFile>('positions.json', normalizePortFile, { v: 1, groups: [], items: [] })
-      this.ledger = await this.readNormalized<LedgerFile>('ledger.json', normalizeLedger, { v: 1, entries: [] })
+      // 账本是用户唯一的交易记录：单条非法也要隔离原件 + 告警（绝不静默丢数据）
+      this.ledger = await this.readLedger()
       const loaded = await this.readNormalized<Partial<PortPrefs>>('prefs.json', (raw) => (isRecord(raw) ? (raw as Partial<PortPrefs>) : null), {})
       this.prefs = { ...DEFAULT_PREFS, ...loaded, rescue: { ...DEFAULT_PREFS.rescue, ...(loaded.rescue ?? {}) } }
       // Coherence: drop descriptors that reference missing groups (never drop ledger).

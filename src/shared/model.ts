@@ -83,8 +83,10 @@ export interface QuoteRow {
   even: number | null
   /** Feed update time (ms epoch) when reported. */
   time: number | null
-  /** 数据来源：em（东财，默认）或 tencent（备用源，东财不可用时） */
-  source?: 'em' | 'tencent'
+  /** 数据来源（见 QuoteSource）：em（东财，默认）或备用源 */
+  source?: QuoteSource
+  /** 该行的成交额是否来自备用源（字段级混源时标注，价格与成交额快照时刻可能不同） */
+  amountSource?: QuoteSource
 }
 
 /** One intraday point (EM trends2 row). */
@@ -451,6 +453,12 @@ export const ACTOR_WEB = 'web' as const
 export function isFiniteNumber(v: unknown): v is number {
   return typeof v === 'number' && Number.isFinite(v)
 }
+
+/**
+ * 行情数据来源的**唯一真源**。此前 api.ts 与 MarketPage.tsx 各自重抄了一份联合类型，
+ * 于是"改一边忘另一边"不会变成编译错误（门禁抓不到）——两侧都必须引用本类型。
+ */
+export type QuoteSource = 'em' | 'tencent' | 'sina' | 'lkg'
 
 /** 日线（轻量，用于位置/概率计算） */
 export interface DailyBarLite {

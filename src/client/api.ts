@@ -11,6 +11,7 @@ import type {
   RescueIntradayPoint,
   RescueSignalEvent,
   RescueSnapshot,
+  QuoteSource,
   StockDetail,
   SuggestItem,
   TrendData,
@@ -92,7 +93,7 @@ export const api = {
     /** 上游不可用时回落上次成功结果 */
     stale?: boolean
     asOf?: number
-    source?: 'em' | 'tencent' | 'sina' | 'lkg'
+    source?: QuoteSource
   }> {
     return request(`/tradewatcher/board?scope=${scope}&sort=${sort}&pn=${pn}&pz=40`)
   },
