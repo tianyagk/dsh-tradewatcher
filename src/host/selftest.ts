@@ -17,7 +17,7 @@ import { SingleFlight } from './singleflight.ts'
 import { losslessJson } from './tools.ts'
 import { DEFAULT_PREFS } from '../shared/model.ts'
 import { canonicalEconomy, macroEventsFromEm, macroImportance, parseEmDate } from './calendar.ts'
-import { RescueMonitor } from './rescue.ts'
+import { RescueMonitor, stripSnapshot } from './rescue.ts'
 import { CircuitBreaker } from './breaker.ts'
 import { calibratePooled, computePattern, computePosition, laneOutcomeStats, patternScore, positionScore, sanitizeBars } from './bottom.ts'
 import {
@@ -869,6 +869,25 @@ async function main(): Promise<void> {
       const posDirty = computePosition(midDirty, price)
       ok(posDirty.percentile60 === posClean.percentile60 && posDirty.downStreak === posClean.downStreak,
         '位置特征不受非法日线影响')
+    }
+
+    // 采样失败不得改写"数据时刻"（失败 ≠ 刚拿到数据），失败时刻单独记
+    {
+      const mon = new RescueMonitor(dir)
+      const internals = mon as unknown as {
+        lastSnapshot: RescueSnapshot | null
+        lastFailTs: number | null
+        noteSampleFailure: (at?: number) => void
+      }
+      const dataTs = 1_700_000_000_000
+      internals.lastSnapshot = { ts: dataTs, lastSampleTs: dataTs, gap: false } as unknown as RescueSnapshot
+      internals.noteSampleFailure(dataTs + 60_000)
+      ok(internals.lastSnapshot?.ts === dataTs, `采样失败不改写数据时刻 ts (got ${internals.lastSnapshot?.ts})`)
+      ok(internals.lastSnapshot?.gap === true && internals.lastSnapshot?.lastFailTs === dataTs + 60_000, '失败另记 lastFailTs 并置缺口')
+      ok(internals.lastFailTs === dataTs + 60_000, 'monitor 记住失败时刻（成功后清空）')
+      // 落盘也要保住这两个诚实性字段：收盘后重启的面板靠它说明"数据来自备用源""最近一次失败在何时"
+      const stripped = stripSnapshot({ ts: dataTs, flowSource: 'tencent', lastFailTs: dataTs + 60_000 } as unknown as RescueSnapshot)
+      ok(stripped.flowSource === 'tencent' && stripped.lastFailTs === dataTs + 60_000 && stripped.ts === dataTs, '持久化保留 flowSource / lastFailTs / ts')
     }
 
     // 校准不可用时保留上次底部视图（而不是整块面板消失）

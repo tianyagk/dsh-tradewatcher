@@ -133,11 +133,18 @@ interface PersistedSnapshot {
   selfSampleDays: number
   config: RescueConfig
   activeIntervalSec: number
+  /** 数据来源（em/tencent）：收盘后重启时面板要能说明为什么缺分单资金流因子 */
+  flowSource?: RescueSnapshot['flowSource']
+  /** 最近一次采样失败时刻（与 ts 严格分开） */
+  lastFailTs?: RescueSnapshot['lastFailTs']
 }
 
-function stripSnapshot(s: RescueSnapshot): PersistedSnapshot {
-  const { ts, level, score, summary, factors, etfs, indexPct, indexName, timeCoef, resonance, pulseBand, completeness, thresholdSource, selfSampleDays, config, activeIntervalSec } = s
-  return { ts, level, score, summary, factors, etfs, indexPct, indexName, timeCoef, resonance, pulseBand, completeness, thresholdSource, selfSampleDays, config, activeIntervalSec }
+/** 导出供自检：确认落盘时保留了"数据来源"与"失败时刻"这类诚实性字段 */
+export function stripSnapshot(s: RescueSnapshot): PersistedSnapshot {
+  // flowSource / lastFailTs 也要落盘：收盘后重启时面板才能说明"这份数据来自备用源
+  // （所以缺分单资金流因子）"与"最近一次采样失败于何时"，而不是只剩一个时间戳
+  const { ts, level, score, summary, factors, etfs, indexPct, indexName, timeCoef, resonance, pulseBand, completeness, thresholdSource, selfSampleDays, config, activeIntervalSec, flowSource, lastFailTs } = s
+  return { ts, level, score, summary, factors, etfs, indexPct, indexName, timeCoef, resonance, pulseBand, completeness, thresholdSource, selfSampleDays, config, activeIntervalSec, flowSource, lastFailTs }
 }
 
 interface DayLog {
@@ -938,6 +945,23 @@ export class RescueMonitor {
     }
   }
 
+  /**
+   * 采样失败的统一记账。
+   *
+   * **不得改写 `ts`**：`ts`/`lastSampleTs` 是"这份数据是几点拿到的"，失败只是"我们
+   * 在几点试过并且没成功"。此前这里写 `ts: Date.now()` —— 收盘后手动点一次「立即采样」
+   * 而上游不可用时，界面顶部的「已收盘 · 21:34:43」会变成失败时刻，看起来像刚采到数据。
+   * 失败的时刻另存 `lastFailTs`，与数据时刻在界面上分开表述。
+   */
+  private noteSampleFailure(at = Date.now()): void {
+    this.today.gap = true
+    this.lastFailTs = at
+    if (this.lastSnapshot !== null) this.lastSnapshot = { ...this.lastSnapshot, gap: true, lastFailTs: at }
+  }
+
+  /** 最近一次采样失败时刻（成功采样会清空它） */
+  private lastFailTs: number | null = null
+
   /** 立即采样一次（手动刷新/非交易时段复盘）；与在飞的定时采样合并 */
   async sampleNow(): Promise<RescueSnapshot> {
     await this.init()
@@ -972,8 +996,7 @@ export class RescueMonitor {
       quotes = got.rows
       source = got.source
     } catch {
-      this.today.gap = true
-      if (this.lastSnapshot !== null) this.lastSnapshot = { ...this.lastSnapshot, gap: true, ts: Date.now() }
+      this.noteSampleFailure()
       return
     }
     this.quoteSource = source
@@ -1216,6 +1239,7 @@ export class RescueMonitor {
     }
     this.today.samples += 1
     this.today.gap = false
+    this.lastFailTs = null
     this.lastSnapshot = {
       ts, trading: inTradingWindow(ts), level: scored.level, score: scored.score, summary: scored.summary,
       factors: scored.factors, etfs, indexPct, indexName: INDEX_NAME, timeCoef: timeCoefficient(elapsed),
@@ -1235,7 +1259,7 @@ export class RescueMonitor {
       thresholdSource: this.f2Source(), selfSampleDays: this.selfSampleDays(),
       config: this.getConfig(), activeIntervalSec: this.activeIntervalSec(ts),
       today: [...this.today.events].reverse(), intraday: [...this.today.intraday],
-      sampleCount: this.today.samples, lastSampleTs: ts, gap: false,
+      sampleCount: this.today.samples, lastSampleTs: ts, gap: false, lastFailTs: null,
       note: elapsed <= 0 ? '尚未开盘，量能倍数按全天口径显示为 0' : undefined,
     }
     this.file.lastSnapshot = stripSnapshot(this.lastSnapshot)
@@ -1357,10 +1381,12 @@ export class RescueMonitor {
       // 兜底：本次会话还没采到数据（例如收盘后重启），用上次成功快照，注明为旧数据
       const p = this.file.lastSnapshot
       return {
-        ...p, trading: inTradingWindow(Date.now()), stale: true, lastSampleTs: p.ts,
+        // 注意 gap 取**当日真实缺口标记**，而不是无条件 true：
+        // "本会话还没采过样"与"采样失败"是两件事，用同一个标记会让面板误报"采样缺口"。
+        ...p, trading: inTradingWindow(Date.now()), stale: true, lastSampleTs: p.ts, lastFailTs: this.lastFailTs, gap: this.today.gap,
         today: [...this.today.events].reverse(), intraday: [...this.today.intraday],
-        sampleCount: this.today.samples, gap: true,
-        note: `上游暂不可用，显示上次成功采样（${hhmmOf(p.ts)}）的数据`,
+        sampleCount: this.today.samples,
+        note: `本会话尚未采样（如收盘后重启），显示上次成功采样（${hhmmOf(p.ts)}）的数据`,
         config: this.getConfig(), activeIntervalSec: this.activeIntervalSec(), selfSampleDays: this.selfSampleDays(),
       }
     }

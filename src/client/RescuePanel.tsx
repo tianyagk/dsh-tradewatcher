@@ -346,15 +346,35 @@ export function RescuePanel(props: { prefs: PortPrefs; redUp: boolean; onPrefs?:
       snapshot !== null && (snapshot.completeness?.missing.length ?? 0) > 0
         ? React.createElement('span', {
             className: 'tw-badge',
-            title: `本次快照缺少因子：${snapshot.completeness?.missing.join('、')}（评分偏保守；冷启动回填完成或盘中采样 5 分钟后自动补齐）`,
+            // 缺因子的**原因**必须说清：备用源（腾讯）没有分单资金流，等多久都不会补齐；
+            // 东财源下的缺因子才是"冷启动/采样满 5 分钟自动补齐"。此前一律写"5 分钟后自动补齐"，
+            // 在备用源场景下是空头承诺。
+            title: snapshot.flowSource === 'tencent'
+              ? `本次快照缺少因子：${snapshot.completeness?.missing.join('、')} —— 数据来自**腾讯备用源**，该源不含分单资金流（超大单/主力净额），因此「超大单强度」「持续性」无法计算，不是等几分钟就能补齐的；量能、脉冲、背离、共振仍为真实数据，评分偏保守。`
+              : `本次快照缺少因子：${snapshot.completeness?.missing.join('、')}（评分偏保守；冷启动回填完成或盘中采样 5 分钟后自动补齐）`,
             style: { color: LEVEL_COLOR[2], borderColor: LEVEL_COLOR[2] },
           }, `因子 ${snapshot.completeness?.available}/${snapshot.completeness?.total}`)
         : null,
       snapshot !== null
-        ? React.createElement('span', { className: 'tw-muted', style: { fontSize: 10.5 } },
+        ? React.createElement('span', {
+            className: 'tw-muted',
+            style: { fontSize: 10.5 },
+            title: [
+              snapshot.lastSampleTs !== null ? `最近一次成功采样：${new Date(snapshot.lastSampleTs).toLocaleString('zh-CN', { hour12: false })}` : '尚未成功采样',
+              snapshot.lastFailTs !== null && snapshot.lastFailTs !== undefined ? `最近一次采样失败：${new Date(snapshot.lastFailTs).toLocaleString('zh-CN', { hour12: false })}` : null,
+              snapshot.flowSource === 'tencent' ? '数据来源：腾讯备用源（无分单资金流）' : snapshot.flowSource === 'em' ? '数据来源：东方财富（含分单资金流）' : null,
+              snapshot.note ?? null,
+            ].filter(Boolean).join('\n'),
+          },
             `${snapshot.trading ? `采样中 · ${snapshot.activeIntervalSec}s` : snapshot.pulseBand.phase === 'closed' ? '已收盘' : '非交易时段'}` +
-            `${snapshot.lastSampleTs !== null ? ` · ${new Date(snapshot.lastSampleTs).toLocaleTimeString('zh-CN', { hour12: false })}` : ''}` +
-            `${snapshot.gap ? ' · ⚠ 缺口' : ''}`,
+            // 「数据 HH:mm:ss」= 这份数据是几点拿到的（不是响应时刻、更不是失败时刻）
+            `${snapshot.lastSampleTs !== null ? ` · 数据 ${new Date(snapshot.lastSampleTs).toLocaleTimeString('zh-CN', { hour12: false })}` : ''}` +
+            `${snapshot.flowSource === 'tencent' ? ' · 腾讯源' : ''}` +
+            // 两种"不新鲜"必须分开说：有失败时刻 = 采样失败；只有缺口标记 = 当日有过缺口
+            //（磁盘上的旧快照、会话未采样等）；仅 stale（本会话未采样）由「上次数据」红标说明
+            `${snapshot.gap && snapshot.lastFailTs !== null && snapshot.lastFailTs !== undefined
+              ? ` · ⚠ 采样失败 ${new Date(snapshot.lastFailTs).toLocaleTimeString('zh-CN', { hour12: false })}`
+              : snapshot.gap ? ' · ⚠ 当日有采样缺口' : ''}`,
           )
         : null,
       React.createElement(Btn, { onClick: () => load(true) }, loading ? '刷新中…' : '立即采样'),
@@ -365,18 +385,43 @@ export function RescuePanel(props: { prefs: PortPrefs; redUp: boolean; onPrefs?:
         : null,
     ),
     React.createElement(ErrorNote, { error }),
-    data?.breaker?.open === true
-      ? React.createElement('div', { className: 'tw-hint', style: { color: LEVEL_COLOR[2], padding: '2px 2px 4px' } },
-          // 聚合口径：逐主机独立熔断。最早恢复的那台到点就能重试（此前这里显示的是
-          // 单台 push2delay 的状态与最晚恢复时间，两种口径都会误导）
-          `上游行情部分主机暂不可用（${data.breaker.openHosts}/${data.breaker.hosts} 台熔断${
-            data.breaker.allOpen ? '，全部不可用' : ''
-          }）：最早约 ${data.breaker.minutesLeft} 分钟后可重试${
-            data.breaker.allMinutesLeft > data.breaker.minutesLeft ? `（全部恢复约 ${data.breaker.allMinutesLeft} 分钟）` : ''
-          }。期间不发起请求以免加重封锁，面板显示当日复盘数据。` +
-          `明细：${data.breaker.detail.filter((h) => h.open).map((h) => `${h.host.split('.')[0]} ${h.minutesLeft}min`).join(' / ')}。` +
-          `最后错误：${data.breaker.lastError ?? '—'}`)
-      : null,
+    (() => {
+      const b = data?.breaker
+      if (b?.open !== true || snapshot === null) return null
+      // 一行短句 + tooltip 明细，且**说清影响范围**：
+      //  - 东财主机熔断只影响"东财那条链路"；面板数据若已由腾讯备用源兜底，
+      //    结论是"缺分单资金流因子"，而不是"没有数据"（此前一律写"面板显示当日复盘数据"，
+      //    在备用源兜底成功的场景下与事实不符）；
+      //  - 收盘后不再承诺"最早 N 分钟可重试"（那时没有采样需求），改为"下次开盘自动重试"；
+      //  - "期间不发起请求"只对熔断中的东财主机成立，备用源照常请求（「立即采样」仍可用）。
+      const closed = snapshot.trading !== true
+      const fromAlt = snapshot.flowSource === 'tencent'
+      const head = closed
+        ? `东财行情主机 ${b.openHosts}/${b.hosts} 台熔断${b.allOpen ? '（全部）' : ''} · 下次开盘自动重试`
+        : `东财行情主机 ${b.openHosts}/${b.hosts} 台熔断 · 最早约 ${b.minutesLeft} 分钟可重试${
+            b.allMinutesLeft > b.minutesLeft ? `（全部恢复 ${b.allMinutesLeft} 分钟）` : ''
+          }`
+      const impact = fromAlt
+        ? '当前快照已由腾讯备用源兜底：价格、量能、脉冲、背离可用；超大单强度与持续性无法计算（该源无分单资金流）'
+        : snapshot.stale === true || snapshot.fallback !== undefined
+          ? '当前显示上次成功采样/当日复盘数据'
+          // 来源未知时（例如客户端已刷新、宿主未重启）不猜测取自哪个源，只陈述可核对的事实
+          : '当前快照来自最近一次成功采样（时刻见上方「数据」）'
+      return React.createElement(
+        'div',
+        {
+          className: 'tw-hint',
+          style: { color: LEVEL_COLOR[2], padding: '2px 2px 4px' },
+          title: [
+            `熔断明细（按主机独立计数）：${b.detail.filter((h) => h.open).map((h) => `${h.host} 剩余 ${h.minutesLeft} 分钟（连续熔断 ${h.trips} 次）`).join('；')}`,
+            `最后错误：${b.lastError ?? '—'}`,
+            '熔断期间不再请求**熔断中的东财主机**（避免把限流推成封锁）；腾讯/新浪备用源不受影响，「立即采样」照常可用。',
+            '熔断是进程级状态，不随面板开关变化。',
+          ].join('\n'),
+        },
+        `${head} —— ${impact}`,
+      )
+    })(),
     loading && data === null ? React.createElement(Skeleton, { lines: 3, height: 20 }) : null,
     snapshot !== null
       ? React.createElement('div', { className: 'tw-rescue-summary' },

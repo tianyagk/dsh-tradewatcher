@@ -796,6 +796,12 @@ export interface RescueSnapshot {
   intraday: RescueIntradayPoint[]
   sampleCount: number
   lastSampleTs: number | null
+  /**
+   * 最近一次**采样失败**的时刻（epoch ms）。
+   * 与 `ts`/`lastSampleTs` 严格分开：失败不得改写"数据时刻"，否则界面会把
+   * 「刚刚试图采样但失败了」显示成「刚刚拿到了数据」。
+   */
+  lastFailTs?: number | null
   /** 是否出现采样缺口（上游失败） */
   gap: boolean
   /** 本快照是否来自 last-known-good（上游暂不可用时的旧数据） */
