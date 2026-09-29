@@ -33,8 +33,8 @@ const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
 const REFERER = 'https://quote.eastmoney.com/'
 const SUGGEST_TOKEN = 'D43BF722C8E33BDC906FB84D85E326E8'
 
-const QUOTE_HOSTS = ['push2delay.eastmoney.com', 'push2.eastmoney.com']
-const HISTORY_HOSTS = ['push2his.eastmoney.com', 'push2delay.eastmoney.com', 'push2.eastmoney.com']
+export const QUOTE_HOSTS = ['push2delay.eastmoney.com', 'push2.eastmoney.com']
+export const HISTORY_HOSTS = ['push2his.eastmoney.com', 'push2delay.eastmoney.com', 'push2.eastmoney.com']
 const SEARCH_HOST = 'searchapi.eastmoney.com'
 
 // ─────────────────────────── tiny TTL cache ───────────────────────────────
@@ -213,12 +213,15 @@ async function loadLastGood(): Promise<void> {
       const raw = await readFile(join(dataHome(), 'quotes-lkg.json'), 'utf8')
       const parsed = JSON.parse(raw)
       const rows = Array.isArray(parsed?.rows) ? parsed.rows : []
+      // 文件写入时刻：老版本落盘的行没有 at 字段，用它近似"观测时刻"，
+      // 否则重启后这些行会被当成"时刻未知"而无法参与新鲜度判定
+      const fileTs = typeof parsed?.ts === 'number' ? parsed.ts : Date.now()
       for (const r of rows) {
         if (r === null || typeof r !== 'object') continue
         const row = r as QuoteRow
         if (typeof row.secid !== 'string' || !SECID_RE.test(row.secid)) continue
         if (typeof row.price !== 'number' || !Number.isFinite(row.price)) continue
-        lastGood.set(row.secid, row)
+        lastGood.set(row.secid, typeof row.at === 'number' ? row : { ...row, at: fileTs })
       }
     } catch {
       /* no persisted file yet — first boot */
@@ -253,9 +256,53 @@ function persistLastGood(): void {
 }
 
 function noteLastGood(row: QuoteRow): void {
-  lastGood.set(row.secid, { ...row })
+  lastGood.set(row.secid, { ...row, at: typeof row.at === 'number' ? row.at : Date.now() })
   lkgDirty = true
   persistLastGood()
+}
+
+/**
+ * 行情新鲜度汇总（真实 `asOf` / `stale`）。
+ *
+ * 此前 `/quotes` 回传的 `ts` 是**响应生成时刻**，与数据本身无关：上游全挂、整屏
+ * 都是 last-known-good 旧值时，界面依然显示"更新 14:32:05"，用户以为刚拿到最新价。
+ * 这里按行给出真实判定：
+ *   - `asOf` = 所有有价行中最新的**观测时刻**（`row.at`），无行则为 null
+ *   - `stale` = 至少一行是兜底值（`source === 'lkg'`）或观测时刻已超过 `QUOTE_STALE_MS`
+ *   - `staleCount` / `sources` 供界面如实标注"哪几行不是新数据、来自哪个源"
+ */
+export const QUOTE_STALE_MS = 90_000
+
+export interface QuoteProvenance {
+  /** 最新一次真实观测到行情的时间（epoch ms）；无有效行为 null */
+  asOf: number | null
+  /** 是否至少一行不新鲜（兜底值或已超时） */
+  stale: boolean
+  /** 不新鲜的行数 */
+  staleCount: number
+  /** 有价行数 / 总行数 */
+  priced: number
+  rows: number
+  /** 按来源计数（em/tencent/sina/lkg） */
+  sources: Record<string, number>
+}
+
+export function summarizeQuoteProvenance(items: Record<string, QuoteRow>, now = Date.now()): QuoteProvenance {
+  let asOf: number | null = null
+  let staleCount = 0
+  let priced = 0
+  const sources: Record<string, number> = {}
+  const rows = Object.values(items)
+  for (const row of rows) {
+    const src = row.source ?? 'em'
+    sources[src] = (sources[src] ?? 0) + 1
+    if (row.price === null) continue
+    priced += 1
+    const at = typeof row.at === 'number' && Number.isFinite(row.at) ? row.at : null
+    if (at !== null && (asOf === null || at > asOf)) asOf = at
+    if (src === 'lkg' || at === null || now - at > QUOTE_STALE_MS) staleCount += 1
+  }
+  return { asOf, stale: staleCount > 0, staleCount, priced, rows: rows.length, sources }
 }
 
 /**
@@ -274,7 +321,9 @@ export function fillLastGood(
     const row = rows.get(secid)
     const good = bank.get(secid)
     if (row === undefined) {
-      if (good !== undefined && good.price !== null) rows.set(secid, { ...good })
+      // 整行来自兜底库：标 source='lkg' 并保留**原始观测时刻**（at），
+      // 界面与 /quotes 的 asOf 才能如实反映"这是几点的旧价"
+      if (good !== undefined && good.price !== null) rows.set(secid, { ...good, source: 'lkg' })
       continue
     }
     if (row.price !== null) {
@@ -283,6 +332,7 @@ export function fillLastGood(
       continue
     }
     if (good !== undefined && good.price !== null) {
+      // 价格本身取自旧值 → 该行即兜底行（即使行内有其它字段是新的）
       if (row.price === null) row.price = good.price
       if (row.chg === null) row.chg = good.chg
       if (row.pct === null) row.pct = good.pct
@@ -291,6 +341,8 @@ export function fillLastGood(
       if (row.high === null) row.high = good.high
       if (row.low === null) row.low = good.low
       if (row.time === null) row.time = good.time
+      row.source = 'lkg'
+      if (typeof good.at === 'number') row.at = good.at
     }
   }
 }
@@ -319,6 +371,9 @@ function rowsFrom(json: unknown): Map<string, QuoteRow> {
       down: num(it.f105),
       even: num(it.f106),
       time: normTime(it.f124),
+      // 真实观测时刻（本行的 asOf）：客户端据此显示"数据是几点几分拿到的"，
+      // 而不是"响应是几点几分返回的"（后者在上游不可用时会显示成刚刚更新）
+      at: Date.now(),
     })
   }
   return rows
@@ -381,6 +436,7 @@ export function quoteFromTencent(secid: string, q: TencentQuoteFull): QuoteRow |
     even: null,
     time: q.ts,
     source: 'tencent',
+    at: Date.now(),
   }
 }
 
@@ -447,6 +503,7 @@ async function fillFromFallbacks(list: readonly string[], rows: Map<string, Quot
         even: null,
         time: null,
         source: 'sina',
+        at: Date.now(),
       })
     }
   } catch {
@@ -508,13 +565,13 @@ function persistBoardLkg(): void {
 
 /** Batch quotes with a 2.5 s TTL + last-known-good on every return path
  *  (fresh fetch, TTL hit and peek hit alike). */
-export async function fetchQuotes(secids: string[]): Promise<Record<string, QuoteRow>> {
+async function loadQuotes(secids: string[]): Promise<Map<string, QuoteRow>> {
   // 去重 + 排序：同一批标的无论以何顺序传入都命中同一缓存槽（否则 /portfolio 与 /quotes
   // 会各占一个槽、各自打一次上游）。**但必须保留原始大小写**：`113.rbm` / `114.lhm`
   // 这类商品 secid 后缀区分大小写，整体 toUpperCase 会让上游请求与备用源映射双双落空
   // （曾因此在东财不可用时把 4 个期货整批丢掉）。
   const list = [...new Set(secids.map((s) => s.trim()))].sort((a, b) => (a.toUpperCase() < b.toUpperCase() ? -1 : a.toUpperCase() > b.toUpperCase() ? 1 : 0))
-  if (list.length === 0) return {}
+  if (list.length === 0) return new Map()
   await loadLastGood()
   const key = `quotes:${list.map((s) => s.toUpperCase()).join(',')}`
   const quick = peekCache<Record<string, QuoteRow>>(key, 40_000)
@@ -527,7 +584,7 @@ export async function fetchQuotes(secids: string[]): Promise<Record<string, Quot
     })
     if (gap) await fillFromFallbacks(list, map)
     fillLastGood(list, map)
-    return rowsToRecord(map)
+    return map
   }
   const rows = await ttlCache<Map<string, QuoteRow>>(key, 2500, async () => {
     const got = await rawQuotes(list)
@@ -536,7 +593,22 @@ export async function fetchQuotes(secids: string[]): Promise<Record<string, Quot
     return got
   })
   fillLastGood(list, rows)
-  return rowsToRecord(rows)
+  return rows
+}
+
+/**
+ * 行情 + 真实新鲜度。`asOf` 是数据被观测到的时刻，`stale` 表示至少一行是兜底/过期值 ——
+ * 二者都由行内的 `at`/`source` 推导，不依赖响应生成时间（见 summarizeQuoteProvenance）。
+ */
+export async function fetchQuotesDetailed(secids: string[]): Promise<QuoteProvenance & { items: Record<string, QuoteRow> }> {
+  const rows = await loadQuotes(secids)
+  const items = rowsToRecord(rows)
+  return { items, ...summarizeQuoteProvenance(items) }
+}
+
+/** 只要行情的调用方用这个（tools 等）；需要新鲜度信息的用 fetchQuotesDetailed */
+export async function fetchQuotes(secids: string[]): Promise<Record<string, QuoteRow>> {
+  return rowsToRecord(await loadQuotes(secids))
 }
 
 /** Detail card for one stock/ETF (extra fundamentals; indices return what the feed has). */

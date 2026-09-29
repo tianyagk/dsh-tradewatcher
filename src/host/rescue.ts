@@ -28,6 +28,7 @@ import { quoteBreaker } from './breaker.ts'
 import { fetchTencentDaily, fetchTencentMinutes, fetchTencentQuoteRows } from './tencent.ts'
 import { dayOf as shDayOf, hhmmOf as shHhmmOf, weekdayOf as shWeekdayOf } from './time.ts'
 import { buildBottomLane, calibrateAcross } from './bottom.ts'
+import { SingleFlight } from './singleflight.ts'
 import { dataHome } from './store.ts'
 
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
@@ -815,6 +816,14 @@ export class RescueMonitor {
   private bottomCalRetryAfter = 0
   /** 底部视图缓存（按节流刷新，避免每 tick 重算位置/形态） */
   private bottomCache: { at: number; key: string; view: RescueSnapshot['bottom'] } | null = null
+  /**
+   * 上一次成功算出的底部视图。日线拉取失败或校准样本归零时**保留**它（标 stale），
+   * 而不是让整块面板消失 —— 位置/形态/概率都是慢变量，几十分钟前的结论仍可参考，
+   * 但必须标明"非本次计算"。
+   */
+  private bottomLast: { at: number; view: NonNullable<RescueSnapshot['bottom']> } | null = null
+  /** tick 合并（定时循环 / 手动刷新 / 自动补采三条路径共用一份工作） */
+  private tickFlight = new SingleFlight()
   /** 当日分钟序列缓存（脉冲计算用；东财或腾讯） */
   private minutes: Record<string, MinuteFlowPoint[]> = {}
   private lastMinuteRefresh = 0
@@ -953,14 +962,29 @@ export class RescueMonitor {
     }
   }
 
-  /** 立即采样一次（手动刷新/非交易时段复盘） */
+  /** 立即采样一次（手动刷新/非交易时段复盘）；与在飞的定时采样合并 */
   async sampleNow(): Promise<RescueSnapshot> {
     await this.init()
-    await this.tick(true)
+    await this.tick()
     return this.snapshot()
   }
 
-  private async tick(force = false): Promise<void> {
+  /**
+   * 采样一次。**重入守卫**：三条触发路径（定时循环 `loop`、前端手动 `sampleNow`、
+   * 路由自动补采 `ensureFresh`）会撞在一起 —— 此前各跑一份，导致上游请求翻倍、
+   * `today.samples` 重复计数、两份快照互相覆盖（样本数可能"回退"）。现统一合并：
+   * 已有采样在飞时，新调用等待同一份结果，不再叠加第二次全量采样。
+   */
+  private async tick(): Promise<void> {
+    return this.tickFlight.run(() => this.tickOnce())
+  }
+
+  /** 是否正在采样（自检/UI 观察用） */
+  get sampling(): boolean {
+    return this.tickFlight.busy
+  }
+
+  private async tickOnce(): Promise<void> {
     await this.init()
     this.rollDay()
     const metas = rescueUniverseMeta(this.config.universe, this.config.custom ?? [])
@@ -1452,10 +1476,14 @@ export class RescueMonitor {
   /**
    * 底部视图：位置 + 日内形态 + 概率（概率来自跨通道合并的历史频率校准）。
    * 概率与形态分开呈现 —— 日内形态没有可回算的历史分钟数据，不进入概率。
+   *
+   * 不可用时（日线还没拉到 / 校准冷却中 / 校准失败）**保留上一次成功视图**并标 `stale`：
+   * 此前直接 `return undefined`，整块「底部位置 / 形态 / 概率」面板会凭空消失，
+   * 而这恰恰发生在上游最抖的时候 —— 用户看到的不是"数据旧"，是"功能没了"。
    */
   private buildBottom(etfs: RescueEtfView[]): RescueSnapshot['bottom'] {
     const lanes = etfs.filter((e) => this.dailyBars[e.secid] !== undefined).slice(0, 8)
-    if (lanes.length === 0) return undefined
+    if (lanes.length === 0) return this.retainedBottom()
     // 节流：位置/形态/概率都基于日线与当日快照，没必要每个 tick 重算（15–60s 一次足够）
     const cacheKey = `${this.todayKey}|${lanes.map((l) => `${l.secid}:${l.price ?? 0}`).join(',')}`
     const now = Date.now()
@@ -1465,9 +1493,10 @@ export class RescueMonitor {
     // 校准失败（日线拉取失败）后进入冷却，避免每 tick 重跑全量回测
     const cal =
       this.bottomCal ??
-      (Date.now() < this.bottomCalRetryAfter
+      (now < this.bottomCalRetryAfter
         ? null
         : calibrateAcross(Object.values(this.dailyBars).map((b) => b as DailyBarLite[])))
+    if (cal === null) return this.retainedBottom()
     const views: RescueBottomLane[] = lanes.map((e) => {
       const bars = this.dailyBars[e.secid] ?? []
       const minutes = this.minutes[e.secid] ?? []
@@ -1477,8 +1506,6 @@ export class RescueMonitor {
         minutes, volumeRatio: e.timeAdjMult, calibration: cal,
       })
     })
-    // 用行情快照里的开高低补全日内形态（日线只有收盘）
-    if (cal === null) return undefined
     const view: RescueSnapshot['bottom'] = {
       lanes: views,
       model:
@@ -1487,9 +1514,17 @@ export class RescueMonitor {
         `前向收盘收益中位数 ${cal.medianForward === null ? '—' : (cal.medianForward * 100).toFixed(2) + '%'}，` +
         `期间最大回撤中位数 ${cal.medianDrawdown === null ? '—' : (cal.medianDrawdown * 100).toFixed(2) + '%'}`,
       asOf: this.todayKey,
+      computedAt: now,
     }
     this.bottomCache = { at: now, key: cacheKey, view }
+    this.bottomLast = { at: now, view }
     return view
+  }
+
+  /** 上次成功算出的底部视图（标 stale 并保留原计算时刻）；从未算出过则为 undefined */
+  private retainedBottom(): RescueSnapshot['bottom'] {
+    if (this.bottomLast === null) return undefined
+    return { ...this.bottomLast.view, stale: true, computedAt: this.bottomLast.at }
   }
 
   /** 近 60 天每日摘要（历史回看） */
@@ -1536,7 +1571,8 @@ export class RescueMonitor {
     await this.init()
     if (phaseOf(hhmmOf(now)) === 'pre') return false
     try {
-      await this.tick(true)
+      // 与在飞的定时采样合并（重入守卫）：这里不再叠加第二份全量采样
+      await this.tick()
     } catch {
       /* 失败则交由 LKG 兜底 */
     }

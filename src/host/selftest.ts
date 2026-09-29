@@ -8,16 +8,18 @@ import { join } from 'node:path'
 import { DataStore, normalizeRescuePrefs, replayPosition, sortLedger, dataHome } from './store.ts'
 import { assemblePortfolio, derivePosition, ledgerViews, shanghaiDayStart, verbLabel } from './portfolio.ts'
 import * as em from './em.ts'
-import { fillLastGood, mergeBars, quoteFromTencent, resampleYearly } from './em.ts'
+import { fillLastGood, mergeBars, quoteFromTencent, resampleYearly, summarizeQuoteProvenance } from './em.ts'
 import { parseTencentStamp, parseTencentSuggest, suggestKindFromTencent, tencentCode, unescapeUnicode } from './tencent.ts'
 import { parseSinaEtfRanking, parseSinaHq, sinaCovered, sinaSymbol } from './sina.ts'
-import { breakerFor, hostsAllowed } from './breaker.ts'
+import { breakerFor, breakerSummary, hostsAllowed, minutesToFullyRecover, minutesToRecover } from './breaker.ts'
+import { HttpError, httpStatusOf, retryAfterSecondsOf } from './http.ts'
+import { SingleFlight } from './singleflight.ts'
 import { losslessJson } from './tools.ts'
 import { DEFAULT_PREFS } from '../shared/model.ts'
 import { canonicalEconomy, macroEventsFromEm, macroImportance, parseEmDate } from './calendar.ts'
 import { RescueMonitor } from './rescue.ts'
 import { CircuitBreaker } from './breaker.ts'
-import { calibratePooled, computePattern, computePosition, laneOutcomeStats, patternScore, positionScore } from './bottom.ts'
+import { calibratePooled, computePattern, computePosition, laneOutcomeStats, patternScore, positionScore, sanitizeBars } from './bottom.ts'
 import {
   CORE_OUTFLOW_VETO, PERSIST_ANCHORS, PULSE_HIT_SCORE, divergenceScore, interpScore, isTailElapsed,
   progressAt, pulseAnchorsFor, pulseBandLabel, quantile, resonanceScore, scoreRescue, sessionElapsed,
@@ -25,7 +27,7 @@ import {
 } from './rescue.ts'
 import { RESCUE_CALIBRATION } from './rescue-thresholds.ts'
 import { TW_ALL_SECIDS, TW_ROWS, rescueUniverseMeta } from '../shared/model.ts'
-import type { QuoteRow } from '../shared/model.ts'
+import type { DailyBarLite, QuoteRow, RescueEtfView, RescueSnapshot } from '../shared/model.ts'
 
 let failures = 0
 const ok = (cond: boolean, msg: string): void => {
@@ -699,6 +701,156 @@ async function main(): Promise<void> {
       rows3.set('1.600519', fakeQuote('1.600519', 1501, 1490))
       fillLastGood(['1.600519'], rows3, bank)
       ok(bank.get('1.600519')?.price === 1501, 'lkg bank updated by fresh price')
+      // 4) 兜底行必须标 source='lkg'，并保留**原始观测时刻**：否则界面会把旧价
+      //    当成"刚刚更新"（asOf 取的是行内 at，不是响应时刻）
+      ok(rows1.get('1.600519')?.source === 'lkg', 'lkg 字段级填充标注 source=lkg')
+      ok(rows2.get('1.600519')?.source === 'lkg', 'lkg 整行恢复标注 source=lkg')
+      const bankAt = 1_700_000_000_000
+      const bank2 = new Map<string, QuoteRow>()
+      bank2.set('1.600519', { ...fakeQuote('1.600519', 1500, 1490), at: bankAt })
+      const rows4 = new Map<string, QuoteRow>()
+      fillLastGood(['1.600519'], rows4, bank2)
+      ok(rows4.get('1.600519')?.at === bankAt, 'lkg 保留原始观测时刻 at（不伪装成刚刚更新）')
+    }
+
+    // 真实新鲜度（/quotes 的 asOf / stale）：由行内 at + source 推导，与响应时刻无关
+    {
+      const base = fakeQuote('1.600519', 1500, 1490)
+      const now = 1_700_000_000_000
+      const fresh = { ...base, at: now - 3_000 }
+      const alt = { ...fakeQuote('1.000001', 3900, 3880), at: now - 5_000, source: 'tencent' as const }
+      const lkg = { ...fakeQuote('100.KOSPI200', 300, 301), at: now - 3_600_000, source: 'lkg' as const }
+      const old = { ...fakeQuote('122.XAU', 2400, 2390), at: now - 200_000 }
+      const p = summarizeQuoteProvenance({ '1.600519': fresh, '1.000001': alt, '100.KOSPI200': lkg, '122.XAU': old }, now)
+      ok(p.asOf === now - 3_000, `asOf 取最新观测时刻而非响应时刻 (got ${p.asOf})`)
+      ok(p.stale === true && p.staleCount === 2, `stale 判定：lkg 行 + 超过 90s 的行 (got ${p.staleCount}/2)`)
+      ok(p.priced === 4 && p.sources.tencent === 1 && p.sources.lkg === 1, '按来源计数正确')
+      const allFresh = summarizeQuoteProvenance({ '1.600519': fresh, '1.000001': alt }, now)
+      ok(allFresh.stale === false && allFresh.staleCount === 0, '全部新鲜时不报警')
+      ok(summarizeQuoteProvenance({}, now).asOf === null, '空集 asOf 为 null')
+      // 无 at 的行（老数据）不得被当成新鲜
+      const noAt = { ...fakeQuote('1.600519', 1500, 1490) } as QuoteRow
+      delete noAt.at
+      ok(summarizeQuoteProvenance({ '1.600519': noAt }, now).stale === true, '缺少观测时刻的行按"不新鲜"处理')
+    }
+
+    // 错误语义分级：400 请求写错 / 413 体过大 / 503 上游不可用 / 500 本插件 bug
+    {
+      ok(httpStatusOf(new HttpError('请求体过大', 413)) === 413, 'HttpError 显式状态码优先')
+      ok(httpStatusOf(new Error('secid 非法')) === 400, '参数非法 → 400')
+      ok(httpStatusOf(new Error('请求体过大（上限 262144 字节）')) === 413, '体过大 → 413（兜底匹配）')
+      ok(httpStatusOf(new Error('上游暂时不可用（熔断中，约 3 分钟后自动重试）')) === 503, '熔断 → 503')
+      ok(httpStatusOf(new Error('HTTP 503 from push2delay.eastmoney.com')) === 503, '上游 5xx → 503')
+      ok(httpStatusOf(new Error('HTTP 404 from push2his.eastmoney.com')) === 503, '上游 4xx 仍算上游不可用（不是调用方写错）')
+      ok(httpStatusOf(new Error('non-JSON reply from push2.eastmoney.com: <html>')) === 503, '上游返回非 JSON → 503')
+      ok(httpStatusOf(new Error('fetch failed')) === 503, 'fetch failed → 503')
+      ok(httpStatusOf(new Error('socket hang up')) === 503, 'socket 断开 → 503')
+      ok(httpStatusOf(new Error('The operation was aborted due to timeout')) === 503, '超时 → 503')
+      ok(httpStatusOf(new Error('Cannot read properties of undefined (reading f13)')) === 500, '未归类错误 → 500（不再伪装成 400）')
+      ok(retryAfterSecondsOf(new Error('fetch failed'), 2) === 120, '503 附带 retry-after 秒数')
+      ok(retryAfterSecondsOf(new Error('secid 非法'), 2) === null, '非 503 不带 retry-after')
+    }
+
+    // tick 重入守卫：并发采样合并为一份，失败不锁死
+    {
+      const sf = new SingleFlight()
+      let calls = 0
+      let release: (() => void) | null = null
+      const gate = new Promise<void>((r) => { release = r })
+      const work = async (): Promise<void> => { calls += 1; await gate }
+      const a = sf.run(work)
+      const b = sf.run(work)
+      const c = sf.run(work)
+      ok(sf.busy === true, '采样进行中标记 busy')
+      ok(calls === 1, `并发三次只跑一份工作 (got ${calls})`)
+      release?.()
+      await Promise.all([a, b, c])
+      ok(sf.busy === false, '结算后释放')
+      await sf.run(async () => { calls += 1 })
+      ok(calls === 2, '结算后可再次运行（不被锁死）')
+      let threw = 0
+      await sf.run(async () => { throw new Error('boom') }).catch(() => { threw += 1 })
+      ok(threw === 1 && sf.busy === false, '失败向上抛但不阻塞后续采样')
+    }
+
+    // 熔断聚合 + "最早恢复"语义
+    {
+      const hA = 'selftest-host-a.example'
+      const hB = 'selftest-host-b.example'
+      const ba = breakerFor(hA)
+      const bb = breakerFor(hB)
+      for (let i = 0; i < 3; i++) bb.recordFailure(new Error('boom-b'))
+      ok(bb.allow() === false, 'host-b 熔断')
+      const single = breakerSummary([hA, hB])
+      ok(single.open === true && single.allOpen === false && single.openHosts === 1 && single.hosts === 2,
+        '聚合：单主机熔断不等于整组不可用')
+      // host-a 连续熔断两次 → 退避 4 分钟；host-b 只熔断一次 → 2 分钟
+      for (let i = 0; i < 3; i++) ba.recordFailure(new Error('boom-a'))
+      for (let i = 0; i < 3; i++) ba.recordFailure(new Error('boom-a'))
+      ok(ba.allow() === false && ba.minutesLeft() >= 3, `host-a 二次熔断退避已加倍 (${ba.minutesLeft()}min)`)
+      const both = breakerSummary([hA, hB])
+      ok(both.allOpen === true && both.openHosts === 2, '两台都熔断时 allOpen')
+      ok(minutesToRecover([hA, hB]) === 2, `minutesToRecover 取**最早**恢复（host-b 的 2 分钟），而非最晚的 4 分钟 (got ${minutesToRecover([hA, hB])})`)
+      ok(minutesToFullyRecover([hA, hB]) === 4, `minutesToFullyRecover 取最晚（4 分钟）(got ${minutesToFullyRecover([hA, hB])})`)
+      ok(both.minutesLeft === 2 && both.allMinutesLeft === 4, '聚合同时给出"最早可重试"与"全部恢复"')
+      ok(both.detail.filter((h) => h.open).length === 2 && both.lastError !== null, '逐主机明细与最近失败原因')
+      ba.recordSuccess()
+      bb.recordSuccess()
+      ok(breakerSummary([hA, hB]).open === false, '成功后聚合复位')
+    }
+
+    // 回测/标定路径同样要清洗日线：非法值不得把概率与中位数污染成 NaN
+    {
+      const mk = (n: number): DailyBarLite[] => {
+        const out: DailyBarLite[] = []
+        for (let i = 0; i < n; i++) {
+          const close = 100 + Math.sin(i / 7) * 12 + (i % 13 === 0 ? -6 : 0)
+          const mm = String(1 + Math.floor(i / 28) % 12).padStart(2, '0')
+          const dd = String(1 + (i % 28)).padStart(2, '0')
+          out.push({ date: `20${20 + Math.floor(i / 336)}-${mm}-${dd}`, open: close, close, high: close * 1.01, low: close * 0.99, vol: 1000 + (i % 5) * 100 })
+        }
+        return out
+      }
+      const clean = mk(320)
+      const tailDirty = [...clean, { ...clean[clean.length - 1], high: Number.NaN, vol: 0 }]
+      const a = calibratePooled([clean], { horizon: 5, targets: [0.01, 0.02] })
+      const b = calibratePooled([tailDirty], { horizon: 5, targets: [0.01, 0.02] })
+      ok(a.n > 0 && a.baseN > 0, `标定产出样本 (n=${a.n}, baseN=${a.baseN})`)
+      ok(a.medianForward !== null && Number.isFinite(a.medianForward) && a.medianDrawdown !== null && Number.isFinite(a.medianDrawdown),
+        '中位数/回撤为有限值（非 NaN）')
+      ok(a.targets.every((t) => t.prob === null || Number.isFinite(t.prob)), '概率为有限值')
+      ok(JSON.stringify(b) === JSON.stringify(a), '尾部非法日线被清洗：标定结果与干净序列逐字节一致')
+      ok(sanitizeBars(tailDirty).length === clean.length, 'sanitizeBars 滤掉非法日线')
+      // 中部非法日线无法被"直接丢弃后结果不变"检验，但必须仍然输出有限值
+      const midDirty = clean.map((bar, i) => (i === 250 ? { ...bar, high: Number.NaN } : bar))
+      const mid = calibratePooled([midDirty], { horizon: 5, targets: [0.01, 0.02] })
+      ok(mid.baseN > 0 && mid.medianForward !== null && Number.isFinite(mid.medianForward)
+        && mid.targets.every((t) => t.prob === null || Number.isFinite(t.prob)),
+        '中部非法日线不再污染概率/中位数（NaN 免疫）')
+      const st = laneOutcomeStats(midDirty, { percentileMax: 0.25, volumeMin: 1.0, horizon: 5, targets: [0.01] })
+      ok(st.forwards.every((v) => Number.isFinite(v)) && st.draws.every((v) => Number.isFinite(v)),
+        '单通道回测的前向收益/回撤均为有限值')
+      const price = clean[clean.length - 1].close
+      const posClean = computePosition(clean, price)
+      const posDirty = computePosition(midDirty, price)
+      ok(posDirty.percentile60 === posClean.percentile60 && posDirty.downStreak === posClean.downStreak,
+        '位置特征不受非法日线影响')
+    }
+
+    // 校准不可用时保留上次底部视图（而不是整块面板消失）
+    {
+      const mon = new RescueMonitor(dir)
+      const internals = mon as unknown as {
+        bottomLast: { at: number; view: NonNullable<RescueSnapshot['bottom']> } | null
+        buildBottom: (etfs: RescueEtfView[]) => RescueSnapshot['bottom']
+      }
+      ok(internals.buildBottom([]) === undefined, '从未算出过时不编造视图（面板显示空态提示）')
+      const at = 1_700_000_000_000
+      internals.bottomLast = { at, view: { lanes: [], model: '保留测试', asOf: '2026-09-28' } }
+      const kept = internals.buildBottom([])
+      ok(kept !== undefined && kept.stale === true, '无通道日线时保留上次视图并标 stale')
+      ok(kept?.computedAt === at && kept?.asOf === '2026-09-28', '保留视图带原计算时刻与原口径')
+      ok(kept?.model === '保留测试', '保留视图内容原样返回')
     }
   } finally {
     rmSync(dir, { recursive: true, force: true })

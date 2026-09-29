@@ -164,7 +164,10 @@ function App(props: TabProps): React.ReactElement {
     { className: 'tw-root', 'data-theme': theme, style: { height: '100%', display: 'flex', flexDirection: 'column', minWidth: 0 } },
     React.createElement(TopBar, {
       quotes,
-      ts: engine.ts,
+      asOf: engine.asOf,
+      stale: engine.stale,
+      staleCount: engine.staleCount,
+      sources: engine.sources,
       refreshing: engine.refreshing,
       onRefresh: engine.refresh,
       prefs: prefs ?? DEFAULT_PREFS,

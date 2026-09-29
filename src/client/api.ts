@@ -53,9 +53,23 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export const api = {
-  quotes(secids: string[]): Promise<{ ts: number; items: Record<string, QuoteRow> }> {
+  quotes(secids: string[]): Promise<{
+    /** 响应生成时刻（用于触发下游刷新），**不是**数据时刻 */
+    ts: number
+    items: Record<string, QuoteRow>
+    /** 最新一次真实观测到行情的时间（epoch ms）；无有效行为 null */
+    asOf: number | null
+    /** 至少一行是兜底值/已过期（界面必须如实报警，而不是显示"刚刚更新"） */
+    stale: boolean
+    staleCount: number
+    priced: number
+    rows: number
+    sources: Record<string, number>
+  }> {
     const ids = [...new Set(secids)].join(',')
-    if (ids === '') return Promise.resolve({ ts: Date.now(), items: {} })
+    if (ids === '') {
+      return Promise.resolve({ ts: Date.now(), items: {}, asOf: null, stale: false, staleCount: 0, priced: 0, rows: 0, sources: {} })
+    }
     return request(`/tradewatcher/quotes?ids=${encodeURIComponent(ids)}`)
   },
   trend(secid: string, ndays = 1): Promise<{ trend: TrendData | null }> {
@@ -97,7 +111,21 @@ export const api = {
   }> {
     return request(`/tradewatcher/board?scope=${scope}&sort=${sort}&pn=${pn}&pz=40`)
   },
-  rescue(force = false): Promise<{ snapshot: RescueSnapshot; history: RescueDaySummary[]; calibration?: unknown }> {
+  rescue(force = false): Promise<{
+    snapshot: RescueSnapshot
+    history: RescueDaySummary[]
+    calibration?: unknown
+    breaker?: {
+      open: boolean
+      allOpen: boolean
+      openHosts: number
+      hosts: number
+      minutesLeft: number
+      allMinutesLeft: number
+      lastError: string | null
+      detail: Array<{ host: string; open: boolean; minutesLeft: number; trips: number; fails: number; lastError: string | null }>
+    }
+  }> {
     return request(`/tradewatcher/rescue${force ? '?force=1' : ''}`)
   },
   rescueDay(day: string): Promise<{ snapshot: RescueSnapshot; dayEvents: RescueSignalEvent[]; dayIntraday: RescueIntradayPoint[] }> {

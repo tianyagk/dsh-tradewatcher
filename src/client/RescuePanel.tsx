@@ -34,11 +34,31 @@ interface Calibration {
   baselines: Record<string, number>
 }
 
+interface BreakerHost {
+  host: string
+  open: boolean
+  until: number
+  trips: number
+  fails: number
+  minutesLeft: number
+  lastError: string | null
+}
+
 interface RescueData {
   snapshot: RescueSnapshot
   history: RescueDaySummary[]
   calibration?: Calibration
-  breaker?: { open: boolean; until: number; trips: number; minutesLeft: number; lastError: string | null }
+  /** 熔断状态聚合（逐主机明细 + 最早/全部恢复时间） */
+  breaker?: {
+    open: boolean
+    allOpen: boolean
+    openHosts: number
+    hosts: number
+    minutesLeft: number
+    allMinutesLeft: number
+    lastError: string | null
+    detail: BreakerHost[]
+  }
   staleNote?: string
 }
 
@@ -347,8 +367,15 @@ export function RescuePanel(props: { prefs: PortPrefs; redUp: boolean; onPrefs?:
     React.createElement(ErrorNote, { error }),
     data?.breaker?.open === true
       ? React.createElement('div', { className: 'tw-hint', style: { color: LEVEL_COLOR[2], padding: '2px 2px 4px' } },
-          `上游行情暂时不可用（连续失败已熔断，约 ${data.breaker.minutesLeft} 分钟后自动重试）：` +
-          `期间不发起请求以免加重封锁，面板显示当日复盘数据。最后错误：${data.breaker.lastError ?? '—'}`)
+          // 聚合口径：逐主机独立熔断。最早恢复的那台到点就能重试（此前这里显示的是
+          // 单台 push2delay 的状态与最晚恢复时间，两种口径都会误导）
+          `上游行情部分主机暂不可用（${data.breaker.openHosts}/${data.breaker.hosts} 台熔断${
+            data.breaker.allOpen ? '，全部不可用' : ''
+          }）：最早约 ${data.breaker.minutesLeft} 分钟后可重试${
+            data.breaker.allMinutesLeft > data.breaker.minutesLeft ? `（全部恢复约 ${data.breaker.allMinutesLeft} 分钟）` : ''
+          }。期间不发起请求以免加重封锁，面板显示当日复盘数据。` +
+          `明细：${data.breaker.detail.filter((h) => h.open).map((h) => `${h.host.split('.')[0]} ${h.minutesLeft}min`).join(' / ')}。` +
+          `最后错误：${data.breaker.lastError ?? '—'}`)
       : null,
     loading && data === null ? React.createElement(Skeleton, { lines: 3, height: 20 }) : null,
     snapshot !== null
@@ -435,6 +462,19 @@ export function RescuePanel(props: { prefs: PortPrefs; redUp: boolean; onPrefs?:
             ? React.createElement('div', { className: 'tw-panel', style: { padding: '6px 8px' } },
                 React.createElement('div', { className: 'tw-sub-h' }, '底部位置 / 形态 / 概率',
                   React.createElement('span', { style: { flex: 1 } }),
+                  // 保留视图必须显式标注：这是「日线/校准样本暂时拿不到」时的上次结果，
+                  // 不是本次计算 —— 否则会被当成刚算出来的实时结论
+                  snapshot.bottom.stale === true
+                    ? React.createElement('span', {
+                        className: 'tw-badge',
+                        title: '日线或校准样本暂时不可用，这里展示上一次成功计算的结果（位置/形态/概率都是慢变量，仍可参考）',
+                        style: { fontSize: 9.5, color: '#e0a94a' },
+                      }, `上次结果${
+                        typeof snapshot.bottom.computedAt === 'number'
+                          ? ` · ${new Date(snapshot.bottom.computedAt).toTimeString().slice(0, 5)}`
+                          : ''
+                      }`)
+                    : null,
                   React.createElement('span', { className: 'tw-muted', style: { fontSize: 10.5 } }, snapshot.bottom.asOf),
                 ),
                 React.createElement('table', { className: 'tw-rescue-factor' },

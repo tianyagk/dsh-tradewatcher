@@ -7,12 +7,28 @@ import { readFileSync, rmSync } from 'node:fs'
  * 此前 build.mjs 只用 esbuild（不做类型检查），而 typecheck 脚本无人调用 ——
  * 双端共享契约漂移（例如 api.ts 的 source 联合类型漏了 'sina'）没有任何编译期保护。
  * 需要临时跳过（例如调试构建）时设 TW_SKIP_TYPECHECK=1。
+ *
+ * 两种失败必须分开报：**tsc 根本没起来**（没装 devDependencies、路径不对、权限）
+ * 与**类型检查不通过**是完全不同的处置 —— 前者报"类型错误"会让人去翻一个并不存在的
+ * 类型问题。`execFileSync` 的错误对象里 `status` 是子进程退出码，只在真的跑起来时才有。
  */
 if (process.env.TW_SKIP_TYPECHECK !== '1') {
   try {
     execFileSync('node_modules/.bin/tsc', ['--noEmit', '-p', 'tsconfig.json'], { stdio: 'inherit' })
-  } catch {
-    console.error('\n构建中断：类型检查未通过（tsc --noEmit）。修好后再构建，或设 TW_SKIP_TYPECHECK=1 临时跳过。\n')
+  } catch (error) {
+    const status = typeof error?.status === 'number' ? error.status : null
+    if (status === null) {
+      const reason = error?.code ?? error?.message ?? String(error)
+      console.error(`\n构建中断：无法启动 tsc（${reason}）。`)
+      console.error('这通常是依赖未安装：先在项目根目录跑 `npm i`（需要 devDependencies 里的 typescript）。')
+      console.error('确认不需要类型门禁时可设 TW_SKIP_TYPECHECK=1 临时跳过。\n')
+      process.exit(2)
+    }
+    if (typeof error?.signal === 'string') {
+      console.error(`\n构建中断：tsc 被信号 ${error.signal} 终止（可能是内存不足或被外部杀掉）。\n`)
+      process.exit(3)
+    }
+    console.error(`\n构建中断：类型检查未通过（tsc --noEmit，退出码 ${status}）。修好后再构建，或设 TW_SKIP_TYPECHECK=1 临时跳过。\n`)
     process.exit(1)
   }
 }
@@ -85,7 +101,7 @@ const REQUIRED_CLIENT_SNIPPETS = [
   '5 分钟抽样',              // 复盘区的当日记录条
   '最高评分',                // 复盘区当日记录
   '无实时数据：本次快照没有因子得分', // 因子表空态提示
-  '上游行情暂时不可用',      // 熔断横幅
+  '上游行情部分主机暂不可用',  // 熔断横幅（文案随聚合口径调整过，断言同步更新）
   '今日信号时间线',          // 时间线（曾在守卫里被误隐藏）
   '分时量能',
   '护盘信号',
@@ -93,6 +109,9 @@ const REQUIRED_CLIENT_SNIPPETS = [
   '历史同类情形的频率',        // 概率口径说明（防止被当成预测）
   '板块涨跌来自腾讯备用源',     // 板块栏的来源标注
   '「主力净流入」仅东财提供',   // 备用源下资金流不可用的说明
+  '滞后',                    // 顶栏"数据滞后"标记（真实 asOf/stale）
+  '上次结果',                // 底部视图的保留视图标记（校准暂不可用）
+  '台熔断',                  // 护盘面板的熔断聚合横幅
 ]
 
 const clientBundle = readFileSync('lib/client.js', 'utf8')

@@ -12,7 +12,16 @@ const clientLkg = new Map<string, QuoteRow>()
 
 export interface QuoteEngine {
   quotes: Record<string, QuoteRow>
+  /** 响应时刻（触发下游页面重取），不是数据时刻 */
   ts: number | null
+  /** 数据被真实观测到的时刻（null = 还没有过有效行情） */
+  asOf: number | null
+  /** 至少一行是兜底/过期值 */
+  stale: boolean
+  /** 不新鲜行数（用于界面标注"其中 N 个为旧值"） */
+  staleCount: number
+  /** 按来源计数（em/tencent/sina/lkg） */
+  sources: Record<string, number>
   error: string | null
   refreshing: boolean
   refresh: () => void
@@ -29,6 +38,10 @@ export function useQuoteEngine(secids: string[], intervalMs: number, enabled: bo
     return initial
   })
   const [ts, setTs] = useState<number | null>(null)
+  const [asOf, setAsOf] = useState<number | null>(null)
+  const [stale, setStale] = useState(false)
+  const [staleCount, setStaleCount] = useState(0)
+  const [sources, setSources] = useState<Record<string, number>>({})
   const [error, setError] = useState<string | null>(null)
   const [refreshing, setRefreshing] = useState(false)
   const inFlight = useRef(false)
@@ -62,6 +75,12 @@ export function useQuoteEngine(secids: string[], intervalMs: number, enabled: bo
           return next
         })
         setTs(r.ts)
+        // 真实数据时刻与新鲜度：上游全挂时 asOf 会停在最后一次成功观测，
+        // stale=true 让顶栏显示"滞后"而不是"刚刚更新"（此前用的是响应时刻）
+        setAsOf(r.asOf ?? null)
+        setStale(r.stale === true)
+        setStaleCount(r.staleCount ?? 0)
+        setSources(r.sources ?? {})
         setError(null)
       })
       .catch((e: Error) => {
@@ -85,5 +104,5 @@ export function useQuoteEngine(secids: string[], intervalMs: number, enabled: bo
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key, intervalMs, enabled])
 
-  return { quotes, ts, error, refreshing, refresh: load }
+  return { quotes, ts, asOf, stale, staleCount, sources, error, refreshing, refresh: load }
 }

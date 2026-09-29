@@ -66,9 +66,11 @@ export function sanitizeBars(bars: readonly DailyBarLite[]): DailyBarLite[] {
 /** 位置特征（bars 为截至当日的历史，price 为现价或当日收盘） */
 export function computePosition(bars: readonly DailyBarLite[], price: number): PositionMetrics {
   const empty: PositionMetrics = { drawdown60: null, drawdown250: null, aboveLow60: null, percentile60: null, downStreak: 0, atNewLow60: false }
-  if (bars.length < 20 || !(price > 0)) return empty
-  const win60 = sanitizeBars(bars.slice(-60))
-  const win250 = sanitizeBars(bars.slice(-250))
+  // 先在入口清洗：一根 NaN/0 成交量的日线会污染分位、极值与连跌计数（一路传到视图）
+  const clean = sanitizeBars(bars)
+  if (clean.length < 20 || !(price > 0)) return empty
+  const win60 = clean.slice(-60)
+  const win250 = clean.slice(-250)
   const ex60 = extremes(win60)
   const ex250 = extremes(win250)
   if (ex60 === null || ex250 === null) return empty
@@ -78,8 +80,8 @@ export function computePosition(bars: readonly DailyBarLite[], price: number): P
   const closes = win60.map((b) => b.close).sort((a, b) => a - b)
   const rank = closes.filter((c) => c <= price).length / closes.length
   let downStreak = 0
-  for (let i = bars.length - 1; i > 0; i--) {
-    if (bars[i].close < bars[i - 1].close) downStreak += 1
+  for (let i = clean.length - 1; i > 0; i--) {
+    if (clean[i].close < clean[i - 1].close) downStreak += 1
     else break
   }
   return {
@@ -194,20 +196,27 @@ export function laneOutcomeStats(
   const stats: BottomOutcomeStats = {
     hits: targets.map(() => []), baseHits: targets.map(() => []), forwards: [], draws: [], n: 0, baseN: 0,
   }
+  // 回测路径同样必须先清洗：分位/量能倍数/前向极值都建立在"每根日线都是有限正数"之上。
+  // 此前只有展示路径（computePosition）清洗，回测路径直接用原始数组 —— 一根 NaN 会让
+  // maxHigh/minLow 变成 NaN，进而让中位数、概率、回撤中位数全部变成 NaN 却被当成有效样本。
+  const clean = sanitizeBars(bars)
   const amountOf = (b: DailyBarLite): number => b.vol * b.close
-  for (let i = 60; i + horizon < bars.length; i++) {
-    const today = bars[i]
+  for (let i = 60; i + horizon < clean.length; i++) {
+    const today = clean[i]
     if (!(today.close > 0)) continue
-    const win = bars.slice(i - 59, i + 1)
+    const win = clean.slice(i - 59, i + 1)
     const closes = [...win.map((b) => b.close)].sort((a, b) => a - b)
     const rank = closes.filter((c) => c <= today.close).length / closes.length
-    const avg20 = bars.slice(i - 20, i).reduce((a, b) => a + amountOf(b), 0) / 20
+    const avg20 = clean.slice(i - 20, i).reduce((a, b) => a + amountOf(b), 0) / 20
     const volMult = avg20 > 0 ? amountOf(today) / avg20 : 0
-    const fwd = bars.slice(i + 1, i + 1 + horizon)
+    const fwd = clean.slice(i + 1, i + 1 + horizon)
     if (fwd.length < horizon) continue
-    const maxHigh = Math.max(...fwd.map((b) => b.high))
+    // 单遍求极值：避免 Math.max(...arr) 的参数展开，且对非有限值天然免疫
+    const ex = extremes(fwd)
+    if (ex === null) continue
+    const maxHigh = ex.hi
     const lastClose = fwd[fwd.length - 1].close
-    const minLow = Math.min(...fwd.map((b) => b.low))
+    const minLow = ex.lo
     const matched = rank <= percentileMax && volMult >= volumeMin
     targets.forEach((t, ti) => {
       const hit = maxHigh >= today.close * (1 + t)
@@ -239,9 +248,10 @@ export function calibratePooled(
   const pooled: BottomOutcomeStats = { hits: targets.map(() => []), baseHits: targets.map(() => []), forwards: [], draws: [], n: 0, baseN: 0 }
   let used = 0
   for (const bars of barsList) {
-    if (bars.length < 80) continue
+    const clean = sanitizeBars(bars)
+    if (clean.length < 80) continue
     used += 1
-    const st = laneOutcomeStats(bars, { percentileMax, volumeMin, horizon, targets })
+    const st = laneOutcomeStats(clean, { percentileMax, volumeMin, horizon, targets })
     st.hits.forEach((arr, i) => pooled.hits[i].push(...arr))
     st.baseHits.forEach((arr, i) => pooled.baseHits[i].push(...arr))
     pooled.forwards.push(...st.forwards)
@@ -290,8 +300,9 @@ export function buildBottomLane(input: {
   calibration?: BottomCalibration
 }): RescueBottomLane {
   const price = input.price ?? (input.bars.length > 0 ? input.bars[input.bars.length - 1].close : 0)
-  const pos = computePosition(input.bars, price)
-  const prevLow20 = input.bars.length >= 20 ? Math.min(...input.bars.slice(-20).map((b) => b.low)) : null
+  const bars = sanitizeBars(input.bars)
+  const pos = computePosition(bars, price)
+  const prevLow20 = bars.length >= 20 ? (extremes(bars.slice(-20))?.lo ?? null) : null
   const pat = computePattern({ price: input.price, open: input.open, high: input.high, low: input.low, minutes: input.minutes, prevLow20, atNewLow60: pos.atNewLow60 })
   const cal = input.calibration ?? calibrateBottom(input.bars)
   return {

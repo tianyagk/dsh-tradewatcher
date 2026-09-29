@@ -134,11 +134,102 @@ export function hostsAllowed(hosts: readonly string[]): string[] {
   return hosts.filter((h) => breakerFor(h).allow())
 }
 
-/** 该组主机中最短的恢复时间（分钟），供 UI 提示 */
+/**
+ * 该组主机中**最早**的恢复时间（分钟），供 UI 提示。
+ *
+ * 取最小值而非最大值：冷却中的主机各自独立，最早恢复的那台一到点就允许重新请求
+ * （半开探针），此时上游已经"可试"了。此前取 `Math.max` 会把提示写成"最晚那台的
+ * 剩余时间"——例如 push2delay 还剩 14 分钟、push2 还剩 1 分钟，界面却显示
+ * "约 14 分钟后自动重试"，与实际可以重试的时刻差了十几分钟。
+ */
 export function minutesToRecover(hosts: readonly string[]): number {
   const open = hosts.map((h) => breakerFor(h)).filter((b) => !b.allow())
   if (open.length === 0) return 0
+  return Math.min(...open.map((b) => b.minutesLeft()))
+}
+
+/** 该组主机中**最晚**的恢复时间（分钟）：全部恢复才代表整组彻底可用 */
+export function minutesToFullyRecover(hosts: readonly string[]): number {
+  const open = hosts.map((h) => breakerFor(h)).filter((b) => !b.allow())
+  if (open.length === 0) return 0
   return Math.max(...open.map((b) => b.minutesLeft()))
+}
+
+export interface BreakerHostStatus {
+  host: string
+  open: boolean
+  until: number
+  trips: number
+  fails: number
+  minutesLeft: number
+  lastError: string | null
+}
+
+export interface BreakerSummary {
+  /** 任一主机熔断中 */
+  open: boolean
+  /** 全部主机都熔断中（此时才会真正快速失败，无可用上游） */
+  allOpen: boolean
+  /** 熔断中的主机数 */
+  openHosts: number
+  /** 参与统计的主机数 */
+  hosts: number
+  /** 最早恢复（分钟）：到点即可重新尝试 */
+  minutesLeft: number
+  /** 全部恢复（分钟） */
+  allMinutesLeft: number
+  /** 最近一次失败原因（取最新熔断的那台） */
+  lastError: string | null
+  /** 逐主机明细（UI 展开用） */
+  detail: BreakerHostStatus[]
+}
+
+/**
+ * 熔断状态聚合。
+ *
+ * 此前界面只展示 `quoteBreaker`（单台 push2delay）的状态：push2his/push2 同时被限流时，
+ * 横幅却可能显示"正常"，用户看到的是"数据缺但不报警"；反过来 push2delay 单独熔断时
+ * 又会让界面以为**整组**不可用。真实语义是"按主机各自独立"，因此聚合时把逐主机明细
+ * 一起给出，并区分「最早可重试」与「全部恢复」。
+ */
+export function breakerSummary(hosts: readonly string[]): BreakerSummary {
+  const detail: BreakerHostStatus[] = []
+  let openHosts = 0
+  let lastError: string | null = null
+  let latestTrip = -1
+  // 去重：调用方常把"行情主机 + 历史主机"拼在一起，两组本身有重叠
+  // （push2delay/push2 同时服务两条链路），不去重会把同一台主机报成两台
+  const unique = [...new Set(hosts)]
+  for (const host of unique) {
+    const b = breakerFor(host)
+    const state = b.state
+    const open = !b.allow()
+    if (open) openHosts += 1
+    // 最近熔断的那台最能代表当前故障原因
+    if (state.lastError !== null && state.until > latestTrip) {
+      latestTrip = state.until
+      lastError = state.lastError
+    }
+    detail.push({
+      host,
+      open,
+      until: state.until,
+      trips: state.trips,
+      fails: state.fails,
+      minutesLeft: b.minutesLeft(),
+      lastError: state.lastError,
+    })
+  }
+  return {
+    open: openHosts > 0,
+    allOpen: unique.length > 0 && openHosts === unique.length,
+    openHosts,
+    hosts: unique.length,
+    minutesLeft: minutesToRecover(unique),
+    allMinutesLeft: minutesToFullyRecover(unique),
+    lastError,
+    detail,
+  }
 }
 
 /** 行情主机熔断器（供护盘采样器与行情中继共用；搜索/数据中心各自独立） */

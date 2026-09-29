@@ -138,13 +138,20 @@ function HoverCard(props: {
 
 export function TopBar(props: {
   quotes: Record<string, QuoteRow>
-  ts: number | null
+  /** 数据被真实观测到的时刻（不是响应时刻） */
+  asOf: number | null
+  /** 至少一行是兜底/过期值 */
+  stale: boolean
+  /** 不新鲜行数 */
+  staleCount: number
+  /** 按来源计数（em/tencent/sina/lkg） */
+  sources: Record<string, number>
   refreshing: boolean
   onRefresh: () => void
   prefs: PortPrefs
   setPrefs: (p: Partial<PortPrefs>) => void
 }): React.ReactElement {
-  const { quotes, ts, refreshing, onRefresh, prefs, setPrefs } = props
+  const { quotes, asOf, stale, staleCount, sources, refreshing, onRefresh, prefs, setPrefs } = props
   const [hover, setHover] = useState<HoverState | null>(null)
   const hostRef = useRef<HTMLDivElement | null>(null)
   const popRef = useRef<HTMLDivElement | null>(null)
@@ -298,18 +305,31 @@ export function TopBar(props: {
     React.createElement('div', { className: 'tw-topmeta' },
       React.createElement('span', { className: 'tw-title', title: `dsh-tradewatcher v${__TW_VERSION__}` }, '实时行情'),
       React.createElement('span', { className: 'tw-uptime' },
-        ts !== null ? `更新 ${fmtClock(ts)} · 每 ${prefs.refreshSec}s` : '加载中…',
+        // 显示**数据时刻**而非响应时刻：上游全挂、整屏 read 旧值时，此前仍会显示
+        // "更新 14:32:05"（那是响应生成时间），用户误以为刚拿到最新价
+        asOf !== null ? `数据 ${fmtClock(asOf)} · 每 ${prefs.refreshSec}s` : '加载中…',
       ),
-      // 东财行情不可用时部分标的走腾讯备用源：如实标注，避免误以为是东财数据
+      stale && staleCount > 0
+        ? React.createElement('span', {
+            className: 'tw-badge',
+            title:
+              `其中 ${staleCount} 个标的不是新数据（最近一次成功行情 ${asOf === null ? '—' : fmtClock(asOf)}）：` +
+              '上游行情接口不可用期间，价格冻结在最近一次成功值（last-known-good）；' +
+              '来源明细：' +
+              Object.entries(sources).map(([k, n]) => `${k} ${n}`).join(' / '),
+            style: { fontSize: 9.5, color: '#e0a94a' },
+          }, `滞后 ${staleCount}`)
+        : null,
+      // 东财行情不可用时部分标的走腾讯/新浪备用源：如实标注，避免误以为是东财数据
       (() => {
-        const rows = Object.values(quotes)
-        const tx = rows.filter((r) => r.source === 'tencent').length
-        if (tx === 0) return null
+        const alt = (sources.tencent ?? 0) + (sources.sina ?? 0)
+        if (alt === 0) return null
         return React.createElement('span', {
           className: 'tw-badge',
-          title: `其中 ${tx} 个标的来自腾讯备用源（东财行情接口暂不可用）；美股/国际指数/商品无腾讯映射，仍显示最近一次成功数据`,
+          title: `其中 ${alt} 个标的来自备用源（腾讯 ${sources.tencent ?? 0} / 新浪 ${sources.sina ?? 0}）；` +
+            '美股/国际指数/商品部分标的无备用源映射，仍显示最近一次成功数据',
           style: { fontSize: 9.5 },
-        }, `备用源 ${tx}`)
+        }, `备用源 ${alt}`)
       })(),
       React.createElement('button', {
         className: 'tw-iconbtn',

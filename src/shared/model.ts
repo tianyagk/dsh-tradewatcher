@@ -87,6 +87,12 @@ export interface QuoteRow {
   source?: QuoteSource
   /** 该行的成交额是否来自备用源（字段级混源时标注，价格与成交额快照时刻可能不同） */
   amountSource?: QuoteSource
+  /**
+   * 这一行价格被**实际观测到**的时刻（epoch ms；来自 last-known-good 时是它的原始观测时刻）。
+   * 与 `time`（上游自报的行情时间）不同：`at` 描述"我们何时拿到这个数"，
+   * 供 `/quotes` 的 `asOf`/`stale` 与界面标注使用。
+   */
+  at?: number
 }
 
 /** One intraday point (EM trends2 row). */
@@ -520,6 +526,13 @@ export interface RescueBottomView {
   /** 概率口径说明（含类比规则与样本量） */
   model: string
   asOf: string
+  /**
+   * 本次展示的是**上一次成功计算的结果**（日线/校准样本暂时拿不到时的保留视图）。
+   * 为 true 时界面必须标明"非本次计算"，避免当成实时结论。
+   */
+  stale?: boolean
+  /** 保留视图的原始计算时刻（epoch ms） */
+  computedAt?: number
 }
 
 /** ── 护盘信号 ─────────────────────────────────────────────────────────────

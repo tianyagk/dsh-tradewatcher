@@ -4,6 +4,9 @@
  * GET  — watch / portfolio / ledger / prefs snapshots
  * POST — watch + portfolio mutations (validated by the store) and prefs
  * Every route is behind the browser-trust fence; POST bodies are capped.
+ *
+ * 错误语义见 http.ts：400 请求有问题 / 413 体过大 / 503 上游不可用 / 500 本插件 bug。
+ * 此前一律 400，把"上游被限流"报成"你的请求写错了"。
  */
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { MutatePortBody, MutateWatchBody, QuoteRow } from '../shared/model.ts'
@@ -14,7 +17,9 @@ import { assemblePortfolio, ledgerViews } from './portfolio.ts'
 import { DataStore } from './store.ts'
 import { CalendarStore, calToday } from './calendar.ts'
 import { RescueMonitor } from './rescue.ts'
-import { quoteBreaker } from './breaker.ts'
+import { QUOTE_HOSTS, HISTORY_HOSTS } from './em.ts'
+import { breakerSummary } from './breaker.ts'
+import { HttpError, httpStatusOf, retryAfterSecondsOf } from './http.ts'
 import { log, type PluginWebRoute, type PluginWebServer } from './context.ts'
 
 const MAX_BODY = 256 * 1024
@@ -25,11 +30,12 @@ export interface TradeRoutes {
   store: DataStore
 }
 
-function send(res: ServerResponse, code: number, payload: unknown): void {
+function send(res: ServerResponse, code: number, payload: unknown, extraHeaders: Record<string, string> = {}): void {
   const body = JSON.stringify(payload)
   res.writeHead(code, {
     'content-type': 'application/json; charset=utf-8',
     'cache-control': 'no-store',
+    ...extraHeaders,
   })
   res.end(body)
 }
@@ -45,11 +51,15 @@ async function readBody(req: IncomingMessage): Promise<unknown> {
   for await (const chunk of req) {
     const b = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
     size += b.length
-    if (size > MAX_BODY) throw new Error('请求体过大')
+    if (size > MAX_BODY) throw new HttpError(`请求体过大（上限 ${MAX_BODY} 字节）`, 413)
     chunks.push(b)
   }
   if (size === 0) return {}
-  return JSON.parse(Buffer.concat(chunks).toString('utf8'))
+  try {
+    return JSON.parse(Buffer.concat(chunks).toString('utf8'))
+  } catch {
+    throw new HttpError('请求体不是合法 JSON', 400)
+  }
 }
 
 function splitIds(raw: string | null): string[] {
@@ -89,10 +99,15 @@ export function makeTradeRoutes(
   rescue?: RescueMonitor,
 ): TradeRoutes {
   const gate = (req: IncomingMessage): boolean => isTrustedApiRequest(req, trustedHosts)
+  /** 上游主机组：503 时用它给出 retry-after，并聚合展示熔断明细（去重后 3 台） */
+  const upstreamHosts = [...new Set([...QUOTE_HOSTS, ...HISTORY_HOSTS])]
   const fail = (res: ServerResponse, error: unknown): void => {
     const message = error instanceof Error ? error.message : String(error)
-    log('route error:', message)
-    send(res, 400, { error: message })
+    const status = httpStatusOf(error)
+    log(`route error (${status}):`, message)
+    // 503 带上建议重试时刻：熔断中最早恢复的那台到点即可重试
+    const retry = retryAfterSecondsOf(error, breakerSummary(upstreamHosts).minutesLeft)
+    send(res, status, { error: message }, retry === null ? {} : { 'retry-after': String(retry) })
   }
   const needGate = (req: IncomingMessage, res: ServerResponse): boolean => {
     if (gate(req)) return true
@@ -106,7 +121,7 @@ export function makeTradeRoutes(
       path: '/tradewatcher/health',
       handler: (req, res) => {
         if (!needGate(req, res)) return
-        send(res, 200, { ok: true, name: 'dsh-tradewatcher', time: Date.now() })
+        send(res, 200, { ok: true, name: 'dsh-tradewatcher', time: Date.now(), breaker: breakerSummary(upstreamHosts) })
       },
     },
     {
@@ -117,11 +132,13 @@ export function makeTradeRoutes(
         try {
           const ids = splitIds(queryOf(req).get('ids'))
           if (ids.length === 0) {
-            send(res, 200, { ts: Date.now(), items: {} })
+            send(res, 200, { ts: Date.now(), asOf: null, stale: false, staleCount: 0, priced: 0, rows: 0, sources: {}, items: {} })
             return
           }
-          const items = await em.fetchQuotes(ids)
-          send(res, 200, { ts: Date.now(), items })
+          // 真实新鲜度：asOf = 数据被观测到的时刻（不是响应生成时刻），
+          // stale = 至少一行是 last-known-good 或已超过 90s —— 上游全挂时界面必须能如实报警
+          const detail = await em.fetchQuotesDetailed(ids)
+          send(res, 200, { ts: Date.now(), ...detail })
         } catch (error) {
           fail(res, error)
         }
@@ -134,7 +151,7 @@ export function makeTradeRoutes(
         if (!needGate(req, res)) return
         try {
           const secid = String(queryOf(req).get('secid') ?? '').toUpperCase()
-          if (!SECID_RE.test(secid)) throw new Error('secid 非法')
+          if (!SECID_RE.test(secid)) throw new HttpError('secid 非法', 400)
           const ndays = Number(queryOf(req).get('ndays') ?? 1) || 1
           const trend = await em.fetchTrend(secid, ndays)
           send(res, 200, { trend })
@@ -150,7 +167,7 @@ export function makeTradeRoutes(
         if (!needGate(req, res)) return
         try {
           const secid = String(queryOf(req).get('secid') ?? '').toUpperCase()
-          if (!SECID_RE.test(secid)) throw new Error('secid 非法')
+          if (!SECID_RE.test(secid)) throw new HttpError('secid 非法', 400)
           const rawKlt = Number(queryOf(req).get('klt') ?? 101)
           const klt = rawKlt === 102 || rawKlt === 103 || rawKlt === 104 ? (rawKlt as 101 | 102 | 103 | 104) : 101
           const rawLmt = Number(queryOf(req).get('lmt') ?? 0)
@@ -185,7 +202,7 @@ export function makeTradeRoutes(
         if (!needGate(req, res)) return
         try {
           const secid = String(queryOf(req).get('secid') ?? '').toUpperCase()
-          if (!SECID_RE.test(secid)) throw new Error('secid 非法')
+          if (!SECID_RE.test(secid)) throw new HttpError('secid 非法', 400)
           const industry = await em.fetchIndustryOf(secid)
           send(res, 200, { industry })
         } catch (error) {
@@ -200,7 +217,7 @@ export function makeTradeRoutes(
         if (!needGate(req, res)) return
         try {
           const secid = String(queryOf(req).get('secid') ?? '').toUpperCase()
-          if (!SECID_RE.test(secid)) throw new Error('secid 非法')
+          if (!SECID_RE.test(secid)) throw new HttpError('secid 非法', 400)
           const detail = await em.fetchStockDetail(secid)
           send(res, 200, { detail })
         } catch (error) {
@@ -231,8 +248,8 @@ export function makeTradeRoutes(
           const p = queryOf(req)
           const scope = String(p.get('scope') ?? 'industry')
           const sort = String(p.get('sort') ?? 'pct')
-          if (scope !== 'industry' && scope !== 'concept' && scope !== 'etf') throw new Error('scope 非法')
-          if (sort !== 'pct' && sort !== 'money' && sort !== 'amount') throw new Error('sort 非法')
+          if (scope !== 'industry' && scope !== 'concept' && scope !== 'etf') throw new HttpError('scope 非法', 400)
+          if (sort !== 'pct' && sort !== 'money' && sort !== 'amount') throw new HttpError('sort 非法', 400)
           const pn = Math.max(1, Math.min(100, Number(p.get('pn') ?? 1) || 1))
           const pz = Math.max(1, Math.min(100, Number(p.get('pz') ?? 40) || 40))
           const data = await em.fetchBoard(scope as 'industry' | 'concept' | 'etf', sort as 'pct' | 'money' | 'amount', pn, pz)
@@ -297,7 +314,7 @@ export function makeTradeRoutes(
         if (!needGate(req, res)) return
         try {
           const secid = String(queryOf(req).get('secid') ?? '').toUpperCase()
-          if (!SECID_RE.test(secid)) throw new Error('secid 非法')
+          if (!SECID_RE.test(secid)) throw new HttpError('secid 非法', 400)
           await store.init()
           const port = store.portData()
           const groupName = new Map(port.groups.map((g) => [g.id, g.name]))
@@ -370,11 +387,13 @@ export function makeTradeRoutes(
               })
               return
             }
-            const b = quoteBreaker.state
+            const b = breakerSummary(upstreamHosts)
             send(res, 200, {
               snapshot, history: rescue.history(30), calibrated: rescue.calibratedInfo,
               calibration: rescue.calibrationInfo,
-              breaker: { open: b.open, until: b.until, trips: b.trips, minutesLeft: quoteBreaker.minutesLeft(), lastError: b.lastError },
+              // 聚合：此前只反映单台 push2delay 的状态（其它主机被限流时横幅显示"正常"，
+              // 而 push2delay 单独熔断时又让界面以为整组不可用）
+              breaker: b,
             })
             return
           }
@@ -395,7 +414,7 @@ export function makeTradeRoutes(
             const p = queryOf(req)
             const from = String(p.get('from') ?? calToday(-45))
             const to = String(p.get('to') ?? calToday(400))
-            if (!/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to)) throw new Error('from/to 应为 YYYY-MM-DD')
+            if (!/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to)) throw new HttpError('from/to 应为 YYYY-MM-DD', 400)
             const codes = focusCodes(store)
             if (p.get('sync') !== '0') {
               try {
@@ -435,7 +454,7 @@ export function makeTradeRoutes(
             const body = (await readBody(req)) as { patch?: Record<string, unknown> }
             const patch = body?.patch
             if (patch === null || typeof patch !== 'object' || Array.isArray(patch)) {
-              throw new Error('patch 必须是对象')
+              throw new HttpError('patch 必须是对象', 400)
             }
             const prefs = await store.setPrefs(patch as Parameters<DataStore['setPrefs']>[0])
             rescue?.setConfig(prefs.rescue)
