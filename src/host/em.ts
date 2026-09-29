@@ -374,6 +374,9 @@ function rowsFrom(json: unknown): Map<string, QuoteRow> {
       down: num(it.f105),
       even: num(it.f106),
       time: normTime(it.f124),
+      // 市值：东财 f20/f21 已是**元**（fltt=2 只影响价格类字段的缩放）
+      totalMv: num(it.f20),
+      floatMv: num(it.f21),
       // 真实观测时刻（本行的 asOf）：客户端据此显示"数据是几点几分拿到的"，
       // 而不是"响应是几点几分返回的"（后者在上游不可用时会显示成刚刚更新）
       at: Date.now(),
@@ -440,6 +443,8 @@ export function quoteFromTencent(secid: string, q: TencentQuoteFull): QuoteRow |
     time: q.ts,
     source: 'tencent',
     at: Date.now(),
+    totalMv: q.totalMv,
+    floatMv: q.floatMv,
   }
 }
 

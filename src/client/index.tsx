@@ -97,7 +97,6 @@ function App(props: TabProps): React.ReactElement {
   }
 
   const refreshSec = prefs?.refreshSec ?? 10
-  const redUp = prefs?.redUp ?? true
 
   // theme
   const [systemDark, setSystemDark] = useState(false)
@@ -129,7 +128,7 @@ function App(props: TabProps): React.ReactElement {
 
   const pageEl = (): React.ReactNode => {
     if (page === 'watch') {
-      return React.createElement(WatchlistPage, { quotes, quotesReady: engine.ts !== null, prefs: { redUp }, onSymbols: onWatchSymbols })
+      return React.createElement(WatchlistPage, { quotes, quotesReady: engine.ts !== null, prefs: prefs ?? DEFAULT_PREFS, setPrefs, onSymbols: onWatchSymbols })
     }
     if (page === 'portfolio') {
       return React.createElement(PortfolioPage, {

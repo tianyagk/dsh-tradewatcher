@@ -104,6 +104,10 @@ export interface TencentQuoteFull extends TencentQuote {
   low: number | null
   /** 成交量（手；港股为股） */
   vol: number | null
+  /** 总市值（元）：腾讯 f45，原始单位为**亿元** */
+  totalMv: number | null
+  /** 流通市值（元）：腾讯 f44，原始单位为**亿元** */
+  floatMv: number | null
 }
 
 /** 完整批量行情（含名称/开高低/量），供自选与持仓的行情链路兜底使用 */
@@ -147,6 +151,10 @@ export async function fetchTencentQuoteRows(secids: string[]): Promise<Record<st
       low: num(f[34]),
       vol: num(f[6]),
       amount: num(tri[2]) ?? (num(f[37]) !== null ? (num(f[37]) as number) * 1e4 : null),
+      // 市值字段：腾讯给的是**亿元**（实测 f44/f45 对 sh600519 = 15445.76 亿），统一乘 1e8 转元；
+      // 指数/ETF 也有值（ETF 为基金规模），期货/国际指数无该字段 → null
+      totalMv: num(f[45]) !== null ? (num(f[45]) as number) * 1e8 : null,
+      floatMv: num(f[44]) !== null ? (num(f[44]) as number) * 1e8 : null,
       ts: parseTencentStamp(f[30]),
     }
   }

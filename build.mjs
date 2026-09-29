@@ -112,6 +112,9 @@ const REQUIRED_CLIENT_SNIPPETS = [
   '滞后',                    // 顶栏"数据滞后"标记（真实 asOf/stale）
   '上次结果',                // 底部视图的保留视图标记（校准暂不可用）
   '台熔断',                  // 护盘面板的熔断聚合横幅
+  '自选排序',                // 自选页排序段控（aria-label）
+  '持仓排序',                // 持仓页排序段控（aria-label）
+  '仓位占比',                // 持仓排序键「仓位占比」
 ]
 
 const clientBundle = readFileSync('lib/client.js', 'utf8')

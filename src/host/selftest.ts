@@ -146,6 +146,38 @@ async function main(): Promise<void> {
     // prefs
     await store2.setPrefs({ refreshSec: 30, theme: 'dark' })
     ok(store2.getPrefs().refreshSec === 30 && store2.getPrefs().theme === 'dark', 'prefs persisted')
+    // 排序偏好：白名单校验（非法键抛错而不是静默写入），合法值落盘并在重载后保留
+    ok(store2.getPrefs().watchSort.key === 'default' && store2.getPrefs().portSort.key === 'default', '排序偏好有默认值')
+    await store2.setPrefs({ watchSort: { key: 'mv', desc: false }, portSort: { key: 'weight', desc: true } })
+    ok(store2.getPrefs().watchSort.key === 'mv' && store2.getPrefs().watchSort.desc === false, '自选排序可写')
+    ok(store2.getPrefs().portSort.key === 'weight' && store2.getPrefs().portSort.desc === true, '持仓排序可写')
+    let sortRejected = 0
+    for (const bad of [
+      { watchSort: { key: 'nope', desc: true } },
+      { watchSort: { key: 'mv', desc: 'yes' } },
+      { portSort: 'mv' },
+      { portSort: { key: 'pnl', desc: 1 } },
+    ]) {
+      try {
+        await store2.setPrefs(bad as Parameters<typeof store2.setPrefs>[0])
+      } catch {
+        sortRejected += 1
+      }
+    }
+    ok(sortRejected === 4, `非法排序偏好全部被拒（${sortRejected}/4）`)
+    ok(store2.getPrefs().watchSort.key === 'mv', '被拒的写入不污染已有偏好')
+    {
+      // 重载（模拟重启）：明文文件里的排序偏好必须保留；手改成非法值时回退默认而不带进界面
+      const store3 = new DataStore(dir)
+      await store3.init()
+      ok(store3.getPrefs().portSort.key === 'weight', '排序偏好跨重启保留')
+      writeFileSync(join(dir, 'prefs.json'), JSON.stringify({ ...store3.getPrefs(), watchSort: { key: 'garbage' }, portSort: { key: 'dayPnl', desc: false } }), 'utf8')
+      const store4 = new DataStore(dir)
+      await store4.init()
+      ok(store4.getPrefs().watchSort.key === 'default', '手改的非法排序键在装载时回退默认（不带到界面）')
+      ok(store4.getPrefs().portSort.key === 'dayPnl' && store4.getPrefs().portSort.desc === false, '同一文件里的合法排序偏好保留')
+      writeFileSync(join(dir, 'prefs.json'), JSON.stringify({ ...store3.getPrefs() }), 'utf8')
+    }
 
     // 摊薄成本（券商口径）：买入 100@10，卖出 50@8 → 摊薄成本 = (1000-400)/50 = 12
     {
@@ -517,9 +549,11 @@ async function main(): Promise<void> {
       const row = quoteFromTencent('1.510300', {
         secid: '1.510300', name: '沪深300ETF华泰柏瑞', price: 4.47, prev: 4.515, open: 4.51,
         pct: -1.0, high: 4.52, low: 4.46, vol: 1000, amount: 5.25e8, ts: 1_700_000_000_000,
+        totalMv: 1067.7e8, floatMv: 1067.7e8,
       })
       ok(row !== null && row.source === 'tencent' && row.price === 4.47 && row.chg !== null && Math.abs(row.chg + 0.045) < 1e-9, '腾讯行转换：价/涨跌/来源标记正确')
-      ok(quoteFromTencent('1.510300', { secid: '1.510300', name: '', price: null, prev: 1, open: null, pct: null, high: null, low: null, vol: null, amount: null, ts: null }) === null, '无有效价格的行被丢弃（不污染显示）')
+      ok(row?.totalMv === 1067.7e8 && row?.floatMv === 1067.7e8, '腾讯行带上市值（供自选按总市值排序）')
+      ok(quoteFromTencent('1.510300', { secid: '1.510300', name: '', price: null, prev: 1, open: null, pct: null, high: null, low: null, vol: null, amount: null, ts: null, totalMv: null, floatMv: null }) === null, '无有效价格的行被丢弃（不污染显示）')
     }
 
     // 搜索备用源（腾讯 smartbox）：转义还原、类型词表与解析

@@ -12,8 +12,10 @@ import { join } from 'node:path'
 import {
   ACTOR_WEB,
   DEFAULT_PREFS,
+  PORT_SORT_KEYS,
   RESCUE_ETF_CATALOG,
   SECID_RE,
+  WATCH_SORT_KEYS,
   isFiniteNumber,
   type LedgerEntry,
   type LedgerVerb,
@@ -24,6 +26,7 @@ import {
   type PortPrefs,
   type RescueConfig,
   type RescueCustomChannel,
+  type SortState,
   type WatchData,
   type WatchGroup,
   type WatchItem,
@@ -378,7 +381,14 @@ export class DataStore {
       // 账本是用户唯一的交易记录：单条非法也要隔离原件 + 告警（绝不静默丢数据）
       this.ledger = await this.readLedger()
       const loaded = await this.readNormalized<Partial<PortPrefs>>('prefs.json', (raw) => (isRecord(raw) ? (raw as Partial<PortPrefs>) : null), {})
-      this.prefs = { ...DEFAULT_PREFS, ...loaded, rescue: { ...DEFAULT_PREFS.rescue, ...(loaded.rescue ?? {}) } }
+      this.prefs = {
+        ...DEFAULT_PREFS,
+        ...loaded,
+        rescue: { ...DEFAULT_PREFS.rescue, ...(loaded.rescue ?? {}) },
+        // 排序偏好来自明文文件（可被手改）：装载时按白名单收敛，非法键回退默认而不是带进界面
+        watchSort: safeSortPref(loaded.watchSort, WATCH_SORT_KEYS, DEFAULT_PREFS.watchSort),
+        portSort: safeSortPref(loaded.portSort, PORT_SORT_KEYS, DEFAULT_PREFS.portSort),
+      }
       // Coherence: drop descriptors that reference missing groups (never drop ledger).
       const groupIds = new Set(this.port.groups.map((g) => g.id))
       this.port.items = this.port.items.filter((p) => groupIds.has(p.groupId))
@@ -800,6 +810,9 @@ export class DataStore {
       this.prefs.refreshSec = Math.round(r)
     }
     if (patch.redUp !== undefined) this.prefs.redUp = patch.redUp === true
+    // 排序偏好：非法键/非布尔方向一律拒绝（而不是静默写入，否则界面会拿到无法排序的键）
+    if (patch.watchSort !== undefined) this.prefs.watchSort = normalizeSortPref(patch.watchSort, WATCH_SORT_KEYS, this.prefs.watchSort, 'watchSort')
+    if (patch.portSort !== undefined) this.prefs.portSort = normalizeSortPref(patch.portSort, PORT_SORT_KEYS, this.prefs.portSort, 'portSort')
     if (patch.rescue !== undefined) this.prefs.rescue = normalizeRescuePrefs(patch.rescue, this.prefs.rescue)
     await this.commit([['prefs.json', this.prefs]])
     return this.getPrefs()
@@ -814,6 +827,35 @@ export function money(n: number | null | undefined): number | null {
 
 export function clampMoney(n: number): number {
   return roundMoney(n)
+}
+
+/**
+ * 排序偏好校验：键必须在白名单内、方向必须是布尔值，否则**抛错**而不是回退。
+ * 回退会让"点了没反应"变成静默行为（写进去的是无法识别的键）；抛错会让界面提示出来。
+ */
+function normalizeSortPref<K extends string>(
+  raw: unknown,
+  keys: readonly K[],
+  base: SortState<K>,
+  field: string,
+): SortState<K> {
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) throw new Error(`${field} 应为对象`)
+  const o = raw as { key?: unknown; desc?: unknown }
+  if (typeof o.key !== 'string' || !(keys as readonly string[]).includes(o.key)) {
+    throw new Error(`${field}.key 必须是 ${keys.join('/')}`)
+  }
+  if (o.desc !== undefined && typeof o.desc !== 'boolean') throw new Error(`${field}.desc 必须是布尔值`)
+  const desc = o.desc
+  return { key: o.key as K, desc: typeof desc === 'boolean' ? desc : base.desc }
+}
+
+/** 装载时的宽容版本：非法值回退默认（启动不该因为一个坏偏好而失败） */
+function safeSortPref<K extends string>(raw: unknown, keys: readonly K[], base: SortState<K>): SortState<K> {
+  try {
+    return normalizeSortPref(raw, keys, base, 'sort')
+  } catch {
+    return { ...base }
+  }
 }
 
 /** 护盘信号配置校验：频率 5–600s、尾盘时刻 HH:mm、标的池限白名单 */

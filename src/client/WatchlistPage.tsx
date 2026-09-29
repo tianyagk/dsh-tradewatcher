@@ -1,12 +1,14 @@
 /** 自选 page: grouped watchlist with live quotes from the shared engine. */
 import React, { useCallback, useEffect, useRef, useState } from 'react'
-import type { QuoteRow, SuggestItem, WatchData } from '../shared/model.ts'
+import { DEFAULT_PREFS, type PortPrefs, type QuoteRow, type SuggestItem, type WatchData } from '../shared/model.ts'
 import { api } from './api.ts'
 import { dirClass, fmtAmt, fmtPct, fmtPrice, fmtSigned, pctArrow } from './format.ts'
 import { Btn, EmptyHint, ErrorNote, Field, Modal, MoreMenu, Skeleton, SuggestInput } from './ui.tsx'
 import { MiniTrend } from './charts.tsx'
 import { useMiniTrends } from './mini.ts'
 import { QuoteDrawer } from './QuoteDrawer.tsx'
+import { SortBar } from './SortBar.tsx'
+import { WATCH_SORT_HINT, WATCH_SORT_KEYS, WATCH_SORT_LABEL, nextSortState, normalizeSortState, sortWatch, type WatchSortKey } from './sort.ts'
 
 type ModalState =
   | { kind: 'addGroup' }
@@ -19,10 +21,14 @@ type ModalState =
 export function WatchlistPage(props: {
   quotes: Record<string, QuoteRow>
   quotesReady: boolean
-  prefs: { redUp: boolean }
+  prefs: PortPrefs
+  setPrefs: (patch: Partial<PortPrefs>) => void
   onSymbols: (ids: string[]) => void
 }): React.ReactElement {
-  const { quotes, quotesReady, prefs, onSymbols } = props
+  const { quotes, quotesReady, prefs, setPrefs, onSymbols } = props
+  // 兼容"客户端已刷新、宿主还没重启"：旧 /prefs 响应里没有 watchSort 字段，
+  // 此时回退默认而不是让 state.key 取到 undefined（否则整页崩）
+  const watchSort = normalizeSortState(prefs.watchSort, WATCH_SORT_KEYS, DEFAULT_PREFS.watchSort)
   const [watch, setWatch] = useState<WatchData | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [modal, setModal] = useState<ModalState>(null)
@@ -101,8 +107,18 @@ export function WatchlistPage(props: {
     React.createElement(ErrorNote, { error }),
     React.createElement(
       'div',
-      { className: 'tw-panel', style: { display: 'flex', alignItems: 'center', gap: 8 } },
+      { className: 'tw-panel', style: { display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' } },
       React.createElement('span', { className: 't' }, '自选分组'),
+      // 排序：分组内生效（同一设置应用到所有分组），存进 prefs 所以重开面板仍生效
+      React.createElement(SortBar<WatchSortKey>, {
+        keys: WATCH_SORT_KEYS,
+        labels: WATCH_SORT_LABEL,
+        hints: WATCH_SORT_HINT,
+        state: watchSort,
+        onChange: (next) => setPrefs({ watchSort: next }),
+        ariaLabel: '自选排序',
+      }),
+      React.createElement('span', { style: { flex: 1 } }),
       archived.length > 0
         ? React.createElement(Btn, { onClick: () => setShowArchived((v) => !v) }, `已归档 ${archived.length}`)
         : null,
@@ -112,7 +128,11 @@ export function WatchlistPage(props: {
       ? React.createElement(EmptyHint, { action: React.createElement(Btn, { primary: true, onClick: () => setModal({ kind: 'addGroup' }) }, '+ 新建分组') }, '暂无自选分组：新建分组后，往组里添加证券（支持搜索代码/名称）。')
       : null,
     active.map((g) => {
-      const items = itemsOf(g.id)
+      // 排序在分组内生效；无行情/无市值的条目恒沉底（见 sort.ts）
+      const items = sortWatch(itemsOf(g.id), watchSort, (it) => {
+        const q = quotes[it.secid]
+        return { pct: q?.pct ?? null, totalMv: q?.totalMv ?? null }
+      })
       const isCollapsed = collapsed[g.id] === true
       return React.createElement(
         'div',
@@ -188,6 +208,10 @@ export function WatchlistPage(props: {
                   React.createElement('small', { style: { display: 'flex', gap: 6, alignItems: 'baseline', flexWrap: 'wrap' } },
                     q?.amount !== null && q?.amount !== undefined && q.amount > 0
                       ? React.createElement('span', null, `额 ${fmtAmt(q.amount)}`)
+                      : null,
+                    // 市值：排序键是它，就必须看得见（新浪备用源/国际指数/商品没有该字段 → 不显示）
+                    q?.totalMv !== null && q?.totalMv !== undefined && q.totalMv > 0
+                      ? React.createElement('span', { className: 'tw-dim' }, `市值 ${fmtAmt(q.totalMv)}`)
                       : null,
                     ind !== undefined
                       ? React.createElement(React.Fragment, null,

@@ -93,6 +93,14 @@ export interface QuoteRow {
    * 供 `/quotes` 的 `asOf`/`stale` 与界面标注使用。
    */
   at?: number
+  /**
+   * 总市值（元）。来源覆盖：东财 `f20`（全部标的）、腾讯 `f45`（沪/深/港股）。
+   * **新浪备用源不提供市值**（其 `int_/nf_/hf_` 行情里没有该字段），
+   * 因此国际指数/商品/期货经新浪兜底时该值为空 —— 按市值排序时它们沉底（见 client/sort.ts）。
+   */
+  totalMv?: number | null
+  /** 流通市值（元）：东财 `f21`、腾讯 `f44`。 */
+  floatMv?: number | null
 }
 
 /** One intraday point (EM trends2 row). */
@@ -315,12 +323,32 @@ export interface LedgerEntry {
   meta?: Record<string, unknown>
 }
 
+/**
+ * 列表排序的**契约**（键名与允许值属于 prefs 的一部分，因此放 shared）：
+ * 客户端 UI 文案/比较器在 client/sort.ts，主机侧校验用这里的键表。
+ */
+export type WatchSortKey = 'default' | 'pct' | 'mv'
+export type PortSortKey = 'default' | 'mv' | 'pnl' | 'dayPnl' | 'weight'
+
+export interface SortState<K extends string> {
+  key: K
+  /** true = 降序（大→小） */
+  desc: boolean
+}
+
+export const WATCH_SORT_KEYS: readonly WatchSortKey[] = ['default', 'pct', 'mv']
+export const PORT_SORT_KEYS: readonly PortSortKey[] = ['default', 'mv', 'pnl', 'dayPnl', 'weight']
+
 export interface PortPrefs {
   theme: 'auto' | 'light' | 'dark'
   refreshSec: number
   redUp: boolean
   /** 成本口径：diluted = 摊薄成本（券商 App 默认）；average = 买入均价 */
   costBasis: 'diluted' | 'average'
+  /** 自选页排序（分组内生效）：默认顺序 / 当日涨跌 / 总市值 */
+  watchSort: SortState<WatchSortKey>
+  /** 持仓页排序（分组内生效）：默认顺序 / 市值 / 盈亏 / 当日盈亏 / 仓位占比 */
+  portSort: SortState<PortSortKey>
   /** 护盘信号监测配置 */
   rescue: RescueConfig
 }
@@ -330,6 +358,8 @@ export const DEFAULT_PREFS: PortPrefs = {
   refreshSec: 10,
   redUp: true,
   costBasis: 'diluted',
+  watchSort: { key: 'default', desc: true },
+  portSort: { key: 'default', desc: true },
   rescue: { enabled: true, intervalSec: 30, tailIntervalSec: 15, tailFrom: '14:30', universe: [] },
 }
 

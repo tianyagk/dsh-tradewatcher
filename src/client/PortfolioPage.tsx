@@ -10,12 +10,15 @@ import type {
   QuoteRow,
   SuggestItem,
 } from '../shared/model.ts'
+import { DEFAULT_PREFS } from '../shared/model.ts'
 import { api } from './api.ts'
 import { dirClass, fmtAmt, fmtPct, fmtPrice, fmtSigned } from './format.ts'
 import { Btn, EmptyHint, ErrorNote, Field, Modal, MoreMenu, Skeleton, SuggestInput } from './ui.tsx'
 import { MiniTrend } from './charts.tsx'
 import { useMiniTrends } from './mini.ts'
 import { QuoteDrawer } from './QuoteDrawer.tsx'
+import { SortBar } from './SortBar.tsx'
+import { PORT_SORT_HINT, PORT_SORT_KEYS, PORT_SORT_LABEL, nextSortState, normalizeSortState, sortPositions, weightOf, type PortSortKey } from './sort.ts'
 
 const VERB_LABEL: Record<LedgerEntry['verb'], string> = {
   buy: '买入',
@@ -47,6 +50,8 @@ export function PortfolioPage(props: {
 }): React.ReactElement {
   const { active, refreshSec, prefs, setPrefs, quotes, onSymbols } = props
   const redUp = prefs.redUp
+  // 同自选页：宿主未重启时旧 /prefs 没有 portSort，回退默认避免整页崩
+  const portSort = normalizeSortState(prefs.portSort, PORT_SORT_KEYS, DEFAULT_PREFS.portSort)
   const basis = prefs.costBasis
   const diluted = basis === 'diluted'
   const [view, setView] = useState<PortfolioView | null>(null)
@@ -167,6 +172,15 @@ export function PortfolioPage(props: {
             : '买入均价（移动加权含费）；浮动盈亏 = (现价 − 均价) × 数量，已实现盈亏单列。当日盈亏 = 隔夜(现价−昨收)×数量 + 日内买卖差额 − 费用，与券商 App 一致。',
           'aria-label': '口径说明',
         }, 'ⓘ'),
+        // 排序：分组内生效，存进 prefs（重开面板仍生效）
+        React.createElement(SortBar<PortSortKey>, {
+          keys: PORT_SORT_KEYS,
+          labels: PORT_SORT_LABEL,
+          hints: PORT_SORT_HINT,
+          state: portSort,
+          onChange: (next) => setPrefs({ portSort: next }),
+          ariaLabel: '持仓排序',
+        }),
         React.createElement(Btn, { onClick: reload }, '刷新'),
       ),
       React.createElement('div', { className: 'tw-statrow' },
@@ -189,7 +203,18 @@ export function PortfolioPage(props: {
       ? React.createElement(EmptyHint, { action: React.createElement(Btn, { primary: true, onClick: () => setModal({ kind: 'addGroup' }) }, '+ 新建分组') }, '暂无持仓分组：新建分组 → 添加持仓 → 用「买/卖」录入流水。')
       : null,
     activeGroups.map((grp) => {
-      const rows = view.positions.filter((p) => p.groupId === grp.id)
+      // 排序在分组内生效；盈亏键跟随当前口径（摊薄=持仓盈亏 / 均价=浮动盈亏），
+      // 与表格里显示的那一列保持同一个数 —— 否则"按盈亏排序"看到的顺序会与列对不上
+      const rows = sortPositions(
+        view.positions.filter((p) => p.groupId === grp.id),
+        portSort,
+        (row) => ({
+          mv: row.mv,
+          pnl: diluted ? row.dilutedPnl : row.floatPnl,
+          dayPnl: row.dayPnl,
+          weight: weightOf(row.mv, grand.totalMv),
+        }),
+      )
       const isCollapsed = collapsed[grp.id] === true
       return React.createElement(
         'div',
@@ -235,6 +260,7 @@ export function PortfolioPage(props: {
                   row,
                   redUp,
                   diluted,
+                  weight: weightOf(row.mv, grand.totalMv),
                   quote: quotes[row.secid],
                   mini: minis[row.secid],
                   onTrade: (verb) => setModal({ kind: 'trade', verb, pos: row, groupName: grp.name }),
@@ -546,6 +572,8 @@ function PosRow(props: {
   quote: QuoteRow | undefined
   redUp: boolean
   diluted: boolean
+  /** 仓位占比（个股市值 ÷ 组合总市值）；总市值为 0 时为 null */
+  weight: number | null
   mini: { values: number[]; up: boolean | null } | undefined
   onTrade: (verb: 'buy' | 'sell' | 'adjust') => void
   onDetail: () => void
@@ -619,7 +647,8 @@ function PosRow(props: {
       ),
     ),
     React.createElement('div', { className: 'tw-pos-grid' },
-      pps('市值', React.createElement('span', null, fmtAmt(row.mv)), `成本 ${fmtPrice(showCost)}`),
+      pps('市值', React.createElement('span', null, fmtAmt(row.mv)),
+        `占比 ${props.weight === null ? '—' : (props.weight * 100).toFixed(2) + '%'} · 成本 ${fmtPrice(showCost)}`),
       pps(diluted ? '持仓盈亏' : '浮动盈亏',
         React.createElement('span', { className: dirClass(showPnl, redUp) }, fmtSigned(showPnl)),
         React.createElement('span', { className: dirClass(showPnl, redUp) }, pctMeta(showPnlPct, showPnl))),
