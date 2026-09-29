@@ -187,7 +187,7 @@ export interface BreakerSummary {
 /**
  * 熔断状态聚合。
  *
- * 此前界面只展示 `quoteBreaker`（单台 push2delay）的状态：push2his/push2 同时被限流时，
+ * 此前界面只展示单台 push2delay 的熔断状态：push2his/push2 同时被限流时，
  * 横幅却可能显示"正常"，用户看到的是"数据缺但不报警"；反过来 push2delay 单独熔断时
  * 又会让界面以为**整组**不可用。真实语义是"按主机各自独立"，因此聚合时把逐主机明细
  * 一起给出，并区分「最早可重试」与「全部恢复」。
@@ -232,5 +232,6 @@ export function breakerSummary(hosts: readonly string[]): BreakerSummary {
   }
 }
 
-/** 行情主机熔断器（供护盘采样器与行情中继共用；搜索/数据中心各自独立） */
-export const quoteBreaker = breakerFor('push2delay.eastmoney.com')
+// 注：曾导出过 `quoteBreaker`（单台 push2delay 的熔断器别名），行情中继与护盘采样器都拿它
+// 当"行情整体闸门"用 —— 这正是"按主机隔离"要避免的语义，两处都已改为按主机/整组判定，
+// 该别名随之删除（保留别名只会让同一个 bug 再长回来）。搜索/数据中心各自独立熔断。

@@ -24,7 +24,8 @@ import type {
 } from '../shared/model.ts'
 import { RESCUE_CORE_OUTFLOW_VETO, RESCUE_CORE_INDEXES, RESCUE_PERIPHERAL_FLOW_DISCOUNT, rescueUniverseMeta } from '../shared/model.ts'
 import { RESCUE_CALIBRATION } from './rescue-thresholds.ts'
-import { quoteBreaker } from './breaker.ts'
+import { hostsAllowed } from './breaker.ts'
+import { QUOTE_HOSTS as EM_QUOTE_HOSTS, HISTORY_HOSTS as EM_HISTORY_HOSTS, fetchAny as fetchAnyJson } from './em.ts'
 import { fetchTencentDaily, fetchTencentMinutes, fetchTencentQuoteRows } from './tencent.ts'
 import { dayOf as shDayOf, hhmmOf as shHhmmOf, weekdayOf as shWeekdayOf } from './time.ts'
 import { buildBottomLane, calibrateAcross } from './bottom.ts'
@@ -32,8 +33,9 @@ import { SingleFlight } from './singleflight.ts'
 import { dataHome } from './store.ts'
 
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-const QUOTE_HOSTS = ['push2delay.eastmoney.com', 'push2.eastmoney.com'] as const
-const KLINE_HOSTS = ['push2delay.eastmoney.com', 'push2his.eastmoney.com', 'push2.eastmoney.com'] as const
+// 主机组与取数实现都从 em.ts 复用（单一所有者）：本地再写一份只会让两边的退避与熔断语义漂移
+const QUOTE_HOSTS = EM_QUOTE_HOSTS
+const KLINE_HOSTS = EM_HISTORY_HOSTS
 
 /** 因子权重（合计 1.00） */
 export const RESCUE_WEIGHTS = {
@@ -498,45 +500,19 @@ export function quantile(sorted: readonly number[], p: number): number | null {
 
 /** ── 网络取数 ──────────────────────────────────────────────────────────── */
 
-/** 与 em.fetchAny 同策略：本机到东财的连接会随机被立刻关闭（瞬时失败率可达数十个百分点），
- *  采样器一次丢样本就会形成「缺口」，因此按「轮 × 主机」重试并加抖动退避。 */
-const FETCH_ROUNDS = 2
-const FETCH_ATTEMPTS_PER_HOST = 2
-const FETCH_DEADLINE_MS = 9_000
-
-async function fetchAny(hosts: readonly string[], pathAndQuery: string, timeoutMs = 8000): Promise<Record<string, unknown>> {
-  // 与行情中继共用熔断器：冷却期内不发起任何请求，由 LKG/复盘数据兜底
-  if (!quoteBreaker.allow()) {
-    throw new Error(`上游行情暂时不可用（熔断中，约 ${quoteBreaker.minutesLeft()} 分钟后自动重试）`)
-  }
-  const deadline = Date.now() + FETCH_DEADLINE_MS
-  let lastErr: unknown = null
-  for (let round = 0; round < FETCH_ROUNDS; round++) {
-    for (const host of hosts) {
-      for (let attempt = 0; attempt < FETCH_ATTEMPTS_PER_HOST; attempt++) {
-        const left = deadline - Date.now()
-        if (left <= 250) throw lastErr instanceof Error ? lastErr : new Error('上游请求超时')
-        try {
-          const res = await fetch(`https://${host}${pathAndQuery}`, {
-            headers: { 'user-agent': UA, referer: 'https://quote.eastmoney.com/' },
-            signal: AbortSignal.timeout(Math.min(timeoutMs, left)),
-          })
-          if (!res.ok) throw new Error(`HTTP ${res.status}`)
-          const j = (await res.json()) as { data?: unknown }
-          if (j?.data === null || j?.data === undefined) throw new Error('data null')
-          quoteBreaker.recordSuccess()
-          return j.data as Record<string, unknown>
-        } catch (e) {
-          lastErr = e
-          const message = e instanceof Error ? e.message : String(e)
-          if (/HTTP 4\d\d/.test(message)) break
-          await new Promise((r) => setTimeout(r, 60 + attempt * 120 + Math.random() * 140))
-        }
-      }
-    }
-  }
-  quoteBreaker.recordFailure(lastErr)
-  throw lastErr instanceof Error ? lastErr : new Error('all hosts failed')
+/**
+ * 采样器取数：**复用行情中继的同一套骨架**（2 轮 × 每主机 2 次 + 抖动退避 + 9 秒总截止
+ * + **按主机**熔断与半开探针，见 em.fetchAny）。
+ *
+ * 此前这里自己实现了一套，且用单台 push2delay 的熔断器当**整组**闸门：
+ *   - push2delay 冷却时，健康的 push2 被一起挡掉 → 采样器与日线一并停摆；
+ *   - 反过来 push2his 熔断时闸门毫无反应，采样器仍然每 15s 打一遍不可达主机。
+ * 重复实现带来的第二个后果是两条链路的退避节奏不同（抖动间隔、截止时间各写一份）。
+ */
+async function fetchData(hosts: readonly string[], pathAndQuery: string, timeoutMs = 8000): Promise<Record<string, unknown>> {
+  const json = (await fetchAnyJson(hosts, pathAndQuery, timeoutMs)) as { data?: unknown }
+  if (json?.data === null || json?.data === undefined) throw new Error('data null')
+  return json.data as Record<string, unknown>
 }
 
 export interface RescueQuoteRow {
@@ -558,7 +534,7 @@ const num = (v: unknown): number | null => (typeof v === 'number' && Number.isFi
 
 /** 批量快照（含 ETF 资金流字段；ETF 的 f62/f66 东财同样提供） */
 export async function fetchRescueQuotes(secids: string[]): Promise<Record<string, RescueQuoteRow>> {
-  const data = await fetchAny(QUOTE_HOSTS, `/api/qt/ulist.np/get?fltt=2&invt=2&secids=${secids.join(',')}&fields=f12,f13,f14,f2,f3,f4,f6,f8,f10,f15,f16,f17,f62,f66,f184`)
+  const data = await fetchData(QUOTE_HOSTS, `/api/qt/ulist.np/get?fltt=2&invt=2&secids=${secids.join(',')}&fields=f12,f13,f14,f2,f3,f4,f6,f8,f10,f15,f16,f17,f62,f66,f184`)
   const diff = Array.isArray(data.diff) ? (data.diff as Array<Record<string, unknown>>) : []
   const out: Record<string, RescueQuoteRow> = {}
   for (const r of diff) {
@@ -588,7 +564,7 @@ interface DailyBar { date: string; close: number; vol: number; amount: number }
 /** 20 日均成交额基准：东财日K（含真实成交额）优先，腾讯日K（vol×100×close 近似）兜底 */
 async function fetchAvgAmount20(secid: string): Promise<{ avg: number; source: 'em' | 'tencent' } | null> {
   try {
-    const data = await fetchAny(KLINE_HOSTS, `/api/qt/stock/kline/get?secid=${secid}&klt=101&fqt=0&lmt=25&end=20500101&fields1=f1,f2,f3&fields2=f51,f52,f53,f54,f55,f56,f57`, 9000)
+    const data = await fetchData(KLINE_HOSTS, `/api/qt/stock/kline/get?secid=${secid}&klt=101&fqt=0&lmt=25&end=20500101&fields1=f1,f2,f3&fields2=f51,f52,f53,f54,f55,f56,f57`, 9000)
     const rows = Array.isArray(data.klines) ? (data.klines as string[]) : []
     const bars: DailyBar[] = []
     for (const line of rows) {
@@ -706,8 +682,8 @@ function parseMinuteStamp(text: string): number {
 
 export async function fetchMinuteSeries(secid: string): Promise<MinuteFlowPoint[]> {
   const [trends, flow] = await Promise.all([
-    fetchAny(KLINE_HOSTS, `/api/qt/stock/trends2/get?secid=${encodeURIComponent(secid)}&fields1=f1,f2,f3&fields2=f51,f52,f53,f54,f55,f56,f57,f58&ndays=1&iscr=0`).catch(() => null),
-    fetchAny(QUOTE_HOSTS, `/api/qt/stock/fflow/kline/get?lmt=0&klt=1&secid=${encodeURIComponent(secid)}&fields1=f1,f2,f3,f7&fields2=f51,f52,f53,f54,f55,f56`).catch(() => null),
+    fetchData(KLINE_HOSTS, `/api/qt/stock/trends2/get?secid=${encodeURIComponent(secid)}&fields1=f1,f2,f3&fields2=f51,f52,f53,f54,f55,f56,f57,f58&ndays=1&iscr=0`).catch(() => null),
+    fetchData(QUOTE_HOSTS, `/api/qt/stock/fflow/kline/get?lmt=0&klt=1&secid=${encodeURIComponent(secid)}&fields1=f1,f2,f3,f7&fields2=f51,f52,f53,f54,f55,f56`).catch(() => null),
   ])
   // 每分钟成交额 → 累计
   const amountByTs = new Map<number, number>()
@@ -1008,7 +984,8 @@ export class RescueMonitor {
     // 缺少 20 日均额基准的通道（例如刚加入的自定义通道）立即后台补算，
     // 否则它们的量能倍数/脉冲会一直显示为空
     const missingBase = metas.filter((m) => this.file.baselines[m.secid]?.avgAmt20 === undefined && !this.baselinePending.has(m.secid))
-    if (missingBase.length > 0 && quoteBreaker.allow()) {
+    // 整组闸门（而不是单台）：只要还有一台可用就继续补算
+    if (missingBase.length > 0 && hostsAllowed(QUOTE_HOSTS).length > 0) {
       for (const m of missingBase) this.baselinePending.add(m.secid)
       void (async () => {
         for (const m of missingBase) {

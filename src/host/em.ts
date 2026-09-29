@@ -106,12 +106,15 @@ async function fetchFromHost(host: string, pathAndQuery: string, timeoutMs = 700
  * 实测本机到东财的连接会随机被立刻关闭（UND_ERR_SOCKET，瞬时失败率 20–75%，
  * 与响应大小无关），单次尝试的成功率无法接受，因此按「轮 × 主机」重试，
  * 并用总体截止时间兜住延迟。任何一次成功即返回。
+ *
+ * **导出**：护盘采样器（rescue.ts）复用这一份实现，不再自己写一套 —— 它此前那套用
+ * 单台 `push2delay` 的熔断器当整组闸门，push2delay 冷却时会把健康的 push2 一起挡掉。
  */
 const FETCH_ROUNDS = 2
 const FETCH_ATTEMPTS_PER_HOST = 2
 const FETCH_DEADLINE_MS = 9_000
 
-async function fetchAny(hosts: readonly string[], pathAndQuery: string, timeoutMs = 7000): Promise<unknown> {
+export async function fetchAny(hosts: readonly string[], pathAndQuery: string, timeoutMs = 7000): Promise<unknown> {
   // 熔断冷却期内跳过该主机；整组都在冷却才快速失败（重试只会加重上游对本机 IP 的封锁）
   const live = hostsAllowed(hosts)
   if (live.length === 0) {
