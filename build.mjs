@@ -123,6 +123,8 @@ const REQUIRED_CLIENT_SNIPPETS = [
   '仅东财源',                // 搜索结果里只有东财一条链路的标注
   '无行情源 ',               // 顶栏"无行情源 N"标记
   '已截断 160',              // 超过 160 项上限时的如实回报
+  '留空即清除',              // 分组备注模态（此前绑错状态，保存无效）
+  '总额不含',                // 无价持仓被按 0 计入时，总额要标注不含它们
 ]
 
 const clientBundle = readFileSync('lib/client.js', 'utf8')

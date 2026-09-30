@@ -18,7 +18,7 @@ import { MiniTrend } from './charts.tsx'
 import { useMiniTrends } from './mini.ts'
 import { QuoteDrawer } from './QuoteDrawer.tsx'
 import { SortBar } from './SortBar.tsx'
-import { PORT_SORT_HINT, PORT_SORT_KEYS, PORT_SORT_LABEL, nextSortState, normalizeSortState, sortPositions, weightOf, type PortSortKey } from './sort.ts'
+import { PORT_SORT_HINT, PORT_SORT_KEYS, PORT_SORT_LABEL, normalizeSortState, sortPositions, weightOf, type PortSortKey } from './sort.ts'
 
 const VERB_LABEL: Record<LedgerEntry['verb'], string> = {
   buy: '买入',
@@ -161,7 +161,14 @@ export function PortfolioPage(props: {
     React.createElement('div', { className: 'tw-panel' },
       React.createElement('div', { className: 'tw-panel-h' },
         React.createElement('span', { className: 't' }, '持仓总览（实时行情）'),
-        stale > 0 ? React.createElement('span', { className: 'tw-badge' }, `${stale} 只行情暂缺`) : null,
+        stale > 0
+          ? React.createElement('span', {
+              className: 'tw-badge',
+              // 分组/总览的市值与盈亏把无价持仓按 0 计入 —— 只说"N 只行情暂缺"不够，
+              // 必须说清"下面那些总额不含它们"，否则数字看着完整其实缺一块
+              title: `有 ${stale} 只持仓当前没有价格（行情源未给出），它们在分组与总览的市值/盈亏里按 0 计入；具体标的见各行「暂无可用行情源」标记`,
+            }, `${stale} 只无价 · 总额不含`)
+          : null,
         React.createElement('div', { className: 'tw-seg', title: '成本口径：摊薄=卖出冲减成本（多数券商 App 口径）；均价=买入移动加权' },
           React.createElement('button', { 'data-on': diluted, onClick: () => setPrefs({ costBasis: 'diluted' }) }, '摊薄口径'),
           React.createElement('button', { 'data-on': !diluted, onClick: () => setPrefs({ costBasis: 'average' }) }, '均价口径'),
@@ -186,7 +193,7 @@ export function PortfolioPage(props: {
         React.createElement(Btn, { onClick: reload }, '刷新'),
       ),
       React.createElement('div', { className: 'tw-statrow' },
-        stat('总市值', grand.totalMv, false),
+        stat(stale > 0 ? '总市值（不含无价）' : '总市值', grand.totalMv, false),
         diluted ? stat('持仓盈亏', grand.dilutedPnl) : stat('浮动盈亏', grand.floatPnl),
         stat('当日盈亏', grand.dayPnl),
         stat('累计已实现', grand.realized),

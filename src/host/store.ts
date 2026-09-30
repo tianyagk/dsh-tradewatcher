@@ -56,7 +56,7 @@ function numOrNull(v: unknown): number | null {
   return typeof v === 'number' && Number.isFinite(v) ? v : null
 }
 
-const LEDGER_VERBS = new Set([
+export const LEDGER_VERBS = new Set([
   'buy', 'sell', 'adjust', 'add', 'remove', 'gcreate', 'grename', 'gdelete', 'grestore', 'gmove', 'pnote',
 ])
 
@@ -356,6 +356,12 @@ export class DataStore {
       await this.quarantine('ledger.json')
       log(`ledger.json 有 ${detailed.dropped}/${detailed.total} 条无法解析 —— 已隔离原件备份，本次仅载入可用条目`)
     }
+    // 未知 verb 会被原样保留（见 normalizeLedgerEntry 的说明），但值得告警一声：
+    // 通常意味着有人手改了账本或写了未来版本的条目，静默接受会让它一直隐身
+    const unknown = [...new Set(detailed.file.entries.map((e) => e.verb).filter((v) => !LEDGER_VERBS.has(v)))]
+    if (unknown.length > 0) {
+      log(`ledger.json 含未知操作类型（已原样保留）：${unknown.join('、')}`)
+    }
     return detailed.file
   }
 
@@ -409,7 +415,9 @@ export class DataStore {
 
   private nextId(prefix: string): string {
     this.seq += 1
-    return `${prefix}${Date.now().toString(36)}${this.seq.toString(36)}${Math.random().toString(36).slice(2, 6)}`
+    // seq 定宽（4 位 base36 = 到 168 万次）：sortLedger 用 id 的**字符串序**兜同一毫秒的并列，
+    // 不定宽时 '36' 会排在 '35' 之前（同一毫秒内既有买又有卖时会影响均摊成本）
+    return `${prefix}${Date.now().toString(36)}${this.seq.toString(36).padStart(4, '0')}${Math.random().toString(36).slice(2, 6)}`
   }
 
   private appendLedger(entry: LedgerEntry): void {

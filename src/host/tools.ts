@@ -16,7 +16,7 @@ import { DataStore, dataHome } from './store.ts'
 import { CalendarStore, calToday } from './calendar.ts'
 import { RescueMonitor } from './rescue.ts'
 import { RESCUE_LEVEL_LABEL } from '../shared/model.ts'
-import { CAL_CATEGORY_LABEL, type CalCategory } from '../shared/model.ts'
+import { CAL_CATEGORY_LABEL } from '../shared/model.ts'
 import type { PluginContext, PluginToolDefinition, PluginToolRuntime, PluginSystemPrompt } from './context.ts'
 
 const PREFIX = 'tradewatcher_'
@@ -557,21 +557,15 @@ export function makeAgentTools(
 
   function guidanceText(): string {
     return (
-      '本机已安装 dsh-tradewatcher（盯盘）插件：' +
-      '数据文件在 ' + dataHome() + '（watch.json 自选 / positions.json 持仓与分组 / ledger.json 逐笔流水与操作记录 / prefs.json 偏好），' +
-      '均为明文 JSON，可直接用文件工具读取分析。' +
-      '会话内优先使用只读工具：' +
-      'tradewatcher_portfolio（持仓总览：分组市值/持仓盈亏(摊薄口径，等同券商App)/浮动盈亏(均价口径)/当日盈亏/已实现 + 每只持仓的数量、摊薄成本、均价成本与实时价，全部由买卖流水自动核算、费用已计入）、' +
-      'tradewatcher_ledger（逐笔买卖与分组操作流水，支持按 posId/groupId 过滤）、' +
-      'tradewatcher_watchlist（自选分组）、' +
-      'tradewatcher_quotes（实时行情：cn/intl/commodity/all 预设或任意东财代码）、' +
-      'tradewatcher_search（证券搜索）、' +
-      'tradewatcher_calendar（财经日历：宏观/IPO/财报/分红，自动同步东财数据中心），' +
-      'tradewatcher_calendar_add（把用户提到的重要日期写入日历）、' +
-      'tradewatcher_rescue（护盘信号：宽基 ETF 放量+超大单净流入的概率性护盘识别，含六因子明细与历史回看），' +
-      '持仓与流水由侧边栏「盯盘」页签维护；工具为只读，如需修改（如按建议调仓后补录）请在侧边栏页面操作。' +
-      '主动调用规则：当用户询问持仓/仓位/盈亏/市值/某笔交易历史/自选行情/行情报价/护盘或国家队动向时，应主动用 tradewatcher_* 工具查询，不要臆造数据。' +
-      '护盘信号是行为模式识别（汇金/国新/诚通不披露日内成交），回答时不要断言「国家队已入场」。'
+      '本机已安装 dsh-tradewatcher（盯盘）插件：数据文件在 ' + dataHome() + '（watch.json 自选 / positions.json 持仓 / ledger.json 流水 / prefs.json 偏好），均为明文 JSON，可直接用文件工具读取分析。' +
+      '会话内优先用只读工具：tradewatcher_portfolio（持仓总览与盈亏，由流水核算、费用已计入）、' +
+      'tradewatcher_ledger（买卖与分组流水，可按 posId/groupId 过滤）、tradewatcher_watchlist（自选分组）、' +
+      'tradewatcher_quotes（行情：cn/intl/commodity/all 预设或任意代码）、tradewatcher_search（证券搜索）、' +
+      'tradewatcher_calendar（财经日历：宏观/IPO/财报/分红，自动同步）、tradewatcher_calendar_add（写入重要日期）、' +
+      'tradewatcher_rescue（护盘信号：宽基 ETF 放量+超大单净流入的概率性识别，含六因子与历史回看）。' +
+      '持仓与流水由侧边栏「盯盘」页签维护；工具只读，需要修改请在页面操作。' +
+      '当用户问及持仓/仓位/盈亏/市值/交易历史/自选行情/护盘或国家队动向时，主动调用 tradewatcher_* 查询，不要臆造数据；' +
+      '护盘是行为模式识别（汇金/国新/诚通不披露日内成交），回答时不要断言「国家队已入场」。'
     )
   }
 

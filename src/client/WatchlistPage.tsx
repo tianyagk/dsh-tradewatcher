@@ -8,7 +8,7 @@ import { MiniTrend } from './charts.tsx'
 import { useMiniTrends } from './mini.ts'
 import { QuoteDrawer } from './QuoteDrawer.tsx'
 import { SortBar } from './SortBar.tsx'
-import { WATCH_SORT_HINT, WATCH_SORT_KEYS, WATCH_SORT_LABEL, nextSortState, normalizeSortState, sortWatch, type WatchSortKey } from './sort.ts'
+import { WATCH_SORT_HINT, WATCH_SORT_KEYS, WATCH_SORT_LABEL, normalizeSortState, sortWatch, type WatchSortKey } from './sort.ts'
 
 type ModalState =
   | { kind: 'addGroup' }
@@ -289,6 +289,8 @@ function WatchModal(props: {
   const [targetGroup, setTargetGroup] = useState<string | null>(null)
 
   if (modal.kind === 'addGroup' || modal.kind === 'renameGroup' || modal.kind === 'noteGroup') {
+    // 备注模态此前把输入框绑在 `name` 上、保存时却提交从未更新的 `note`：
+    // 打开是空框、输入任何内容保存都不生效（实测确认）。这里按模态切换状态源。
     const isNote = modal.kind === 'noteGroup'
     return React.createElement(
       Modal,
@@ -296,13 +298,13 @@ function WatchModal(props: {
       React.createElement(ErrorNote, { error: err }),
       React.createElement(
         Field,
-        { label: isNote ? '备注（200 字内）' : '分组名' },
+        { label: isNote ? '备注（200 字内，留空即清除）' : '分组名' },
         React.createElement('input', {
           className: 'tw-input',
-          value: name,
+          value: isNote ? note : name,
           autoFocus: true,
           placeholder: modal.kind === 'addGroup' ? '如：科技成长' : undefined,
-          onChange: (e) => setName(e.target.value),
+          onChange: (e) => (isNote ? setNote(e.target.value) : setName(e.target.value)),
         }),
       ),
       React.createElement('div', { style: { display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 6 } },

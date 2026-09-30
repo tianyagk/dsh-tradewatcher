@@ -21,7 +21,8 @@ import { RescueMonitor, stripSnapshot } from './rescue.ts'
 import { CircuitBreaker } from './breaker.ts'
 import { calibratePooled, computePattern, computePosition, laneOutcomeStats, patternScore, positionScore, sanitizeBars } from './bottom.ts'
 import {
-  CORE_OUTFLOW_VETO, PERSIST_ANCHORS, PULSE_HIT_SCORE, divergenceScore, interpScore, isTailElapsed,
+  CORE_OUTFLOW_VETO, FLOW_WINDOW_MS, PERSIST_ANCHORS, PULSE_HIT_SCORE, divergenceScore, interpScore, isTailElapsed,
+  pickPulseRef,
   progressAt, pulseAnchorsFor, pulseBandLabel, quantile, resonanceScore, scoreRescue, sessionElapsed,
   phaseOf, pulseFactorLabel, timeCoefficient, windowFlowStats,
 } from './rescue.ts'
@@ -869,6 +870,65 @@ async function main(): Promise<void> {
       const posDirty = computePosition(midDirty, price)
       ok(posDirty.percentile60 === posClean.percentile60 && posDirty.downStreak === posClean.downStreak,
         '位置特征不受非法日线影响')
+    }
+
+    // 脉冲参考点选择：过期序列不得被采用（v0.21.0 修的放大 bug：5.01x → 1.13x）
+    {
+      const t0 = 1_700_000_000_000
+      const seriesOf = (n: number, stepMs: number, shiftMs: number): Array<{ ts: number; amount: number }> =>
+        Array.from({ length: n }, (_, i) => ({ ts: t0 - (n - 1 - i) * stepMs + shiftMs, amount: 1e8 + i * 1e6 }))
+      const fresh = seriesOf(30, 60_000, 0)
+      const got = pickPulseRef(fresh, t0, t0)
+      ok(got !== null, '新鲜 1 分钟序列：取到参考点')
+      ok(got !== null && Math.abs(t0 - got.ref.ts - FLOW_WINDOW_MS) <= 30_000,
+        `参考点落在 5 分钟窗口内（差 ${got === null ? 'n/a' : Math.round((t0 - got.ref.ts) / 1000)}s）`)
+      const stale = seriesOf(30, 60_000, -30 * 60_000)
+      ok(pickPulseRef(stale, t0, t0) === null, '过期序列（末端 30 分钟前）→ 拒绝，退回采样环口径')
+      ok(pickPulseRef(stale, t0, stale[stale.length - 1].ts) === null, '即使把评估时点设成序列末端，过期序列仍被拒绝')
+      const late = seriesOf(30, 60_000, -120_000)
+      ok(pickPulseRef(late, t0, t0) === null, '序列末端落后 2 分钟 → 拒绝（容差 60s）')
+      const holed = fresh.filter((p) => Math.abs(t0 - FLOW_WINDOW_MS - p.ts) > 120_000)
+      ok(pickPulseRef(holed, t0, t0) === null, '窗口内恰好没有点（数据空洞）→ 拒绝')
+      ok(pickPulseRef([], t0, t0) === null, '空序列 → null')
+      // 收盘口径：评估时点取序列末端（tailRef），窗口应相对末端计算
+      const tailEval = fresh[fresh.length - 1].ts
+      const tailRef = pickPulseRef(fresh, tailEval, tailEval)
+      ok(tailRef !== null && Math.abs(tailEval - tailRef.ref.ts - FLOW_WINDOW_MS) <= 30_000, '收盘口径：参考点相对序列末端前移 5 分钟')
+    }
+
+    // F2 口径：标注与数值必须一致（核心未达参与档时外围真打 0.7 折）
+    {
+      const anchors: [number, number, number] = [0.2, 0.6, 1.2]
+      const common = {
+        flowAvailable: true, f2Anchors: anchors, f2Source: 'empirical' as const, coreWorstShare: 0.3,
+        coreResonance: 1, peripheralResonance: 1, resonanceLanes: ['沪深300'], isTail: true, timeCoef: 1,
+        retraceRatio: 0, timeAdjMult: 1, pulseMult: 1, persistShare: 0, indexPct: -1, resonance: 1,
+      }
+      const shown = (f: { actual: string }): number => Number(String(f.actual).match(/^([\d.]+)x/)?.[1] ?? NaN)
+      const micro = scoreRescue({ ...common, coreSuperVsAvg: 0.05, peripheralSuperVsAvg: 0.5 } as never)
+      const f2micro = micro.factors.find((f) => f.id === 'superflow')!
+      ok(Math.abs(shown(f2micro) - 0.35) < 0.011, `核心微幅正时取折算后的 0.35x（实际显示 ${shown(f2micro)}）`)
+      ok(f2micro.actual.includes('打 0.7 折'), '标注写明"外围打 0.7 折"（与数值一致）')
+      ok(f2micro.score === interpScore(0.35, anchors), '因子分按折算后的值计算')
+      const meaningful = scoreRescue({ ...common, coreSuperVsAvg: 0.25, peripheralSuperVsAvg: 0.5 } as never)
+      const f2core = meaningful.factors.find((f) => f.id === 'superflow')!
+      ok(Math.abs(shown(f2core) - 0.5) < 0.011, `核心达标时取二者较强且不折算（实际显示 ${shown(f2core)}）`)
+      ok(f2core.actual.includes('核心已参与'), '核心达标时标注为"核心已参与"（不再声称已折算）')
+      const outflow = scoreRescue({ ...common, coreSuperVsAvg: -0.3, peripheralSuperVsAvg: 0.5 } as never)
+      const f2out = outflow.factors.find((f) => f.id === 'superflow')!
+      ok(Math.abs(shown(f2out) - 0.35) < 0.011, `核心净流出 + 外围在买 → 仍按折算后的 0.35x（实际 ${shown(f2out)}）`)
+    }
+
+    // 分组备注契约（客户端备注模态此前绑错状态，保存无效）
+    {
+      const store5 = new DataStore(dir)
+      await store5.init()
+      await store5.mutateWatch({ op: 'addGroup', name: 'G5' })
+      const gid = store5.watchData().groups[0].id
+      await store5.mutateWatch({ op: 'noteGroup', groupId: gid, note: '测试备注' } as never)
+      ok(store5.watchData().groups[0].note === '测试备注', '自选分组备注可写入')
+      await store5.mutateWatch({ op: 'noteGroup', groupId: gid, note: '' } as never)
+      ok(store5.watchData().groups[0].note === undefined, '备注留空即清除')
     }
 
     // 大小写口径：入库存原样、上游映射大小写无关、LKG 库大小写无关

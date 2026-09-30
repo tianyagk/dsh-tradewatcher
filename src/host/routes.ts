@@ -20,7 +20,7 @@ import { RescueMonitor } from './rescue.ts'
 import { QUOTE_HOSTS, HISTORY_HOSTS } from './em.ts'
 import { breakerSummary } from './breaker.ts'
 import { HttpError, httpStatusOf, retryAfterSecondsOf } from './http.ts'
-import { log, type PluginWebRoute, type PluginWebServer } from './context.ts'
+import { log, type PluginWebRoute } from './context.ts'
 
 const MAX_BODY = 256 * 1024
 const MAX_QUOTE_IDS = 160

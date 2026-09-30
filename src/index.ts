@@ -26,7 +26,20 @@ export function apply(ctx: PluginContext): void {
   const calendar = new CalendarStore()
   // 护盘监测：交易时段常驻采样（30s / 尾盘 15s），配置随 prefs 同步
   const rescue = new RescueMonitor()
+  /**
+   * 卸载标记。
+   *
+   * `store.init()` 是异步的，而卸载（effect disposer → `rescue.stop()`）可能先发生：
+   * 那样会变成「先 stop、再 start」—— 采样循环在插件已经卸载之后继续跑（实测：
+   * 卸载后 `running = true` 且仍持有定时器），热重载时还会累积多个采样器并发写同一个
+   * `rescue-log.json`。因此启动前必须检查这个标记。
+   */
+  let disposed = false
   void store.init().then(() => {
+    if (disposed) {
+      log('plugin unloaded before store init finished — rescue monitor not started')
+      return
+    }
     log('store ready at', dataHome())
     // 行情新鲜度跟随用户的刷新间隔：界面写着"每 N 秒"，数据就该是 N 秒级新鲜
     // （此前报价缓存有 40s 的隐式复用宽限 → 10s 的刷新设置实际拿到 ~43s 的数据）
@@ -49,6 +62,7 @@ export function apply(ctx: PluginContext): void {
       }
     })
     return () => {
+      disposed = true
       rescue.stop()
       for (const dispose of disposers) {
         try {

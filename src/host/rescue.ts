@@ -287,7 +287,6 @@ export interface RescueScoreResult {
 }
 
 const fmt = (v: number | null, unit: string, digits = 2): string => (v === null ? '—' : `${v.toFixed(digits)}${unit}`)
-const fmtYi = (v: number | null): string => (v === null ? '—' : `${(v / 1e8).toFixed(2)}亿`)
 
 /**
  * 六因子合成：S = Σ w·f × 时点系数，再施加防误报封顶。
@@ -307,12 +306,24 @@ export function scoreRescue(input: RescueFactorInput): RescueScoreResult {
 
   const f1 = interpScore(input.timeAdjMult ?? 0, [RESCUE_CALIBRATION.f1.mid, RESCUE_CALIBRATION.f1.high, RESCUE_CALIBRATION.f1.extreme])
 
-  // F2：核心通道优先。核心有净流入则以其为准；只有外围在买 → 打折（外围单买不足以证明系统性托底）
+  // F2：核心通道优先，且**核心必须"真正参与"**才不带折扣 ——
+  // 判据是核心净流入达到第一档锚点（f2Anchors[0]），而不是"大于 0"：
+  // 此前只要核心为正（哪怕 0.05x，几乎等于没买）就取 Math.max(core, peri)，
+  // 外围强度按**原值**计入，而标注却写「已折算」——文本与数值不一致
+  // （实测核心 0.05x + 外围 0.5x 被判 63 分，真按 0.7 折算应为 51）。
   const core = input.coreSuperVsAvg ?? null
   const peri = input.peripheralSuperVsAvg ?? null
-  const corePositive = core !== null && core > 0
-  const f2Value = corePositive ? (peri !== null ? Math.max(core, peri) : core) : peri !== null ? peri * PERIPHERAL_FLOW_DISCOUNT : 0
-  const f2Basis = corePositive ? (peri !== null && peri > core ? '外围主导（已折算）' : '核心通道') : '外围通道（打 0.7 折）'
+  const coreMeaningful = core !== null && core >= input.f2Anchors[0]
+  const f2Value = coreMeaningful
+    ? (peri !== null ? Math.max(core, peri) : core)
+    : peri !== null
+      ? Math.max(core ?? 0, peri * PERIPHERAL_FLOW_DISCOUNT)
+      : (core ?? 0)
+  const f2Basis = coreMeaningful
+    ? (peri !== null && peri > core ? '外围主导（核心已参与）' : '核心通道')
+    : peri !== null
+      ? '外围通道（核心未达参与档，外围打 0.7 折）'
+      : '核心通道（未达参与档）'
   const f2 = interpScore(f2Value, input.f2Anchors)
 
   // F3：脉冲。盘中打折，尾盘满分；命中线为该时段 P90
@@ -339,7 +350,7 @@ export function scoreRescue(input: RescueFactorInput): RescueScoreResult {
     {
       id: 'superflow', label: '超大单强度', score: f2, weight: RESCUE_WEIGHTS.superflow,
       actual: `${fmt(f2Value, 'x')}（${f2Basis}）`,
-      threshold: `核心通道优先：超大单净额/20日均额（${input.f2Anchors[0]}/${input.f2Anchors[1]}/${input.f2Anchors[2]}x，来源 ${input.f2Source === 'self' ? '自建样本分位' : '经验锚点'}）；仅外围净流入打 0.7 折`,
+      threshold: `核心通道优先（核心净流入 ≥ ${input.f2Anchors[0]}x 才算参与）：超大单净额/20日均额（${input.f2Anchors[0]}/${input.f2Anchors[1]}/${input.f2Anchors[2]}x，来源 ${input.f2Source === 'self' ? '自建样本分位' : '经验锚点'}）；核心未达参与档或净流出时，外围强度打 0.7 折`,
       hit: f2 >= 40,
     },
     {
@@ -496,6 +507,43 @@ export function windowFlowStats(
   }
   const retraceRatio = netIncrease > 0 ? maxDrop / netIncrease : null
   return { persistShare, retraceRatio }
+}
+
+/**
+ * 脉冲参考点选择（纯函数，便于断言）。
+ *
+ * 规则：只有在 `[evalAt - windowMs - 容差, evalAt - windowMs + 容差]` **窗口内**的序列点
+ * 才能当作"5 分钟前"的参考；且序列末端必须贴近 evalAt（`evalTs - last <= maxLagMs`）。
+ *
+ * 为什么必须卡这两个边界（v0.21.0 修的 bug）：分钟序列此前**每天只在冷启动回填写一次**，
+ * 而参考点选择以"序列末端"为锚点（`evalAt = min(evalTs, last)`）—— 序列过期后，
+ * 分子变成"序列末端→现在"的累计成交额（可达几十分钟），分母仍是"5 分钟"的预期，
+ * 于是脉冲被系统性放大。实测（假时钟 10:30 盘中、同一份真实行情）：
+ * 过期序列 → 5.01x，采样环口径 → 1.12x（因子分 60 vs 22）。
+ * 卡住窗口后，过期序列提供不了窗口内的点 → 自然退回采样环口径，**算错变成不可能**。
+ */
+export function pickPulseRef(
+  series: readonly { ts: number; amount: number }[],
+  evalTs: number,
+  evalAt: number,
+  windowMs = FLOW_WINDOW_MS,
+  opts: { maxLagMs?: number; toleranceMs?: number } = {},
+): { ref: { ts: number; amount: number }; evalAt: number } | null {
+  if (series.length === 0) return null
+  const maxLag = opts.maxLagMs ?? 60_000
+  const tol = opts.toleranceMs ?? 30_000
+  const last = series[series.length - 1]
+  // 序列末端离评估时点太远（过期）→ 不用序列口径
+  if (last.ts < evalTs - maxLag) return null
+  const at = Math.min(evalAt, last.ts)
+  const low = at - windowMs - tol
+  const high = at - windowMs + tol
+  let ref: { ts: number; amount: number } | null = null
+  for (const p of series) {
+    if (p.ts < low || p.ts > high) continue
+    if (ref === null || p.ts > ref.ts) ref = p
+  }
+  return ref === null ? null : { ref, evalAt: at }
 }
 
 /** 自建样本分位数（升序数组的线性插值分位） */
@@ -817,9 +865,13 @@ export class RescueMonitor {
   private tickFlight = new SingleFlight()
   /** 当日分钟序列缓存（脉冲计算用；东财或腾讯） */
   private minutes: Record<string, MinuteFlowPoint[]> = {}
+  /** 最近一次分钟序列刷新时刻（节流用；此前只写不读 → 序列每天只冷启动写一次） */
   private lastMinuteRefresh = 0
-  /** 本次快照的数据来源 */
-  private quoteSource: QuoteSource = 'em'
+  private minuteRefreshing = false
+  /** 分钟序列刷新间隔：与采样间隔无关，60 秒足够让脉冲参考点落在窗口内 */
+  private static readonly MINUTE_REFRESH_MS = 60_000
+  /** 最近一次成功采样的数据来源（未采过样时为 null，避免把"还没采"说成"来自东财"） */
+  private quoteSource: QuoteSource | null = null
 
   constructor(dir: string = dataHome(), config?: RescueConfig) {
     this.dir = dir
@@ -938,6 +990,12 @@ export class RescueMonitor {
       clearTimeout(this.timer)
       this.timer = null
     }
+    // 延迟补算也要取消：否则卸载后还会再跑一拍（与"stop 之后又 start"的竞态同源）
+    if (this.deferredTimer !== null) {
+      clearTimeout(this.deferredTimer)
+      this.deferredTimer = null
+    }
+    this.deferredReTick = false
   }
 
   private async loop(): Promise<void> {
@@ -1076,6 +1134,11 @@ export class RescueMonitor {
       })
     }
     const ts = Date.now()
+    const tradingNow = inTradingWindow(ts)
+    // 分钟序列刷新（后台执行，不阻塞本拍；面板用的是本拍已有序列 + pickPulseRef 的守卫）
+    if (tradingNow && ts - this.lastMinuteRefresh >= RescueMonitor.MINUTE_REFRESH_MS) {
+      void this.refreshMinutes(metas).catch(() => undefined)
+    }
     const elapsed = sessionElapsed(hhmmOf(ts))
     const curve = this.file.progressCurve ?? RESCUE_CALIBRATION.progressCurve
     const progress = progressAt(curve, elapsed)
@@ -1129,18 +1192,14 @@ export class RescueMonitor {
       // 脉冲：最近 5 分钟成交额 ÷ 同时点基准 5 分钟额
       let pulseMult: number | null = null
       if (allowPulse && base !== null && base > 0) {
-        // 优先用当日分钟序列（东财 trends2 或腾讯分钟线都能提供累计成交额）
-        const series = this.minutes[meta.secid] ?? []
-        const evalAt = series.length > 0 ? Math.min(evalTs, series[series.length - 1].ts) : evalTs
-        const windowMs = 5 * 60_000
-        let refPoint: MinuteFlowPoint | null = null
-        for (const p of series) {
-          if (p.ts <= evalAt - windowMs + 30_000 && (refPoint === null || p.ts > refPoint.ts)) refPoint = p
-        }
-        if (refPoint !== null) {
-          const actual5 = (amount ?? 0) - refPoint.amount
-          const elapsedRef = sessionElapsed(hhmmOf(refPoint.ts))
-          const expected = base * (progressAt(curve, sessionElapsed(hhmmOf(evalAt))) - progressAt(curve, elapsedRef))
+        // 优先用当日分钟序列（东财 trends2 或腾讯分钟线都能提供累计成交额）；
+        // 序列过期时 pickPulseRef 返回 null，自动退回采样环口径（见该函数的说明）
+        const windowMs = FLOW_WINDOW_MS
+        const picked = pickPulseRef(this.minutes[meta.secid] ?? [], evalTs, evalTs, windowMs)
+        if (picked !== null) {
+          const actual5 = (amount ?? 0) - picked.ref.amount
+          const elapsedRef = sessionElapsed(hhmmOf(picked.ref.ts))
+          const expected = base * (progressAt(curve, sessionElapsed(hhmmOf(picked.evalAt))) - progressAt(curve, elapsedRef))
           if (expected > 0 && actual5 > 0) pulseMult = actual5 / expected
         }
         // 无分钟序列时退回采样环口径
@@ -1311,6 +1370,41 @@ export class RescueMonitor {
     }
   }
 
+  /**
+   * 分钟序列的**节流刷新**（交易时段内每 60 秒一次）。
+   *
+   * 此前 `this.minutes` 只在冷启动回填时写一次：进程盘中启动后序列就冻结在那一刻，
+   * 而脉冲要用"5 分钟前"的参考点 —— 序列过期就会拿几十分钟的成交额去比 5 分钟预期
+   * （实测放大 4.5 倍，见 pickPulseRef 的说明）。刷新失败时保留旧序列，
+   * 由 pickPulseRef 的陈旧守卫保证"宁可退回采样环，也不算错"。
+   */
+  private async refreshMinutes(metas: RescueEtfMeta[]): Promise<void> {
+    if (this.minuteRefreshing) return
+    this.minuteRefreshing = true
+    try {
+      const queue = [...metas]
+      const workers = Array.from(
+        { length: Math.max(1, Math.min(RescueMonitor.BOOTSTRAP_CONCURRENCY, queue.length)) },
+        async () => {
+          for (;;) {
+            const meta = queue.shift()
+            if (meta === undefined) return
+            try {
+              const points = await fetchMinuteSeriesAny(meta.secid)
+              if (points.length >= 3) this.minutes[meta.secid] = points
+            } catch {
+              /* 单通道失败保留旧序列（陈旧守卫会兜住） */
+            }
+          }
+        },
+      )
+      await Promise.all(workers)
+      this.lastMinuteRefresh = Date.now()
+    } finally {
+      this.minuteRefreshing = false
+    }
+  }
+
   /** 单个通道的回填；失败放回待办（上限 3 次/日），避免一次网络抖动让该通道整日缺因子 */
   private async bootstrapOne(meta: RescueEtfMeta): Promise<void> {
     const key = `${this.todayKey}|${meta.secid}`
@@ -1366,7 +1460,8 @@ export class RescueMonitor {
     if (this.deferredReTick) return
     this.deferredReTick = true
     const step = (n: number): void => {
-      setTimeout(() => {
+      const handle = setTimeout(() => {
+        this.deferredTimer = null
         if (this.tickFlight.busy) {
           if (n < 6) { step(n + 1); return }
           this.deferredReTick = false
@@ -1374,13 +1469,17 @@ export class RescueMonitor {
         }
         this.deferredReTick = false
         void this.tick().catch(() => undefined)
-      }, 250).unref?.()
+      }, 250)
+      handle.unref?.()
+      this.deferredTimer = handle
     }
     step(attempt)
   }
 
   /** 是否有待执行的补算（自检用） */
   private deferredReTick = false
+  /** 延迟补算的定时器句柄（stop 时要清掉） */
+  private deferredTimer: ReturnType<typeof setTimeout> | null = null
 
   /**
    * 采样环 + 窗口内资金流统计。
@@ -1503,6 +1602,8 @@ export class RescueMonitor {
         config: this.getConfig(), activeIntervalSec: this.activeIntervalSec(),
         today: [...this.today.events].reverse(), intraday: [...this.today.intraday],
         sampleCount: this.today.samples, lastSampleTs: null, gap: true, stale: true,
+        // 复盘兜底也要如实标注"最近一次成功采样取自哪个源"（未采过样则不给结论）
+        flowSource: this.quoteSource ?? undefined,
         note: fb.note, fallback: fb.meta,
       }
     }

@@ -22,7 +22,7 @@ import type {
   TrendPoint,
 } from '../shared/model.ts'
 import { SECID_RE } from '../shared/model.ts'
-import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { breakerFor, hostsAllowed, minutesToRecover } from './breaker.ts'
 import { fetchSinaEtfRanking, fetchSinaQuotes, sinaSymbol as sinaQuoteSymbol } from './sina.ts'
 import { fetchTencentBoards, fetchTencentMinutes, fetchTencentQuoteRows, fetchTencentSuggest, tencentCode, type TencentQuoteFull } from './tencent.ts'
@@ -612,6 +612,8 @@ function persistBoardLkg(): void {
  * 一拍只剩一次批量取数。
  */
 const quoteSlots = new Map<string, { exp: number; at: number; row: QuoteRow }>()
+/** 槽位上限（与 LKG_MAX 对称）：只增不减会随"历史上出现过的标的"无限增长 */
+const QUOTE_SLOT_MAX = 1500
 
 /** 在飞的批量取数：大小写键 → 覆盖它的那次批量（并发去重，避免同一批打两遍） */
 const quoteInflight = new Map<string, Promise<void>>()
@@ -689,6 +691,12 @@ async function loadQuotes(secids: string[]): Promise<Map<string, QuoteRow>> {
       await fillFromFallbacks(still, got)
       const at = Date.now()
       for (const [secid, row] of got) quoteSlots.set(secid.toUpperCase(), { exp: at + ttl, at, row })
+      // Map 保持插入序：超限时从最旧的开始丢（正被使用的槽会被重新 set 而回到队尾）
+      while (quoteSlots.size > QUOTE_SLOT_MAX) {
+        const oldest = quoteSlots.keys().next()
+        if (oldest.done === true) break
+        quoteSlots.delete(oldest.value)
+      }
     })()
     for (const secid of still) quoteInflight.set(secid.toUpperCase(), batch)
     try {
@@ -749,7 +757,6 @@ export async function fetchQuotes(secids: string[]): Promise<Record<string, Quot
 /** Detail card for one stock/ETF (extra fundamentals; indices return what the feed has). */
 export async function fetchStockDetail(secid: string): Promise<StockDetail | null> {
   if (!SECID_RE.test(secid)) return null
-  const q = `secid=${encodeURIComponent(secid)}&fltt=2&invt=2&fields=${QUOTE_FIELDS}`
   const json = await ttlCache(`detail:${secid}`, 10_000, () => fetchAny(QUOTE_HOSTS, `/api/qt/ulist.np/get?secids=${encodeURIComponent(secid)}&fltt=2&invt=2&fields=${QUOTE_FIELDS}`))
   const rows = diffList(json)
   const it = rows[0]
@@ -1120,8 +1127,45 @@ async function saveKlineCache(secid: string, klt: number, bars: DayBar[]): Promi
   try {
     await mkdir(join(dataHome(), 'klines'), { recursive: true })
     await writeFile(klineFile(secid, klt), JSON.stringify({ v: 1, secid, klt, updatedAt: Date.now(), bars }), 'utf8')
+    void pruneKlineCache()
   } catch (error) {
     console.warn('[tradewatcher] 保存K线缓存失败:', String(error))
+  }
+}
+
+/**
+ * K 线磁盘缓存裁剪：每个 (secid, klt) 一个文件，长期浏览会持续累积
+ * （实测 40 个文件 2.7MB，无上限）。超过 KLINE_CACHE_MAX 时按 mtime 从最旧开始删。
+ * 有节流：最多 10 分钟扫一次目录，不影响常态写入路径。
+ */
+const KLINE_CACHE_MAX = 300
+let klinePruneAt = 0
+
+async function pruneKlineCache(): Promise<void> {
+  const now = Date.now()
+  if (now - klinePruneAt < 600_000) return
+  klinePruneAt = now
+  try {
+    const dir = join(dataHome(), 'klines')
+    const names = await readdir(dir)
+    if (names.length <= KLINE_CACHE_MAX) return
+    const stats = await Promise.all(
+      names.map(async (name) => {
+        try {
+          const st = await stat(join(dir, name))
+          return { name, mtime: st.mtimeMs }
+        } catch {
+          return { name, mtime: 0 }
+        }
+      }),
+    )
+    stats.sort((a, b) => a.mtime - b.mtime)
+    for (const drop of stats.slice(0, stats.length - KLINE_CACHE_MAX)) {
+      await rm(join(dir, drop.name), { force: true }).catch(() => undefined)
+    }
+    console.log(`[tradewatcher] K线缓存裁剪：保留 ${KLINE_CACHE_MAX} 个，清理 ${stats.length - KLINE_CACHE_MAX} 个`)
+  } catch {
+    /* 目录不存在或权限不足：不影响主路径 */
   }
 }
 
@@ -1323,7 +1367,6 @@ async function fetchBoardLive(
   pz = 40,
 ): Promise<{ total: number; rows: BoardRow[]; source?: 'em' | 'tencent' | 'sina' }> {
   await loadBoardLkg()
-  const lkgKey = `board:${scope}:${sort}:${pn}:${pz}`
   const fs = scope === 'etf' ? ETF_FS : BOARD_FS[scope]
   const fid = sort === 'money' ? 'f62' : sort === 'amount' ? 'f6' : 'f3'
   const po = sort === 'money' || sort === 'amount' ? 1 : 1 // all descending by chosen fid

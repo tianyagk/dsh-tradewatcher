@@ -3,11 +3,11 @@
  * (分时 / 五日 / 日K / 周K / 月K / 年K). Data is fetched lazily per tab and
  * memoized client-side (host caches back it anyway).
  */
-import React, { useCallback, useEffect, useRef, useState } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 import type { KlineData, StockDetail, TradeMark, TrendData } from '../shared/model.ts'
 import { api } from './api.ts'
 import { dirClass, fmtAmt, fmtBig, fmtPct, fmtPrice, fmtSigned } from './format.ts'
-import { Btn, ErrorNote, Skeleton } from './ui.tsx'
+import { Btn, Skeleton} from './ui.tsx'
 import type { CandleMarker, SparkMarker } from './charts.tsx'
 import { KlineChart, TrendChart } from './kline.tsx'
 
