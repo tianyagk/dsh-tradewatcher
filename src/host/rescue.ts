@@ -787,6 +787,14 @@ export class RescueMonitor {
   /** 每个交易日每个标的只回填一次 */
   private bootstrapped = new Set<string>()
   private bootstrappedCount = 0
+  /** 当日每个通道的回填尝试次数（失败上限 3 次，避免网络抖动导致整日缺因子或重试风暴） */
+  private bootstrapAttempts = new Map<string, number>()
+  /** 本轮并发回填成功计数（bootstrapRings 结束时并入 bootstrappedCount） */
+  private bootstrapFilled = 0
+  /** 回填并发度 */
+  private static readonly BOOTSTRAP_CONCURRENCY = 3
+  /** 回填时间预算：超过就先出快照（剩余通道后台补齐） */
+  private static readonly BOOTSTRAP_BUDGET_MS = 3_000
   /** 正在后台补算基准的通道（避免重复请求） */
   private baselinePending = new Set<string>()
   /** 日线缓存（位置/底部概率用，按日刷新） */
@@ -859,6 +867,8 @@ export class RescueMonitor {
     const key = dayOf(Date.now())
     if (this.todayKey === key) return
     this.bootstrapped.clear()
+    this.bootstrapAttempts.clear()
+    this.bootstrapFilled = 0
     this.todayKey = key
     this.today = this.file.days[key] ?? { events: [], intraday: [], samples: 0, gap: false }
     this.file.days[key] = this.today
@@ -989,10 +999,25 @@ export class RescueMonitor {
     this.rollDay()
     const metas = rescueUniverseMeta(this.config.universe, this.config.custom ?? [])
     const secids = [INDEX_SECID, ...metas.map((m) => m.secid)]
+    // 冷启动回填与行情取数**并发**（此前是串行：先等行情失败 3.4s，再等回填 3s = 6.4s 首屏）
+    const shortRings = phaseOf(hhmmOf(Date.now())) === 'pre'
+      ? []
+      : metas.filter((m) => {
+          const ring = this.ring[m.secid] ?? []
+          if (ring.length < 2) return true
+          return ring[ring.length - 1].ts - ring[0].ts < FLOW_WINDOW_MS - 30_000
+        })
+    const needsBootstrap = shortRings.length > 0 && !shortRings.every((m) => this.bootstrapped.has(`${this.todayKey}|${m.secid}`))
+    const bootstrapWork = needsBootstrap
+      ? this.withBudget(this.bootstrapRings(shortRings), RescueMonitor.BOOTSTRAP_BUDGET_MS, '冷启动回填').then((timedOut) => {
+          // 超预算 = 这份快照的脉冲/持续性可能要缺，后台补齐后自动补算一次
+          if (timedOut) this.scheduleDeferredReTick()
+        })
+      : Promise.resolve()
     let quotes: Record<string, RescueQuoteRow>
     let source: QuoteSource = 'em'
     try {
-      const got = await fetchQuoteSource(secids)
+      const [got] = await Promise.all([fetchQuoteSource(secids), bootstrapWork])
       quotes = got.rows
       source = got.source
     } catch {
@@ -1049,18 +1074,6 @@ export class RescueMonitor {
       })().finally(() => {
         this.bottomComputing = false
       })
-    }
-    // 冷启动回填：盘中重启或收盘后复盘，都应立刻具备脉冲/持续性所需的历史
-    if (phaseOf(hhmmOf(Date.now())) !== 'pre') {
-      const short = metas.filter((m) => {
-        const ring = this.ring[m.secid] ?? []
-        if (ring.length < 2) return true
-        const span = ring[ring.length - 1].ts - ring[0].ts
-        return span < FLOW_WINDOW_MS - 30_000
-      })
-      if (short.length > 0 && !short.every((m) => this.bootstrapped.has(`${this.todayKey}|${m.secid}`))) {
-        await this.bootstrapRings(short).catch(() => undefined)
-      }
     }
     const ts = Date.now()
     const elapsed = sessionElapsed(hhmmOf(ts))
@@ -1270,33 +1283,104 @@ export class RescueMonitor {
    * 用当日分钟数据回填采样环（每个交易日每标的只做一次）。
    * 只补历史、不覆盖已采到的实时样本，因此不会与实时采样冲突。
    */
+  /**
+   * 冷启动回填：把当日分钟序列灌进采样环（脉冲与持续性都需要 ≥5 分钟历史）。
+   *
+   * 两处修正（此前实测首屏 7.8s）：
+   *  1. **并发**：原来 for-await 串行拉每个通道（7 次网络往返叠加），现按 3 路并发，
+   *     正常上游下从数秒降到几百毫秒；
+   *  2. **时间预算**：调用方用 `withBudget` 等最多 3s，超时就先出快照（缺口如实标注），
+   *     剩余通道的请求继续在后台跑完并在后续 tick 生效 —— 面板不再为回填干等。
+   */
   private async bootstrapRings(metas: RescueEtfMeta[]): Promise<void> {
-    let filled = 0
-    for (const meta of metas) {
-      const key = `${this.todayKey}|${meta.secid}`
-      if (this.bootstrapped.has(key)) continue
-      this.bootstrapped.add(key)
-      try {
-        const points = await fetchMinuteSeriesAny(meta.secid)
-        if (points.length < 3) continue
-        this.minutes[meta.secid] = points
-        const ring = this.ring[meta.secid] ?? []
-        const newest = ring.length > 0 ? ring[ring.length - 1].ts : 0
-        this.lastMinuteRefresh = Date.now()
-        // 腾讯备用源没有分单资金流：此时不写入采样环（持续性须真实资金数据支撑）
-        const seeded: Sample[] = points
-          .filter((p) => p.ts > newest && p.superNet !== null)
-          .slice(-SAMPLE_RING)
-          .map((p) => ({ ts: p.ts, amount: p.amount, superNet: p.superNet as number, mainNet: p.mainNet ?? 0 }))
-        if (seeded.length === 0) continue
-        this.ring[meta.secid] = [...ring, ...seeded].slice(-SAMPLE_RING)
-        filled += 1
-      } catch {
-        /* 单只失败不影响其它 */
-      }
+    const queue = [...metas]
+    const workers = Array.from(
+      { length: Math.max(1, Math.min(RescueMonitor.BOOTSTRAP_CONCURRENCY, queue.length)) },
+      async () => {
+        for (;;) {
+          const meta = queue.shift()
+          if (meta === undefined) return
+          await this.bootstrapOne(meta)
+        }
+      },
+    )
+    await Promise.all(workers)
+    if (this.bootstrapFilled > 0) {
+      this.bootstrappedCount += this.bootstrapFilled
+      this.bootstrapFilled = 0
     }
-    if (filled > 0) this.bootstrappedCount += filled
   }
+
+  /** 单个通道的回填；失败放回待办（上限 3 次/日），避免一次网络抖动让该通道整日缺因子 */
+  private async bootstrapOne(meta: RescueEtfMeta): Promise<void> {
+    const key = `${this.todayKey}|${meta.secid}`
+    if (this.bootstrapped.has(key)) return
+    const attempts = (this.bootstrapAttempts.get(key) ?? 0) + 1
+    this.bootstrapAttempts.set(key, attempts)
+    this.bootstrapped.add(key) // 先占位：同一 tick 内的并发不重复拉同一通道
+    try {
+      const points = await fetchMinuteSeriesAny(meta.secid)
+      if (points.length < 3) return // 上游明确没有分钟数据：今天不再试
+      this.minutes[meta.secid] = points
+      const ring = this.ring[meta.secid] ?? []
+      const newest = ring.length > 0 ? ring[ring.length - 1].ts : 0
+      this.lastMinuteRefresh = Date.now()
+      // 腾讯备用源没有分单资金流：此时不写入采样环（持续性须真实资金数据支撑）
+      const seeded: Sample[] = points
+        .filter((p) => p.ts > newest && p.superNet !== null)
+        .slice(-SAMPLE_RING)
+        .map((p) => ({ ts: p.ts, amount: p.amount, superNet: p.superNet as number, mainNet: p.mainNet ?? 0 }))
+      if (seeded.length === 0) return
+      this.ring[meta.secid] = [...ring, ...seeded].slice(-SAMPLE_RING)
+      this.bootstrapFilled += 1
+    } catch {
+      if (attempts < 3) this.bootstrapped.delete(key)
+    }
+  }
+
+  /**
+   * 给一段后台工作设时间预算：到点即返回（工作继续在后台跑），
+   * 用于"宁可先出带缺口的快照，也不让面板干等"。
+   */
+  private async withBudget(work: Promise<void>, budgetMs: number, label: string): Promise<boolean> {
+    let timedOut = false
+    const timer = new Promise<void>((resolve) => {
+      setTimeout(() => {
+        timedOut = true
+        resolve()
+      }, budgetMs).unref?.()
+    })
+    await Promise.race([work.catch(() => undefined), timer])
+    if (timedOut) {
+      console.warn(`[tradewatcher] ${label} 超过 ${budgetMs}ms 预算：先出快照（因子可能暂时缺失），后台继续补齐`)
+    }
+    return timedOut
+  }
+
+  /**
+   * 回填被预算"抛弃"后，它仍会在后台跑完 —— 但收盘后没有定时 tick，
+   * 面板就会一直停在缺因子的那份快照上。这里在回填完成后安排**一次**补算：
+   * 先等当前 tick 结束（不能在这里 await 自己那一份，会自锁），再重新采样一次。
+   */
+  private scheduleDeferredReTick(attempt = 0): void {
+    if (this.deferredReTick) return
+    this.deferredReTick = true
+    const step = (n: number): void => {
+      setTimeout(() => {
+        if (this.tickFlight.busy) {
+          if (n < 6) { step(n + 1); return }
+          this.deferredReTick = false
+          return
+        }
+        this.deferredReTick = false
+        void this.tick().catch(() => undefined)
+      }, 250).unref?.()
+    }
+    step(attempt)
+  }
+
+  /** 是否有待执行的补算（自检用） */
+  private deferredReTick = false
 
   /**
    * 采样环 + 窗口内资金流统计。

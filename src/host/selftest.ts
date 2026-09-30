@@ -5,10 +5,10 @@
 import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { DataStore, normalizeRescuePrefs, replayPosition, sortLedger, dataHome } from './store.ts'
+import { DataStore, normalizeRescuePrefs, replayPosition, secidKey, sortLedger, dataHome } from './store.ts'
 import { assemblePortfolio, derivePosition, ledgerViews, shanghaiDayStart, verbLabel } from './portfolio.ts'
 import * as em from './em.ts'
-import { fillLastGood, mergeBars, quoteFromTencent, resampleYearly, summarizeQuoteProvenance } from './em.ts'
+import { fillLastGood, hasQuoteFallback, mergeBars, quoteFreshnessMs, quoteFromTencent, resampleYearly, setQuoteFreshnessMs, summarizeQuoteProvenance } from './em.ts'
 import { parseTencentStamp, parseTencentSuggest, suggestKindFromTencent, tencentCode, unescapeUnicode } from './tencent.ts'
 import { parseSinaEtfRanking, parseSinaHq, sinaCovered, sinaSymbol } from './sina.ts'
 import { breakerFor, breakerSummary, hostsAllowed, minutesToFullyRecover, minutesToRecover } from './breaker.ts'
@@ -869,6 +869,38 @@ async function main(): Promise<void> {
       const posDirty = computePosition(midDirty, price)
       ok(posDirty.percentile60 === posClean.percentile60 && posDirty.downStreak === posClean.downStreak,
         '位置特征不受非法日线影响')
+    }
+
+    // 大小写口径：入库存原样、上游映射大小写无关、LKG 库大小写无关
+    {
+      ok(secidKey('114.lhm') === secidKey('114.LHM'), 'secidKey 大小写无关于同一标的')
+      ok(hasQuoteFallback('114.lhm') && hasQuoteFallback('114.LHM'), '商品主连有新浪兜底（大小写两种写法都认）')
+      ok(!hasQuoteFallback('113.rb2610') && !hasQuoteFallback('107.SPY'), '月度合约/美股如实标注只有东财一条链路')
+      ok(hasQuoteFallback('1.600519') && hasQuoteFallback('116.00700'), 'A股/港股有腾讯兜底')
+      // LKG 库按大小写无关键取用：库里存大写、请求小写（或反之）都要命中
+      const bank = new Map<string, QuoteRow>()
+      bank.set('114.LHM', { ...fakeQuote('114.LHM', 10680, 10600), at: 1_700_000_000_000 })
+      const rows = new Map<string, QuoteRow>()
+      fillLastGood(['114.lhm'], rows, bank)
+      ok(rows.get('114.lhm')?.price === 10680, 'LKG 大小写无关命中（库里大写、请求小写）')
+      ok(rows.get('114.lhm')?.secid === '114.lhm', 'LKG 回填后把 secid 归位到本次请求的写法')
+      const bank2 = new Map<string, QuoteRow>()
+      const fresh = { ...fakeQuote('114.lhm', 10690, 10600), at: 1_700_000_001_000 }
+      const rows2 = new Map<string, QuoteRow>()
+      // rows 的键与"本次请求的写法"一致（loadQuotes 就是这么建的）
+      rows2.set('114.LHM', fresh)
+      fillLastGood(['114.LHM'], rows2, bank2)
+      ok(bank2.has('114.LHM') && bank2.get('114.LHM')?.price === 10690, '新读数按大小写无关键写入 LKG 库')
+    }
+
+    // 行情新鲜度窗口：跟随刷新间隔且夹在 5–60 秒
+    {
+      setQuoteFreshnessMs(1_000)
+      ok(quoteFreshnessMs() === 5_000, `低于下限夹到 5s (got ${quoteFreshnessMs()})`)
+      setQuoteFreshnessMs(9_999_999)
+      ok(quoteFreshnessMs() === 60_000, `高于上限夹到 60s (got ${quoteFreshnessMs()})`)
+      setQuoteFreshnessMs(10_000)
+      ok(quoteFreshnessMs() === 10_000, '正常值原样生效')
     }
 
     // 采样失败不得改写"数据时刻"（失败 ≠ 刚拿到数据），失败时刻单独记

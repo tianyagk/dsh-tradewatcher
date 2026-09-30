@@ -35,6 +35,17 @@ const num = (v: unknown): number | null => {
  *   - 外盘商品：hf_XAU 伦敦金 / hf_HG 铜 / hf_SI 银 / hf_OIL 布伦特原油
  * 仍未覆盖（如实返回 null）：韩国 KOSPI200、法国 CAC40、欧洲斯托克50。
  */
+/**
+ * 大小写无关的查表：键统一为大写。
+ * secid 后缀区分大小写（114.lhm），而库/路由历史上存过大写写法（114.LHM），
+ * 按原样查表会让这些标的丢掉新浪兜底 —— 这里统一按大写匹配，输出仍用请求的写法。
+ */
+const SINA_BY_UPPER: Record<string, string> = {}
+
+function sinaSymbolOf(secid: string): string | null {
+  return SINA_BY_UPPER[secid.trim().toUpperCase()] ?? null
+}
+
 const SINA_SYMBOL: Record<string, string> = {
   '100.DJI': 'int_dji',
   '100.SPX': 'int_sp500',
@@ -53,13 +64,16 @@ const SINA_SYMBOL: Record<string, string> = {
   '112.B00Y': 'hf_OIL',
 }
 
+// 建索引：查表一律走大写键（见 SINA_BY_UPPER 的说明）
+for (const [secid, symbol] of Object.entries(SINA_SYMBOL)) SINA_BY_UPPER[secid.toUpperCase()] = symbol
+
 export function sinaSymbol(secid: string): string | null {
-  return SINA_SYMBOL[secid] ?? null
+  return sinaSymbolOf(secid)
 }
 
 /** 兜底源可解析的标的数（供自检断言：预设 23 只里应覆盖 ≥ 20） */
 export function sinaCovered(secids: readonly string[]): number {
-  return secids.filter((s) => SINA_SYMBOL[s] !== undefined).length
+  return secids.filter((s) => sinaSymbolOf(s) !== null).length
 }
 
 export interface SinaHqQuote {
@@ -120,8 +134,8 @@ function sanePct(pct: number | null): number | null {
 export async function fetchSinaQuotes(secids: readonly string[]): Promise<Record<string, SinaHqQuote>> {
   const pairs: Array<[string, string]> = []
   for (const secid of secids) {
-    const symbol = SINA_SYMBOL[secid]
-    if (symbol !== undefined) pairs.push([secid, symbol])
+    const symbol = sinaSymbolOf(secid)
+    if (symbol !== null) pairs.push([secid, symbol])
   }
   if (pairs.length === 0) return {}
   const out: Record<string, SinaHqQuote> = {}

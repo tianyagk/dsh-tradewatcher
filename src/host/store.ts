@@ -453,8 +453,14 @@ export class DataStore {
     return s === '' ? undefined : s
   }
 
+  /**
+   * 校验证券代码。**保留原始大小写**：`113.rbm` / `114.lhm` 这类商品/期货后缀区分大小写，
+   * 上游请求与备用源映射（腾讯/新浪）都以原样为键；改写大小写会让这些标的永久取不到行情
+   * （em.ts 里已踩过一次：整体 toUpperCase 让 4 个期货整批丢掉）。
+   * 需要"同一标的"语义的地方（去重/冲突检测）用 secidKey() 做大小写无关比较。
+   */
   private sanitizeSecid(v: unknown): string {
-    const s = typeof v === 'string' ? v.trim().toUpperCase() : ''
+    const s = typeof v === 'string' ? v.trim() : ''
     if (!SECID_RE.test(s)) throw new Error('证券代码格式非法（如 1.600519 / 100.KOSPI200）')
     return s
   }
@@ -524,7 +530,7 @@ export class DataStore {
         const gid = this.requireId(body.groupId)
         this.groupOfWatch(gid)
         const secid = this.sanitizeSecid(body.secid)
-        if (this.watch.items.some((x) => x.groupId === gid && x.secid === secid)) {
+        if (this.watch.items.some((x) => x.groupId === gid && secidKey(x.secid) === secidKey(secid))) {
           throw new Error('该分组已包含此证券')
         }
         const name = this.sanitizeText(body.symbolName, NAME_MAX, '证券名')
@@ -553,7 +559,7 @@ export class DataStore {
         const it = this.itemOfWatch(this.requireId(body.itemId))
         const gid = this.requireId(body.groupId)
         this.groupOfWatch(gid)
-        if (this.watch.items.some((x) => x.id !== it.id && x.groupId === gid && x.secid === it.secid)) {
+        if (this.watch.items.some((x) => x.id !== it.id && x.groupId === gid && secidKey(x.secid) === secidKey(it.secid))) {
           throw new Error('目标分组已包含此证券')
         }
         it.groupId = gid
@@ -679,7 +685,7 @@ export class DataStore {
         const g = this.groupOfPort(gid)
         if (g.archived === true) throw new Error('分组已归档，请先还原')
         const secid = this.sanitizeSecid(body.secid)
-        if (this.port.items.some((x) => x.groupId === gid && x.secid === secid)) {
+        if (this.port.items.some((x) => x.groupId === gid && secidKey(x.secid) === secidKey(secid))) {
           throw new Error('该分组已包含此证券')
         }
         const name = this.sanitizeText(body.symbolName, NAME_MAX, '证券名')
@@ -702,7 +708,7 @@ export class DataStore {
           const gid = this.requireId(body.groupId)
           const g = this.groupOfPort(gid)
           if (g.archived === true) throw new Error('目标分组已归档')
-          if (this.port.items.some((x) => x.id !== p.id && x.groupId === gid && x.secid === p.secid)) {
+          if (this.port.items.some((x) => x.id !== p.id && x.groupId === gid && secidKey(x.secid) === secidKey(p.secid))) {
             throw new Error('目标分组已包含此证券')
           }
           meta.oldGroup = p.groupId
@@ -819,6 +825,14 @@ export class DataStore {
   }
 }
 
+/**
+ * "同一标的"的比较键：大小写无关。
+ * 只用于**比较/去重**，绝不用它改写存下来的 secid 原值（见 sanitizeSecid 的说明）。
+ */
+export function secidKey(secid: string): string {
+  return secid.trim().toUpperCase()
+}
+
 /** Rounding helper for money display. */
 export function money(n: number | null | undefined): number | null {
   if (n === null || n === undefined || !Number.isFinite(n)) return null
@@ -879,12 +893,13 @@ export function normalizeRescuePrefs(patch: Partial<RescueConfig>, base: RescueC
     const seen = new Set<string>()
     const out2: RescueCustomChannel[] = []
     for (const raw of patch.custom.slice(0, 20)) {
-      const secid = String((raw as { secid?: unknown })?.secid ?? '').toUpperCase()
+      // 保留原始大小写（同 sanitizeSecid 的理由）；去重用大小写无关键
+      const secid = String((raw as { secid?: unknown })?.secid ?? '').trim()
       const name = String((raw as { name?: unknown })?.name ?? '').trim()
       if (!SECID_RE.test(secid)) throw new Error(`自定义通道代码非法：${secid}`)
       if (name === '' || name.length > 24) throw new Error('自定义通道名称必填且 ≤ 24 字')
-      if (seen.has(secid)) continue
-      seen.add(secid)
+      if (seen.has(secidKey(secid))) continue
+      seen.add(secidKey(secid))
       const index = String((raw as { index?: unknown })?.index ?? '').trim().slice(0, 16)
       out2.push({ secid, name, index: index === '' ? undefined : index })
     }

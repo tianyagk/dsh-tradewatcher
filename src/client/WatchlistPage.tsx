@@ -20,12 +20,15 @@ type ModalState =
 
 export function WatchlistPage(props: {
   quotes: Record<string, QuoteRow>
+  /** 没有任何源给出价格的标的（大写键）；用于区分"暂无行情源"与"还没刷新" */
+  missing?: Set<string>
   quotesReady: boolean
   prefs: PortPrefs
   setPrefs: (patch: Partial<PortPrefs>) => void
   onSymbols: (ids: string[]) => void
 }): React.ReactElement {
-  const { quotes, quotesReady, prefs, setPrefs, onSymbols } = props
+  const { quotes, missing, quotesReady, prefs, setPrefs, onSymbols } = props
+  const noSource = (secid: string): boolean => missing?.has(secid.toUpperCase()) === true
   // 兼容"客户端已刷新、宿主还没重启"：旧 /prefs 响应里没有 watchSort 字段，
   // 此时回退默认而不是让 state.key 取到 undefined（否则整页崩）
   const watchSort = normalizeSortState(prefs.watchSort, WATCH_SORT_KEYS, DEFAULT_PREFS.watchSort)
@@ -233,7 +236,15 @@ export function WatchlistPage(props: {
                       React.createElement('span', { className: `tw-chg-chip ${pct === null ? 'tw-chip-flat' : pct >= 0 ? (prefs.redUp ? 'tw-chip-up' : 'tw-chip-down') : (prefs.redUp ? 'tw-chip-down' : 'tw-chip-up')}` }, fmtPct(pct)),
                     )
                   : quotesReady
-                    ? React.createElement('div', { className: 'wq' }, React.createElement('span', { className: 'tw-muted' }, '暂无行情'))
+                    ? noSource(it.secid)
+                      // 区分两种"没有数字"：没有任何可用行情源 vs 本轮还没拿到数据
+                      ? React.createElement('div', { className: 'wq' },
+                          React.createElement('span', {
+                            className: 'tw-badge',
+                            title: '东财、腾讯、新浪三个源都没有返回该标的的可用价格。若为期货主连/商品合约，请核对代码大小写（如 114.lhm 与 114.LHM 是同一标的，现已大小写无关匹配）。',
+                            style: { fontSize: 9.5, color: '#e0a94a' },
+                          }, '暂无可用行情源'))
+                      : React.createElement('div', { className: 'wq' }, React.createElement('span', { className: 'tw-muted' }, '暂无行情'))
                     : React.createElement('div', { className: 'wq' }, React.createElement('div', { className: 'tw-skel', style: { width: 76, height: 16 } })),
                 React.createElement(MoreMenu, {
                   ariaLabel: `${it.name} 更多操作`,

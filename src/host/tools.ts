@@ -54,9 +54,21 @@ async function resolveQuoteIds(idsRaw: unknown): Promise<string[]> {
   }
   if (raw === 'all') return [...presets.cn, ...presets.intl, ...presets.commodity]
   if (presets[raw] !== undefined) return presets[raw]
-  const ids = raw.split(',').map((s) => s.trim().toUpperCase()).filter((s) => SECID_RE.test(s))
+  // 保留原始大小写（113.rbm / 114.lhm 后缀区分大小写）；去重按大小写无关键
+  const seen = new Set<string>()
+  const ids: string[] = []
+  let dropped = 0
+  for (const piece of raw.split(',')) {
+    const id = piece.trim()
+    if (id === '' || !SECID_RE.test(id)) continue
+    if (seen.has(id.toUpperCase())) continue
+    if (ids.length >= 120) { dropped += 1; continue }
+    seen.add(id.toUpperCase())
+    ids.push(id)
+  }
   if (ids.length === 0) throw new Error('未解析到合法证券代码（格式如 1.000001 / 114.lhm）')
-  return [...new Set(ids)].slice(0, 120)
+  if (dropped > 0) throw new Error(`一次最多查询 120 个标的（本次多出 ${dropped} 个，请分批）`)
+  return ids
 }
 
 function renderQuotes(items: Record<string, QuoteRow>): string {
@@ -318,11 +330,16 @@ export function makeAgentTools(
         properties: { hits: { type: 'array', items: {} } },
       },
       render: (_a, value) => {
-        const v = value as { hits?: Array<{ name: string; code: string; secid: string; kind: string }>; error?: string }
+        const v = value as { hits?: Array<{ name: string; code: string; secid: string; kind: string; hasFallback?: boolean }>; error?: string }
         if (v.error !== undefined) return textBlock(`错误：${v.error}`)
         const hits = v.hits ?? []
         if (hits.length === 0) return textBlock('未找到匹配证券。')
-        return textBlock(hits.map((h) => `${h.name}（${h.code}）${h.kind} → ${h.secid}`).join('\n'))
+        // 如实标注"仅东财源"：这类标的在东财被限流期间必然取不到价
+        return textBlock(
+          hits
+            .map((h) => `${h.name}（${h.code}）${h.kind} → ${h.secid}${h.hasFallback === false ? '（仅东财源，无腾讯/新浪兜底）' : ''}`)
+            .join('\n'),
+        )
       },
     },
     async execute(args) {

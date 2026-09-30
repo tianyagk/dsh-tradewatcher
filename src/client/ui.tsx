@@ -140,6 +140,14 @@ export function SuggestInput(props: {
                 },
               },
               React.createElement('span', null, h.name, React.createElement('small', { className: 'tw-muted' }, ` ${h.code}`)),
+              // 只有东财一条链路的标的：东财被限流期间必然空行，提前说清（不拦着添加）
+              h.hasFallback === false
+                ? React.createElement('span', {
+                    className: 'tw-badge',
+                    title: '腾讯/新浪都没有该标的的映射：东财行情主机不可用时，它不会有价格（加入后会在自选里显示"暂无可用行情源"）',
+                    style: { fontSize: 9, color: '#e0a94a' },
+                  }, '仅东财源')
+                : null,
               React.createElement('span', { className: 'k' }, h.kind),
             ),
           ),

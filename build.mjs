@@ -119,6 +119,10 @@ const REQUIRED_CLIENT_SNIPPETS = [
   '自选排序',                // 自选页排序段控（aria-label）
   '持仓排序',                // 持仓页排序段控（aria-label）
   '仓位占比',                // 持仓排序键「仓位占比」
+  '暂无可用行情源',           // 三源都没有该标的时与「暂无行情」区分
+  '仅东财源',                // 搜索结果里只有东财一条链路的标注
+  '无行情源 ',               // 顶栏"无行情源 N"标记
+  '已截断 160',              // 超过 160 项上限时的如实回报
 ]
 
 const clientBundle = readFileSync('lib/client.js', 'utf8')

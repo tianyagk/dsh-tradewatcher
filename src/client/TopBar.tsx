@@ -138,6 +138,10 @@ function HoverCard(props: {
 
 export function TopBar(props: {
   quotes: Record<string, QuoteRow>
+  /** 三个源都没有可用价格的标的（大写键） */
+  missing?: Set<string>
+  /** 请求被 160 项上限截断 */
+  truncated?: boolean
   /** 数据被真实观测到的时刻（不是响应时刻） */
   asOf: number | null
   /** 至少一行是兜底/过期值 */
@@ -151,7 +155,7 @@ export function TopBar(props: {
   prefs: PortPrefs
   setPrefs: (p: Partial<PortPrefs>) => void
 }): React.ReactElement {
-  const { quotes, asOf, stale, staleCount, sources, refreshing, onRefresh, prefs, setPrefs } = props
+  const { quotes, missing, truncated, asOf, stale, staleCount, sources, refreshing, onRefresh, prefs, setPrefs } = props
   const [hover, setHover] = useState<HoverState | null>(null)
   const hostRef = useRef<HTMLDivElement | null>(null)
   const popRef = useRef<HTMLDivElement | null>(null)
@@ -319,6 +323,19 @@ export function TopBar(props: {
               Object.entries(sources).map(([k, n]) => `${k} ${n}`).join(' / '),
             style: { fontSize: 9.5, color: '#e0a94a' },
           }, `滞后 ${staleCount}`)
+        : null,
+      // 无任何源可用的标的数：不能与"本轮还没数据"混为一谈
+      (() => {
+        const n = missing?.size ?? 0
+        if (n === 0) return null
+        return React.createElement('span', {
+          className: 'tw-badge',
+          title: `其中 ${n} 个标的三源都没有可用价格（东财/腾讯/新浪）；这些卡片显示 —，请在自选或持仓页查看明细`,
+          style: { fontSize: 9.5, color: '#e0a94a' },
+        }, `无行情源 ${n}`)
+      })(),
+      truncated === true
+        ? React.createElement('span', { className: 'tw-badge', title: '一次最多请求 160 个标的，超出部分未请求；请减少自选数量或分页查看', style: { fontSize: 9.5, color: '#e0a94a' } }, '已截断 160')
         : null,
       // 东财行情不可用时部分标的走腾讯/新浪备用源：如实标注，避免误以为是东财数据
       (() => {

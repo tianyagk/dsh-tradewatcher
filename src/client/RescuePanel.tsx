@@ -731,7 +731,8 @@ function SettingsModal(props: {
         React.createElement('input', { className: 'tw-input', style: { width: 96 }, placeholder: '板块备注', value: newIndex, onChange: (e) => setNewIndex(e.target.value) }),
         React.createElement(Btn, {
           onClick: () => {
-            const secid = newSecid.trim().toUpperCase()
+            // 保留原始大小写（114.lhm 这类后缀区分大小写）；主机侧另有 SECID_RE 校验
+            const secid = newSecid.trim()
             const name = newName.trim()
             if (!/^[0-9]\.[A-Za-z0-9]{4,8}$/.test(secid)) { setErr('代码格式应为「市场.代码」，如 1.512480'); return }
             if (name === '') { setErr('请填写通道名称'); return }

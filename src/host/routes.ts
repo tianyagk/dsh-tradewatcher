@@ -14,7 +14,7 @@ import { SECID_RE } from '../shared/model.ts'
 import { isTrustedApiRequest } from './fence.ts'
 import * as em from './em.ts'
 import { assemblePortfolio, ledgerViews } from './portfolio.ts'
-import { DataStore } from './store.ts'
+import { DataStore, secidKey } from './store.ts'
 import { CalendarStore, calToday } from './calendar.ts'
 import { RescueMonitor } from './rescue.ts'
 import { QUOTE_HOSTS, HISTORY_HOSTS } from './em.ts'
@@ -46,6 +46,14 @@ function queryOf(req: IncomingMessage): URLSearchParams {
 }
 
 async function readBody(req: IncomingMessage): Promise<unknown> {
+  // Content-Type 断言：写接口只接受 application/json。
+  // 这条不是装饰 —— 浏览器对 `<form>` 只能发出 urlencoded/text/plain/multipart，
+  // 因此"必须带 application/json"把跨站表单这一整类请求挡在了路由之外
+  // （与 Origin/sec-fetch-site 围栏互补；此前 README 声称有这条断言但代码里并没有）。
+  const contentType = String(req.headers['content-type'] ?? '')
+  if (!contentType.toLowerCase().startsWith('application/json')) {
+    throw new HttpError(`Content-Type 必须是 application/json（收到 ${contentType === '' ? '空' : contentType}）`, 415)
+  }
   const chunks: Buffer[] = []
   let size = 0
   for await (const chunk of req) {
@@ -62,12 +70,29 @@ async function readBody(req: IncomingMessage): Promise<unknown> {
   }
 }
 
-function splitIds(raw: string | null): string[] {
-  if (raw === null) return []
-  const ids = raw.split(',')
-    .map((s) => s.trim().toUpperCase())
-    .filter((s) => s !== '' && SECID_RE.test(s))
-  return [...new Set(ids)].slice(0, MAX_QUOTE_IDS)
+/**
+ * 解析 `ids=` 查询参数。
+ *
+ * **保留原始大小写**：`113.rbm` / `114.lhm` 这类商品后缀区分大小写，改写成大写会让
+ * 上游请求与备用源（腾讯/新浪）映射双双落空（em.ts 曾因此把 4 个期货整批丢掉；
+ * 而路由层此前一直在重新引入这个 bug）。去重按大小写无关键，保留首次出现的写法。
+ * 超出上限时**如实回报**（截断不再静默）。
+ */
+function splitIds(raw: string | null): { ids: string[]; requested: number; truncated: boolean } {
+  if (raw === null) return { ids: [], requested: 0, truncated: false }
+  const seen = new Set<string>()
+  const ids: string[] = []
+  let requested = 0
+  for (const piece of raw.split(',')) {
+    const id = piece.trim()
+    if (id === '' || !SECID_RE.test(id)) continue
+    requested += 1
+    const key = id.toUpperCase()
+    if (seen.has(key) || ids.length >= MAX_QUOTE_IDS) continue
+    seen.add(key)
+    ids.push(id)
+  }
+  return { ids, requested, truncated: requested > ids.length }
 }
 
 /** Full portfolio view with quotes resolved through the quote cache. */
@@ -130,15 +155,19 @@ export function makeTradeRoutes(
       handler: async (req, res) => {
         if (!needGate(req, res)) return
         try {
-          const ids = splitIds(queryOf(req).get('ids'))
+          const { ids, requested, truncated } = splitIds(queryOf(req).get('ids'))
           if (ids.length === 0) {
-            send(res, 200, { ts: Date.now(), asOf: null, stale: false, staleCount: 0, priced: 0, rows: 0, sources: {}, items: {} })
+            send(res, 200, {
+              ts: Date.now(), asOf: null, stale: false, staleCount: 0, priced: 0, rows: 0, sources: {},
+              items: {}, missing: [], requested, truncated: false,
+            })
             return
           }
           // 真实新鲜度：asOf = 数据被观测到的时刻（不是响应生成时刻），
-          // stale = 至少一行是 last-known-good 或已超过 90s —— 上游全挂时界面必须能如实报警
+          // stale = 至少一行是 last-known-good 或已超过 90s —— 上游全挂时界面必须能如实报警。
+          // missing = 请求了但**没有任何源**给出可用价格的标的（界面据此显示"暂无可用行情源"）
           const detail = await em.fetchQuotesDetailed(ids)
-          send(res, 200, { ts: Date.now(), ...detail })
+          send(res, 200, { ts: Date.now(), ...detail, requested, truncated })
         } catch (error) {
           fail(res, error)
         }
@@ -150,7 +179,7 @@ export function makeTradeRoutes(
       handler: async (req, res) => {
         if (!needGate(req, res)) return
         try {
-          const secid = String(queryOf(req).get('secid') ?? '').toUpperCase()
+          const secid = String(queryOf(req).get('secid') ?? '').trim()
           if (!SECID_RE.test(secid)) throw new HttpError('secid 非法', 400)
           const ndays = Number(queryOf(req).get('ndays') ?? 1) || 1
           const trend = await em.fetchTrend(secid, ndays)
@@ -166,7 +195,7 @@ export function makeTradeRoutes(
       handler: async (req, res) => {
         if (!needGate(req, res)) return
         try {
-          const secid = String(queryOf(req).get('secid') ?? '').toUpperCase()
+          const secid = String(queryOf(req).get('secid') ?? '').trim()
           if (!SECID_RE.test(secid)) throw new HttpError('secid 非法', 400)
           const rawKlt = Number(queryOf(req).get('klt') ?? 101)
           const klt = rawKlt === 102 || rawKlt === 103 || rawKlt === 104 ? (rawKlt as 101 | 102 | 103 | 104) : 101
@@ -187,7 +216,14 @@ export function makeTradeRoutes(
         if (!needGate(req, res)) return
         try {
           const raw = queryOf(req).get('secids') ?? ''
-          const secids = [...new Set(raw.split(',').map((x) => x.trim().toUpperCase()).filter((x) => SECID_RE.test(x)))].slice(0, 120)
+          const seen = new Set<string>()
+          const secids: string[] = []
+          for (const piece of raw.split(',')) {
+            const id = piece.trim()
+            if (id === '' || !SECID_RE.test(id) || seen.has(id.toUpperCase()) || secids.length >= 120) continue
+            seen.add(id.toUpperCase())
+            secids.push(id)
+          }
           const map = secids.length > 0 ? await em.fetchIndustryOverview(secids) : {}
           send(res, 200, { map })
         } catch (error) {
@@ -201,7 +237,7 @@ export function makeTradeRoutes(
       handler: async (req, res) => {
         if (!needGate(req, res)) return
         try {
-          const secid = String(queryOf(req).get('secid') ?? '').toUpperCase()
+          const secid = String(queryOf(req).get('secid') ?? '').trim()
           if (!SECID_RE.test(secid)) throw new HttpError('secid 非法', 400)
           const industry = await em.fetchIndustryOf(secid)
           send(res, 200, { industry })
@@ -216,7 +252,7 @@ export function makeTradeRoutes(
       handler: async (req, res) => {
         if (!needGate(req, res)) return
         try {
-          const secid = String(queryOf(req).get('secid') ?? '').toUpperCase()
+          const secid = String(queryOf(req).get('secid') ?? '').trim()
           if (!SECID_RE.test(secid)) throw new HttpError('secid 非法', 400)
           const detail = await em.fetchStockDetail(secid)
           send(res, 200, { detail })
@@ -313,7 +349,7 @@ export function makeTradeRoutes(
       handler: async (req, res) => {
         if (!needGate(req, res)) return
         try {
-          const secid = String(queryOf(req).get('secid') ?? '').toUpperCase()
+          const secid = String(queryOf(req).get('secid') ?? '').trim()
           if (!SECID_RE.test(secid)) throw new HttpError('secid 非法', 400)
           await store.init()
           const port = store.portData()
@@ -321,7 +357,7 @@ export function makeTradeRoutes(
           const posName = new Map(port.items.map((p) => [p.id, p.name]))
           const trades = store
             .ledgerEntries()
-            .filter((e) => (e.verb === 'buy' || e.verb === 'sell') && e.secid === secid && typeof e.price === 'number' && typeof e.qty === 'number')
+            .filter((e) => (e.verb === 'buy' || e.verb === 'sell') && secidKey(e.secid) === secidKey(secid) && typeof e.price === 'number' && typeof e.qty === 'number')
             .sort((a, b) => a.ts - b.ts)
             .map((e) => ({
               id: e.id,
@@ -457,6 +493,8 @@ export function makeTradeRoutes(
               throw new HttpError('patch 必须是对象', 400)
             }
             const prefs = await store.setPrefs(patch as Parameters<DataStore['setPrefs']>[0])
+            // 改刷新间隔立刻生效（否则要等下一次重启才对齐行情新鲜度）
+            em.setQuoteFreshnessMs(prefs.refreshSec * 1000)
             rescue?.setConfig(prefs.rescue)
             send(res, 200, { prefs })
             return

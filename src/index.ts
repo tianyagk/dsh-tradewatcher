@@ -12,6 +12,7 @@ import { makeAgentTools, servicesOf } from './host/tools.ts'
 import { DataStore, dataHome } from './host/store.ts'
 import { CalendarStore } from './host/calendar.ts'
 import { RescueMonitor } from './host/rescue.ts'
+import { setQuoteFreshnessMs } from './host/em.ts'
 import { log, type PluginContext, type PluginWebRoute } from './host/context.ts'
 
 /** Plugin identity for the bundle-patch row. */
@@ -27,6 +28,9 @@ export function apply(ctx: PluginContext): void {
   const rescue = new RescueMonitor()
   void store.init().then(() => {
     log('store ready at', dataHome())
+    // 行情新鲜度跟随用户的刷新间隔：界面写着"每 N 秒"，数据就该是 N 秒级新鲜
+    // （此前报价缓存有 40s 的隐式复用宽限 → 10s 的刷新设置实际拿到 ~43s 的数据）
+    setQuoteFreshnessMs(store.getPrefs().refreshSec * 1000)
     rescue.setConfig(store.getPrefs().rescue)
     rescue.start()
     log('rescue monitor started', `interval ${store.getPrefs().rescue.intervalSec}s / tail ${store.getPrefs().rescue.tailIntervalSec}s`)

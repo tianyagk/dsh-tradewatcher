@@ -9,6 +9,8 @@ import { api } from './api.ts'
  * the last readings immediately and refreshes on top.
  */
 const clientLkg = new Map<string, QuoteRow>()
+/** 上限：LKG 只增不减会随会话里出现过的标的无限增长（Map 保持插入序，超出丢最旧） */
+const CLIENT_LKG_MAX = 800
 
 export interface QuoteEngine {
   quotes: Record<string, QuoteRow>
@@ -22,6 +24,10 @@ export interface QuoteEngine {
   staleCount: number
   /** 按来源计数（em/tencent/sina/lkg） */
   sources: Record<string, number>
+  /** 没有任何源给出价格的标的（大写键集合，便于按 secid 判定） */
+  missing: Set<string>
+  /** 请求被 160 项上限截断（界面需提示） */
+  truncated: boolean
   error: string | null
   refreshing: boolean
   refresh: () => void
@@ -42,6 +48,8 @@ export function useQuoteEngine(secids: string[], intervalMs: number, enabled: bo
   const [stale, setStale] = useState(false)
   const [staleCount, setStaleCount] = useState(0)
   const [sources, setSources] = useState<Record<string, number>>({})
+  const [missing, setMissing] = useState<Set<string>>(() => new Set())
+  const [truncated, setTruncated] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [refreshing, setRefreshing] = useState(false)
   const inFlight = useRef(false)
@@ -64,7 +72,14 @@ export function useQuoteEngine(secids: string[], intervalMs: number, enabled: bo
             const have = clientLkg.get(k)
             if (v.price === null && have !== undefined && have.price !== null) continue
             next[k] = v
-            if (v.price !== null) clientLkg.set(k, v)
+            if (v.price !== null) {
+              clientLkg.set(k, v)
+              while (clientLkg.size > CLIENT_LKG_MAX) {
+                const oldest = clientLkg.keys().next()
+                if (oldest.done === true) break
+                clientLkg.delete(oldest.value)
+              }
+            }
           }
           // Keep entries when a symbol leaves the active set (page/tab
           // switches must show the last reading instantly, not "—"); prune
@@ -81,6 +96,8 @@ export function useQuoteEngine(secids: string[], intervalMs: number, enabled: bo
         setStale(r.stale === true)
         setStaleCount(r.staleCount ?? 0)
         setSources(r.sources ?? {})
+        setMissing(new Set((r.missing ?? []).map((s) => s.toUpperCase())))
+        setTruncated(r.truncated === true)
         setError(null)
       })
       .catch((e: Error) => {
@@ -104,5 +121,5 @@ export function useQuoteEngine(secids: string[], intervalMs: number, enabled: bo
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key, intervalMs, enabled])
 
-  return { quotes, ts, asOf, stale, staleCount, sources, error, refreshing, refresh: load }
+  return { quotes, ts, asOf, stale, staleCount, sources, missing, truncated, error, refreshing, refresh: load }
 }

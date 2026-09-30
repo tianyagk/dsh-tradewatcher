@@ -128,7 +128,7 @@ function App(props: TabProps): React.ReactElement {
 
   const pageEl = (): React.ReactNode => {
     if (page === 'watch') {
-      return React.createElement(WatchlistPage, { quotes, quotesReady: engine.ts !== null, prefs: prefs ?? DEFAULT_PREFS, setPrefs, onSymbols: onWatchSymbols })
+      return React.createElement(WatchlistPage, { quotes, missing: engine.missing, quotesReady: engine.ts !== null, prefs: prefs ?? DEFAULT_PREFS, setPrefs, onSymbols: onWatchSymbols })
     }
     if (page === 'portfolio') {
       return React.createElement(PortfolioPage, {
@@ -137,6 +137,7 @@ function App(props: TabProps): React.ReactElement {
         prefs: prefs ?? DEFAULT_PREFS,
         setPrefs,
         quotes,
+        missing: engine.missing,
         onSymbols: onPortSymbols,
         quoteTs: engine.ts,
       })
@@ -163,6 +164,8 @@ function App(props: TabProps): React.ReactElement {
     { className: 'tw-root', 'data-theme': theme, style: { height: '100%', display: 'flex', flexDirection: 'column', minWidth: 0 } },
     React.createElement(TopBar, {
       quotes,
+      missing: engine.missing,
+      truncated: engine.truncated,
       asOf: engine.asOf,
       stale: engine.stale,
       staleCount: engine.staleCount,

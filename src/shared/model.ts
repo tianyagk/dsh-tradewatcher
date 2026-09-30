@@ -203,6 +203,12 @@ export interface SuggestItem {
   name: string
   kind: string
   market: string
+  /**
+   * 是否有**备用源**（腾讯/新浪）能取到该标的的行情。
+   * false = 只有东财一条链路（如部分商品指数、美股、国际指数的大部分），
+   * 东财被限流期间该标的必然空行 —— 界面据此标注"仅东财源"，避免加进自选后以为是 bug。
+   */
+  hasFallback?: boolean
 }
 
 /** Board row (industry / concept / ETF). */

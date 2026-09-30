@@ -65,10 +65,16 @@ export const api = {
     priced: number
     rows: number
     sources: Record<string, number>
+    /** 请求了但没有任何源给出价格的标的（原样大小写）→ 界面显示"暂无可用行情源" */
+    missing: string[]
+    /** 请求的标的数（含重复与超限项） */
+    requested: number
+    /** 是否因超过 160 项上限被截断 */
+    truncated: boolean
   }> {
     const ids = [...new Set(secids)].join(',')
     if (ids === '') {
-      return Promise.resolve({ ts: Date.now(), items: {}, asOf: null, stale: false, staleCount: 0, priced: 0, rows: 0, sources: {} })
+      return Promise.resolve({ ts: Date.now(), items: {}, asOf: null, stale: false, staleCount: 0, priced: 0, rows: 0, sources: {}, missing: [], requested: 0, truncated: false })
     }
     return request(`/tradewatcher/quotes?ids=${encodeURIComponent(ids)}`)
   },

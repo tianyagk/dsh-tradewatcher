@@ -44,11 +44,13 @@ export function PortfolioPage(props: {
   prefs: PortPrefs
   setPrefs: (patch: Partial<PortPrefs>) => void
   quotes: Record<string, QuoteRow>
+  /** 没有任何源给出价格的标的（大写键） */
+  missing?: Set<string>
   /** 共享行情引擎最近一次成功更新的时间戳（单一取数源用） */
   quoteTs?: number | null
   onSymbols: (ids: string[]) => void
 }): React.ReactElement {
-  const { active, refreshSec, prefs, setPrefs, quotes, onSymbols } = props
+  const { active, refreshSec, prefs, setPrefs, quotes, missing, onSymbols } = props
   const redUp = prefs.redUp
   // 同自选页：宿主未重启时旧 /prefs 没有 portSort，回退默认避免整页崩
   const portSort = normalizeSortState(prefs.portSort, PORT_SORT_KEYS, DEFAULT_PREFS.portSort)
@@ -262,6 +264,7 @@ export function PortfolioPage(props: {
                   diluted,
                   weight: weightOf(row.mv, grand.totalMv),
                   quote: quotes[row.secid],
+                  noSource: missing?.has(row.secid.toUpperCase()) === true,
                   mini: minis[row.secid],
                   onTrade: (verb) => setModal({ kind: 'trade', verb, pos: row, groupName: grp.name }),
                   onDetail: () => openLedger({ mode: 'pos', id: row.posId, title: `${row.name} 交易明细`, row }),
@@ -574,6 +577,8 @@ function PosRow(props: {
   diluted: boolean
   /** 仓位占比（个股市值 ÷ 组合总市值）；总市值为 0 时为 null */
   weight: number | null
+  /** 三个源都没有该标的的可用价格（与"行情暂缺"区分） */
+  noSource: boolean
   mini: { values: number[]; up: boolean | null } | undefined
   onTrade: (verb: 'buy' | 'sell' | 'adjust') => void
   onDetail: () => void
@@ -627,7 +632,12 @@ function PosRow(props: {
       ),
       React.createElement('div', { className: 'tw-pos-price' },
         React.createElement('span', { className: 'px ' + priceCls }, fmtPrice(price)),
-        React.createElement('span', { className: 'meta' }, `数量 ${fmtQty(row.qty)} · 成本 ${fmtPrice(showCost)}${price === null ? ' · 行情暂缺' : ''}`),
+        React.createElement('span', {
+          className: 'meta',
+          title: props.noSource ? '东财、腾讯、新浪三个源都没有返回该标的的可用价格；市值/盈亏在无价时按成本口径暂以 0 计' : undefined,
+        }, `数量 ${fmtQty(row.qty)} · 成本 ${fmtPrice(showCost)}${
+          price === null ? (props.noSource ? ' · 暂无可用行情源' : ' · 行情暂缺') : ''
+        }`),
       ),
       React.createElement('div', { className: 'tw-actions' },
         React.createElement(Btn, { onClick: () => props.onTrade('buy') }, '买'),

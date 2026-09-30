@@ -24,7 +24,7 @@ import type {
 import { SECID_RE } from '../shared/model.ts'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { breakerFor, hostsAllowed, minutesToRecover } from './breaker.ts'
-import { fetchSinaEtfRanking, fetchSinaQuotes } from './sina.ts'
+import { fetchSinaEtfRanking, fetchSinaQuotes, sinaSymbol as sinaQuoteSymbol } from './sina.ts'
 import { fetchTencentBoards, fetchTencentMinutes, fetchTencentQuoteRows, fetchTencentSuggest, tencentCode, type TencentQuoteFull } from './tencent.ts'
 import { join } from 'node:path'
 import { dataHome } from './store.ts'
@@ -131,12 +131,15 @@ export async function fetchAny(hosts: readonly string[], pathAndQuery: string, t
   const neverSucceeded = new Set<string>(claimed)
   try {
   for (let round = 0; round < FETCH_ROUNDS; round++) {
+    /** 本轮是否存在"非瞬时失败"（慢失败/超时/HTTP 错误）：只有瞬时失败才值得跳过下一轮 */
+    let anySlowFailure = false
     for (const host of claimed) {
       for (let attempt = 0; attempt < FETCH_ATTEMPTS_PER_HOST; attempt++) {
         const left = deadline - Date.now()
         if (left <= 250) {
           throw lastError instanceof Error ? lastError : new Error('上游请求超时')
         }
+        const startedAt = Date.now()
         try {
           const ok = await fetchFromHost(host, pathAndQuery, Math.min(timeoutMs, left))
           breakerFor(host).recordSuccess()
@@ -147,10 +150,19 @@ export async function fetchAny(hosts: readonly string[], pathAndQuery: string, t
           // 握手/连接被立刻关闭：短退避后立刻重试；HTTP 4xx 之类不重试
           const message = error instanceof Error ? error.message : String(error)
           if (/HTTP 4\d\d/.test(message)) break
+          // 几十毫秒即返回的失败 = 连接被立刻关闭（针对本机 IP 的封锁特征）。
+          // 慢失败（超时/半开）则说明链路只是不稳定，仍值得多试一轮。
+          if (Date.now() - startedAt > 300) anySlowFailure = true
           // 抖动：并发的多个 worker 不要同步重试
           await new Promise((r) => setTimeout(r, 60 + attempt * 120 + Math.random() * 140))
         }
       }
+    }
+    // 整轮都是"立刻被关闭"：这不是抖动而是封锁，第二轮只会再烧掉 1–2 秒退避。
+    // 抖动仍由本轮内的两次尝试覆盖（实测瞬时失败率 20–75%，两次尝试足以救回单次抖动）。
+    if (!anySlowFailure && round === 0 && FETCH_ROUNDS > 1) {
+      console.warn('[tradewatcher] upstream fast-fail (connection reset) on', hosts.join('/'), '— 跳过第二轮重试')
+      break
     }
   }
   // 只对「本次尝试中从未成功过」的主机记失败
@@ -224,7 +236,9 @@ async function loadLastGood(): Promise<void> {
         const row = r as QuoteRow
         if (typeof row.secid !== 'string' || !SECID_RE.test(row.secid)) continue
         if (typeof row.price !== 'number' || !Number.isFinite(row.price)) continue
-        lastGood.set(row.secid, typeof row.at === 'number' ? row : { ...row, at: fileTs })
+        // 键用大小写无关形式：库里可能存着历史写入的大写 secid（如 114.LHM），
+        // 而新请求是小写（114.lhm）—— 按原样做键会让这些标的丢掉兜底价
+        lastGood.set(row.secid.toUpperCase(), typeof row.at === 'number' ? row : { ...row, at: fileTs })
       }
     } catch {
       /* no persisted file yet — first boot */
@@ -259,7 +273,7 @@ function persistLastGood(): void {
 }
 
 function noteLastGood(row: QuoteRow): void {
-  lastGood.set(row.secid, { ...row, at: typeof row.at === 'number' ? row.at : Date.now() })
+  lastGood.set(row.secid.toUpperCase(), { ...row, at: typeof row.at === 'number' ? row.at : Date.now() })
   lkgDirty = true
   persistLastGood()
 }
@@ -279,6 +293,13 @@ export const QUOTE_STALE_MS = 90_000
 export interface QuoteProvenance {
   /** 最新一次真实观测到行情的时间（epoch ms）；无有效行为 null */
   asOf: number | null
+  /**
+   * 请求了但**没有任何源**给出可用价格的标的（原样大小写）。
+   * 与 `stale` 是两件事：`stale` 是"有价格但是旧值"，`missing` 是"一个价都没有"。
+   * 界面必须区分「暂无行情源」与「本轮还没数据」，否则取自选/持仓里消失的标的
+   * （曾因大小写被整批丢掉）看起来只是"还没刷新"。
+   */
+  missing: string[]
   /** 是否至少一行不新鲜（兜底值或已超时） */
   stale: boolean
   /** 不新鲜的行数 */
@@ -290,7 +311,7 @@ export interface QuoteProvenance {
   sources: Record<string, number>
 }
 
-export function summarizeQuoteProvenance(items: Record<string, QuoteRow>, now = Date.now()): QuoteProvenance {
+export function summarizeQuoteProvenance(items: Record<string, QuoteRow>, now = Date.now(), missing: string[] = []): QuoteProvenance {
   let asOf: number | null = null
   let staleCount = 0
   let priced = 0
@@ -305,7 +326,7 @@ export function summarizeQuoteProvenance(items: Record<string, QuoteRow>, now = 
     if (at !== null && (asOf === null || at > asOf)) asOf = at
     if (src === 'lkg' || at === null || now - at > QUOTE_STALE_MS) staleCount += 1
   }
-  return { asOf, stale: staleCount > 0, staleCount, priced, rows: rows.length, sources }
+  return { asOf, stale: staleCount > 0, staleCount, priced, rows: rows.length, sources, missing }
 }
 
 /**
@@ -322,16 +343,17 @@ export function fillLastGood(
 ): void {
   for (const secid of list) {
     const row = rows.get(secid)
-    const good = bank.get(secid)
+    const good = bank.get(secid.toUpperCase())
     if (row === undefined) {
       // 整行来自兜底库：标 source='lkg' 并保留**原始观测时刻**（at），
-      // 界面与 /quotes 的 asOf 才能如实反映"这是几点的旧价"
-      if (good !== undefined && good.price !== null) rows.set(secid, { ...good, source: 'lkg' })
+      // 界面与 /quotes 的 asOf 才能如实反映"这是几点的旧价"。
+      // secid 归位到**本次请求的写法**，保证客户端按自己持有的 secid 能取到。
+      if (good !== undefined && good.price !== null) rows.set(secid, { ...good, secid, source: 'lkg' })
       continue
     }
     if (row.price !== null) {
       if (bank === lastGood) noteLastGood(row)
-      else bank.set(secid, { ...row })
+      else bank.set(secid.toUpperCase(), { ...row })
       continue
     }
     if (good !== undefined && good.price !== null) {
@@ -402,7 +424,14 @@ async function rawQuotes(list: string[]): Promise<Map<string, QuoteRow>> {
     const q = `secids=${encodeURIComponent(missing.join(','))}&fltt=2&invt=2&fields=${QUOTE_FIELDS}`
     try {
       const json = await fetchAny(QUOTE_HOSTS, `/api/qt/ulist.np/get?${q}`)
-      for (const [secid, row] of rowsFrom(json)) rows.set(secid, row)
+      // 东财回包用**它自己的 f12 大小写**（商品是小写 rbm/lhm），而请求与库里的写法可能不同
+      // （历史数据曾被大写化）。这里按大小写无关把行归位到本次请求的写法，否则
+      // 客户端按自己持有的 secid 查不到这行（表现为"行情条少了几项"）。
+      const want = new Map(missing.map((secid) => [secid.toUpperCase(), secid]))
+      for (const [echoed, row] of rowsFrom(json)) {
+        const asRequested = want.get(echoed.toUpperCase()) ?? echoed
+        rows.set(asRequested, asRequested === row.secid ? row : { ...row, secid: asRequested })
+      }
     } catch (error) {
       console.warn('[tradewatcher] quotes batch failed', `pass ${pass + 1}`, `${missing.length} symbols`, String(error).slice(0, 120))
       break
@@ -573,33 +602,119 @@ function persistBoardLkg(): void {
 
 /** Batch quotes with a 2.5 s TTL + last-known-good on every return path
  *  (fresh fetch, TTL hit and peek hit alike). */
+/**
+ * 逐标的行情缓存槽。
+ *
+ * 此前缓存键是**整批 id 的拼接**（`quotes:1.600519,1.510300,…`），于是
+ * `/quotes`（引擎：行情条 + 自选 + 持仓）与 `/portfolio`（仅持仓）虽然标的**互相包含**，
+ * 却落在两个槽里 → 每个客户端节拍各打一次上游（实测一拍 20 次上游请求，其中持仓那 3 个
+ * 标的是引擎集合的子集，纯重复劳动）。改为逐标的槽后，子集请求直接命中，
+ * 一拍只剩一次批量取数。
+ */
+const quoteSlots = new Map<string, { exp: number; at: number; row: QuoteRow }>()
+
+/** 在飞的批量取数：大小写键 → 覆盖它的那次批量（并发去重，避免同一批打两遍） */
+const quoteInflight = new Map<string, Promise<void>>()
+
+/** 兜底可用窗口：上游失败时仍可服务最近一次成功读数（旧到看不出来时由 `at`/`stale` 如实暴露） */
+const QUOTE_SERVE_STALE_MS = 10 * 60_000
+
+/** 新鲜度窗口（ms）：跟随用户的刷新间隔设置，夹在 5–60 秒；由插件入口与 prefs 变更处写入 */
+let quoteFreshMs = 10_000
+
+export function setQuoteFreshnessMs(ms: number): void {
+  if (!Number.isFinite(ms)) return
+  quoteFreshMs = Math.max(5_000, Math.min(60_000, Math.round(ms)))
+}
+
+export function quoteFreshnessMs(): number {
+  return quoteFreshMs
+}
+
+/** 去重（大小写无关，保留首次出现的写法）+ 稳定排序 */
+function normalizeQuoteList(secids: readonly string[]): string[] {
+  const seen = new Set<string>()
+  const out: string[] = []
+  for (const raw of secids) {
+    const id = raw.trim()
+    if (id === '' || seen.has(id.toUpperCase())) continue
+    seen.add(id.toUpperCase())
+    out.push(id)
+  }
+  return out.sort((a, b) => (a.toUpperCase() < b.toUpperCase() ? -1 : a.toUpperCase() > b.toUpperCase() ? 1 : 0))
+}
+
 async function loadQuotes(secids: string[]): Promise<Map<string, QuoteRow>> {
-  // 去重 + 排序：同一批标的无论以何顺序传入都命中同一缓存槽（否则 /portfolio 与 /quotes
-  // 会各占一个槽、各自打一次上游）。**但必须保留原始大小写**：`113.rbm` / `114.lhm`
-  // 这类商品 secid 后缀区分大小写，整体 toUpperCase 会让上游请求与备用源映射双双落空
-  // （曾因此在东财不可用时把 4 个期货整批丢掉）。
-  const list = [...new Set(secids.map((s) => s.trim()))].sort((a, b) => (a.toUpperCase() < b.toUpperCase() ? -1 : a.toUpperCase() > b.toUpperCase() ? 1 : 0))
+  const list = normalizeQuoteList(secids)
   if (list.length === 0) return new Map()
   await loadLastGood()
-  const key = `quotes:${list.map((s) => s.toUpperCase()).join(',')}`
-  const quick = peekCache<Record<string, QuoteRow>>(key, 40_000)
-  if (quick !== undefined) {
-    const map = new Map<string, QuoteRow>()
-    for (const [k, v] of Object.entries(quick)) map.set(k, v)
-    const gap = list.some((secid) => {
-      const row = map.get(secid)
-      return row === undefined || row.price === null
-    })
-    if (gap) await fillFromFallbacks(list, map)
-    fillLastGood(list, map)
-    return map
+
+  const picked = new Map<string, QuoteRow>()
+  const waiters = new Set<Promise<void>>()
+  const need: string[] = []
+  const now = Date.now()
+  for (const secid of list) {
+    const key = secid.toUpperCase()
+    const slot = quoteSlots.get(key)
+    if (slot !== undefined && now < slot.exp) {
+      picked.set(key, slot.row)
+      continue
+    }
+    const flying = quoteInflight.get(key)
+    if (flying !== undefined) {
+      waiters.add(flying)
+      continue
+    }
+    need.push(secid)
   }
-  const rows = await ttlCache<Map<string, QuoteRow>>(key, 2500, async () => {
-    const got = await rawQuotes(list)
-    // 东财整体不可用或部分丢码时，用腾讯把缺口补上（避免价格停在 last-known-good）
-    await fillFromFallbacks(list, got)
-    return got
-  })
+  if (waiters.size > 0) await Promise.all([...waiters]).catch(() => undefined)
+
+  // 等在飞的批量结算后重新看槽（它们可能已经把我们需要的标的填好了）
+  const still: string[] = []
+  for (const secid of list) {
+    const key = secid.toUpperCase()
+    if (picked.has(key)) continue
+    const slot = quoteSlots.get(key)
+    if (slot !== undefined && Date.now() < slot.exp) {
+      picked.set(key, slot.row)
+      continue
+    }
+    still.push(secid)
+  }
+  if (still.length > 0) {
+    const ttl = quoteFreshMs
+    const batch = (async () => {
+      const got = await rawQuotes(still)
+      // 东财整体不可用或部分丢码时，用腾讯/新浪把缺口补上
+      await fillFromFallbacks(still, got)
+      const at = Date.now()
+      for (const [secid, row] of got) quoteSlots.set(secid.toUpperCase(), { exp: at + ttl, at, row })
+    })()
+    for (const secid of still) quoteInflight.set(secid.toUpperCase(), batch)
+    try {
+      await batch
+    } catch {
+      /* 批量失败不影响其它标的；下面用旧槽与 LKG 兜底 */
+    } finally {
+      for (const secid of still) {
+        const key = secid.toUpperCase()
+        if (quoteInflight.get(key) === batch) quoteInflight.delete(key)
+      }
+    }
+  }
+
+  const rows = new Map<string, QuoteRow>()
+  const freshNow = Date.now()
+  for (const secid of list) {
+    const key = secid.toUpperCase()
+    const pickedRow = picked.get(key)
+    const slot = quoteSlots.get(key)
+    // 优先用本轮（或刚在飞的那轮）拿到的行；否则退回槽里的旧读数（10 分钟内），
+    // 再往下的兜底交给 LKG。行内 `at`/`source` 会如实标注它有多旧。
+    const row = pickedRow ?? (slot !== undefined && freshNow - slot.at <= QUOTE_SERVE_STALE_MS ? slot.row : undefined)
+    if (row === undefined) continue
+    rows.set(secid, row.secid === secid ? row : { ...row, secid })
+  }
   fillLastGood(list, rows)
   return rows
 }
@@ -611,7 +726,19 @@ async function loadQuotes(secids: string[]): Promise<Map<string, QuoteRow>> {
 export async function fetchQuotesDetailed(secids: string[]): Promise<QuoteProvenance & { items: Record<string, QuoteRow> }> {
   const rows = await loadQuotes(secids)
   const items = rowsToRecord(rows)
-  return { items, ...summarizeQuoteProvenance(items) }
+  // 大小写无关地判定"这一项到底有没有价"：调用方可能混用写法，归一到大写再比对
+  const priced = new Set<string>()
+  for (const row of rows.values()) if (row.price !== null) priced.add(row.secid.toUpperCase())
+  const requested: string[] = []
+  const seen = new Set<string>()
+  for (const raw of secids) {
+    const id = raw.trim()
+    if (id === '' || seen.has(id.toUpperCase())) continue
+    seen.add(id.toUpperCase())
+    requested.push(id)
+  }
+  const missing = requested.filter((id) => !priced.has(id.toUpperCase()))
+  return { items, ...summarizeQuoteProvenance(items, Date.now(), missing) }
 }
 
 /** 只要行情的调用方用这个（tools 等）；需要新鲜度信息的用 fetchQuotesDetailed */
@@ -831,6 +958,11 @@ async function fetchTrendSingleDay(secid: string): Promise<TrendData | null> {
     const pre = num(data.prePrice) ?? num(data.preClose) ?? null
     return { secid, prePrice: pre, points, last: points[points.length - 1]?.price ?? null }
   })
+}
+
+/** 该标的是否有备用源（腾讯或新浪报价映射）；用于搜索结果与工具输出如实标注"仅东财源"。 */
+export function hasQuoteFallback(secid: string): boolean {
+  return tencentCode(secid) !== null || sinaQuoteSymbol(secid) !== null
 }
 
 /** 东财 secid → 新浪代码（仅 A股/深沪 ETF；港股/美股接口不适用）。 */
@@ -1385,7 +1517,7 @@ export async function searchSymbols(query: string): Promise<SuggestItem[]> {
   if (data.length === 0) {
     try {
       const tx = await fetchTencentSuggest(q, 10)
-      if (tx.length > 0) return tx
+      if (tx.length > 0) return tx.map((h) => ({ ...h, hasFallback: hasQuoteFallback(h.secid) }))
     } catch {
       /* 交给下面返回空列表 */
     }
@@ -1409,6 +1541,7 @@ export async function searchSymbols(query: string): Promise<SuggestItem[]> {
       name,
       kind: suggestKind(it, name),
       market: mkt,
+      hasFallback: hasQuoteFallback(quoteId),
     })
     if (out.length >= 10) break
   }
