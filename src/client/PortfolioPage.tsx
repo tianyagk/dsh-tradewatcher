@@ -16,7 +16,6 @@ import { dirClass, fmtAmt, fmtPct, fmtPrice, fmtSigned } from './format.ts'
 import { Btn, EmptyHint, ErrorNote, Field, Modal, MoreMenu, Skeleton, SuggestInput } from './ui.tsx'
 import { MiniTrend } from './charts.tsx'
 import { useMiniTrends } from './mini.ts'
-import { QuoteDrawer } from './QuoteDrawer.tsx'
 import { SortBar } from './SortBar.tsx'
 import { PORT_SORT_HINT, PORT_SORT_KEYS, PORT_SORT_LABEL, normalizeSortState, sortPositions, weightOf, type PortSortKey } from './sort.ts'
 
@@ -49,8 +48,10 @@ export function PortfolioPage(props: {
   /** 共享行情引擎最近一次成功更新的时间戳（单一取数源用） */
   quoteTs?: number | null
   onSymbols: (ids: string[]) => void
+  /** 打开详情抽屉（由 App 统一渲染，见 index.tsx） */
+  onOpenDetail?: (secid: string, name: string) => void
 }): React.ReactElement {
-  const { active, refreshSec, prefs, setPrefs, quotes, missing, onSymbols } = props
+  const { active, refreshSec, prefs, setPrefs, quotes, missing, onSymbols, onOpenDetail } = props
   const redUp = prefs.redUp
   // 同自选页：宿主未重启时旧 /prefs 没有 portSort，回退默认避免整页崩
   const portSort = normalizeSortState(prefs.portSort, PORT_SORT_KEYS, DEFAULT_PREFS.portSort)
@@ -64,7 +65,6 @@ export function PortfolioPage(props: {
   const [modal, setModal] = useState<ModalState>(null)
   const [ledgerTarget, setLedgerTarget] = useState<LedgerTarget>(null)
   const [ledgerEntries, setLedgerEntries] = useState<LedgerView[] | null>(null)
-  const [drawer, setDrawer] = useState<{ secid: string; name: string } | null>(null)
   const miniIds = React.useMemo(() => {
     const ids = new Set<string>()
     for (const p of view?.positions ?? []) ids.add(p.secid)
@@ -275,7 +275,7 @@ export function PortfolioPage(props: {
                   mini: minis[row.secid],
                   onTrade: (verb) => setModal({ kind: 'trade', verb, pos: row, groupName: grp.name }),
                   onDetail: () => openLedger({ mode: 'pos', id: row.posId, title: `${row.name} 交易明细`, row }),
-                  onOpenChart: () => setDrawer({ secid: row.secid, name: row.name }),
+                  onOpenChart: () => onOpenDetail?.(row.secid, row.name),
                   onEdit: () => setModal({ kind: 'posEdit', pos: row, groupName: grp.name, groups: activeGroups }),
                   onRemove: () => {
                     if (row.qty > 0) {
@@ -307,9 +307,6 @@ export function PortfolioPage(props: {
       : null,
     modal !== null
       ? React.createElement(PortModalHost, { modal, key: `${modal.kind}-${'pos' in modal ? modal.pos.posId : 'groupId' in modal ? modal.groupId : 'n'}`, redUp, quotes, onClose: () => setModal(null), mutate })
-      : null,
-    drawer !== null
-      ? React.createElement(QuoteDrawer, { secid: drawer.secid, name: drawer.name, redUp, onClose: () => setDrawer(null) })
       : null,
   )
 }
@@ -622,6 +619,11 @@ function PosRow(props: {
           e.preventDefault()
           props.onOpenChart()
         }
+      },
+      onClick: (e: React.MouseEvent) => {
+        // 行内还有 买/卖/明细/编辑/移除/迷你图 等按钮：点它们时不要连带触发整行
+        if ((e.target as HTMLElement).closest('button,a,input,select,textarea') !== null) return
+        props.onOpenChart()
       },
     },
     React.createElement('div', { className: 'tw-pos-main' },

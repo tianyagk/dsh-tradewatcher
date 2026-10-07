@@ -6,7 +6,6 @@ import { dirClass, fmtAmt, fmtPct, fmtPrice, fmtSigned, pctArrow } from './forma
 import { Btn, EmptyHint, ErrorNote, Field, Modal, MoreMenu, Skeleton, SuggestInput } from './ui.tsx'
 import { MiniTrend } from './charts.tsx'
 import { useMiniTrends } from './mini.ts'
-import { QuoteDrawer } from './QuoteDrawer.tsx'
 import { SortBar } from './SortBar.tsx'
 import { WATCH_SORT_HINT, WATCH_SORT_KEYS, WATCH_SORT_LABEL, normalizeSortState, sortWatch, type WatchSortKey } from './sort.ts'
 
@@ -26,8 +25,11 @@ export function WatchlistPage(props: {
   prefs: PortPrefs
   setPrefs: (patch: Partial<PortPrefs>) => void
   onSymbols: (ids: string[]) => void
+  /** 打开详情抽屉（由 App 统一渲染，见 index.tsx） */
+  onOpenDetail?: (secid: string, name: string) => void
 }): React.ReactElement {
-  const { quotes, missing, quotesReady, prefs, setPrefs, onSymbols } = props
+  const { quotes, missing, quotesReady, prefs, setPrefs, onSymbols, onOpenDetail } = props
+  const openDetail = (secid: string, name: string): void => onOpenDetail?.(secid, name)
   const noSource = (secid: string): boolean => missing?.has(secid.toUpperCase()) === true
   // 兼容"客户端已刷新、宿主还没重启"：旧 /prefs 响应里没有 watchSort 字段，
   // 此时回退默认而不是让 state.key 取到 undefined（否则整页崩）
@@ -37,7 +39,6 @@ export function WatchlistPage(props: {
   const [modal, setModal] = useState<ModalState>(null)
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({})
   const [showArchived, setShowArchived] = useState(false)
-  const [drawer, setDrawer] = useState<{ secid: string; name: string } | null>(null)
   const miniIds = React.useMemo(() => {
     const ids = new Set<string>()
     if (watch !== null) for (const it of watch.items) ids.add(it.secid)
@@ -192,14 +193,19 @@ export function WatchlistPage(props: {
                   onKeyDown: (e: React.KeyboardEvent) => {
                     if (e.key === 'Enter' || e.key === ' ') {
                       e.preventDefault()
-                      setDrawer({ secid: it.secid, name: it.name })
+                      openDetail(it.secid, it.name)
                     }
+                  },
+                                  onClick: (e: React.MouseEvent) => {
+                    // 行内还有迷你图按钮/更多菜单：点它们时不要连带触发整行
+                    if ((e.target as HTMLElement).closest('button,a,input,select,textarea') !== null) return
+                    openDetail(it.secid, it.name)
                   },
                 },
                 React.createElement('button', {
                   className: 'tw-mini',
                   title: `${it.name} 分时 · 点击打开明细`,
-                  onClick: () => setDrawer({ secid: it.secid, name: it.name }),
+                  onClick: () => openDetail(it.secid, it.name),
                 },
                   React.createElement(MiniTrend, { values: mini?.values ?? [], up: mini?.up ?? null, width: 56, height: 20, redUp: prefs.redUp }),
                 ),
@@ -270,9 +276,6 @@ export function WatchlistPage(props: {
         )
       : null,
     modal !== null ? React.createElement(WatchModal, { key: `${modal.kind}:${(modal as { groupId?: string }).groupId ?? (modal as { itemId?: string }).itemId ?? 'n'}`, modal, groups: active, onClose: () => setModal(null), mutate }) : null,
-    drawer !== null
-      ? React.createElement(QuoteDrawer, { secid: drawer.secid, name: drawer.name, redUp: prefs.redUp, onClose: () => setDrawer(null) })
-      : null,
   )
 }
 

@@ -124,6 +124,11 @@ export interface TrendData {
   last: number | null
   /** 该序列来自 last-known-good 时，记录快照时间（上游瞬时失败兜底） */
   staleAt?: number
+  /**
+   * true = 直接吃本地缓存、**没有回源**：休市且快照已越过最近一次收盘，
+   * 当天的分时/五日序列不会再变（数据是确定的，不是降级）。
+   */
+  cached?: boolean
 }
 
 /** One daily bar (kline fallback). */
@@ -142,6 +147,11 @@ export interface KlineData {
   days: DayBar[]
   /** true = 上游不可用，返回的是本地缓存（数据可能不是最新） */
   stale?: boolean
+  /**
+   * true = 休市定稿，直接吃本地磁盘缓存、**没有回源**（与 stale 语义不同：
+   * 数据是完整的收盘序列，只是不需要再问上游要）。
+   */
+  cached?: boolean
 }
 
 /** ── 财经日历 ─────────────────────────────────────────────────────────── */

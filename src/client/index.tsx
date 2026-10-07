@@ -15,6 +15,7 @@ import { PortfolioPage } from './PortfolioPage.tsx'
 import { MarketPage } from './MarketPage.tsx'
 import { CloudMap } from './CloudMap.tsx'
 import { CalendarPage } from './CalendarPage.tsx'
+import { QuoteDrawer } from './QuoteDrawer.tsx'
 import { ensureCss } from './styles.ts'
 
 /** Structural face of ctx.betterSidebar (see dsh-better-sidebar service). */
@@ -76,6 +77,14 @@ function App(props: TabProps): React.ReactElement {
   const [prefs, setPrefsState] = useState<PortPrefs | null>(null)
   const [watchIds, setWatchIds] = useState<string[]>([])
   const [posIds, setPosIds] = useState<string[]>([])
+  /** 详情抽屉：顶栏行情卡片、自选行、持仓行都走这一个入口（单一实例） */
+  const [detail, setDetail] = useState<{ secid: string; name: string } | null>(null)
+  const openDetail = useCallback((secid: string, name: string): void => setDetail({ secid, name }), [])
+  const closeDetail = useCallback((): void => setDetail(null), [])
+  // 切页时关掉抽屉：它按 secid 取数，跨页留着容易看成"新页面的图"
+  useEffect(() => {
+    setDetail(null)
+  }, [page])
 
   // prefs
   useEffect(() => {
@@ -128,7 +137,7 @@ function App(props: TabProps): React.ReactElement {
 
   const pageEl = (): React.ReactNode => {
     if (page === 'watch') {
-      return React.createElement(WatchlistPage, { quotes, missing: engine.missing, quotesReady: engine.ts !== null, prefs: prefs ?? DEFAULT_PREFS, setPrefs, onSymbols: onWatchSymbols })
+      return React.createElement(WatchlistPage, { quotes, missing: engine.missing, quotesReady: engine.ts !== null, prefs: prefs ?? DEFAULT_PREFS, setPrefs, onSymbols: onWatchSymbols, onOpenDetail: openDetail })
     }
     if (page === 'portfolio') {
       return React.createElement(PortfolioPage, {
@@ -140,6 +149,7 @@ function App(props: TabProps): React.ReactElement {
         missing: engine.missing,
         onSymbols: onPortSymbols,
         quoteTs: engine.ts,
+        onOpenDetail: openDetail,
       })
     }
     if (page === 'market') {
@@ -174,6 +184,8 @@ function App(props: TabProps): React.ReactElement {
       onRefresh: engine.refresh,
       prefs: prefs ?? DEFAULT_PREFS,
       setPrefs,
+      onOpenDetail: openDetail,
+      popupDisabled: detail !== null,
     }),
     engine.error !== null
       ? React.createElement('div', { className: 'tw-hint', style: { padding: '0 10px 2px' } }, `行情接口暂时不可用：${engine.error}`)
@@ -188,5 +200,14 @@ function App(props: TabProps): React.ReactElement {
       ),
     ),
     React.createElement('div', { style: { flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' } }, pageEl()),
+    detail !== null
+      ? React.createElement(QuoteDrawer, {
+          key: detail.secid,
+          secid: detail.secid,
+          name: detail.name,
+          redUp: (prefs ?? DEFAULT_PREFS).redUp,
+          onClose: closeDetail,
+        })
+      : null,
   )
 }

@@ -28,6 +28,7 @@ import { fetchSinaEtfRanking, fetchSinaQuotes, sinaSymbol as sinaQuoteSymbol } f
 import { fetchTencentBoards, fetchTencentMinutes, fetchTencentQuoteRows, fetchTencentSuggest, tencentCode, type TencentQuoteFull } from './tencent.ts'
 import { join } from 'node:path'
 import { dataHome } from './store.ts'
+import { isSettledOffline } from './time.ts'
 
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
 const REFERER = 'https://quote.eastmoney.com/'
@@ -881,7 +882,7 @@ export function lastGoodTrend(secid: string, ndays: number, maxAgeMs = Infinity)
   return { ...hit.trend, staleAt: hit.at }
 }
 
-/** 分时取数统一入口：内存新鲜缓存 → 上游（带重试）→ last-known-good */
+/** 分时取数统一入口：内存新鲜缓存 → 休市定稿复用 → 上游（带重试）→ last-known-good */
 async function trendWithFallback(
   secid: string,
   ndays: number,
@@ -891,6 +892,14 @@ async function trendWithFallback(
   const key = `trend:${secid}:${ndays}`
   const fresh = peekCache<TrendData>(key, 45_000)
   if (fresh !== undefined) return fresh
+  // 休市且本地快照已越过最近一次收盘 → 当天的分时/五日序列不会再变，直接吃本地
+  // （进程重启后仍生效：trendLkg 是落盘的）。盘中 / 快照过期一律走上游。
+  const settled = trendLkg.get(trendKey(secid, ndays))
+  if (settled !== undefined && settled.trend.points.length >= 2 && isSettledOffline(settled.at)) {
+    const reused: TrendData = { ...settled.trend, cached: true }
+    cache.set(key, { exp: Date.now() + 300_000, value: reused })
+    return reused
+  }
   try {
     const data = await loader()
     if (data === null || data.points.length < 2) {
@@ -1299,7 +1308,14 @@ async function requestKlineRaw(secid: string, klt: number, lmt: number): Promise
   return null
 }
 
-/** 取 K 线：命中本地缓存时只增量更新最新几根；上游不可用时回退缓存。 */
+/**
+ * 取 K 线：命中本地缓存时只增量更新最新几根；上游不可用时回退缓存。
+ *
+ * 三层：① 磁盘缓存（<dataHome>/klines/<secid>_<klt>.json，落盘可跨重启）
+ *      ② 增量回源（正常 10/5/3 根，首次 800/400/240 根）
+ *      ③ 休市定稿免回源 —— 非交易时段且缓存更新时间已越过最近 15:05 收盘时，
+ *         这根收盘 bar 早已落袋，上游不会再有新数据，**一次请求都不发**。
+ */
 export async function fetchKline(
   secid: string,
   klt: 101 | 102 | 103 | 104 = 101,
@@ -1309,11 +1325,23 @@ export async function fetchKline(
   const baseKlt = klt === 104 ? 103 : klt
   const entry = await loadKlineCache(secid, baseKlt)
   const needFull = entry.bars.length === 0
+  const settled = !needFull && isSettledOffline(entry.updatedAt)
+  const stale = settled ? false : await refreshKline(secid, baseKlt, entry, needFull)
+  if (!settled && stale && entry.bars.length === 0) return null
+  const series = baseKlt === 103 && klt === 104 ? resampleYearly(entry.bars) : entry.bars
+  const want = Math.max(1, Math.min(Math.round(lmt) || series.length, series.length))
+  return { secid, days: series.slice(series.length - want), stale, ...(settled ? { cached: true } : {}) }
+}
+
+/**
+ * 增量回源 + 落盘。返回 true 表示"上游失败、这次给的是旧缓存"。
+ * 拆成独立函数是为了让 fetchKline 的三个分支（定稿免回源 / 失败 / 成功）各只有一条出口。
+ */
+async function refreshKline(secid: string, baseKlt: number, entry: KlineEntry, needFull: boolean): Promise<boolean> {
   const key = `kline:${secid}:${baseKlt}:${needFull ? 'full' : 'incr'}`
   const fetched = await ttlCache<DayBar[] | null>(key, needFull ? 3600_000 : 120_000, () =>
     requestKlineRaw(secid, baseKlt, needFull ? KLINE_FULL_LMT[baseKlt] : KLINE_RECENT_LMT[baseKlt]),
   )
-  let stale = false
   if (fetched !== null && fetched.length > 0) {
     const before = entry.bars.length
     const beforeLast = entry.bars[entry.bars.length - 1]?.date ?? ''
@@ -1321,14 +1349,9 @@ export async function fetchKline(
     entry.updatedAt = Date.now()
     const afterLast = entry.bars[entry.bars.length - 1]?.date ?? ''
     if (before !== entry.bars.length || beforeLast !== afterLast) void saveKlineCache(secid, baseKlt, entry.bars)
-  } else if (entry.bars.length === 0) {
-    return null
-  } else {
-    stale = true
+    return false
   }
-  const series = baseKlt === 103 && klt === 104 ? resampleYearly(entry.bars) : entry.bars
-  const want = Math.max(1, Math.min(Math.round(lmt) || series.length, series.length))
-  return { secid, days: series.slice(series.length - want), stale }
+  return true
 }
 
 // ─────────────────────────────── boards ───────────────────────────────────

@@ -95,3 +95,57 @@ export function shanghaiDayStart(ts: number): number {
   const { day } = shanghaiParts(ts)
   return Date.parse(`${day}T00:00:00+08:00`)
 }
+
+/** 收盘时刻（北京时间 15:05，沪深连续竞价的最后一分钟之后） */
+const CLOSE_HHMM = '15:05'
+/** 开盘时刻（北京时间 09:25，集合竞价结束） */
+const OPEN_HHMM = '09:25'
+
+/**
+ * 现在是否处于交易时段（工作日 09:25–15:05，北京时间）。
+ *
+ * 用途是**粗略判断"上游会不会有新数据"**，决定 kline/trend 要不要回源；
+ * 精确的护盘采样窗口另有 `rescue.inTradingWindow`（含午休、尾盘切换）。
+ * 因此这里只关心"是否可能还在生成新 bar"，宁可判 true（多回源一次）也不漏。
+ */
+export function inSession(ts: number = Date.now()): boolean {
+  const wd = weekdayOf(ts)
+  if (wd === 0 || wd === 6) return false
+  const { hhmm } = shanghaiParts(ts)
+  return hhmm >= OPEN_HHMM && hhmm < CLOSE_HHMM
+}
+
+/**
+ * 最近一次"收盘定稿"时刻（北京时间 15:05）的 epoch ms。
+ *
+ * 休市期间上游不会产生新 bar：只要本地缓存的更新时间晚于该时刻，
+ * 就说明这一根收盘 bar 已经落袋，可以**完全跳过回源**（0 请求）。
+ * 周末/周一早盘会一直回溯到上一个工作日的 15:05。
+ */
+export function lastCloseBoundary(ts: number = Date.now()): number {
+  const parts = shanghaiParts(ts)
+  // 先取"今天 15:05"（北京无夏令时：UTC+8 → 当日 07:05Z）
+  let day = parts.day
+  if (parts.hhmm < CLOSE_HHMM) {
+    day = dayOf(shanghaiDayStart(ts) - 86_400_000)
+  }
+  for (let guard = 0; guard < 10; guard += 1) {
+    // 必须用 weekdayOf（按北京日历日）——`new Date(day+'T00:00:00+08:00').getUTCDay()`
+    // 拿到的是"该日 00:00 北京"换算到 UTC 前一天的星期，整体偏一天
+    const wd = weekdayOf(Date.parse(`${day}T00:00:00+08:00`))
+    if (wd !== 0 && wd !== 6) break
+    day = dayOf(Date.parse(`${day}T00:00:00+08:00`) - 86_400_000)
+  }
+  return Date.parse(`${day}T${CLOSE_HHMM}:00+08:00`)
+}
+
+/**
+ * 休市且本地缓存的更新时间已越过最近一次收盘 → 数据"已定稿"，可以不走上游。
+ * 只有 ①休市 ②有缓存 ③缓存晚于最近收盘 三个条件同时成立才算 —— 凌晨/周末/
+ * 节假日都成立，盘中永远不成立（回源逻辑保持原样）。
+ */
+export function isSettledOffline(cacheUpdatedAt: number, ts: number = Date.now()): boolean {
+  if (inSession(ts)) return false
+  if (!Number.isFinite(cacheUpdatedAt) || cacheUpdatedAt <= 0) return false
+  return cacheUpdatedAt >= lastCloseBoundary(ts)
+}

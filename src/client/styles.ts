@@ -56,7 +56,7 @@ color-scheme:dark}
 .tw-strip-cards::-webkit-scrollbar{height:6px}
 .tw-strip-cards::-webkit-scrollbar-thumb{background:var(--tw-border-strong);border-radius:4px}
 .tw-strip-cards::-webkit-scrollbar-track{background:transparent}
-.tw-qcard{flex:1 1 100px;min-width:100px;min-height:54px;background:var(--tw-card);border:1px solid var(--tw-border);border-radius:10px;padding:4px 9px 5px;position:relative;overflow:hidden;transition:border-color .12s,background .12s}
+.tw-qcard{flex:1 1 100px;min-width:100px;min-height:54px;background:var(--tw-card);border:1px solid var(--tw-border);border-radius:10px;padding:4px 9px 5px;position:relative;overflow:hidden;transition:border-color .12s,background .12s;cursor:pointer}
 .tw-qcard:hover{border-color:var(--tw-accent);background:var(--tw-hover)}
 .tw-qcard .nm{font-size:11px;color:var(--tw-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1.4}
 .tw-qcard .px{font-family:var(--tw-mono);font-size:15px;font-weight:600;font-variant-numeric:tabular-nums;line-height:1.35}
@@ -131,7 +131,7 @@ color-scheme:dark}
 .tw-group-h .gsum b{font-weight:600;color:var(--tw-text)}
 
 /* position row: two-line layout (title/price line + aligned numeric grid) */
-.tw-posrow{display:flex;flex-direction:column;gap:6px;padding:7px 10px 6px;border-top:1px solid var(--tw-border);transition:background .1s}
+.tw-posrow{display:flex;flex-direction:column;gap:6px;padding:7px 10px 6px;border-top:1px solid var(--tw-border);transition:background .1s;cursor:pointer}
 .tw-posrow:hover{background:var(--tw-card2)}
 .tw-pos-main{display:flex;align-items:center;gap:8px;min-width:0}
 .tw-pos-title{display:flex;align-items:baseline;gap:6px;min-width:0;flex:1}
@@ -159,7 +159,7 @@ color-scheme:dark}
 .tw-menu button[data-danger=true]:hover{background:var(--tw-up-bg)}
 
 /* watch rows */
-.tw-wrow{display:flex;align-items:center;gap:8px;padding:6px 10px;border-top:1px solid var(--tw-border);transition:background .1s}
+.tw-wrow{display:flex;align-items:center;gap:8px;padding:6px 10px;border-top:1px solid var(--tw-border);transition:background .1s;cursor:pointer}
 .tw-wrow:hover{background:var(--tw-card2)}
 .tw-wrow .nm{flex:1;min-width:0}
 .tw-wrow .nm b{font-size:12px;font-weight:600}
@@ -167,11 +167,12 @@ color-scheme:dark}
 .tw-wrow .wq{display:flex;gap:6px;align-items:baseline;font-variant-numeric:tabular-nums;flex:none;font-family:var(--tw-mono);font-size:12px}
 
 /* ── hover popup ───────────────────────────────────────── */
-.tw-pop{position:absolute;z-index:9999;width:330px;background:var(--tw-card);border:1px solid var(--tw-border-strong);border-radius:12px;box-shadow:var(--tw-shadow-lg);padding:9px 11px 7px;pointer-events:none;font:12px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;color:var(--tw-text)}
+.tw-pop{position:absolute;z-index:9999;width:330px;background:var(--tw-card);border:1px solid var(--tw-border-strong);border-radius:12px;box-shadow:var(--tw-shadow-lg);padding:9px 11px 7px;pointer-events:auto;cursor:pointer;font:12px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;color:var(--tw-text)}
 .tw-pop .ph{display:flex;align-items:baseline;gap:8px;margin-bottom:5px}
 .tw-pop .ph .nm{font-weight:650;font-size:13px}
 .tw-pop .ph .px{font-family:var(--tw-mono);font-size:15px;font-weight:700;font-variant-numeric:tabular-nums}
 .tw-pop .ph .tag{color:var(--tw-dim);font-size:11px;font-family:var(--tw-mono)}
+.tw-pop .tw-pop-hint{color:var(--tw-accent);font-family:inherit}
 .tw-pop .pl{display:flex;gap:12px;color:var(--tw-muted);margin-top:3px;font-variant-numeric:tabular-nums;flex-wrap:wrap;font-size:11px;font-family:var(--tw-mono)}
 
 /* ── modal ─────────────────────────────────────────────── */

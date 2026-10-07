@@ -13,7 +13,7 @@
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { IncomingMessage, ServerResponse } from 'node:http'
@@ -290,6 +290,105 @@ test('排序偏好：合法值落盘、非法值 400', async () => {
     const after = await h.call('/tradewatcher/prefs', '/tradewatcher/prefs')
     assert.equal((after.body.prefs as { watchSort: { key: string } }).watchSort.key, 'mv', '被拒的写入不得污染已有偏好')
   } finally {
+    h.close()
+  }
+})
+
+/** 数上游真实请求次数：包一层 globalThis.fetch（熔断器的 fails 只记失败，当不了计数器） */
+function countFetch(): { calls: () => number; restore: () => void } {
+  const original = globalThis.fetch
+  let calls = 0
+  globalThis.fetch = ((...args: Parameters<typeof fetch>) => {
+    calls += 1
+    return original(...args)
+  }) as typeof fetch
+  return { calls: () => calls, restore: () => { globalThis.fetch = original } }
+}
+
+interface FixtureBar {
+  date: string
+  open: number
+  close: number
+  high: number
+  low: number
+  vol: number
+}
+
+/** 造一份"昨天收盘就已落袋"的日K缓存：300 根，updatedAt = 生成时刻 */
+function writeKlineFixture(secid: string, klt: number, n: number): FixtureBar[] {
+  const dir = join(process.env.DSH_HOME as string, 'dsh-tradewatcher', 'klines')
+  mkdirSync(dir, { recursive: true })
+  const now = Date.now()
+  const bars: FixtureBar[] = []
+  for (let i = n - 1; i >= 0; i -= 1) {
+    const date = new Date(now - i * 86_400_000).toISOString().slice(0, 10)
+    bars.push({ date, open: 100 + i, close: 100.5 + i, high: 101 + i, low: 99 + i, vol: 1000 + i })
+  }
+  writeFileSync(join(dir, `${secid}_${klt}.json`), JSON.stringify({ v: 1, secid, klt, updatedAt: now, bars }))
+  return bars
+}
+
+/** 把"现在"钉在北京时间某一刻（其余代码一律走 Date.now，故必须成对恢复） */
+function pinNow(ts: number): () => void {
+  const original = Date.now
+  Date.now = () => ts
+  return () => {
+    Date.now = original
+  }
+}
+
+test('K 线盘缓存：休市定稿后整条链路零回源，且如实标注 cached', async () => {
+  const h = await harness()
+  // 北京 2026-10-03（周六）12:00
+  const unpin = pinNow(Date.UTC(2026, 9, 3, 4, 0, 0))
+  const counter = countFetch()
+  try {
+    const secid = '1.600519'
+    const bars = writeKlineFixture(secid, 101, 300)
+    const url = `/tradewatcher/kline?secid=${secid}&klt=101&lmt=240`
+    const first = await h.call('/tradewatcher/kline', url)
+    assert.equal(first.code, 200)
+    const k1 = first.body.kline as { days: Array<{ date: string }>; cached?: boolean; stale?: boolean }
+    assert.equal(k1.days.length, 240, '休市复用本地 300 根 → 取最近 240 根')
+    assert.equal(k1.days[0].date, bars[60].date)
+    assert.equal(k1.days[239].date, bars[299].date, '末根必须是本地缓存里那根')
+    assert.equal(counter.calls(), 0, '休市定稿：一次上游请求都不该发')
+    assert.equal(k1.cached, true, '必须标注"定稿复用"')
+    assert.notEqual(k1.stale, true, '定稿不是过期数据')
+    const second = await h.call('/tradewatcher/kline', url)
+    assert.equal(counter.calls(), 0, '反复开关抽屉也不得回源')
+    assert.equal(((second.body.kline as { days: unknown[] }).days).length, 240)
+  } finally {
+    counter.restore()
+    unpin()
+    h.close()
+  }
+})
+
+test('K 线盘缓存：盘中上游全挂 → 如实标 stale + 旧缓存照给，绝不当定稿', async () => {
+  const h = await harness()
+  // 北京 2026-09-30（周三）10:00
+  const unpin = pinNow(Date.UTC(2026, 8, 30, 2, 0, 0))
+  // 上游全挂：让每一次 fetch 都直接失败（含腾讯/新浪兜底），断言才不依赖真实网络状态
+  const original = globalThis.fetch
+  let tries = 0
+  globalThis.fetch = (() => {
+    tries += 1
+    return Promise.reject(new Error('fetch failed'))
+  }) as typeof fetch
+  try {
+    const secid = '1.600519'
+    writeKlineFixture(secid, 101, 300)
+    const res = await h.call('/tradewatcher/kline', `/tradewatcher/kline?secid=${secid}&klt=101&lmt=240`)
+    assert.equal(res.code, 200)
+    const k = res.body.kline as { days: unknown[]; cached?: boolean; stale?: boolean }
+    assert.equal(k.cached, undefined, '盘中永不得标 cached（哪怕请求失败）')
+    assert.equal(k.stale, true, '上游不可用时必须如实标 stale')
+    assert.equal(k.days.length, 240, '旧缓存仍要完整给出来，不能因为刷新失败就清空')
+    assert.ok(tries > 0, '盘中必须真的尝试过回源（证明没走定稿分支）')
+  } finally {
+    globalThis.fetch = original
+    unpin()
     h.close()
   }
 })

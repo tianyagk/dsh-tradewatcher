@@ -3,7 +3,7 @@
  *  after each content change so it never runs off screen. */
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { TW_ROWS, type QuoteRow, type TrendData, type KlineData } from '../shared/model.ts'
-import { api } from './api.ts'
+import { chartCache } from './chartCache.ts'
 import { fmtClock, fmtPct, fmtPrice, fmtSigned, dirClass } from './format.ts'
 import { Sparkline } from './charts.tsx'
 import type { PortPrefs } from '../shared/model.ts'
@@ -21,39 +21,42 @@ function HoverCard(props: {
   prefs: PortPrefs
   popRef: { current: HTMLDivElement | null }
   onSized: () => void
+  onOpen: () => void
+  onEnter: () => void
+  onLeave: () => void
 }): React.ReactElement {
-  const { hover, quote, prefs, popRef, onSized } = props
+  const { hover, quote, prefs, popRef, onSized, onOpen, onEnter, onLeave } = props
   const [kind, setKind] = useState<PopKind>('loading')
   const [data, setData] = useState<TrendData | KlineData | null>(null)
-  const req = useRef(0)
 
   useEffect(() => {
-    const n = ++req.current
+    let alive = true
     setKind('loading')
     setData(null)
-    api
-      .trend(hover.secid)
-      .then(async ({ trend }) => {
-        if (n !== req.current) return
-        if (trend !== null) {
+    // 与详情抽屉共用客户端图表缓存：同一只标的来回划过只发一次请求
+    chartCache
+      .get(hover.secid, 'trend')
+      .then(async (p) => {
+        if (!alive) return
+        if (p !== null && p.kind === 'trend') {
           setKind('trend')
-          setData(trend)
+          setData(p.trend)
           return
         }
-        const { kline } = await api.kline(hover.secid)
-        if (n !== req.current) return
-        if (kline !== null) {
+        const d = await chartCache.get(hover.secid, 'day')
+        if (!alive) return
+        if (d !== null && d.kind === 'kline') {
           setKind('kline')
-          setData(kline)
+          setData(d.kline)
         } else {
           setKind('none')
         }
       })
       .catch(() => {
-        if (n === req.current) setKind('error')
+        if (alive) setKind('error')
       })
     return () => {
-      req.current += 1
+      alive = false
     }
   }, [hover.secid])
 
@@ -100,7 +103,16 @@ function HoverCard(props: {
 
   return React.createElement(
     'div',
-    { ref: popRef, className: 'tw-pop', style: { left: 0, top: 0, visibility: 'hidden' } },
+    {
+      ref: popRef,
+      className: 'tw-pop',
+      style: { left: 0, top: 0, visibility: 'hidden' },
+      title: '点击查看详情（可切分时/五日/日K/周K/月K/年K）',
+      role: 'button',
+      onClick: onOpen,
+      onMouseEnter: onEnter,
+      onMouseLeave: onLeave,
+    },
     React.createElement('div', { className: 'ph' },
       React.createElement('span', { className: 'nm' }, hover.name),
       React.createElement('span', { className: 'px ' + dir }, fmtPrice(price)),
@@ -132,6 +144,7 @@ function HoverCard(props: {
       quote?.amount !== null && quote?.amount !== undefined && quote.amount > 0
         ? React.createElement('span', null, `成交 ${(quote.amount / 1e8).toFixed(0)}亿`)
         : null,
+      React.createElement('span', { className: 'tw-pop-hint' }, '点击查看详情'),
     ),
   )
 }
@@ -154,8 +167,14 @@ export function TopBar(props: {
   onRefresh: () => void
   prefs: PortPrefs
   setPrefs: (p: Partial<PortPrefs>) => void
+  /** 点击行情卡片 → 打开详情抽屉（可切 分时/五日/日K/周K/月K/年K） */
+  onOpenDetail?: (secid: string, name: string) => void
+  /** 详情抽屉已打开时不再弹悬浮卡（否则遮住抽屉且与点击语义冲突） */
+  popupDisabled?: boolean
 }): React.ReactElement {
   const { quotes, missing, truncated, asOf, stale, staleCount, sources, refreshing, onRefresh, prefs, setPrefs } = props
+  const onOpenDetail = props.onOpenDetail
+  const popupDisabled = props.popupDisabled === true
   const [hover, setHover] = useState<HoverState | null>(null)
   const hostRef = useRef<HTMLDivElement | null>(null)
   const popRef = useRef<HTMLDivElement | null>(null)
@@ -237,6 +256,25 @@ export function TopBar(props: {
     clearClose()
     setHover(null)
   }, [])
+
+  // 详情抽屉打开时收起悬浮卡
+  useEffect(() => {
+    if (popupDisabled) hide()
+  }, [popupDisabled, hide])
+
+  // 卡片点击 = 打开详情。按下→抬起的位移超过 6px 视为横向拖动滚动条，不触发。
+  const downAt = useRef<{ x: number; y: number } | null>(null)
+  const openDetail = (secid: string, name: string): void => {
+    if (onOpenDetail === undefined) return
+    hide()
+    onOpenDetail(secid, name)
+  }
+  const clickCard = (e: React.MouseEvent, secid: string, name: string): void => {
+    const d = downAt.current
+    downAt.current = null
+    if (d !== null && (Math.abs(e.clientX - d.x) > 6 || Math.abs(e.clientY - d.y) > 6)) return
+    openDetail(secid, name)
+  }
 
   const scheduleOpen = (secid: string, name: string): void => {
     pending.current = { secid, name }
@@ -382,9 +420,20 @@ export function TopBar(props: {
                 className: 'tw-qcard',
                 tabIndex: 0,
                 role: 'button',
-                'aria-label': `${it.name} 分时走势`,
+                title: `${it.name}：点击打开详情（分时/五日/日K/周K/月K/年K）`,
+                'aria-label': `${it.name} 实时行情，点击打开详情`,
                 onMouseEnter: (e: React.MouseEvent) => enterCard(e, it.secid, it.name),
                 onMouseMove: (e: React.MouseEvent) => moveCard(e, it.secid, it.name),
+                onMouseDown: (e: React.MouseEvent) => {
+                  downAt.current = { x: e.clientX, y: e.clientY }
+                },
+                onClick: (e: React.MouseEvent) => clickCard(e, it.secid, it.name),
+                onKeyDown: (e: React.KeyboardEvent) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault()
+                    openDetail(it.secid, it.name)
+                  }
+                },
                 onFocus: (e: React.FocusEvent) => focusCard(e, it.secid, it.name),
                 onBlur: scheduleClose,
               },
@@ -401,8 +450,17 @@ export function TopBar(props: {
         ),
       ),
     ),
-    hover !== null
-      ? React.createElement(HoverCard, { hover, quote: quotes[hover.secid], prefs, popRef, onSized: applyPos })
+    hover !== null && !popupDisabled
+      ? React.createElement(HoverCard, {
+          hover,
+          quote: quotes[hover.secid],
+          prefs,
+          popRef,
+          onSized: applyPos,
+          onOpen: () => openDetail(hover.secid, hover.name),
+          onEnter: clearClose,
+          onLeave: scheduleClose,
+        })
       : null,
   )
 }

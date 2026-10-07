@@ -10,7 +10,7 @@
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { calToday, dayOf, hhmmOf, shanghaiDayStart, weekdayOf } from './time.ts'
+import { calToday, dayOf, hhmmOf, inSession, isSettledOffline, lastCloseBoundary, shanghaiDayStart, weekdayOf } from './time.ts'
 import { inTradingWindow, sessionElapsed, timeCoefficient, phaseOf } from './rescue.ts'
 
 /** 北京时间 2026-09-28（周一）10:00 = UTC 02:00 */
@@ -54,4 +54,45 @@ test('shanghaiDayStart 与 calToday 同一口径', () => {
   assert.equal(new Date(start).toISOString(), '2026-09-27T16:00:00.000Z', '北京 09-28 00:00 = UTC 09-27 16:00')
   assert.equal(calToday(0).length, 10)
   assert.equal(calToday(1) > calToday(0), true, '偏移一天递增')
+})
+
+/**
+ * 收盘定稿判定（v0.22.0）：决定"休市时还要不要回源"。
+ * 这一组的价值同样在"任意宿主时区下都成立"，且**不依赖真实当前时间**。
+ * 参考周：2026-09-28 是周一 → 周三 = 09-30，周五 = 10-02，周六 = 10-03。
+ */
+const BJ = (y: number, m: number, d: number, hh: number, mm: number): number =>
+  Date.UTC(y, m - 1, d, hh - 8, mm, 0)
+
+test('inSession：北京时间 09:25–15:05 才可能产生新 bar', () => {
+  assert.equal(inSession(BJ(2026, 9, 30, 10, 0)), true, '周三 10:00 盘中')
+  assert.equal(inSession(BJ(2026, 9, 30, 9, 30)), true, '开盘后')
+  assert.equal(inSession(BJ(2026, 9, 30, 15, 4)), true, '收盘前一分钟')
+  assert.equal(inSession(BJ(2026, 9, 30, 15, 5)), false, '15:05 已定稿')
+  assert.equal(inSession(BJ(2026, 9, 30, 8, 0)), false, '盘前')
+  assert.equal(inSession(BJ(2026, 10, 3, 12, 0)), false, '周六')
+  assert.equal(inSession(BJ(2026, 10, 4, 12, 0)), false, '周日')
+})
+
+test('lastCloseBoundary：最近一次收盘定稿时刻（跨周末回溯）', () => {
+  const iso = (t: number): string => new Date(t).toISOString()
+  assert.equal(iso(lastCloseBoundary(BJ(2026, 9, 30, 10, 0))), '2026-09-29T07:05:00.000Z', '周三盘中 → 周二 15:05')
+  assert.equal(iso(lastCloseBoundary(BJ(2026, 9, 30, 15, 5))), '2026-09-30T07:05:00.000Z', '刚好收盘 → 当天 15:05')
+  assert.equal(iso(lastCloseBoundary(BJ(2026, 9, 30, 22, 0))), '2026-09-30T07:05:00.000Z', '周三夜里 → 周三 15:05')
+  assert.equal(iso(lastCloseBoundary(BJ(2026, 10, 3, 12, 0))), '2026-10-02T07:05:00.000Z', '周六 → 周五 15:05')
+  assert.equal(iso(lastCloseBoundary(BJ(2026, 10, 5, 8, 0))), '2026-10-02T07:05:00.000Z', '周一早盘 → 周五 15:05')
+  assert.equal(iso(lastCloseBoundary(BJ(2026, 10, 5, 16, 0))), '2026-10-05T07:05:00.000Z', '周一收盘后 → 周一 15:05')
+})
+
+test('isSettledOffline：休市 + 缓存晚于收盘 → 零回源；盘中永不成立', () => {
+  const wed1000 = BJ(2026, 9, 30, 10, 0)
+  const wed2000 = BJ(2026, 9, 30, 20, 0)
+  const tueClose = Date.parse('2026-09-29T15:05:00+08:00')
+  const wedJustClosed = Date.parse('2026-09-30T15:06:00+08:00')
+  assert.equal(isSettledOffline(wedJustClosed, wed2000), true, '缓存晚于最近一次收盘 → 定稿，可零回源')
+  assert.equal(isSettledOffline(tueClose + 60_000, wed2000), false, '缓存是上一个交易日收盘后的 → 必须回源')
+  assert.equal(isSettledOffline(tueClose - 60_000, wed2000), false, '缓存早于最近收盘 → 必须回源')
+  assert.equal(isSettledOffline(Date.now(), wed1000), false, '盘中永远不成立')
+  assert.equal(isSettledOffline(0, wed2000), false, '没有缓存不成立')
+  assert.equal(isSettledOffline(Number.NaN, wed2000), false, 'NaN 不成立')
 })

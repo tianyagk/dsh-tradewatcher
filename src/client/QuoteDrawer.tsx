@@ -1,66 +1,27 @@
 /**
  * Right-side drawer with a fixed stock info header + chart tabs
- * (分时 / 五日 / 日K / 周K / 月K / 年K). Data is fetched lazily per tab and
- * memoized client-side (host caches back it anyway).
+ * (分时 / 五日 / 日K / 周K / 月K / 年K). Data is fetched lazily per tab through
+ * the shared client-side chart cache (see chartCache.ts): switching tabs or
+ * reopening the same stock costs zero requests while the entry is fresh.
  */
 import React, { useEffect, useRef, useState } from 'react'
-import type { KlineData, StockDetail, TradeMark, TrendData } from '../shared/model.ts'
+import type { StockDetail, TradeMark } from '../shared/model.ts'
 import { api } from './api.ts'
 import { dirClass, fmtAmt, fmtBig, fmtPct, fmtPrice, fmtSigned } from './format.ts'
 import { Btn, Skeleton} from './ui.tsx'
 import type { CandleMarker, SparkMarker } from './charts.tsx'
 import { KlineChart, TrendChart } from './kline.tsx'
-
-type ChartTab = 'trend' | '5d' | 'day' | 'week' | 'month' | 'year'
-
-const TAB_LABEL: Record<ChartTab, string> = { trend: '分时', '5d': '五日', day: '日K', week: '周K', month: '月K', year: '年K' }
-
-const KLINE_PLAN: Record<'day' | 'week' | 'month' | 'year', { klt: 101 | 102 | 103 | 104; lmt: number }> = {
-  day: { klt: 101, lmt: 240 },
-  week: { klt: 102, lmt: 200 },
-  month: { klt: 103, lmt: 120 },
-  year: { klt: 104, lmt: 20 },
-}
-
-type KlineTab = 'day' | 'week' | 'month' | 'year'
-
-/** payload 记住它属于哪个 tab —— 切周期时旧数据不会拿去渲染新周期 */
-type ChartPayload =
-  | { kind: 'trend'; tab: 'trend' | '5d'; trend: TrendData }
-  | { kind: 'kline'; tab: KlineTab; kline: KlineData }
-
-const isKlineTab = (t: ChartTab): t is KlineTab => t === 'day' || t === 'week' || t === 'month' || t === 'year'
-
-/** client-side memo: one resolved payload per secid+tab (host TTLs back it). */
-const payloadCache = new Map<string, { exp: number; value: ChartPayload | null }>()
-
-function fetchPayload(secid: string, tab: ChartTab): Promise<ChartPayload | null> {
-  const cacheKey = `${secid}|${tab}`
-  const hit = payloadCache.get(cacheKey)
-  if (hit !== undefined && Date.now() < hit.exp) return Promise.resolve(hit.value)
-  const p = (async (): Promise<ChartPayload | null> => {
-    if (tab === 'trend') {
-      const { trend } = await api.trend(secid, 1)
-      if (trend === null) return null
-      return { kind: 'trend', tab: 'trend', trend }
-    }
-    if (tab === '5d') {
-      const { trend } = await api.trend(secid, 5)
-      if (trend === null) return null
-      return { kind: 'trend', tab: '5d', trend }
-    }
-    if (!isKlineTab(tab)) return null
-    const plan = KLINE_PLAN[tab]
-    const { kline } = await api.kline(secid, plan.klt, plan.lmt)
-    if (kline === null) return null
-    return { kind: 'kline', tab, kline }
-  })()
-  void p.then((value) => {
-    const ttl = tab === 'trend' || tab === '5d' ? 90_000 : 600_000
-    payloadCache.set(cacheKey, { exp: Date.now() + ttl, value })
-  })
-  return p
-}
+import {
+  KLINE_PLAN,
+  TAB_LABEL,
+  cacheNoteOf,
+  chartCache,
+  isKlineTab,
+  rememberedTab,
+  rememberTab,
+  type ChartPayload,
+  type ChartTab,
+} from './chartCache.ts'
 
 function useContainerWidth(): [React.RefObject<HTMLDivElement>, number] {
   const ref = useRef<HTMLDivElement | null>(null)
@@ -79,7 +40,8 @@ function useContainerWidth(): [React.RefObject<HTMLDivElement>, number] {
 
 export function QuoteDrawer(props: { secid: string; name: string; redUp: boolean; onClose: () => void }): React.ReactElement {
   const { secid, name, redUp, onClose } = props
-  const [tab, setTab] = useState<ChartTab>('trend')
+  // 记住上次看的周期：关掉再打开、换一只标的时不必重新点一次
+  const [tab, setTab] = useState<ChartTab>(rememberedTab())
   const [payload, setPayload] = useState<ChartPayload | null>(null)
   const [loading, setLoading] = useState(true)
   const [err, setErr] = useState<string | null>(null)
@@ -100,13 +62,21 @@ export function QuoteDrawer(props: { secid: string; name: string; redUp: boolean
     return () => { alive = false }
   }, [secid, retry])
 
-  // chart payload per tab
+  // chart payload per tab（走客户端图表缓存：命中即零请求，同键并发合并）
   useEffect(() => {
     let alive = true
-    setLoading(true)
     setErr(null)
-    setPayload((prev) => (prev !== null && prev.tab === tab ? prev : null))
-    fetchPayload(secid, tab)
+    const peeked = chartCache.peek(secid, tab)
+    if (peeked !== null) {
+      // 有缓存：先出图，不闪骨架
+      setPayload(peeked)
+      setLoading(false)
+    } else {
+      setLoading(true)
+      setPayload((prev) => (prev !== null && prev.tab === tab ? prev : null))
+    }
+    chartCache
+      .get(secid, tab)
       .then((value) => {
         if (!alive) return
         setPayload(value)
@@ -292,6 +262,9 @@ export function QuoteDrawer(props: { secid: string; name: string; redUp: boolean
         note = `共 ${k.days.length} 根 · ${first.date} ~ ${last.date} · MA5/10/30/60 · 滚轮或拖动滑块缩放日期区间${k.stale === true ? ' · 缓存数据（上游暂不可用）' : ''}`
       }
     }
+    // 数据来源如实标注：本地缓存 / 休市定稿 / 本次刷新失败时的上次成功数据
+    const cn = cacheNoteOf(payload)
+    if (cn !== '') note = note === '' ? cn.replace(/^ · /, '') : note + cn
   }
 
   return React.createElement(
@@ -303,7 +276,16 @@ export function QuoteDrawer(props: { secid: string; name: string; redUp: boolean
       React.createElement('div', { className: 'tw-drawer-head' }, headerRows()),
       React.createElement('div', { className: 'tw-tabs', style: { justifyContent: 'flex-start' } },
         (Object.keys(TAB_LABEL) as ChartTab[]).map((t) =>
-          React.createElement('button', { key: t, className: 'tw-tab', title: TAB_LABEL[t], 'data-on': tab === t, onClick: () => setTab(t) }, TAB_LABEL[t]),
+          React.createElement('button', {
+            key: t,
+            className: 'tw-tab',
+            title: TAB_LABEL[t],
+            'data-on': tab === t,
+            onClick: () => {
+              rememberTab(t)
+              setTab(t)
+            },
+          }, TAB_LABEL[t]),
         ),
       ),
       React.createElement('div', { ref: containerRef, className: 'tw-drawer-body' },
