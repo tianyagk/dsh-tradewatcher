@@ -48,6 +48,7 @@
     "cordis.patch.yml",
     "scripts",
     "README.md",
+    "CHANGELOG.md",
     "LICENSE"
   ],
   "devDependencies": {
