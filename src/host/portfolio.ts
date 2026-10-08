@@ -56,7 +56,7 @@ interface LedgerSlice {
 }
 
 function slicePosition(entries: readonly LedgerEntry[], posId: string, dayStart: number): LedgerSlice {
-  const slice: LedgerSlice = { entries: [], dayTrades: [], dayFees: 0, start: { qty: 0, avgCost: 0, netCost: 0, realized: 0, fees: 0 } }
+  const slice: LedgerSlice = { entries: [], dayTrades: [], dayFees: 0, start: { qty: 0, avgCost: 0, netCost: 0, realized: 0, fees: 0, turnover: 0 } }
   const pre: LedgerEntry[] = []
   for (const e of entries) {
     if (e.posId !== posId) continue
@@ -105,6 +105,12 @@ export function derivePosition(
   const mv = price !== null ? round2(price * total.qty) : total.qty > 0 ? null : 0
   const floatPnl = price !== null ? round2((price - total.avgCost) * total.qty) : total.qty > 0 ? null : 0
   const dayPnl = dayPnlOf(slice, price, prev)
+  // P1-5：可用数量与费用。A股 T+1：今日买入的部分当日不可卖 → 可用 = 持仓 − 今日买入；
+  // ETF/LOF/港股/美股 T+0 → 可用 = 持仓。规则由 isT0Secid() 单点判定。
+  const t0 = isT0Secid(pos.secid)
+  const todayBuyQty = slice.dayTrades.reduce((a, t) => a + (t.verb === 'buy' ? t.qty : 0), 0)
+  const availableQty = t0 ? total.qty : Math.max(0, Math.round((total.qty - todayBuyQty) * 1e4) / 1e4)
+  const feeShare = total.turnover > 0 ? round2((total.fees / total.turnover) * 100) : null
   // 总收益率（浮动口径）：浮动盈亏 / 摊薄成本×数量
   const floatPnlPct =
     total.qty > 1e-9 && total.avgCost > 0 && price !== null
@@ -153,12 +159,32 @@ export function derivePosition(
     dayPnlPct,
     price,
     prev,
+    availableQty,
+    t0,
+    fees: round2(total.fees),
+    turnover: round2(total.turnover),
+    feeShare,
     pct: quote?.pct ?? null,
     chg: quote?.chg ?? null,
   }
 }
 
 const add = (a: number, b: number | null | undefined): number => (b === null || b === undefined ? a : a + b)
+
+/**
+ * 该标的是否 T+0（当日买入当日可卖）。判定只有这一处，避免界面与账本各写一套。
+ *
+ * 规则：港股/美股/国际/期货商品为 T+0；A股股票 T+1，但**场内基金（ETF/LOF）是 T+0**。
+ * 场内基金代码：沪市 `5xxxxx`（50/51/52/56/58 开头），深市 `15xxxx` / `16xxxx` / `18xxxx`。
+ * 拿不准的一律按 T+1（更保守：不会把"今天买的"说成能卖）。
+ */
+export function isT0Secid(secid: string): boolean {
+  const m = marketOf(secid)
+  if (m === 'hk' || m === 'us' || m === 'intl' || m === 'futures') return true
+  if (m !== 'cn') return false
+  const code = secid.slice(secid.indexOf('.') + 1)
+  return /^(5\d{5}|1[5-9]\d{4})$/.test(code)
+}
 
 export interface PortfolioAssembly {
   view: PortfolioView

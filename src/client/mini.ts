@@ -15,6 +15,14 @@ export interface MiniData {
   values: number[]
   /** day direction vs the session open (null when unknown) */
   up: boolean | null
+  /** 分时均价线（P1-1；上游缺该字段时为 null，界面就不画这条线而不是画一条假线） */
+  avg?: Array<number | null>
+  /** 当日开/高/低（P1-1，hover 用） */
+  open?: number | null
+  high?: number | null
+  low?: number | null
+  /** 上游给的昨收/昨结基准（振幅分母） */
+  prePrice?: number | null
 }
 
 const miniCache = new Map<string, { exp: number; data: MiniData | null }>()
@@ -32,7 +40,16 @@ async function fetchMini(secid: string): Promise<MiniData | null> {
       const values = trend.points.map((p) => p.price)
       const first = values[0]
       const last = values[values.length - 1]
-      const data: MiniData = { values, up: last >= first }
+      const data: MiniData = {
+        values,
+        up: last >= first,
+        // 均价线只在**整段都有值**时才画：中间缺点的折线会在图上造成假的跳变
+        avg: trend.points.every((p) => typeof p.avg === 'number') ? trend.points.map((p) => p.avg ?? null) : undefined,
+        open: first,
+        high: Math.max(...values),
+        low: Math.min(...values),
+        prePrice: trend.prePrice,
+      }
       miniCache.set(secid, { exp: Date.now() + MINI_TTL, data })
       return data
     }

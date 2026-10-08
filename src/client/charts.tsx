@@ -182,6 +182,8 @@ export function MiniTrend(props: {
   /** color the line by the day direction when provided */
   up?: boolean | null
   redUp?: boolean
+  /** 分时均价线（P1-1）：与价格线共用同一坐标映射，虚线绘制；缺值就不画 */
+  avg?: Array<number | null>
 }): React.ReactElement {
   const { values, width = 64, height = 24, up, redUp = true } = props
   if (values.length < 2) {
@@ -198,9 +200,40 @@ export function MiniTrend(props: {
   const step = innerW / (values.length - 1)
   const points = values.map((v, i) => `${(pad + step * i).toFixed(1)},${(pad + ((hi - v) / (hi - lo)) * innerH).toFixed(1)}`)
   const dir = up === null || up === undefined ? null : (up === redUp ? 'var(--tw-up)' : 'var(--tw-down)')
+  // 均价线必须用**同一套 y 映射**（同 lo/hi），否则两条线不可比 —— 那比不画更糟
+  const yAt = (v: number): number => pad + ((hi - v) / (hi - lo)) * innerH
+  const avg = props.avg
+  const avgPoints = avg !== undefined && avg.length === values.length
+    ? avg.map((v, i) => (v === null ? null : `${(pad + step * i).toFixed(1)},${yAt(v).toFixed(1)}`))
+    : null
+  // 断点处拆成多段折线（缺口不连线，避免视觉上"跨过"缺失区间）
+  const avgSegments: string[] = []
+  if (avgPoints !== null) {
+    let seg: string[] = []
+    for (const pt of avgPoints) {
+      if (pt === null) {
+        if (seg.length > 1) avgSegments.push(`M${seg.join(' L')}`)
+        seg = []
+      } else {
+        seg.push(pt)
+      }
+    }
+    if (seg.length > 1) avgSegments.push(`M${seg.join(' L')}`)
+  }
   return React.createElement(
     'svg',
     { width, height, viewBox: `0 0 ${width} ${height}`, style: { display: 'block' } },
+    avgSegments.map((d, i) =>
+      React.createElement('path', {
+        key: `avg${i}`,
+        d,
+        fill: 'none',
+        style: { stroke: 'var(--tw-muted)' },
+        strokeWidth: 1,
+        strokeDasharray: '2 2',
+        opacity: 0.75,
+      }),
+    ),
     React.createElement('path', {
       d: `M${points.join(' L')}`,
       fill: 'none',

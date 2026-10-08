@@ -607,12 +607,33 @@ export function RescuePanel(props: { prefs: PortPrefs; redUp: boolean; onPrefs?:
                 snapshot.bottom.lanes.length > 0
                   ? React.createElement('div', { className: 'tw-rescue-resonance', style: { marginTop: 6 } },
                       React.createElement('span', { className: 'tw-muted' }, '历史频率'),
-                      ...snapshot.bottom.lanes[0].calibration.targets.map((t) =>
-                        React.createElement('span', { key: t.targetPct },
-                          `+${(t.targetPct * 100).toFixed(0)}%：${t.prob === null ? '—' : (t.prob * 100).toFixed(1) + '%'} vs 基线 ${t.baseRate === null ? '—' : (t.baseRate * 100).toFixed(1) + '%'}`,
-                        ),
-                      ),
-                      React.createElement('span', { className: 'tw-muted' }, `样本 N=${snapshot.bottom.lanes[0].calibration.n}（基线 ${snapshot.bottom.lanes[0].calibration.baseN}）`),
+                      // P1-9：概率必须带 Wilson 95% 区间 —— 20 个样本的 80% 与 500 个样本的
+                      // 80% 不是一回事，只给点估计会被读成"准确率"
+                      ...snapshot.bottom.lanes[0].calibration.targets.map((t) => {
+                        const ci = (lo: number | null | undefined, hi: number | null | undefined): string =>
+                          lo === null || lo === undefined || hi === null || hi === undefined
+                            ? ''
+                            : `（95% 区间 ${(lo * 100).toFixed(1)}–${(hi * 100).toFixed(1)}%）`
+                        return React.createElement('span', {
+                          key: t.targetPct,
+                          title:
+                            `同类 ${t.prob === null ? '—' : (t.prob * 100).toFixed(1) + '%'}${ci(t.probLo, t.probHi)}` +
+                            ` · 基线 ${t.baseRate === null ? '—' : (t.baseRate * 100).toFixed(1) + '%'}${ci(t.baseLo, t.baseHi)}`,
+                        },
+                          `+${(t.targetPct * 100).toFixed(0)}%：${t.prob === null ? '—' : (t.prob * 100).toFixed(1) + '%'}` +
+                          (t.probLo != null && t.probHi != null ? `［${(t.probLo * 100).toFixed(1)}–${(t.probHi * 100).toFixed(1)}］` : '') +
+                          ` vs 基线 ${t.baseRate === null ? '—' : (t.baseRate * 100).toFixed(1) + '%'}`,
+                        )
+                      }),
+                      // 样本量必须与区间一起读：不足以支撑结论时要显式说出来
+                      snapshot.bottom.lanes[0].calibration.sampleSmall === true
+                        ? React.createElement('span', {
+                            className: 'tw-badge',
+                            style: { color: '#e0a94a', borderColor: '#e0a94a' },
+                            title: `同类样本 N=${snapshot.bottom.lanes[0].calibration.n} < 30：此时 95% 区间宽到能同时容纳"有效"与"无效"，这个概率不足以支撑行动，仅作参考`,
+                          }, '样本少')
+                        : null,
+                      React.createElement('span', { className: 'tw-muted' }, `样本 N=${snapshot.bottom.lanes[0].calibration.n}（基线 ${snapshot.bottom.lanes[0].calibration.baseN}${snapshot.bottom.lanes[0].calibration.baseSampleSmall === true ? ' · 偏少' : ''}）`),
                       React.createElement('span', null, `前向${snapshot.bottom.lanes[0].calibration.horizon}日收益中位数 ${snapshot.bottom.lanes[0].calibration.medianForward === null ? '—' : (snapshot.bottom.lanes[0].calibration.medianForward * 100).toFixed(2) + '%'}`),
                       React.createElement('span', null, `期间最大回撤中位数 ${snapshot.bottom.lanes[0].calibration.medianDrawdown === null ? '—' : (snapshot.bottom.lanes[0].calibration.medianDrawdown * 100).toFixed(2) + '%'}`),
                     )
@@ -621,7 +642,7 @@ export function RescuePanel(props: { prefs: PortPrefs; redUp: boolean; onPrefs?:
                   snapshot.bottom.model,
                 ),
                 React.createElement('div', { className: 'tw-hint', style: { fontSize: 10.5 } },
-                  '口径说明：概率是**历史同类情形的频率**，不是预测；样本不足时结论不可用。' +
+                  '口径说明：概率是**历史同类情形的频率**，不是预测；给出的 95% 区间是 Wilson 区间，样本越小区间越宽 —— 区间跨过基线时，这个差异不具备可辨识性。' +
                   '日内形态（回升/下影线/收回前低）没有可回算的历史分钟数据，因此**不参与概率校准**，只作实时修正参考。' +
                   '位置低 ≠ 见底：护盘也可能发生在下跌半程，请结合资金流与量价背离一起判断。',
                 ),

@@ -208,6 +208,12 @@ export interface TradeState {
   realized: number
   /** Cumulative fees on trades that affected qty/cost (audit aid). */
   fees: number
+  /**
+   * 累计成交额（|数量 × 价格|，买卖双向都计；P1-5）。
+   * 用途是算费用占比：`费用 ÷ 成交额` 才能说明"这个账户的手续费贵不贵"，
+   * 光给一个绝对金额没有参照物。
+   */
+  turnover: number
 }
 
 /** Pure replay of one trade onto an accounting state. */
@@ -220,6 +226,7 @@ export function applyTrade(state: TradeState, verb: 'buy' | 'sell' | 'adjust', q
     state.qty = total
     state.netCost += qty * price + feeN
     state.fees += feeN
+    state.turnover += qty * price
   } else if (verb === 'sell') {
     if (qty <= 0 || !Number.isFinite(qty)) throw new Error('卖出数量必须大于 0')
     if (qty > state.qty + 1e-9) throw new Error(`卖出数量超过持仓（持有 ${state.qty}）`)
@@ -227,6 +234,7 @@ export function applyTrade(state: TradeState, verb: 'buy' | 'sell' | 'adjust', q
     state.qty = Math.max(0, state.qty - qty)
     state.netCost -= qty * price - feeN
     state.fees += feeN
+    state.turnover += qty * price
   } else {
     // adjust: set qty (target) and optionally rewrite avgCost; no P&L effect.
     if (qty < 0 || !Number.isFinite(qty)) throw new Error('调整数量不能为负')
@@ -240,7 +248,7 @@ export function applyTrade(state: TradeState, verb: 'buy' | 'sell' | 'adjust', q
 
 /** Replay one position's whole ledger into accounting state. */
 export function replayPosition(entries: readonly LedgerEntry[], posId: string): TradeState {
-  const state: TradeState = { qty: 0, avgCost: 0, netCost: 0, realized: 0, fees: 0 }
+  const state: TradeState = { qty: 0, avgCost: 0, netCost: 0, realized: 0, fees: 0, turnover: 0 }
   for (const e of entries) {
     if (e.posId !== posId) continue
     if (e.verb !== 'buy' && e.verb !== 'sell' && e.verb !== 'adjust') continue

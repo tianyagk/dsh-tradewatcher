@@ -46,21 +46,35 @@ export function WatchlistPage(props: {
   }, [watch])
   const minis = useMiniTrends(miniIds, true)
   const [inds, setInds] = useState<Record<string, { name: string; pct: number | null }>>({})
+  /**
+   * 行业/板块请求的状态（P1-3）。
+   *
+   * 此前失败被 `catch(() => undefined)` 静默吞掉：上游限流时每一行都不显示板块信息，
+   * 看上去就像"这些标的本来就没有行业归属"。两种情形的含义完全不同 ——
+   * 前者等一会儿就有，后者等多久都没有 —— 所以必须区分并说出来。
+   */
+  const [indState, setIndState] = useState<{ status: 'idle' | 'ok' | 'error'; at: number | null; error: string | null }>({ status: 'idle', at: null, error: null })
   const indSeq = useRef(0)
   useEffect(() => {
     if (watch === null) return
     const secs = [...new Set(watch.items.map((i) => i.secid))]
     if (secs.length === 0) {
       setInds({})
+      setIndState({ status: 'ok', at: Date.now(), error: null })
       return
     }
     const n = ++indSeq.current
     api
       .industries(secs)
       .then((r) => {
-        if (n === indSeq.current) setInds(r.map)
+        if (n !== indSeq.current) return
+        setInds(r.map)
+        setIndState({ status: 'ok', at: Date.now(), error: null })
       })
-      .catch(() => undefined)
+      .catch((e: Error) => {
+        if (n !== indSeq.current) return
+        setIndState({ status: 'error', at: Date.now(), error: e.message })
+      })
     // 依赖 quotes：每次行情轮询后同步刷新板块涨幅与 alpha
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [watch, quotes])
@@ -128,6 +142,13 @@ export function WatchlistPage(props: {
         : null,
       React.createElement(Btn, { primary: true, onClick: () => setModal({ kind: 'addGroup' }) }, '+ 新建分组'),
     ),
+    // 行业/板块请求失败必须说出来（否则每一行都"看起来本来就没有行业"）
+    indState.status === 'error'
+      ? React.createElement('div', { className: 'tw-hint', style: { color: 'var(--tw-up)' } },
+          `板块涨跌与 α 本次未取到：${indState.error ?? '上游不可用'}（${indState.at === null ? '—' : new Date(indState.at).toLocaleTimeString('zh-CN', { hour12: false })}）。` +
+          '板块行情取不到时，板块涨幅显示 —（不用 0 代替：0 会被读成"没涨没跌"，那是错的），α 记为 —。下次行情轮询会自动重试。',
+        )
+      : null,
     active.length === 0
       ? React.createElement(EmptyHint, { action: React.createElement(Btn, { primary: true, onClick: () => setModal({ kind: 'addGroup' }) }, '+ 新建分组') }, '暂无自选分组：新建分组后，往组里添加证券（支持搜索代码/名称）。')
       : null,
@@ -204,10 +225,11 @@ export function WatchlistPage(props: {
                 },
                 React.createElement('button', {
                   className: 'tw-mini',
-                  title: `${it.name} 分时 · 点击打开明细`,
+                  // P1-1：开/高/低/振幅放在 hover 里显示 —— 缩略图只有 56×20，往图上加字就是噪音
+                  title: miniHover(it.name, mini),
                   onClick: () => openDetail(it.secid, it.name),
                 },
-                  React.createElement(MiniTrend, { values: mini?.values ?? [], up: mini?.up ?? null, width: 56, height: 20, redUp: prefs.redUp }),
+                  React.createElement(MiniTrend, { values: mini?.values ?? [], avg: mini?.avg, up: mini?.up ?? null, width: 56, height: 20, redUp: prefs.redUp }),
                 ),
                 React.createElement('div', { className: 'nm' },
                   React.createElement('div', null,
@@ -227,9 +249,21 @@ export function WatchlistPage(props: {
                           React.createElement('span', { className: 'tw-dim' }, `行业 ${ind.name}`),
                           ind.pct !== null
                             ? React.createElement('span', { className: dirClass(ind.pct, prefs.redUp) }, fmtPct(ind.pct))
-                            : React.createElement('span', { className: 'tw-muted' }, '板块 —'),
-                          React.createElement('span', { className: dirClass(alpha, prefs.redUp), style: { fontFamily: 'var(--tw-mono)' } },
-                            `α ${alpha === null ? '—' : `${pctArrow(alpha)}${Math.abs(alpha).toFixed(2)}%`}`),
+                            : React.createElement('span', {
+                                className: 'tw-muted',
+                                // 板块涨幅缺失一律显示 —，**绝不拿 0 代替**：0 会被读成"没涨没跌"，
+                                // 那是错的信息，而"取不到"是另一件事
+                                title: '板块当日涨幅未取到：该板块不在本次榜单返回里，或板块行情接口暂不可用（稍后随行情轮询重试）。这里显示 — 而不是 0，因为 0 会被读成"没涨没跌"——那是错的',
+                              }, '板块 —'),
+                          React.createElement('span', {
+                            className: dirClass(alpha, prefs.redUp),
+                            style: { fontFamily: 'var(--tw-mono)' },
+                            title: alpha !== null
+                              ? `α = 个股涨跌幅 ${stockPct?.toFixed(2)}% − 板块涨跌幅 ${boardPct?.toFixed(2)}%`
+                              : stockPct === null
+                                ? 'α 不可算：该标的本次没有可用行情（个股涨跌幅缺失）'
+                                : 'α 不可算：板块涨跌幅未取到（见左侧「板块 —」的说明）',
+                          }, `α ${alpha === null ? '—' : `${pctArrow(alpha)}${Math.abs(alpha).toFixed(2)}%`}`),
                         )
                       : null,
                     it.note !== undefined && it.note !== '' ? React.createElement('span', { className: 'tw-muted' }, it.note) : null,
@@ -369,4 +403,31 @@ function WatchModal(props: {
     )
   }
   return React.createElement('div', null)
+}
+
+/**
+ * 缩略图的 hover 说明（P1-1）：名称 + 开/高/低/振幅 + 均价。
+ *
+ * 振幅 = (高 − 低) ÷ 昨收；缺昨收时不编数（振幅分母不对等于给了一个错的波动幅度）。
+ * 数据不全时只列能算的项，不显示占位符 —— hover 里一堆 `—` 只是噪音。
+ */
+function miniHover(name: string, mini: { open?: number | null; high?: number | null; low?: number | null; prePrice?: number | null; values?: number[] } | undefined): string {
+  const head = `${name} 分时 · 点击打开明细`
+  if (mini === undefined) return head
+  const parts: string[] = []
+  if (mini.open !== null && mini.open !== undefined) parts.push(`开 ${mini.open.toFixed(3)}`)
+  if (mini.high !== null && mini.high !== undefined) parts.push(`高 ${mini.high.toFixed(3)}`)
+  if (mini.low !== null && mini.low !== undefined) parts.push(`低 ${mini.low.toFixed(3)}`)
+  const pre = mini.prePrice
+  if (pre !== null && pre !== undefined && pre > 0 && mini.high != null && mini.low != null) {
+    parts.push(`振幅 ${(((mini.high - mini.low) / pre) * 100).toFixed(2)}%`)
+  } else {
+    parts.push('振幅 —（上游未给昨收）')
+  }
+  // 相对昨收的涨跌幅：只在"有昨收且有最新价"时给（缺一就是 NaN 或一个错的分母）
+  const last = mini.values !== undefined && mini.values.length > 0 ? mini.values[mini.values.length - 1] : null
+  if (last !== null && pre !== null && pre !== undefined && pre > 0) {
+    parts.push(`相对昨收 ${(((last - pre) / pre) * 100).toFixed(2)}%`)
+  }
+  return `${head}\n${parts.join(' · ')}`
 }

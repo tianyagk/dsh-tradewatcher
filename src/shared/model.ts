@@ -450,6 +450,19 @@ export interface PositionRow {
   prev: number | null
   pct: number | null
   chg: number | null
+  /**
+   * 可用（可卖）数量（P1-5）。A股 T+1：今日买入的部分当日不可卖；
+   * ETF/LOF/港股/美股为 T+0，可用 = 持仓。
+   */
+  availableQty: number
+  /** 该标的是否 T+0（决定 availableQty 的口径，界面据此给出说明） */
+  t0: boolean
+  /** 累计费用（佣金/手续费，买卖双向，来自流水） */
+  fees: number
+  /** 累计成交额（|数量×价格| 双向合计） */
+  turnover: number
+  /** 费用占成交额比例（%）；成交额为 0 时为 null */
+  feeShare: number | null
 }
 
 /** 所属行业板块快照（个股详情抽屉用；非 A股 返回 null）。 */
@@ -681,7 +694,26 @@ export interface BottomCalibrationView {
   n: number
   baseN: number
   lanes: number
-  targets: Array<{ targetPct: number; prob: number | null; baseRate: number | null }>
+  /**
+   * 多个目标涨幅下的概率与基线（避免只看一个阈值）。
+   * v0.25.0（P1-9）补上 Wilson 95% 区间：`20 个样本的 80%` 与 `500 个样本的 80%`
+   * 不是一回事，只给点估计会被读成"准确率"。
+   */
+  targets: Array<{
+    targetPct: number
+    prob: number | null
+    baseRate: number | null
+    /** 同类样本的 95% 区间（0–1）；样本为 0 时为 null */
+    probLo?: number | null
+    probHi?: number | null
+    /** 无条件基线的 95% 区间（0–1） */
+    baseLo?: number | null
+    baseHi?: number | null
+  }>
+  /** 样本不足（n < 30）：界面必须标「样本少」，此时区间宽到无法支撑结论 */
+  sampleSmall?: boolean
+  /** 基线样本是否也不足 */
+  baseSampleSmall?: boolean
   medianForward: number | null
   medianDrawdown: number | null
   horizon: number

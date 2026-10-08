@@ -399,29 +399,50 @@ export function KlineChart(props: {
     }
     return lo2
   }
-  const grouped = new Map<number, { buy: number; sell: number }>()
+  /**
+   * 买卖点去噪 + 明细（P1-2）。
+   *
+   * 同一根 bar 上的多笔必须**合并成一个标记**（`B×3`），否则密集交易的日子里
+   * 满屏 B/S、"点位看着多、其实只有两笔"。合并后仍要能追到明细，因此这里保留
+   * 每笔的数量/价格，供悬停时给出"共 N 笔 · 合计 X 股 · 均价 Y"。
+   */
+  type TradeDetail = { qty: number | null; price: number | null }
+  const grouped = new Map<number, { buys: TradeDetail[]; sells: TradeDetail[] }>()
   for (const mk of props.markers ?? []) {
     const i = idxOfDate(mk.date)
-    const g = grouped.get(i) ?? { buy: 0, sell: 0 }
-    if (mk.kind === 'buy') g.buy += 1
-    else g.sell += 1
+    const g = grouped.get(i) ?? { buys: [], sells: [] }
+    const detail: TradeDetail = { qty: mk.qty ?? null, price: mk.price ?? null }
+    if (mk.kind === 'buy') g.buys.push(detail)
+    else g.sells.push(detail)
     grouped.set(i, g)
+  }
+  /** 一笔/一日的小结文本：笔数 + 合计数量 + 成交均价（缺字段时不编数） */
+  const detailText = (label: string, list: readonly TradeDetail[], date: string): string => {
+    const qty = list.reduce((a, t) => a + (t.qty ?? 0), 0)
+    const amount = list.reduce((a, t) => a + (t.qty ?? 0) * (t.price ?? 0), 0)
+    const vwap = qty > 0 ? amount / qty : null
+    const parts = [`${date} ${label} ${list.length} 笔`]
+    if (qty > 0) parts.push(`合计 ${Math.round(qty * 1e4) / 1e4} 股`)
+    if (vwap !== null) parts.push(`均价 ${vwap.toFixed(3)}`)
+    return parts.join(' · ')
   }
   for (const [i, g] of grouped) {
     const b = bars[i]
     const x = xAt(i)
-    if (g.buy > 0) {
+    if (g.buys.length > 0) {
       const my = Math.min(yOf(b.low) + 13, PAD_TOP + mainH - 1)
       children.push(React.createElement('g', { key: `mb${i}` },
+        React.createElement('title', null, detailText('买入', g.buys, b.date)),
         React.createElement('line', { x1: x, y1: yOf(b.low), x2: x, y2: my - 4, style: { stroke: redUp ? 'var(--tw-up)' : 'var(--tw-down)' }, strokeWidth: 1, opacity: 0.7 }),
-        React.createElement('text', { x, y: my, textAnchor: 'middle', style: { fill: redUp ? 'var(--tw-up)' : 'var(--tw-down)', fontSize: 9.5, fontWeight: 700, paintOrder: 'stroke', stroke: 'var(--tw-card)', strokeWidth: 2.5 } }, g.buy > 1 ? `B${g.buy}` : 'B'),
+        React.createElement('text', { x, y: my, textAnchor: 'middle', style: { fill: redUp ? 'var(--tw-up)' : 'var(--tw-down)', fontSize: 9.5, fontWeight: 700, paintOrder: 'stroke', stroke: 'var(--tw-card)', strokeWidth: 2.5 } }, g.buys.length > 1 ? `B${g.buys.length}` : 'B'),
       ))
     }
-    if (g.sell > 0) {
+    if (g.sells.length > 0) {
       const my = Math.max(yOf(b.high) - 8, PAD_TOP + 8)
       children.push(React.createElement('g', { key: `ms${i}` },
+        React.createElement('title', null, detailText('卖出', g.sells, b.date)),
         React.createElement('line', { x1: x, y1: yOf(b.high), x2: x, y2: my + 4, style: { stroke: redUp ? 'var(--tw-down)' : 'var(--tw-up)' }, strokeWidth: 1, opacity: 0.7 }),
-        React.createElement('text', { x, y: my, textAnchor: 'middle', style: { fill: redUp ? 'var(--tw-down)' : 'var(--tw-up)', fontSize: 9.5, fontWeight: 700, paintOrder: 'stroke', stroke: 'var(--tw-card)', strokeWidth: 2.5 } }, g.sell > 1 ? `S${g.sell}` : 'S'),
+        React.createElement('text', { x, y: my, textAnchor: 'middle', style: { fill: redUp ? 'var(--tw-down)' : 'var(--tw-up)', fontSize: 9.5, fontWeight: 700, paintOrder: 'stroke', stroke: 'var(--tw-card)', strokeWidth: 2.5 } }, g.sells.length > 1 ? `S${g.sells.length}` : 'S'),
       ))
     }
   }
@@ -460,9 +481,55 @@ export function KlineChart(props: {
     }),
   )
 
+  /**
+   * 区间买卖图例（P1-2）。
+   *
+   * 缩放后区间里可能一笔交易都没有（而图上一条 B/S 也看不到），但**区间外**可能有好几笔 ——
+   * 不说出来，用户会把"看不到"读成"没有交易"。因此这里同时报出：
+   *   区间内 B/S 笔数、净买入数量、成本变化方向，以及区间外还剩多少笔。
+   */
+  const inRange = [...grouped.entries()].filter(([i]) => i >= s && i < e)
+  const outCount = [...grouped.entries()].filter(([i]) => i < s || i >= e).reduce((a, [, g]) => a + g.buys.length + g.sells.length, 0)
+  const sum = (list: TradeDetail[]): { qty: number; amount: number } =>
+    list.reduce((a, t) => ({ qty: a.qty + (t.qty ?? 0), amount: a.amount + (t.qty ?? 0) * (t.price ?? 0) }), { qty: 0, amount: 0 })
+  let buyQty = 0
+  let sellQty = 0
+  let buyAmt = 0
+  let sellAmt = 0
+  let buyCount = 0
+  let sellCount = 0
+  for (const [, g] of inRange) {
+    const b = sum(g.buys)
+    const sl = sum(g.sells)
+    buyQty += b.qty; buyAmt += b.amount; buyCount += g.buys.length
+    sellQty += sl.qty; sellAmt += sl.amount; sellCount += g.sells.length
+  }
+  const netQty = Math.round((buyQty - sellQty) * 1e4) / 1e4
+  const bsLegend = buyCount + sellCount > 0 || outCount > 0
+    ? React.createElement('div', { className: 'tw-ma-legend', style: { display: 'flex', gap: 10, flexWrap: 'wrap', fontSize: 10, fontFamily: 'var(--tw-mono)', margin: '2px 0 0' } },
+        buyCount + sellCount > 0
+          ? React.createElement('span', { style: { color: redUp ? 'var(--tw-up)' : 'var(--tw-down)' } },
+              `区间内 B ${buyCount} 笔 / S ${sellCount} 笔`)
+          : React.createElement('span', { className: 'tw-muted' }, '区间内无买卖点'),
+        buyCount + sellCount > 0
+          ? React.createElement('span', { className: netQty >= 0 ? (redUp ? 'tw-up' : 'tw-down') : (redUp ? 'tw-down' : 'tw-up') },
+              `净${netQty >= 0 ? '买入' : '卖出'} ${Math.abs(netQty)} 股`)
+          : null,
+        buyCount + sellCount > 0 && buyQty > 0 && sellQty > 0
+          ? React.createElement('span', { className: 'tw-muted' },
+              `买入均价 ${(buyAmt / buyQty).toFixed(3)} / 卖出均价 ${(sellAmt / sellQty).toFixed(3)}`)
+          : null,
+        outCount > 0
+          ? React.createElement('span', { className: 'tw-muted', title: '缩放区间外仍有买卖记录；缩小日期范围即可看到' },
+              `（区间外另有 ${outCount} 笔）`)
+          : null,
+      )
+    : null
+
   return React.createElement('div', { className: 'tw-kline' },
     React.createElement(WheelZoom, { bars, range: [s, e], width, onChange: setRange }, svg),
     legend,
+    bsLegend,
     React.createElement(RangeSlider, { total: bars.length, range: [s, e], bars, onChange: setRange }),
   )
 }

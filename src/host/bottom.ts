@@ -11,6 +11,7 @@
  *  3. 概率是"历史上同类情形的频率"，不是预测；底部只能事后确认。
  */
 import type { DailyBarLite, RescueBottomLane, RescueBottomView } from '../shared/model.ts'
+import { isSmallSample, wilsonInterval } from '../shared/stats.ts'
 
 /** 位置特征：相对历史的位置（越低越"便宜"） */
 export interface PositionMetrics {
@@ -156,7 +157,18 @@ export interface BottomCalibration {
   /** 参与合并的通道数 */
   lanes: number
   /** 多个目标涨幅下的概率与基线（避免只看一个阈值） */
-  targets: Array<{ targetPct: number; prob: number | null; baseRate: number | null }>
+  targets: Array<{
+    targetPct: number
+    prob: number | null
+    baseRate: number | null
+    probLo?: number | null
+    probHi?: number | null
+    baseLo?: number | null
+    baseHi?: number | null
+  }>
+  /** 样本不足（n < 30）：结论不该被当成可行动的信息（P1-9） */
+  sampleSmall?: boolean
+  baseSampleSmall?: boolean
   /** 前向窗口收盘收益中位数 */
   medianForward: number | null
   /** 前向窗口最大回撤中位数（负数） */
@@ -260,12 +272,28 @@ export function calibratePooled(
     pooled.baseN += st.baseN
   }
   const rate = (arr: readonly boolean[]): number | null => (arr.length === 0 ? null : arr.filter(Boolean).length / arr.length)
+  const count = (arr: readonly boolean[]): number => arr.filter(Boolean).length
   return {
     rule,
     n: pooled.n,
     baseN: pooled.baseN,
     lanes: used,
-    targets: targets.map((t, i) => ({ targetPct: t, prob: rate(pooled.hits[i]), baseRate: rate(pooled.baseHits[i]) })),
+    sampleSmall: isSmallSample(pooled.n),
+    baseSampleSmall: isSmallSample(pooled.baseN),
+    targets: targets.map((t, i) => {
+      // 每个目标涨幅共用同一批"类比日"作为分母，因此区间也共用同一个 n
+      const hit = wilsonInterval(count(pooled.hits[i]), pooled.hits[i].length)
+      const base = wilsonInterval(count(pooled.baseHits[i]), pooled.baseHits[i].length)
+      return {
+        targetPct: t,
+        prob: rate(pooled.hits[i]),
+        baseRate: rate(pooled.baseHits[i]),
+        probLo: hit.lo,
+        probHi: hit.hi,
+        baseLo: base.lo,
+        baseHi: base.hi,
+      }
+    }),
     medianForward: medianOf(pooled.forwards),
     medianDrawdown: medianOf(pooled.draws),
     horizon,

@@ -5,6 +5,8 @@ import React, { useCallback, useEffect, useState } from 'react'
 import type { BoardRow, QuoteRow, StockDetail, TrendData } from '../shared/model.ts'
 import { api } from './api.ts'
 import { dirClass, fmtAmt, fmtBig, fmtPct, fmtPrice, fmtSigned } from './format.ts'
+import { CN_PHASE_LABEL, cnSessionState } from './marketTime.ts'
+import { useNow } from './useNow.ts'
 import { Btn, ErrorNote, Modal, SuggestInput } from './ui.tsx'
 import { Sparkline } from './charts.tsx'
 import { RescuePanel } from './RescuePanel.tsx'
@@ -30,6 +32,35 @@ export function MarketPage(props: {
   const [boardLoading, setBoardLoading] = useState(false)
   const [boardError, setBoardError] = useState<string | null>(null)
   const [boardMeta, setBoardMeta] = useState<{ stale?: boolean; asOf?: number; source?: QuoteSource } | null>(null)
+  /**
+   * 资金流排行的排序口径（P1-7）：`money` = 主力净额（上游排行键）；
+   * `share` = 主力净额 ÷ 成交额（本页内重排）。
+   *
+   * 为什么 `share` 只能"本页内重排"：上游接口按 `f62`（净额）返回前 40 条，
+   * 本仓库不掌握"按净占比的全市场排行"这个字段（免费源里没有可验证的净占比字段）。
+   * 因此这里如实标注"仅在本页内重排"，而不是伪造一个看起来像全市场排行的东西。
+   */
+  const [moneySort, setMoneySort] = useState<'money' | 'share'>('money')
+  // 交易时段状态（P1-7）：「定稿」标记必须随墙上时钟更新，否则收盘后要等下一次交互才变
+  const now = useNow(60_000)
+  const cnSession = cnSessionState(now)
+  /** 净占比（%）= 主力净额 ÷ 成交额；任一项缺失即 null（不拿 0 顶替） */
+  const shareOf = (r: BoardRow): number | null =>
+    r.money === null || r.amount === null || r.amount === 0 ? null : (r.money / r.amount) * 100
+  /**
+   * 展示顺序（P1-7）：`share` 时**只在本页内重排**，且缺失占比的行沉底。
+   * 绝不动上游分页 —— 否则会把"本页重排"和"全市场排行"混为一谈。
+   */
+  const viewRows = moneySort === 'share' && sort === 'money' && scope !== 'etf'
+    ? [...rows].sort((a, b) => {
+        const sa = shareOf(a)
+        const sb = shareOf(b)
+        if (sa === null && sb === null) return 0
+        if (sa === null) return 1
+        if (sb === null) return -1
+        return sb - sa
+      })
+    : rows
   const [pick, setPick] = useState<{ secid: string } | null>(null)
   const [detail, setDetail] = useState<StockDetail | null>(null)
   const [trend, setTrend] = useState<TrendData | null>(null)
@@ -185,10 +216,31 @@ export function MarketPage(props: {
               React.createElement('button', { 'data-on': sort === 'pct', onClick: () => setSort('pct') }, '涨跌幅'),
               React.createElement('button', { 'data-on': sort === 'money', onClick: () => setSort('money') }, '主力资金'),
             ),
+        // P1-7：主力资金排行下的两种口径（金额 / 占比）
+        sort === 'money' && scope !== 'etf'
+          ? React.createElement('div', { className: 'tw-seg', title: '主力净额为本插件直接取用的上游字段；占比＝净额 ÷ 成交额（本页内重排，见下方说明）' },
+              React.createElement('button', { 'data-on': moneySort === 'money', onClick: () => setMoneySort('money') }, '金额'),
+              React.createElement('button', { 'data-on': moneySort === 'share', onClick: () => setMoneySort('share') }, '占比'),
+            )
+          : null,
       ),
       React.createElement(ErrorNote, { error: boardError }),
       // 数据来源与新鲜度：东财行情 CDN 被限流时这里会显示备用源或上次成功结果，
       // 且明确标注"主力净流入不可用"（该列仅东财提供）
+      // P1-7：口径与时刻常显（不再只在降级时才出现）。
+      // 15:00 之后上游不再更新板块资金流 → 标「定稿」；这是"数据不会再变"，不是"降级"。
+      React.createElement('div', { className: 'tw-hint', style: { padding: '2px 2px 4px' } },
+        React.createElement('span', { className: 'tw-badge', style: { marginRight: 6 } },
+          cnSession.settled ? '定稿' : CN_PHASE_LABEL[cnSession.phase]),
+        `数据时刻 ${boardMeta?.asOf !== undefined ? new Date(boardMeta.asOf).toLocaleTimeString('zh-CN', { hour12: false }) : '—'}` +
+        ` · 来源 ${boardMeta?.source ?? 'em'}${boardMeta?.stale === true ? '（上次成功结果）' : ''}` +
+        (scope === 'etf'
+          ? ' · ETF 排行口径：涨跌幅/成交额/换手，无资金流字段'
+          : ' · 主力净额＝超大单＋大单净流入（上游口径，仅东财提供）；占比＝净额 ÷ 成交额') +
+        (sort === 'money' && scope !== 'etf' && moneySort === 'share'
+          ? '。注意：占比排序只在**本页 40 条**内重排 —— 上游按净额取前 40，本插件没有"按净占比的全市场排行"这一口径，因此不把它呈现成全市场排行。'
+          : ''),
+      ),
       boardMeta !== null && (boardMeta.stale === true || boardMeta.source === 'tencent' || boardMeta.source === 'sina')
         ? React.createElement('div', { className: 'tw-hint', style: { padding: '2px 2px 4px' } },
             boardMeta.source === 'tencent' || boardMeta.source === 'sina'
@@ -207,11 +259,17 @@ export function MarketPage(props: {
               React.createElement('th', null, '幅度'),
               scope === 'etf'
                 ? [React.createElement('th', { key: 'a' }, '成交额'), React.createElement('th', { key: 't' }, '换手')]
-                : [React.createElement('th', { key: 'u' }, '上涨/下跌'), React.createElement('th', { key: 'l' }, '领涨股'), React.createElement('th', { key: 'm' }, '主力净流入')],
+                : [
+                    React.createElement('th', { key: 'u' }, '上涨/下跌'),
+                    React.createElement('th', { key: 'l' }, '领涨股'),
+                    React.createElement('th', { key: 'm' }, '主力净流入'),
+                    // 口径切换后必须能看到被排序的那个数，否则"为什么这么排"无从判断
+                    moneySort === 'share' ? React.createElement('th', { key: 's', title: '净额 ÷ 成交额' }, '净占比') : null,
+                  ],
             ),
           ),
           React.createElement('tbody', null,
-            rows.map((r, i) => {
+            viewRows.map((r, i) => {
               const cls = dirClass(r.pct ?? null, redUp)
               const clickable = scope === 'etf' && r.secid !== undefined
               return React.createElement('tr', {
@@ -250,6 +308,13 @@ export function MarketPage(props: {
                       ),
                       React.createElement('td', { key: 'l', className: 'tl' }, r.leader ?? '—'),
                       React.createElement('td', { key: 'm', className: dirClass(r.money ?? null, redUp) }, fmtAmt(r.money ?? null)),
+                      moneySort === 'share'
+                        ? React.createElement('td', {
+                            key: 's',
+                            className: dirClass(shareOf(r), redUp),
+                            title: shareOf(r) === null ? '净占比不可算：缺主力净额或成交额' : `${fmtAmt(r.money ?? null)} ÷ ${fmtAmt(r.amount ?? null)}`,
+                          }, shareOf(r) === null ? '—' : `${shareOf(r)!.toFixed(2)}%`)
+                        : null,
                     ],
               )
             }),

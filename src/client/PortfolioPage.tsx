@@ -15,7 +15,7 @@ import { api } from './api.ts'
 import { dirClass, fmtAmt, fmtMoneySigned, fmtPct, fmtPrice, fmtRaw } from './format.ts'
 import { Btn, EmptyHint, ErrorNote, Field, Modal, MoreMenu, Skeleton, SuggestInput } from './ui.tsx'
 import { MiniTrend } from './charts.tsx'
-import { useMiniTrends } from './mini.ts'
+import { useMiniTrends, type MiniData } from './mini.ts'
 import { SortBar } from './SortBar.tsx'
 import { PORT_SORT_HINT, PORT_SORT_KEYS, PORT_SORT_LABEL, normalizeSortState, sortPositions, weightOf, type PortSortKey } from './sort.ts'
 
@@ -776,7 +776,8 @@ function PosRow(props: {
   weight: number | null
   /** 三个源都没有该标的的可用价格（与"行情暂缺"区分） */
   noSource: boolean
-  mini: { values: number[]; up: boolean | null } | undefined
+  /** 分时缩略图数据（P1-1：含均价线与开/高/低） */
+  mini: MiniData | undefined
   onTrade: (verb: 'buy' | 'sell' | 'adjust') => void
   onDetail: () => void
   onOpenChart: () => void
@@ -822,11 +823,12 @@ function PosRow(props: {
     React.createElement('div', { className: 'tw-pos-main' },
       React.createElement('button', {
         className: 'tw-mini',
-        title: `${row.name} 分时 · 点击打开明细`,
+        // P1-1：开/高/低/振幅走 hover（缩略图太小，图上不加常驻文字）
+        title: miniHover(row.name, props.mini),
         'aria-label': `${row.name} 分时明细`,
         onClick: props.onOpenChart,
       },
-        React.createElement(MiniTrend, { values: props.mini?.values ?? [], up: props.mini?.up ?? null, width: 52, height: 20, redUp }),
+        React.createElement(MiniTrend, { values: props.mini?.values ?? [], avg: props.mini?.avg, up: props.mini?.up ?? null, width: 52, height: 20, redUp }),
       ),
       React.createElement('div', { className: 'tw-pos-title' },
         React.createElement('b', null, row.name),
@@ -868,6 +870,39 @@ function PosRow(props: {
         React.createElement('span', { className: dirClass(row.dayPnl, redUp) }, pctMeta(row.dayPnlPct, row.dayPnl))),
       pps(diluted ? '累计已实现（已计入上栏）' : '累计已实现',
         React.createElement('span', { className: 'tw-dim' }, fmtMoneySigned(row.realized))),
+      // P1-5：可用（可卖）数量。A股 T+1（今日买入当日不可卖）/ ETF·港股·美股 T+0 —— 口径写在 title 里，
+      // 否则"持有 1000 可卖 800"看起来就像算错了
+      pps('可用（可卖）',
+        React.createElement('span', { className: row.availableQty < row.qty ? 'tw-flat' : undefined },
+          `${fmtQty(row.availableQty)}${row.availableQty < row.qty ? ` / ${fmtQty(row.qty)}` : ''}`),
+        row.t0
+          ? 'T+0：当日买入当日可卖（ETF/LOF、港股、美股等）'
+          : `T+1：今日买入 ${fmtQty(Math.max(0, row.qty - row.availableQty))} 份当日不可卖，故可用少于持仓`),
+      // P1-5：费用列。给绝对金额的同时给占比 —— 没有参照物的手续费数看不出贵不贵
+      pps('累计费用',
+        React.createElement('span', { className: 'tw-dim' }, fmtAmt(row.fees)),
+        row.feeShare === null
+          ? '尚无成交，占比不可算（不用 0 顶替）'
+          : `占累计成交额 ${row.turnover > 0 ? fmtAmt(row.turnover) : '—'} 的 ${row.feeShare.toFixed(3)}%`),
     ),
   )
+}
+
+/**
+ * 持仓行缩略图的 hover 说明（P1-1）。与自选页同一口径：
+ * 振幅 = (高 − 低) ÷ 昨收；缺昨收时不给振幅（分母不对等于给了一个错的波动幅度）。
+ */
+function miniHover(name: string, mini: { open?: number | null; high?: number | null; low?: number | null; prePrice?: number | null } | undefined): string {
+  const head = `${name} 分时 · 点击打开明细`
+  if (mini === undefined) return head
+  const parts: string[] = []
+  if (mini.open != null) parts.push(`开 ${mini.open.toFixed(3)}`)
+  if (mini.high != null) parts.push(`高 ${mini.high.toFixed(3)}`)
+  if (mini.low != null) parts.push(`低 ${mini.low.toFixed(3)}`)
+  if (mini.prePrice != null && mini.prePrice > 0 && mini.high != null && mini.low != null) {
+    parts.push(`振幅 ${(((mini.high - mini.low) / mini.prePrice) * 100).toFixed(2)}%`)
+  } else {
+    parts.push('振幅 —（上游未给昨收）')
+  }
+  return `${head}\n${parts.join(' · ')}`
 }
