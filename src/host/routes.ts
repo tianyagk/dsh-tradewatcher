@@ -233,15 +233,22 @@ export function makeTradeRoutes(
         try {
           await store.init()
           const port = store.portData()
-          const secids = [...new Set(port.items.map((p) => p.secid))]
-          const q = secids.length > 0 ? await em.fetchQuotesWithProvenance(secids) : null
-          const { view } = assemblePortfolio(port.groups, port.items, store.ledgerEntries(), q?.items ?? {})
+          const posSecids = [...new Set(port.items.map((p) => p.secid))]
+          // 指数点位要与持仓行情**同一次取数**（隐身档只显示点位，不能另开一条链路：
+          // 那会让徽标与面板顶部显示两个不同时刻的数）
+          const indexSecids = ['1.000300', '1.000001']
+          const want = [...new Set([...posSecids, ...indexSecids])]
+          const q = await em.fetchQuotesWithProvenance(want)
+          const { view } = assemblePortfolio(port.groups, port.items, store.ledgerEntries(), q.items)
           const snap = rescue?.snapshot() ?? null
           const win = snap?.activeWindow ?? null
-          // 沪深300 点位：隐身视图下只显示点位（不显示任何金额/盈亏）
-          const indexRow = q?.items['1.000300'] ?? q?.items['1.000001'] ?? null
+          // 沪深300 优先，缺了退上证指数（两者都缺才给 null —— 不给假点位）
+          const indexRow = q.items['1.000300'] ?? q.items['1.000001'] ?? null
           const dayPnlBase = view.grand.dayPnl
           const dayPnlPct = view.grand.totalMv > 0 ? (dayPnlBase / view.grand.totalMv) * 100 : null
+          // 缺失计数只统计**持仓**标的：指数点位取不到不算"你的持仓缺数据"
+          const posSet = new Set(posSecids.map((x) => x.toUpperCase()))
+          const posMissing = q.provenance.missing.filter((m) => posSet.has(m.what.toUpperCase()))
           send(res, 200, {
             level: snap?.level ?? 0,
             levelLabel: snap === null ? null : RESCUE_LEVEL_LABEL[snap.level],
@@ -252,9 +259,9 @@ export function makeTradeRoutes(
             indexName: indexRow?.name ?? null,
             // 收盘后缀「收」：只有在"非采样时段且原因是已收盘/周末"时才加
             settled: win !== null && win.sampling !== true && (win.reason === 'closed' || win.reason === 'weekend'),
-            asOf: q?.provenance.asOf ?? snap?.lastSampleTs ?? null,
-            source: q?.provenance.source ?? 'none',
-            missingCount: (q?.provenance.missing.length ?? 0) + (view.unpriced?.length ?? 0),
+            asOf: q.provenance.asOf ?? snap?.lastSampleTs ?? null,
+            source: q.provenance.source ?? 'none',
+            missingCount: posMissing.length + (view.unpriced?.length ?? 0),
           })
         } catch (error) {
           fail(res, error)
