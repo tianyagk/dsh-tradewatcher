@@ -12,6 +12,7 @@ import { SortBar } from './SortBar.tsx'
 import { SortHeader } from './SortHeader.tsx'
 import { WATCH_COLUMNS, WATCH_SORT_HINT, WATCH_SORT_KEYS, WATCH_SORT_LABEL, normalizeSortState, sortWatch, type WatchSortKey } from './sort.ts'
 import { useYtd } from './useYtd.ts'
+import { useWideLayout } from './useWide.ts'
 import { ytdMissingSummary, ytdText, ytdTooltip } from './ytdView.ts'
 
 type ModalState =
@@ -119,6 +120,8 @@ export function WatchlistPage(props: {
 
   // 页面级 YTD 缺失摘要：逐行给 tooltip，整体只说"有几项算不出 + 第一条原因"
   const ytdSummary = ytd.loaded ? ytdMissingSummary(Object.values(ytd.map)) : null
+  // 宽窄判定：**只挂其中一个**排序控件（此前是两个都挂、靠 CSS 藏一个，实测会同时出现）
+  const wide = useWideLayout()
 
   const reload = useCallback(() => {
     api
@@ -169,16 +172,17 @@ export function WatchlistPage(props: {
       { className: 'tw-panel', style: { display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' } },
       React.createElement('span', { className: 't' }, '自选分组'),
       // 排序：分组内生效（同一设置应用到所有分组），存进 prefs 所以重开面板仍生效
-      React.createElement(SortBar<WatchSortKey>, {
-        keys: WATCH_SORT_KEYS,
-        labels: WATCH_SORT_LABEL,
-        hints: WATCH_SORT_HINT,
-        state: watchSort,
-        onChange: (next) => setPrefs({ watchSort: next }),
-        ariaLabel: '自选排序',
-        // 本页在宽屏另有列头排序入口（SortHeader）→ 宽屏收起段控，窄屏仍用段控
-        wideHidden: true,
-      }),
+      // 窄屏才挂段控；宽屏挂列头（见下方）。**互斥由这里决定，不再依赖 CSS 隐藏**
+      wide
+        ? null
+        : React.createElement(SortBar<WatchSortKey>, {
+            keys: WATCH_SORT_KEYS,
+            labels: WATCH_SORT_LABEL,
+            hints: WATCH_SORT_HINT,
+            state: watchSort,
+            onChange: (next) => setPrefs({ watchSort: next }),
+            ariaLabel: '自选排序',
+          }),
       React.createElement('span', { style: { flex: 1 } }),
       // P1-4：异动徽标队列。数字是"需要提醒的条数"；被静默压制的单独标出，
       // 否则"我明明看到它在异动，为什么徽标是 0"会变成新的困惑
@@ -239,32 +243,53 @@ export function WatchlistPage(props: {
             : null,
         )
       : null,
-    // 行业/板块请求失败必须说出来（否则每一行都"看起来本来就没有行业"）
+    // 行业/板块请求失败必须说出来（否则每一行都"看起来本来就没有行业"）。
+    // 正文只留一行：原因与时刻可见，长解释进 tooltip —— 这类横幅每轮刷新都在，写成三行会把面板挤满。
     indState.status === 'error'
-      ? React.createElement('div', { className: 'tw-hint', style: { color: 'var(--tw-up)' } },
-          `板块涨跌与 α 本次未取到：${indState.error ?? '上游不可用'}（${indState.at === null ? '—' : new Date(indState.at).toLocaleTimeString('zh-CN', { hour12: false })}）。` +
-          '板块行情取不到时，板块涨幅显示 —（不用 0 代替：0 会被读成"没涨没跌"，那是错的），α 记为 —。下次行情轮询会自动重试。',
+      ? React.createElement('div', {
+          className: 'tw-hint',
+          style: { color: 'var(--tw-up)' },
+          tabIndex: 0,
+          role: 'note',
+          'aria-label':
+            `板块涨跌与 α 本次未取到（${indState.error ?? '上游不可用'}）。` +
+            '板块涨幅与 α 显示 — 而不是 0：0 会被读成"没涨没跌"，那是错的；下一次行情轮询会自动重试。',
+          title:
+            '板块涨幅与 α 显示 — 而不是 0：0 会被读成"没涨没跌"，那是错的。' +
+            '行业归属与板块行情取不到时，下一次行情轮询会自动重试。',
+        },
+          `板块涨跌与 α 本次未取到 · ${indState.at === null ? '时刻未知' : new Date(indState.at).toLocaleTimeString('zh-CN', { hour12: false })} · ${indState.error ?? '上游不可用'}`,
         )
       : null,
-    // 列头排序（宽屏）：与上方「排序」段控读写**同一份** watchSort 偏好；
-    // 窄屏由 CSS 隐藏（见 styles.ts），两个入口的条件是同一个断点，因此始终至少有一个可用
-    React.createElement(SortHeader<WatchSortKey>, {
-      columns: WATCH_COLUMNS,
-      state: watchSort,
-      onChange: (next) => setPrefs({ watchSort: next }),
-      ariaLabel: '自选列头排序',
-    }),
+    // 列头排序（宽屏）：与段控读写**同一份** watchSort 偏好。两者由 `wide` 二选一挂载，
+    // 因此任一宽度下都只有一个排序入口（此前靠 CSS 隐藏，实测会同时出现两个）
+    wide
+      ? React.createElement(SortHeader<WatchSortKey>, {
+          columns: WATCH_COLUMNS,
+          state: watchSort,
+          onChange: (next) => setPrefs({ watchSort: next }),
+          ariaLabel: '自选列头排序',
+        })
+      : null,
     // 年初至今（YTD）的失败与上限必须说出来：数字静静变 — 会被读成"这只票今年没动"
     ytd.error !== null
       ? React.createElement('div', { className: 'tw-hint', style: { color: 'var(--tw-up)' } },
           `年初至今（YTD）本次未取到：${ytd.error}。已取到的数字保留上一次结果，取不到的显示 —（不用 0 顶替）。`)
       : null,
     ytd.truncated
-      ? React.createElement('div', { className: 'tw-hint' },
-          `年初至今（YTD）单次最多计算 ${ytd.limit} 项，本页自选多于该上限：超出的条目 YTD 显示 —（不静默截断）。`)
+      ? React.createElement('div', {
+          className: 'tw-hint',
+          title: `YTD 单次上限 ${ytd.limit} 项；超出部分不静默截断，而是显示 — 并在此说明。`,
+        }, `YTD 单次上限 ${ytd.limit} 项，超出部分显示 —`)
       : null,
     ytdSummary !== null
-      ? React.createElement('div', { className: 'tw-hint' }, `年初至今（YTD）：${ytdSummary}`)
+      ? React.createElement('div', {
+          className: 'tw-hint',
+          tabIndex: 0,
+          role: 'note',
+          'aria-label': `年初至今：${ytdSummary}。取不到的一律显示 — 而不是 0：0 会被读成"今年没涨没跌"。逐行原因见各行的悬停提示。`,
+          title: '取不到的一律显示 — 而不是 0：0 会被读成"今年没涨没跌"。逐行原因见各行的悬停提示。',
+        }, `YTD：${ytdSummary}`)
       : null,
     active.length === 0
       ? React.createElement(EmptyHint, { action: React.createElement(Btn, { primary: true, onClick: () => setModal({ kind: 'addGroup' }) }, '+ 新建分组') }, '暂无自选分组：新建分组后，往组里添加证券（支持搜索代码/名称）。')

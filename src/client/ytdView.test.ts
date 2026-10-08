@@ -69,7 +69,17 @@ test('ytdMissingSummary：全都能算时为 null；有缺失时报数量与第�
   assert.equal(ytdMissingSummary([row(), row({ secid: '1.a' })]), null)
   const s = ytdMissingSummary([row(), row({ secid: '1.b', ytd: null, why: '日线本次取不到（上游限流或超时），稍后自动重试' })])
   assert.ok(s !== null)
-  assert.match(s, /1 项/)
-  assert.match(s, /不用 0 顶替/)
+  assert.match(s, /1 项缺数据/)
   assert.ok(s.includes('日线本次取不到'))
+})
+
+test('ytdMissingSummary 正文不重复渲染处已写的信息（面板每轮刷新都印，重复=把面板挤满）', () => {
+  const s = ytdMissingSummary([row({ secid: '1.b', ytd: null, why: '日线本次取不到' })])
+  assert.ok(s !== null)
+  // 前缀「YTD：」已表明口径，正文再说一次 YTD 就是重复
+  assert.ok(!s.includes('YTD'), `正文不该重复 YTD：${s}`)
+  assert.ok(!s.includes('年初至今'), `正文不该重复"年初至今"：${s}`)
+  // "显示 —、不用 0 顶替"是全页统一约定，属于 tooltip 而非常驻正文
+  assert.ok(!s.includes('不用 0 顶替'), `正文不该重复缺失约定：${s}`)
+  assert.ok(!s.includes('显示 —'), `正文不该重复缺失约定：${s}`)
 })

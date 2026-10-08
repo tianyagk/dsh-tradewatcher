@@ -36,9 +36,14 @@ export function ytdTooltip(name: string, row: YtdRow | undefined, loaded: boolea
   return `${head}\n${parts.join('\n')}`
 }
 
-/** 页面级的缺失摘要：只说"有几项没算出来 + 第一条原因"，避免把每条都刷一遍 */
+/**
+ * 页面级的缺失摘要：一行 —— 数量 + 第一条原因。
+ *
+ * 不在正文里重复两件事：① "YTD"（渲染处的前缀已写）；② "显示 —、不用 0 顶替"（这是全页统一的缺失约定，
+ * 每轮刷新都印一遍只会把面板挤满，它属于 tooltip）。正文只回答"影响几条、为什么"。
+ */
 export function ytdMissingSummary(rows: readonly YtdRow[]): string | null {
   const missing = rows.filter((r) => r.ytd === null)
   if (missing.length === 0) return null
-  return `${missing.length} 项本次算不出 YTD（显示 —，不用 0 顶替）：${missing[0].why ?? '原因未给出'}`
+  return `${missing.length} 项缺数据：${missing[0].why ?? '原因未给出'}`
 }

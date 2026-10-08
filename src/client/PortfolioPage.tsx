@@ -23,6 +23,7 @@ import { SortBar } from './SortBar.tsx'
 import { SortHeader } from './SortHeader.tsx'
 import { PORT_COLUMNS, PORT_SORT_HINT, PORT_SORT_KEYS, PORT_SORT_LABEL, normalizeSortState, sortPositions, weightOf, type PortSortKey } from './sort.ts'
 import { useYtd } from './useYtd.ts'
+import { useWideLayout } from './useWide.ts'
 import { ytdMissingSummary, ytdText, ytdTooltip } from './ytdView.ts'
 
 const VERB_LABEL: Record<LedgerEntry['verb'], string> = {
@@ -116,6 +117,8 @@ export function PortfolioPage(props: {
   // 年初至今（YTD）：**标的**的年初至今涨幅（不是持仓收益），现价与其它面板同源、基准由宿主按日 memo
   const ytd = useYtd(miniIds, props.quoteTs ?? null, active)
   const ytdSummary = ytd.loaded ? ytdMissingSummary(Object.values(ytd.map)) : null
+  // 宽窄判定：排序控件二选一挂载（详见 useWide.ts —— 此前两个都挂、靠 CSS 藏一个，实测会同时出现）
+  const wide = useWideLayout()
 
   useEffect(() => {
     if (view === null) return
@@ -258,16 +261,17 @@ export function PortfolioPage(props: {
           'aria-label': '口径说明',
         }, 'ⓘ'),
         // 排序：分组内生效，存进 prefs（重开面板仍生效）
-        React.createElement(SortBar<PortSortKey>, {
-          keys: PORT_SORT_KEYS,
-          labels: PORT_SORT_LABEL,
-          hints: PORT_SORT_HINT,
-          state: portSort,
-          onChange: (next) => setPrefs({ portSort: next }),
-          ariaLabel: '持仓排序',
-          // 本页在宽屏另有列头排序入口（SortHeader）→ 宽屏收起段控，窄屏仍用段控
-          wideHidden: true,
-        }),
+        // 窄屏才挂段控；宽屏挂列头。互斥由 `wide` 决定，不依赖 CSS 隐藏（见 useWide.ts 的说明）
+        wide
+          ? null
+          : React.createElement(SortBar<PortSortKey>, {
+              keys: PORT_SORT_KEYS,
+              labels: PORT_SORT_LABEL,
+              hints: PORT_SORT_HINT,
+              state: portSort,
+              onChange: (next) => setPrefs({ portSort: next }),
+              ariaLabel: '持仓排序',
+            }),
         // P1-11：折算口径常显 —— "这个人民币数字怎么来的"必须答得上来
         React.createElement(Btn, {
           onClick: () => setFxOpen(true),
@@ -338,16 +342,24 @@ export function PortfolioPage(props: {
         new Date(view.generatedAt).toLocaleTimeString('zh-CN', { hour12: false }),
       ),
     ),
-    // 列头排序（宽屏）：与面板顶部「排序」段控读写**同一份** `portSort` 偏好；窄屏由 CSS 隐藏
-    React.createElement(SortHeader<PortSortKey>, {
-      columns: PORT_COLUMNS,
-      state: portSort,
-      onChange: (next) => setPrefs({ portSort: next }),
-      ariaLabel: '持仓列头排序',
-    }),
+    // 列头排序（宽屏）：与面板顶部段控读写**同一份** `portSort` 偏好。两者由 `wide` 二选一挂载
+    wide
+      ? React.createElement(SortHeader<PortSortKey>, {
+          columns: PORT_COLUMNS,
+          state: portSort,
+          onChange: (next) => setPrefs({ portSort: next }),
+          ariaLabel: '持仓列头排序',
+        })
+      : null,
     ytd.error !== null
-      ? React.createElement('div', { className: 'tw-hint', style: { color: 'var(--tw-up)' } },
-          `年初至今（YTD）本次未取到：${ytd.error}。已取到的数字保留上一次结果，取不到的显示 —（不用 0 顶替）。`)
+      ? React.createElement('div', {
+          className: 'tw-hint',
+          style: { color: 'var(--tw-up)' },
+          tabIndex: 0,
+          role: 'note',
+          'aria-label': `年初至今本次未取到：${ytd.error}。已取到的数字保留上一次结果，取不到的显示 — 而不是 0。`,
+          title: '已取到的数字保留上一次成功结果；取不到的显示 — 而不是 0：0 会被读成"今年没涨没跌"。',
+        }, `YTD 本次未取到 · ${ytd.error}`)
       : null,
     ytd.truncated
       ? React.createElement('div', { className: 'tw-hint' },
