@@ -9,11 +9,19 @@
  */
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import type { CalCategory, CalEvent, CalImportance } from '../shared/model.ts'
+import type { CalCategory, CalEvent, CalImportance, MissingField } from '../shared/model.ts'
 import { dataHome } from './store.ts'
 import { calToday as shCalToday } from './time.ts'
 
 const AUTO_SYNC_TTL = 6 * 3600_000
+/**
+ * 同步失败后的重试冷却（P0-2）。
+ *
+ * 失败不再推进 `syncedAt`，因此"TTL 未到就直接返回"这条早退不再拦得住重试请求 ——
+ * 没有冷却的话，上游全挂时每一次面板刷新都会重新打一遍四个源。冷却期内不重试，
+ * 冷却过后再试（`force=1` 不受限制，用户手动刷新照旧）。
+ */
+const SYNC_FAIL_COOLDOWN = 5 * 60_000
 const KEEP_PAST_DAYS = 60
 
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
@@ -32,7 +40,58 @@ interface CalFile {
   v: number
   events: CalEvent[]
   hiddenAutoKeys: string[]
+  /** 最近一次**成功**同步的时刻（epoch ms，0 = 从未成功）—— `asOf` 只认它 */
   syncedAt: number
+  /**
+   * 最近一次**尝试**同步的时刻（不论成败，0 = 从未尝试）。
+   *
+   * 为什么必须与 `syncedAt` 分开：此前每个自动源各自 `catch {}` 吞错，然后**无条件**
+   * 把 `syncedAt` 写成 `Date.now()`；断网时事件还是旧的，而界面/agent 读到"刚刚同步过、
+   * 没有降级" —— 于是"没有新事件"被读成"确实没有新事件"。失败时刻不得改写数据时刻。
+   */
+  syncAttemptAt: number
+}
+
+/** 单个自动源在一次同步里的结果 */
+export interface CalSyncSourceResult {
+  key: 'ipo' | 'earnings' | 'dividend' | 'macro'
+  label: string
+  /** ok=本次成功；failed=本次失败；skipped=本次未尝试（如没有关注标的时的财报/分红源） */
+  state: 'ok' | 'failed' | 'skipped'
+  /** 本次该源写入的自动事件数（ok 时有效） */
+  count: number
+  error?: string
+}
+
+/**
+ * 同步源的可注入入口（默认就是真实实现）。
+ *
+ * 存在的理由：`sync()` 里四个源此前各自 `catch {}`，因此"全挂时 asOf 会不会被改写"
+ * 只能靠注入失败源来断言 —— 否则这条口径在实践中不可验证（正是它出问题的方式）。
+ */
+export interface CalSyncFetchers {
+  /** 三类报表接口（新股申购/上市、财报预约披露、分红除权） */
+  report: (reportName: string, params: Record<string, string>) => Promise<Array<Record<string, unknown>>>
+  /** 东财财经日历（宏观数据/会议） */
+  macroCal: (start: string, end: string) => Promise<EmCalRow[]>
+}
+
+const DEFAULT_FETCHERS: CalSyncFetchers = { report: fetchReport, macroCal: fetchEconomicCalendar }
+
+/** 同步状态（工具与路由共用同一份判定，不各自解释） */
+export interface CalSyncStatus {
+  /** 最近一次成功同步时刻；从未成功过为 null */
+  syncedAt: number | null
+  /** 最近一次尝试时刻；从未尝试过为 null */
+  attemptAt: number | null
+  /** 是否有源失败（`skipped` 不算失败）——为真表示本次返回的事件里有"上次的旧值" */
+  stale: boolean
+  /** 失败源的缺失明细，可直接并入工具/路由的 `missing[]` */
+  missing: MissingField[]
+  /** 本次各源明细（成功/失败/未尝试） */
+  sources: CalSyncSourceResult[]
+  /** 四个源全部失败（本次尝试没换来任何新数据） */
+  allFailed: boolean
 }
 
 /** 供路由使用：今天的 YYYY-MM-DD（可偏移天数） */
@@ -260,10 +319,14 @@ export function withChangeHistory(
 
 export class CalendarStore {
   private dir: string
-  private file: CalFile = { v: 1, events: [], hiddenAutoKeys: [], syncedAt: 0 }
+  private file: CalFile = { v: 1, events: [], hiddenAutoKeys: [], syncedAt: 0, syncAttemptAt: 0 }
   private loaded: Promise<void> | null = null
   private writeChain: Promise<void> = Promise.resolve()
   private syncing: Promise<void> | null = null
+  /** 最近一次尝试的各源明细（内存态：重启后由下一次同步重新填） */
+  private lastSources: CalSyncSourceResult[] = []
+  /** 最近一次调用 `sync()` 时同步过程本身抛出的错误（非逐源失败） */
+  private lastThrown: string | null = null
   private seq = 0
 
   constructor(dir: string = dataHome()) {
@@ -286,6 +349,8 @@ export class CalendarStore {
           events: Array.isArray(parsed.events) ? parsed.events : [],
           hiddenAutoKeys: Array.isArray(parsed.hiddenAutoKeys) ? parsed.hiddenAutoKeys : [],
           syncedAt: typeof parsed.syncedAt === 'number' ? parsed.syncedAt : 0,
+          // 旧文件没有该字段：当作"从未记录过尝试"，装载不因一个坏字段失败
+          syncAttemptAt: typeof parsed.syncAttemptAt === 'number' ? parsed.syncAttemptAt : 0,
         }
       } catch {
         /* 首次：空库 */
@@ -328,8 +393,50 @@ export class CalendarStore {
       })
   }
 
+  /** 最近一次**成功**同步的时刻（0 = 从未成功）。`asOf` 只认它，失败时刻不得改写数据时刻 */
   get syncedAt(): number {
     return this.file.syncedAt
+  }
+
+  /** 最近一次**尝试**同步的时刻（0 = 从未尝试） */
+  get syncAttemptAt(): number {
+    return this.file.syncAttemptAt
+  }
+
+  /**
+   * 同步状态（工具与路由共用这一份判定）。
+   *
+   * `asOf` = 最近一次成功同步时刻（从未成功过 ⇒ null，**不拿"现在"顶替**）；
+   * `stale` = 最近一次尝试里有源失败；`missing[]` = 失败源及其原因。
+   */
+  syncStatus(): CalSyncStatus {
+    const sources = this.lastSources
+    const attempted = sources.filter((s) => s.state !== 'skipped')
+    const failed = attempted.filter((s) => s.state === 'failed')
+    const ok = attempted.filter((s) => s.state === 'ok')
+    const missing: MissingField[] = failed.map((s) => ({
+      what: s.label,
+      // 失败原因都是"这次没拿到"（上游超时/限流/不可达），稍后重试可恢复
+      why: 'transient',
+      note: `本次同步未取到（${s.error ?? '上游不可用'}）；该类别仍是上一次成功同步的事件（若有），稍后会自动重试`,
+    }))
+    if (this.lastThrown !== null) {
+      missing.push({
+        what: '日历同步',
+        why: 'transient',
+        note: `本次同步过程出错（${this.lastThrown}）；返回的是本地已有事件 + 手动事件，稍后重试可补齐`,
+      })
+    }
+    return {
+      syncedAt: this.file.syncedAt > 0 ? this.file.syncedAt : null,
+      attemptAt: this.file.syncAttemptAt > 0 ? this.file.syncAttemptAt : null,
+      // 有源失败即视为降级（本次返回的事件里含上一次成功同步的旧值）；
+      // 从未成功同步过也算降级 —— 那时根本没有可信的 asOf
+      stale: this.file.syncedAt <= 0 || failed.length > 0 || this.lastThrown !== null,
+      missing,
+      sources,
+      allFailed: sources.length > 0 && ok.length === 0,
+    }
   }
 
   /** 手动事件 CRUD（自动事件只允许隐藏/恢复） */
@@ -377,18 +484,38 @@ export class CalendarStore {
   }
 
   /** 自动同步（TTL 内直接返回；并发去重）。symbols = 关注标的的 6 位代码 */
-  async sync(symbols: string[], force = false): Promise<void> {
+  async sync(symbols: string[], force = false, fetchers: CalSyncFetchers = DEFAULT_FETCHERS): Promise<void> {
     await this.init()
+    // 成功过且还在 TTL 内 → 直接用本地；失败过则按冷却窗口重试，避免上游全挂时
+    // 每次面板刷新都重打一遍（旧的"无条件写 syncedAt"其实充当了这个节流，但它同时损坏了 asOf）
     if (!force && Date.now() - this.file.syncedAt < AUTO_SYNC_TTL) return
+    if (!force && Date.now() - this.file.syncAttemptAt < SYNC_FAIL_COOLDOWN) return
     if (this.syncing !== null) return this.syncing
     this.syncing = (async () => {
       const auto: CalEvent[] = []
       const push = (e: Omit<CalEvent, 'id' | 'source'>): void => {
         auto.push({ ...e, id: `auto:${e.autoKey ?? Math.random()}`, source: 'auto' })
       }
+      /**
+       * 逐源执行并**记录结果**（P0-2）。
+       *
+       * 此前四个源各自 `catch {}`：失败不可见，而且随后无条件把 `syncedAt` 写成"现在"，
+       * 于是上游全挂时 agent/界面读到的是"刚刚同步过、无降级"。现在每个源的结果都进
+       * `lastSources`，由 `syncStatus()` 统一翻译成 asOf/stale/missing。
+       */
+      const results: CalSyncSourceResult[] = []
+      const run = async (key: CalSyncSourceResult['key'], label: string, body: () => Promise<void>): Promise<void> => {
+        const before = auto.length
+        try {
+          await body()
+          results.push({ key, label, state: 'ok', count: auto.length - before })
+        } catch (error) {
+          results.push({ key, label, state: 'failed', count: 0, error: error instanceof Error ? error.message : String(error) })
+        }
+      }
       // 1) 新股申购 / 上市
-      try {
-        const rows = await fetchReport('RPTA_APP_IPOAPPLY', {
+      await run('ipo', '新股申购/上市日历', async () => {
+        const rows = await fetchers.report('RPTA_APP_IPOAPPLY', {
           pageSize: '200', pageNumber: '1', sortColumns: 'APPLY_DATE', sortTypes: '-1',
         })
         const from = todayStr(-KEEP_PAST_DAYS)
@@ -412,16 +539,17 @@ export class CalendarStore {
             })
           }
         }
-      } catch {
-        /* 单个数据源失败不影响其它 */
-      }
-      // 2) 关注标的的财报预约披露 + 3) 分红除权
-      if (symbols.length > 0) {
+      })
+      // 2) 关注标的的财报预约披露 + 3) 分红除权（没有关注标的时**未尝试**，不算失败）
+      if (symbols.length === 0) {
+        results.push({ key: 'earnings', label: '财报预约披露', state: 'skipped', count: 0 })
+        results.push({ key: 'dividend', label: '分红除权除息', state: 'skipped', count: 0 })
+      } else {
         const list = symbols.slice(0, 60).map((c) => `"${c}"`).join(',')
         const from = todayStr(-14)
         const to = todayStr(120)
-        try {
-          const rows = await fetchReport('RPT_PUBLIC_BS_APPOIN', {
+        await run('earnings', '财报预约披露', async () => {
+          const rows = await fetchers.report('RPT_PUBLIC_BS_APPOIN', {
             pageSize: '200', pageNumber: '1',
             filter: `(SECURITY_CODE in (${list}))`,
             sortColumns: 'APPOINT_PUBLISH_DATE', sortTypes: '-1',
@@ -440,11 +568,9 @@ export class CalendarStore {
               note: published ? '已披露（实际披露日）' : '预约披露日期',
             })
           }
-        } catch {
-          /* ignore */
-        }
-        try {
-          const rows = await fetchReport('RPT_SHAREBONUS_DET', {
+          })
+        await run('dividend', '分红除权除息', async () => {
+          const rows = await fetchers.report('RPT_SHAREBONUS_DET', {
             pageSize: '200', pageNumber: '1',
             filter: `(SECURITY_CODE in (${list}))`,
             sortColumns: 'PLAN_NOTICE_DATE', sortTypes: '-1',
@@ -469,17 +595,13 @@ export class CalendarStore {
               })
             }
           }
-        } catch {
-          /* ignore */
-        }
+          })
       }
       // 4) 国际 / 国内宏观数据公布与会议事件（东财财经日历）
-      try {
-        const rows = await fetchEconomicCalendar(todayStr(-MACRO_PAST), todayStr(MACRO_FUTURE))
+      await run('macro', '宏观数据/会议', async () => {
+        const rows = await fetchers.macroCal(todayStr(-MACRO_PAST), todayStr(MACRO_FUTURE))
         for (const e of macroEventsFromEm(rows)) push(e)
-      } catch {
-        /* 单个数据源失败不影响其它 */
-      }
+      })
       // 合并：手动事件保留，自动事件按 autoKey upsert，清理过旧自动事件
       const manual = this.file.events.filter((e) => e.source === 'manual')
       const cutoff = todayStr(-KEEP_PAST_DAYS)
@@ -489,11 +611,21 @@ export class CalendarStore {
         (e) => e.source === 'auto' && e.date >= cutoff && e.autoKey !== undefined && !autoKeySet.has(e.autoKey),
       )
       this.file.events = [...manual, ...keptAuto, ...withChangeHistory(this.file.events, fresh, Date.now())]
-      this.file.syncedAt = Date.now()
+      // 「尝试」无条件记录，「成功」只在真有源成功时才推进 —— 全挂时 asOf 必须停留在上次成功时刻
+      this.file.syncAttemptAt = Date.now()
+      const okCount = results.filter((r) => r.state === 'ok').length
+      if (okCount > 0) this.file.syncedAt = Date.now()
+      this.lastSources = results
+      this.lastThrown = null
       await this.persist()
     })()
     try {
       await this.syncing
+    } catch (error) {
+      // 同步过程本身出错（init/persist 等）：记录原因，但**不改写** syncedAt
+      this.lastThrown = error instanceof Error ? error.message : String(error)
+      this.file.syncAttemptAt = Date.now()
+      throw error
     } finally {
       this.syncing = null
     }

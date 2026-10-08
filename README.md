@@ -35,13 +35,14 @@
 
 - 分组的新建/改名/备注/删除（删除=归档，可恢复）+ 组内添加（名称/代码搜索补全）/移除/移动分组；搜索池覆盖 A股/港股/美股/ETF/基金/指数/期货主连（如 688825、02155）
 - A股行展示**所属行业板块名、板块当日涨幅**、**个股相对板块 alpha（个股涨跌幅 − 板块涨跌幅）**（行业归属 10 分钟缓存，板块涨幅随行情轮询同步刷新）；板块涨跌缺失时显示 `—` 并给出原因，**禁用 0 代替**（0 会被读成"没涨没跌"，那是错的信息）
-- **排序**：默认顺序 / 当日涨跌 / 总市值（组内生效，记忆在 `prefs.json`，同键再点切换升降序）
+- **排序**：默认顺序 / 当日涨跌 / 总市值（组内生效，记忆在 `prefs.json`，同键再点切换升降序）；**宽屏（≥1080px）改用列头排序** —— 点列头按该列排序、再点翻转方向、列头显示 ▲/▼、原生按钮键盘可达并带 `aria-sort`，另有「↺ 默认顺序」复位；窄屏保留原分段开关，两个入口互斥（收起段控由调用方显式声明，漏传只会"两个入口都在"，不会一个都不剩）
+- **年初至今（YTD）列**：口径见「口径规范 → 年初至今」；显示 `—` 时可在 tooltip 看到具体原因
 - **异动提示**：放量/价格异动/量价共振的行带**左侧竖条 + 缓慢呼吸背景**（不是整行变红——整行红会与"跌了"的语义冲突；`prefers-reduced-motion` 下退化为静态底色），面板头部「异动 N」徽标可展开队列；同一条目 30 分钟静默（记在 localStorage）
 
 ### 持仓
 
 - 分组 CRUD（同上归档语义）+ 组内证券的「买入/卖出/调整/编辑/移动/明细/移除」
-- 每分组与总览显示**总市值、浮动盈亏、当日盈亏、累计已实现**；每行含**浮动盈亏率与当日盈亏率**、**可用（可卖）数量**、**累计费用（含占累计成交额百分比）**
+- 每分组与总览显示**总市值、浮动盈亏、当日盈亏、累计已实现**；每行含**浮动盈亏率与当日盈亏率**、**可用（可卖）数量**、**累计费用（含占累计成交额百分比）**、**标的年初至今（YTD）**
 - **排序**：默认顺序 / 市值 / 持仓盈亏（随所选成本口径）/ 当日盈亏 / 仓位占比
 - **总额口径**：默认只含 A股，港/美股逐项列在「不含 N 项 ▼」里并可下钻看原因；也可切到**固定汇率**折算（见「折算口径」）
 - **除权提示**：复用已同步的日历事件，顶部列出涉及持仓的公司行为与日期，持仓卡片标「N 天后除权」；**不自动改账**（真实的送转/派息以券商为准，正确动作是在「调整」里按实际到账录入）
@@ -116,7 +117,7 @@ iframe 有三态降级：**加载中 / 已加载 / 超时**（8 秒）。超时�
 
 ### 宽屏布局
 
-面板在宽屏下**用宽度装更多内容**而不是把内容拉长：行情条是自动填充网格（宽屏多列、窄屏换行，**没有内容被藏进横向滚动**）；自选与持仓列表在 ≥1500px 时铺成多列（同高度约两倍条目，窗口变窄自动退回单列）；提示文案限宽 96ch。
+面板在宽屏下**用宽度装更多内容**而不是把内容拉长：行情条是自动填充网格（宽屏多列、窄屏换行，**没有内容被藏进横向滚动**）；自选与持仓列表在 ≥1080px 时铺成多列（**按列竖向填充**，名次自上而下读是 1/2/3，同高度约两倍条目；窗口变窄自动退回单列）；提示文案限宽 96ch。
 
 ## 安装
 
@@ -176,13 +177,14 @@ bash scripts/install.sh
    - `tradewatcher_calendar` / `tradewatcher_calendar_add` — 财经日历读取与手动事件写入（唯一的写工具，带节流与反向操作登记）
    - `tradewatcher_undo` — 撤销本插件的写入（按 `id` 或 `last=N`；`listOnly=true` 只列出可撤销项）
    - `tradewatcher_rescue` — 护盘信号（六因子 + 贡献度 + 出分日志 + 采样窗口）
+   - `tradewatcher_ytd` — 年初至今（前复权口径，含基准说明与缺失明细）
    - **每个读数都带数据出处**：`asOf` / `stale` / `source` / `missing[]`（见「数据出处与状态」）
    - 系统提示词已注册引导段落（插件在会话工具列表即显形，如出现工具名即说明挂载成功）
 2. **明文 JSON 文件**：上述数据文件路径固定、格式如上，任何会话可用文件工具直接读取做离线分析/回溯校验
 
 ### HTTP 路由（同源，浏览器信任围栏保护，POST 校验 Origin）
 
-`GET /tradewatcher/health|badge|quotes?ids=|trend?secid=|kline?secid=|detail?secid=|suggest?q=|board?scope=&sort=&pn=&pz=|anomaly?ids=|breadth`、`GET|POST /tradewatcher/watch|portfolio|prefs|calendar`、`GET /tradewatcher/ledger`、`GET /tradewatcher/trades?secid=`、`GET /tradewatcher/industry|industries`、`GET|POST /tradewatcher/backup`（导出/导入备份；POST body `{mode:'preview'|'apply', bundle}`）
+`GET /tradewatcher/health|badge|quotes?ids=|trend?secid=|kline?secid=|detail?secid=|suggest?q=|board?scope=&sort=&pn=&pz=|anomaly?ids=|ytd?ids=|breadth`、`GET|POST /tradewatcher/watch|portfolio|prefs|calendar`、`GET /tradewatcher/ledger`、`GET /tradewatcher/trades?secid=`、`GET /tradewatcher/industry|industries`、`GET|POST /tradewatcher/backup`（导出/导入备份；POST body `{mode:'preview'|'apply', bundle}`）
 
 - `/tradewatcher/kline` 的 `fqt`：`0`=不复权 `1`=前复权（默认）`2`=后复权；回包 `kline.fqt` 是**实际生效**口径（指数/期货恒为 0 并置 `fqSupported:false`），`kline.asOf`/`barOpen` 供口径条显示"数据截至几点、当根是否已收盘"
 - `/tradewatcher/badge` 只读**同一份** rescue 快照与持仓汇总，**不触发新采样**
@@ -269,6 +271,18 @@ bash scripts/install.sh
 
 **实时汇率暂不可用**：汇率源尚未验证连通性与字段口径（中间价还是即期、符号怎么写都未确认）。宿主对 `fxMode='live'` **显式报错说明原因**，而不是接受一个什么都不做的档位。
 
+### 年初至今（YTD）
+
+`YTD =（现价 − 本年内第一个交易日收盘价）÷ 该收盘价 × 100%`，序列用**前复权**（不复权序列在除权除息日会跳空下跌，那不是真实收益）。口径常量是**单一来源**（`shared/model.ts` 的 `YTD_CALIBER`），界面 tooltip 与 agent 工具引用同一句。
+
+三处必须随结果说明的边界：
+
+- **指数 / 期货 / 板块**（`fqSupported=false`）：按原始价格（点位、合约价）计算，tooltip 写明"该标的不适用复权"。
+- **本年内上市**：序列里没有更早的交易日 → 基准是**上市首日**，标注为「上市首日至今，不是年初至今」（按年初读会高估）。
+- **年内第一个交易日就是今天**：口径要求的是**收盘价**，此时**不给数**（`missing[].why='no-source'`，今天重试无用），不拿未收盘价或上一年收盘顶替。
+
+取数：宿主按日 memo 复用 `em.fetchKline`（磁盘缓存 + 增量 + 单飞），并发 ≤4、失败有冷却、不重试轰炸；单次上限 60 个标的，超出如实回报 `truncated`；缺失一律 `—` 并给原因，不用 0 顶替。
+
 ### K 线与复权
 
 - **默认前复权**：前复权序列连续、最适合判断当前位置与相对成本（不复权会把除权跳空伪装成暴跌，所以不能当默认）。段控 `前复权 / 后复权 / 不复权`，口径常显在脚注
@@ -322,6 +336,9 @@ src/
   host/selftest.ts    # npm run selftest（核算断言 + 实时接口冒烟，网络项 soft）
   client/index.tsx    # 浏览器半区：ctx.slots 注册（sidebar.panellist 图标 + main 面板）+ 装配
   client/*.tsx        # TopBar/自选/持仓/大盘/云图 + SVG 分时图 + 悬浮卡
+  host/ytd.ts         # 年初至今（前复权基准 + 按日 memo + 并发有界的批量计算）
+  client/SortHeader.tsx # 宽屏列头排序（原生 button + aria-sort + ▲/▼）
+  client/ytdView.ts   # YTD 展示纯函数（文案/口径 tooltip/缺失摘要）
   client/treemap.ts   # squarified treemap（纯函数，面积/越界/重叠/长宽比均有断言）
   shared/model.ts     # 两端共享类型 + 固定代码
   shared/stats.ts     # Wilson 区间（纯函数）

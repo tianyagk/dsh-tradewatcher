@@ -19,6 +19,7 @@ import {
   SECID_RE,
   WATCH_SORT_KEYS,
   isFiniteNumber,
+  isT0Secid,
   type LedgerEntry,
   type LedgerVerb,
   type MutatePortBody,
@@ -34,6 +35,7 @@ import {
   type WatchItem,
 } from '../shared/model.ts'
 import { log } from './context.ts'
+import { shanghaiDayStart } from './time.ts'
 
 const NAME_MAX = 40
 
@@ -216,6 +218,16 @@ export interface TradeState {
    * 光给一个绝对金额没有参照物。
    */
   turnover: number
+  /**
+   * **成本未知期间卖出的股数**（D1b）：应用某笔 `sell` 时 `avgCost <= 0`（成本还没录入），
+   * 该笔已实现盈亏算不出来 —— 记下股数、且**不计入** `realized`。
+   *
+   * 为什么必须记：`adjust(100,0)` → `sell(50,12.5)` → 之后补成本，会让 `costAmountRecorded`
+   * 变真、持仓级守卫解除；若那笔卖出仍按 `(12.5 − 0) × 50` 计，界面就会把 625 当成正常数字
+   * 展示（真实应为 `(12.5 − 9.5) × 50 = 150`）。按**逐笔**判定而不是持仓级粘性标记：
+   * 补录的成本流水 ts 若早于该笔卖出，重放时成本已知 ⇒ 就能正确算出 150。
+   */
+  realizedUnknownQty: number
 }
 
 /** Pure replay of one trade onto an accounting state. */
@@ -232,7 +244,13 @@ export function applyTrade(state: TradeState, verb: 'buy' | 'sell' | 'adjust', q
   } else if (verb === 'sell') {
     if (qty <= 0 || !Number.isFinite(qty)) throw new Error('卖出数量必须大于 0')
     if (qty > state.qty + 1e-9) throw new Error(`卖出数量超过持仓（持有 ${state.qty}）`)
-    state.realized += (price - state.avgCost) * qty - feeN
+    if (state.avgCost > 0) {
+      state.realized += (price - state.avgCost) * qty - feeN
+    } else {
+      // 成本未录入：这笔的已实现盈亏**算不出来**（(卖价 − 0) × 数量 不是收益）。
+      // 记股数并在展示层给 null + 原因；不累加进 realized，数字里就永远不会混进假分量。
+      state.realizedUnknownQty += qty
+    }
     state.qty = Math.max(0, state.qty - qty)
     state.netCost -= qty * price - feeN
     state.fees += feeN
@@ -248,24 +266,85 @@ export function applyTrade(state: TradeState, verb: 'buy' | 'sell' | 'adjust', q
   }
 }
 
-/** Replay one position's whole ledger into accounting state. */
-export function replayPosition(entries: readonly LedgerEntry[], posId: string): TradeState {
-  const state: TradeState = { qty: 0, avgCost: 0, netCost: 0, realized: 0, fees: 0, turnover: 0 }
+/** 一条**未能应用**的流水（账本里有、快照却没算进来）—— 必须能被读到，否则就是静默降级 */
+export interface SkippedLedgerEntry {
+  id: string
+  verb: LedgerVerb
+  reason: string
+}
+
+export interface ReplayResult {
+  state: TradeState
+  /** 未应用的流水（含原因）；空数组 = 全部应用成功 */
+  skipped: SkippedLedgerEntry[]
+}
+
+/**
+ * Replay one position's whole ledger into accounting state, **并报告没能应用的条目**（P1-5）。
+ *
+ * 此前未应用的流水被 `catch {}` 静默吞掉：账本里能看到 5 笔、持仓快照却少一块，
+ * 而没有任何标记说明"有 N 条流水没算进来" —— 用户对不上账时无从下手
+ * （导入校验会因负持仓报错，但手工改了文件或历史脏数据会走到这里）。
+ *
+ * 坏流水**不影响**后续流水：保持应用前的状态继续往下走（快照永远给得出来），
+ * 但这一次会被记进 `skipped`，由工具与界面如实报出。
+ */
+export function replayPositionWithSkips(entries: readonly LedgerEntry[], posId: string): ReplayResult {
+  const state: TradeState = { qty: 0, avgCost: 0, netCost: 0, realized: 0, fees: 0, turnover: 0, realizedUnknownQty: 0 }
+  const skipped: SkippedLedgerEntry[] = []
   for (const e of entries) {
     if (e.posId !== posId) continue
     if (e.verb !== 'buy' && e.verb !== 'sell' && e.verb !== 'adjust') continue
     const qty = e.qty
     const price = e.price
-    if (!isFiniteNumber(qty) || !isFiniteNumber(price)) continue
+    if (!isFiniteNumber(qty) || !isFiniteNumber(price)) {
+      skipped.push({ id: e.id, verb: e.verb, reason: '流水缺少数量或价格（必须是有限数值）' })
+      continue
+    }
     const fee = isFiniteNumber(e.fee) ? e.fee : 0
     try {
       applyTrade(state, e.verb, qty, price, fee)
-    } catch {
+    } catch (error) {
       // Malformed/out-of-order history must never break the snapshot: keep
       // prior state (the entry remains visible in the ledger for audit).
+      skipped.push({ id: e.id, verb: e.verb, reason: error instanceof Error ? error.message : String(error) })
     }
   }
-  return state
+  return { state, skipped }
+}
+
+/** Replay one position's whole ledger into accounting state（只要状态，忽略跳过明细） */
+export function replayPosition(entries: readonly LedgerEntry[], posId: string): TradeState {
+  return replayPositionWithSkips(entries, posId).state
+}
+
+/**
+ * 这笔交易之前**可卖**的数量（P1-8）。
+ *
+ * A股 T+1：当日买入的部分当日不可卖，因此"持有 1000"不等于"可卖 1000"。
+ * 时点取**这笔流水自己的时间戳**（而不是"现在"）：补录历史流水时，可卖量按那一天的时点算。
+ *
+ * 口径：`可卖 = 该时点之前已持有的数量 − 同一天内该时点之前买入的数量`。
+ * 同一毫秒的流水按插入序无法分辨先后，一律算作"之前"（宁可少算可卖量，也不放行一笔
+ * 券商端不存在的成交）。
+ */
+export function availableQtyAt(entries: readonly LedgerEntry[], posId: string, at: number): number {
+  const dayStart = shanghaiDayStart(at)
+  let held = 0
+  let sameDayBuys = 0
+  for (const e of sortLedger(entries)) {
+    if (e.posId !== posId || e.ts > at) continue
+    const n = isFiniteNumber(e.qty) ? e.qty : 0
+    if (e.verb === 'buy') {
+      held += n
+      if (e.ts >= dayStart) sameDayBuys += n
+    } else if (e.verb === 'sell') {
+      held -= n
+    } else if (e.verb === 'adjust') {
+      held = n
+    }
+  }
+  return Math.max(0, Math.round((held - sameDayBuys) * 1e4) / 1e4)
 }
 
 function roundMoney(n: number): number {
@@ -735,13 +814,26 @@ export class DataStore {
     const note = this.sanitizeOptional(body.note, NOTE_MAX)
     // Validate against current derived state before writing anything.
     const state = replayPosition(this.sortedLedger(), pos.id)
+    // 时点先算：可卖数量按这笔流水自己的 ts 判定（补录历史时按那一天算）
+    const ts = this.sanitizeTs(body.ts)
     const rule = (verb: 'buy' | 'sell'): void => {
-      if (verb === 'sell' && qty > state.qty + 1e-9) {
+      if (verb !== 'sell') return
+      if (qty > state.qty + 1e-9) {
         throw new Error(`卖出数量超过当前持仓（持有 ${state.qty}）`)
+      }
+      // P1-8：可用（可卖）数量。此前只校验总持仓，于是可以录出一笔"当日买入、当日卖出"的
+      // A股成交 —— 券商端不存在这笔交易，当日盈亏与已实现会随之偏离真实。
+      if (!isT0Secid(pos.secid)) {
+        const available = availableQtyAt(this.sortedLedger(), pos.id, ts)
+        if (qty > available + 1e-9) {
+          throw new Error(
+            `可用（可卖）数量不足：该时点可用 ${available}，当前持仓 ${state.qty}` +
+            '（差额是当日买入的部分，A股 T+1 当日不可卖）。ETF/LOF、港股、美股为 T+0，不受该限制',
+          )
+        }
       }
     }
     rule(verb)
-    const ts = this.sanitizeTs(body.ts)
     this.ledgerEntry(verb, {
       ts,
       posId: pos.id,

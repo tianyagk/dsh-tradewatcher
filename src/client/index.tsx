@@ -391,7 +391,8 @@ function Dashboard(): React.ReactElement {
     if (page === 'calendar') {
       return React.createElement(CalendarPage, { prefs: prefs ?? DEFAULT_PREFS })
     }
-    return React.createElement(CloudMap, null)
+    // 云图页的自绘热力图跟随全局涨跌配色（此前写死红涨绿跌，与大盘页/列表相反）
+    return React.createElement(CloudMap, { redUp: (prefs ?? DEFAULT_PREFS).redUp })
   }
 
   const tabs: Array<{ key: PageKey; label: string; full: string }> = [

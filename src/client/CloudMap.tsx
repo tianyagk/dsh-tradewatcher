@@ -58,7 +58,17 @@ function useWidth(ref: React.RefObject<HTMLDivElement>, fallback = 700): number 
   return w
 }
 
-export function CloudMap(): React.ReactElement {
+export function CloudMap(props: {
+  /**
+   * 涨跌配色（`prefs.redUp`）。
+   *
+   * 自绘热力图**必须**跟随它：此前这里写死 `redUp: true`，于是设成"绿涨红跌"的用户
+   * 在大盘页看到绿=涨、切到云图页看到红=涨 —— 同一个面板里两套相反的色义
+   * （第三方站点是第三套，且不由本插件决定，只能把它的口径写在界面上）。
+   */
+  redUp: boolean
+}): React.ReactElement {
+  const redUp = props.redUp
   /**
    * 默认「自绘」（P2-5）：只有自绘才标得了口径（面积=成交额、色深=涨跌幅、数据几点）。
    * 第三方站点仍然保留 —— 它的钻取与信息量确实更强，但口径与本插件无关，必须分清。
@@ -121,7 +131,8 @@ export function CloudMap(): React.ReactElement {
         React.createElement('span', { className: 'tw-hint', style: { margin: 0 } }, '自绘可标口径；第三方站点信息更全但口径由它决定'),
       ),
       React.createElement('div', { ref: hostRef, style: { padding: '0 10px 10px' } },
-        React.createElement(IndustryHeatmap, { redUp: true, width: width - 20, height: Math.max(320, Math.round((width - 20) * 0.62)) }),
+        // 配色跟随全局开关（与大盘页/列表同一套色义）
+        React.createElement(IndustryHeatmap, { redUp, width: width - 20, height: Math.max(320, Math.round((width - 20) * 0.62)) }),
       ),
     )
   }
@@ -135,7 +146,13 @@ export function CloudMap(): React.ReactElement {
         React.createElement('button', { 'data-on': false, onClick: () => setSource('self') }, '自绘'),
         React.createElement('button', { 'data-on': true, onClick: () => setSource('third') }, '第三方站点'),
       ),
-      React.createElement('span', { className: 'tw-hint', style: { margin: 0 } }, '面积=流通市值，颜色=涨跌幅，约 8 秒自动刷新，滚轮缩放、双击看K线、方向键复盘'),
+      React.createElement('span', { className: 'tw-hint', style: { margin: 0 } }, '面积=流通市值，颜色=涨跌幅，自动刷新（频率以站点实际为准），滚轮缩放、双击看K线、方向键复盘'),
+      // 该站点的色义与本插件**相反**且改不了：不写出来，用户就会以为云图跟自己的配色设置一致
+      React.createElement('span', {
+        className: 'tw-badge',
+        style: { color: '#e0a94a', borderColor: '#e0a94a' },
+        title: '第三方站点的涨跌配色由它自己决定，本插件无法修改，也不抓取它的内容。它的口径是「红=跌、绿=涨」',
+      }, redUp ? '该站：红=跌 绿=涨（与本面板相反）' : '该站：红=跌 绿=涨（与本面板当前设置一致）'),
       // 加载状态常驻可见：超时不是"静默等待"，要能一眼看出现在处于哪一态
       React.createElement('span', { className: 'tw-badge', 'data-state': state, title: `最后成功加载：${lastOkText}` },
         state === 'loading' ? '加载中…' : state === 'loaded' ? '已加载' : '加载超时'),

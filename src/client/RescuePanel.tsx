@@ -392,7 +392,7 @@ export function RescuePanel(props: { prefs: PortPrefs; redUp: boolean; onPrefs?:
             // 东财源下的缺因子才是"冷启动/采样满 5 分钟自动补齐"。此前一律写"5 分钟后自动补齐"，
             // 在备用源场景下是空头承诺。
             title: snapshot.flowSource === 'tencent'
-              ? `本次快照缺少因子：${snapshot.completeness?.missing.join('、')} —— 数据来自**腾讯备用源**，该源不含分单资金流（超大单/主力净额），因此「超大单强度」「持续性」无法计算，不是等几分钟就能补齐的；量能、脉冲、背离、共振仍为真实数据，评分偏保守。`
+              ? `本次快照缺少因子：${snapshot.completeness?.missing.join('、')} —— 数据来自「腾讯备用源」，该源不含分单资金流（超大单/主力净额），因此「超大单强度」「持续性」无法计算，不是等几分钟就能补齐的；量能、脉冲、背离、共振仍为真实数据，评分偏保守。`
               : `本次快照缺少因子：${snapshot.completeness?.missing.join('、')}（评分偏保守；冷启动回填完成或盘中采样 5 分钟后自动补齐）`,
             style: { color: LEVEL_COLOR[2], borderColor: LEVEL_COLOR[2] },
           }, `因子 ${snapshot.completeness?.available}/${snapshot.completeness?.total}`)
@@ -466,7 +466,7 @@ export function RescuePanel(props: { prefs: PortPrefs; redUp: boolean; onPrefs?:
           title: [
             `熔断明细（按主机独立计数）：${b.detail.filter((h) => h.open).map((h) => `${h.host} 剩余 ${h.minutesLeft} 分钟（连续熔断 ${h.trips} 次）`).join('；')}`,
             `最后错误：${b.lastError ?? '—'}`,
-            '熔断期间不再请求**熔断中的东财主机**（避免把限流推成封锁）；腾讯/新浪备用源不受影响，「立即采样」照常可用。',
+            '熔断期间不再请求「熔断中的东财主机」（避免把限流推成封锁）；腾讯/新浪备用源不受影响，「立即采样」照常可用。',
             '熔断是进程级状态，不随面板开关变化。',
           ].join('\n'),
         },
@@ -642,8 +642,8 @@ export function RescuePanel(props: { prefs: PortPrefs; redUp: boolean; onPrefs?:
                   snapshot.bottom.model,
                 ),
                 React.createElement('div', { className: 'tw-hint', style: { fontSize: 10.5 } },
-                  '口径说明：概率是**历史同类情形的频率**，不是预测；给出的 95% 区间是 Wilson 区间，样本越小区间越宽 —— 区间跨过基线时，这个差异不具备可辨识性。' +
-                  '日内形态（回升/下影线/收回前低）没有可回算的历史分钟数据，因此**不参与概率校准**，只作实时修正参考。' +
+                  '口径说明：概率是「历史同类情形的频率」，不是预测；给出的 95% 区间是 Wilson 区间，样本越小区间越宽 —— 区间跨过基线时，这个差异不具备可辨识性。' +
+                  '日内形态（回升/下影线/收回前低）没有可回算的历史分钟数据，因此「不参与概率校准」，只作实时修正参考。' +
                   '位置低 ≠ 见底：护盘也可能发生在下跌半程，请结合资金流与量价背离一起判断。',
                 ),
               )

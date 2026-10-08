@@ -4,6 +4,7 @@
 import React, { useCallback, useEffect, useState } from 'react'
 import type { BoardRow, QuoteRow, StockDetail, TrendData } from '../shared/model.ts'
 import { api } from './api.ts'
+import { UPDOWN_MISSING_NOTE, breadthCells, upDownPair } from './breadthView.ts'
 import { dirClass, fmtAmt, fmtBig, fmtPct, fmtPrice, fmtSigned } from './format.ts'
 import { CN_PHASE_LABEL, cnSessionState } from './marketTime.ts'
 import { useNow } from './useNow.ts'
@@ -113,11 +114,9 @@ export function MarketPage(props: {
 
   const sh = quotes['1.000001']
   const sz = quotes['0.399001']
-  const upSum = (sh?.up ?? 0) + (sz?.up ?? 0)
-  const downSum = (sh?.down ?? 0) + (sz?.down ?? 0)
-  const evenSum = (sh?.even ?? 0) + (sz?.even ?? 0)
-  const amountSum = (sh?.amount ?? 0) + (sz?.amount ?? 0)
-  const breadthOk = sh?.up !== null && sh?.up !== undefined && sh.up !== null
+  // 涨跌家数与成交额：任一分量缺失即整格 `—` + 原因（**不用 0 顶替**，见 breadthView.ts）
+  const cells = breadthCells(sh, sz)
+  const breadthOk = cells.countsOk
 
   const cnIndices: Array<{ secid: string; name: string }> = [
     { secid: '1.000001', name: '上证指数' },
@@ -160,14 +159,24 @@ export function MarketPage(props: {
         React.createElement('span', { className: 'tw-muted' }, '沪深两市'),
       ),
       React.createElement('div', { className: 'tw-statrow' },
-        statCell('上涨', upSum, breadthOk ? (redUp ? 'tw-up' : 'tw-down') : ''),
-        statCell('下跌', downSum, breadthOk ? (redUp ? 'tw-down' : 'tw-up') : ''),
-        statCell('平盘', evenSum),
+        statCell('上涨', cells.countsOk ? String(cells.up) : '—', breadthOk ? (redUp ? 'tw-up' : 'tw-down') : ''),
+        statCell('下跌', cells.countsOk ? String(cells.down) : '—', breadthOk ? (redUp ? 'tw-down' : 'tw-up') : ''),
+        statCell('平盘', cells.countsOk ? String(cells.even) : '—'),
         React.createElement('div', { className: 'tw-stat-sep' }),
-        statCell('两市成交额', amountSum > 0 ? `${fmtAmt(amountSum)}` : '—'),
+        statCell('两市成交额', cells.amountOk ? `${fmtAmt(cells.amount)}` : '—'),
         statCell('上证', sh?.price !== undefined && sh?.price !== null ? fmtPrice(sh.price) : '—', dirClass(sh?.chg ?? null, redUp)),
         statCell('深成', sz?.price !== undefined && sz?.price !== null ? fmtPrice(sz.price) : '—', dirClass(sz?.chg ?? null, redUp)),
       ),
+      // 缺失必须能被键盘/触屏读到（不能只挂在 title 上：那是鼠标专属）
+      cells.countsOk
+        ? null
+        : React.createElement('div', {
+            className: 'tw-hint',
+            style: { color: 'var(--tw-up)' },
+            tabIndex: 0,
+            role: 'note',
+            'aria-label': `涨跌家数本次未取到：${cells.reason}`,
+          }, `涨跌家数本次未取到：${cells.reason}`),
       // P1-8：分位必须带口径与样本量一起读；样本不足或取不到时不显示分位（而不是显示 0）
       breadthErr !== null
         ? React.createElement('div', { className: 'tw-hint', style: { color: 'var(--tw-up)' } }, `涨跌家数分位本次未取到：${breadthErr}（稍后随行情轮询自动重试）`)
@@ -228,13 +237,14 @@ export function MarketPage(props: {
                 React.createElement('td', { className: cls }, fmtSigned(q?.chg ?? null)),
                 React.createElement('td', null, React.createElement('span', { className: `tw-chg-chip ${q?.pct === null || q?.pct === undefined ? 'tw-chip-flat' : (q.pct >= 0) === redUp ? 'tw-chip-up' : 'tw-chip-down'}` }, fmtPct(q?.pct ?? null))),
                 React.createElement('td', { className: 'tw-dim' },
-                  q?.up !== null && q?.up !== undefined
+                  // 上涨/下跌是同一个事实的两个分量：一侧缺失就整格 —（否则会读成"没有一只下跌"）
+                  upDownPair(q?.up, q?.down).ok
                     ? React.createElement(React.Fragment, null,
-                        React.createElement('span', { className: dirClass(1, redUp) }, String(q.up)),
+                        React.createElement('span', { className: dirClass(1, redUp) }, String(q?.up)),
                         ' / ',
-                        React.createElement('span', { className: dirClass(-1, redUp) }, String(q.down ?? 0)),
+                        React.createElement('span', { className: dirClass(-1, redUp) }, String(q?.down)),
                       )
-                    : '—',
+                    : React.createElement('span', { tabIndex: 0, role: 'note', 'aria-label': UPDOWN_MISSING_NOTE, title: UPDOWN_MISSING_NOTE }, '—'),
                 ),
                 React.createElement('td', null, fmtAmt(q?.amount ?? null)),
               )
@@ -284,7 +294,7 @@ export function MarketPage(props: {
           ? ' · ETF 排行口径：涨跌幅/成交额/换手，无资金流字段'
           : ' · 主力净额＝超大单＋大单净流入（上游口径，仅东财提供）；占比＝净额 ÷ 成交额') +
         (sort === 'money' && scope !== 'etf' && moneySort === 'share'
-          ? '。注意：占比排序只在**本页 40 条**内重排 —— 上游按净额取前 40，本插件没有"按净占比的全市场排行"这一口径，因此不把它呈现成全市场排行。'
+          ? '。注意：占比排序只在「本页 40 条」内重排 —— 上游按净额取前 40，本插件没有"按净占比的全市场排行"这一口径，因此不把它呈现成全市场排行。'
           : ''),
       ),
       boardMeta !== null && (boardMeta.stale === true || boardMeta.source === 'tencent' || boardMeta.source === 'sina')
@@ -344,13 +354,13 @@ export function MarketPage(props: {
                   ? [React.createElement('td', { key: 'a' }, fmtAmt(r.amount ?? null)), React.createElement('td', { key: 't' }, r.turnover !== null && r.turnover !== undefined ? `${r.turnover.toFixed(2)}%` : '—')]
                   : [
                       React.createElement('td', { key: 'u', className: 'tw-dim' },
-                        r.up !== null
+                        upDownPair(r.up, r.down).ok
                           ? React.createElement(React.Fragment, null,
                               React.createElement('span', { className: dirClass(1, redUp) }, String(r.up)),
                               ' / ',
-                              React.createElement('span', { className: dirClass(-1, redUp) }, String(r.down ?? 0)),
+                              React.createElement('span', { className: dirClass(-1, redUp) }, String(r.down)),
                             )
-                          : '—',
+                          : React.createElement('span', { tabIndex: 0, role: 'note', 'aria-label': UPDOWN_MISSING_NOTE, title: UPDOWN_MISSING_NOTE }, '—'),
                       ),
                       React.createElement('td', { key: 'l', className: 'tl' }, r.leader ?? '—'),
                       React.createElement('td', { key: 'm', className: dirClass(r.money ?? null, redUp) }, fmtAmt(r.money ?? null)),

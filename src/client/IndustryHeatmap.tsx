@@ -13,6 +13,7 @@
 import React, { useEffect, useMemo, useState } from 'react'
 import type { BoardRow } from '../shared/model.ts'
 import { api } from './api.ts'
+import { UPDOWN_MISSING_NOTE, upDownPair } from './breadthView.ts'
 import { fmtAmt, fmtPct } from './format.ts'
 import { Skeleton } from './ui.tsx'
 import { squarify } from './treemap.ts'
@@ -111,7 +112,10 @@ export function IndustryHeatmap(props: { redUp: boolean; width: number; height: 
                   : null,
                 React.createElement('title', null,
                   `${row.name}\n涨跌幅 ${fmtPct(row.pct)}\n成交额 ${fmtAmt(row.amount)}` +
-                  `${row.up !== null ? `\n上涨 ${row.up} / 下跌 ${row.down ?? 0}` : ''}`),
+                  // 涨/跌家数成对判：一侧缺失就说"未取到"，不写成 `上涨 1234 / 下跌 0`
+                  (upDownPair(row.up, row.down).ok
+                    ? `\n上涨 ${row.up} / 下跌 ${row.down}`
+                    : `\n${UPDOWN_MISSING_NOTE}`)),
               )
             }),
           ),

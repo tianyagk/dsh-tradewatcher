@@ -144,7 +144,7 @@ export function SuggestInput(props: {
               h.hasFallback === false
                 ? React.createElement('span', {
                     className: 'tw-badge',
-                    title: '腾讯/新浪都没有该标的的映射：东财行情主机不可用时，它不会有价格（加入后会在自选里显示"暂无可用行情源"）',
+                    title: '腾讯/新浪都没有该标的的映射：东财行情主机不可用时，它不会有价格（加入后会在自选里显示「无行情源」）',
                     style: { fontSize: 9, color: '#e0a94a' },
                   }, '仅东财源')
                 : null,

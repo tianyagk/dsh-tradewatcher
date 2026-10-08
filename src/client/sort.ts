@@ -19,6 +19,9 @@ export const WATCH_SORT_LABEL: Record<WatchSortKey, string> = {
   default: '默认',
   pct: '当日涨跌',
   mv: '总市值',
+  amount: '成交额',
+  chg: '涨跌额',
+  alpha: '行业α',
 }
 
 export const PORT_SORT_LABEL: Record<PortSortKey, string> = {
@@ -27,6 +30,8 @@ export const PORT_SORT_LABEL: Record<PortSortKey, string> = {
   pnl: '持仓盈亏',
   dayPnl: '当日盈亏',
   weight: '仓位占比',
+  price: '现价',
+  cost: '成本',
 }
 
 /** 排序说明（悬浮提示用）：口径必须写在界面上，避免"这个盈亏是摊薄还是均价" */
@@ -34,6 +39,9 @@ export const WATCH_SORT_HINT: Record<WatchSortKey, string> = {
   default: '按添加顺序（分组内自定义顺序）',
   pct: '按当日涨跌幅排序（行情来自东财/腾讯/新浪，无行情者排最后）',
   mv: '按总市值排序（东财 f20 / 腾讯总市值字段；无该字段的标的——如国际指数、商品、新浪备用源——排最后）',
+  amount: '按当日成交额排序（东财/腾讯的成交额字段；备用源缺该字段时排最后）。成交额是当日资金规模，不是市值',
+  chg: '按当日涨跌额排序（现价 − 昨收/昨结，与界面显示的「涨跌」是同一份数）',
+  alpha: '按行业 α 排序（α = 个股涨跌幅 − 所属板块涨跌幅，与界面显示的 α 同一个数）；板块行情未取到或个股无行情时 α 不可算 → 排最后',
 }
 
 export const PORT_SORT_HINT: Record<PortSortKey, string> = {
@@ -42,7 +50,49 @@ export const PORT_SORT_HINT: Record<PortSortKey, string> = {
   pnl: '按当前所选口径的盈亏排序（摊薄口径=持仓盈亏，均价口径=浮动盈亏）；行情暂缺者排最后',
   dayPnl: '按当日盈亏排序（隔夜持仓 + 日内买卖 − 费用，与券商 App 一致）；行情暂缺者排最后',
   weight: '按仓位占比排序（个股市值 ÷ 组合总市值，含全部未归档分组）；总市值为 0 时该键无效，保持原顺序',
+  price: '按现价排序（行情暂缺者排最后）',
+  cost: '按当前所选口径的成本排序（摊薄口径=摊薄成本 / 均价口径=买入均价）—— 与「成本」列显示的是同一个数',
 }
+
+/**
+ * 列头定义（宽屏表格视图用）：列顺序与行内字段顺序一致。
+ *
+ * `key === null` 表示**该列没有可靠的排序键**，列头只作标签 —— 宁可不排，也不做一个
+ * 看起来能排、实际按别的字段排的假列头（那种错误在界面上看不出来，只会让人不信任排序）。
+ */
+export interface SortColumn<K extends string> {
+  /** 列头文案 */
+  label: string
+  /** 可排序键；null = 不参与排序 */
+  key: K | null
+  /** 悬浮提示：口径，或"为什么不排" */
+  hint: string
+}
+
+/** 名称列不排序的理由（自选/持仓共用一句，避免两处说法不一致） */
+const NO_NAME_SORT =
+  '名称列不做排序：本插件的排序契约是「数值比较」（无效值恒沉底、同值保持原顺序）；' +
+  '中文名的顺序取决于运行环境的排序表（ICU），不同环境可能给出不同结果 —— 排错比不排更糟。' +
+  '要回到自定义顺序请选「默认」'
+
+export const WATCH_COLUMNS: readonly SortColumn<WatchSortKey>[] = [
+  { label: '名称', key: null, hint: NO_NAME_SORT },
+  { label: '成交额', key: 'amount', hint: WATCH_SORT_HINT.amount },
+  { label: '市值', key: 'mv', hint: WATCH_SORT_HINT.mv },
+  { label: '涨跌', key: 'chg', hint: WATCH_SORT_HINT.chg },
+  { label: '涨跌幅', key: 'pct', hint: WATCH_SORT_HINT.pct },
+  { label: '行业 α', key: 'alpha', hint: WATCH_SORT_HINT.alpha },
+]
+
+export const PORT_COLUMNS: readonly SortColumn<PortSortKey>[] = [
+  { label: '名称', key: null, hint: NO_NAME_SORT },
+  { label: '市值', key: 'mv', hint: PORT_SORT_HINT.mv },
+  { label: '成本', key: 'cost', hint: PORT_SORT_HINT.cost },
+  { label: '现价', key: 'price', hint: PORT_SORT_HINT.price },
+  { label: '盈亏', key: 'pnl', hint: PORT_SORT_HINT.pnl },
+  { label: '当日', key: 'dayPnl', hint: PORT_SORT_HINT.dayPnl },
+  { label: '仓位', key: 'weight', hint: PORT_SORT_HINT.weight },
+]
 
 /** 有限数值才算有效；NaN / Infinity / 缺失一律视为无效值 */
 export function sortValue(v: number | null | undefined): number | null {
@@ -73,12 +123,28 @@ export interface WatchSortInput {
   pct: number | null
   /** 总市值（元） */
   totalMv: number | null
+  /** 当日成交额（元）；备用源不给该字段时为 null */
+  amount: number | null
+  /** 当日涨跌额 */
+  chg: number | null
+  /** 行业 α = 个股涨跌幅 − 板块涨跌幅（%）；任一侧缺失时为 null */
+  alpha: number | null
 }
 
 /** 自选分组内排序（默认顺序 = 原样返回副本） */
 export function sortWatch<T>(items: readonly T[], state: SortState<WatchSortKey>, inputOf: (item: T) => WatchSortInput): T[] {
   if (state.key === 'default') return [...items]
-  const pick = state.key === 'pct' ? (it: T): number | null => inputOf(it).pct : (it: T): number | null => inputOf(it).totalMv
+  const pick = (it: T): number | null => {
+    const v = inputOf(it)
+    switch (state.key) {
+      case 'pct': return v.pct
+      case 'mv': return v.totalMv
+      case 'amount': return v.amount
+      case 'chg': return v.chg
+      case 'alpha': return v.alpha
+      default: return null
+    }
+  }
   return sortByNumber(items, pick, state.desc)
 }
 
@@ -90,6 +156,10 @@ export interface PortSortInput {
   dayPnl: number
   /** 仓位占比（0–1），总市值为 0 时为 null */
   weight: number | null
+  /** 现价；行情暂缺时为 null */
+  price: number | null
+  /** 当前口径成本（摊薄=摊薄成本，均价=买入均价）—— 必须与「成本」列显示的是同一个数 */
+  cost: number | null
 }
 
 /** 持仓分组内排序（默认顺序 = 原样返回副本） */
@@ -97,10 +167,15 @@ export function sortPositions<T>(rows: readonly T[], state: SortState<PortSortKe
   if (state.key === 'default') return [...rows]
   const pick = (row: T): number | null => {
     const v = inputOf(row)
-    if (state.key === 'mv') return v.mv
-    if (state.key === 'pnl') return v.pnl
-    if (state.key === 'dayPnl') return v.dayPnl
-    return v.weight
+    switch (state.key) {
+      case 'mv': return v.mv
+      case 'pnl': return v.pnl
+      case 'dayPnl': return v.dayPnl
+      case 'weight': return v.weight
+      case 'price': return v.price
+      case 'cost': return v.cost
+      default: return null
+    }
   }
   return sortByNumber(rows, pick, state.desc)
 }

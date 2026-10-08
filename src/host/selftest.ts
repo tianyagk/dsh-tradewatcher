@@ -78,7 +78,8 @@ async function main(): Promise<void> {
     // portfolio: group + position + trades
     await store.mutatePortfolio({ op: 'addGroup', name: '长期持有' })
     const pg = store.portData().groups[0]
-    await store.mutatePortfolio({ op: 'addPos', groupId: pg.id, secid: '1.600519', symbolName: '贵州茅台' })
+    // 用 T+0 的场内 ETF：这一段的买/卖都在"今天"，A股 T+1 会（正确地）拦住当日买当日卖
+    await store.mutatePortfolio({ op: 'addPos', groupId: pg.id, secid: '1.510300', symbolName: '沪深300ETF' })
     const pos = store.portData().items[0]
     await store.mutatePortfolio({ op: 'buy', posId: pos.id, qty: 100, price: 10, fee: 5, note: '首建仓' })
     await store.mutatePortfolio({ op: 'sell', posId: pos.id, qty: 40, price: 12, fee: 3 })
@@ -103,8 +104,8 @@ async function main(): Promise<void> {
     ok(Math.abs(state.realized - 75) < 1e-6, `realized → 75 (got ${state.realized})`)
 
     // assemble with fake quote
-    const q = fakeQuote('1.600519', 15, 9)
-    const { view } = assemblePortfolio(store.portData().groups, store.portData().items, entries, { '1.600519': q })
+    const q = fakeQuote('1.510300', 15, 9)
+    const { view } = assemblePortfolio(store.portData().groups, store.portData().items, entries, { '1.510300': q })
     const row = view.positions[0]
     ok(row !== undefined, 'position row derived')
     ok(Math.abs(row.qty - 30) < 1e-9 && Math.abs(row.avgCost - 9) < 1e-9, 'row qty/cost')
@@ -132,6 +133,24 @@ async function main(): Promise<void> {
     // base: 10*(130-90)=400; today buy: 5*(130-120)=50 → 450
     ok(r2?.dayPnl !== null && r2 !== undefined && Math.abs(r2.dayPnl - 450) < 1e-6, `dayPnl with overnight base → 450 (got ${r2?.dayPnl})`)
     ok(r2?.dayPnlPct !== null && r2 !== undefined && Math.abs(r2.dayPnlPct - 30) < 0.01, `dayPnlPct overnight → 30 (got ${r2?.dayPnlPct})`)
+
+    // P1-8：A股 T+1 —— 当日买入的部分当日不可卖（另起临时目录，避免影响上面的账本断言）
+    const t1store = new DataStore(mkdtempSync(join(tmpdir(), 'tw-selftest-t1-')))
+    await t1store.init()
+    await t1store.mutatePortfolio({ op: 'addGroup', name: 'T+1 验证' })
+    await t1store.mutatePortfolio({ op: 'addPos', groupId: t1store.portData().groups[0].id, secid: '1.600519', symbolName: '贵州茅台' })
+    const t1pos = t1store.portData().items[0]
+    await t1store.mutatePortfolio({ op: 'buy', posId: t1pos.id, qty: 100, price: 1500, fee: 0 })
+    let t1Rejected = false
+    try {
+      await t1store.mutatePortfolio({ op: 'sell', posId: t1pos.id, qty: 100, price: 1600 })
+    } catch (error) {
+      t1Rejected = /可用（可卖）/.test(String(error))
+    }
+    ok(t1Rejected, 'A股当日买入当日卖出被驳回（可用数量 / T+1）')
+    await t1store.mutatePortfolio({ op: 'buy', posId: t1pos.id, qty: 100, price: 1400, fee: 0, ts: shanghaiDayStart(Date.now()) - 86400000 })
+    await t1store.mutatePortfolio({ op: 'sell', posId: t1pos.id, qty: 100, price: 1600 })
+    ok(t1store.ledgerEntries().filter((e) => e.verb === 'sell').length === 1, '昨日买入的部分今天可以卖（只拦当日买入）')
 
     // persist round-trip: new store on same dir
     const store2 = new DataStore(dir)
@@ -191,7 +210,32 @@ async function main(): Promise<void> {
       ok(Math.abs(row.avgCost - 10) < 1e-9, `均价成本 → 10 (got ${row.avgCost})`)
       ok(row.dilutedCost !== null && Math.abs(row.dilutedCost - 12) < 1e-9, `摊薄成本 → 12 (got ${row.dilutedCost})`)
       ok(row.dilutedPnl !== null && Math.abs(row.dilutedPnl - -50) < 1e-6, `持仓盈亏(摊薄) → -50 (got ${row.dilutedPnl})`)
-      ok(Math.abs((row.floatPnl + row.realized) - (row.dilutedPnl ?? 0)) < 1e-6, '摊薄盈亏 == 均价浮盈 + 已实现')
+      // 「摊薄盈亏 == 均价浮盈 + 已实现」只在三者**都可算**时成立。
+      // realized 为 null 时不能拿它当 0 去比 —— `null + x` 在 JS 里会静默变成 `x`，
+      // 于是 `(nan ?? 0)` 又会把整条断言算成 0 == 0 而"通过"：那是假通过，
+      // 真正该说的是"这行算不出来"。所以：能算就验恒等式，算不出来就必须有明确原因。
+      if (row.realized === null || row.floatPnl === null || row.dilutedPnl === null) {
+        ok(
+          row.costUnknown === true || (row.realizedUnknownQty ?? 0) > 0,
+          '已实现/盈亏为 — 时必须有明确原因（成本未录入，或存在成本录入前卖出的股）',
+        )
+      } else {
+        ok(Math.abs((row.floatPnl + row.realized) - row.dilutedPnl) < 1e-6, '摊薄盈亏 == 均价浮盈 + 已实现')
+      }
+
+      // N5 覆盖用例：成本未知期间卖出的持仓 —— 恒等式在这里**不适用**，必须走"有原因"分支，
+      // 而不得因为 realized 是 null 被当成 0 而假通过
+      {
+        const ru = [
+          // price: 0 = 界面上「调整」只填数量、不填成本（宿主就是这么写的；缺 price 会被当成坏流水跳过）
+          { id: 'r1', ts: 1, actor: 'web' as const, verb: 'adjust' as const, posId: 'P2', secid: '1.000002', qty: 100, price: 0 },
+          { id: 'r2', ts: 2, actor: 'web' as const, verb: 'sell' as const, posId: 'P2', secid: '1.000002', qty: 50, price: 12.5 },
+        ]
+        const ruRow = derivePosition(ru, { id: 'P2', groupId: 'G1', secid: '1.000002', name: '成本未知', createdAt: 0 }, { ...fakeQuote('1.000002', 12.5, 12.5) }, 3)
+        ok(ruRow.realized === null, '成本未知期间卖出的持仓：已实现必须是 null（不得被算成一个数）')
+        ok((ruRow.realizedUnknownQty ?? 0) === 50, `记下成本未知期间卖出的股数 → 50 (got ${ruRow.realizedUnknownQty})`)
+        ok(ruRow.floatPnl === null && ruRow.dilutedPnl === null, '同一行的盈亏也不给数（不得拿 0 顶替）')
+      }
     }
 
     // 财经日历：东财宏观行解析（纯函数，fixture 取自真实返回）
@@ -838,7 +882,7 @@ async function main(): Promise<void> {
       ok(ba.allow() === false && ba.minutesLeft() >= 3, `host-a 二次熔断退避已加倍 (${ba.minutesLeft()}min)`)
       const both = breakerSummary([hA, hB])
       ok(both.allOpen === true && both.openHosts === 2, '两台都熔断时 allOpen')
-      ok(minutesToRecover([hA, hB]) === 2, `minutesToRecover 取**最早**恢复（host-b 的 2 分钟），而非最晚的 4 分钟 (got ${minutesToRecover([hA, hB])})`)
+      ok(minutesToRecover([hA, hB]) === 2, `minutesToRecover 取「最早」恢复（host-b 的 2 分钟），而非最晚的 4 分钟 (got ${minutesToRecover([hA, hB])})`)
       ok(minutesToFullyRecover([hA, hB]) === 4, `minutesToFullyRecover 取最晚（4 分钟）(got ${minutesToFullyRecover([hA, hB])})`)
       ok(both.minutesLeft === 2 && both.allMinutesLeft === 4, '聚合同时给出"最早可重试"与"全部恢复"')
       ok(both.detail.filter((h) => h.open).length === 2 && both.lastError !== null, '逐主机明细与最近失败原因')

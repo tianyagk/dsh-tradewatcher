@@ -17,7 +17,7 @@ import type {
   PositionRow,
   QuoteRow,
 } from '../shared/model.ts'
-import { FX_CURRENCY_LABEL, fxCurrencyOf, marketOf, normalizeFxRate, normalizeFxRates } from '../shared/model.ts'
+import { FX_CURRENCY_LABEL, fxCurrencyOf, isFiniteNumber, isT0Secid, marketOf, normalizeFxRate, normalizeFxRates } from '../shared/model.ts'
 
 /** 市场显示名（unpriced 的原因说明用；与 client/format.ts 的 shortLabel 同一口径） */
 const MARKET_LABEL: Record<Market, string> = {
@@ -28,7 +28,7 @@ const MARKET_LABEL: Record<Market, string> = {
   futures: '期货/商品',
   unknown: '未知市场',
 }
-import { replayPosition, type TradeState, sortLedger } from './store.ts'
+import { replayPosition, replayPositionWithSkips, type TradeState, sortLedger } from './store.ts'
 import { shanghaiDayStart as shDayStart } from './time.ts'
 
 /**
@@ -59,7 +59,7 @@ interface LedgerSlice {
 }
 
 function slicePosition(entries: readonly LedgerEntry[], posId: string, dayStart: number): LedgerSlice {
-  const slice: LedgerSlice = { entries: [], dayTrades: [], dayFees: 0, start: { qty: 0, avgCost: 0, netCost: 0, realized: 0, fees: 0, turnover: 0 } }
+  const slice: LedgerSlice = { entries: [], dayTrades: [], dayFees: 0, start: { qty: 0, avgCost: 0, netCost: 0, realized: 0, fees: 0, turnover: 0, realizedUnknownQty: 0 } }
   const pre: LedgerEntry[] = []
   for (const e of entries) {
     if (e.posId !== posId) continue
@@ -101,12 +101,30 @@ export function derivePosition(
   quote: QuoteRow | undefined,
   dayStart: number,
 ): PositionRow {
-  const total = replayPosition(entries, pos.id)
+  const { state: total, skipped } = replayPositionWithSkips(entries, pos.id)
   const slice = slicePosition(entries, pos.id, dayStart)
   const price = quote?.price ?? null
   const prev = quote?.prev ?? null
   const mv = price !== null ? round2(price * total.qty) : total.qty > 0 ? null : 0
-  const floatPnl = price !== null ? round2((price - total.avgCost) * total.qty) : total.qty > 0 ? null : 0
+  /**
+   * 成本"未录入"≠"成本为 0"（P1-10 / D1 修正）。
+   *
+   * 新建持仓后用「调整」录了数量却没给成本时 `avgCost` 是 0，若照旧计算，
+   * 浮动盈亏 = (现价 − 0) × 数量 = 整个市值 —— 凭空多出一整笔盈利，且会污染分组与总额。
+   *
+   * 判据是**不存在产生成本的流水**（买入，或带 price>0 的调整）—— 见 `hasPricedCostEntry`：
+   *   - 不能用 `turnover<=0` 表达"从未真的买卖过"：**卖出同样产生成交额**。
+   *     `adjust(100,0)` 之后卖一次，守卫就自行解除，持仓重新落回 0 成本路径
+   *     （实测：浮盈 = 剩余 50 股的全额市值、摊薄盈亏 = 市值的两倍、已实现 = "0 成本买入"的收益）；
+   *   - 也不能只看 `avgCost<=0`：手工改过的流水里可能出现 price=0 的买入。
+   *
+   * 覆盖范围含"已全部卖出"的持仓：qty 归零不满足"有持仓"，但那些股是在成本未知时卖出的
+   * （`realizedUnknownQty > 0`）—— 成本同样从未录入，因此 `costUnknown` 在那里也成立。
+   * 该情形下**市值照算**（与成本无关），但盈亏 / 盈亏率 / 已实现一律给 null（界面显示 —）。
+   */
+  const costAmountRecorded = hasPricedCostEntry(entries, pos.id)
+  const costUnknown = !costAmountRecorded && total.avgCost <= 0 && (total.qty > 1e-9 || total.realizedUnknownQty > 1e-9)
+  const floatPnl = costUnknown || price === null ? (total.qty > 0 ? null : 0) : round2((price - total.avgCost) * total.qty)
   const dayPnl = dayPnlOf(slice, price, prev)
   // P1-5：可用数量与费用。A股 T+1：今日买入的部分当日不可卖 → 可用 = 持仓 − 今日买入；
   // ETF/LOF/港股/美股 T+0 → 可用 = 持仓。规则由 isT0Secid() 单点判定。
@@ -136,11 +154,14 @@ export function derivePosition(
     }
   }
   // 摊薄成本（券商口径）：(累计买入含费 − 累计卖出净额) ÷ 剩余数量
-  const dilutedCost = total.qty > 1e-9 ? round4(total.netCost / total.qty) : null
-  const dilutedPnl =
-    price !== null && dilutedCost !== null ? round2((price - dilutedCost) * total.qty) : total.qty > 1e-9 ? null : 0
+  // 成本未录入时不给数：此时 netCost 被卖出收入冲成负数（D1 场景下是 −12.5），
+  // 显示出来会让人以为"成本真是负的"，而真相是"成本不知道"。
+  const dilutedCost = costUnknown ? null : total.qty > 1e-9 ? round4(total.netCost / total.qty) : null
+  const dilutedPnl = costUnknown
+    ? (total.qty > 1e-9 ? null : 0)
+    : price !== null && dilutedCost !== null ? round2((price - dilutedCost) * total.qty) : total.qty > 1e-9 ? null : 0
   const dilutedPnlPct =
-    price !== null && dilutedCost !== null && Math.abs(dilutedCost) > 1e-9
+    !costUnknown && price !== null && dilutedCost !== null && Math.abs(dilutedCost) > 1e-9
       ? round2(((price - dilutedCost) / Math.abs(dilutedCost)) * 100)
       : null
   return {
@@ -152,7 +173,14 @@ export function derivePosition(
     qty: total.qty,
     avgCost: round4(total.avgCost),
     dilutedCost,
-    realized: round2(total.realized),
+    // 「已实现」不可算的两种情形（都返回 null → 界面 —，而不是一个看着正常的数）：
+    //   1. 整仓成本未录入（costUnknown）：它是 (卖出价 − 0) × 数量；
+    //   2. **历史上**有 N 股在成本未知时卖出（realizedUnknownQty，D1b）：那几笔的已实现
+    //      没被累加（见 applyTrade），即使后来补录了成本也不能把它算成一个数
+    //      —— 除非补录的成本流水 ts 早于那笔卖出（重放时成本已知，自然算对，counter=0）。
+    // 给 null 而不是 0：0 会被读成"确实没有已实现盈亏"，那是另一种错信息。
+    realized: costUnknown || total.realizedUnknownQty > 0 ? null : round2(total.realized),
+    realizedUnknownQty: total.realizedUnknownQty,
     mv,
     floatPnl,
     floatPnlPct,
@@ -167,27 +195,40 @@ export function derivePosition(
     fees: round2(total.fees),
     turnover: round2(total.turnover),
     feeShare,
+    costUnknown,
+    skippedLedger: skipped.length,
+    skippedNotes: skipped.slice(0, 3).map((x) => `[${x.id}] ${x.reason}`),
     pct: quote?.pct ?? null,
     chg: quote?.chg ?? null,
   }
 }
 
+/**
+ * 是否存在**产生成本**的流水（D1）：买入，或带 `price > 0` 的调整。
+ *
+ * 这是"成本是否录入过"的唯一判据来源 —— 卖出会产生 `turnover` 但不产生成本，
+ * 用它当"从未买卖过"的替身正是 D1 的成因。
+ * 买入要求 `price > 0`（正常写入路径已保证）：手工改过的流水里 price=0 的买入
+ * 不该被当成"成本已知"，否则又会退回"浮盈 = 全额市值"。
+ */
+export function hasPricedCostEntry(entries: readonly LedgerEntry[], posId: string): boolean {
+  for (const e of entries) {
+    if (e.posId !== posId) continue
+    if (e.verb === 'buy' && isFiniteNumber(e.price) && e.price > 0) return true
+    if (e.verb === 'adjust' && isFiniteNumber(e.price) && e.price > 0) return true
+  }
+  return false
+}
+
 const add = (a: number, b: number | null | undefined): number => (b === null || b === undefined ? a : a + b)
 
 /**
- * 该标的是否 T+0（当日买入当日可卖）。判定只有这一处，避免界面与账本各写一套。
+ * 该标的是否 T+0（当日买入当日可卖）。
  *
- * 规则：港股/美股/国际/期货商品为 T+0；A股股票 T+1，但**场内基金（ETF/LOF）是 T+0**。
- * 场内基金代码：沪市 `5xxxxx`（50/51/52/56/58 开头），深市 `15xxxx` / `16xxxx` / `18xxxx`。
- * 拿不准的一律按 T+1（更保守：不会把"今天买的"说成能卖）。
+ * 判定实现在 `shared/model.ts`（只依赖 `marketOf`，两端与账本校验共用同一处）——
+ * 宿主侧卖出校验（store.ts）也要用它，放在 portfolio.ts 会让 store ↔ portfolio 形成循环依赖。
  */
-export function isT0Secid(secid: string): boolean {
-  const m = marketOf(secid)
-  if (m === 'hk' || m === 'us' || m === 'intl' || m === 'futures') return true
-  if (m !== 'cn') return false
-  const code = secid.slice(secid.indexOf('.') + 1)
-  return /^(5\d{5}|1[5-9]\d{4})$/.test(code)
-}
+export { isT0Secid } from '../shared/model.ts'
 
 export interface PortfolioAssembly {
   view: PortfolioView

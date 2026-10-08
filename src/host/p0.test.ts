@@ -120,6 +120,20 @@ test('P0-1 出处：缺备用源的标的判为 no-source，有备用源的判�
   assert.equal(p.source, 'em')
 })
 
+test('P1-7 出处：东财不可用时，"只有东财一条链路"的标的判 transient（等东财恢复），不是 no-source', () => {
+  // 同一个标的（107.SPY：无腾讯/新浪映射），只看东财此刻可不可用：
+  //   东财可达但它不给这个标的 → 结构性缺失（no-source，重试无效）
+  //   东财不可用（熔断/整批失败）→ 等东财恢复就有（transient，稍后自动重试）
+  const detail = provenanceOf(['107.SPY'], { em: 1 }, 1, 0)
+  const up = quoteProvenance(detail, { emDown: false })
+  assert.equal(up.missing[0].why, 'no-source')
+  assert.ok(up.missing[0].note.includes('重试无效'))
+  const down = quoteProvenance(detail, { emDown: true })
+  assert.equal(down.missing[0].why, 'transient', '东财故障期不能判成"结构性缺失"')
+  assert.ok(down.missing[0].note.includes('等东财恢复'), '原因里必须写清等待对象')
+  assert.ok(!down.missing[0].note.includes('重试无效'), '不得再说"重试无效"（那是反向指引）')
+})
+
 test('P0-1 出处：多源混用标 mixed、无数据标 none、零行时 asOf 必须是 null', () => {
   const mixed = quoteProvenance(provenanceOf([], { em: 18, tencent: 4 }, 22, 22))
   assert.equal(mixed.source, 'mixed')

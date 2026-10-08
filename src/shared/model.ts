@@ -183,6 +183,66 @@ export interface KlineData {
   barOpen?: boolean
 }
 
+/** ── 年初至今（YTD）────────────────────────────────────────────────────── */
+
+/**
+ * YTD 的口径**写死在这里**（界面 tooltip 与 agent 工具都引用同一句，不许各写一套）：
+ *
+ *   YTD = (现价 − 本年内第一个交易日收盘价) ÷ 该收盘价 × 100%，序列用**前复权**。
+ *
+ * 为什么必须前复权：除权除息那天不复权序列会跳空下跌，那不是真实收益（分红/送转不是亏钱）。
+ * 指数是点位回报、期货是合约价、板块是成分股统计 —— 这些标的没有除权除息概念
+ * （`fqSupported=false`），按原始价格计算并在 tooltip 写明「该标的不适用复权，按原始价格」。
+ */
+export const YTD_CALIBER = 'YTD =（现价 − 本年内第一个交易日收盘价）÷ 该收盘价 × 100%，前复权序列'
+
+/**
+ * 基准的性质：
+ *   - `year`：本年内第一个交易日（正常情形）；
+ *   - `listing`：该标的本年内上市，序列里没有更早的交易日 —— 此时基准是**上市首日**，
+ *     不是年初，必须标出来（拿"上市首日至今"当"年初至今"读会高估）。
+ */
+export type YtdBaseKind = 'year' | 'listing'
+
+export interface YtdRow {
+  secid: string
+  name: string
+  /** 年初至今涨跌幅（%）；不可得时为 null —— **不用 0 顶替**（0 会被读成"没涨没跌"） */
+  ytd: number | null
+  /** 基准日（YYYY-MM-DD）；不可得为 null */
+  baseDate: string | null
+  /** 基准收盘价（与 `fq` 同一口径）；不可得为 null */
+  baseClose: number | null
+  /** 计算用的现价（来自行情） */
+  price: number | null
+  /** 基准性质；不可得为 null */
+  baseKind: YtdBaseKind | null
+  /** **实际生效**的复权口径（0=不复权 1=前复权 2=后复权），不是请求值 */
+  fq: FqMode
+  /** false = 该标的没有除权除息概念（指数/期货/板块），按原始价格计算 */
+  fqSupported: boolean
+  /** 基准序列被观测/落盘的时刻（epoch ms） */
+  asOf: number | null
+  /** 本轮没算出 YTD 的原因（人话）；能算出时为 null */
+  why: string | null
+}
+
+export interface YtdPayload {
+  /** 行情（现价）被观测到的时刻；无有效行情时为 null */
+  asOf: number | null
+  /** 至少一项是兜底值或已过期（沿用行情出处契约的语义） */
+  stale: boolean
+  source: DataProvenance['source']
+  missing: MissingField[]
+  rows: YtdRow[]
+  /** 请求的标的数（含重复与超限项） */
+  requested: number
+  /** 是否因超过单次上限被截断（不静默截断） */
+  truncated: boolean
+  /** 单次上限（界面据此说明"只算了前 N 项"） */
+  limit: number
+}
+
 /** ── 财经日历 ─────────────────────────────────────────────────────────── */
 
 export type CalCategory = 'macro-intl' | 'macro-cn' | 'ipo' | 'earnings' | 'dividend' | 'other'
@@ -398,9 +458,12 @@ export interface LedgerEntry {
 /**
  * 列表排序的**契约**（键名与允许值属于 prefs 的一部分，因此放 shared）：
  * 客户端 UI 文案/比较器在 client/sort.ts，主机侧校验用这里的键表。
+ *
+ * 键与**列头**一一对应（见 client/sort.ts 的 WATCH_COLUMNS / PORT_COLUMNS）：
+ * 有数值来源的列才给键，没有键的列（如「名称」）不参与排序 —— 排错比不排更糟。
  */
-export type WatchSortKey = 'default' | 'pct' | 'mv'
-export type PortSortKey = 'default' | 'mv' | 'pnl' | 'dayPnl' | 'weight'
+export type WatchSortKey = 'default' | 'pct' | 'mv' | 'amount' | 'chg' | 'alpha'
+export type PortSortKey = 'default' | 'mv' | 'pnl' | 'dayPnl' | 'weight' | 'price' | 'cost'
 
 export interface SortState<K extends string> {
   key: K
@@ -408,8 +471,8 @@ export interface SortState<K extends string> {
   desc: boolean
 }
 
-export const WATCH_SORT_KEYS: readonly WatchSortKey[] = ['default', 'pct', 'mv']
-export const PORT_SORT_KEYS: readonly PortSortKey[] = ['default', 'mv', 'pnl', 'dayPnl', 'weight']
+export const WATCH_SORT_KEYS: readonly WatchSortKey[] = ['default', 'pct', 'mv', 'amount', 'chg', 'alpha']
+export const PORT_SORT_KEYS: readonly PortSortKey[] = ['default', 'mv', 'pnl', 'dayPnl', 'weight', 'price', 'cost']
 
 /**
  * 视图密度档位（P0-8，对标"一键摸鱼"）。
@@ -520,8 +583,13 @@ export interface PositionRow {
   avgCost: number
   /** 摊薄成本（券商口径）：(累计买入含费 − 累计卖出净额) ÷ 剩余数量 */
   dilutedCost: number | null
-  /** Realized P&L since inception (fees included). */
-  realized: number
+  /**
+   * 累计已实现盈亏（含费用）。
+   *
+   * `null` = **算不出来**：成本未录入时它是 (卖出价 − 0) × 数量，正是 D1 那类"凭空盈利"。
+   * 界面显示 `—`（不给 0：0 会被读成"确实没有已实现盈亏"），且不计入分组/总览的合计。
+   */
+  realized: number | null
   mv: number
   floatPnl: number
   /** Total (floating) return % — floatPnl / (avgCost × qty). */
@@ -549,6 +617,33 @@ export interface PositionRow {
   turnover: number
   /** 费用占成交额比例（%）；成交额为 0 时为 null */
   feeShare: number | null
+  /**
+   * 成本**未录入**（P1-10）：有持仓、买入均价为 0、且从未有过成交额。
+   *
+   * 典型来源：新建持仓后直接用「调整」录了数量、没填成本 —— 此前会被当成"零成本"，
+   * 于是浮动盈亏 = (现价 − 0) × 数量 = 全部市值（凭空多出一整笔盈利）。现在标出来，
+   * 盈亏与盈亏率一律显示 `—`，并提示去「调整」补成本；市值照算（它与成本无关）。
+   */
+  costUnknown?: boolean
+  /**
+   * 未能应用的流水条数（P1-5）：账本里有这条流水、快照却没把它算进来。
+   *
+   * 此前这类流水被静默跳过（既不计数据也不报数），用户对不上账时无从下手。
+   * 现在逐条记原因：`skippedLedger > 0` 时界面与 `tradewatcher_portfolio` 都会报出来。
+   */
+  skippedLedger?: number
+  /** 未应用流水的原因（最多前 3 条，形如 `[e12] 卖出数量超过持仓（持有 100）`） */
+  skippedNotes?: string[]
+  /**
+   * **成本未知期间卖出的股数**（D1b）：这些股在卖出时 `avgCost` 还是 0（成本未录入），
+   * 它们的已实现盈亏算不出来，因此 `realized` 为 `null`。
+   *
+   * 与 `costUnknown` 是两件事：`costUnknown` 是"整仓现在也没有成本"，
+   * 这里是"历史上有 N 股在成本录入之前卖出" —— 用户后来补录了成本，整仓不再缺成本，
+   * 但那 N 股的已实现仍旧不可算（除非补录的成本流水 ts 早于那笔卖出，重放就能算对）。
+   * 界面与工具据此给出原因（`realizedUnknownNote`），而不是只甩一个 `—`。
+   */
+  realizedUnknownQty?: number
 }
 
 /** 所属行业板块快照（个股详情抽屉用；非 A股 返回 null）。 */
@@ -723,6 +818,58 @@ export function marketOf(secid: string): Market {
   const dot = secid.indexOf('.')
   if (dot <= 0) return 'unknown'
   return MARKET_BY_PREFIX[secid.slice(0, dot)] ?? 'unknown'
+}
+
+/**
+ * 该标的是否 T+0（当日买入当日可卖）。**判定只有这一处**，避免界面、账本校验与核算各写一套。
+ *
+ * 规则：港股/美股/国际/期货商品为 T+0；A股股票 T+1，但**场内基金（ETF/LOF）是 T+0**。
+ * 场内基金代码：沪市 `5xxxxx`（50/51/52/56/58 开头），深市 `15xxxx` / `16xxxx` / `18xxxx`。
+ * 拿不准的一律按 T+1（保守方向：绝不把"今天买的"说成能卖）。
+ *
+ * 放在 shared 而不是 host/portfolio.ts：宿主侧的**卖出校验**（store.ts）也要用它，
+ * 而 store ↔ portfolio 互相 import 会形成循环依赖。
+ */
+/**
+ * 「已实现不可算」的统一说明（D1b）—— 界面与工具共用同一句，避免两处措辞分叉。
+ *
+ * 必须点明**原因**而不只是给一个 `—`：`—` 会被读成"数据丢了/还没算"，
+ * 而真相是那 N 股在**成本录入之前**卖出，当时成本是未录入的 0，`(卖出价 − 0) × 数量` 不是收益。
+ * 用户补录的成本流水时点若早于那笔卖出，重放即可算对（本插件按流水时点重放）。
+ */
+/**
+ * 面板级 / 工具侧「已实现不可算」的**唯一判定**（N1）：只认 `realizedUnknownQty > 0`，
+ * 并排除已在「成本未录入」提示里报过的行。
+ *
+ * 为什么必须共用一份：客户端面板、行内提示、宿主工具都要说"另有 N 只、共 X 股"，
+ * 三处各写一套 filter 迟早分叉（分叉出的差额就是"静默缺口"——用户看到合计少了却不知道为什么）。
+ * 两个提示合起来**恰好**覆盖所有 `realized === null` 的行：不重复计，也不漏。
+ */
+export function realizedUnknownRows<T extends { realizedUnknownQty?: number; costUnknown?: boolean }>(
+  rows: readonly T[],
+): T[] {
+  return rows.filter((r) => (r.realizedUnknownQty ?? 0) > 0 && r.costUnknown !== true)
+}
+
+/** 上述行里"成本录入前卖出"的股数合计（面板级"共 X 股"）—— 与判定同源，调用方不得自己 reduce */
+export function realizedUnknownQtyOf(rows: readonly { realizedUnknownQty?: number }[]): number {
+  let sum = 0
+  for (const r of rows) sum += r.realizedUnknownQty ?? 0
+  return Math.round(sum * 1e4) / 1e4
+}
+
+export function realizedUnknownNote(qty: number): string {
+  const n = Math.round(qty * 1e4) / 1e4
+  return `已实现不可算：其中 ${n} 股在「成本录入前卖出」—— 那笔卖出应用时成本还是未录入的 0，` +
+    '(卖出价 − 0) × 数量 不是真实收益；补录的成本流水时点若早于这笔卖出，重放即可算对'
+}
+
+export function isT0Secid(secid: string): boolean {
+  const m = marketOf(secid)
+  if (m === 'hk' || m === 'us' || m === 'intl' || m === 'futures') return true
+  if (m !== 'cn') return false
+  const code = secid.slice(secid.indexOf('.') + 1)
+  return /^(5\d{5}|1[5-9]\d{4})$/.test(code)
 }
 
 /** Reject unreasonable numeric inputs (server-side guard). */

@@ -21,6 +21,7 @@ import type {
   LedgerView,
   TradeMark,
   CalEvent,
+  YtdPayload,
 } from '../shared/model.ts'
 
 export class ApiError extends Error {
@@ -82,8 +83,19 @@ export const api = {
   }> {
     return request('/tradewatcher/breadth')
   },
-  /** 自选异动（P1-4）：放量/异动判定，含"为什么不判定"的原因 */
-  anomaly(secids: string[]): Promise<{
+  /**
+   * 年初至今（YTD）。口径写死在 `shared/model.ts` 的 `YTD_CALIBER`：
+   * YTD =（现价 − 本年内第一个交易日收盘价）÷ 该收盘价 × 100%，前复权序列。
+   * 缺失项在 `rows[].why` 与 `missing[]` 里都给出原因（不用 0 顶替）。
+   */
+  ytd(secids: string[]): Promise<YtdPayload> {
+    const ids = [...new Set(secids)].join(',')
+    if (ids === '') {
+      return Promise.resolve({ asOf: null, stale: false, source: 'none', rows: [], missing: [], requested: 0, truncated: false, limit: 0 })
+    }
+    return request(`/tradewatcher/ytd?ids=${encodeURIComponent(ids)}`)
+  },
+  /** 自选异动（P1-4）：放量/异动判定，含"为什么不判定"的原因 */  anomaly(secids: string[]): Promise<{
     rows: Array<{
       secid: string
       name: string
@@ -132,7 +144,7 @@ export const api = {
     priced: number
     rows: number
     sources: Record<string, number>
-    /** 请求了但没有任何源给出价格的标的（原样大小写）→ 界面显示"暂无可用行情源" */
+    /** 请求了但没有任何源给出价格的标的（原样大小写）→ 界面显示「无行情源」 */
     missing: string[]
     /** 请求的标的数（含重复与超限项） */
     requested: number
@@ -154,10 +166,29 @@ export const api = {
   kline(secid: string, klt: 101 | 102 | 103 | 104 = 101, lmt = 120, fqt: FqMode = 1): Promise<{ kline: KlineData | null }> {
     return request(`/tradewatcher/kline?secid=${encodeURIComponent(secid)}&klt=${klt}&lmt=${lmt}&fqt=${fqt}`)
   },
-  calendar(from: string, to: string, force = false): Promise<{ events: CalEvent[]; syncedAt: number; symbolCount: number }> {
+  calendar(from: string, to: string, force = false): Promise<{
+    events: CalEvent[]
+    /** 最近一次**成功**同步时刻；从未成功过为 null（P0-2：失败时刻不改写数据时刻） */
+    syncedAt: number | null
+    /** 最近一次尝试时刻（不论成败） */
+    syncAttemptAt: number | null
+    /** 本次是否有源失败（含"从未成功同步"）→ 界面必须如实标注 */
+    stale: boolean
+    syncSources?: Array<{ key: string; label: string; state: 'ok' | 'failed' | 'skipped'; count: number; error?: string }>
+    missing?: Array<{ what: string; why: string; note: string }>
+    symbolCount: number
+  }> {
     return request(`/tradewatcher/calendar?from=${from}&to=${to}${force ? '&force=1' : ''}`)
   },
-  mutateCalendar(body: Record<string, unknown>): Promise<{ ok: boolean; events: CalEvent[]; syncedAt: number }> {
+  mutateCalendar(body: Record<string, unknown>): Promise<{
+    ok: boolean
+    events: CalEvent[]
+    syncedAt: number | null
+    syncAttemptAt: number | null
+    stale: boolean
+    syncSources?: Array<{ key: string; label: string; state: 'ok' | 'failed' | 'skipped'; count: number; error?: string }>
+    missing?: Array<{ what: string; why: string; note: string }>
+  }> {
     return request('/tradewatcher/calendar', { method: 'POST', body: JSON.stringify(body) })
   },
   trades(secid: string): Promise<{ trades: TradeMark[] }> {

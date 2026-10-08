@@ -10,12 +10,14 @@
  */
 import { TW_ROWS, type CalEvent, type DataProvenance, type MissingField, type QuoteRow } from '../shared/model.ts'
 import { SECID_RE } from '../shared/model.ts'
+import { FQ_LABEL, YTD_CALIBER, type YtdRow } from '../shared/model.ts'
 import * as em from './em.ts'
+import { YTD_MAX_IDS, computeYtds } from './ytd.ts'
 import { assemblePortfolio, ledgerViews, verbLabel } from './portfolio.ts'
 import { DataStore, dataHome } from './store.ts'
-import { CalendarStore, calToday } from './calendar.ts'
+import { CalendarStore, calToday, type CalSyncSourceResult } from './calendar.ts'
 import { RescueMonitor } from './rescue.ts'
-import { RESCUE_LEVEL_LABEL } from '../shared/model.ts'
+import { RESCUE_LEVEL_LABEL, realizedUnknownNote, realizedUnknownQtyOf, realizedUnknownRows } from '../shared/model.ts'
 import { CAL_CATEGORY_LABEL } from '../shared/model.ts'
 import type { PluginContext, PluginToolDefinition, PluginToolExec, PluginToolRuntime, PluginSystemPrompt } from './context.ts'
 import { WriteJournal } from './writeLog.ts'
@@ -76,6 +78,19 @@ function missingLines(p: DataProvenance | undefined, limit = 8): string[] {
   const head = p.missing.slice(0, limit).map((m) => `  · ${m.what}（${m.why === 'no-source' ? '上游无此数据' : '本次失败'}）：${m.note}`)
   if (p.missing.length > limit) head.push(`  · …另有 ${p.missing.length - limit} 项`)
   return ['缺失明细：', ...head]
+}
+
+/** 缺失明细去重（同一条 `what` 只留第一次出现的原因）：行情缺失与 YTD 基准缺失合并时不能刷两遍 */
+function dedupeMissing(list: readonly MissingField[]): MissingField[] {
+  const seen = new Set<string>()
+  const out: MissingField[] = []
+  for (const m of list) {
+    const key = m.what.toUpperCase()
+    if (seen.has(key)) continue
+    seen.add(key)
+    out.push(m)
+  }
+  return out
 }
 
 // ── quote helpers shared by tools ─────────────────────────────────────────
@@ -173,9 +188,10 @@ export function makeAgentTools(
             groups: Array<{ id: string; name: string; totalMv: number; floatPnl: number; dayPnl: number; realized: number; archived?: boolean }>
             positions: Array<{
               posId: string; groupId: string; secid: string; name: string; qty: number; avgCost: number
-              dilutedCost: number | null; realized: number; mv: number | null
+              dilutedCost: number | null; realized: number | null; mv: number | null
               floatPnl: number | null; dilutedPnl: number | null; dayPnl: number | null
-              price: number | null; pct: number | null
+              price: number | null; pct: number | null; costUnknown?: boolean
+              skippedLedger?: number; skippedNotes?: string[]; realizedUnknownQty?: number
             }>
           }
           stale?: number
@@ -188,10 +204,27 @@ export function makeAgentTools(
         const view = v.view
         if (view === undefined) return textBlock('暂无数据。')
         const g = view.grand
+        // 成本未录入的持仓（P1-10）：盈亏是 null 且不计入合计 —— 必须写在总览行里，
+        // 否则 agent 会把"合计少了这几只"读成"它们没有盈亏"
+        const costUnknown = view.positions.filter((p) => p.qty > 0 && p.costUnknown === true)
+        // P1-5：未应用的流水必须报出来（账本里有、快照没算进来）
+        const skippedRows = view.positions.filter((p) => (p.skippedLedger ?? 0) > 0)
+        // D1b：成本未知期间卖出的股数 —— 成本后来补录了、整仓不再"未录入"，
+        // 但那几笔的已实现依旧算不出来，总览行里必须说清（否则 — 看起来像丢了数据）
+        // 判定与股数都取自 shared/model.ts 的同一份函数（与面板级提示、行内提示同源）
+        const ruRows = realizedUnknownRows(view.positions)
+        const ruQty = realizedUnknownQtyOf(ruRows)
+        const skippedTotal = skippedRows.reduce((a, p) => a + (p.skippedLedger ?? 0), 0)
         const head =
           `【持仓总览】${pnlLine('总市值', g.totalMv)} | ${pnlLine('持仓盈亏(摊薄口径)', g.dilutedPnl ?? g.floatPnl)} | ` +
           `${pnlLine('浮动盈亏(均价口径)', g.floatPnl)} | ${pnlLine('当日盈亏', g.dayPnl)} | ${pnlLine('累计已实现', g.realized)}` +
-          (v.stale && v.stale > 0 ? `（${v.stale} 只持仓行情暂缺）` : '')
+          (v.stale && v.stale > 0 ? `（${v.stale} 只持仓行情暂缺）` : '') +
+          (costUnknown.length > 0
+            ? `（${costUnknown.length} 只未录入成本，盈亏与已实现为 — 且未计入上述合计：${costUnknown.map((p) => p.name).join('、')}）`
+            : '') +
+          (ruRows.length > 0
+            ? `（另有 ${ruRows.length} 只的已实现为 —：共 ${ruQty} 股在成本录入前卖出：${ruRows.map((p) => p.name).join('、')}）`
+            : '')
         const groupLines = view.groups
           .filter((x) => x.archived !== true)
           .map((x) => `  ▸ ${x.name}: ${fmtMoney(x.totalMv)}  ${pnlLine('浮盈', x.floatPnl)} ${pnlLine('当日', x.dayPnl)}`)
@@ -201,8 +234,11 @@ export function makeAgentTools(
           const price = p.price ?? null
           const pct = price !== null && p.pct !== null ? `（${p.pct > 0 ? '+' : ''}${p.pct.toFixed(2)}%）` : ''
           posLines.push(
-            `  • ${p.name}（${p.secid}）数量 ${p.qty}  均价成本 ${fmtNum(p.avgCost, 4)}  摊薄成本 ${fmtNum(p.dilutedCost, 4)}  现价 ${fmtNum(price)}${pct}\n` +
-            `    市值 ${fmtMoney(p.mv)}  持仓盈亏(摊薄) ${fmtMoney(p.dilutedPnl)}  浮动盈亏(均价) ${fmtMoney(p.floatPnl)}  当日 ${fmtMoney(p.dayPnl)}  已实现 ${fmtMoney(p.realized)}`,
+            `  • ${p.name}（${p.secid}）数量 ${p.qty}  ` +
+            (p.costUnknown === true ? '成本 —（未录入，用「调整」补成本价）' : `均价成本 ${fmtNum(p.avgCost, 4)}  摊薄成本 ${fmtNum(p.dilutedCost, 4)}`) +
+            `  现价 ${fmtNum(price)}${pct}\n` +
+            `    市值 ${fmtMoney(p.mv)}  持仓盈亏(摊薄) ${fmtMoney(p.dilutedPnl)}  浮动盈亏(均价) ${fmtMoney(p.floatPnl)}  当日 ${fmtMoney(p.dayPnl)}  已实现 ${fmtMoney(p.realized)}` +
+            ((p.realizedUnknownQty ?? 0) > 0 ? `\n    ⚠ ${realizedUnknownNote(p.realizedUnknownQty ?? 0)}` : ''),
           )
         }
         const np = v.unpriced ?? []
@@ -212,10 +248,18 @@ export function makeAgentTools(
               ...np.map((u) => `  · ${u.name}（${u.secid}）${u.why === 'no-fx' ? '非人民币计价且未折算' : '无可用行情源'}：${u.note}`),
             ]
           : []
+        const skippedLines = skippedTotal > 0
+          ? [
+              `⚠ ${skippedTotal} 条流水未能应用（持仓快照未计入它们）：`,
+              ...skippedRows.flatMap((p) => (p.skippedNotes ?? []).map((n) => `  · ${p.name} ${n}`)),
+              '  这不是上游问题：请在「交易明细」里核对这几笔（数量/价格缺失，或卖出超出当期持仓）。',
+            ]
+          : []
         const body = [
           head,
           ...(groupLines.length > 0 ? ['分组：', ...groupLines] : ['暂无分组。']),
           ...(posLines.length > 0 ? ['持仓明细：', ...posLines] : ['暂无持仓。']),
+          ...skippedLines,
           ...unpricedLines,
           provenanceLine(v.provenance),
           ...missingLines(v.provenance),
@@ -243,6 +287,15 @@ export function makeAgentTools(
           why: u.why === 'no-fx' ? ('no-source' as const) : ('transient' as const),
           note: u.note,
         }))
+        // P1-5：未应用的流水进 missing[]（agent 只看出处行也知道账没算平）
+        const skippedCount = view.positions.reduce((a, p) => a + (p.skippedLedger ?? 0), 0)
+        if (skippedCount > 0) {
+          extra.push({
+            what: '账本流水',
+            why: 'no-source',
+            note: `${skippedCount} 条流水未能应用（数量/价格缺失，或卖出超出当期持仓）；不是上游问题、重试无用 —— 请在「交易明细」里核对这几笔`,
+          })
+        }
         const provenance: DataProvenance = { ...base, missing: [...base.missing, ...extra] }
         return {
           view, stale, provenance,
@@ -407,6 +460,83 @@ export function makeAgentTools(
   })
 
   defs.push({
+    name: `${PREFIX}ytd`,
+    description:
+      '年初至今（YTD）涨跌幅：口径写死为「(现价 − 本年内第一个交易日收盘价) ÷ 该收盘价 × 100%」，序列用「前复权」' +
+      '（除权跳空会把分红/送转伪装成下跌，不复权序列算出来的不是真实收益）。指数/期货没有除权除息概念，按原始价格（点位/合约价）计算并在行内标注。' +
+      '算不出时给 — 并说明原因（「不用 0 顶替」：0 会被读成"今年没涨没跌"）。' +
+      'Triggers: 年初至今/今年以来涨幅/YTD/年内涨了多少.',
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['secids'],
+      properties: { secids: { type: 'string', description: `如 cn / all / 1.600519,114.lhm（单次最多计算 ${YTD_MAX_IDS} 项）` } },
+    },
+    output: {
+      schema: {
+        type: 'object',
+        additionalProperties: true,
+        properties: {
+          rows: { type: 'array', items: {} },
+          missing: { type: 'array', items: {} },
+          provenance: { type: 'object', additionalProperties: true },
+        },
+      },
+      render: (_a, value) => {
+        const v = value as {
+          rows?: YtdRow[]
+          missing?: MissingField[]
+          provenance?: DataProvenance
+          truncated?: boolean
+          requested?: number
+          limit?: number
+          error?: string
+        }
+        if (v.error !== undefined) return textBlock(`错误：${v.error}`)
+        const rows = v.rows ?? []
+        const prov: DataProvenance = {
+          ...(v.provenance ?? { asOf: null, stale: false, source: 'none' as const, missing: [] }),
+          // 行情缺失 + YTD 基准缺失合并去重：同一个标的只报一次，原因不重复刷
+          missing: dedupeMissing([...(v.provenance?.missing ?? []), ...(v.missing ?? [])]),
+        }
+        if (rows.length === 0) return textBlock(['未取到 YTD 数据。', provenanceLine(prov)].filter((x) => x !== '').join('\n'))
+        const lines = rows.map((r) => {
+          const pct = r.ytd === null ? '—' : `${r.ytd > 0 ? '+' : ''}${r.ytd.toFixed(2)}%`
+          const base = r.baseDate === null || r.baseClose === null
+            ? '基准未取到'
+            : `基准 ${r.baseDate} 收盘 ${r.baseClose.toFixed(3)}${r.baseKind === 'listing' ? '（本年内上市：这是上市首日，不是年初）' : ''}`
+          // 没取到基准时不报复权口径：没读过序列，说"前复权"就是对没发生的事下结论
+          const fq = r.baseClose === null ? '' : r.fqSupported ? FQ_LABEL[r.fq] : '不适用复权（指数/期货按原始价格）'
+          return `${r.name}（${r.secid}） YTD ${pct}  ${base}${fq === '' ? '' : `  ${fq}`}${r.why === null ? '' : `  ⚠ ${r.why}`}`
+        })
+        const truncated = v.truncated === true
+          ? [`注：单次最多计算 ${v.limit ?? YTD_MAX_IDS} 项（本次请求 ${v.requested ?? 0} 项），超出的未计算 —— 不静默截断。`]
+          : []
+        return textBlock([
+          `口径：${YTD_CALIBER}`,
+          ...lines,
+          ...truncated,
+          provenanceLine(prov),
+          ...missingLines(prov),
+        ].filter((x) => x !== '').join('\n'))
+      },
+    },
+    async execute(args) {
+      try {
+        const wanted = await resolveQuoteIds(args.secids)
+        const ids = wanted.slice(0, YTD_MAX_IDS)
+        // 现价与界面同源：同一次行情缓存（TTL 内零上游请求）；基准走 host/ytd.ts 的按日 memo
+        const q = await em.fetchQuotesWithProvenance(ids)
+        const items = ids.map((secid) => ({ secid, name: q.items[secid]?.name ?? secid, price: q.items[secid]?.price ?? null }))
+        const { rows, missing } = await computeYtds(items)
+        return { rows, missing, truncated: wanted.length > ids.length, requested: wanted.length, limit: YTD_MAX_IDS, provenance: q.provenance }
+      } catch (error) {
+        return { error: error instanceof Error ? error.message : String(error) }
+      }
+    },
+  })
+
+  defs.push({
     name: `${PREFIX}search`,
     description:
       '在 tradewatcher 的证券池中搜索代码/名称（A股股票、ETF/基金、指数、期货主连等），返回带 secid 的候选，' +
@@ -480,11 +610,18 @@ export function makeAgentTools(
         properties: { events: { type: 'array', items: {} }, syncedAt: { type: 'number' }, provenance: { type: 'object', additionalProperties: true } },
       },
       render: (_a, value) => {
-        const v = value as { events?: CalEvent[]; syncedAt?: number; provenance?: DataProvenance; error?: string }
+        const v = value as { events?: CalEvent[]; syncedAt?: number; syncAttemptAt?: number | null; syncSources?: CalSyncSourceResult[]; provenance?: DataProvenance; error?: string }
         if (v.error !== undefined) return textBlock(`错误：${v.error}`)
         const rows = v.events ?? []
+        // 逐源结果必须说出来：只说"同步失败"无法回答"哪几类事件是旧的"
+        const failed = (v.syncSources ?? []).filter((s) => s.state === 'failed')
+        const syncLine = failed.length === 0
+          ? null
+          : `本次同步失败源：${failed.map((s) => `${s.label}（${s.error ?? '上游不可用'}）`).join('、')}` +
+            `；这些类别仍是上一次成功同步的事件，稍后自动重试（尝试于 ${
+              v.syncAttemptAt == null ? '—' : new Date(v.syncAttemptAt).toLocaleString('zh-CN', { hour12: false })}）`
         if (rows.length === 0) {
-          return textBlock(['该区间暂无事件。', provenanceLine(v.provenance), ...missingLines(v.provenance)].filter((x) => x !== '').join('\n'))
+          return textBlock(['该区间暂无事件。', syncLine, provenanceLine(v.provenance), ...missingLines(v.provenance)].filter((x) => x !== null && x !== '').join('\n'))
         }
         const mark = (i: number): string => (i === 3 ? '【高】' : i === 2 ? '【中】' : '')
         const lines = rows.map((e) =>
@@ -498,13 +635,14 @@ export function makeAgentTools(
         )
         const auto = rows.filter((e) => e.source === 'auto').length
         const tail = [
+          syncLine,
           provenanceLine(v.provenance),
           // 自动/手动事件的时间口径不同（一个来自上游同步、一个由用户本地维护），
           // 混在一个 asOf 里说不清，因此分开报数
           auto > 0 ? `事件构成：自动同步 ${auto} 条（时刻以上方数据时刻为准）· 手动 ${rows.length - auto} 条（本地维护）` : '事件构成：全部为手动事件（本地维护）',
           ...missingLines(v.provenance),
-        ].filter((x) => x !== '')
-        return textBlock(`共 ${rows.length} 条：\n${lines.join('\n')}\n${tail.join('\n')}`)
+        ].filter((x) => x !== null && x !== '').join('\n')
+        return textBlock(`共 ${rows.length} 条：\n${lines.join('\n')}\n${tail}`)
       },
     },
     async execute(args) {
@@ -513,7 +651,6 @@ export function makeAgentTools(
         const from = typeof args.from === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(args.from) ? args.from : calToday(0)
         const to = typeof args.to === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(args.to) ? args.to : calToday(30)
         await calendar.init()
-        let syncError: string | null = null
         try {
           const port = store.portData()
           const codes = new Set<string>()
@@ -524,10 +661,9 @@ export function makeAgentTools(
           for (const it of store.watchData().items) push(it.secid)
           for (const it of port.items) push(it.secid)
           await calendar.sync([...codes], false)
-        } catch (error) {
-          // 静默吞掉同步失败等于让 agent 以为"日历里没有就是没有事件"——
-          // 必须把这次失败如实写进 missing[]
-          syncError = error instanceof Error ? error.message : String(error)
+        } catch {
+          // 逐源失败与同步过程出错都已由 calendar 记进 syncStatus()（含 missing[]）——
+          // 这里不再重复记一遍，避免同一个原因在输出里出现两次
         }
         const cat = typeof args.category === 'string' && args.category !== '' ? args.category : null
         let events = calendar.list(from, to)
@@ -547,17 +683,19 @@ export function makeAgentTools(
           const code = m[1]
           return { ...e, link: { held: held.has(code), watched: !held.has(code) && watched.has(code) } }
         })
+        const status = calendar.syncStatus()
         const provenance: DataProvenance = {
-          // 自动事件的数据时刻 = 上一次成功同步时刻；一次都没同步过时是 null
-          asOf: calendar.syncedAt > 0 ? calendar.syncedAt : null,
-          stale: syncError !== null,
-          source: calendar.syncedAt > 0 ? 'em' : 'local',
-          missing: syncError === null ? [] : [{
-            what: '自动事件（新股/财报/分红）', why: 'transient',
-            note: `本次同步失败（${syncError.slice(0, 80)}）；下方事件仅含本地已同步的部分 + 手动事件，稍后重试可补齐`,
-          }],
+          // 自动事件的数据时刻 = 最近一次**成功**同步时刻（P0-2：失败时刻不得改写数据时刻）；
+          // 从未成功同步过 → null，而不是"现在"
+          asOf: status.syncedAt,
+          // 有源失败（或从未成功同步）即降级：本次返回的事件里含上一次成功同步的旧值
+          stale: status.stale,
+          // 降级项数 = 失败源数（provenanceLine 会打印"降级复用 N 项"，0 项读起来像没降级）
+          staleCount: status.stale ? status.missing.length : 0,
+          source: status.syncedAt === null ? 'local' : 'em',
+          missing: status.missing,
         }
-        return { events, syncedAt: calendar.syncedAt, provenance }
+        return { events, syncedAt: calendar.syncedAt, syncAttemptAt: status.attemptAt, syncSources: status.sources, provenance }
       } catch (error) {
         return { error: error instanceof Error ? error.message : String(error) }
       }
@@ -568,7 +706,7 @@ export function makeAgentTools(
   defs.push({
     name: `${PREFIX}calendar_add`,
     description:
-      '向 tradewatcher 财经日历写入一条**手动事件**（宏观会议/数据、未上市公司 IPO 与上市日期、自定义提醒等）。' +
+      '向 tradewatcher 财经日历写入一条手动事件（宏观会议/数据、未上市公司 IPO 与上市日期、自定义提醒等）。' +
       'importance：3=高（红）2=中（橙）1=低。自动事件（新股/财报/分红）由数据源同步，不要手工重复添加。' +
       'Triggers: 记到日历/加入日历/提醒我/记录某个日期.',
     parameters: {
@@ -633,7 +771,7 @@ export function makeAgentTools(
   defs.push({
     name: `${PREFIX}undo`,
     description:
-      '撤销本插件做过的**写入**（目前是日历事件的新增）。可传 id（来自写入回包或 writeLog 列表），' +
+      '撤销本插件做过的写入（目前是日历事件的新增）。可传 id（来自写入回包或 writeLog 列表），' +
       '或 last=N 撤销最近 N 次尚未撤销的写入（默认 1）。撤销只作用于本插件登记过的写入，' +
       '不删除历史（撤销本身也留痕）。Triggers: 撤销/回滚/写错了/undo/退回去.',
     parameters: {
@@ -899,7 +1037,9 @@ export function makeAgentTools(
       '本机已安装 dsh-tradewatcher（盯盘）插件：数据文件在 ' + dataHome() + '（watch.json 自选 / positions.json 持仓 / ledger.json 流水 / prefs.json 偏好），均为明文 JSON，可直接用文件工具读取分析。' +
       '会话内优先用只读工具：tradewatcher_portfolio（持仓总览与盈亏，由流水核算、费用已计入）、' +
       'tradewatcher_ledger（买卖与分组流水，可按 posId/groupId 过滤）、tradewatcher_watchlist（自选分组）、' +
-      'tradewatcher_quotes（行情：cn/intl/commodity/all 预设或任意代码）、tradewatcher_search（证券搜索）、' +
+      'tradewatcher_quotes（行情：cn/intl/commodity/all 预设或任意代码）、' +
+      'tradewatcher_ytd（年初至今涨跌幅：前复权序列算，指数/期货按原始价格，取不到给原因、不用 0 顶替）、' +
+      'tradewatcher_search（证券搜索）、' +
       'tradewatcher_calendar（财经日历：宏观/IPO/财报/分红，自动同步）、tradewatcher_calendar_add（写入重要日期）、' +
       'tradewatcher_undo（撤销本插件做过的写入）、' +
       'tradewatcher_rescue（护盘信号：宽基 ETF 放量+超大单净流入的概率性识别，含六因子与历史回看）。' +

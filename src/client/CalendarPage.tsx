@@ -44,7 +44,18 @@ export function CalendarPage(_props: { prefs: PortPrefs }): React.ReactElement {
   const [year, setYear] = useState(now.getFullYear())
   const [month0, setMonth0] = useState(now.getMonth())
   const [events, setEvents] = useState<CalEvent[]>([])
-  const [syncedAt, setSyncedAt] = useState(0)
+  const [syncedAt, setSyncedAt] = useState<number | null>(null)
+  /**
+   * 最后一次同步的状态（P0-2）。
+   *
+   * 界面必须能回答"这些事件是什么时候同步到的、这次同步成功了吗" ——
+   * 只显示一个"同步于 X"会在上游全挂时骗人（事件是旧的、时间戳却是新的）。
+   */
+  const [syncInfo, setSyncInfo] = useState<{
+    stale: boolean
+    attemptAt: number | null
+    missing: Array<{ what: string; why: string; note: string }>
+  } | null>(null)
   const [loading, setLoading] = useState(true)
   const [err, setErr] = useState<string | null>(null)
   const [filter, setFilter] = useState<CalCategory | 'all'>('all')
@@ -73,6 +84,7 @@ export function CalendarPage(_props: { prefs: PortPrefs }): React.ReactElement {
       .then((r) => {
         setEvents(r.events)
         setSyncedAt(r.syncedAt)
+        setSyncInfo({ stale: r.stale, attemptAt: r.syncAttemptAt, missing: r.missing ?? [] })
         setErr(null)
       })
       .catch((e: Error) => setErr(e.message))
@@ -116,6 +128,7 @@ export function CalendarPage(_props: { prefs: PortPrefs }): React.ReactElement {
       .then((r) => {
         setEvents(r.events)
         setSyncedAt(r.syncedAt)
+        setSyncInfo({ stale: r.stale, attemptAt: r.syncAttemptAt, missing: r.missing ?? [] })
         setErr(null)
         setEditing(null)
       })
@@ -173,13 +186,34 @@ export function CalendarPage(_props: { prefs: PortPrefs }): React.ReactElement {
           },
         }, '今天'),
         React.createElement('span', { style: { flex: 1 } }),
-        syncedAt > 0
+        syncedAt !== null
           ? React.createElement('span', { className: 'tw-muted', style: { fontSize: 10.5 } },
-              `同步于 ${new Date(syncedAt).toLocaleString('zh-CN', { hour12: false })}`)
-          : null,
+              `同步于 ${new Date(syncedAt).toLocaleString('zh-CN', { hour12: false })}${syncInfo?.stale === true ? '（本次未全部成功）' : ''}`)
+          : React.createElement('span', {
+              className: 'tw-muted',
+              style: { fontSize: 10.5 },
+              tabIndex: 0,
+              role: 'note',
+              'aria-label': '日历尚未成功同步过，当前只显示本地手动事件',
+            }, '尚未成功同步'),
         React.createElement(Btn, { onClick: () => load(true), disabled: busy }, busy ? '同步中…' : '同步'),
         React.createElement(Btn, { primary: true, onClick: () => setEditing('new') }, '+ 事件'),
       ),
+      // 同步降级必须写在界面上（P0-2）：不要只说"同步失败"，要说清哪几类事件是旧的、数据时刻是几点。
+      // tabIndex + aria-label：原因不能只挂在 title 上（键盘/触屏拿不到）
+      syncInfo?.stale === true
+        ? React.createElement('div', {
+            className: 'tw-hint',
+            style: { color: 'var(--tw-up)', padding: '2px 10px 0' },
+            tabIndex: 0,
+            role: 'note',
+            'aria-label': `日历同步未全部成功：${syncInfo.missing.map((m) => `${m.what}（${m.why === 'no-source' ? '上游无此数据' : '本次失败'}）`).join('；') || '原因未给出'}`,
+          },
+            `日历同步未全部成功：${syncInfo.missing.map((m) => `${m.what}（${m.why === 'no-source' ? '上游无此数据' : '本次失败'}）`).join('；') || '原因未给出'}。` +
+            (syncedAt === null
+              ? '本地还没有成功同步过的事件，稍后自动重试；手动事件不受影响。'
+              : `下方自动事件仍是上次成功同步（${new Date(syncedAt).toLocaleString('zh-CN', { hour12: false })}）的结果，手动事件不受影响，稍后自动重试。`))
+        : null,
       // 过滤与图例
       React.createElement('div', { className: 'tw-cal-bar' },
         React.createElement('div', { className: 'tw-seg' },

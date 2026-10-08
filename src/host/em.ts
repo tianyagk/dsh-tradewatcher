@@ -325,13 +325,19 @@ export interface QuoteProvenance {
  * 把行情新鲜度升级为 agent 可读的**数据出处契约**（P0-1）。
  *
  * 关键在 `missing[].why` 的判定：同样是"一个价都没有"，成因完全不同——
- *   - 该标的**没有备用源映射**（腾讯/新浪都不认这个 secid）→ `no-source`：
+ *   - 该标的**没有备用源映射**（腾讯/新浪都不认这个 secid）**且东财可达** → `no-source`：
  *     这是上游的结构性缺口，重试一万次也没有，agent 应该改口径而不是等；
- *   - 有备用源映射但三源这次都失败了 → `transient`：稍后重试可能拿到。
+ *   - 有备用源映射但三源这次都失败了 → `transient`：稍后重试可能拿到；
+ *   - 没有备用源映射**但东财此刻不可用** → 也是 `transient`（P1-7 修正）：
+ *     此前只看静态映射，于是"东财被限流 + 该标的只有东财一条链路"会被判成
+ *     "拆结构性缺失、重试无效"，而事实是**等东财恢复就有** —— 方向错会让 agent 放弃等待。
  *
  * 此前工具层只回 `{ ts, items }`，两者都是"列表里少几行"，agent 无从分辨。
+ *
+ * @param opts.emDown 覆盖"东财此刻是否不可用"（默认读熔断器与最近一次批量失败）；测试可注入
  */
-export function quoteProvenance(detail: QuoteProvenance): DataProvenance {
+export function quoteProvenance(detail: QuoteProvenance, opts: { emDown?: boolean } = {}): DataProvenance {
+  const emDown = opts.emDown ?? emUnavailableNow()
   const sources: Record<string, number> = {}
   for (const [k, v] of Object.entries(detail.sources)) if (v > 0) sources[k] = v
   const keys = Object.keys(sources)
@@ -345,12 +351,24 @@ export function quoteProvenance(detail: QuoteProvenance): DataProvenance {
     sources,
     missing: detail.missing.map((secid) => {
       const noFallback = !hasQuoteFallback(secid)
+      if (noFallback && emDown) {
+        return {
+          what: secid,
+          why: 'transient' as const,
+          note: '东财行情主机本次不可用（熔断中或整批失败），而该标的没有腾讯/新浪备用源映射 —— 等东财恢复就会有（不是结构性缺失），稍后自动重试即可',
+        }
+      }
+      if (noFallback) {
+        return {
+          what: secid,
+          why: 'no-source' as const,
+          note: '该标的无腾讯/新浪备用源映射（东财之外的源不提供它），且东财本次可正常取数 —— 属结构性缺失，重试无效',
+        }
+      }
       return {
         what: secid,
-        why: noFallback ? ('no-source' as const) : ('transient' as const),
-        note: noFallback
-          ? '该标的无腾讯/新浪备用源映射（东财之外的源不提供它），行情源结构性缺失，重试无效'
-          : '东财与备用源本次都未给出可用价格（限流或超时），稍后重试可能恢复',
+        why: 'transient' as const,
+        note: '东财与备用源本次都未给出可用价格（限流或超时），稍后重试可能恢复',
       }
     }),
     // 这一批是否"休市定稿零回源"：定稿时 asOf 会停在收盘时刻，且没有任何兜底行
@@ -485,6 +503,25 @@ function rowsFrom(json: unknown): Map<string, QuoteRow> {
  *   - 主机只丢一部分标的时，对缺口再试一轮（最多两轮，避免放大请求量）
  *   - 失败必打日志（含主机与错误），不再静默
  */
+/**
+ * 东财行情批量取数最近一次是否整批失败，以及失败时刻（P1-7）。
+ *
+ * 用途只有一个：`missing[]` 的归因方向。同样是"这个标的没有价"：
+ *   - 东财**可达**但没有这个标的（如某些美股/国际指数它不给）→ 结构性缺失，重试无效；
+ *   - 东财**此刻不可用**（熔断中或刚整批失败）+ 该标的没有腾讯/新浪映射 →
+ *     等东财恢复就会有，"重试无效"是错的结论（agent 会据此改口径、放弃等待）。
+ */
+let lastEmBatchFailed = false
+let lastEmBatchFailAt = 0
+/** 整批失败后的"算作现在不可用"窗口：超过它就不再拿旧失败说事 */
+const EM_FAIL_RECENT_MS = 120_000
+
+/** 东财此刻是否不可用：熔断中，或最近 2 分钟内整批失败过 */
+function emUnavailableNow(): boolean {
+  if (QUOTE_HOSTS.every((host) => !breakerFor(host).allow())) return true
+  return lastEmBatchFailed && Date.now() - lastEmBatchFailAt <= EM_FAIL_RECENT_MS
+}
+
 async function rawQuotes(list: string[]): Promise<Map<string, QuoteRow>> {
   const rows = new Map<string, QuoteRow>()
   for (let pass = 0; pass < 2; pass++) {
@@ -502,9 +539,14 @@ async function rawQuotes(list: string[]): Promise<Map<string, QuoteRow>> {
         rows.set(asRequested, asRequested === row.secid ? row : { ...row, secid: asRequested })
       }
     } catch (error) {
+      // 记下"东财这会儿不可用"：missing[] 的归因要用它区分结构性缺失与瞬时故障
+      lastEmBatchFailed = true
+      lastEmBatchFailAt = Date.now()
       console.warn('[tradewatcher] quotes batch failed', `pass ${pass + 1}`, `${missing.length} symbols`, String(error).slice(0, 120))
       break
     }
+    // 拿到回包（哪怕 diff 为空）说明东财可达 → 清掉失败标记
+    lastEmBatchFailed = false
   }
   return rows
 }

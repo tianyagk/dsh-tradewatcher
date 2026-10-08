@@ -111,7 +111,7 @@ export class WriteJournal {
     const sec = Math.floor(now / 1000)
     const recent = this.file.entries.filter((e) => Math.floor(e.ts / 1000) === sec).length
     if (recent >= WRITE_RATE_LIMIT_PER_SEC) {
-      return `写入过于频繁：同一秒内已有 ${recent} 次写入（上限 ${WRITE_RATE_LIMIT_PER_SEC} 次/秒）。本次写入**未执行**，请稍后重试；需要批量录入请分几秒完成`
+      return `写入过于频繁：同一秒内已有 ${recent} 次写入（上限 ${WRITE_RATE_LIMIT_PER_SEC} 次/秒）。本次写入「未执行」，请稍后重试；需要批量录入请分几秒完成`
     }
     return null
   }

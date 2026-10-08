@@ -370,7 +370,7 @@ export function TopBar(props: {
   const shotModal = shotOpen
     ? React.createElement(Modal, { title: '截图 / 录屏（面板不透明度与数字模糊）', onClose: () => setShotOpen(false) },
         React.createElement('div', { className: 'tw-hint', style: { marginBottom: 8 } },
-          '这两项只影响**本插件面板的显示**：取数、告警、agent 工具返回都不受影响。' +
+          '这两项只影响「本插件面板的显示」：取数、告警、agent 工具返回都不受影响。' +
           '面板不透明度让面板不抢画面（录屏时压在下层内容之上）；数字模糊把价格/盈亏/成交额等数字糊住，' +
           '鼠标移到某一行或某张卡上时该行临时显形 —— 既能录进画面，又不泄露具体数值。',
         ),
@@ -396,7 +396,7 @@ export function TopBar(props: {
           '数字模糊（价格/涨跌/盈亏/成交额；hover 该行显形）',
         ),
         React.createElement('div', { className: 'tw-hint' },
-          '隐蔽性说明：数字模糊只覆盖**本插件渲染的数字**。表格里的名称、代码与提示文字不在模糊范围内（它们不是数字）；' +
+          '隐蔽性说明：数字模糊只覆盖「本插件渲染的数字」。表格里的名称、代码与提示文字不在模糊范围内（它们不是数字）；' +
           '若需要整屏不可读，请配合隐身视图（Alt+M）使用 —— 隐身会把金额替换为 ¥••••。',
         ),
         React.createElement('div', { style: { display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 10 } },

@@ -12,6 +12,10 @@ export const TW_CSS = `
 --tw-bg:#f5f6f8;--tw-bg2:#eceef2;--tw-card:#ffffff;--tw-card2:#f2f4f7;--tw-hover:#eef0f5;
 --tw-border:#e2e5ea;--tw-border-strong:#cfd3dc;
 --tw-text:#16181d;--tw-dim:#4c535f;--tw-muted:#6f7787;
+/* 图表辅助线的两个 token：此前只在救援曲线/日历里被 var() 引用、**从未定义** ——
+   无 fallback 的地方会因"无效值"退回初始色（浅色主题下出现一条近黑的轴线）。
+   这里补成主题内已有的同义 token。 */
+--tw-fg-dim:var(--tw-muted);--tw-line:var(--tw-border);
 --tw-up:#e5484d;--tw-down:#0e8f5c;--tw-flat:#6f7787;
 --tw-up-bg:rgba(229,72,77,.09);--tw-down-bg:rgba(12,154,99,.09);--tw-flat-bg:rgba(138,145,160,.10);
 --tw-accent:#5e6ad2;--tw-accent-hover:#4652c0;--tw-accent-soft:rgba(94,106,210,.10);--tw-ring:rgba(94,106,210,.38);
@@ -26,6 +30,7 @@ letter-spacing:-0.006em}
 --tw-bg:#010102;--tw-bg2:#0b0c0e;--tw-card:#0f1011;--tw-card2:#16181b;--tw-hover:#1b1d21;
 --tw-border:#23252a;--tw-border-strong:#34343a;
 --tw-text:#f7f8f8;--tw-dim:#c8ced8;--tw-muted:#8a8f98;
+--tw-fg-dim:var(--tw-muted);--tw-line:var(--tw-border);
 --tw-up:#ff5f6d;--tw-down:#27a644;--tw-flat:#8a8f98;
 --tw-up-bg:rgba(255,95,109,.12);--tw-down-bg:rgba(47,191,131,.12);--tw-flat-bg:rgba(138,143,152,.12);
 --tw-accent:#5e6ad2;--tw-accent-hover:#828fff;--tw-accent-soft:rgba(94,106,210,.16);--tw-ring:rgba(94,106,210,.45);
@@ -36,7 +41,13 @@ color-scheme:dark}
 .tw-root *{box-sizing:border-box}
 .tw-root button{font:inherit;color:inherit;background:none;border:none;padding:0;cursor:pointer}
 .tw-root input,.tw-root select{font:inherit;color:var(--tw-text);background:var(--tw-card);border:1px solid var(--tw-border);border-radius:8px;padding:5px 9px;outline:none}
-.tw-root input:focus,.tw-root select:focus{border-color:var(--tw-accent);box-shadow:var(--tw-focus)}
+/* 焦点可见性：此前这里写的是 --tw-focus —— 该 token 全项目**没有定义**，
+   等于输入框的焦点提示只剩 1px 边框由灰变紫（滑块还内联 border:none，连边框都没有）。
+   改用已定义的 --tw-ring，并且只在键盘聚焦（:focus-visible）时画环：鼠标点击不画。 */
+.tw-root input:focus,.tw-root select:focus{border-color:var(--tw-accent)}
+.tw-root input:focus-visible,.tw-root select:focus-visible{border-color:var(--tw-accent);box-shadow:0 0 0 3px var(--tw-ring)}
+/* 滑块是宽条元素，外阴影环不明显 → 用 outline（TopBar 的不透明度滑块也不再是"完全没有焦点提示"） */
+.tw-root input[type=range]:focus-visible{outline:2px solid var(--tw-accent);outline-offset:2px;box-shadow:none}
 .tw-root ::placeholder{color:var(--tw-muted)}
 .tw-scroll::-webkit-scrollbar{height:8px;width:8px}
 .tw-scroll::-webkit-scrollbar-thumb{background:var(--tw-border-strong);border-radius:4px}
@@ -98,14 +109,45 @@ color-scheme:dark}
 .tw-sr{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0}
 
 /* 宽屏利用率（布局优化）────────────────────────────────
-   列表行按侧栏宽度设计（~360px），摊到 1800px+ 的宽屏上就是"名字在左、价格在右、中间一片空"。
-   与其把行拉长，不如在宽屏下多铺几列 —— 同样的高度里能看到两倍的条目，滚动也更少。
-   用 minmax(520px,1fr) 而不是固定列数：窗口变窄会自动退回单列。 */
-@media (min-width:1500px){
-  .tw-wlist,.tw-poslist{display:grid;grid-template-columns:repeat(auto-fill,minmax(520px,1fr));column-gap:16px;align-content:start}
-  /* 两列并排时，行分隔线要能区分左右两列 → 左边一列不画竖线，靠列间距分隔 */
-  .tw-wlist>.tw-wrow:first-child,.tw-poslist>.tw-posrow:first-child{border-top-color:transparent}
+   列表行按侧栏宽度设计（~360px），摊到 1080px+ 的面板上就是"名字在左、价格在右、中间一片空"。
+   与其把行拉长，不如多铺几列 —— 同样的高度里能看到两倍的条目，滚动也更少。
+
+   两条口径（都来自审计结论）：
+   1. **按列填充**，不是按行填充：grid 的 auto-fill 会把"第 2 名"放到第 1 名右侧，
+      顺左列往下读变成 1/3/5 名 —— 排序的全部意义就是名次，因此改用 CSS 多列（竖向填满）。
+   2. **断点 1080px**（两列所需 520×2 + 16 间距 + 内边距），不是 1500px。
+      ⚠ 本断点在**三处**必须一致：这里、.tw-sorthead（列头）、[data-wide-hide]（收起段控）。
+      不一致的后果是"列头显示了但段控也没收起"或"宽屏下一个排序入口都没有"。 */
+@media (min-width:1080px){
+  .tw-wlist,.tw-poslist{columns:520px;column-gap:16px}
+  /* 多列下行不能被拦腰截断 */
+  .tw-wlist>.tw-wrow,.tw-poslist>.tw-posrow{break-inside:avoid}
 }
+
+/* 列头排序（宽屏）────────────────────────────────────────
+   窄屏不显示：侧栏那点宽度塞不下列头，继续用分段开关（SortBar）。
+   两者读写**同一份**排序偏好（watchSort / portSort），列头里另带「↺ 默认顺序」，
+   因此宽屏收起段控不丢操作，也不会出现"两个控件各说一套"。
+   ⚠ 断点必须与 .tw-wlist/.tw-poslist 的多列、[data-wide-hide] 三处一致（见上方注释；都是 1080px）。 */
+.tw-sorthead{display:none}
+@media (min-width:1080px){
+  .tw-sorthead{display:flex;align-items:center;gap:2px;flex-wrap:wrap;padding:3px 8px;border:1px solid var(--tw-border);border-radius:8px;background:var(--tw-bg2)}
+  .tw-sorthead-cap{font-size:10px;color:var(--tw-muted);letter-spacing:.02em;margin:0 4px 0 2px}
+  .tw-sorthead-cell{display:inline-flex;align-items:center}
+  .tw-sorthead-btn,.tw-sorthead-static,.tw-sorthead-reset{font-size:11px;line-height:18px;padding:0 7px;border-radius:6px;border:1px solid transparent;color:var(--tw-dim);white-space:nowrap}
+  .tw-sorthead-btn:hover,.tw-sorthead-reset:hover{color:var(--tw-text);background:var(--tw-hover);border-color:var(--tw-border-strong)}
+  .tw-sorthead-btn:focus-visible,.tw-sorthead-reset:focus-visible{outline:2px solid var(--tw-accent);outline-offset:1px}
+  /* 没有排序键的列（名称）只作标签：不装成可点的样子 */
+  .tw-sorthead-static{color:var(--tw-muted);cursor:help;border-color:transparent}
+  .tw-sorthead-cell[data-on=true] .tw-sorthead-btn{color:var(--tw-accent);font-weight:600;background:var(--tw-accent-soft);border-color:var(--tw-accent)}
+  .tw-sorthead-reset{background:var(--tw-card);border-color:var(--tw-border);cursor:pointer}
+  /* 宽屏改用列头排序，收起分段开关（窄屏仍在）。隐藏条件由 SortBar 的 wideHidden 属性决定
+     （不是无条件隐藏）：只有确实挂了列头的页面才收起段控，漏传也只会"两个入口都在"。 */
+  .tw-root [data-wide-hide=1]{display:none !important}
+}
+/* 行内数字面（额 / 市值 / α / YTD）：与其它数字面同一套等宽数字，并且**必须**出现在
+   上面的模糊选择器清单里（漏一个就等于隐身不彻底）。 */
+.tw-num,.tw-ytd{font-family:var(--tw-mono);font-variant-numeric:tabular-nums}
 
 /* 数字模糊（P2-2, data-blur=1）────────────────────────────
    目标集合来自「所有使用 --tw-mono 的数字面」的证据清单（styles.ts 里逐条可查），
@@ -114,7 +156,7 @@ color-scheme:dark}
 .tw-root[data-blur=1] :is(.tw-qcard .px, .tw-qcard .chg, .tw-chg-chip,
   .tw-stat .v, .tw-pps .v, .tw-pps .meta, .tw-pos-price .px, .tw-pos-price .meta,
   .tw-pop .ph .px, .tw-pop .ph .tag, .tw-pop .pl,
-  .tw-group-h .gsum, .tw-wrow .wq, .tw-gh-metrics,
+  .tw-group-h .gsum, .tw-wrow .wq, .tw-wrow .tw-num, .tw-ytd, .tw-gh-metrics,
   .tw-dkv .v, .tw-rescue-card-grid .v, .tw-table td,
   .tw-caliber, .tw-chartnote, .tw-zoom-bar, .tw-topmeta .tw-uptime){
   filter:blur(3.2px);transition:filter .12s}
@@ -122,7 +164,7 @@ color-scheme:dark}
   .tw-dkv, .tw-rescue-card-grid, .tw-panel):hover :is(.tw-qcard .px, .tw-qcard .chg, .tw-chg-chip,
   .tw-stat .v, .tw-pps .v, .tw-pps .meta, .tw-pos-price .px, .tw-pos-price .meta,
   .tw-pop .ph .px, .tw-pop .ph .tag, .tw-pop .pl,
-  .tw-group-h .gsum, .tw-wrow .wq, .tw-gh-metrics,
+  .tw-group-h .gsum, .tw-wrow .wq, .tw-wrow .tw-num, .tw-ytd, .tw-gh-metrics,
   .tw-dkv .v, .tw-rescue-card-grid .v, .tw-table td,
   .tw-caliber, .tw-chartnote, .tw-zoom-bar){
   filter:none}
@@ -205,6 +247,13 @@ color-scheme:dark}
 .tw-group-h button.gname:hover{color:var(--tw-text);background:var(--tw-hover)}
 .tw-group-h .gsum{display:flex;gap:12px;flex:1;min-width:60px;overflow:hidden;white-space:nowrap;color:var(--tw-muted);font-size:12px;font-family:var(--tw-mono)}
 .tw-group-h .gsum b{font-weight:600;color:var(--tw-text)}
+
+/* 宽屏多列下：组头不画分隔线，改由行自己的 border-top 充当那一条线。
+   为什么不用 :nth-child(-n+2) 抹掉首行线：多列是按**高度均衡**竖向填充的，
+   "每列第一行"是第几个子元素取决于条目数，无法用 nth-child 表达；
+   组头画线 + 行画线会让除第一列外的每一列都出现双线。
+   注意：必须写在这里（.tw-group-h 定义之后）—— 同优先级下 CSS 按出现顺序决胜。 */
+@media (min-width:1080px){.tw-group-h{border-bottom:none}}
 
 /* position row: two-line layout (title/price line + aligned numeric grid) */
 .tw-posrow{display:flex;flex-direction:column;gap:6px;padding:7px 10px 6px;border-top:1px solid var(--tw-border);transition:background .1s;cursor:pointer}

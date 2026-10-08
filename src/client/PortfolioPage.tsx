@@ -10,15 +10,20 @@ import type {
   PositionRow,
   QuoteRow,
   SuggestItem,
+  YtdRow,
 } from '../shared/model.ts'
-import { DEFAULT_PREFS } from '../shared/model.ts'
+import { DEFAULT_PREFS, realizedUnknownNote, realizedUnknownQtyOf, realizedUnknownRows } from '../shared/model.ts'
 import { api } from './api.ts'
 import { dirClass, fmtAmt, fmtMoneySigned, fmtPct, fmtPrice, fmtRaw } from './format.ts'
 import { Btn, EmptyHint, ErrorNote, Field, Modal, MoreMenu, Skeleton, SuggestInput } from './ui.tsx'
 import { MiniTrend } from './charts.tsx'
 import { useMiniTrends, type MiniData } from './mini.ts'
+import { NO_SOURCE_LABEL, PENDING_LABEL } from './quoteState.ts'
 import { SortBar } from './SortBar.tsx'
-import { PORT_SORT_HINT, PORT_SORT_KEYS, PORT_SORT_LABEL, normalizeSortState, sortPositions, weightOf, type PortSortKey } from './sort.ts'
+import { SortHeader } from './SortHeader.tsx'
+import { PORT_COLUMNS, PORT_SORT_HINT, PORT_SORT_KEYS, PORT_SORT_LABEL, normalizeSortState, sortPositions, weightOf, type PortSortKey } from './sort.ts'
+import { useYtd } from './useYtd.ts'
+import { ytdMissingSummary, ytdText, ytdTooltip } from './ytdView.ts'
 
 const VERB_LABEL: Record<LedgerEntry['verb'], string> = {
   buy: '买入',
@@ -108,6 +113,9 @@ export function PortfolioPage(props: {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [view?.positions.length ?? 0])
   const minis = useMiniTrends(miniIds, active)
+  // 年初至今（YTD）：**标的**的年初至今涨幅（不是持仓收益），现价与其它面板同源、基准由宿主按日 memo
+  const ytd = useYtd(miniIds, props.quoteTs ?? null, active)
+  const ytdSummary = ytd.loaded ? ytdMissingSummary(Object.values(ytd.map)) : null
 
   useEffect(() => {
     if (view === null) return
@@ -187,6 +195,24 @@ export function PortfolioPage(props: {
 
   // 未计入总额的持仓（口径问题/无价），来自 host 的 assemblePortfolio（P0-1）
   const unpriced = view?.unpriced ?? []
+  /**
+   * 未录入成本的持仓（P1-10）：市值照算，但盈亏与盈亏率是 `—`，且**不计入**分组/总览的盈亏合计
+   * （宿主侧对 null 盈亏按"跳过"处理）。这种事必须写在界面上，否则总额看起来完整、其实缺一块。
+   */
+  const costUnknownRows = view.positions.filter((p) => p.costUnknown === true && p.qty > 0)
+  /**
+   * 「累计已实现」少算的那些行（N1）：只数与股数都取自 `shared/model.ts` 的**同一份判定**
+   * （与行内提示、`tradewatcher_portfolio` 同源），面板不自己 filter/reduce 一套 ——
+   * 否则"合计少了多少、为什么少"会在两处给出不同答案。
+   */
+  const ruRows = realizedUnknownRows(view.positions)
+  const ruQty = realizedUnknownQtyOf(ruRows)
+  /**
+   * 未能应用的流水（P1-5）：账本里有、快照却没算进来。**必须报出来** ——
+   * 否则用户看到的是"账本 5 笔、持仓少一块"，而没有任何线索说明少了什么。
+   */
+  const skippedRows = view.positions.filter((p) => (p.skippedLedger ?? 0) > 0)
+  const skippedTotal = skippedRows.reduce((a, p) => a + (p.skippedLedger ?? 0), 0)
   // 折算口径摘要（P1-11）：不折算 = 只含 A股；固定 = 列出实际使用的汇率
   const fxRatesText = Object.entries(view?.fxRates ?? {})
     .map(([c, r]) => `1 ${c} = ${r} CNY`)
@@ -207,15 +233,17 @@ export function PortfolioPage(props: {
     { className: 'tw-body' },
     React.createElement(ErrorNote, { error }),
     React.createElement('div', { className: 'tw-panel' },
-      React.createElement('div', { className: 'tw-panel-h' },
+      // 这一行比自选页更挤（口径段控 + 排序键 + 汇率/备份/刷新）：7 个排序键把整行推到 900px+，
+      // 不换行会把「汇率/刷新」顶出卡片右缘。自选页的面板头本来就 wrap，两页行为要一致。
+      React.createElement('div', { className: 'tw-panel-h', style: { flexWrap: 'wrap' } },
         React.createElement('span', { className: 't' }, '持仓总览（实时行情）'),
         stale > 0
           ? React.createElement('span', {
               className: 'tw-badge',
               // 分组/总览的市值与盈亏把无价持仓按 0 计入 —— 只说"N 只行情暂缺"不够，
               // 必须说清"下面那些总额不含它们"，否则数字看着完整其实缺一块
-              title: `有 ${stale} 只持仓当前没有价格（行情源未给出），它们在分组与总览的市值/盈亏里按 0 计入；具体标的见各行「暂无可用行情源」标记`,
-            }, `${stale} 只无价 · 总额不含`)
+              title: `有 ${stale} 只持仓当前没有价格（行情源未给出），它们在分组与总览的市值/盈亏里按 0 计入；具体标的见各行「${NO_SOURCE_LABEL}」标记`,
+            }, `${stale} 只${NO_SOURCE_LABEL} · 总额不含`)
           : null,
         React.createElement('div', { className: 'tw-seg', title: '成本口径：摊薄=卖出冲减成本（多数券商 App 口径）；均价=买入移动加权' },
           React.createElement('button', { 'data-on': diluted, onClick: () => switchBasis('diluted') }, '摊薄口径'),
@@ -237,6 +265,8 @@ export function PortfolioPage(props: {
           state: portSort,
           onChange: (next) => setPrefs({ portSort: next }),
           ariaLabel: '持仓排序',
+          // 本页在宽屏另有列头排序入口（SortHeader）→ 宽屏收起段控，窄屏仍用段控
+          wideHidden: true,
         }),
         // P1-11：折算口径常显 —— "这个人民币数字怎么来的"必须答得上来
         React.createElement(Btn, {
@@ -308,6 +338,61 @@ export function PortfolioPage(props: {
         new Date(view.generatedAt).toLocaleTimeString('zh-CN', { hour12: false }),
       ),
     ),
+    // 列头排序（宽屏）：与面板顶部「排序」段控读写**同一份** `portSort` 偏好；窄屏由 CSS 隐藏
+    React.createElement(SortHeader<PortSortKey>, {
+      columns: PORT_COLUMNS,
+      state: portSort,
+      onChange: (next) => setPrefs({ portSort: next }),
+      ariaLabel: '持仓列头排序',
+    }),
+    ytd.error !== null
+      ? React.createElement('div', { className: 'tw-hint', style: { color: 'var(--tw-up)' } },
+          `年初至今（YTD）本次未取到：${ytd.error}。已取到的数字保留上一次结果，取不到的显示 —（不用 0 顶替）。`)
+      : null,
+    ytd.truncated
+      ? React.createElement('div', { className: 'tw-hint' },
+          `年初至今（YTD）单次最多计算 ${ytd.limit} 项：超出的持仓 YTD 显示 —（不静默截断）。`)
+      : null,
+    ytdSummary !== null
+      ? React.createElement('div', { className: 'tw-hint' }, `年初至今（YTD）：${ytdSummary}`)
+      : null,
+    costUnknownRows.length > 0
+      ? React.createElement('div', {
+          className: 'tw-hint',
+          style: { padding: '2px 2px 0', color: '#e0a94a' },
+          tabIndex: 0,
+          role: 'note',
+          'aria-label': `有 ${costUnknownRows.length} 只持仓未录入成本：${costUnknownRows.map((p) => p.name).join('、')}。市值照算，盈亏、盈亏率与已实现显示 —，且不计入分组与总览的盈亏合计`,
+        },
+          `有 ${costUnknownRows.length} 只持仓未录入成本（${costUnknownRows.map((p) => p.name).join('、')}）：` +
+          '市值照算，但它们的盈亏、盈亏率与已实现显示 —，且不计入分组与总览的盈亏合计 —— ' +
+          '拿 0 当成本会把全部市值算成一笔盈利。用行内「调整」补上成本价即可。',
+        )
+      : null,
+    ruRows.length > 0
+      ? React.createElement('div', {
+          className: 'tw-hint',
+          style: { padding: '2px 2px 0', color: 'var(--tw-muted)' },
+          tabIndex: 0,
+          role: 'note',
+          'aria-label': `累计已实现不含 ${ruRows.length} 只（${ruRows.map((p) => p.name).join('、')}）：${realizedUnknownNote(ruQty)}`,
+        },
+          `累计已实现不含 ${ruRows.length} 只（${ruRows.map((p) => p.name).join('、')}）：${realizedUnknownNote(ruQty)}`,
+        )
+      : null,
+    skippedTotal > 0
+      ? React.createElement('div', {
+          className: 'tw-hint',
+          style: { padding: '2px 2px 0', color: 'var(--tw-up)' },
+          tabIndex: 0,
+          role: 'note',
+          'aria-label': `有 ${skippedTotal} 条流水未能应用：${skippedRows.flatMap((p) => (p.skippedNotes ?? []).map((n) => `${p.name} ${n}`)).join('；')}`,
+        },
+          `有 ${skippedTotal} 条流水未能应用（账本里有、持仓快照没算进来）：` +
+          skippedRows.flatMap((p) => (p.skippedNotes ?? []).map((n) => `${p.name} ${n}`)).slice(0, 3).join('；') +
+          '。请用行内「交易明细」核对这几笔（数量/价格缺失，或卖出超出当期持仓）。',
+        )
+      : null,
     activeGroups.length === 0
       ? React.createElement(EmptyHint, { action: React.createElement(Btn, { primary: true, onClick: () => setModal({ kind: 'addGroup' }) }, '+ 新建分组') }, '暂无持仓分组：新建分组 → 添加持仓 → 用「买/卖」录入流水。')
       : null,
@@ -322,6 +407,9 @@ export function PortfolioPage(props: {
           pnl: diluted ? row.dilutedPnl : row.floatPnl,
           dayPnl: row.dayPnl,
           weight: weightOf(row.mv, grand.totalMv),
+          // 成本键跟随当前口径：与「成本」列显示的是同一个数（否则按成本排出来的顺序与列对不上）
+          price: row.price,
+          cost: diluted ? row.dilutedCost : row.avgCost,
         }),
       )
       const isCollapsed = collapsed[grp.id] === true
@@ -374,6 +462,8 @@ export function PortfolioPage(props: {
                   quote: quotes[row.secid],
                   noSource: missing?.has(row.secid.toUpperCase()) === true,
                   mini: minis[row.secid],
+                  ytd: ytd.map[row.secid],
+                  ytdLoaded: ytd.loaded,
                   // 同一持仓可能有多条（登记日 + 除权日），取最近的一条提示
                   action: actions.filter((a) => a.posId === row.posId).sort((a, b) => a.date.localeCompare(b.date))[0],
                   onTrade: (verb) => setModal({ kind: 'trade', verb, pos: row, groupName: grp.name }),
@@ -664,11 +754,15 @@ function TradeModal(props: {
   const pN = Number(price)
   const fN = Number(fee) || 0
   const title = verb === 'buy' ? '买入' : verb === 'sell' ? '卖出' : '调整持仓'
+  // P1-8：可用（可卖）口径的说明（T+1 品种今日买入的部分不可卖；T+0 不受限）
+  const sellHint = pos.t0
+    ? 'T+0：当日买入当日可卖（与本面板的可用数量口径一致）'
+    : `可用（可卖）${pos.availableQty} —— A股 T+1：今日买入的部分当日不可卖`
   const hint =
     verb === 'buy'
       ? `预计投入 ≈ ${fmtAmt(qN * pN + fN)}（费用计入摊薄成本）`
       : verb === 'sell'
-        ? `预计回收 ≈ ${fmtAmt(qN * pN - fN)} · 现持有 ${pos.qty}`
+        ? `预计回收 ≈ ${fmtAmt(qN * pN - fN)} · 现持有 ${pos.qty} · ${sellHint}`
         : '数量=调整后目标数量（可 0）；价格=新摊薄成本，留空则保持现值'
   return React.createElement(Modal, { title: `${pos.name} · ${title}`, onClose: props.onClose },
     React.createElement(ErrorNote, { error: err }),
@@ -695,6 +789,12 @@ function TradeModal(props: {
         onClick: () => {
           if (!Number.isFinite(qN) || qN <= 0) { setErr('请输入有效数量'); return }
           if (verb === 'sell' && qN > pos.qty + 1e-9) { setErr(`卖出数量超过持有（${pos.qty}）`); return }
+          // P1-8：可用（可卖）数量。宿主侧有同一道校验（两处都不放行），这里先拦是为了
+          // 不让用户填完一整张表才收到 400 —— 也顺带把"为什么不能卖"讲清楚
+          if (verb === 'sell' && !pos.t0 && qN > pos.availableQty + 1e-9) {
+            setErr(`可用（可卖）${pos.availableQty} 少于本次卖出 ${qN}：${sellHint}。请核对券商端的可用数量（本插件按流水推导，T+1 部分今日买入不可卖）`)
+            return
+          }
           if (verb !== 'adjust') {
             if (!Number.isFinite(pN) || pN <= 0) { setErr('请输入有效价格'); return }
             props.mutate({ op: verb, posId: pos.posId, qty: qN, price: pN, fee: fN, note: note.trim() === '' ? undefined : note.trim() }, props.onClose)
@@ -767,6 +867,12 @@ function LedgerModal(props: { target: { mode: string; id: string; title: string;
       React.createElement('span', null, `持仓 ${r.qty} · ${diluted ? '摊薄成本' : '均价'} ${fmtPrice(cost)} · 现价 ${fmtPrice(r.price)}`),
       React.createElement('span', { className: dirClass(pnl, redUp) }, `${diluted ? '持仓盈亏' : '浮动盈亏'} ${fmtMoneySigned(pnl)} (${fmtRate(pnlPct)})`),
       React.createElement('span', { className: dirClass(r.dayPnl, redUp) }, `当日 ${fmtMoneySigned(r.dayPnl)} (${fmtRate(r.dayPnlPct)})`),
+      // 「已实现 —」必须给原因（否则看起来像丢了数据）：先讲逐笔成因，再讲整仓未录入
+      (r.realizedUnknownQty ?? 0) > 0
+        ? React.createElement('span', { className: 'tw-muted' }, realizedUnknownNote(r.realizedUnknownQty ?? 0))
+        : r.costUnknown === true
+          ? React.createElement('span', { className: 'tw-muted' }, '成本未录入 → 成本/盈亏/已实现均不给数（用「调整」补成本价）')
+          : null,
     )
   }
   return React.createElement(
@@ -817,6 +923,10 @@ function PosRow(props: {
   noSource: boolean
   /** 分时缩略图数据（P1-1：含均价线与开/高/低） */
   mini: MiniData | undefined
+  /** 标的的年初至今（YTD）行；尚未取到时 undefined */
+  ytd: YtdRow | undefined
+  /** 是否至少成功取到过一次 YTD（区分"还没结果"与"真的没有"） */
+  ytdLoaded: boolean
   /** 该标的最近的除权除息（P2-4）：只提示"要变"，不自动改账 */
   action: CorporateAction | undefined
   onTrade: (verb: 'buy' | 'sell' | 'adjust') => void
@@ -880,6 +990,13 @@ function PosRow(props: {
                 '除权除息后数量与成本会变 —— 请在「调整」里按券商实际到账录入（本插件不自动改账）',
             }, `${props.action.daysUntil <= 0 ? '除权' : `${props.action.daysUntil} 天后除权`}`)
           : null,
+        row.skippedLedger !== undefined && row.skippedLedger > 0
+          ? React.createElement('span', {
+              className: 'tw-badge',
+              style: { marginRight: 4, color: 'var(--tw-up)', borderColor: 'var(--tw-up)' },
+              title: `${row.skippedLedger} 条流水未能应用（账本里有、快照没算进来）：\n${(row.skippedNotes ?? []).join('\n')}`,
+            }, `流水 ${row.skippedLedger} 条未应用`)
+          : null,
         React.createElement('b', null, row.name),
         React.createElement('small', null, `${row.secid}${pct !== null ? ` · ${fmtPct(pct)}` : ''}`),
       ),
@@ -887,9 +1004,25 @@ function PosRow(props: {
         React.createElement('span', { className: 'px ' + priceCls }, fmtPrice(price)),
         React.createElement('span', {
           className: 'meta',
-          title: props.noSource ? '东财、腾讯、新浪三个源都没有返回该标的的可用价格；市值/盈亏在无价时按成本口径暂以 0 计' : undefined,
-        }, `数量 ${fmtQty(row.qty)} · 成本 ${fmtPrice(showCost)}${
-          price === null ? (props.noSource ? ' · 暂无可用行情源' : ' · 行情暂缺') : ''
+          title: [
+            props.noSource ? '东财、腾讯、新浪三个源都没有返回该标的的可用价格；市值/盈亏在无价时按成本口径暂以 0 计' : null,
+            row.costUnknown === true
+              ? '成本未录入：新建持仓后只在「调整」里填了数量、没填成本价。市值照算（与成本无关），但盈亏与盈亏率显示 — —— 拿 0 当成本会把全部市值算成盈利。请用行内「调整」补上成本价。'
+              : null,
+          ].filter((x) => x !== null).join('\n') || undefined,
+          // 有缺失时补可聚焦入口（title 是鼠标专属，键盘/触屏拿不到）——P1-5
+          ...(props.noSource || row.costUnknown === true
+            ? {
+                tabIndex: 0,
+                role: 'note',
+                'aria-label': [
+                  props.noSource ? '无行情源：东财、腾讯、新浪三个源都没有返回该标的的可用价格' : null,
+                  row.costUnknown === true ? '成本未录入：市值照算，盈亏与盈亏率显示 —，请用「调整」补上成本价' : null,
+                ].filter((x) => x !== null).join('；'),
+              }
+            : {}),
+        }, `数量 ${fmtQty(row.qty)} · ${row.costUnknown === true ? '成本 —（未录入）' : `成本 ${fmtPrice(showCost)}`}${
+          price === null ? ` · ${props.noSource ? NO_SOURCE_LABEL : PENDING_LABEL}` : ''
         }`),
       ),
       React.createElement('div', { className: 'tw-actions' },
@@ -911,14 +1044,39 @@ function PosRow(props: {
     ),
     React.createElement('div', { className: 'tw-pos-grid' },
       pps('市值', React.createElement('span', null, fmtAmt(row.mv)),
-        `占比 ${props.weight === null ? '—' : (props.weight * 100).toFixed(2) + '%'} · 成本 ${fmtPrice(showCost)}`),
+        `占比 ${props.weight === null ? '—' : (props.weight * 100).toFixed(2) + '%'} · 成本 ${
+          row.costUnknown === true ? '—（未录入）' : fmtPrice(showCost)
+        }`),
       pps(diluted ? '持仓盈亏' : '浮动盈亏',
         React.createElement('span', { className: dirClass(showPnl, redUp) }, fmtMoneySigned(showPnl)),
-        React.createElement('span', { className: dirClass(showPnl, redUp) }, pctMeta(showPnlPct, showPnl))),
+        // 成本未录入时不给"率"（分母未知），并直接告诉你怎么办
+        row.costUnknown === true
+          ? React.createElement('span', { className: 'tw-muted' }, '未录入成本 → 用「调整」补成本价')
+          : React.createElement('span', { className: dirClass(showPnl, redUp) }, pctMeta(showPnlPct, showPnl))),
       pps('当日盈亏', React.createElement('span', { className: dirClass(row.dayPnl, redUp) }, fmtMoneySigned(row.dayPnl)),
         React.createElement('span', { className: dirClass(row.dayPnl, redUp) }, pctMeta(row.dayPnlPct, row.dayPnl))),
+      // 年初至今（YTD）：这是**标的**的年内涨幅，不是这笔持仓的收益 —— 口径写在 tooltip 里
+      // （前复权序列；指数/期货按原始价格）。取不到显示 — 并给原因，不用 0 顶替。
+      pps('标的年初至今',
+        React.createElement('span', {
+          className: `tw-ytd ${dirClass(props.ytd?.ytd ?? null, redUp)}`,
+          title: ytdTooltip(row.name, props.ytd, props.ytdLoaded),
+          // 算不出时才可聚焦：可计算的行不需要多一个 Tab 停靠点
+          ...(props.ytd?.ytd == null
+            ? { tabIndex: 0, role: 'note', 'aria-label': ytdTooltip(row.name, props.ytd, props.ytdLoaded) }
+            : {}),
+        }, ytdText(props.ytd)),
+        props.ytd?.baseDate != null
+          ? `基准 ${props.ytd.baseDate}${props.ytd.baseKind === 'listing' ? '（上市首日）' : ''}`
+          // 基准缺失时不说"基准未取到"就算了 —— 悬停里才有真正的原因（日线失败 / 现价缺失 / 年内还没收盘日）
+          : '本轮未算（悬停看原因）'),
       pps(diluted ? '累计已实现（已计入上栏）' : '累计已实现',
-        React.createElement('span', { className: 'tw-dim' }, fmtMoneySigned(row.realized))),
+        React.createElement('span', { className: 'tw-dim' }, fmtMoneySigned(row.realized)),
+        (row.realizedUnknownQty ?? 0) > 0
+          ? React.createElement('span', { className: 'tw-muted' }, realizedUnknownNote(row.realizedUnknownQty ?? 0))
+          : row.costUnknown === true
+            ? React.createElement('span', { className: 'tw-muted' }, '成本未录入 → 已实现不可算（它不是 0）')
+            : undefined),
       // P1-5：可用（可卖）数量。A股 T+1（今日买入当日不可卖）/ ETF·港股·美股 T+0 —— 口径写在 title 里，
       // 否则"持有 1000 可卖 800"看起来就像算错了
       pps('可用（可卖）',
@@ -1011,7 +1169,7 @@ function FxModal(props: {
   return React.createElement(Modal, { title: '跨市场折算口径（港股 / 美股）', onClose: props.onClose },
     React.createElement(ErrorNote, { error: err }),
     React.createElement('div', { className: 'tw-hint' },
-      '默认**不折算**：总额只含 A股，港/美股以原币种计价、逐项列在「不含 N 项」里。' +
+      '默认「不折算」：总额只含 A股，港/美股以原币种计价、逐项列在「不含 N 项」里。' +
       '按 1:1 悄悄加进去会让总额看起来完整、其实错了 —— 因此只有这两种档位，没有第三种。',
     ),
     React.createElement('div', { className: 'tw-seg', style: { margin: '8px 0' } },

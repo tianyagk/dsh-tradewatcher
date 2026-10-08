@@ -9,19 +9,20 @@
  * 此前一律 400，把"上游被限流"报成"你的请求写错了"。
  */
 import type { IncomingMessage, ServerResponse } from 'node:http'
-import type { CorporateAction, MutatePortBody, MutateWatchBody, QuoteRow } from '../shared/model.ts'
+import type { CorporateAction, MissingField, MutatePortBody, MutateWatchBody, QuoteRow } from '../shared/model.ts'
 import { RESCUE_LEVEL_LABEL, SECID_RE } from '../shared/model.ts'
 import { isTrustedApiRequest } from './fence.ts'
 import * as em from './em.ts'
 import { assemblePortfolio, ledgerViews } from './portfolio.ts'
 import { DataStore, secidKey } from './store.ts'
-import { CalendarStore, calToday } from './calendar.ts'
+import { CalendarStore, calToday, type CalSyncSourceResult } from './calendar.ts'
 import { RescueMonitor } from './rescue.ts'
 import { QUOTE_HOSTS, HISTORY_HOSTS } from './em.ts'
 import { breakerSummary } from './breaker.ts'
 import { HttpError, httpStatusOf, retryAfterSecondsOf } from './http.ts'
 import { describeConflicts, makeBundle, verifyBundle } from './backup.ts'
 import { detectAnomalies } from './anomaly.ts'
+import { YTD_MAX_IDS, computeYtds } from './ytd.ts'
 import { BREADTH_MIN_DAYS, BREADTH_WINDOW, BreadthStore, breadthUsable, percentileOf, upRatio } from './breadth.ts'
 import { dayOf } from './time.ts'
 import { log, type PluginWebRoute } from './context.ts'
@@ -192,6 +193,21 @@ export function makeTradeRoutes(
     return false
   }
 
+  /**
+   * 日历同步状态 → 回包字段（GET / POST 共用一份，避免两处口径分叉）。
+   * P0-2：`syncedAt` 只认最近一次**成功**同步（从未成功为 null），失败与否由 `stale`/`missing` 说明。
+   */
+  const calendarStatusPayload = (): {
+    syncedAt: number | null
+    syncAttemptAt: number | null
+    stale: boolean
+    syncSources: CalSyncSourceResult[]
+    missing: MissingField[]
+  } => {
+    const s = calendar.syncStatus()
+    return { syncedAt: s.syncedAt, syncAttemptAt: s.attemptAt, stale: s.stale, syncSources: s.sources, missing: s.missing }
+  }
+
   const routes: PluginWebRoute[] = [
     {
       kind: 'exact',
@@ -352,6 +368,50 @@ export function makeTradeRoutes(
     },
     {
       kind: 'exact',
+      path: '/tradewatcher/ytd',
+      /**
+       * 年初至今（YTD）：`ids=` 逗号分隔（上限 `YTD_MAX_IDS`，超出如实回报 truncated）。
+       *
+       * 口径写死在 `shared/model.ts` 的 `YTD_CALIBER`：
+       *   YTD = (现价 − 本年内第一个交易日收盘价) ÷ 该收盘价 × 100%，前复权序列。
+       *
+       * 现价来自与其它面板**同一次**行情（`fetchQuotesWithProvenance` 的 TTL 缓存 + 逐标的槽），
+       * 基准走 `host/ytd.ts` 的按日 memo + `em.fetchKline` 的磁盘缓存/增量/单飞 ——
+       * 因此这个路由**不会每个轮询周期重算**，休市定稿时更是零回源。
+       */
+      handler: async (req, res) => {
+        if (!needGate(req, res)) return
+        try {
+          const { ids: all, requested, truncated } = splitIds(queryOf(req).get('ids'))
+          const ids = all.slice(0, YTD_MAX_IDS)
+          if (ids.length === 0) {
+            send(res, 200, { asOf: null, stale: false, source: 'none', rows: [], missing: [], requested, truncated: false, limit: YTD_MAX_IDS })
+            return
+          }
+          const q = await em.fetchQuotesWithProvenance(ids)
+          const items = ids.map((secid) => ({
+            secid,
+            name: q.items[secid]?.name ?? secid,
+            price: q.items[secid]?.price ?? null,
+          }))
+          const { rows, missing } = await computeYtds(items)
+          send(res, 200, {
+            asOf: q.provenance.asOf,
+            stale: q.provenance.stale,
+            source: q.provenance.source,
+            missing,
+            rows,
+            requested,
+            truncated: truncated || all.length > ids.length,
+            limit: YTD_MAX_IDS,
+          })
+        } catch (error) {
+          fail(res, error)
+        }
+      },
+    },
+    {
+      kind: 'exact',
       path: '/tradewatcher/badge',
       /**
        * 侧栏徽标数据（P0-3）。
@@ -423,7 +483,7 @@ export function makeTradeRoutes(
           }
           // 真实新鲜度：asOf = 数据被观测到的时刻（不是响应生成时刻），
           // stale = 至少一行是 last-known-good 或已超过 90s —— 上游全挂时界面必须能如实报警。
-          // missing = 请求了但**没有任何源**给出可用价格的标的（界面据此显示"暂无可用行情源"）
+          // missing = 请求了但**没有任何源**给出可用价格的标的（界面据此显示「无行情源」）
           const detail = await em.fetchQuotesDetailed(ids)
           send(res, 200, { ts: Date.now(), ...detail, requested, truncated })
         } catch (error) {
@@ -726,7 +786,9 @@ export function makeTradeRoutes(
               try {
                 await calendar.sync(codes, p.get('force') === '1')
               } catch {
-                /* 同步失败仍返回本地事件 */
+                // 同步过程本身出错：原因已由 calendar.sync 记进 syncStatus().missing，
+                // 下面照常返回本地事件并**如实带上降级标记**（此前这里静默吞掉，
+                // 界面于是分不清"这两天没有新股/分红"与"日历根本没同步上"）
               }
             }
             // P1-10 勾稽：持仓（实心）/ 仅自选（空心）/ 无关，三种由宿主判定，
@@ -738,14 +800,15 @@ export function makeTradeRoutes(
               if (code === null) return e
               return { ...e, link: { held: heldSet.has(code), watched: !heldSet.has(code) && watchSet.has(code) } }
             })
-            send(res, 200, { events, syncedAt: calendar.syncedAt, symbolCount: codes.length })
+            // asOf 口径（P0-2）：只认最近一次**成功**同步；从未成功过是 null
+            send(res, 200, { events, ...calendarStatusPayload(), symbolCount: codes.length })
             return
           }
           if (req.method === 'POST') {
             const body = (await readBody(req)) as Record<string, unknown>
             await calendar.mutate(body)
             const events = calendar.list(calToday(-45), calToday(400))
-            send(res, 200, { ok: true, events, syncedAt: calendar.syncedAt })
+            send(res, 200, { ok: true, events, ...calendarStatusPayload() })
             return
           }
           send(res, 405, { error: 'method not allowed' })

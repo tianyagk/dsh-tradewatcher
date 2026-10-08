@@ -18,11 +18,28 @@ import type { QuoteRow } from '../shared/model.ts'
 
 export type QuoteState = 'live' | 'delayed' | 'settled' | 'missing'
 
+/**
+ * **同一状态只能有一个名字**（审计 P1-4）。
+ *
+ * 此前"三源都没有价格"在界面里有四种叫法：徽标「缺失」、持仓页「无价」、
+ * 行内「无行情源」、未刷新时「暂无行情」—— 用户无法确认它们是不是同一件事，
+ * 也就无法判断"要不要重试"。现在统一走下面这几个常量：
+ *   - `NO_SOURCE_LABEL`：三源都没有 → **无行情源**（重试可能恢复，也可能只是东财没恢复）
+ *   - `PENDING_LABEL`：本轮还没拿到（尚未刷新）→ **暂无行情**（等下一拍）
+ */
+export const NO_SOURCE_LABEL = '无行情源'
+export const PENDING_LABEL = '暂无行情'
+
+export const NO_SOURCE_TITLE =
+  '东财、腾讯、新浪三个源都没有返回该标的的可用价格。若为期货主连/商品合约，请核对代码大小写（如 114.lhm 与 114.LHM 是同一标的，现已大小写无关匹配）。'
+export const PENDING_TITLE = '本轮行情尚未返回该标的（还没刷新完），不是"这个标的没有行情"'
+
 export const QUOTE_STATE_LABEL: Record<QuoteState, string> = {
   live: '实时',
   delayed: '延迟',
   settled: '定稿',
-  missing: '缺失',
+  // 与 NO_SOURCE_LABEL 同一个词：徽标里的"无行情源 N"和行内的标记指的是同一件事
+  missing: NO_SOURCE_LABEL,
 }
 
 /** 四态色点（跟随主题 token，深/浅色都成立） */
