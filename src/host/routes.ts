@@ -9,7 +9,7 @@
  * 此前一律 400，把"上游被限流"报成"你的请求写错了"。
  */
 import type { IncomingMessage, ServerResponse } from 'node:http'
-import type { MutatePortBody, MutateWatchBody, QuoteRow } from '../shared/model.ts'
+import type { CorporateAction, MutatePortBody, MutateWatchBody, QuoteRow } from '../shared/model.ts'
 import { RESCUE_LEVEL_LABEL, SECID_RE } from '../shared/model.ts'
 import { isTrustedApiRequest } from './fence.ts'
 import * as em from './em.ts'
@@ -104,7 +104,12 @@ async function portfolioWithQuotes(store: DataStore): Promise<{ view: unknown; s
   const port = store.portData()
   const secids = [...new Set(port.items.map((p) => p.secid))]
   const quotes: Record<string, QuoteRow> = secids.length > 0 ? await em.fetchQuotes(secids) : {}
-  const { view, stale } = assemblePortfolio(port.groups, port.items, store.ledgerEntries(), quotes)
+  // P1-11：折算口径来自偏好（缺省 none = 只含 A股 + 逐项说明）
+  const prefs = store.getPrefs()
+  const { view, stale } = assemblePortfolio(port.groups, port.items, store.ledgerEntries(), quotes, {
+    mode: prefs.fxMode ?? 'none',
+    rates: prefs.fxRates ?? {},
+  })
   return { view, stale }
 }
 
@@ -122,6 +127,38 @@ function focusCodes(store: DataStore, heldOnly = false): string[] {
   if (!heldOnly) for (const it of store.watchData().items) push(it.secid)
   for (const it of store.portData().items) push(it.secid)
   return [...codes]
+}
+
+/**
+ * 持仓的公司行为提示（P2-4）：从**已同步**的日历事件里取 `div:` 类（分红除权除息），
+ * 与持仓标的按 6 位代码对上。不新增数据源、不自动改账。
+ */
+async function corporateActionsFor(
+  store: DataStore,
+  calendar: CalendarStore,
+  windowDays = 30,
+): Promise<CorporateAction[]> {
+  await calendar.init()
+  const today = dayOf(Date.now())
+  const events = calendar.list(calToday(-3), calToday(windowDays))
+  const port = store.portData()
+  const byCode = new Map<string, { posId: string; name: string; secid: string }>()
+  for (const p of port.items) {
+    const m = /^(\d{1,3})\.(\d{6})$/.exec(p.secid)
+    if (m !== null) byCode.set(m[2], { posId: p.id, name: p.name, secid: p.secid })
+  }
+  const out: CorporateAction[] = []
+  for (const e of events) {
+    if (e.category !== 'dividend') continue
+    const code = symbolCode(e.symbol)
+    if (code === null) continue
+    const hit = byCode.get(code)
+    if (hit === undefined) continue
+    const kind: CorporateAction['kind'] = (e.autoKey ?? '').includes(':ex:') ? 'ex' : 'record'
+    const daysUntil = Math.round((Date.parse(`${e.date}T00:00:00+08:00`) - Date.parse(`${today}T00:00:00+08:00`)) / 86_400_000)
+    out.push({ ...hit, date: e.date, kind, note: e.note ?? '', daysUntil })
+  }
+  return out.sort((a, b) => a.date.localeCompare(b.date))
 }
 
 /** 事件关联标的 → 6 位代码（symbol 可能是代码或 secid） */
@@ -337,7 +374,11 @@ export function makeTradeRoutes(
           const indexSecids = ['1.000300', '1.000001']
           const want = [...new Set([...posSecids, ...indexSecids])]
           const q = await em.fetchQuotesWithProvenance(want)
-          const { view } = assemblePortfolio(port.groups, port.items, store.ledgerEntries(), q.items)
+          const prefs = store.getPrefs()
+          const { view } = assemblePortfolio(port.groups, port.items, store.ledgerEntries(), q.items, {
+            mode: prefs.fxMode ?? 'none',
+            rates: prefs.fxRates ?? {},
+          })
           const snap = rescue?.snapshot() ?? null
           const win = snap?.activeWindow ?? null
           // 沪深300 优先，缺了退上证指数（两者都缺才给 null —— 不给假点位）
@@ -548,7 +589,15 @@ export function makeTradeRoutes(
           await store.init()
           if (req.method === 'GET') {
             const { view, stale } = await portfolioWithQuotes(store)
-            send(res, 200, { ok: true, view, stale })
+            // P2-4：除权除息提示（来源是已同步的日历事件，不新增数据源）
+            let actions: CorporateAction[] = []
+            try {
+              actions = await corporateActionsFor(store, calendar)
+            } catch {
+              /* 日历不可用时不阻断持仓视图：提示是附加信息，缺了要说但不该整页失败 */
+              actions = []
+            }
+            send(res, 200, { ok: true, view, stale, corporateActions: actions })
             return
           }
           if (req.method === 'POST') {

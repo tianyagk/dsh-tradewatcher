@@ -89,6 +89,10 @@ color-scheme:dark}
 .tw-wrow[data-alert][data-alert=price]{box-shadow:inset 3px 0 0 var(--tw-flat)}
 @media (prefers-reduced-motion:reduce){.tw-wrow[data-alert]{animation:none;background:rgba(229,72,77,.08)}}
 
+/* 读屏专用文本（P2-3）：视觉上不可见，但读屏软件可朗读。
+   用 clip 而不是 display:none —— 后者会让读屏软件也读不到。 */
+.tw-sr{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0}
+
 /* 数字模糊（P2-2, data-blur=1）────────────────────────────
    目标集合来自「所有使用 --tw-mono 的数字面」的证据清单（styles.ts 里逐条可查），
    而不是凭印象写：漏一个面就等于隐身不彻底。新增数字展示面时必须同时加进这两条规则。

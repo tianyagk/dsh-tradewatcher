@@ -4,6 +4,9 @@
  * Pure functions — no IO — so they are directly unit-testable.
  */
 import type {
+  FxCurrency,
+  FxMode,
+  FxRates,
   GroupView,
   LedgerEntry,
   LedgerView,
@@ -14,7 +17,7 @@ import type {
   PositionRow,
   QuoteRow,
 } from '../shared/model.ts'
-import { marketOf } from '../shared/model.ts'
+import { FX_CURRENCY_LABEL, fxCurrencyOf, marketOf, normalizeFxRate, normalizeFxRates } from '../shared/model.ts'
 
 /** 市场显示名（unpriced 的原因说明用；与 client/format.ts 的 shortLabel 同一口径） */
 const MARKET_LABEL: Record<Market, string> = {
@@ -191,11 +194,35 @@ export interface PortfolioAssembly {
   /** Positions without a usable quote (kept so the UI can still show state). */
   stale: number
 }
+export interface FxOptions {
+  mode: FxMode
+  rates: FxRates
+}
+
+/**
+ * 折算到人民币（P1-11）。返回 `rate: null` 表示**无法折算**（该币种没给汇率），
+ * 调用方必须据此把它排除在总额外并如实说明 —— 绝不回退成 1:1。
+ */
+export function toCny(
+  value: number | null,
+  secid: string,
+  fx: FxOptions,
+): { value: number | null; currency: FxCurrency | null; rate: number | null } {
+  const currency = fxCurrencyOf(marketOf(secid))
+  if (currency === null) return { value: null, currency: null, rate: null }
+  if (fx.mode !== 'fixed') return { value: null, currency, rate: null }
+  const rate = normalizeFxRate(fx.rates[currency])
+  if (rate === undefined) return { value: null, currency, rate: null }
+  return { value: value === null ? null : value * rate, currency, rate }
+}
+
 export function assemblePortfolio(
   groups: readonly PortGroup[],
   items: readonly PortItem[],
   entries: readonly LedgerEntry[],
   quotes: Readonly<Record<string, QuoteRow>>,
+  /** 跨市场折算口径（P1-11）。缺省不折算：总额只含 A股 + 逐项说明 */
+  fx: FxOptions = { mode: 'none', rates: {} },
 ): PortfolioAssembly {
   // Ledger replay must be chronological: sort a copy by (ts, id).
   // 与 store 的校验口径共用同一排序（单一来源），避免"校验用插入序、展示用 ts 序"分叉
@@ -217,11 +244,21 @@ export function assemblePortfolio(
     let valued = 0
     for (const r of rows) {
       if (r.mv === null && r.qty > 0) continue // no quote yet
-      // 总额口径（P0-1/P1-11）：fxMode='none' 时**只统计 A股**。
-      // 港/美股以原币种计价，按 1:1 加进去会让总额"看起来完整、其实错了"，
-      // 而错的口径比缺的口径更危险（用户不会去质疑一个看起来正常的数）。
-      // 被排除的持仓逐项列进 unpriced，界面与工具都能说清缺的是谁、为什么。
-      if (marketOf(r.secid) !== 'cn') continue
+      // 总额口径（P0-1/P1-11）：A股直接计；非 A股**只有在能折算时**才计。
+      // 按 1:1 加进去会让总额"看起来完整、其实错了"—— 错的口径比缺的口径更危险
+      // （用户不会去质疑一个看起来正常的数）。折算不了的一律进 unpriced，
+      // 且区分"口径未开"（no-fx）与"开了但没有这个币种的汇率"（no-rate）。
+      const cn = marketOf(r.secid) === 'cn'
+      if (!cn) {
+        const fxMv = toCny(r.mv ?? 0, r.secid, fx)
+        if (fxMv.value === null) continue
+        totalMv = add(totalMv, fxMv.value)
+        floatPnl = add(floatPnl, (toCny(r.floatPnl, r.secid, fx).value ?? 0))
+        dilutedPnl = add(dilutedPnl, (toCny(r.dilutedPnl ?? 0, r.secid, fx).value ?? 0))
+        if (r.dayPnl !== null) dayPnl = add(dayPnl, (toCny(r.dayPnl, r.secid, fx).value ?? 0))
+        realized = add(realized, (toCny(r.realized, r.secid, fx).value ?? 0))
+        continue
+      }
       totalMv = add(totalMv, r.mv ?? 0)
       floatPnl = add(floatPnl, r.floatPnl)
       dilutedPnl = add(dilutedPnl, r.dilutedPnl ?? 0)
@@ -289,14 +326,22 @@ export function assemblePortfolio(
     }
     const m = marketOf(p.secid)
     if (m !== 'cn') {
+      const conv = toCny(p.mv ?? 0, p.secid, fx)
+      if (conv.value !== null) continue // 已折算并计入总额，不再列为未计入
+      const currency = fxCurrencyOf(m)
       unpriced.push({
         posId: p.posId, secid: p.secid, name: p.name, qty: p.qty, why: 'no-fx',
-        note: `${MARKET_LABEL[m]}标的以原币种计价，当前 fxMode=none 不做折算，故不计入总额（不是按 1:1 加进去）`,
+        note: currency === null
+          ? `${MARKET_LABEL[m]}标的没有可折算的币种（指数/期货以点位或合约价计价），故不计入总额`
+          : fx.mode === 'fixed'
+            ? `已开启固定汇率折算，但没有为${FX_CURRENCY_LABEL[currency]}填写汇率，故仍不计入总额（不是按 1:1 加进去）`
+            : `${MARKET_LABEL[m]}标的以${FX_CURRENCY_LABEL[currency]}计价，当前 fxMode=${fx.mode} 不做折算，故不计入总额（不是按 1:1 加进去）`,
       })
       unpricedMv = round2(unpricedMv + (p.mv ?? 0))
     }
   }
-  view.fxMode = 'none'
+  view.fxMode = fx.mode
+  view.fxRates = fx.mode === 'fixed' ? normalizeFxRates(fx.rates) : {}
   view.unpriced = unpriced
   view.unpricedMv = round2(unpricedMv)
   return { view, stale }

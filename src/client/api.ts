@@ -1,6 +1,7 @@
 /** Same-origin JSON calls to the /tradewatcher/* host routes. */
 import type {
   BoardRow,
+  CorporateAction,
   FqMode,
   KlineData,
   MutatePortBody,
@@ -212,10 +213,15 @@ export const api = {
   mutateWatch(body: MutateWatchBody): Promise<{ watch: WatchData }> {
     return request('/tradewatcher/watch', { method: 'POST', body: JSON.stringify(body) })
   },
-  portfolio(): Promise<{ view: PortfolioView; stale: number }> {
+  portfolio(): Promise<{
+    view: PortfolioView
+    stale: number
+    /** 除权除息提示（P2-4），来自已同步的日历事件 */
+    corporateActions?: CorporateAction[]
+  }> {
     return request('/tradewatcher/portfolio')
   },
-  mutatePortfolio(body: MutatePortBody): Promise<{ view: PortfolioView; stale: number }> {
+  mutatePortfolio(body: MutatePortBody): Promise<{ view: PortfolioView; stale: number; corporateActions?: CorporateAction[] }> {
     return request('/tradewatcher/portfolio', { method: 'POST', body: JSON.stringify(body) })
   },
   ledger(groupId?: string, posId?: string, limit = 300): Promise<{ entries: LedgerView[] }> {

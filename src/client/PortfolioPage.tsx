@@ -1,6 +1,7 @@
 /** 持仓 page: ledger-driven portfolio groups + group/position trade history. */
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import type {
+  CorporateAction,
   LedgerEntry,
   LedgerView,
   MutatePortBody,
@@ -88,7 +89,10 @@ export function PortfolioPage(props: {
     setPrefs({ costBasis: next })
   }
   const [view, setView] = useState<PortfolioView | null>(null)
+  /** 除权除息提示（P2-4）：来自已同步的日历事件，按持仓标的勾稽 */
+  const [actions, setActions] = useState<CorporateAction[]>([])
   const [backupOpen, setBackupOpen] = useState(false)
+  const [fxOpen, setFxOpen] = useState(false)
   const [unpricedOpen, setUnpricedOpen] = useState(false)
   const [stale, setStale] = useState(0)
   const [error, setError] = useState<string | null>(null)
@@ -119,6 +123,7 @@ export function PortfolioPage(props: {
       .then((r) => {
         setView(r.view)
         setStale(r.stale)
+        setActions(r.corporateActions ?? [])
         setError(null)
       })
       .catch((e: Error) => setError(e.message))
@@ -155,6 +160,7 @@ export function PortfolioPage(props: {
       .then((r) => {
         setView(r.view)
         setStale(r.stale)
+        setActions(r.corporateActions ?? [])
         done?.()
       })
       .catch((e: Error) => setError(e.message))
@@ -181,6 +187,13 @@ export function PortfolioPage(props: {
 
   // 未计入总额的持仓（口径问题/无价），来自 host 的 assemblePortfolio（P0-1）
   const unpriced = view?.unpriced ?? []
+  // 折算口径摘要（P1-11）：不折算 = 只含 A股；固定 = 列出实际使用的汇率
+  const fxRatesText = Object.entries(view?.fxRates ?? {})
+    .map(([c, r]) => `1 ${c} = ${r} CNY`)
+    .join('，')
+  const fxSummary = view?.fxMode === 'fixed'
+    ? `固定汇率折算（${fxRatesText === '' ? '未填写汇率' : fxRatesText}，由你设定）`
+    : '不折算（总额只含 A股）'
 
   const stat = (label: string, value: number, colored = true): React.ReactElement =>
     React.createElement('div', { className: 'tw-stat' },
@@ -225,9 +238,23 @@ export function PortfolioPage(props: {
           onChange: (next) => setPrefs({ portSort: next }),
           ariaLabel: '持仓排序',
         }),
+        // P1-11：折算口径常显 —— "这个人民币数字怎么来的"必须答得上来
+        React.createElement(Btn, {
+          onClick: () => setFxOpen(true),
+          title: '跨市场折算口径：不折算 / 固定汇率',
+        }, view?.fxMode === 'fixed' ? '汇率：固定' : '汇率：不折算'),
         React.createElement(Btn, { onClick: () => setBackupOpen(true), title: '导出/导入 JSON（换机、备份）' }, '备份'),
         React.createElement(Btn, { onClick: reload }, '刷新'),
       ),
+      fxOpen
+        ? React.createElement(FxModal, {
+            mode: (prefs.fxMode ?? 'none'),
+            rates: prefs.fxRates ?? {},
+            setPrefs,
+            onClose: () => setFxOpen(false),
+            notify: props.notify,
+          })
+        : null,
       backupOpen
         ? React.createElement(BackupModal, {
             onClose: () => setBackupOpen(false),
@@ -235,9 +262,17 @@ export function PortfolioPage(props: {
             onDone: () => { void reload() },
           })
         : null,
+      // P2-4：除权除息提示。只提示"要变"，**不自动改账** —— 送转到账数量以券商为准，
+      // 自动改会把用户唯一的交易记录改成一个"看起来对但没人能核对"的状态。
+      actions.length > 0
+        ? React.createElement('div', { className: 'tw-hint', style: { padding: '2px 2px 0', color: '#e8a33d' } },
+            `${actions.length} 条公司行为涉及你的持仓：${actions.slice(0, 3).map((a) => `${a.date} ${a.name}${a.kind === 'ex' ? '除权除息' : '股权登记'}`).join('、')}${actions.length > 3 ? ' 等' : ''}。` +
+            '除权除息后数量与成本会变 —— 请在「调整」里按券商实际到账录入新数量与成本（本插件不自动改账：真实的送转/派息以券商为准，自动改出来的数字没人能核对）。',
+          )
+        : null,
       unpricedOpen && unpriced.length > 0
         ? React.createElement('div', { className: 'tw-hint', style: { padding: '4px 2px 0' } },
-            `以下 ${unpriced.length} 项不计入总额与盈亏（口径：fxMode=${view?.fxMode ?? 'none'}，总额仅含 A股；未折算的市值合计 ${fmtAmt(view?.unpricedMv ?? 0)}）：`,
+            `以下 ${unpriced.length} 项不计入总额与盈亏（口径：${fxSummary}；未计入的原币市值合计 ${fmtAmt(view?.unpricedMv ?? 0)}）：`,
             React.createElement('ul', { style: { margin: '4px 0 0 16px' } },
               ...unpriced.map((u) =>
                 React.createElement('li', { key: u.posId },
@@ -338,6 +373,8 @@ export function PortfolioPage(props: {
                   quote: quotes[row.secid],
                   noSource: missing?.has(row.secid.toUpperCase()) === true,
                   mini: minis[row.secid],
+                  // 同一持仓可能有多条（登记日 + 除权日），取最近的一条提示
+                  action: actions.filter((a) => a.posId === row.posId).sort((a, b) => a.date.localeCompare(b.date))[0],
                   onTrade: (verb) => setModal({ kind: 'trade', verb, pos: row, groupName: grp.name }),
                   onDetail: () => openLedger({ mode: 'pos', id: row.posId, title: `${row.name} 交易明细`, row }),
                   onOpenChart: () => onOpenDetail?.(row.secid, row.name),
@@ -778,6 +815,8 @@ function PosRow(props: {
   noSource: boolean
   /** 分时缩略图数据（P1-1：含均价线与开/高/低） */
   mini: MiniData | undefined
+  /** 该标的最近的除权除息（P2-4）：只提示"要变"，不自动改账 */
+  action: CorporateAction | undefined
   onTrade: (verb: 'buy' | 'sell' | 'adjust') => void
   onDetail: () => void
   onOpenChart: () => void
@@ -831,6 +870,14 @@ function PosRow(props: {
         React.createElement(MiniTrend, { values: props.mini?.values ?? [], avg: props.mini?.avg, up: props.mini?.up ?? null, width: 52, height: 20, redUp }),
       ),
       React.createElement('div', { className: 'tw-pos-title' },
+        props.action !== undefined
+          ? React.createElement('span', {
+              className: 'tw-badge',
+              style: { marginRight: 4, color: '#e8a33d', borderColor: '#e8a33d' },
+              title: `${props.action.date} ${props.action.kind === 'ex' ? '除权除息' : '股权登记'}${props.action.note === '' ? '' : `：${props.action.note}`}\n` +
+                '除权除息后数量与成本会变 —— 请在「调整」里按券商实际到账录入（本插件不自动改账）',
+            }, `${props.action.daysUntil <= 0 ? '除权' : `${props.action.daysUntil} 天后除权`}`)
+          : null,
         React.createElement('b', null, row.name),
         React.createElement('small', null, `${row.secid}${pct !== null ? ` · ${fmtPct(pct)}` : ''}`),
       ),
@@ -905,4 +952,88 @@ function miniHover(name: string, mini: { open?: number | null; high?: number | n
     parts.push('振幅 —（上游未给昨收）')
   }
   return `${head}\n${parts.join(' · ')}`
+}
+
+/**
+ * 折算口径设置（P1-11）。
+ *
+ * 只提供两种**可验证**的档位：
+ *   - 不折算：总额只含 A股，港股/美股逐项进 `unpriced` 并说明原因（默认）；
+ *   - 固定汇率：由用户填写 `1 外币 = N 人民币`，口径完全透明、离线可用。
+ *
+ * 「实时汇率」不出现在这里：汇率源尚未验证连通性与字段口径，摆一个点了没用的档位
+ * 比不摆更坏（用户会以为开了实时折算，而数字其实没变）。宿主侧也会拒绝该档。
+ */
+function FxModal(props: {
+  mode: 'none' | 'fixed' | 'live'
+  rates: Partial<Record<'HKD' | 'USD', number>>
+  setPrefs: (patch: Partial<PortPrefs>) => void
+  onClose: () => void
+  notify?: (text: string) => void
+}): React.ReactElement {
+  const [hkd, setHkd] = useState(props.rates.HKD === undefined ? '' : String(props.rates.HKD))
+  const [usd, setUsd] = useState(props.rates.USD === undefined ? '' : String(props.rates.USD))
+  const [err, setErr] = useState<string | null>(null)
+  const fixed = props.mode === 'fixed'
+
+  const save = (): void => {
+    const rates: Partial<Record<'HKD' | 'USD', number>> = {}
+    for (const [cur, raw] of [['HKD', hkd], ['USD', usd]] as const) {
+      const t = raw.trim()
+      if (t === '') continue
+      const n = Number(t)
+      if (!Number.isFinite(n) || n < 0.01 || n > 100) {
+        setErr(`${cur === 'HKD' ? '港元' : '美元'}汇率需要在 0.01–100 之间（填错数量级会得到完全错误的人民币市值）`)
+        return
+      }
+      rates[cur] = n
+    }
+    if (Object.keys(rates).length === 0) {
+      setErr('固定汇率档至少要填一个币种的汇率（都不填就等于不折算，请直接选上一档）')
+      return
+    }
+    props.setPrefs({ fxMode: 'fixed', fxRates: rates })
+    props.notify?.(
+      `折算口径：固定汇率（${Object.entries(rates).map(([c, r]) => `1 ${c} = ${r}`).join('，')}）。` +
+      '港/美股按此汇率折成人民币计入总额 —— 汇率变了数字就会变，因此它写在总额旁边。',
+    )
+    props.onClose()
+  }
+
+  const chooseNone = (): void => {
+    props.setPrefs({ fxMode: 'none', fxRates: {} })
+    props.notify?.('折算口径：不折算。总额只含 A股，港/美股逐项列在「不含 N 项」里（不按 1:1 加进去）。')
+    props.onClose()
+  }
+
+  return React.createElement(Modal, { title: '跨市场折算口径（港股 / 美股）', onClose: props.onClose },
+    React.createElement(ErrorNote, { error: err }),
+    React.createElement('div', { className: 'tw-hint' },
+      '默认**不折算**：总额只含 A股，港/美股以原币种计价、逐项列在「不含 N 项」里。' +
+      '按 1:1 悄悄加进去会让总额看起来完整、其实错了 —— 因此只有这两种档位，没有第三种。',
+    ),
+    React.createElement('div', { className: 'tw-seg', style: { margin: '8px 0' } },
+      React.createElement('button', { 'data-on': !fixed, onClick: chooseNone }, '不折算（只含 A股）'),
+      React.createElement('button', { 'data-on': fixed, onClick: () => setErr(null) }, '固定汇率折算'),
+    ),
+    fixed
+      ? React.createElement('div', null,
+          React.createElement('div', { style: { display: 'flex', gap: 8, marginTop: 4 } },
+            React.createElement(Field, { label: '1 港元 = ? 人民币' },
+              React.createElement('input', { className: 'tw-input', value: hkd, inputMode: 'decimal', placeholder: '如 0.92', onChange: (e) => setHkd(e.target.value) }),
+            ),
+            React.createElement(Field, { label: '1 美元 = ? 人民币' },
+              React.createElement('input', { className: 'tw-input', value: usd, inputMode: 'decimal', placeholder: '如 7.15', onChange: (e) => setUsd(e.target.value) }),
+            ),
+          ),
+          React.createElement('div', { style: { display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 8 } },
+            React.createElement(Btn, { primary: true, onClick: save }, '保存并折算'),
+          ),
+        )
+      : null,
+    React.createElement('div', { className: 'tw-hint' },
+      '实时汇率暂不可用：汇率源尚未验证连通性与字段口径（中间价还是即期、符号怎么写都没有确认）。' +
+      '本插件不猜字段 —— 填一个你认可的汇率，比拿一条可能解析错的数据去算人民币市值安全得多。',
+    ),
+  )
 }

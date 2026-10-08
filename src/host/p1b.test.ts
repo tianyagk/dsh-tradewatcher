@@ -8,7 +8,9 @@
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import type { CalEvent, DayBar } from '../shared/model.ts'
+import type { CalEvent, DayBar, LedgerEntry, PortGroup, PortItem, QuoteRow } from '../shared/model.ts'
+import { normalizeFxRate, normalizeFxRates } from '../shared/model.ts'
+import { assemblePortfolio } from './portfolio.ts'
 import { BASELINE_DAYS, MIN_SAMPLES, VOLUME_MULT_ALERT, judgeAnomaly } from './anomaly.ts'
 import { BREADTH_MIN_DAYS, percentileOf, upRatio } from './breadth.ts'
 import { withChangeHistory } from './calendar.ts'
@@ -24,6 +26,15 @@ function bars(n: number, base: number, todayVol: number, today = '2026-10-08'): 
 }
 
 const OPEN = { hhmm: '10:00', inSessionNow: true, today: '2026-10-08' }
+
+/** 极简行情构造（P1-11 用例用；只关心价格） */
+function q(secid: string, price: number, prev: number): QuoteRow {
+  return {
+    secid, code: secid, name: secid, price, chg: price - prev, pct: ((price - prev) / prev) * 100,
+    prev, open: price, high: price, low: price, vol: 1, amount: 1, up: null, down: null, even: null,
+    time: null, at: Date.now(), source: 'em',
+  }
+}
 
 test('P1-4 量能异动：同时点口径 —— 早盘同样的量比尾盘更"异常"', () => {
   // 20 日基线 100，今日量 200 → 到尾盘（进度 1.0）是 2.0x，未越 2.5x
@@ -177,4 +188,72 @@ test('P1-10 改期留痕：手动事件与没有 autoKey 的事件不受影响',
   const fresh: CalEvent[] = [{ ...manual[0], date: '2026-10-02' }]
   const out = withChangeHistory(manual, fresh, 1000)
   assert.equal(out[0].changes, undefined, '手动事件由用户自己维护，不做自动改期记录')
+})
+
+// ── P1-11 跨市场折算 ─────────────────────────────────────────────────────
+
+test('P1-11 折算：不折算时不折算、开了固定汇率才折，且缺汇率照样排除', () => {
+  const groups: PortGroup[] = [{ id: 'g1', name: '主仓', order: 1 }]
+  const items: PortItem[] = [
+    { id: 'p1', groupId: 'g1', secid: '1.600519', name: 'A股', createdAt: 1 },
+    { id: 'p2', groupId: 'g1', secid: '116.00700', name: '港股', createdAt: 2 },
+    { id: 'p3', groupId: 'g1', secid: '105.AAPL', name: '美股', createdAt: 3 },
+  ]
+  const entries: LedgerEntry[] = [
+    { id: 'e1', ts: 1, actor: 'web', verb: 'buy', posId: 'p1', groupId: 'g1', secid: '1.600519', name: 'A股', qty: 100, price: 100 },
+    { id: 'e2', ts: 2, actor: 'web', verb: 'buy', posId: 'p2', groupId: 'g1', secid: '116.00700', name: '港股', qty: 200, price: 300 },
+    { id: 'e3', ts: 3, actor: 'web', verb: 'buy', posId: 'p3', groupId: 'g1', secid: '105.AAPL', name: '美股', qty: 10, price: 400 },
+  ]
+  const quotes = {
+    '1.600519': q('1.600519', 120, 110),
+    '116.00700': q('116.00700', 320, 310),
+    '105.AAPL': q('105.AAPL', 400, 400),
+  }
+
+  // ① 不折算：总额只有 A股 100×120
+  const none = assemblePortfolio(groups, items, entries, quotes)
+  assert.equal(none.view.fxMode, 'none')
+  assert.equal(none.view.grand.totalMv, 12000)
+  assert.equal((none.view.unpriced ?? []).length, 2, '港股与美股都逐项说明')
+  assert.deepEqual(none.view.fxRates, {})
+
+  // ② 只给港元汇率：港股折算进总额（200×320×0.92），美股仍被排除
+  const hkOnly = assemblePortfolio(groups, items, entries, quotes, { mode: 'fixed', rates: { HKD: 0.92 } })
+  assert.equal(hkOnly.view.fxMode, 'fixed')
+  assert.equal(hkOnly.view.grand.totalMv, 12000 + 64000 * 0.92)
+  const rest = hkOnly.view.unpriced ?? []
+  assert.equal(rest.length, 1, '只剩美股未折算')
+  assert.equal(rest[0].secid, '105.AAPL')
+  assert.ok(rest[0].note.includes('美元'), '要说明缺的是哪个币种的汇率')
+  assert.ok(rest[0].note.includes('不是按 1:1'), '必须写清不是按 1:1 加进去')
+  assert.deepEqual(hkOnly.view.fxRates, { HKD: 0.92 }, '实际生效的汇率要能回读')
+
+  // ③ 两个都给：全部折算
+  const both = assemblePortfolio(groups, items, entries, quotes, { mode: 'fixed', rates: { HKD: 0.92, USD: 7.15 } })
+  assert.equal(both.view.grand.totalMv, Math.round((12000 + 64000 * 0.92 + 4000 * 7.15) * 100) / 100)
+  assert.equal((both.view.unpriced ?? []).length, 0)
+})
+
+test('P1-11 汇率归一化：越界或非数字一律拒绝（宁可不折算也不填错数量级）', () => {
+  assert.equal(normalizeFxRate(7.15), 7.15)
+  assert.equal(normalizeFxRate(0.92), 0.92)
+  assert.equal(normalizeFxRate(715), undefined, '数量级填错必须拒绝')
+  assert.equal(normalizeFxRate(0.001), undefined)
+  assert.equal(normalizeFxRate(-1), undefined)
+  assert.equal(normalizeFxRate('7.15'), undefined, '字符串不隐式转换')
+  assert.equal(normalizeFxRate(NaN), undefined)
+  assert.deepEqual(normalizeFxRates({ HKD: 0.92, USD: 715, EUR: 7.8 }), { HKD: 0.92 }, '越界与未知币种都被剔除')
+  assert.deepEqual(normalizeFxRates(null), {})
+})
+
+test('P1-11 无法折算的市场（指数/期货）即使开了固定汇率也不进总额', () => {
+  const groups: PortGroup[] = [{ id: 'g1', name: '主仓', order: 1 }]
+  const items: PortItem[] = [{ id: 'p1', groupId: 'g1', secid: '100.KOSPI200', name: '韩国指数', createdAt: 1 }]
+  const entries: LedgerEntry[] = [
+    { id: 'e1', ts: 1, actor: 'web', verb: 'buy', posId: 'p1', groupId: 'g1', secid: '100.KOSPI200', name: '韩国指数', qty: 1, price: 1000 },
+  ]
+  const { view } = assemblePortfolio(groups, items, entries, { '100.KOSPI200': q('100.KOSPI200', 1088, 1000) }, { mode: 'fixed', rates: { HKD: 0.92, USD: 7.15 } })
+  assert.equal(view.grand.totalMv, 0, '指数没有可折算的币种')
+  assert.equal((view.unpriced ?? []).length, 1)
+  assert.ok((view.unpriced ?? [])[0].note.includes('没有可折算的币种'))
 })

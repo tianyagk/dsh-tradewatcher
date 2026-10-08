@@ -13,6 +13,7 @@
  */
 import React, { useEffect, useRef, useState } from 'react'
 import { Btn } from './ui.tsx'
+import { IndustryHeatmap } from './IndustryHeatmap.tsx'
 
 /** 第三方源站（展示用；实现里只引用这一处，域名不散落） */
 const CLOUD_MAP_URL = 'https://52etf.site/'
@@ -41,7 +42,30 @@ function readLastOk(): number | null {
   }
 }
 
+/** 用容器宽度作热力图宽度（SVG 需要数值；不引 ResizeObserver 之外的依赖） */
+function useWidth(ref: React.RefObject<HTMLDivElement>, fallback = 700): number {
+  const [w, setW] = useState(fallback)
+  useEffect(() => {
+    const el = ref.current
+    if (el === null || typeof ResizeObserver === 'undefined') return
+    const ro = new ResizeObserver(() => {
+      const next = Math.max(320, el.clientWidth)
+      setW(next)
+    })
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [ref])
+  return w
+}
+
 export function CloudMap(): React.ReactElement {
+  /**
+   * 默认「自绘」（P2-5）：只有自绘才标得了口径（面积=成交额、色深=涨跌幅、数据几点）。
+   * 第三方站点仍然保留 —— 它的钻取与信息量确实更强，但口径与本插件无关，必须分清。
+   */
+  const [source, setSource] = useState<'self' | 'third'>('self')
+  const hostRef = useRef<HTMLDivElement>(null)
+  const width = useWidth(hostRef)
   const [state, setState] = useState<LoadState>('loading')
   const [reloadKey, setReloadKey] = useState(0)
   const [lastOk, setLastOk] = useState<number | null>(() => readLastOk())
@@ -84,11 +108,33 @@ export function CloudMap(): React.ReactElement {
     ? '尚无成功记录'
     : new Date(lastOk).toLocaleString('zh-CN', { hour12: false })
 
+  if (source === 'self') {
+    return React.createElement(
+      'div',
+      { className: 'tw-body', style: { padding: 0, gap: 0 } },
+      React.createElement('div', { className: 'tw-panel-h', style: { padding: '8px 10px' } },
+        React.createElement('span', { className: 't' }, '大盘云图'),
+        React.createElement('div', { className: 'tw-seg' },
+          React.createElement('button', { 'data-on': true, onClick: () => setSource('self') }, '自绘'),
+          React.createElement('button', { 'data-on': false, onClick: () => setSource('third') }, '第三方站点'),
+        ),
+        React.createElement('span', { className: 'tw-hint', style: { margin: 0 } }, '自绘可标口径；第三方站点信息更全但口径由它决定'),
+      ),
+      React.createElement('div', { ref: hostRef, style: { padding: '0 10px 10px' } },
+        React.createElement(IndustryHeatmap, { redUp: true, width: width - 20, height: Math.max(320, Math.round((width - 20) * 0.62)) }),
+      ),
+    )
+  }
+
   return React.createElement(
     'div',
     { className: 'tw-body', style: { padding: 0, gap: 0 } },
     React.createElement('div', { className: 'tw-panel-h', style: { padding: '8px 10px' } },
       React.createElement('span', { className: 't' }, `大盘云图 · A股热力图（${CLOUD_MAP_HOST}）`),
+      React.createElement('div', { className: 'tw-seg' },
+        React.createElement('button', { 'data-on': false, onClick: () => setSource('self') }, '自绘'),
+        React.createElement('button', { 'data-on': true, onClick: () => setSource('third') }, '第三方站点'),
+      ),
       React.createElement('span', { className: 'tw-hint', style: { margin: 0 } }, '面积=流通市值，颜色=涨跌幅，约 8 秒自动刷新，滚轮缩放、双击看K线、方向键复盘'),
       // 加载状态常驻可见：超时不是"静默等待"，要能一眼看出现在处于哪一态
       React.createElement('span', { className: 'tw-badge', 'data-state': state, title: `最后成功加载：${lastOkText}` },

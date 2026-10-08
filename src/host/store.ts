@@ -13,6 +13,7 @@ import {
   ACTOR_WEB,
   DEFAULT_PREFS,
   PORT_SORT_KEYS,
+  normalizeFxRates,
   normalizePanelOpacity,
   RESCUE_ETF_CATALOG,
   SECID_RE,
@@ -407,6 +408,9 @@ export class DataStore {
         viewMode: loaded.viewMode === 'compact' || loaded.viewMode === 'incognito' ? loaded.viewMode : 'full',
         panelOpacity: normalizePanelOpacity(loaded.panelOpacity, DEFAULT_PREFS.panelOpacity ?? 1),
         blurDigits: loaded.blurDigits === true,
+        // live 是"未验证源"，装载时按 none 处理（启动不该因为一个不可用档位就崩）
+        fxMode: loaded.fxMode === 'fixed' ? 'fixed' : 'none',
+        fxRates: normalizeFxRates(loaded.fxRates),
       }
       // Coherence: drop descriptors that reference missing groups (never drop ledger).
       const groupIds = new Set(this.port.groups.map((g) => g.id))
@@ -940,6 +944,21 @@ export class DataStore {
     if (patch.blurDigits !== undefined) {
       if (typeof patch.blurDigits !== 'boolean') throw new Error('blurDigits 必须是布尔值')
       this.prefs.blurDigits = patch.blurDigits
+    }
+    // P1-11：折算口径。`live` 明确拒绝并给出理由 —— 实时汇率源尚未验证，
+    // 接受它只会让用户以为开了实时折算、实际什么都没算
+    if (patch.fxMode !== undefined) {
+      if (patch.fxMode === 'live') {
+        throw new Error('实时汇率暂不可用：汇率源尚未验证连通性与字段口径。请选「不折算」或填写固定汇率（固定汇率离线可用、口径透明）')
+      }
+      if (patch.fxMode !== 'none' && patch.fxMode !== 'fixed') throw new Error('fxMode 必须是 none/fixed/live')
+      this.prefs.fxMode = patch.fxMode
+    }
+    if (patch.fxRates !== undefined) {
+      if (patch.fxRates === null || typeof patch.fxRates !== 'object' || Array.isArray(patch.fxRates)) {
+        throw new Error('fxRates 必须是对象（如 { HKD: 0.92, USD: 7.15 }）')
+      }
+      this.prefs.fxRates = normalizeFxRates(patch.fxRates)
     }
     // P0-8：视图档位。非法值拒绝而不是回退 —— 回退会让"点了没反应"变成静默行为
     if (patch.viewMode !== undefined) {

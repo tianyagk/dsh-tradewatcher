@@ -464,6 +464,13 @@ export interface PortPrefs {
    * 用于截图或录屏时不泄露具体数值。只影响显示，取数与工具返回不受影响。
    */
   blurDigits?: boolean
+  /**
+   * 跨市场折算口径（P1-11）。缺省 `none`（只含 A股 + 逐项说明）；
+   * `fixed` 用 `fxRates` 里的用户设定汇率折算；`live` 源未验证，宿主会拒绝并说明。
+   */
+  fxMode?: FxMode
+  /** 固定汇率表（1 外币 = N 人民币），仅 fxMode='fixed' 时生效 */
+  fxRates?: FxRates
 }
 
 export const DEFAULT_PREFS: PortPrefs = {
@@ -477,6 +484,28 @@ export const DEFAULT_PREFS: PortPrefs = {
   viewMode: 'full',
   panelOpacity: 1,
   blurDigits: false,
+  fxMode: 'none',
+  fxRates: {},
+}
+
+/**
+ * 持仓相关的公司行为提示（P2-4，除权除息日）。
+ *
+ * 来源是日历里**已同步**的分红除权事件（`autoKey` 前缀 `div:`），因此不新增数据源。
+ * 本插件**不自动改账**：送转/派息的实际到账数量与金额以券商为准，自动改会把用户唯一的
+ * 交易记录改成一个"看起来对但没人能核对"的状态。
+ */
+export interface CorporateAction {
+  posId: string
+  secid: string
+  name: string
+  /** YYYY-MM-DD */
+  date: string
+  kind: 'ex' | 'record'
+  /** 方案摘要（来自数据源 note） */
+  note: string
+  /** 距今天数（负=已过） */
+  daysUntil: number
 }
 
 /** One derived position row (accounting from ledger + live quote). */
@@ -548,8 +577,10 @@ export interface PortfolioView {
   groups: GroupView[]
   positions: PositionRow[]
   grand: { totalMv: number; floatPnl: number; dilutedPnl: number; dayPnl: number; realized: number }
-  /** 跨市场折算口径（P0-1）：当前实现恒为 'none'，总额**不含**港美股按 1:1 折算的部分 */
+  /** 跨市场折算口径（P0-1/P1-11）：none = 总额只含 A股；fixed = 按 fxRates 折算后计入 */
   fxMode?: FxMode
+  /** 实际生效的固定汇率表（仅 fxMode='fixed' 时非空）—— 界面与工具据此说明"按什么汇率算的" */
+  fxRates?: FxRates
   /** 未计入总额的持仓及原因（P0-1）：总额缺一块必须能点开看到缺的谁 */
   unpriced?: Array<{ posId: string; secid: string; name: string; qty: number; why: 'no-quote' | 'no-fx'; note: string }>
   /** 港美股市值未折算的部分（元，按原币种计价就不存在"折算"这回事，故只在 fxMode=none 时给出） */
@@ -560,8 +591,46 @@ export interface PortfolioView {
  * 跨市场（港股/美股）市值折算口径。
  * `none` = 不折算：总额**只含 A股**，并在界面与工具里显式标注"不含港股市值"，
  * 绝不按 1:1 悄悄加进去（那会让总额看起来完整、其实是错的数）。
+ * `fixed` = 用户设定的固定汇率（离线可用、口径完全透明）；
+ * `live` = 实时汇率源 —— **源尚未验证**，宿主拒绝该档并说明原因（不猜符号）。
  */
 export type FxMode = 'none' | 'fixed' | 'live'
+
+/** 需要在总额里折算的币种（按 secid 市场号推导；国际指数/期货没有可折算的币种） */
+export type FxCurrency = 'HKD' | 'USD'
+
+export const FX_CURRENCIES: readonly FxCurrency[] = ['HKD', 'USD']
+export const FX_CURRENCY_LABEL: Record<FxCurrency, string> = { HKD: '港元', USD: '美元' }
+
+/**
+ * 固定汇率表：`1 单位外币 = N 人民币`。用户自填，因此口径与出处完全透明
+ * —— "这个人民币数字是按什么汇率算的"必须答得上来。
+ */
+export type FxRates = Partial<Record<FxCurrency, number>>
+
+/** 市场 → 币种（不列出的市场视为"无对应币种"，即无法折算） */
+export function fxCurrencyOf(market: ReturnType<typeof marketOf>): FxCurrency | null {
+  if (market === 'hk') return 'HKD'
+  if (market === 'us') return 'USD'
+  return null
+}
+
+/** 汇率归一化：只接受合理区间内的正数（0.01–100），超出几乎一定是填错数量级（7.15 写成 715） */
+export function normalizeFxRate(v: unknown): number | undefined {
+  if (typeof v !== 'number' || !Number.isFinite(v)) return undefined
+  if (v < 0.01 || v > 100) return undefined
+  return Math.round(v * 1e6) / 1e6
+}
+
+export function normalizeFxRates(raw: unknown): FxRates {
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return {}
+  const out: FxRates = {}
+  for (const c of FX_CURRENCIES) {
+    const v = normalizeFxRate((raw as Record<string, unknown>)[c])
+    if (v !== undefined) out[c] = v
+  }
+  return out
+}
 
 /** One visible history row (verb display + payload). */
 export interface LedgerView {

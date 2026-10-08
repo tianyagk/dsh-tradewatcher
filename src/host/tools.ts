@@ -228,7 +228,9 @@ export function makeAgentTools(
         const port = store.portData()
         const secids = [...new Set(port.items.map((p) => p.secid))]
         const q = secids.length > 0 ? await em.fetchQuotesWithProvenance(secids) : null
-        const { view, stale } = assemblePortfolio(port.groups, port.items, store.ledgerEntries(), q?.items ?? {})
+        const prefs = store.getPrefs()
+        const fx = { mode: prefs.fxMode ?? 'none', rates: prefs.fxRates ?? {} }
+        const { view, stale } = assemblePortfolio(port.groups, port.items, store.ledgerEntries(), q?.items ?? {}, fx)
         if (args.includeEmpty !== true) {
           view.positions = view.positions.filter((p) => p.qty > 0)
         }

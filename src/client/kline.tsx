@@ -526,12 +526,82 @@ export function KlineChart(props: {
       )
     : null
 
+  /**
+   * 读屏摘要（P2-3）。SVG 本身对读屏软件是黑箱，因此把"这张图说了什么"写成文本：
+   * 区间、首末收盘、区间涨跌幅、最高最低、买卖点笔数。**与图同源**（同一份 bars/markers/range），
+   * 因此不会出现"摘要说涨、图上在跌"。
+   *
+   * 键盘：图表可聚焦，←/→ 平移（Shift 加速 10 根）、+/- 缩放、Home/End 到两端。
+   */
+  const visBars = bars.slice(s, e)
+  const first = visBars[0]
+  const last = visBars[visBars.length - 1]
+  const visHi = visBars.length > 0 ? Math.max(...visBars.map((b) => b.high)) : null
+  const visLo = visBars.length > 0 ? Math.min(...visBars.map((b) => b.low)) : null
+  const chgPct = first !== undefined && last !== undefined && first.close > 0
+    ? ((last.close - first.close) / first.close) * 100
+    : null
+  const summary =
+    `${TAB_LABEL_FOR_SUMMARY(klt)}，共 ${bars.length} 根，当前显示 ${visBars.length} 根` +
+    (first !== undefined && last !== undefined
+      ? `（${first.date} 至 ${last.date}）：首收盘 ${fmtAxis(first.close)}，末收盘 ${fmtAxis(last.close)}` +
+        (chgPct === null ? '' : `，区间${chgPct >= 0 ? '涨' : '跌'} ${Math.abs(chgPct).toFixed(2)}%`) +
+        `，区间最高 ${visHi === null ? '—' : fmtAxis(visHi)}，最低 ${visLo === null ? '—' : fmtAxis(visLo)}`
+      : '（区间内没有数据）') +
+    (buyCount + sellCount > 0 ? `；区间内买入 ${buyCount} 笔、卖出 ${sellCount} 笔，净${netQty >= 0 ? '买入' : '卖出'} ${Math.abs(netQty)} 股` : '；区间内没有买卖点') +
+    (outCount > 0 ? `；区间外另有 ${outCount} 笔买卖记录` : '')
+
+  const chartKey = (ev: React.KeyboardEvent): void => {
+    const step = ev.shiftKey ? 10 : 1
+    const width = e - s
+    if (ev.key === 'ArrowLeft') {
+      ev.preventDefault()
+      const ns = Math.max(0, s - step)
+      setRange([ns, ns + width])
+    } else if (ev.key === 'ArrowRight') {
+      ev.preventDefault()
+      const ns = Math.min(bars.length - width, s + step)
+      setRange([ns, ns + width])
+    } else if (ev.key === '+' || ev.key === '=') {
+      ev.preventDefault()
+      const w2 = Math.max(8, width - step * 2)
+      setRange([Math.min(s, bars.length - w2), Math.min(bars.length, Math.min(s, bars.length - w2) + w2)])
+    } else if (ev.key === '-' || ev.key === '_') {
+      ev.preventDefault()
+      const w2 = Math.min(bars.length, width + step * 2)
+      const ns = Math.max(0, Math.min(bars.length - w2, s - step))
+      setRange([ns, ns + w2])
+    } else if (ev.key === 'Home') {
+      ev.preventDefault()
+      setRange([0, width])
+    } else if (ev.key === 'End') {
+      ev.preventDefault()
+      setRange([bars.length - width, bars.length])
+    }
+  }
+
   return React.createElement('div', { className: 'tw-kline' },
-    React.createElement(WheelZoom, { bars, range: [s, e], width, onChange: setRange }, svg),
+    React.createElement('div', {
+      tabIndex: 0,
+      role: 'img',
+      'aria-label': summary,
+      title: '键盘：←/→ 平移（Shift 加速），+/- 缩放，Home/End 到两端',
+      style: { outlineOffset: 2 },
+      onKeyDown: chartKey,
+    },
+      React.createElement(WheelZoom, { bars, range: [s, e], width, onChange: setRange }, svg),
+    ),
+    // 读屏专用：完整摘要（含买卖点明细），视觉上不可见但可被朗读
+    React.createElement('div', { className: 'tw-sr' }, summary),
     legend,
     bsLegend,
     React.createElement(RangeSlider, { total: bars.length, range: [s, e], bars, onChange: setRange }),
   )
+}
+
+/** 周期号 → 摘要里的中文（与图表 tab 文案保持一致的语义） */
+function TAB_LABEL_FOR_SUMMARY(klt: 101 | 102 | 103 | 104): string {
+  return klt === 101 ? '日K线' : klt === 102 ? '周K线' : klt === 103 ? '月K线' : '年K线'
 }
 
 /** 滚轮缩放：以光标位置为中心缩放可视区间。 */
@@ -622,22 +692,60 @@ function RangeSlider(props: {
     props.onChange([idx, total])
   }
 
+  /**
+   * 键盘操作（P2-3）：三处手柄都是 slider 语义，方向键微调、Shift+方向键粗调、Home/End 到底。
+   * 拖拽能用不代表键盘能用 —— 只用指针的图表对键盘用户等于不可操作。
+   */
+  const nudge = (which: 'start' | 'end' | 'mid', delta: number): void => {
+    if (which === 'start') props.onChange([Math.max(0, Math.min(s + delta, e - 8)), e])
+    else if (which === 'end') props.onChange([s, Math.min(total, Math.max(e + delta, s + 8))])
+    else {
+      const width = e - s
+      const ns = Math.max(0, Math.min(total - width, s + delta))
+      props.onChange([ns, ns + width])
+    }
+  }
+  const keyOf = (which: 'start' | 'end' | 'mid') => (ev: React.KeyboardEvent): void => {
+    const step = ev.shiftKey ? 10 : 1
+    if (ev.key === 'ArrowLeft') { ev.preventDefault(); nudge(which, -step) }
+    else if (ev.key === 'ArrowRight') { ev.preventDefault(); nudge(which, step) }
+    else if (ev.key === 'Home') { ev.preventDefault(); nudge(which, -total) }
+    else if (ev.key === 'End') { ev.preventDefault(); nudge(which, total) }
+  }
+  const handleProps = (which: 'start' | 'end'): Record<string, unknown> => ({
+    className: 'tw-zoom-h',
+    role: 'slider',
+    tabIndex: 0,
+    'aria-label': which === 'start' ? '区间起点' : '区间终点',
+    'aria-valuemin': 0,
+    'aria-valuemax': total,
+    'aria-valuenow': which === 'start' ? s : e,
+    'aria-valuetext': `${bars[which === 'start' ? s : e - 1]?.date ?? ''}（第 ${which === 'start' ? s : e} 根，共 ${total} 根）`,
+    onPointerDown: (ev: React.PointerEvent) => { ev.preventDefault(); drag.current = which },
+    onKeyDown: keyOf(which),
+  })
   const start = React.createElement('div', {
     key: 'start',
-    className: 'tw-zoom-h',
+    ...handleProps('start'),
     style: { left: `calc(${pct(s)}% - 6px)` },
-    onPointerDown: (ev: React.PointerEvent) => { ev.preventDefault(); drag.current = 'start' },
   })
   const end = React.createElement('div', {
     key: 'end',
-    className: 'tw-zoom-h',
+    ...handleProps('end'),
     style: { left: `calc(${pct(e - 1)}% - 6px)` },
-    onPointerDown: (ev: React.PointerEvent) => { ev.preventDefault(); drag.current = 'end' },
   })
   return React.createElement('div', { className: 'tw-zoom' },
     React.createElement('div', {
       className: 'tw-zoom-track',
       ref: trackRef,
+      role: 'slider',
+      tabIndex: 0,
+      'aria-label': '可视区间（方向键平移，Shift 加速）',
+      'aria-valuemin': 0,
+      'aria-valuemax': total,
+      'aria-valuenow': s,
+      'aria-valuetext': `${bars[s]?.date ?? ''} ~ ${bars[e - 1]?.date ?? ''}，共 ${e - s} 根`,
+      onKeyDown: keyOf('mid'),
       onPointerDown: (ev: React.PointerEvent) => { ev.preventDefault(); drag.current = 'mid' },
     },
       React.createElement('div', { className: 'tw-zoom-sel', style: { left: `${pct(s)}%`, width: `${Math.max(1, pct(e - 1) - pct(s))}%` } }),
