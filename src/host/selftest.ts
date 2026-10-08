@@ -8,7 +8,7 @@ import { join } from 'node:path'
 import { DataStore, normalizeRescuePrefs, replayPosition, secidKey, sortLedger, dataHome } from './store.ts'
 import { assemblePortfolio, derivePosition, ledgerViews, shanghaiDayStart, verbLabel } from './portfolio.ts'
 import * as em from './em.ts'
-import { fillLastGood, hasQuoteFallback, mergeBars, quoteFreshnessMs, quoteFromTencent, resampleYearly, setQuoteFreshnessMs, summarizeQuoteProvenance } from './em.ts'
+import { fillLastGood, fqSupported, hasQuoteFallback, mergeBars, normalizeFq, quoteFreshnessMs, quoteFromTencent, resampleYearly, setQuoteFreshnessMs, summarizeQuoteProvenance } from './em.ts'
 import { parseTencentStamp, parseTencentSuggest, suggestKindFromTencent, tencentCode, unescapeUnicode } from './tencent.ts'
 import { parseSinaEtfRanking, parseSinaHq, sinaCovered, sinaSymbol } from './sina.ts'
 import { breakerFor, breakerSummary, hostsAllowed, minutesToFullyRecover, minutesToRecover } from './breaker.ts'
@@ -703,6 +703,19 @@ async function main(): Promise<void> {
         `年K 首根 OHLC 正确 (got ${JSON.stringify(years[0])})`)
       ok(years[1].close === 15 && years[1].pct !== null && Math.abs((years[1].pct as number) - 36.36) < 0.05,
         `年K 次根涨跌幅基于上年收盘 (got ${years[1].pct})`)
+    }
+
+    // 复权适用范围（纯函数）：只有股票/ETF/港美股才谈得上除权除息
+    {
+      const yes = ['1.600519', '0.300750', '0.000858', '1.510300', '1.588000', '0.159915', '116.00700', '105.AAPL', '106.BABA', '107.NVDA']
+      for (const s of yes) ok(fqSupported(s), `复权适用：${s}`)
+      const no = ['1.000001', '1.000300', '0.399001', '0.399006', '100.DJI', '100.SPX', '90.BK0475', '113.rbm', '114.jmm', '101.HG00Y', '112.B00Y']
+      for (const s of no) ok(!fqSupported(s), `复权不适用：${s}`)
+      ok(normalizeFq('1.600519', undefined) === 1, '缺省口径 = 前复权')
+      ok(normalizeFq('1.600519', 2) === 2 && normalizeFq('1.600519', 0) === 0, '后复权/不复权原样保留')
+      ok(normalizeFq('1.600519', 9) === 1 && normalizeFq('1.600519', 'x') === 1, '非法口径回落前复权')
+      ok(normalizeFq('1.000001', 1) === 0, '指数即便请求前复权也必须回落不复权')
+      ok(normalizeFq('113.rbm', 2) === 0, '期货即便请求后复权也必须回落不复权')
     }
 
     // lossless-JSON sanitizer (agent tool output contract)

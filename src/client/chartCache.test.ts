@@ -14,8 +14,11 @@ import {
   TAB_LABEL,
   cacheNoteOf,
   createChartCache,
+  fqFor,
+  fqNoteOf,
   isKlineTab,
   rememberedTab,
+  rememberFq,
   rememberTab,
   type ChartPayload,
   type ChartTab,
@@ -193,4 +196,50 @@ test('周期记忆：抽屉关掉再打开保持同一周期', () => {
   rememberTab('day')
   assert.equal(rememberedTab(), 'day')
   rememberTab('trend')
+})
+
+test('复权口径进缓存键：前复权与不复权是两份数据，切回来不重拉、也不互相顶替', async () => {
+  const seen: Array<{ secid: string; tab: ChartTab; fqt: number }> = []
+  const cache = createChartCache(async (secid, tab, fqt) => {
+    seen.push({ secid, tab, fqt })
+    return { kind: 'kline', tab: 'day', kline: { ...klineOf(), fqt } } as ChartPayload
+  })
+  const qfq = await cache.get('1.600519', 'day', 1)
+  const bfq = await cache.get('1.600519', 'day', 0)
+  assert.equal(seen.length, 2, '两种口径必须各发一次请求')
+  assert.deepEqual(seen.map((s) => s.fqt), [1, 0])
+  assert.equal((qfq as { kline: { fqt: number } }).kline.fqt, 1)
+  assert.equal((bfq as { kline: { fqt: number } }).kline.fqt, 0)
+  const again = await cache.get('1.600519', 'day', 1)
+  assert.equal(seen.length, 2, '切回前复权必须命中缓存，不得再发请求')
+  assert.equal(again?.fromCache, true)
+  assert.equal(cache.peek('1.600519', 'day', 0) !== null, true, 'peek 按口径取值')
+  assert.equal(cache.peek('1.600519', 'day', 2), null, '没请求过的口径不得命中')
+})
+
+test('复权口径只作用于 K 线：分时/五日不分键（切口径不该重拉当日分时）', async () => {
+  let calls = 0
+  const cache = createChartCache(async (_secid, _tab) => {
+    calls += 1
+    return { kind: 'trend', tab: 'trend', trend: trendOf() } as ChartPayload
+  })
+  await cache.get('1.600519', 'trend', 1)
+  await cache.get('1.600519', 'trend', 0)
+  assert.equal(calls, 1, '分时只有一条序列，两种口径必须共用缓存')
+})
+
+test('复权脚注：指数/期货必须说明"无除权除息"，不能只写不复权让人以为是选择', () => {
+  assert.equal(fqNoteOf({ ...klineOf(), fqt: 1, fqSupported: true }), ' · 前复权（详情头为真实成交价）')
+  assert.equal(fqNoteOf({ ...klineOf(), fqt: 0, fqSupported: true }), ' · 不复权')
+  assert.equal(fqNoteOf({ ...klineOf(), fqt: 0, fqSupported: false }), ' · 不复权（指数/期货无除权除息）')
+})
+
+test('复权记忆：按标的记住各自口径，新标的回到全局默认（前复权）', () => {
+  assert.equal(fqFor('1.600519'), 1, '默认前复权')
+  rememberFq('1.600519', 0)
+  assert.equal(fqFor('1.600519'), 0, '同一标的记住上次选择')
+  assert.equal(fqFor('0.300750'), 0, '新标的沿用上一次的全局选择')
+  rememberFq('0.300750', 2)
+  assert.equal(fqFor('1.600519'), 0, '另一只标的的选择不被覆盖')
+  rememberFq('0.300750', 1)
 })

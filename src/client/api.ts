@@ -1,6 +1,7 @@
 /** Same-origin JSON calls to the /tradewatcher/* host routes. */
 import type {
   BoardRow,
+  FqMode,
   KlineData,
   MutatePortBody,
   MutateWatchBody,
@@ -81,8 +82,9 @@ export const api = {
   trend(secid: string, ndays = 1): Promise<{ trend: TrendData | null }> {
     return request(`/tradewatcher/trend?secid=${encodeURIComponent(secid)}&ndays=${ndays}`)
   },
-  kline(secid: string, klt: 101 | 102 | 103 | 104 = 101, lmt = 120): Promise<{ kline: KlineData | null }> {
-    return request(`/tradewatcher/kline?secid=${encodeURIComponent(secid)}&klt=${klt}&lmt=${lmt}`)
+  /** fqt：0=不复权 1=前复权（默认）2=后复权；实际生效口径见回包 kline.fqt */
+  kline(secid: string, klt: 101 | 102 | 103 | 104 = 101, lmt = 120, fqt: FqMode = 1): Promise<{ kline: KlineData | null }> {
+    return request(`/tradewatcher/kline?secid=${encodeURIComponent(secid)}&klt=${klt}&lmt=${lmt}&fqt=${fqt}`)
   },
   calendar(from: string, to: string, force = false): Promise<{ events: CalEvent[]; syncedAt: number; symbolCount: number }> {
     return request(`/tradewatcher/calendar?from=${from}&to=${to}${force ? '&force=1' : ''}`)

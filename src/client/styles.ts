@@ -243,6 +243,14 @@ color-scheme:dark}
 .tw-cal-card{border-left:3px solid var(--tw-accent);background:var(--tw-card2);border-radius:6px;padding:7px 9px;margin-bottom:8px}
 .tw-zoom-bar{display:flex;align-items:center;gap:6px;font-size:10.5px;font-family:var(--tw-mono)}
 .tw-chartnote{display:flex;gap:12px;flex-wrap:wrap;color:var(--tw-muted);font-size:11px;margin:6px 0 2px;font-family:var(--tw-mono)}
+/* 复权口径段控（详情图右上角）：默认前复权；指数/期货禁用并标"不适用" */
+.tw-fq{flex:none;display:inline-flex;align-items:center;gap:3px;padding:2px 4px 2px 6px;border:1px solid var(--tw-border);border-radius:8px;background:var(--tw-bg2)}
+.tw-fq .k{font-size:10px;color:var(--tw-muted);margin-right:2px}
+.tw-fq-btn{min-height:22px;padding:0 7px;font-size:11px;color:var(--tw-dim);background:transparent;border:1px solid transparent;border-radius:6px;transition:background .12s,color .12s,border-color .12s;white-space:nowrap}
+.tw-fq-btn:hover:not(:disabled){color:var(--tw-text);background:var(--tw-hover)}
+.tw-fq-btn[data-on=true]{color:var(--tw-text);font-weight:600;background:var(--tw-accent-soft);border-color:var(--tw-accent);letter-spacing:-0.15px}
+.tw-fq-btn:disabled{opacity:.45;cursor:not-allowed}
+.tw-fq-hint{font-size:10px;color:var(--tw-muted);padding:0 2px}
 
 /* ── row mini trend + detail drawer ─────────────────────── */
 .tw-mini{flex:none;border:1px solid var(--tw-border);border-radius:8px;padding:1px 3px;background:var(--tw-bg2);display:inline-flex;line-height:0;transition:border-color .12s,background .12s}

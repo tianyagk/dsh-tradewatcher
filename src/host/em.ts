@@ -14,6 +14,7 @@
 import type {
   BoardRow,
   DayBar,
+  FqMode,
   KlineData,
   QuoteRow,
   StockDetail,
@@ -1091,11 +1092,42 @@ export async function fetchTrend(secid: string, ndays = 1): Promise<TrendData | 
 
 // ───────────────────────── kline cache & fetch ───────────────────────────
 /**
- * K 线历史在本地按 (secid, 周期) 缓存：首次查看一次性拉全量，之后只拉最新几根
- * 做增量合并，上游失败时直接吃本地缓存 —— 既省请求（push2his 限流严重），
- * 也保证图表永远有数据。
+ * K 线历史在本地按 (secid, 周期, **复权口径**) 缓存：首次查看一次性拉全量，
+ * 之后只拉最新几根做增量合并，上游失败时直接吃本地缓存 —— 既省请求
+ * （push2his 限流严重），也保证图表永远有数据。
  *   101=日K  102=周K  103=月K  104=年K（由月K本地重采样，上游 104 实际是季K）
+ *
+ * 复权口径进缓存键：前复权与不复权是**两套价格序列**，混存会让图上出现
+ * 无解释的跳空，所以三个口径各自一个文件、各自一套增量。
  */
+
+/**
+ * 该标的是否存在除权除息概念（决定复权开关能不能用）。
+ *
+ * 股票 / ETF / 基金 / 港美股 → true；指数是点位回报、期货是合约、板块是成分股统计，
+ * 强行"复权"等于伪造趋势 → false。判定只看 (市场号, 代码前缀)：
+ *   - 沪市(1) 000 开头是上证指数系列（沪市股票没有 000 前缀，深市才有）
+ *   - 深市(0/1) 399 开头是深证指数系列
+ *   - 100=国际指数 / 101·112=外盘商品 / 113·114·115=国内期货 / 90=板块 → 一律不适用
+ */
+export function fqSupported(secid: string): boolean {
+  const dot = secid.indexOf('.')
+  if (dot <= 0) return false
+  const market = secid.slice(0, dot)
+  const code = secid.slice(dot + 1)
+  if (market === '1' || market === '0') {
+    if (market === '1' && code.startsWith('000')) return false
+    return !code.startsWith('399')
+  }
+  return market === '116' || market === '105' || market === '106' || market === '107'
+}
+
+/** 把请求口径收敛到该标的真正可用的口径：不适用恒为 0，非法值按默认前复权处理 */
+export function normalizeFq(secid: string, fqt: unknown): FqMode {
+  if (!fqSupported(secid)) return 0
+  const n = Number(fqt)
+  return n === 0 || n === 2 ? (n as FqMode) : 1
+}
 const KLINE_FULL_LMT: Record<number, number> = { 101: 800, 102: 400, 103: 240 }
 const KLINE_RECENT_LMT: Record<number, number> = { 101: 10, 102: 5, 103: 3 }
 const KLINE_CAP: Record<number, number> = { 101: 1200, 102: 800, 103: 600 }
@@ -1108,34 +1140,46 @@ interface KlineEntry {
 
 const klineMem = new Map<string, KlineEntry>()
 
-function klineFile(secid: string, klt: number): string {
+function klineFile(secid: string, klt: number, fqt: FqMode): string {
+  return join(dataHome(), 'klines', `${secid}_${klt}_${fqt}.json`)
+}
+
+/**
+ * v0.22.0 及以前的缓存文件名是 `<secid>_<klt>.json`，那时的取数一律 `fqt=0`，
+ * 所以它**就是**不复权口径的缓存 —— 只在 fqt=0 时兜底复用，不迁移、不重命名。
+ */
+function legacyKlineFile(secid: string, klt: number): string {
   return join(dataHome(), 'klines', `${secid}_${klt}.json`)
 }
 
-async function loadKlineCache(secid: string, klt: number): Promise<KlineEntry> {
-  const key = `${secid}|${klt}`
+async function loadKlineCache(secid: string, klt: number, fqt: FqMode): Promise<KlineEntry> {
+  const key = `${secid}|${klt}|${fqt}`
   const hit = klineMem.get(key)
   if (hit !== undefined && hit.loaded) return hit
   const entry: KlineEntry = hit ?? { bars: [], loaded: false, updatedAt: 0 }
-  try {
-    const raw = await readFile(klineFile(secid, klt), 'utf8')
-    const parsed = JSON.parse(raw) as { bars?: DayBar[]; updatedAt?: number }
-    if (Array.isArray(parsed.bars) && parsed.bars.length > 0) {
-      entry.bars = parsed.bars.filter((b) => b !== null && typeof b.date === 'string' && Number.isFinite(b.close))
-      entry.updatedAt = typeof parsed.updatedAt === 'number' ? parsed.updatedAt : 0
+  const paths = fqt === 0 ? [klineFile(secid, klt, fqt), legacyKlineFile(secid, klt)] : [klineFile(secid, klt, fqt)]
+  for (const path of paths) {
+    try {
+      const raw = await readFile(path, 'utf8')
+      const parsed = JSON.parse(raw) as { bars?: DayBar[]; updatedAt?: number }
+      if (Array.isArray(parsed.bars) && parsed.bars.length > 0) {
+        entry.bars = parsed.bars.filter((b) => b !== null && typeof b.date === 'string' && Number.isFinite(b.close))
+        entry.updatedAt = typeof parsed.updatedAt === 'number' ? parsed.updatedAt : 0
+        break
+      }
+    } catch {
+      /* 该口径还没有缓存文件 */
     }
-  } catch {
-    /* 首次：无缓存文件 */
   }
   entry.loaded = true
   klineMem.set(key, entry)
   return entry
 }
 
-async function saveKlineCache(secid: string, klt: number, bars: DayBar[]): Promise<void> {
+async function saveKlineCache(secid: string, klt: number, fqt: FqMode, bars: DayBar[]): Promise<void> {
   try {
     await mkdir(join(dataHome(), 'klines'), { recursive: true })
-    await writeFile(klineFile(secid, klt), JSON.stringify({ v: 1, secid, klt, updatedAt: Date.now(), bars }), 'utf8')
+    await writeFile(klineFile(secid, klt, fqt), JSON.stringify({ v: 2, secid, klt, fqt, updatedAt: Date.now(), bars }), 'utf8')
     void pruneKlineCache()
   } catch (error) {
     console.warn('[tradewatcher] 保存K线缓存失败:', String(error))
@@ -1234,18 +1278,21 @@ function tencentSymbol(secid: string): string | null {
  * 统一走「不复权」，与东财 fqt=0 同口径，避免混源污染本地缓存。
  * 行格式 [date, open, close, high, low, volume]。
  */
-async function requestKlineFromTencent(secid: string, klt: number, lmt: number): Promise<DayBar[] | null> {
+async function requestKlineFromTencent(secid: string, klt: number, lmt: number, fqt: FqMode): Promise<DayBar[] | null> {
   const sym = tencentSymbol(secid)
   if (sym === null) return null
   const period = klt === 101 ? 'day' : klt === 102 ? 'week' : 'month'
-  const path = `/appstock/app/fqkline/get?param=${sym},${period},,,${Math.min(1000, Math.max(5, lmt))},`
+  const fq = fqt === 1 ? 'qfq' : fqt === 2 ? 'hfq' : ''
+  const path = `/appstock/app/fqkline/get?param=${sym},${period},,,${Math.min(1000, Math.max(5, lmt))},${fq}`
   try {
     const json = (await fetchFromHost('web.ifzq.gtimg.cn', path, 9000)) as {
       data?: Record<string, Record<string, unknown>>
     }
     const node = json?.data?.[sym]
     if (node === undefined) return null
-    const rows = (node[period] ?? node[`qfq${period}`]) as unknown
+    // 严格按请求的口径取键：要前复权却只拿到不复权序列时宁可失败，
+    // 也不能把不复权价格当前复权画出去（旧实现优先取 `${period}`，就是这种混口径）
+    const rows = node[fq === '' ? period : `${fq}${period}`] as unknown
     if (!Array.isArray(rows)) return null
     const bars: DayBar[] = []
     for (const r of rows) {
@@ -1270,11 +1317,11 @@ async function requestKlineFromTencent(secid: string, klt: number, lmt: number):
 }
 
 /** 单主机取 K 线；空数组视为失败（push2delay/push2 会返回 200 + 空）。优先腾讯。 */
-async function requestKlineRaw(secid: string, klt: number, lmt: number): Promise<DayBar[] | null> {
-  const fromTencent = await requestKlineFromTencent(secid, klt, lmt)
+async function requestKlineRaw(secid: string, klt: number, lmt: number, fqt: FqMode): Promise<DayBar[] | null> {
+  const fromTencent = await requestKlineFromTencent(secid, klt, lmt, fqt)
   if (fromTencent !== null) return fromTencent
   const fields2 = 'f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61'
-  const path = `/api/qt/stock/kline/get?secid=${encodeURIComponent(secid)}&klt=${klt}&fqt=0&lmt=${lmt}&end=20500101&fields1=f1,f2,f3&fields2=${fields2}`
+  const path = `/api/qt/stock/kline/get?secid=${encodeURIComponent(secid)}&klt=${klt}&fqt=${fqt}&lmt=${lmt}&end=20500101&fields1=f1,f2,f3&fields2=${fields2}`
   for (let attempt = 0; attempt < 2; attempt += 1) {
     for (const host of HISTORY_HOSTS) {
       try {
@@ -1311,36 +1358,49 @@ async function requestKlineRaw(secid: string, klt: number, lmt: number): Promise
 /**
  * 取 K 线：命中本地缓存时只增量更新最新几根；上游不可用时回退缓存。
  *
- * 三层：① 磁盘缓存（<dataHome>/klines/<secid>_<klt>.json，落盘可跨重启）
+ * 三层：① 磁盘缓存（<dataHome>/klines/<secid>_<klt>_<fqt>.json，落盘可跨重启）
  *      ② 增量回源（正常 10/5/3 根，首次 800/400/240 根）
  *      ③ 休市定稿免回源 —— 非交易时段且缓存更新时间已越过最近 15:05 收盘时，
  *         这根收盘 bar 早已落袋，上游不会再有新数据，**一次请求都不发**。
+ *
+ * `fqt` 默认前复权（1）：除权跳空会让历史 K 线出现无解释的暴跌，前复权序列
+ * 连续、最适合判断位置与相对成本。指数/期货等由 `normalizeFq` 收敛为 0。
  */
 export async function fetchKline(
   secid: string,
   klt: 101 | 102 | 103 | 104 = 101,
   lmt = 6,
+  fqt: FqMode = 1,
 ): Promise<KlineData | null> {
   if (!SECID_RE.test(secid)) return null
   const baseKlt = klt === 104 ? 103 : klt
-  const entry = await loadKlineCache(secid, baseKlt)
+  const supported = fqSupported(secid)
+  const mode = normalizeFq(secid, fqt)
+  const entry = await loadKlineCache(secid, baseKlt, mode)
   const needFull = entry.bars.length === 0
   const settled = !needFull && isSettledOffline(entry.updatedAt)
-  const stale = settled ? false : await refreshKline(secid, baseKlt, entry, needFull)
+  const stale = settled ? false : await refreshKline(secid, baseKlt, mode, entry, needFull)
   if (!settled && stale && entry.bars.length === 0) return null
   const series = baseKlt === 103 && klt === 104 ? resampleYearly(entry.bars) : entry.bars
   const want = Math.max(1, Math.min(Math.round(lmt) || series.length, series.length))
-  return { secid, days: series.slice(series.length - want), stale, ...(settled ? { cached: true } : {}) }
+  return {
+    secid,
+    days: series.slice(series.length - want),
+    stale,
+    fqt: mode,
+    fqSupported: supported,
+    ...(settled ? { cached: true } : {}),
+  }
 }
 
 /**
  * 增量回源 + 落盘。返回 true 表示"上游失败、这次给的是旧缓存"。
  * 拆成独立函数是为了让 fetchKline 的三个分支（定稿免回源 / 失败 / 成功）各只有一条出口。
  */
-async function refreshKline(secid: string, baseKlt: number, entry: KlineEntry, needFull: boolean): Promise<boolean> {
-  const key = `kline:${secid}:${baseKlt}:${needFull ? 'full' : 'incr'}`
+async function refreshKline(secid: string, baseKlt: number, fqt: FqMode, entry: KlineEntry, needFull: boolean): Promise<boolean> {
+  const key = `kline:${secid}:${baseKlt}:${fqt}:${needFull ? 'full' : 'incr'}`
   const fetched = await ttlCache<DayBar[] | null>(key, needFull ? 3600_000 : 120_000, () =>
-    requestKlineRaw(secid, baseKlt, needFull ? KLINE_FULL_LMT[baseKlt] : KLINE_RECENT_LMT[baseKlt]),
+    requestKlineRaw(secid, baseKlt, needFull ? KLINE_FULL_LMT[baseKlt] : KLINE_RECENT_LMT[baseKlt], fqt),
   )
   if (fetched !== null && fetched.length > 0) {
     const before = entry.bars.length
@@ -1348,7 +1408,7 @@ async function refreshKline(secid: string, baseKlt: number, entry: KlineEntry, n
     entry.bars = mergeBars(entry.bars, fetched, KLINE_CAP[baseKlt])
     entry.updatedAt = Date.now()
     const afterLast = entry.bars[entry.bars.length - 1]?.date ?? ''
-    if (before !== entry.bars.length || beforeLast !== afterLast) void saveKlineCache(secid, baseKlt, entry.bars)
+    if (before !== entry.bars.length || beforeLast !== afterLast) void saveKlineCache(secid, baseKlt, fqt, entry.bars)
     return false
   }
   return true

@@ -12,8 +12,11 @@
  *     并把它标成 fallback，界面如实说明「显示上次成功数据」；
  *  3) 宿主若回 `cached: true`（休市定稿，宿主根本没回源），客户端给更长的 TTL，
  *     收盘后反复开关面板不会产生任何请求。
+ *  4) 复权口径进缓存键 —— 前复权与不复权是两套价格序列，互相顶替会在图上
+ *     造成无解释的跳空；分时/五日不含复权序列，仍共用同一个键。
  */
-import type { KlineData, TrendData } from '../shared/model.ts'
+import type { FqMode, KlineData, TrendData } from '../shared/model.ts'
+import { FQ_LABEL } from '../shared/model.ts'
 import { api } from './api.ts'
 
 export type ChartTab = 'trend' | '5d' | 'day' | 'week' | 'month' | 'year'
@@ -67,15 +70,15 @@ const TTL_SETTLED_MS: Record<ChartTab, number> = {
 /** 请求失败时旧值的保底 TTL：图不空，但 20s 后会再试一次 */
 const TTL_FALLBACK_MS = 20_000
 
-/** 单次请求：把 secid+tab 变成一个 payload（宿主负责兜底与落盘缓存） */
-export async function fetchChartPayload(secid: string, tab: ChartTab): Promise<ChartPayload | null> {
+/** 单次请求：把 secid+tab(+复权口径) 变成一个 payload（宿主负责兜底与落盘缓存） */
+export async function fetchChartPayload(secid: string, tab: ChartTab, fqt: FqMode = 1): Promise<ChartPayload | null> {
   if (tab === 'trend' || tab === '5d') {
     const { trend } = await api.trend(secid, tab === 'trend' ? 1 : 5)
     if (trend === null) return null
     return { kind: 'trend', tab, trend }
   }
   const plan = KLINE_PLAN[tab]
-  const { kline } = await api.kline(secid, plan.klt, plan.lmt)
+  const { kline } = await api.kline(secid, plan.klt, plan.lmt, fqt)
   if (kline === null) return null
   return { kind: 'kline', tab, kline }
 }
@@ -91,14 +94,14 @@ export interface ChartCacheStats {
 
 export interface ChartCache {
   /** 同步查缓存（未过期才有值）；用于切周期时先出图，避免骨架闪烁 */
-  peek(secid: string, tab: ChartTab): ChartPayload | null
+  peek(secid: string, tab: ChartTab, fqt?: FqMode): ChartPayload | null
   /** 取数据：命中缓存零请求，否则请求；同键并发合并 */
-  get(secid: string, tab: ChartTab): Promise<ChartPayload | null>
+  get(secid: string, tab: ChartTab, fqt?: FqMode): Promise<ChartPayload | null>
   stats(): ChartCacheStats
   clear(): void
 }
 
-type Loader = (secid: string, tab: ChartTab) => Promise<ChartPayload | null>
+type Loader = (secid: string, tab: ChartTab, fqt: FqMode) => Promise<ChartPayload | null>
 
 /** 宿主是否已经把这份数据冻结（休市定稿） */
 function settled(value: ChartPayload | null): boolean {
@@ -111,19 +114,22 @@ export function createChartCache(load: Loader = fetchChartPayload): ChartCache {
   const inflight = new Map<string, Promise<ChartPayload | null>>()
   let requests = 0
 
-  const keyOf = (secid: string, tab: ChartTab): string => `${secid}|${tab}`
+  const keyOf = (secid: string, tab: ChartTab, fqt: FqMode): string =>
+    // 复权口径只对 K 线有意义：分时/五日没有复权序列，共用同一个键，
+    // 否则切一次口径会白白重拉一份一模一样的当日分时
+    isKlineTab(tab) ? `${secid}|${tab}|${fqt}` : `${secid}|${tab}`
 
   const ttlOf = (tab: ChartTab, value: ChartPayload | null): number =>
     settled(value) ? TTL_SETTLED_MS[tab] : TTL_MS[tab]
 
   return {
-    peek(secid, tab) {
-      const hit = memo.get(keyOf(secid, tab))
+    peek(secid, tab, fqt) {
+      const hit = memo.get(keyOf(secid, tab, fqt ?? 1))
       return hit !== undefined && Date.now() < hit.exp ? hit.value : null
     },
 
-    get(secid, tab) {
-      const key = keyOf(secid, tab)
+    get(secid, tab, fqt) {
+      const key = keyOf(secid, tab, fqt ?? 1)
       const hit = memo.get(key)
       if (hit !== undefined && Date.now() < hit.exp) {
         return Promise.resolve(hit.value === null ? null : { ...hit.value, fromCache: true })
@@ -131,7 +137,7 @@ export function createChartCache(load: Loader = fetchChartPayload): ChartCache {
       const running = inflight.get(key)
       if (running !== undefined) return running
       requests += 1
-      const p = load(secid, tab)
+      const p = load(secid, tab, isKlineTab(tab) ? fqt ?? 1 : 1)
         .then((value) => {
           memo.set(key, { exp: Date.now() + ttlOf(tab, value), value })
           return value
@@ -171,6 +177,30 @@ let lastTab: ChartTab = 'trend'
 export const rememberedTab = (): ChartTab => lastTab
 export const rememberTab = (t: ChartTab): void => {
   lastTab = t
+}
+
+/**
+ * 复权口径：默认前复权（除权跳空会让历史 K 线出现无解释的暴跌，前复权序列连续），
+ * 全局记住上一次的选择，同时按标的记住各自的口径 —— 换回某只股票时回到它上次的选择。
+ */
+let lastFqt: FqMode = 1
+const fqBySymbol = new Map<string, FqMode>()
+
+/** 段控顺序：前复权（默认）→ 后复权 → 不复权 */
+export const FQ_ORDER: readonly FqMode[] = [1, 2, 0]
+
+export const fqFor = (secid: string): FqMode => fqBySymbol.get(secid) ?? lastFqt
+
+export function rememberFq(secid: string, fqt: FqMode): void {
+  lastFqt = fqt
+  fqBySymbol.set(secid, fqt)
+}
+
+/** 图表脚注里的复权口径说明（不适用时必须说明原因，不能只显示"不复权"让人以为是选择） */
+export function fqNoteOf(kline: KlineData): string {
+  if (kline.fqSupported === false) return ' · 不复权（指数/期货无除权除息）'
+  const mode: FqMode = kline.fqt ?? 1
+  return mode === 0 ? ' · 不复权' : ` · ${FQ_LABEL[mode]}（详情头为真实成交价）`
 }
 
 /** 图表脚注里的缓存来源说明（诚实标注，不假装是刚取到的新数据） */

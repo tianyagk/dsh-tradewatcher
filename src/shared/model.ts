@@ -142,6 +142,17 @@ export interface DayBar {
   pct: number | null
 }
 
+/**
+ * 复权口径（编号与东财 `fqt` 一致）：0=不复权 1=前复权 2=后复权。
+ *
+ * 只有股票 / ETF / 基金 / 港美股有除权除息，才谈得上复权；指数是点位回报、
+ * 期货是合约价格、板块是成分股统计，强行复权等于伪造趋势 —— 这些标的
+ * 一律回落 `0` 并把 `fqSupported` 标成 false（见 host/em.ts 的 `fqSupported`）。
+ */
+export type FqMode = 0 | 1 | 2
+
+export const FQ_LABEL: Record<FqMode, string> = { 0: '不复权', 1: '前复权', 2: '后复权' }
+
 export interface KlineData {
   secid: string
   days: DayBar[]
@@ -152,6 +163,13 @@ export interface KlineData {
    * 数据是完整的收盘序列，只是不需要再问上游要）。
    */
   cached?: boolean
+  /**
+   * 本次数据**实际**使用的复权口径（不适用复权时恒为 0，哪怕请求里写了 1）。
+   * 界面必须用这个值显示口径，而不是用自己请求的那个值。
+   */
+  fqt?: FqMode
+  /** false = 该标的没有除权除息概念，界面上的复权开关应禁用并说明原因 */
+  fqSupported?: boolean
 }
 
 /** ── 财经日历 ─────────────────────────────────────────────────────────── */

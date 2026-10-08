@@ -315,7 +315,7 @@ interface FixtureBar {
 }
 
 /** 造一份"昨天收盘就已落袋"的日K缓存：300 根，updatedAt = 生成时刻 */
-function writeKlineFixture(secid: string, klt: number, n: number): FixtureBar[] {
+function writeKlineFixture(secid: string, klt: number, n: number, fqt: 0 | 1 | 2 | 'legacy' = 1): FixtureBar[] {
   const dir = join(process.env.DSH_HOME as string, 'dsh-tradewatcher', 'klines')
   mkdirSync(dir, { recursive: true })
   const now = Date.now()
@@ -324,7 +324,9 @@ function writeKlineFixture(secid: string, klt: number, n: number): FixtureBar[] 
     const date = new Date(now - i * 86_400_000).toISOString().slice(0, 10)
     bars.push({ date, open: 100 + i, close: 100.5 + i, high: 101 + i, low: 99 + i, vol: 1000 + i })
   }
-  writeFileSync(join(dir, `${secid}_${klt}.json`), JSON.stringify({ v: 1, secid, klt, updatedAt: now, bars }))
+  // 'legacy' = v0.22.0 之前的文件名（<secid>_<klt>.json，当时一律不复权）
+  const name = fqt === 'legacy' ? `${secid}_${klt}.json` : `${secid}_${klt}_${fqt}.json`
+  writeFileSync(join(dir, name), JSON.stringify({ v: 2, secid, klt, updatedAt: now, bars }))
   return bars
 }
 
@@ -388,6 +390,107 @@ test('K 线盘缓存：盘中上游全挂 → 如实标 stale + 旧缓存照给�
     assert.ok(tries > 0, '盘中必须真的尝试过回源（证明没走定稿分支）')
   } finally {
     globalThis.fetch = original
+    unpin()
+    h.close()
+  }
+})
+
+test('K 线复权：后复权与前复权各自落盘，互不顶替（口径进缓存键）', async () => {
+  const h = await harness()
+  // 北京 2026-10-03（周六）12:00 —— 休市定稿，命中缓存即零回源，能干净地看出"读的是哪一份文件"
+  const unpin = pinNow(Date.UTC(2026, 9, 3, 4, 0, 0))
+  const secid = '1.600519'
+  writeKlineFixture(secid, 101, 300, 2)
+  try {
+    const res = await h.call('/tradewatcher/kline', `/tradewatcher/kline?secid=${secid}&klt=101&lmt=240&fqt=2`)
+    assert.equal(res.code, 200)
+    const k = res.body.kline as { days: unknown[]; fqt?: number; fqSupported?: boolean; cached?: boolean }
+    assert.equal(k.fqt, 2, '回包必须如实说明实际生效的口径是后复权')
+    assert.equal(k.fqSupported, true, '股票支持复权')
+    assert.equal(k.days.length, 240, '后复权缓存独立可用')
+    assert.equal(k.cached, true, '休市定稿复用')
+  } finally {
+    unpin()
+    h.close()
+  }
+})
+
+test('K 线复权：不复权不会拿复权序列顶替（缺该口径即回源/失败，不给错图）', async () => {
+  const h = await harness()
+  const unpin = pinNow(Date.UTC(2026, 9, 3, 4, 0, 0))
+  const original = globalThis.fetch
+  let tries = 0
+  globalThis.fetch = (() => {
+    tries += 1
+    return Promise.reject(new Error('fetch failed'))
+  }) as typeof fetch
+  try {
+    const secid = '1.600519'
+    writeKlineFixture(secid, 101, 300, 1) // 只有前复权那一份
+    const res = await h.call('/tradewatcher/kline', `/tradewatcher/kline?secid=${secid}&klt=101&lmt=240&fqt=0`)
+    assert.equal(res.code, 200)
+    assert.ok(tries > 0, '不复权没有缓存时必须真的回源，不能默默用前复权数据')
+    assert.equal(res.body.kline, null, '上游不可用且无该口径缓存 → 如实给 null，界面显示暂无数据')
+  } finally {
+    globalThis.fetch = original
+    unpin()
+    h.close()
+  }
+})
+
+test('K 线复权：旧版缓存文件（无口径后缀＝不复权）仍被复用，不白拉一遍', async () => {
+  const h = await harness()
+  const unpin = pinNow(Date.UTC(2026, 9, 3, 4, 0, 0))
+  const counter = countFetch()
+  try {
+    const secid = '0.300750'
+    const bars = writeKlineFixture(secid, 101, 300, 'legacy')
+    const res = await h.call('/tradewatcher/kline', `/tradewatcher/kline?secid=${secid}&klt=101&lmt=240&fqt=0`)
+    assert.equal(res.code, 200)
+    const k = res.body.kline as { days: Array<{ date: string }>; fqt?: number; cached?: boolean }
+    assert.equal(k.fqt, 0)
+    assert.equal(k.days.length, 240)
+    assert.equal(k.days[239].date, bars[299].date)
+    assert.equal(counter.calls(), 0, 'v0.22.0 的老缓存就是不复权数据，必须零回源复用')
+  } finally {
+    counter.restore()
+    unpin()
+    h.close()
+  }
+})
+
+test('K 线复权：指数回落不复权并标 fqSupported=false（哪怕请求里写了前复权）', async () => {
+  const h = await harness()
+  const unpin = pinNow(Date.UTC(2026, 9, 3, 4, 0, 0))
+  const counter = countFetch()
+  try {
+    const secid = '1.000001' // 上证指数
+    writeKlineFixture(secid, 101, 300, 0)
+    const res = await h.call('/tradewatcher/kline', `/tradewatcher/kline?secid=${secid}&klt=101&lmt=60&fqt=1`)
+    assert.equal(res.code, 200)
+    const k = res.body.kline as { days: unknown[]; fqt?: number; fqSupported?: boolean }
+    assert.equal(k.fqSupported, false, '指数没有除权除息，界面必须禁用复权开关')
+    assert.equal(k.fqt, 0, '实际生效口径回落不复权')
+    assert.equal(k.days.length, 60)
+    assert.equal(counter.calls(), 0, '读的是不复权那份缓存（指数从不写复权缓存）')
+  } finally {
+    counter.restore()
+    unpin()
+    h.close()
+  }
+})
+
+test('K 线复权：非法 fqt 按默认前复权处理，缺省也是前复权', async () => {
+  const h = await harness()
+  const unpin = pinNow(Date.UTC(2026, 9, 3, 4, 0, 0))
+  try {
+    const secid = '0.000858'
+    writeKlineFixture(secid, 101, 120, 1)
+    const we = await h.call('/tradewatcher/kline', `/tradewatcher/kline?secid=${secid}&klt=101&lmt=60&fqt=9`)
+    assert.equal((we.body.kline as { fqt?: number }).fqt, 1, 'fqt=9 非法 → 默认前复权')
+    const noParam = await h.call('/tradewatcher/kline', `/tradewatcher/kline?secid=${secid}&klt=101&lmt=60`)
+    assert.equal((noParam.body.kline as { fqt?: number }).fqt, 1, '不传 fqt 时默认前复权')
+  } finally {
     unpin()
     h.close()
   }

@@ -202,7 +202,11 @@ export function makeTradeRoutes(
           const rawLmt = Number(queryOf(req).get('lmt') ?? 0)
           const defLmt = klt === 101 ? 240 : klt === 102 ? 200 : klt === 103 ? 120 : 20
           const lmt = Number.isFinite(rawLmt) && rawLmt >= 5 ? Math.min(1000, Math.round(rawLmt)) : defLmt
-          const kline = await em.fetchKline(secid, klt, lmt)
+          // 复权口径：0=不复权 1=前复权（默认）2=后复权；非法值按默认处理，
+          // 实际生效的口径由 fetchKline 回包里的 fqt 字段决定（指数/期货恒为 0）
+          const rawFqt = Number(queryOf(req).get('fqt') ?? 1)
+          const fqt = rawFqt === 0 || rawFqt === 2 ? rawFqt : 1
+          const kline = await em.fetchKline(secid, klt, lmt, fqt)
           send(res, 200, { kline })
         } catch (error) {
           fail(res, error)

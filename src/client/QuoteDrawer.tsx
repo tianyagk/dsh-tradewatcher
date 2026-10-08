@@ -5,19 +5,24 @@
  * reopening the same stock costs zero requests while the entry is fresh.
  */
 import React, { useEffect, useRef, useState } from 'react'
-import type { StockDetail, TradeMark } from '../shared/model.ts'
+import type { FqMode, StockDetail, TradeMark } from '../shared/model.ts'
+import { FQ_LABEL } from '../shared/model.ts'
 import { api } from './api.ts'
 import { dirClass, fmtAmt, fmtBig, fmtPct, fmtPrice, fmtSigned } from './format.ts'
 import { Btn, Skeleton} from './ui.tsx'
 import type { CandleMarker, SparkMarker } from './charts.tsx'
 import { KlineChart, TrendChart } from './kline.tsx'
 import {
+  FQ_ORDER,
   KLINE_PLAN,
   TAB_LABEL,
   cacheNoteOf,
   chartCache,
+  fqFor,
+  fqNoteOf,
   isKlineTab,
   rememberedTab,
+  rememberFq,
   rememberTab,
   type ChartPayload,
   type ChartTab,
@@ -42,6 +47,8 @@ export function QuoteDrawer(props: { secid: string; name: string; redUp: boolean
   const { secid, name, redUp, onClose } = props
   // 记住上次看的周期：关掉再打开、换一只标的时不必重新点一次
   const [tab, setTab] = useState<ChartTab>(rememberedTab())
+  // 复权口径：默认前复权，按标的记忆（见 chartCache.ts 的 fqFor/rememberFq）
+  const [fqt, setFqt] = useState<FqMode>(() => fqFor(secid))
   const [payload, setPayload] = useState<ChartPayload | null>(null)
   const [loading, setLoading] = useState(true)
   const [err, setErr] = useState<string | null>(null)
@@ -66,7 +73,7 @@ export function QuoteDrawer(props: { secid: string; name: string; redUp: boolean
   useEffect(() => {
     let alive = true
     setErr(null)
-    const peeked = chartCache.peek(secid, tab)
+    const peeked = chartCache.peek(secid, tab, fqt)
     if (peeked !== null) {
       // 有缓存：先出图，不闪骨架
       setPayload(peeked)
@@ -76,11 +83,17 @@ export function QuoteDrawer(props: { secid: string; name: string; redUp: boolean
       setPayload((prev) => (prev !== null && prev.tab === tab ? prev : null))
     }
     chartCache
-      .get(secid, tab)
+      .get(secid, tab, fqt)
       .then((value) => {
         if (!alive) return
         setPayload(value)
         setErr(value === null ? '该周期暂无数据（停牌/新股/接口限流）' : null)
+        // 宿主认定该标的不适用复权（指数/期货）：把口径归位到它实际用的 0，
+        // 后续请求与缓存键都对齐，界面上也不会显示一个没生效的选择
+        if (value !== null && value.kind === 'kline' && value.kline.fqSupported === false && fqt !== 0) {
+          rememberFq(secid, 0)
+          setFqt(0)
+        }
       })
       .catch((e: Error) => {
         if (alive) setErr(e.message)
@@ -89,7 +102,7 @@ export function QuoteDrawer(props: { secid: string; name: string; redUp: boolean
         if (alive) setLoading(false)
       })
     return () => { alive = false }
-  }, [secid, tab, retry])
+  }, [secid, tab, fqt, retry])
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
@@ -259,12 +272,45 @@ export function QuoteDrawer(props: { secid: string; name: string; redUp: boolean
       const first = k.days[0]
       const last = k.days[k.days.length - 1]
       if (first !== undefined && last !== undefined) {
-        note = `共 ${k.days.length} 根 · ${first.date} ~ ${last.date} · MA5/10/30/60 · 滚轮或拖动滑块缩放日期区间${k.stale === true ? ' · 缓存数据（上游暂不可用）' : ''}`
+        note = `共 ${k.days.length} 根${fqNoteOf(k)} · ${first.date} ~ ${last.date} · MA5/10/30/60 · 滚轮或拖动滑块缩放日期区间${k.stale === true ? ' · 缓存数据（上游暂不可用）' : ''}`
+      } else {
+        note = fqNoteOf(k).replace(/^ · /, '')
       }
     }
     // 数据来源如实标注：本地缓存 / 休市定稿 / 本次刷新失败时的上次成功数据
     const cn = cacheNoteOf(payload)
     if (cn !== '') note = note === '' ? cn.replace(/^ · /, '') : note + cn
+  }
+
+  // 复权段控：只在 K 线周期出现；宿主判定"不适用"时禁用，并把原因写在 title 与角标上
+  const fqDisabled = payload !== null && payload.kind === 'kline' && payload.kline.fqSupported === false
+  const fqControl = (): React.ReactNode => {
+    if (!isKlineTab(tab)) return null
+    const titleOf = (m: FqMode): string =>
+      fqDisabled
+        ? '该标的是指数/期货，价格本身没有除权除息，复权不适用'
+        : `${FQ_LABEL[m]}${m === 0 ? '' : ' · 详情头的行情字段始终是真实成交价'}`
+    return React.createElement('div', { className: 'tw-fq', role: 'group', 'aria-label': '复权口径' },
+      React.createElement('span', { className: 'k' }, '复权'),
+      FQ_ORDER.map((m) =>
+        React.createElement('button', {
+          key: m,
+          type: 'button',
+          className: 'tw-fq-btn',
+          'data-on': !fqDisabled && fqt === m,
+          'aria-pressed': !fqDisabled && fqt === m,
+          disabled: fqDisabled,
+          title: titleOf(m),
+          onClick: () => {
+            rememberFq(secid, m)
+            setFqt(m)
+          },
+        }, FQ_LABEL[m]),
+      ),
+      fqDisabled
+        ? React.createElement('span', { className: 'tw-fq-hint', title: '指数按点位、期货按合约价，都没有除权除息' }, '不适用')
+        : null,
+    )
   }
 
   return React.createElement(
@@ -287,6 +333,8 @@ export function QuoteDrawer(props: { secid: string; name: string; redUp: boolean
             },
           }, TAB_LABEL[t]),
         ),
+        React.createElement('span', { style: { flex: 1, minWidth: 4 } }),
+        fqControl(),
       ),
       React.createElement('div', { ref: containerRef, className: 'tw-drawer-body' },
         chartBody(),
