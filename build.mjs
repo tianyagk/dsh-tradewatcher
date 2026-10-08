@@ -135,6 +135,8 @@ const REQUIRED_CLIENT_SNIPPETS = [
   '后复权',
   '不复权',
   '不适用',                  // 指数/期货无除权除息，开关必须禁用并给理由
+  'sidebar.panellist',      // dsh 0.2 客户端扩展面：侧栏图标席位（旧 betterSidebar 已移除）
+  'slots.register',         // 面板注册必须走 Slots 服务，否则界面整个不会出现
 ]
 
 const clientBundle = readFileSync('lib/client.js', 'utf8')

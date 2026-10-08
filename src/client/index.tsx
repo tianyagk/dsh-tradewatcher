@@ -1,9 +1,12 @@
 /**
- * dsh-tradewatcher — browser half. Registers the 「盯盘」 sidebar tab via the
- * `ctx.betterSidebar` service (provided by dsh-better-sidebar's client half)
- * and renders the full dashboard: three-strip TopBar with hover intraday
- * charts, inner tabs (自选 / 持仓 / 大盘 / 云图), all data served by the host
+ * dsh-tradewatcher — browser half. Registers a global panel through the
+ * Harness Slots service（`sidebar.panellist` 图标 + 同名 `main` 面板键）and
+ * renders the full dashboard: three-strip TopBar with hover intraday charts,
+ * inner tabs (自选 / 持仓 / 大盘 / 云图 / 日历), all data served by the host
  * half over same-origin /tradewatcher/* routes.
+ *
+ * 注意：面板只在「被选中」时挂载（shell 用 renderSlot('main', …, {entryKey}) 只渲染
+ * 当前 key），所以挂载即等价于旧版的 visible —— 未选中时组件卸载，轮询自然停止。
  */
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { DEFAULT_PREFS, TW_ROWS, type PortPrefs, type QuoteRow } from '../shared/model.ts'
@@ -18,61 +21,78 @@ import { CalendarPage } from './CalendarPage.tsx'
 import { QuoteDrawer } from './QuoteDrawer.tsx'
 import { ensureCss } from './styles.ts'
 
-/** Structural face of ctx.betterSidebar (see dsh-better-sidebar service). */
-interface SidebarTabDescriptor {
-  id: string
-  title: string | (() => string)
-  icon?: React.ReactNode | ((size: number) => React.ReactNode)
+/** 侧栏图标与主面板共用的 id（`sidebar.panellist` 的 id == `main` 的 key）。 */
+const PANEL_ID = 'tradewatcher'
+
+/** Structural face of the client `slots` service（见 dsh-client-ui-slots 的 SlotCore）。 */
+interface SlotRegistration {
+  name: string
+  /** list 槽位用 id；keyed 槽位用 key。 */
+  id?: string
+  key?: string
   order?: number
-  single?: boolean
-  component: (props: TabProps) => React.ReactNode
+  label?: string | (() => string)
 }
-interface BetterSidebarService {
-  registerTab(d: SidebarTabDescriptor): () => void
+interface SlotsService {
+  inject(key: string, callback: () => () => void): () => void
+  register(options: SlotRegistration, component: (props: any) => React.ReactNode): () => void
 }
-interface TabProps {
-  // ctx: unknown
-  // store: unknown
-  scope: { sessionId?: string; cwd?: string }
-  tab: { id: string; type: string }
-  visible: boolean
+interface ClientContext {
+  slots: SlotsService
+  effect(fn: () => void | (() => void), label?: string): void
 }
 
-/** Plugin identity for the client module table. */
+/** Plugin identity for the client module table（必须等于包名）。 */
 export const name = 'dsh-tradewatcher'
 
 /** Services required before mounting. */
-export const inject = ['betterSidebar']
+export const inject = ['slots']
 
-export function apply(ctx: {
-  betterSidebar: BetterSidebarService
-  effect(fn: () => void | (() => void), label?: string): void
-}): void {
+export function apply(ctx: ClientContext): void {
   ensureCss()
   try {
     console.log(`[dsh-tradewatcher] client v${__TW_VERSION__} loaded (board fallbacks: Tencent industry/concept + Sina ETF + LKG)`)
   } catch {
     /* console unavailable */
   }
-  ctx.effect(
-    () =>
-      ctx.betterSidebar.registerTab({
-        id: 'dsh-tradewatcher',
-        title: () => '大盘概览',
-        icon: (size: number): React.ReactNode =>
-          React.createElement('span', { style: { fontSize: Math.round(size * 0.78), lineHeight: 1 } }, '📈'),
-        order: 60,
-        single: true,
-        component: (props: TabProps): React.ReactNode => React.createElement(App, props),
-      }),
-    'dsh-tradewatcher: 盯盘 tab',
+  // 侧栏入口：图标组件收到 shell 的 ownerProps { size, active }，label 供 aria-label 与展开态标题
+  ctx.slots.inject('sidebar.panellist', () =>
+    ctx.slots.register(
+      { name: 'sidebar.panellist', id: PANEL_ID, order: 60, label: () => '盯盘' },
+      PanelIcon,
+    ),
+  )
+  // 主面板：key 与侧栏 id 相同，shell 依据 activePanelId 决定渲染哪一个
+  ctx.slots.inject('main', () => ctx.slots.register({ name: 'main', key: PANEL_ID }, Dashboard))
+}
+
+/** 侧栏图标：随主题着色的走势线（不引 Harness 组件库，保持零依赖）。 */
+function PanelIcon(props: { size?: number; active?: boolean }): React.ReactElement {
+  const size = props.size ?? 18
+  return React.createElement(
+    'svg',
+    {
+      width: size,
+      height: size,
+      viewBox: '0 0 16 16',
+      fill: 'none',
+      stroke: 'currentColor',
+      strokeWidth: props.active === true ? 1.9 : 1.6,
+      strokeLinecap: 'round',
+      strokeLinejoin: 'round',
+      'aria-hidden': true,
+      focusable: false,
+      style: { display: 'block' },
+    },
+    React.createElement('path', { key: 'line', d: 'M1.6 10.4 5.9 5.6l2.7 2.4 5.4-5' }),
+    React.createElement('path', { key: 'tip', d: 'M10.6 3h4.2v4.2' }),
   )
 }
 
 type PageKey = 'watch' | 'portfolio' | 'market' | 'cloud' | 'calendar'
 
-function App(props: TabProps): React.ReactElement {
-  const visible = props.visible
+function Dashboard(): React.ReactElement {
+  const visible = true
   const [page, setPage] = useState<PageKey>('watch')
   const [prefs, setPrefsState] = useState<PortPrefs | null>(null)
   const [watchIds, setWatchIds] = useState<string[]>([])
@@ -171,7 +191,7 @@ function App(props: TabProps): React.ReactElement {
 
   return React.createElement(
     'div',
-    { className: 'tw-root', 'data-theme': theme, style: { height: '100%', display: 'flex', flexDirection: 'column', minWidth: 0 } },
+    { className: 'tw-root', 'data-theme': theme, style: { flex: 1, height: '100%', minHeight: 0, display: 'flex', flexDirection: 'column', minWidth: 0 } },
     React.createElement(TopBar, {
       quotes,
       missing: engine.missing,

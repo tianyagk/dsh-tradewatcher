@@ -1,6 +1,6 @@
 # dsh-tradewatcher（盯盘）
 
-一个 DeepSeek Harness **Web 插件**：在 betterSidebar（`ctx.betterSidebar` 服务）注册一个「盯盘」页签，提供 A股/国际/商品行情条 + 悬浮分时图、内嵌大盘云图（52etf.site）、分组自选、流水驱动的分组持仓账本（市值/浮动盈亏/当日盈亏/已实现），并把持仓记录以**只读模型工具 + 明文 JSON 双通道**开放给 dsh 会话分析。
+一个 DeepSeek Harness **Web 插件**：通过宿主客户端 **Slots 服务**注册一个全局「盯盘」面板（左侧栏图标 `sidebar.panellist` + 主面板 `main`，两者 id/key 同为 `tradewatcher`），提供 A股/国际/商品行情条 + 悬浮分时图、内嵌大盘云图（52etf.site）、分组自选、流水驱动的分组持仓账本（市值/浮动盈亏/当日盈亏/已实现），并把持仓记录以**只读模型工具 + 明文 JSON 双通道**开放给 dsh 会话分析。
 
 界面与数据组织参考浏览器插件「爱盯盘」（[52etf.site](https://52etf.site/)）；行情为免费公开接口的**延迟行情**（非 L2），仅作盯盘参考，不构成投资建议。
 
@@ -68,7 +68,7 @@
 
 ## 安装
 
-前置：插件依赖宿主已挂载 `dsh-better-sidebar`（本机 web profile 一般已随其他聚合插件提供；`ctx.betterSidebar` 缺失时「盯盘」页签不会出现）。
+前置：插件按 **dsh 0.2.x 的客户端 Slots 契约**注册面板（`ctx.slots.inject('sidebar.panellist' | 'main', …)`），不依赖任何第三方侧边栏插件；宿主侧只需 `webServer` + `webRuntime` 两个服务（由 dsh web 提供）。旧版 `ctx.betterSidebar` 已在 0.2 移除，请配合 0.24.0 及以上版本的插件使用。
 
 ```bash
 # 1) 构建（lib/index.js + lib/client.js）
@@ -77,8 +77,8 @@ cd dsh-tradewatcher && npm install && npm run build   # 或 npm run selftest
 # 2) 注册进 web profile（默认 ~/.dsh/profiles/web，可用 DSH_PROFILE_DIR 覆盖）
 bash scripts/install.sh
 
-# 3) 重启 dsh web 进程（必须：客户端 bundle 在启动时装载）
-#    重启后打开 betterSidebar「+」菜单 → 大盘概览
+# 3) 重启 dsh web 进程（必须：宿主半区改动只有重启后才生效）
+#    重启后点左侧栏「盯盘」图标（走势线）打开主面板
 ```
 
 卸载：`bash scripts/uninstall.sh`，然后同样重启 web。
@@ -133,7 +133,7 @@ src/
   host/tools.ts       # tradewatcher_* agent 工具 + 提示词段落
   host/selftest.ts    # npm run selftest（核算断言 + 实时接口冒烟，网络项 soft）
   host/routes.test.ts # npm test 的一部分：路由层断言（伪造 req/res 直调 handler，不依赖上游可用性）
-  client/index.tsx    # 浏览器半区：ctx.betterSidebar.registerTab + 装配
+  client/index.tsx    # 浏览器半区：ctx.slots 注册（sidebar.panellist 图标 + main 面板）+ 装配
   client/*.tsx        # TopBar/自选/持仓/A股大盘/云图 + SVG 分时图 + 悬浮卡
   shared/model.ts     # 两端共享类型 + 23 个固定代码
 ```

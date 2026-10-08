@@ -136,6 +136,7 @@
 
 ## 已完成（清单吸收的既有工作）
 
+- **dsh 0.2.x 客户端适配（v0.24.0）**：`ctx.betterSidebar`（0.1.x 的侧边栏页签服务）在新版已被移除，浏览器半区改为宿主 Slots 契约——`ctx.slots.inject('sidebar.panellist', …)` 注册侧栏图标（id `tradewatcher`）、`ctx.slots.inject('main', …)` 注册同名主面板键，自绘 SVG 图标（不引 Harness 组件库，保持零依赖）；面板只在被选中时挂载，未选中即卸载，轮询自然停止。宿主半区（`webServer`/`webRuntime`/`tools`/`systemPrompt`）在 0.2.x 形状未变，无需改动。
 - **K 线复权（v0.23.0，默认前复权）**：三态可切、按标的记忆、`fqSupported` 判定适用性（指数/期货禁用并给理由）、口径进缓存键（缺该口径宁可失败不拿别的顶替）、腾讯兜底混口径修正、MA/MACD/B/S 与图同源、详情头始终真实成交价。详见 README「K 线复权」。
 - 详情图入口与历史数据本地缓存（v0.22.0）、护盘面板状态表述（v0.19.1）、列表排序（v0.19.0）等见 README 对应章节。
 
