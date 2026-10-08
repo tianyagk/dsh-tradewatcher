@@ -41,7 +41,20 @@ export interface PluginToolDefinition {
     /** Pure projection from args + value to model-facing content blocks. */
     render(args: unknown, value: unknown): Array<{ type: 'text'; text: string }>
   }
-  execute(args: Record<string, unknown>, exec?: { signal?: AbortSignal }): Promise<unknown>
+  execute(args: Record<string, unknown>, exec?: PluginToolExec): Promise<unknown>
+}
+
+/**
+ * 工具执行上下文的结构面（`@deepseek-ai/dsh-tools` 的 ToolRunContext 子集）。
+ * 只声明本插件真正读的字段：
+ *   - `signal`：取消信号（写操作应在长耗时前先看它）；
+ *   - `agent.id`：**会话 id**，写操作的 `by` 字段用它标注"这次是谁写的"（P0-11）。
+ *     真实 `Agent` 的 id 是 `SessionId`（见 dsh-agent 的 types.d.ts），此处只当作
+ *     不透明字符串 —— 不引入对 dsh-agent 的类型依赖。
+ */
+export interface PluginToolExec {
+  signal?: AbortSignal
+  agent?: { id?: unknown }
 }
 
 /** The cordis `tools` service face: register returns a disposer. */

@@ -88,10 +88,23 @@ await build({
  *
  * 起因：v0.13.2 的复盘表在客户端源码里**从未插入**（脚本补丁因缩进不匹配静默失败），
  * 而 tsc、host selftest、构建全部通过 —— 这类"少了一段 JSX"的失败只有对着产物查才拦得住。
- * 注意：该 bundle 把中文转义为大写 \uXXXX，比对时必须按大写形式，否则会得到假阴性。
+ * 注意：esbuild 会把非 ASCII 字符转义，且**分两种形式**（都是大写十六进制）：
+ *   - 码位 ≤ 0xFF（`·` U+00B7、`¥` U+00A5）→ `\xHH` 两位；
+ *   - 码位 > 0xFF（汉字、全角标点）→ `\uXXXX` 四位。
+ * 曾经只按 `\uXXXX` 一种形式比对，于是含有 `·` / `¥` 的片段一律报"缺少 UI 片段"——
+ * 校验器自己的假阴性比漏检更浪费时间（会让人去源码里找一个其实存在的字符串）。
  */
 const escapeUpper = (text) =>
   [...text].map((c) => (c.charCodeAt(0) > 127 ? `\\u${c.charCodeAt(0).toString(16).toUpperCase().padStart(4, '0')}` : c)).join('')
+
+/** esbuild 实际使用的转义形式：≤0xFF 用 \xHH，其余用 \uXXXX */
+const escapeEsbuild = (text) =>
+  [...text].map((c) => {
+    const code = c.charCodeAt(0)
+    if (code <= 127) return c
+    const hex = code.toString(16).toUpperCase()
+    return code <= 0xff ? `\\x${hex.padStart(2, '0')}` : `\\u${hex.padStart(4, '0')}`
+  }).join('')
 
 const REQUIRED_CLIENT_SNIPPETS = [
   '当日记录',                // 上游不可用时的当日记录条
@@ -113,7 +126,17 @@ const REQUIRED_CLIENT_SNIPPETS = [
   '历史同类情形的频率',        // 概率口径说明（防止被当成预测）
   '板块涨跌来自腾讯备用源',     // 板块栏的来源标注
   '「主力净流入」仅东财提供',   // 备用源下资金流不可用的说明
-  '滞后',                    // 顶栏"数据滞后"标记（真实 asOf/stale）
+  // v0.25.0（P0 批次）：口径与状态外化的关键片段 —— 这些字符串来自用户可见文案，
+  // 一旦补丁/重构把它们丢掉，构建就该失败（历史上的"少了一段 JSX"正是这样漏出去的）
+  '状态：',                  // 逐卡四态 tooltip（quoteState.ts）
+  '当根未收盘',              // 详情图口径条（P0-5）：MA 是否含未收盘当根
+  '采样暂停 · 下次',          // 护盘非活跃时段的显式态（P0-4）
+  '贡献',                    // 因子贡献度列（P0-7）
+  '隐身',                    // 三档视图（P0-8）
+  '可以导入',                // 备份导入前的校验结论（P0-9）
+  '秒内加载',                // 云图超时占位（P0-10）
+  '不含 ',                   // 未计入总额的可下钻标记（P0-1）
+  '¥••••',                   // 隐身模式的金额遮罩（P0-8）
   '上次结果',                // 底部视图的保留视图标记（校准暂不可用）
   '台熔断',                  // 护盘面板的熔断聚合横幅
   '自选排序',                // 自选页排序段控（aria-label）
@@ -146,7 +169,10 @@ if (!clientBundle.includes(TW_VERSION)) {
   process.exit(1)
 }
 const missing = REQUIRED_CLIENT_SNIPPETS.filter(
-  (snippet) => !clientBundle.includes(snippet) && !clientBundle.includes(escapeUpper(snippet)),
+  (snippet) =>
+    !clientBundle.includes(snippet) &&
+    !clientBundle.includes(escapeUpper(snippet)) &&
+    !clientBundle.includes(escapeEsbuild(snippet)),
 )
 if (missing.length > 0) {
   console.error(`\n构建校验失败：lib/client.js 缺少以下 UI 片段 —— ${missing.join(' / ')}`)

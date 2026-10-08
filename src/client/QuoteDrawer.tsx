@@ -282,6 +282,43 @@ export function QuoteDrawer(props: { secid: string; name: string; redUp: boolean
     if (cn !== '') note = note === '' ? cn.replace(/^ · /, '') : note + cn
   }
 
+  /**
+   * 图表数据口径条（P0-5）。
+   *
+   * 每一个在图上的数都必须能被追问"哪根、什么口径、更新到几点"，因此这一行的**全部字段
+   * 都取自实际取数参数**，不许手写死：
+   *   - 周期：实际请求的 klt（来自 KLINE_PLAN，不是 tab 文字）；
+   *   - 复权：宿主回包里的 `kline.fqt`（实际生效口径），**不是**界面上请求的那个
+   *     （指数/期货会被宿主收敛为 0，用请求值会显示错口径）；
+   *   - 截至：宿主给的 `kline.asOf`（本地最近一次成功取数时刻）；
+   *   - 当根是否收盘：`kline.barOpen`，并明确告知 MA 是否含该根。
+   */
+  const caliberLine = (): string => {
+    if (payload === null || payload.kind !== 'kline') {
+      if (payload !== null && payload.kind === 'trend') {
+        const t = payload.trend
+        const last = t.points[t.points.length - 1]
+        return `${TAB_LABEL[payload.tab]} · 不复权（分时序列无除权概念） · 截至 ${last !== undefined ? last.label.slice(5, 16) : '—'}`
+      }
+      return ''
+    }
+    const k = payload.kline
+    const plan = KLINE_PLAN[payload.tab]
+    const last = k.days[k.days.length - 1]
+    const at = typeof k.asOf === 'number' && k.asOf > 0
+      ? new Date(k.asOf).toLocaleString('zh-CN', { hour12: false, month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
+      : '—'
+    const mode = TAB_LABEL[payload.tab]
+    const fq = k.fqSupported === false ? '不复权（该标的不适用）' : FQ_LABEL[(k.fqt ?? fqt) as FqMode]
+    const tail = k.cached === true
+      ? '已收盘定稿'
+      : k.barOpen === true
+        ? `当根未收盘，MA/MACD 已含未收盘当根（${last !== undefined ? last.date.slice(5) : '—'}）`
+        : '当根已收盘'
+    return `${mode} · klt ${plan.klt} · ${fq} · 截至 ${at}（${tail}）`
+  }
+  const caliber = caliberLine()
+
   // 复权段控：只在 K 线周期出现；宿主判定"不适用"时禁用，并把原因写在 title 与角标上
   const fqDisabled = payload !== null && payload.kind === 'kline' && payload.kline.fqSupported === false
   const fqControl = (): React.ReactNode => {
@@ -337,6 +374,12 @@ export function QuoteDrawer(props: { secid: string; name: string; redUp: boolean
         fqControl(),
       ),
       React.createElement('div', { ref: containerRef, className: 'tw-drawer-body' },
+        caliber !== ''
+          ? React.createElement('div', {
+              className: 'tw-caliber',
+              title: '图上每个数都按这一行口径解释：周期 klt 来自实际请求参数，复权口径来自宿主回包的实际生效值；「截至」是本地最近一次成功取数时刻（未收盘当根在上游没有收盘时间，不用「现在」顶替）',
+            }, caliber)
+          : null,
         chartBody(),
         note !== '' || legend !== ''
           ? React.createElement('div', { className: 'tw-chartnote' }, `${note}${legend}`)

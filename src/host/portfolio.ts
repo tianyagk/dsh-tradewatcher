@@ -7,12 +7,24 @@ import type {
   GroupView,
   LedgerEntry,
   LedgerView,
+  Market,
   PortGroup,
   PortItem,
   PortfolioView,
   PositionRow,
   QuoteRow,
 } from '../shared/model.ts'
+import { marketOf } from '../shared/model.ts'
+
+/** 市场显示名（unpriced 的原因说明用；与 client/format.ts 的 shortLabel 同一口径） */
+const MARKET_LABEL: Record<Market, string> = {
+  cn: 'A股',
+  hk: '港股',
+  us: '美股',
+  intl: '国际',
+  futures: '期货/商品',
+  unknown: '未知市场',
+}
 import { replayPosition, type TradeState, sortLedger } from './store.ts'
 import { shanghaiDayStart as shDayStart } from './time.ts'
 
@@ -153,7 +165,6 @@ export interface PortfolioAssembly {
   /** Positions without a usable quote (kept so the UI can still show state). */
   stale: number
 }
-
 export function assemblePortfolio(
   groups: readonly PortGroup[],
   items: readonly PortItem[],
@@ -180,6 +191,11 @@ export function assemblePortfolio(
     let valued = 0
     for (const r of rows) {
       if (r.mv === null && r.qty > 0) continue // no quote yet
+      // 总额口径（P0-1/P1-11）：fxMode='none' 时**只统计 A股**。
+      // 港/美股以原币种计价，按 1:1 加进去会让总额"看起来完整、其实错了"，
+      // 而错的口径比缺的口径更危险（用户不会去质疑一个看起来正常的数）。
+      // 被排除的持仓逐项列进 unpriced，界面与工具都能说清缺的是谁、为什么。
+      if (marketOf(r.secid) !== 'cn') continue
       totalMv = add(totalMv, r.mv ?? 0)
       floatPnl = add(floatPnl, r.floatPnl)
       dilutedPnl = add(dilutedPnl, r.dilutedPnl ?? 0)
@@ -231,6 +247,32 @@ export function assemblePortfolio(
     },
   }
   const stale = positions.filter((p) => p.qty > 0 && p.price === null).length
+  // P0-1：总额缺一块必须能点开看到缺的是谁、为什么。
+  // 两类原因严格分开：① 拿不到价（行情源问题，重试可能恢复）② 非人民币计价且未折算
+  //（口径问题，重试一万次也一样）—— 混成一句"N 只无价"会让 agent 去等一个不会来的数据。
+  const unpriced: NonNullable<PortfolioView['unpriced']> = []
+  let unpricedMv = 0
+  for (const p of positions) {
+    if (p.qty <= 0) continue
+    if (p.price === null) {
+      unpriced.push({
+        posId: p.posId, secid: p.secid, name: p.name, qty: p.qty, why: 'no-quote',
+        note: '行情源未给出可用价格（东财与备用源均未返回），故不计入总额；重试可能恢复',
+      })
+      continue
+    }
+    const m = marketOf(p.secid)
+    if (m !== 'cn') {
+      unpriced.push({
+        posId: p.posId, secid: p.secid, name: p.name, qty: p.qty, why: 'no-fx',
+        note: `${MARKET_LABEL[m]}标的以原币种计价，当前 fxMode=none 不做折算，故不计入总额（不是按 1:1 加进去）`,
+      })
+      unpricedMv = round2(unpricedMv + (p.mv ?? 0))
+    }
+  }
+  view.fxMode = 'none'
+  view.unpriced = unpriced
+  view.unpricedMv = round2(unpricedMv)
   return { view, stale }
 }
 const VERB_LABEL: Record<LedgerEntry['verb'], string> = {

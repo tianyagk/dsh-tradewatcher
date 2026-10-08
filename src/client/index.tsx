@@ -8,8 +8,8 @@
  * 注意：面板只在「被选中」时挂载（shell 用 renderSlot('main', …, {entryKey}) 只渲染
  * 当前 key），所以挂载即等价于旧版的 visible —— 未选中时组件卸载，轮询自然停止。
  */
-import React, { useCallback, useEffect, useMemo, useState } from 'react'
-import { DEFAULT_PREFS, TW_ROWS, type PortPrefs, type QuoteRow } from '../shared/model.ts'
+import React, { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react'
+import { DEFAULT_PREFS, TW_ROWS, VIEW_MODES, type PortPrefs, type QuoteRow, type ViewMode } from '../shared/model.ts'
 import { api } from './api.ts'
 import { useQuoteEngine } from './useQuotes.ts'
 import { TopBar } from './TopBar.tsx'
@@ -20,9 +20,110 @@ import { CloudMap } from './CloudMap.tsx'
 import { CalendarPage } from './CalendarPage.tsx'
 import { QuoteDrawer } from './QuoteDrawer.tsx'
 import { ensureCss } from './styles.ts'
+import { isMoneyMasked, setMoneyMask } from './format.ts'
+import { Toast, useToast } from './ui.tsx'
 
 /** 侧栏图标与主面板共用的 id（`sidebar.panellist` 的 id == `main` 的 key）。 */
 const PANEL_ID = 'tradewatcher'
+
+/**
+ * 侧栏徽标状态（P0-3）。
+ *
+ * 为什么放在模块级而不是 React state：图标组件（PanelIcon）与主面板（Dashboard）
+ * 是**两条独立的注册链**，没有共同的 React 祖先可以传 props。模块级订阅是这两者
+ * 之间唯一不引入新依赖的通道；而且这样"徽标数据"只有一份，天然满足
+ * 「徽标数字与面板顶部数字同源」的要求。
+ */
+interface BadgeState {
+  text: string
+  /** 徽标颜色键：rescue 等级 / 上涨 / 下跌 / 平静 */
+  tone: 'rescue' | 'up' | 'down' | 'flat'
+  /** 展开态侧栏标题用的完整说明（图标里放不下的部分放这里） */
+  detail: string
+}
+
+const badgeState: BadgeState = { text: '', tone: 'flat', detail: '' }
+const badgeListeners = new Set<() => void>()
+
+function setBadge(next: BadgeState): void {
+  if (next.text === badgeState.text && next.tone === badgeState.tone && next.detail === badgeState.detail) return
+  badgeState.text = next.text
+  badgeState.tone = next.tone
+  badgeState.detail = next.detail
+  for (const fn of badgeListeners) fn()
+}
+
+/**
+ * 徽标文案（P0-3）。
+ *
+ * 图标只有 18px，因此字形最多 4 个字符；完整语义（含"收盘"后缀）放 `detail`，
+ * 由侧栏展开态的标题与 aria-label 呈现 —— 而不是把「护收」这类两字组合硬塞进图标
+ * （那样只会两边都看不清）。
+ *
+ * 隐身视图下**只显示点位**（`¥••••` 之外的绝对值一律不出现），这是 ROADMAP 的硬要求。
+ */
+function badgeView(
+  b: Awaited<ReturnType<typeof api.badge>>,
+  masked: boolean,
+): BadgeState {
+  const asOfText = b.asOf === null ? '—' : new Date(b.asOf).toLocaleTimeString('zh-CN', { hour12: false })
+  // 护盘 ≥ 疑似护盘（level ≥ 2）优先：那是"今天市场有事"的信号，比个人盈亏更该被看到
+  if (b.level >= 2) {
+    return {
+      text: '护',
+      tone: 'rescue',
+      detail: `护盘信号 ${b.levelLabel ?? ''}（等级 ${b.level}）· 数据 ${asOfText}${b.settled ? ' · 已收盘' : ''}`,
+    }
+  }
+  if (masked) {
+    const point = b.indexPoint === null ? null : Math.round(b.indexPoint)
+    return {
+      text: point === null ? '••' : String(point).slice(0, 4),
+      tone: 'flat',
+      detail: `隐身视图：只显示点位（${b.indexName ?? '沪深300'} ${point ?? '—'}）· 数据 ${asOfText}${b.settled ? ' · 已收盘' : ''}`,
+    }
+  }
+  if (b.dayPnlPct === null || b.dayPnlPct === 0) {
+    return {
+      text: b.dayPnlPct === null ? '' : '0.0',
+      tone: 'flat',
+      detail: `持仓当日盈亏 0.00%（${b.dayPnl.toFixed(2)} 元）· 数据 ${asOfText}${b.settled ? ' · 已收盘' : ''}`,
+    }
+  }
+  const pct = b.dayPnlPct
+  const sign = pct > 0 ? '+' : '-'
+  const mag = Math.abs(pct)
+  const text = `${sign}${mag >= 10 ? '10+' : mag.toFixed(1)}`
+  return {
+    text,
+    tone: pct > 0 ? 'up' : 'down',
+    detail: `持仓当日盈亏 ${sign}${mag.toFixed(2)}%（${b.dayPnl >= 0 ? '+' : ''}${b.dayPnl.toFixed(2)} 元）· 数据 ${asOfText}${b.settled ? ' · 已收盘' : ''}`,
+  }
+}
+
+/** 立即重取一次徽标（视图档位切换后必须马上反映，否则要等 60s 轮询） */
+let badgeRefresh: (() => void) | null = null
+
+/** 徽标轮询（60s）：侧栏常驻，必须比面板的行情轮询更省（只读汇总数） */
+function startBadgePolling(): () => void {
+  let alive = true
+  const load = (): void => {
+    api
+      .badge()
+      .then((b) => {
+        if (alive) setBadge(badgeView(b, isMoneyMasked()))
+      })
+      .catch(() => undefined)
+  }
+  badgeRefresh = load
+  load()
+  const timer = window.setInterval(load, 60_000)
+  return () => {
+    alive = false
+    badgeRefresh = null
+    window.clearInterval(timer)
+  }
+}
 
 /** Structural face of the client `slots` service（见 dsh-client-ui-slots 的 SlotCore）。 */
 interface SlotRegistration {
@@ -58,35 +159,94 @@ export function apply(ctx: ClientContext): void {
   // 侧栏入口：图标组件收到 shell 的 ownerProps { size, active }，label 供 aria-label 与展开态标题
   ctx.slots.inject('sidebar.panellist', () =>
     ctx.slots.register(
-      { name: 'sidebar.panellist', id: PANEL_ID, order: 60, label: () => '盯盘' },
+      {
+        name: 'sidebar.panellist',
+        id: PANEL_ID,
+        order: 60,
+        // 展开态侧栏标题 / aria-label：图标放不下的完整语义（包括「已收盘」后缀）在这里
+        label: () => (badgeState.detail === '' ? '盯盘' : `盯盘 · ${badgeState.detail}`),
+      },
       PanelIcon,
     ),
   )
+  // 徽标轮询跟随插件生命周期（disposer 由 effect 管理，卸载后不再请求）
+  ctx.effect(() => startBadgePolling(), 'tradewatcher: sidebar badge')
   // 主面板：key 与侧栏 id 相同，shell 依据 activePanelId 决定渲染哪一个
   ctx.slots.inject('main', () => ctx.slots.register({ name: 'main', key: PANEL_ID }, Dashboard))
 }
 
-/** 侧栏图标：随主题着色的走势线（不引 Harness 组件库，保持零依赖）。 */
+/**
+ * 侧栏图标：随主题着色的走势线 + 徽标（P0-3）。
+ *
+ * 不引 Harness 组件库（保持零依赖）；徽标数据走模块级订阅（见 badgeState 的说明），
+ * 因为图标与主面板之间没有共同的 React 祖先。
+ */
 function PanelIcon(props: { size?: number; active?: boolean }): React.ReactElement {
   const size = props.size ?? 18
-  return React.createElement(
-    'svg',
-    {
-      width: size,
-      height: size,
-      viewBox: '0 0 16 16',
-      fill: 'none',
-      stroke: 'currentColor',
-      strokeWidth: props.active === true ? 1.9 : 1.6,
-      strokeLinecap: 'round',
-      strokeLinejoin: 'round',
-      'aria-hidden': true,
-      focusable: false,
-      style: { display: 'block' },
+  const badge = useSyncExternalStore(
+    (cb) => {
+      badgeListeners.add(cb)
+      return () => badgeListeners.delete(cb)
     },
-    React.createElement('path', { key: 'line', d: 'M1.6 10.4 5.9 5.6l2.7 2.4 5.4-5' }),
-    React.createElement('path', { key: 'tip', d: 'M10.6 3h4.2v4.2' }),
+    () => badgeState,
   )
+  const tone = BADGE_TONE_COLOR[badge.tone]
+  return React.createElement(
+    'span',
+    {
+      style: { position: 'relative', display: 'inline-flex', width: size, height: size, alignItems: 'center', justifyContent: 'center' },
+      title: badge.detail === '' ? '盯盘' : badge.detail,
+    },
+    React.createElement(
+      'svg',
+      {
+        width: size,
+        height: size,
+        viewBox: '0 0 16 16',
+        fill: 'none',
+        stroke: 'currentColor',
+        strokeWidth: props.active === true ? 1.9 : 1.6,
+        strokeLinecap: 'round',
+        strokeLinejoin: 'round',
+        'aria-hidden': true,
+        focusable: false,
+        style: { display: 'block' },
+      },
+      React.createElement('path', { key: 'line', d: 'M1.6 10.4 5.9 5.6l2.7 2.4 5.4-5' }),
+      React.createElement('path', { key: 'tip', d: 'M10.6 3h4.2v4.2' }),
+    ),
+    badge.text === ''
+      ? null
+      : React.createElement('span', {
+          'data-tone': badge.tone,
+          style: {
+            position: 'absolute',
+            right: -7,
+            bottom: -5,
+            minWidth: 13,
+            height: 11,
+            padding: '0 2px',
+            borderRadius: 6,
+            background: tone,
+            color: '#fff',
+            fontSize: 8,
+            lineHeight: '11px',
+            fontFamily: 'var(--tw-mono)',
+            fontWeight: 600,
+            textAlign: 'center',
+            pointerEvents: 'none',
+            whiteSpace: 'nowrap',
+          },
+        }, badge.text),
+  )
+}
+
+/** 徽标底色：护盘用等级色系，盈亏用涨跌语义色（隐身视图下 tone 恒为 flat） */
+const BADGE_TONE_COLOR: Record<BadgeState['tone'], string> = {
+  rescue: '#d97706',
+  up: '#ff5f6d',
+  down: '#27a644',
+  flat: '#6f7787',
 }
 
 type PageKey = 'watch' | 'portfolio' | 'market' | 'cloud' | 'calendar'
@@ -124,6 +284,43 @@ function Dashboard(): React.ReactElement {
     setPrefsState((prev) => ({ ...(prev ?? DEFAULT_PREFS), ...patch }))
     api.setPrefs(patch).catch(() => undefined)
   }
+
+  // 单实例 toast：视图档位、成本口径等"一次性动作的说明"共用（见 ui.tsx 的说明）
+  const toast = useToast()
+
+  const viewMode: ViewMode = prefs?.viewMode ?? 'full'
+  // P0-8：金额遮罩做在格式化出口里，因此这一行就够全局生效（取数/告警/工具返回不受影响）
+  useEffect(() => {
+    setMoneyMask(viewMode === 'incognito')
+    // 徽标字形随视图档位变化（隐身档只显示点位），必须立刻重取一次
+    badgeRefresh?.()
+  }, [viewMode])
+
+  // Alt+M 轮换视图档位：不抢输入框（在输入控件里按 Alt+M 不该被吃掉）
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent): void => {
+      if (!e.altKey || e.ctrlKey || e.metaKey) return
+      if (e.key.toLowerCase() !== 'm') return
+      const el = e.target as HTMLElement | null
+      const tag = el?.tagName ?? ''
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || el?.isContentEditable === true) return
+      e.preventDefault()
+      const cur = prefs?.viewMode ?? 'full'
+      const next = VIEW_MODES[(VIEW_MODES.indexOf(cur) + 1) % VIEW_MODES.length]
+      setPrefsState((prev) => ({ ...(prev ?? DEFAULT_PREFS), viewMode: next }))
+      api.setPrefs({ viewMode: next }).catch(() => undefined)
+      toast.show(
+        next === 'full'
+          ? '视图：完整（恢复说明文字与全部金额）'
+          : next === 'compact'
+            ? '视图：紧凑（已隐藏说明文字与脚注；Alt+M 继续切换）'
+            : '视图：隐身（金额已模糊为 ¥••••、涨跌色转灰阶；只影响显示，取数与告警不变。Alt+M 继续切换）',
+      )
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+    // prefs?.viewMode 是读当前档位的唯一来源，必须进依赖
+  }, [prefs?.viewMode, toast])
 
   const refreshSec = prefs?.refreshSec ?? 10
 
@@ -170,6 +367,7 @@ function Dashboard(): React.ReactElement {
         onSymbols: onPortSymbols,
         quoteTs: engine.ts,
         onOpenDetail: openDetail,
+        notify: toast.show,
       })
     }
     if (page === 'market') {
@@ -191,7 +389,7 @@ function Dashboard(): React.ReactElement {
 
   return React.createElement(
     'div',
-    { className: 'tw-root', 'data-theme': theme, style: { flex: 1, height: '100%', minHeight: 0, display: 'flex', flexDirection: 'column', minWidth: 0 } },
+    { className: 'tw-root', 'data-theme': theme, 'data-view': viewMode, style: { flex: 1, height: '100%', minHeight: 0, display: 'flex', flexDirection: 'column', minWidth: 0 } },
     React.createElement(TopBar, {
       quotes,
       missing: engine.missing,
@@ -229,5 +427,6 @@ function Dashboard(): React.ReactElement {
           onClose: closeDetail,
         })
       : null,
+    React.createElement(Toast, { text: toast.text, onClose: toast.clear }),
   )
 }

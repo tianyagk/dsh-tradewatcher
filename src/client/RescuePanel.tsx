@@ -204,7 +204,23 @@ function EtfCard(props: { etf: RescueEtfView; redUp: boolean }): React.ReactElem
   )
 }
 
-function FactorTable(props: { factors: RescueFactor[] }): React.ReactElement {
+/**
+ * 因子表（P0-7）。
+ *
+ * 加了「贡献」列（权 × 得分 × 时点系数）与一行合计：此前只有总分与六因子分数，
+ * 看到 `评分 68` 而 `量能 ×2.1`、`超大单 ×0.3` 时无法判断这一分是谁加的 ——
+ * 量能撑起来的和"跌出来的背离"撑起来的，操作含义完全相反。
+ */
+function FactorTable(props: {
+  factors: RescueFactor[]
+  /** 贡献度（与 factors 同序；缺失时不显示该列，避免显示一个算不出来的数） */
+  contrib?: Array<{ id: string; contribution: number }>
+  timeCoef?: number
+  total?: number
+}): React.ReactElement {
+  const byId = new Map((props.contrib ?? []).map((c) => [c.id, c.contribution]))
+  const hasContrib = byId.size > 0
+  const sum = [...byId.values()].reduce((a, b) => a + b, 0)
   return React.createElement('table', { className: 'tw-rescue-factor' },
     React.createElement('thead', null,
       React.createElement('tr', null,
@@ -212,19 +228,31 @@ function FactorTable(props: { factors: RescueFactor[] }): React.ReactElement {
         React.createElement('th', null, '实测'),
         React.createElement('th', { style: { width: 46 } }, '得分'),
         React.createElement('th', { style: { width: 36 } }, '权重'),
+        hasContrib ? React.createElement('th', { style: { width: 52 }, title: '贡献 = 权重 × 得分 × 时点系数' }, '贡献') : null,
         React.createElement('th', null, '阈值口径'),
       ),
     ),
     React.createElement('tbody', null,
-      ...props.factors.map((f) =>
-        React.createElement('tr', { key: f.id, 'data-hit': f.hit },
+      ...props.factors.map((f) => {
+        const c = byId.get(f.id)
+        return React.createElement('tr', { key: f.id, 'data-hit': f.hit },
           React.createElement('td', null, f.hit ? React.createElement('span', { style: { color: LEVEL_COLOR[2] } }, '● ') : React.createElement('span', { className: 'tw-muted' }, '○ '), f.label),
           React.createElement('td', { style: { fontFamily: 'var(--tw-mono)' } }, f.actual),
           React.createElement('td', null, React.createElement(ScoreBar, { value: f.score, width: 40, color: f.hit ? LEVEL_COLOR[2] : 'var(--tw-fg-dim)' })),
           React.createElement('td', { className: 'tw-muted' }, f.weight.toFixed(2)),
+          hasContrib
+            ? React.createElement('td', { style: { fontFamily: 'var(--tw-mono)' }, title: `${f.weight.toFixed(2)} × ${f.score} × ${props.timeCoef ?? 1} = ${(c ?? 0).toFixed(1)}` }, (c ?? 0).toFixed(1))
+            : null,
           React.createElement('td', { className: 'tw-muted', style: { fontSize: 10.5 } }, f.threshold),
-        ),
-      ),
+        )
+      }),
+      hasContrib
+        ? React.createElement('tr', { key: '__sum' },
+            React.createElement('td', { className: 'tw-muted', colSpan: 4 }, `合计（权×得分×时点系数 ${props.timeCoef ?? 1}）`),
+            React.createElement('td', { style: { fontFamily: 'var(--tw-mono)', fontWeight: 600 }, title: '与总分一致（差值仅来自四舍五入）' }, sum.toFixed(1)),
+            React.createElement('td', { className: 'tw-muted', style: { fontSize: 10.5 } }, `总分 ${props.total ?? Math.round(sum)}`),
+          )
+        : null,
     ),
   )
 }
@@ -317,6 +345,13 @@ export function RescuePanel(props: { prefs: PortPrefs; redUp: boolean; onPrefs?:
   }
 
   const level = snapshot?.level ?? 0
+  // P0-4：采样窗口状态由宿主给出（含下次采样时刻）；老宿主没有该字段时不冒充"暂停"
+  const win = snapshot?.activeWindow
+  const paused = snapshot !== null && win !== undefined && win.sampling !== true
+  const pauseReason = win?.reason === 'weekend' ? '周末休市'
+    : win?.reason === 'noon-break' ? '午休'
+      : win?.reason === 'disabled' ? '监测已关闭'
+        : win?.reason === 'closed' ? '已收盘' : '非交易时段'
   // 无实时数据时也展开：此时展开区里的分时图、今日时间线、抽样条、历史回看
   // 都是真实记录，折叠起来会让人以为"面板内容越来越少"
   const expanded = manualOpen ?? (level >= 2 || (snapshot?.etfs.length ?? 1) === 0)
@@ -333,7 +368,14 @@ export function RescuePanel(props: { prefs: PortPrefs; redUp: boolean; onPrefs?:
         ? React.createElement('span', { className: 'tw-badge', style: { color: LEVEL_COLOR[level], borderColor: LEVEL_COLOR[level] } }, RESCUE_LEVEL_LABEL[level])
         : null,
       snapshot !== null
-        ? React.createElement('span', { className: 'tw-muted', style: { fontFamily: 'var(--tw-mono)', fontSize: 11 } }, `${snapshot.score}/100`)
+        ? React.createElement('span', {
+            className: 'tw-muted',
+            style: { fontFamily: 'var(--tw-mono)', fontSize: 11 },
+            // P0-4：非采样时段分数位显示 —（不是把上一次的分数留在那里假装是当前分）
+            title: paused
+              ? `采样暂停（${pauseReason}）：分数位显示 —，因为当前没有在采样；下方与该分数相关的结论都是最近一次采样的结果`
+              : '本次快照评分（Σ 权×因子分×时点系数）',
+          }, paused ? '—' : `${snapshot.score}/100`)
         : null,
       React.createElement('span', { style: { flex: 1 } }),
       snapshot !== null && (snapshot.stale === true || (data as { staleNote?: string })?.staleNote !== undefined)
@@ -366,15 +408,24 @@ export function RescuePanel(props: { prefs: PortPrefs; redUp: boolean; onPrefs?:
               snapshot.note ?? null,
             ].filter(Boolean).join('\n'),
           },
-            `${snapshot.trading ? `采样中 · ${snapshot.activeIntervalSec}s` : snapshot.pulseBand.phase === 'closed' ? '已收盘' : '非交易时段'}` +
+            // P0-4：暂停时段必须说清"暂停"而不是让人以为"坏了"，并给出下次采样时刻
+            `${paused
+              ? `采样暂停 · 下次 ${snapshot.activeWindow?.nextLabel ?? '—'}（${pauseReason}）`
+              : `采样中 · ${snapshot.activeIntervalSec}s`}` +
             // 「数据 HH:mm:ss」= 这份数据是几点拿到的（不是响应时刻、更不是失败时刻）
             `${snapshot.lastSampleTs !== null ? ` · 数据 ${new Date(snapshot.lastSampleTs).toLocaleTimeString('zh-CN', { hour12: false })}` : ''}` +
             `${snapshot.flowSource === 'tencent' ? ' · 腾讯源' : ''}` +
             // 两种"不新鲜"必须分开说：有失败时刻 = 采样失败；只有缺口标记 = 当日有过缺口
-            //（磁盘上的旧快照、会话未采样等）；仅 stale（本会话未采样）由「上次数据」红标说明
-            `${snapshot.gap && snapshot.lastFailTs !== null && snapshot.lastFailTs !== undefined
-              ? ` · ⚠ 采样失败 ${new Date(snapshot.lastFailTs).toLocaleTimeString('zh-CN', { hour12: false })}`
-              : snapshot.gap ? ' · ⚠ 当日有采样缺口' : ''}`,
+            //（磁盘上的旧快照、会话未采样等）；仅 stale（本会话未采样）由「上次数据」红标说明。
+            // P0-4：**暂停时段一律不出现「采样缺口」字样** —— 那时缺口不是正在发生的事，
+            // 说成"缺口"会让人以为要处理；改为陈述"当日曾中断"。
+            `${paused
+              ? snapshot.lastFailTs !== null && snapshot.lastFailTs !== undefined
+                ? ` · 当日曾采样失败 ${new Date(snapshot.lastFailTs).toLocaleTimeString('zh-CN', { hour12: false })}`
+                : snapshot.gap ? ' · 当日采样曾中断（非当前故障）' : ''
+              : snapshot.gap && snapshot.lastFailTs !== null && snapshot.lastFailTs !== undefined
+                ? ` · ⚠ 采样失败 ${new Date(snapshot.lastFailTs).toLocaleTimeString('zh-CN', { hour12: false })}`
+                : snapshot.gap ? ' · ⚠ 当日有采样缺口' : ''}`,
           )
         : null,
       React.createElement(Btn, { onClick: () => load(true) }, loading ? '刷新中…' : '立即采样'),
@@ -481,7 +532,12 @@ export function RescuePanel(props: { prefs: PortPrefs; redUp: boolean; onPrefs?:
             React.createElement('div', null,
               React.createElement('div', { className: 'tw-sub-h' }, '因子明细（实测值 / 阈值 / 贡献）'),
               snapshot.factors.length > 0
-                ? React.createElement(FactorTable, { factors: snapshot.factors })
+                ? React.createElement(FactorTable, {
+                    factors: snapshot.factors,
+                    contrib: snapshot.factorContrib,
+                    timeCoef: snapshot.timeCoef,
+                    total: snapshot.score,
+                  })
                 : React.createElement('div', { className: 'tw-hint' }, '无实时数据：本次快照没有因子得分（上游不可用时只提供复盘数据）。'),
             ),
             React.createElement('div', null,

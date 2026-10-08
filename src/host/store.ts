@@ -6,7 +6,7 @@
  * derived from the ledger by replay, so the JSON files are the durable record
  * for in-session analysis and the UI can rebuild any state from scratch.
  */
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
+import { copyFile, mkdir, readFile, rename, stat, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -394,6 +394,8 @@ export class DataStore {
         // 排序偏好来自明文文件（可被手改）：装载时按白名单收敛，非法键回退默认而不是带进界面
         watchSort: safeSortPref(loaded.watchSort, WATCH_SORT_KEYS, DEFAULT_PREFS.watchSort),
         portSort: safeSortPref(loaded.portSort, PORT_SORT_KEYS, DEFAULT_PREFS.portSort),
+        // 老 prefs.json 没有 viewMode → 回退完整视图（启动不该因一个坏偏好失败）
+        viewMode: loaded.viewMode === 'compact' || loaded.viewMode === 'incognito' ? loaded.viewMode : 'full',
       }
       // Coherence: drop descriptors that reference missing groups (never drop ledger).
       const groupIds = new Set(this.port.groups.map((g) => g.id))
@@ -425,6 +427,100 @@ export class DataStore {
   }
 
   // ---- read faces ----
+
+  /**
+   * 导出：把四个数据文件的内容原样读出来（P0-9）。
+   *
+   * 从**磁盘**读而不是从内存读：内存状态理论上与磁盘一致（每次变更都落盘），
+   * 但导出是给"换机器/备份"用的，磁盘才是用户真正拥有的那份。
+   * 形状不合法的文件按 null 报出，由上层决定是拒绝还是跳过（不静默当成空表）。
+   */
+  async exportFiles(): Promise<{
+    watch: unknown
+    positions: unknown
+    ledger: unknown
+    prefs: unknown
+    unreadable: string[]
+  }> {
+    const readRaw = async (file: string): Promise<unknown> => {
+      try {
+        return JSON.parse(await readFile(join(this.dir, file), 'utf8'))
+      } catch {
+        return undefined
+      }
+    }
+    const [watch, positions, ledger, prefs] = await Promise.all([
+      readRaw('watch.json'), readRaw('positions.json'), readRaw('ledger.json'), readRaw('prefs.json'),
+    ])
+    const unreadable = Object.entries({ 'watch.json': watch, 'positions.json': positions, 'ledger.json': ledger, 'prefs.json': prefs })
+      .filter(([, v]) => v === undefined)
+      .map(([k]) => k)
+    return { watch, positions, ledger, prefs, unreadable }
+  }
+
+  /**
+   * 导入：覆盖四个数据文件（P0-9）。
+   *
+   * 顺序很重要：
+   *  1) 先把**现值**复制成 `<file>.bak`（覆盖前留退路；用户自己也能回滚）；
+   *  2) 再逐文件原子写入（tmp + rename），任何一步失败都不会留下半截文件；
+   *  3) 最后重新读回内存，保证之后所有读接口都反映新内容（而不是"写盘了但内存还是旧的"）。
+   *
+   * 调用方必须先跑 backup.verifyBundle()：这里不做业务校验，只做写入。
+   */
+  async importFiles(files: {
+    watch: unknown
+    positions: unknown
+    ledger: unknown
+    prefs: unknown
+  }): Promise<{ backedUp: string[] }> {
+    await this.init()
+    const backedUp: string[] = []
+    const pairs: Array<[string, unknown]> = [
+      ['watch.json', files.watch],
+      ['positions.json', files.positions],
+      ['ledger.json', files.ledger],
+      ['prefs.json', files.prefs],
+    ]
+    for (const [file] of pairs) {
+      try {
+        await copyFile(join(this.dir, file), join(this.dir, `${file}.bak`))
+        backedUp.push(`${file}.bak`)
+      } catch {
+        /* 原本不存在该文件：没有可备份的内容，不算失败 */
+      }
+    }
+    for (const [file, value] of pairs) await this.persist(file, value)
+    // 重读内存：换机导入后立刻可用，不需要重启 dsh web
+    this.watch = await this.readNormalized<WatchFile>('watch.json', normalizeWatchFile, { v: 1, groups: [], items: [] })
+    this.port = await this.readNormalized<PortFile>('positions.json', normalizePortFile, { v: 1, groups: [], items: [] })
+    this.ledger = await this.readLedger()
+    const loaded = await this.readNormalized<Partial<PortPrefs>>('prefs.json', (raw) => (isRecord(raw) ? (raw as Partial<PortPrefs>) : null), {})
+    this.prefs = {
+      ...DEFAULT_PREFS,
+      ...loaded,
+      rescue: { ...DEFAULT_PREFS.rescue, ...(loaded.rescue ?? {}) },
+      watchSort: safeSortPref(loaded.watchSort, WATCH_SORT_KEYS, DEFAULT_PREFS.watchSort),
+      portSort: safeSortPref(loaded.portSort, PORT_SORT_KEYS, DEFAULT_PREFS.portSort),
+      viewMode: loaded.viewMode === 'compact' || loaded.viewMode === 'incognito' ? loaded.viewMode : 'full',
+    }
+    return { backedUp }
+  }
+
+  /**
+   * 数据文件最后写入时刻（epoch ms；文件不存在/读不到 → null）。
+   *
+   * P0-1 用：纯本地读工具（watchlist/ledger）必须能回答"这份数据是几点落盘的"，
+   * 而不是把"响应生成时间"当成数据时刻 —— 那正是 v0.22 之前在行情上修过的同一个错。
+   */
+  async fileMtime(file: string): Promise<number | null> {
+    try {
+      const st = await stat(join(this.dir, file))
+      return st.mtimeMs
+    } catch {
+      return null
+    }
+  }
 
   watchData(): WatchData {
     return JSON.parse(JSON.stringify({ groups: this.watch.groups, items: this.watch.items }))
@@ -824,6 +920,13 @@ export class DataStore {
       this.prefs.refreshSec = Math.round(r)
     }
     if (patch.redUp !== undefined) this.prefs.redUp = patch.redUp === true
+    // P0-8：视图档位。非法值拒绝而不是回退 —— 回退会让"点了没反应"变成静默行为
+    if (patch.viewMode !== undefined) {
+      if (patch.viewMode !== 'full' && patch.viewMode !== 'compact' && patch.viewMode !== 'incognito') {
+        throw new Error('viewMode 必须是 full/compact/incognito')
+      }
+      this.prefs.viewMode = patch.viewMode
+    }
     // 排序偏好：非法键/非布尔方向一律拒绝（而不是静默写入，否则界面会拿到无法排序的键）
     if (patch.watchSort !== undefined) this.prefs.watchSort = normalizeSortPref(patch.watchSort, WATCH_SORT_KEYS, this.prefs.watchSort, 'watchSort')
     if (patch.portSort !== undefined) this.prefs.portSort = normalizeSortPref(patch.portSort, PORT_SORT_KEYS, this.prefs.portSort, 'portSort')

@@ -5,6 +5,8 @@ import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { TW_ROWS, type QuoteRow, type TrendData, type KlineData } from '../shared/model.ts'
 import { chartCache } from './chartCache.ts'
 import { fmtClock, fmtPct, fmtPrice, fmtSigned, dirClass } from './format.ts'
+import { QUOTE_STATE_COLOR, QUOTE_STATE_LABEL, quoteStateOf, quoteStateTitle, summarizeQuoteStates, type QuoteState } from './quoteState.ts'
+import { useNow } from './useNow.ts'
 import { Sparkline } from './charts.tsx'
 import type { PortPrefs } from '../shared/model.ts'
 
@@ -163,6 +165,8 @@ export function TopBar(props: {
   staleCount: number
   /** 按来源计数（em/tencent/sina/lkg） */
   sources: Record<string, number>
+  /** 整批是否休市定稿（P0-2 第三态） */
+  cached?: boolean
   refreshing: boolean
   onRefresh: () => void
   prefs: PortPrefs
@@ -172,7 +176,9 @@ export function TopBar(props: {
   /** 详情抽屉已打开时不再弹悬浮卡（否则遮住抽屉且与点击语义冲突） */
   popupDisabled?: boolean
 }): React.ReactElement {
-  const { quotes, missing, truncated, asOf, stale, staleCount, sources, refreshing, onRefresh, prefs, setPrefs } = props
+  const { quotes, missing, truncated, asOf, stale, staleCount, sources, cached, refreshing, onRefresh, prefs, setPrefs } = props
+  // 新鲜度必须随墙上时钟重算（否则一张卡会永远停在"实时"直到下一次取数）
+  const now = useNow(Math.max(5, prefs.refreshSec) * 1000)
   const onOpenDetail = props.onOpenDetail
   const popupDisabled = props.popupDisabled === true
   const [hover, setHover] = useState<HoverState | null>(null)
@@ -336,6 +342,18 @@ export function TopBar(props: {
     return () => cancelAnimationFrame(raf)
   }, [hover, applyPos])
 
+  // 逐卡四态（一次算好，供列表头汇总与卡片色点共用同一结果）
+  const stateOf = (secid: string): QuoteState => quoteStateOf({
+    row: quotes[secid],
+    isMissing: missing?.has(secid.toUpperCase()) === true,
+    cached: cached === true,
+    refreshSec: prefs.refreshSec,
+    now,
+  })
+  const summary = summarizeQuoteStates(
+    TW_ROWS.flatMap((row) => (row.items as ReadonlyArray<{ secid: string }>).map((it) => stateOf(it.secid))),
+  )
+
   const themeBtn = (): void => {
     const next = prefs.theme === 'auto' ? 'light' : prefs.theme === 'light' ? 'dark' : 'auto'
     setPrefs({ theme: next as PortPrefs['theme'] })
@@ -351,16 +369,17 @@ export function TopBar(props: {
         // "更新 14:32:05"（那是响应生成时间），用户误以为刚拿到最新价
         asOf !== null ? `数据 ${fmtClock(asOf)} · 每 ${prefs.refreshSec}s` : '加载中…',
       ),
-      stale && staleCount > 0
+      // P0-2：四态汇总。数字必须**加得上**（live+delayed+settled+missing == total），
+      // 因此这里用与逐卡完全相同的判定函数，而不是另算一套"滞后"。
+      summary.total > 0
         ? React.createElement('span', {
             className: 'tw-badge',
             title:
-              `其中 ${staleCount} 个标的不是新数据（最近一次成功行情 ${asOf === null ? '—' : fmtClock(asOf)}）：` +
-              '上游行情接口不可用期间，价格冻结在最近一次成功值（last-known-good）；' +
-              '来源明细：' +
+              `本批 ${summary.total} 张卡片：实时 ${summary.live} · 延迟 ${summary.delayed} · 定稿复用 ${summary.settled} · 缺失 ${summary.missing}\n` +
+              `最近一次成功行情 ${asOf === null ? '—' : fmtClock(asOf)}；来源明细：` +
               Object.entries(sources).map(([k, n]) => `${k} ${n}`).join(' / '),
-            style: { fontSize: 9.5, color: '#e0a94a' },
-          }, `滞后 ${staleCount}`)
+            style: { fontSize: 9.5, color: stale && staleCount > 0 ? '#e0a94a' : undefined },
+          }, `${summary.live}/${summary.total} 实时${summary.delayed > 0 ? ` · ${summary.delayed} 延迟` : ''}${summary.settled > 0 ? ` · ${summary.settled} 定稿` : ''}${summary.missing > 0 ? ` · ${summary.missing} 缺失` : ''}`)
         : null,
       // 无任何源可用的标的数：不能与"本轮还没数据"混为一谈
       (() => {
@@ -413,14 +432,16 @@ export function TopBar(props: {
             const price = q?.price ?? null
             const cls = dirClass(q?.chg ?? null, prefs.redUp)
             const pctText = q?.pct ?? null
+            const st = stateOf(it.secid)
             return React.createElement(
               'div',
               {
                 key: it.secid,
                 className: 'tw-qcard',
+                'data-state': st,
                 tabIndex: 0,
                 role: 'button',
-                title: `${it.name}：点击打开详情（分时/五日/日K/周K/月K/年K）`,
+                title: `${QUOTE_STATE_LABEL[st]} · ${it.name}：点击打开详情（分时/五日/日K/周K/月K/年K）\n${quoteStateTitle(st, q, prefs.refreshSec)}`,
                 'aria-label': `${it.name} 实时行情，点击打开详情`,
                 onMouseEnter: (e: React.MouseEvent) => enterCard(e, it.secid, it.name),
                 onMouseMove: (e: React.MouseEvent) => moveCard(e, it.secid, it.name),
@@ -437,6 +458,11 @@ export function TopBar(props: {
                 onFocus: (e: React.FocusEvent) => focusCard(e, it.secid, it.name),
                 onBlur: scheduleClose,
               },
+              React.createElement('span', {
+                className: 'tw-qdot',
+                style: { background: QUOTE_STATE_COLOR[st] },
+                'aria-label': QUOTE_STATE_LABEL[st],
+              }),
               React.createElement('div', { className: 'nm' }, it.name),
               React.createElement('div', { className: 'px ' + (price === null ? 'tw-flat' : cls) }, fmtPrice(price)),
               React.createElement('div', { className: 'chg' },

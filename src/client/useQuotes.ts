@@ -28,6 +28,8 @@ export interface QuoteEngine {
   missing: Set<string>
   /** 请求被 160 项上限截断（界面需提示） */
   truncated: boolean
+  /** 休市定稿（非交易时段且无兜底行）：定稿复用是"数据已确定"，不是降级 */
+  cached: boolean
   error: string | null
   refreshing: boolean
   refresh: () => void
@@ -50,6 +52,7 @@ export function useQuoteEngine(secids: string[], intervalMs: number, enabled: bo
   const [sources, setSources] = useState<Record<string, number>>({})
   const [missing, setMissing] = useState<Set<string>>(() => new Set())
   const [truncated, setTruncated] = useState(false)
+  const [cached, setCached] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [refreshing, setRefreshing] = useState(false)
   const inFlight = useRef(false)
@@ -98,6 +101,7 @@ export function useQuoteEngine(secids: string[], intervalMs: number, enabled: bo
         setSources(r.sources ?? {})
         setMissing(new Set((r.missing ?? []).map((s) => s.toUpperCase())))
         setTruncated(r.truncated === true)
+        setCached(r.cached === true)
         setError(null)
       })
       .catch((e: Error) => {
@@ -121,5 +125,5 @@ export function useQuoteEngine(secids: string[], intervalMs: number, enabled: bo
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key, intervalMs, enabled])
 
-  return { quotes, ts, asOf, stale, staleCount, sources, missing, truncated, error, refreshing, refresh: load }
+  return { quotes, ts, asOf, stale, staleCount, sources, missing, truncated, cached, error, refreshing, refresh: load }
 }

@@ -58,6 +58,37 @@ color-scheme:dark}
 .tw-strip-cards::-webkit-scrollbar-track{background:transparent}
 .tw-qcard{flex:1 1 100px;min-width:100px;min-height:54px;background:var(--tw-card);border:1px solid var(--tw-border);border-radius:10px;padding:4px 9px 5px;position:relative;overflow:hidden;transition:border-color .12s,background .12s;cursor:pointer}
 .tw-qcard:hover{border-color:var(--tw-accent);background:var(--tw-hover)}
+/* toast（P0-6/P0-8）：一次性动作的说明，贴在面板底部，不遮挡行情条 */
+.tw-toast{position:absolute;left:10px;right:10px;bottom:10px;z-index:40;display:flex;align-items:flex-start;gap:8px;padding:7px 10px;border:1px solid var(--tw-border-strong);border-radius:9px;background:var(--tw-card);box-shadow:var(--tw-shadow-lg);color:var(--tw-text);font-size:11.5px;line-height:1.5}
+.tw-toast-x{flex:none;color:var(--tw-muted);font-size:14px;line-height:1;padding:0 2px}
+/* 校验结论（P0-9 导入前的"通过/拒绝"） */
+.tw-ok{color:var(--tw-down)}
+.tw-err{color:var(--tw-up)}
+.tw-toast-x:hover{color:var(--tw-text)}
+
+/* 视图档位（P0-8）─────────────────────────────────────────
+   紧凑：去掉说明文字与脚注（它们占的行多、信息密度低）
+   隐身：金额由格式化出口模糊为 ¥••••，涨跌色转灰阶（色相也会泄露方向与幅度感） */
+.tw-root[data-view=compact] .tw-hint,
+.tw-root[data-view=compact] .tw-chartnote,
+.tw-root[data-view=compact] .tw-drawer-foot,
+.tw-root[data-view=compact] .tw-pop-hint,
+.tw-root[data-view=compact] .tw-empty{display:none}
+.tw-root[data-view=incognito] .tw-hint,
+.tw-root[data-view=incognito] .tw-chartnote,
+.tw-root[data-view=incognito] .tw-drawer-foot,
+.tw-root[data-view=incognito] .tw-pop-hint{display:none}
+.tw-root[data-view=incognito]{
+--tw-up:#8a8f98;--tw-down:#8a8f98;--tw-up-bg:rgba(138,143,152,.12);--tw-down-bg:rgba(138,143,152,.12)}
+/* 图表口径条（P0-5）：紧贴图上方一行，等宽字体便于对齐数字 */
+.tw-caliber{padding:5px 8px 4px;font-size:10.5px;color:var(--tw-dim);font-family:var(--tw-mono);border-bottom:1px dashed var(--tw-border);background:var(--tw-bg2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+/* 三态降级占位（P0-10）：iframe 超时后不留空白 */
+.tw-placeholder{flex:1;min-height:200px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;text-align:center;padding:24px 18px;color:var(--tw-dim);font-size:12px;background:var(--tw-card2);border-top:1px solid var(--tw-border)}
+.tw-badge[data-state=timeout]{color:var(--tw-up);border-color:var(--tw-up)}
+.tw-badge[data-state=loaded]{color:var(--tw-down);border-color:var(--tw-down)}
+/* 四态色点（P0-2）：6px，绝对定位到右上角，不影响卡片高度 */
+.tw-qdot{position:absolute;top:5px;right:5px;width:6px;height:6px;border-radius:50%;flex:none;pointer-events:none}
+.tw-qdot::after{content:"";position:absolute;inset:-3px;border-radius:50%}
 .tw-qcard .nm{font-size:11px;color:var(--tw-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1.4}
 .tw-qcard .px{font-family:var(--tw-mono);font-size:15px;font-weight:600;font-variant-numeric:tabular-nums;line-height:1.35}
 .tw-qcard .chg{display:flex;gap:6px;align-items:baseline;font-size:11px;font-variant-numeric:tabular-nums;white-space:nowrap;font-family:var(--tw-mono)}

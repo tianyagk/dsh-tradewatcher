@@ -28,12 +28,47 @@ export function fmtPct(n: number | null | undefined): string {
   return `${arrow}${Math.abs(n).toFixed(2)}%`
 }
 
+/**
+ * 隐身模式的**唯一开关**（P0-8）。
+ *
+ * 金额必须走同一个出口，否则"隐身不彻底"是必然的：新增一个显示金额的地方只要
+ * 忘了判断，就会在隐身视图下漏出真实数字。因此遮罩做在格式化函数内部，
+ * 调用方不需要知道当前是哪个视图。
+ *
+ * 只影响**显示**：取数、告警、agent 工具返回完全不受影响（工具层根本不引这里）。
+ */
+let moneyMasked = false
+
+export function setMoneyMask(on: boolean): void {
+  moneyMasked = on
+}
+
+export function isMoneyMasked(): boolean {
+  return moneyMasked
+}
+
+/** 金额（元）：受隐身模式影响 —— 隐身时输出等长的模糊占位（不是空字符串，布局不塌） */
 export function fmtAmt(n: number | null | undefined): string {
   if (n === null || n === undefined || !Number.isFinite(n)) return '—'
+  if (moneyMasked) return '¥••••'
   const abs = Math.abs(n)
   if (abs >= 1e8) return `${(n / 1e8).toFixed(2)}亿`
   if (abs >= 1e4) return `${(n / 1e4).toFixed(2)}万`
   return n.toFixed(2)
+}
+
+/** 精确到分的金额（不做亿/万缩写）：同样受隐身模式影响 */
+export function fmtRaw(n: number | null | undefined, digits = 2): string {
+  if (n === null || n === undefined || !Number.isFinite(n)) return '—'
+  if (moneyMasked) return '¥••••'
+  return n.toFixed(digits)
+}
+
+/** 金额（带符号）：盈亏/已实现等。同样受隐身模式影响（符号保留，方向仍可读） */
+export function fmtMoneySigned(n: number | null | undefined, digits = 2): string {
+  if (n === null || n === undefined || !Number.isFinite(n)) return '—'
+  if (moneyMasked) return n >= 0 ? '+¥••••' : '-¥••••'
+  return fmtSigned(n, digits)
 }
 
 export function fmtBig(n: number | null | undefined): string {

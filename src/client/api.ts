@@ -54,6 +54,38 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export const api = {
+  /** 导出备份（P0-9）：GET /tradewatcher/backup */
+  exportBackup(): Promise<{ ok: boolean; bundle: unknown; unreadable: string[] }> {
+    return request('/tradewatcher/backup')
+  },
+  /** 导入备份（P0-9）：mode=preview 只校验，apply 才覆盖（覆盖前宿主写 .bak） */
+  importBackup(mode: 'preview' | 'apply', bundle: unknown): Promise<{
+    ok: boolean
+    mode: string
+    errors: string[]
+    summary: Record<string, unknown>
+    conflicts: string[]
+    backedUp?: string[]
+  }> {
+    return request('/tradewatcher/backup', { method: 'POST', body: JSON.stringify({ mode, bundle }) })
+  },
+  /** 侧栏徽标（P0-3）：与面板顶部同源的汇总数，不触发新采样 */
+  badge(): Promise<{
+    level: number
+    levelLabel: string | null
+    dayPnl: number
+    dayPnlPct: number | null
+    indexPoint: number | null
+    indexPct: number | null
+    indexName: string | null
+    /** 非采样时段且原因是已收盘/周末 → 加后缀「收」 */
+    settled: boolean
+    asOf: number | null
+    source: string
+    missingCount: number
+  }> {
+    return request('/tradewatcher/badge')
+  },
   quotes(secids: string[]): Promise<{
     /** 响应生成时刻（用于触发下游刷新），**不是**数据时刻 */
     ts: number
@@ -72,10 +104,12 @@ export const api = {
     requested: number
     /** 是否因超过 160 项上限被截断 */
     truncated: boolean
+    /** 休市定稿（非交易时段 + 无兜底行 + 有价）：卡片显示"定稿复用"灰点，未开盘不得显示绿色 */
+    cached: boolean
   }> {
     const ids = [...new Set(secids)].join(',')
     if (ids === '') {
-      return Promise.resolve({ ts: Date.now(), items: {}, asOf: null, stale: false, staleCount: 0, priced: 0, rows: 0, sources: {}, missing: [], requested: 0, truncated: false })
+      return Promise.resolve({ ts: Date.now(), items: {}, asOf: null, stale: false, staleCount: 0, priced: 0, rows: 0, sources: {}, missing: [], requested: 0, truncated: false, cached: false })
     }
     return request(`/tradewatcher/quotes?ids=${encodeURIComponent(ids)}`)
   },

@@ -19,7 +19,9 @@
 | ETF 季报持仓穿透 | `FundArchivesDatas.aspx?type=jjcc`（JS 包裹的 HTML 表格） | P2-1 | 需解析 HTML；只给前十大 |
 | 汇率（港股持仓折算） | 腾讯 `whHKDCNY` / 新浪 `fx_shkdcny` | P1-11 | 符号未验证；需确认中间价还是即期 |
 
-## P0（先做：都在「让已有数据不说谎」这一层）
+## P0（**v0.25.0 已全部落地** —— 以下保留原始条目文本，便于逐条对照验收）
+
+> 落地情况与两处**有意偏离**见文末「已完成 → P0（v0.25.0）」。偏离都是有理由的、写明的，不是漏做。
 
 ### P0-1 读工具「数据时刻」统一契约（S）
 **目的**：agent 读到的每个数都能回答"这是几点、什么源、可不可信"。
@@ -135,6 +137,31 @@
 - **P2-5 自绘行业热力（M）**：色深=涨幅、面积=成交额；与现有 iframe 并存，默认自绘（自绘才能标口径）。
 
 ## 已完成（清单吸收的既有工作）
+
+### P0（v0.25.0，11/11 落地）
+
+对照上文的每条 P0 条目，逐条给出**实现位置**与验收依据；三处与原文不同的处理单独标出并说明理由。
+
+- **P0-1 读工具「数据时刻」统一契约 ✅** — `shared/model.ts` 新增 `DataProvenance` / `MissingField`；`host/em.ts` 的 `quoteProvenance()` 把行情新鲜度升级为出处契约（含 `missing[].why` 的 `no-source` / `transient` 判定，依据是"该标的有无备用源映射"）；7 个读工具（portfolio / ledger / watchlist / quotes / calendar / rescue / search）全部返回 `provenance`，并在 render 尾部打印【数据出处】与缺失明细。`portfolio` 增 `fxMode` 与 `unpriced[]` + `unpricedMv`，`rescue` 增 `activeWindow` / `calibratedAt` / `factorContrib` / `scoreLog`。`stale`（降级复用）与 `cached`（休市定稿）两字段并存。
+- **P0-2 卡片四态标记与来源徽章 ✅** — 新增 `client/quoteState.ts`（纯函数，可单测）：绿=实时 / 黄=延迟（>刷新间隔 3 倍或 `lkg`）/ 灰=定稿复用（整批 `cached`）/ 红=缺失；`TopBar` 逐卡 6px 色点 + tooltip（源与观测时刻），列表头汇总 `12/23 实时 · 9 延迟 · 2 缺失`。汇总与逐卡**共用同一个判定函数**，因此必然加得上；定稿优先于实时（未开盘不显示绿色）。`/quotes` 的 `QuoteProvenance` 增 `cached` 字段。
+- **P0-3 侧栏徽标 ✅** — 新增宿主路由 `GET /tradewatcher/badge`（只读同一份 rescue 快照与持仓汇总，**不触发新采样**）；`client/index.tsx` 模块级 `badgeState` + `useSyncExternalStore` 订阅（图标与主面板之间没有共同 React 祖先，这是唯一不引新依赖的通道）。护盘 ≥ 疑似显示「护」（橙，优先于个人盈亏）；否则显示当日盈亏率（带符号）；隐身视图只显示沪深300 点位。
+- **P0-4 非活跃时段显式态 ✅** — `rescue.ts` 新增纯函数 `samplingWindow()`（与 `inTradingWindow` 同源，含午休/周末/跨日推进）；快照四个分支全部带上 `activeWindow`；`RescuePanel` 在暂停时段把分数位显示为 `—`、状态行写 `采样暂停 · 下次 10-09 09:25（已收盘）`，并**在暂停时段完全不出现「采样缺口」字样**（改为"当日曾采样失败/曾中断"）。
+- **P0-5 图表数据口径条 ✅** — `KlineData` 增 `asOf` / `barOpen`（`fetchKline` 填本地最近一次成功取数时刻与"当根是否未收盘"）；`QuoteDrawer` 顶部固定一行 `日K · klt 101 · 前复权 · 截至 10-09 14:31（当根未收盘，MA/MACD 已含未收盘当根）`。复权口径取自回包 `kline.fqt`（实际生效值），**不用界面请求值**；「截至」不用"现在"顶替。
+- **P0-6 成本口径切换联动说明 ✅** — `PortfolioPage.switchBasis()` 切档时弹 6 秒 toast 报差值（`口径切换：摊薄成本 → 买入均价。持仓总盈亏 X → Y（差 Z；N 只持仓逐项差值之和等于该数）`）；两口径本就共用同一套成本函数（`derivePosition`），selftest 断言逐项差值之和 == 总额差值。
+- **P0-7 评分可解释性与阈值漂移监控 ✅** — `scoreRescue` 返回 `timeCoef` / `rawScore`，新增 `factorContributions()`（权 × 得分 × 时点系数）；`RescueFactor` 快照增 `factorContrib`；因子表加「贡献」列 + 合计行；断言"贡献求和 == 总分 ±0.5"。新增 `DayLog.scoreLog`（含各因子原始值与当次生效阈值、引擎版本），`scoreLogOf()` 可回看。
+- **P0-8 紧凑 / 隐身视图 ✅** — `PortPrefs.viewMode`（`full|compact|incognito`，宿主 `setPrefs` 校验、非法值抛错）；`Alt+M` 轮换（输入控件内不抢键）、toast 说明当前档位；根节点 `data-view` 驱动 CSS（紧凑隐藏说明与脚注；隐身把涨跌色转灰阶）；金额遮罩做在**格式化出口内部**（`fmtAmt`/`fmtMoneySigned`/`fmtRaw` + `setMoneyMask`），新增金额展示点不会漏。只影响显示：工具层不引该模块。
+- **P0-9 多设备导出 / 导入 ✅** — 新增 `host/backup.ts`（纯函数：`makeBundle`/`verifyBundle`/`describeConflicts`）与 `GET|POST /tradewatcher/backup`；`DataStore.exportFiles()`（从**磁盘**读，反映用户真正拥有的那份）与 `importFiles()`（先写 `.bak`、再原子写入、最后重读内存，不需要重启）。导入为两段式：预览（校验 + 覆盖前后差异）→ 确认覆盖。拒绝条件逐条给出原因：非对象 / 缺 `schemaVersion` / 版本过高 / 缺文件 / 流水条目无法解析 / 引用不存在的 posId·groupId / **重放出现负持仓** / 校验和不匹配。界面在持仓页「备份」按钮。
+- **P0-10 内嵌 iframe 三态降级 ✅** — `CloudMap.tsx` 重写：8 秒超时 → 超时态占位（域名 + 最后成功加载时间 + "本插件无法区分是本机网络还是站点问题"）+ 一次「重试」（重建 iframe 重新计时）；状态徽标常驻；最后成功时间记 localStorage。仍不抓取该站内容。
+- **P0-11 写工具最小权限与可撤销 ✅** — 新增 `host/writeLog.ts`（`WriteJournal`：落盘 `write-log.json`，`by` / 反向操作 / 是否已撤销，保留 500 条）；`context.ts` 的 `PluginToolExec` 增 `agent.id`（会话 id，取不到记 `unknown` 不编造）；`calendar_add` 过同秒 3 次节流（超限直接报错，不静默丢弃）并登记反向操作；新增 `tradewatcher_undo`（按 `id` 或 `last=N`，`listOnly` 可列可撤销项；未知反向类型明确报错而非假装成功）。
+
+**三处有意偏离原文：**
+
+1. **P0-7 的出分日志粒度**：原文"每次出分写一条"。实际按 **5 分钟刻度 + 等级变化时**写。理由：采样 15–30 秒一次，逐次记录在 60 天滚动窗口下会产生数万条（日志本身变成负担与性能问题），而阈值漂移的回溯分辨率不需要秒级 —— 分差不会在 5 分钟内漂。同一 5 分钟刻度内只保留最后一条。
+2. **P0-3 的「收盘后缀」**：原文"收盘后加后缀「收」"。实际该后缀放在**侧栏展开态的标题/tooltip 与 `aria-label`** 里，图标内只保留最多 4 个字形。理由：图标是 18px，塞进「护收」这类两字组合两边都看不清；完整语义仍然可见（悬停即得），信息没有丢。
+3. **P0-1 的 `fxMode`**：原文只要求"增 `fxMode`"。实现时发现**总额此前把港/美股按 1:1 加进汇总**（`assemblePortfolio` 对所有有价行求和）。这次一并修正为 `fxMode='none'` 时**总额只含 A股**，非 A股逐项进 `unpriced[]` 并在界面给出 `不含 N 项 ▼` 下钻。理由：按 1:1 悄悄相加比"缺一块"更危险 —— 用户不会质疑一个看起来正常的数。这是**行为变更**（港股持仓者的总市值/盈亏数字会变小、且现在会说明原因），实时汇率源落地（P1-11）之前只能如此。
+
+**新增/变更的测试**：`src/host/p0.test.ts`（16 条：采样窗口边界与跨周末、贡献度可复算、missing 的 no-source/transient 分类、零行 asOf 必须为 null、跨市场 unpriced 与总额排除、备份校验的 7 类拒绝路径）；`src/client/quoteState.test.ts`（5 条：四态阈值 2.9×/3.1×、定稿优先于实时但缺失优先于定稿、汇总可加性、遮罩只改金额不动价格与成交量）。合计测试 70 条 × 2 个时区运行。
+
 
 - **dsh 0.2.x 客户端适配（v0.24.0）**：`ctx.betterSidebar`（0.1.x 的侧边栏页签服务）在新版已被移除，浏览器半区改为宿主 Slots 契约——`ctx.slots.inject('sidebar.panellist', …)` 注册侧栏图标（id `tradewatcher`）、`ctx.slots.inject('main', …)` 注册同名主面板键，自绘 SVG 图标（不引 Harness 组件库，保持零依赖）；面板只在被选中时挂载，未选中即卸载，轮询自然停止。宿主半区（`webServer`/`webRuntime`/`tools`/`systemPrompt`）在 0.2.x 形状未变，无需改动。
 - **K 线复权（v0.23.0，默认前复权）**：三态可切、按标的记忆、`fqSupported` 判定适用性（指数/期货禁用并给理由）、口径进缓存键（缺该口径宁可失败不拿别的顶替）、腾讯兜底混口径修正、MA/MACD/B/S 与图同源、详情头始终真实成交价。详见 README「K 线复权」。

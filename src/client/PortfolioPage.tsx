@@ -12,7 +12,7 @@ import type {
 } from '../shared/model.ts'
 import { DEFAULT_PREFS } from '../shared/model.ts'
 import { api } from './api.ts'
-import { dirClass, fmtAmt, fmtPct, fmtPrice, fmtSigned } from './format.ts'
+import { dirClass, fmtAmt, fmtMoneySigned, fmtPct, fmtPrice, fmtRaw } from './format.ts'
 import { Btn, EmptyHint, ErrorNote, Field, Modal, MoreMenu, Skeleton, SuggestInput } from './ui.tsx'
 import { MiniTrend } from './charts.tsx'
 import { useMiniTrends } from './mini.ts'
@@ -50,6 +50,8 @@ export function PortfolioPage(props: {
   onSymbols: (ids: string[]) => void
   /** 打开详情抽屉（由 App 统一渲染，见 index.tsx） */
   onOpenDetail?: (secid: string, name: string) => void
+  /** 一次性动作的说明（P0-6 成本口径切换等），由 App 的单实例 toast 承载 */
+  notify?: (text: string) => void
 }): React.ReactElement {
   const { active, refreshSec, prefs, setPrefs, quotes, missing, onSymbols, onOpenDetail } = props
   const redUp = prefs.redUp
@@ -57,7 +59,37 @@ export function PortfolioPage(props: {
   const portSort = normalizeSortState(prefs.portSort, PORT_SORT_KEYS, DEFAULT_PREFS.portSort)
   const basis = prefs.costBasis
   const diluted = basis === 'diluted'
+
+  /**
+   * 成本口径切换（P0-6）。
+   *
+   * 摊薄/均价两口径并存，切换会让标题上的总盈亏整体跳一下 —— 不解释就只是"数字变了"。
+   * 这里报出**差值**，且差值来自同一份 view（两口径共用同一套成本函数，只换参数），
+   * 因此"切换后总额变化 == 逐项差值之和"是可复算的（见 selftest 的断言）。
+   */
+  const switchBasis = (next: 'diluted' | 'average'): void => {
+    if (next === basis) return
+    const g = view?.grand
+    if (g === undefined) {
+      setPrefs({ costBasis: next })
+      return
+    }
+    const toName = next === 'diluted' ? '摊薄成本' : '买入均价'
+    const fromName = next === 'diluted' ? '买入均价' : '摊薄成本'
+    const fromVal = next === 'diluted' ? g.floatPnl : g.dilutedPnl
+    const toVal = next === 'diluted' ? g.dilutedPnl : g.floatPnl
+    const diff = toVal - fromVal
+    const rows = view?.positions.length ?? 0
+    props.notify?.(
+      `口径切换：${fromName} → ${toName}。持仓总盈亏 ${fmtMoneySigned(fromVal)} → ${fmtMoneySigned(toVal)}` +
+      `（差 ${diff >= 0 ? '+' : ''}${fmtAmt(diff)}；${rows} 只持仓逐项差值之和等于该数）` +
+      '。两口径共用同一套成本函数，切换只换参数，不重算流水。',
+    )
+    setPrefs({ costBasis: next })
+  }
   const [view, setView] = useState<PortfolioView | null>(null)
+  const [backupOpen, setBackupOpen] = useState(false)
+  const [unpricedOpen, setUnpricedOpen] = useState(false)
   const [stale, setStale] = useState(0)
   const [error, setError] = useState<string | null>(null)
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({})
@@ -147,11 +179,14 @@ export function PortfolioPage(props: {
   const archivedGroups = groups.filter((g) => g.archived === true)
   const grand = view.grand
 
+  // 未计入总额的持仓（口径问题/无价），来自 host 的 assemblePortfolio（P0-1）
+  const unpriced = view?.unpriced ?? []
+
   const stat = (label: string, value: number, colored = true): React.ReactElement =>
     React.createElement('div', { className: 'tw-stat' },
       React.createElement('div', { className: 'k' }, label),
       React.createElement('div', { className: colored ? `v ${dirClass(value, redUp)}` : 'v' },
-        colored ? fmtSigned(value) : value.toFixed(2)),
+        colored ? fmtMoneySigned(value) : fmtRaw(value)),
     )
 
   return React.createElement(
@@ -170,8 +205,8 @@ export function PortfolioPage(props: {
             }, `${stale} 只无价 · 总额不含`)
           : null,
         React.createElement('div', { className: 'tw-seg', title: '成本口径：摊薄=卖出冲减成本（多数券商 App 口径）；均价=买入移动加权' },
-          React.createElement('button', { 'data-on': diluted, onClick: () => setPrefs({ costBasis: 'diluted' }) }, '摊薄口径'),
-          React.createElement('button', { 'data-on': !diluted, onClick: () => setPrefs({ costBasis: 'average' }) }, '均价口径'),
+          React.createElement('button', { 'data-on': diluted, onClick: () => switchBasis('diluted') }, '摊薄口径'),
+          React.createElement('button', { 'data-on': !diluted, onClick: () => switchBasis('average') }, '均价口径'),
         ),
         React.createElement('span', {
           className: 'tw-iconbtn',
@@ -190,10 +225,40 @@ export function PortfolioPage(props: {
           onChange: (next) => setPrefs({ portSort: next }),
           ariaLabel: '持仓排序',
         }),
+        React.createElement(Btn, { onClick: () => setBackupOpen(true), title: '导出/导入 JSON（换机、备份）' }, '备份'),
         React.createElement(Btn, { onClick: reload }, '刷新'),
       ),
+      backupOpen
+        ? React.createElement(BackupModal, {
+            onClose: () => setBackupOpen(false),
+            notify: props.notify,
+            onDone: () => { void reload() },
+          })
+        : null,
+      unpricedOpen && unpriced.length > 0
+        ? React.createElement('div', { className: 'tw-hint', style: { padding: '4px 2px 0' } },
+            `以下 ${unpriced.length} 项不计入总额与盈亏（口径：fxMode=${view?.fxMode ?? 'none'}，总额仅含 A股；未折算的市值合计 ${fmtAmt(view?.unpricedMv ?? 0)}）：`,
+            React.createElement('ul', { style: { margin: '4px 0 0 16px' } },
+              ...unpriced.map((u) =>
+                React.createElement('li', { key: u.posId },
+                  React.createElement('b', null, u.name),
+                  `（${u.secid}）${u.why === 'no-fx' ? '非人民币计价、未折算' : '无可用行情源'}：${u.note}`,
+                ),
+              ),
+            ),
+          )
+        : null,
       React.createElement('div', { className: 'tw-statrow' },
-        stat(stale > 0 ? '总市值（不含无价）' : '总市值', grand.totalMv, false),
+        stat(unpriced.length > 0 ? '总市值（仅 A股）' : '总市值', grand.totalMv, false),
+        // P0-1/P1-6：总额缺一块必须能点开看到缺的是谁、为什么
+        unpriced.length > 0
+          ? React.createElement('span', {
+              className: 'tw-badge',
+              style: { cursor: 'pointer', alignSelf: 'center' },
+              title: '点击展开：这些持仓未计入上方的总额与盈亏',
+              onClick: () => setUnpricedOpen((v) => !v),
+            }, `不含 ${unpriced.length} 项${unpricedOpen ? ' ▲' : ' ▼'}`)
+          : null,
         diluted ? stat('持仓盈亏', grand.dilutedPnl) : stat('浮动盈亏', grand.floatPnl),
         stat('当日盈亏', grand.dayPnl),
         stat('累计已实现', grand.realized),
@@ -253,10 +318,10 @@ export function PortfolioPage(props: {
           React.createElement('div', { className: 'tw-gh-metrics' },
             React.createElement('span', null, '市值 ', React.createElement('b', null, fmtAmt(grp.totalMv))),
             diluted
-              ? React.createElement('span', { className: dirClass(grp.dilutedPnl, redUp) }, '持仓盈亏 ', fmtSigned(grp.dilutedPnl))
-              : React.createElement('span', { className: dirClass(grp.floatPnl, redUp) }, '浮盈 ', fmtSigned(grp.floatPnl)),
-            React.createElement('span', { className: dirClass(grp.dayPnl, redUp) }, '当日 ', fmtSigned(grp.dayPnl)),
-            React.createElement('span', { className: 'tw-dim' }, '已实现 ', fmtSigned(grp.realized)),
+              ? React.createElement('span', { className: dirClass(grp.dilutedPnl, redUp) }, '持仓盈亏 ', fmtMoneySigned(grp.dilutedPnl))
+              : React.createElement('span', { className: dirClass(grp.floatPnl, redUp) }, '浮盈 ', fmtMoneySigned(grp.floatPnl)),
+            React.createElement('span', { className: dirClass(grp.dayPnl, redUp) }, '当日 ', fmtMoneySigned(grp.dayPnl)),
+            React.createElement('span', { className: 'tw-dim' }, '已实现 ', fmtMoneySigned(grp.realized)),
           ),
         ),
         isCollapsed
@@ -294,7 +359,7 @@ export function PortfolioPage(props: {
             React.createElement('div', { key: grp.id, className: 'tw-wrow' },
               React.createElement('div', { className: 'nm' },
                 React.createElement('b', null, grp.name),
-                React.createElement('small', null, `市值 ${fmtAmt(grp.totalMv)} · 浮盈 ${fmtSigned(grp.floatPnl)} · 流水保留`),
+                React.createElement('small', null, `市值 ${fmtAmt(grp.totalMv)} · 浮盈 ${fmtMoneySigned(grp.floatPnl)} · 流水保留`),
               ),
               React.createElement(Btn, { onClick: () => mutate({ op: 'restoreGroup', groupId: grp.id }) }, '恢复'),
               React.createElement(Btn, { onClick: () => openLedger({ mode: 'group', id: grp.id, title: grp.name }) }, '流水'),
@@ -342,6 +407,134 @@ function PortModalHost(props: {
     return React.createElement(TradeModal, { verb: m.verb, pos: m.pos, groupName: m.groupName, quote: props.quotes[m.pos.secid], redUp: props.redUp, onClose: props.onClose, mutate: props.mutate })
   }
   return React.createElement(PosEditModal, { pos: m.pos, groupName: m.groupName, groups: m.groups, onClose: props.onClose, mutate: props.mutate })
+}
+
+/**
+ * 备份 / 恢复（P0-9）。
+ *
+ * 流程刻意做成两段：选文件 → **预览**（校验 + 冲突差异）→ 确认覆盖。
+ * 因为"导入"是不可逆的一步（覆盖本机账本），一次点击就写盘等于把误操作变成数据丢失；
+ * 校验不通过时根本走不到确认按钮 —— 宿主侧会逐条拒绝并说明原因。
+ */
+function BackupModal(props: { onClose: () => void; notify?: (text: string) => void; onDone: () => void }): React.ReactElement {
+  const [bundle, setBundle] = useState<unknown>(null)
+  const [fileName, setFileName] = useState('')
+  const [check, setCheck] = useState<{ ok: boolean; errors: string[]; conflicts: string[]; summary: Record<string, unknown> } | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState<string | null>(null)
+
+  const doExport = (): void => {
+    setErr(null)
+    setBusy(true)
+    api
+      .exportBackup()
+      .then((r) => {
+        const text = JSON.stringify(r.bundle, null, 1)
+        const blob = new Blob([text], { type: 'application/json' })
+        const url = URL.createObjectURL(blob)
+        const a = document.createElement('a')
+        a.href = url
+        a.download = `dsh-tradewatcher-backup-${new Date().toISOString().slice(0, 10)}.json`
+        document.body.appendChild(a)
+        a.click()
+        a.remove()
+        URL.revokeObjectURL(url)
+        props.notify?.(`已导出备份（${(text.length / 1024).toFixed(1)} KB）${r.unreadable.length > 0 ? `；注意：${r.unreadable.join('、')} 读不到，已按空表导出` : ''}`)
+      })
+      .catch((e: Error) => setErr(e.message))
+      .finally(() => setBusy(false))
+  }
+
+  const pickFile = (file: File): void => {
+    setErr(null)
+    setCheck(null)
+    setBundle(null)
+    setFileName(file.name)
+    const reader = new FileReader()
+    reader.onload = () => {
+      try {
+        const parsed = JSON.parse(String(reader.result))
+        setBundle(parsed)
+        setBusy(true)
+        api
+          .importBackup('preview', parsed)
+          .then((r) => setCheck({ ok: r.ok, errors: r.errors, conflicts: r.conflicts, summary: r.summary }))
+          .catch((e: Error) => setCheck({ ok: false, errors: [e.message], conflicts: [], summary: {} }))
+          .finally(() => setBusy(false))
+      } catch (e) {
+        setCheck({ ok: false, errors: [`文件不是合法 JSON：${e instanceof Error ? e.message : String(e)}`], conflicts: [], summary: {} })
+      }
+    }
+    reader.onerror = () => setCheck({ ok: false, errors: ['文件读取失败'], conflicts: [], summary: {} })
+    reader.readAsText(file)
+  }
+
+  const doApply = (): void => {
+    if (bundle === null) return
+    setErr(null)
+    setBusy(true)
+    api
+      .importBackup('apply', bundle)
+      .then((r) => {
+        props.notify?.(`已导入：${r.conflicts.length > 0 ? r.conflicts.join('；') : '内容与校验全部通过'}。原文件已备份为 ${(r.backedUp ?? []).join('、') || '（无）'}`)
+        props.onDone()
+        props.onClose()
+      })
+      .catch((e: Error) => setErr(e.message))
+      .finally(() => setBusy(false))
+  }
+
+  return React.createElement(Modal, { title: '备份 / 恢复（导出·导入 JSON）', onClose: props.onClose },
+    React.createElement(ErrorNote, { error: err }),
+    React.createElement('div', { className: 'tw-hint' },
+      '导出把 watch/positions/ledger/prefs 打包成一份 JSON（含 schemaVersion 与校验和），用于换机或备份。' +
+      '导入前会先校验并给出差异预览，确认后才覆盖；覆盖前本机原文件会写成 .bak。' +
+      '账本重放不一致（引用缺失、负持仓、条目无法解析）一律拒绝导入 —— 宁可不导入，也不导入一份算不平的账。',
+    ),
+    React.createElement('div', { style: { display: 'flex', gap: 8, alignItems: 'center', marginTop: 8 } },
+      React.createElement(Btn, { onClick: doExport, disabled: busy }, '导出 JSON'),
+      React.createElement('label', { className: 'tw-iconbtn', style: { cursor: 'pointer' } },
+        '选择备份文件…',
+        React.createElement('input', {
+          type: 'file',
+          accept: '.json,application/json',
+          style: { display: 'none' },
+          onChange: (e: React.ChangeEvent<HTMLInputElement>) => {
+            const f = e.target.files?.[0]
+            if (f !== undefined) pickFile(f)
+          },
+        }),
+      ),
+      fileName !== '' ? React.createElement('span', { className: 'tw-muted', style: { fontSize: 11 } }, fileName) : null,
+    ),
+    check !== null
+      ? React.createElement('div', { style: { marginTop: 10 } },
+          React.createElement('div', { className: check.ok ? 'tw-ok' : 'tw-err', style: { fontSize: 12, fontWeight: 600 } },
+            check.ok ? '校验通过，可以导入' : '拒绝导入'),
+          check.errors.length > 0
+            ? React.createElement('ul', { className: 'tw-hint', style: { margin: '4px 0 0 16px' } },
+                ...check.errors.map((e, i) => React.createElement('li', { key: i }, e)),
+              )
+            : null,
+          check.conflicts.length > 0
+            ? React.createElement('div', { style: { marginTop: 6 } },
+                React.createElement('div', { className: 'tw-muted', style: { fontSize: 11 } }, '覆盖前后差异预览：'),
+                React.createElement('ul', { className: 'tw-hint', style: { margin: '4px 0 0 16px' } },
+                  ...check.conflicts.map((c, i) => React.createElement('li', { key: i }, c)),
+                ),
+              )
+            : null,
+        )
+      : null,
+    React.createElement('div', { style: { display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 10 } },
+      React.createElement(Btn, { onClick: props.onClose }, '取消'),
+      React.createElement(Btn, {
+        primary: true,
+        disabled: busy || check === null || !check.ok || bundle === null,
+        onClick: doApply,
+      }, busy ? '处理中…' : '确认覆盖导入'),
+    ),
+  )
 }
 
 function GroupFormModal(props: {
@@ -533,8 +726,8 @@ function LedgerModal(props: { target: { mode: string; id: string; title: string;
       v === null || v === undefined ? '—' : `${v === 0 ? '' : v > 0 ? '▲' : '▼'}${Math.abs(v).toFixed(2)}%`
     return React.createElement('div', { className: 'tw-hint', style: { display: 'flex', gap: 14, flexWrap: 'wrap', margin: '0 0 8px', fontFamily: 'var(--tw-mono)' } },
       React.createElement('span', null, `持仓 ${r.qty} · ${diluted ? '摊薄成本' : '均价'} ${fmtPrice(cost)} · 现价 ${fmtPrice(r.price)}`),
-      React.createElement('span', { className: dirClass(pnl, redUp) }, `${diluted ? '持仓盈亏' : '浮动盈亏'} ${fmtSigned(pnl)} (${fmtRate(pnlPct)})`),
-      React.createElement('span', { className: dirClass(r.dayPnl, redUp) }, `当日 ${fmtSigned(r.dayPnl)} (${fmtRate(r.dayPnlPct)})`),
+      React.createElement('span', { className: dirClass(pnl, redUp) }, `${diluted ? '持仓盈亏' : '浮动盈亏'} ${fmtMoneySigned(pnl)} (${fmtRate(pnlPct)})`),
+      React.createElement('span', { className: dirClass(r.dayPnl, redUp) }, `当日 ${fmtMoneySigned(r.dayPnl)} (${fmtRate(r.dayPnlPct)})`),
     )
   }
   return React.createElement(
@@ -669,12 +862,12 @@ function PosRow(props: {
       pps('市值', React.createElement('span', null, fmtAmt(row.mv)),
         `占比 ${props.weight === null ? '—' : (props.weight * 100).toFixed(2) + '%'} · 成本 ${fmtPrice(showCost)}`),
       pps(diluted ? '持仓盈亏' : '浮动盈亏',
-        React.createElement('span', { className: dirClass(showPnl, redUp) }, fmtSigned(showPnl)),
+        React.createElement('span', { className: dirClass(showPnl, redUp) }, fmtMoneySigned(showPnl)),
         React.createElement('span', { className: dirClass(showPnl, redUp) }, pctMeta(showPnlPct, showPnl))),
-      pps('当日盈亏', React.createElement('span', { className: dirClass(row.dayPnl, redUp) }, fmtSigned(row.dayPnl)),
+      pps('当日盈亏', React.createElement('span', { className: dirClass(row.dayPnl, redUp) }, fmtMoneySigned(row.dayPnl)),
         React.createElement('span', { className: dirClass(row.dayPnl, redUp) }, pctMeta(row.dayPnlPct, row.dayPnl))),
       pps(diluted ? '累计已实现（已计入上栏）' : '累计已实现',
-        React.createElement('span', { className: 'tw-dim' }, fmtSigned(row.realized))),
+        React.createElement('span', { className: 'tw-dim' }, fmtMoneySigned(row.realized))),
     ),
   )
 }

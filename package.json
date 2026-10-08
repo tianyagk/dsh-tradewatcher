@@ -1,7 +1,7 @@
 {
   "name": "dsh-tradewatcher",
-  "version": "0.24.0",
-  "description": "dsh-tradewatcher（盯盘）: a DeepSeek Harness web plugin that registers an AIDP-style market dashboard as a global panel through the client Slots service (sidebar.panellist + main key `tradewatcher`) — TopBar index/global/commodity strips with hover intraday charts, embedded 52etf cloud map, grouped watchlist, ledger-driven portfolio groups with market value / float P&L / day P&L, and host-side read-only agent tools + JSON files exposing every portfolio record for in-session analysis.",
+  "version": "0.25.0",
+  "description": "dsh-tradewatcher（盯盘）: a DeepSeek Harness web plugin that registers an AIDP-style market dashboard as a global panel through the client Slots service (sidebar.panellist + main key `tradewatcher`) — TopBar index/global/commodity strips with per-card freshness state, hover intraday charts with a caliber bar, embedded cloud map with three-state fallback, grouped watchlist, ledger-driven portfolio groups with market value / float P&L / day P&L, sidebar badge, compact/incognito view modes, JSON backup export/import, and host-side agent tools that carry a data-provenance contract (asOf/stale/source/missing[]) plus a revocable write journal.",
   "type": "module",
   "engines": {
     "node": ">=20"
@@ -37,7 +37,6 @@
     "dsh",
     "plugin",
     "web",
-    "dsh-better-sidebar",
     "market",
     "portfolio",
     "盯盘",

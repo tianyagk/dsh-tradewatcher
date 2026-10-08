@@ -13,10 +13,12 @@
  */
 import type {
   BoardRow,
+  DataProvenance,
   DayBar,
   FqMode,
   KlineData,
   QuoteRow,
+  QuoteSource,
   StockDetail,
   SuggestItem,
   TrendData,
@@ -29,7 +31,7 @@ import { fetchSinaEtfRanking, fetchSinaQuotes, sinaSymbol as sinaQuoteSymbol } f
 import { fetchTencentBoards, fetchTencentMinutes, fetchTencentQuoteRows, fetchTencentSuggest, tencentCode, type TencentQuoteFull } from './tencent.ts'
 import { join } from 'node:path'
 import { dataHome } from './store.ts'
-import { isSettledOffline } from './time.ts'
+import { dayOf, inSession, isSettledOffline } from './time.ts'
 
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
 const REFERER = 'https://quote.eastmoney.com/'
@@ -311,6 +313,69 @@ export interface QuoteProvenance {
   rows: number
   /** 按来源计数（em/tencent/sina/lkg） */
   sources: Record<string, number>
+  /**
+   * 休市定稿（P0-2 的第三态）：非交易时段 + 全部行都新鲜（没有兜底行）+ 至少有一行有价。
+   * 与 `stale` 语义不同 —— 定稿是"数据已确定、不需要回源"，不是"降级复用旧值"。
+   * 卡片据此显示灰色点（定稿复用）而不是绿色（实时）：未开盘时不得显示绿色。
+   */
+  cached: boolean
+}
+
+/**
+ * 把行情新鲜度升级为 agent 可读的**数据出处契约**（P0-1）。
+ *
+ * 关键在 `missing[].why` 的判定：同样是"一个价都没有"，成因完全不同——
+ *   - 该标的**没有备用源映射**（腾讯/新浪都不认这个 secid）→ `no-source`：
+ *     这是上游的结构性缺口，重试一万次也没有，agent 应该改口径而不是等；
+ *   - 有备用源映射但三源这次都失败了 → `transient`：稍后重试可能拿到。
+ *
+ * 此前工具层只回 `{ ts, items }`，两者都是"列表里少几行"，agent 无从分辨。
+ */
+export function quoteProvenance(detail: QuoteProvenance): DataProvenance {
+  const sources: Record<string, number> = {}
+  for (const [k, v] of Object.entries(detail.sources)) if (v > 0) sources[k] = v
+  const keys = Object.keys(sources)
+  const source: DataProvenance['source'] =
+    detail.rows === 0 ? 'none' : keys.length === 1 ? (keys[0] as QuoteSource) : keys.length > 1 ? 'mixed' : 'none'
+  return {
+    asOf: detail.asOf,
+    stale: detail.stale,
+    staleCount: detail.staleCount,
+    source,
+    sources,
+    missing: detail.missing.map((secid) => {
+      const noFallback = !hasQuoteFallback(secid)
+      return {
+        what: secid,
+        why: noFallback ? ('no-source' as const) : ('transient' as const),
+        note: noFallback
+          ? '该标的无腾讯/新浪备用源映射（东财之外的源不提供它），行情源结构性缺失，重试无效'
+          : '东财与备用源本次都未给出可用价格（限流或超时），稍后重试可能恢复',
+      }
+    }),
+    // 这一批是否"休市定稿零回源"：定稿时 asOf 会停在收盘时刻，且没有任何兜底行
+    cached: detail.cached,
+  }
+}
+
+/**
+ * 把行情 + 新鲜度一起取回的便捷入口。
+ * 工具层此前用 `fetchQuotes`（丢掉全部出处信息），改用这个即可满足 P0-1。
+ */
+export async function fetchQuotesWithProvenance(secids: string[]): Promise<{
+  items: Record<string, QuoteRow>
+  provenance: DataProvenance
+  /** 有价行数 / 总行数（供调用方判断"是不是整批空"） */
+  priced: number
+  rows: number
+}> {
+  const detail = await fetchQuotesDetailed(secids)
+  return {
+    items: detail.items,
+    provenance: quoteProvenance(detail),
+    priced: detail.priced,
+    rows: detail.rows,
+  }
 }
 
 export function summarizeQuoteProvenance(items: Record<string, QuoteRow>, now = Date.now(), missing: string[] = []): QuoteProvenance {
@@ -328,7 +393,9 @@ export function summarizeQuoteProvenance(items: Record<string, QuoteRow>, now = 
     if (at !== null && (asOf === null || at > asOf)) asOf = at
     if (src === 'lkg' || at === null || now - at > QUOTE_STALE_MS) staleCount += 1
   }
-  return { asOf, stale: staleCount > 0, staleCount, priced, rows: rows.length, sources, missing }
+  // 定稿判定：休市 + 零兜底行 + 有价（盘中永远为 false；分钟级延迟的盘中数据不是"定稿"）
+  const cached = !inSession(now) && staleCount === 0 && priced > 0
+  return { asOf, stale: staleCount > 0, staleCount, priced, rows: rows.length, sources, missing, cached }
 }
 
 /**
@@ -1383,12 +1450,20 @@ export async function fetchKline(
   if (!settled && stale && entry.bars.length === 0) return null
   const series = baseKlt === 103 && klt === 104 ? resampleYearly(entry.bars) : entry.bars
   const want = Math.max(1, Math.min(Math.round(lmt) || series.length, series.length))
+  const days = series.slice(series.length - want)
+  // 最后一根是否未收盘：只有"该 bar 就是今天"且此刻仍可能产生新数据时才算。
+  // 周/月/年 K 的"今天"同理存在，但判断口径一致（date 相等 + inSession）。
+  const lastDate = days[days.length - 1]?.date ?? ''
+  const barOpen = !settled && lastDate !== '' && lastDate === dayOf(Date.now()) && inSession()
   return {
     secid,
-    days: series.slice(series.length - want),
+    days,
     stale,
     fqt: mode,
     fqSupported: supported,
+    // 口径条的"数据截至"= 本地最近一次成功取数时刻（定稿时就是收盘那一次）
+    asOf: entry.updatedAt > 0 ? entry.updatedAt : Date.now(),
+    barOpen,
     ...(settled ? { cached: true } : {}),
   }
 }

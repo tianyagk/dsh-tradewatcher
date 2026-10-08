@@ -170,6 +170,17 @@ export interface KlineData {
   fqt?: FqMode
   /** false = 该标的没有除权除息概念，界面上的复权开关应禁用并说明原因 */
   fqSupported?: boolean
+  /**
+   * 本地最近一次成功取数（或落盘）的时刻（epoch ms）。口径条显示"数据截至 …"用的就是它
+   * —— **不是**最后一根 bar 自己的时间：未收盘的那根 bar 在上游没有收盘时间，
+   * 拿"现在"顶替会把"我什么时候拿的"说成"这根什么时候收的"。
+   */
+  asOf?: number
+  /**
+   * 最后一根 bar 是否**尚未收盘**（上游仍在更新它）。
+   * 该值为 true 时 MA/指标都含这一根，口径条必须写明（否则"MA 是不是含今天"要靠猜）。
+   */
+  barOpen?: boolean
 }
 
 /** ── 财经日历 ─────────────────────────────────────────────────────────── */
@@ -373,6 +384,17 @@ export interface SortState<K extends string> {
 export const WATCH_SORT_KEYS: readonly WatchSortKey[] = ['default', 'pct', 'mv']
 export const PORT_SORT_KEYS: readonly PortSortKey[] = ['default', 'mv', 'pnl', 'dayPnl', 'weight']
 
+/**
+ * 视图密度档位（P0-8，对标"一键摸鱼"）。
+ * `full` = 完整（含说明文字与脚注）；`compact` = 去掉说明文字/脚注；
+ * `incognito` = 金额模糊（`¥••••`）+ 涨跌色转灰阶。
+ * **只影响显示**：取数、告警与 agent 工具返回不受影响。
+ */
+export type ViewMode = 'full' | 'compact' | 'incognito'
+
+export const VIEW_MODES: readonly ViewMode[] = ['full', 'compact', 'incognito']
+export const VIEW_MODE_LABEL: Record<ViewMode, string> = { full: '完整', compact: '紧凑', incognito: '隐身' }
+
 export interface PortPrefs {
   theme: 'auto' | 'light' | 'dark'
   refreshSec: number
@@ -385,6 +407,8 @@ export interface PortPrefs {
   portSort: SortState<PortSortKey>
   /** 护盘信号监测配置 */
   rescue: RescueConfig
+  /** 视图档位（P0-8）：Alt+M 轮换，持久化 */
+  viewMode?: ViewMode
 }
 
 export const DEFAULT_PREFS: PortPrefs = {
@@ -395,6 +419,7 @@ export const DEFAULT_PREFS: PortPrefs = {
   watchSort: { key: 'default', desc: true },
   portSort: { key: 'default', desc: true },
   rescue: { enabled: true, intervalSec: 30, tailIntervalSec: 15, tailFrom: '14:30', universe: [] },
+  viewMode: 'full',
 }
 
 /** One derived position row (accounting from ledger + live quote). */
@@ -453,7 +478,20 @@ export interface PortfolioView {
   groups: GroupView[]
   positions: PositionRow[]
   grand: { totalMv: number; floatPnl: number; dilutedPnl: number; dayPnl: number; realized: number }
+  /** 跨市场折算口径（P0-1）：当前实现恒为 'none'，总额**不含**港美股按 1:1 折算的部分 */
+  fxMode?: FxMode
+  /** 未计入总额的持仓及原因（P0-1）：总额缺一块必须能点开看到缺的谁 */
+  unpriced?: Array<{ posId: string; secid: string; name: string; qty: number; why: 'no-quote' | 'no-fx'; note: string }>
+  /** 港美股市值未折算的部分（元，按原币种计价就不存在"折算"这回事，故只在 fxMode=none 时给出） */
+  unpricedMv?: number
 }
+
+/**
+ * 跨市场（港股/美股）市值折算口径。
+ * `none` = 不折算：总额**只含 A股**，并在界面与工具里显式标注"不含港股市值"，
+ * 绝不按 1:1 悄悄加进去（那会让总额看起来完整、其实是错的数）。
+ */
+export type FxMode = 'none' | 'fixed' | 'live'
 
 /** One visible history row (verb display + payload). */
 export interface LedgerView {
@@ -519,6 +557,35 @@ export interface MutatePortBody {
 export const ACTOR_TOOL = 'tool' as const
 export const ACTOR_WEB = 'web' as const
 
+/**
+ * secid 所属市场。东财 secid 的市场号是**前缀**（`1.` 沪 / `0.` 深 / `116.` 港 /
+ * `105|106|107.` 美 / `100.` 国际指数 / `101|112|113|114|122.` 期货与商品）。
+ * 跨市场折算（P0-1 的 unpriced/fxMode）与"当日涨跌按哪个市场的日历"都依赖它，
+ * 因此放在 shared —— 宿主与客户端必须用同一份判定。
+ */
+export type Market = 'cn' | 'hk' | 'us' | 'intl' | 'futures' | 'unknown'
+
+const MARKET_BY_PREFIX: Record<string, Market> = {
+  '1': 'cn',
+  '0': 'cn',
+  '116': 'hk',
+  '105': 'us',
+  '106': 'us',
+  '107': 'us',
+  '100': 'intl',
+  '101': 'futures',
+  '112': 'futures',
+  '113': 'futures',
+  '114': 'futures',
+  '122': 'futures',
+}
+
+export function marketOf(secid: string): Market {
+  const dot = secid.indexOf('.')
+  if (dot <= 0) return 'unknown'
+  return MARKET_BY_PREFIX[secid.slice(0, dot)] ?? 'unknown'
+}
+
 /** Reject unreasonable numeric inputs (server-side guard). */
 export function isFiniteNumber(v: unknown): v is number {
   return typeof v === 'number' && Number.isFinite(v)
@@ -529,6 +596,54 @@ export function isFiniteNumber(v: unknown): v is number {
  * 于是"改一边忘另一边"不会变成编译错误（门禁抓不到）——两侧都必须引用本类型。
  */
 export type QuoteSource = 'em' | 'tencent' | 'sina' | 'lkg'
+
+/** ── 数据出处契约（P0-1）───────────────────────────────────────────────── */
+
+/**
+ * 读工具共用的「数据出处」契约。
+ *
+ * 每一个被 agent 读到的数都必须能回答：这是几点（`asOf`）、什么源（`source`）、
+ * 可不可信（`stale`）、拿不到什么（`missing[]`）。
+ *
+ * 两个易混字段的口径（必须同时存在，不可互相顶替）：
+ *   - `stale`：降级复用 —— 上游这次没给/给了旧值，我们退回 last-known-good；
+ *   - `cached`：休市定稿 —— 数据本身是收盘定稿序列，**根本没有回源**（不是降级）。
+ */
+export interface DataProvenance {
+  /** 数据被真实观测到的时刻（epoch ms）；一次都没观测到时是 null（不是"刚刚"） */
+  asOf: number | null
+  /** 至少一项是兜底值或已过期（与 cached 语义不同，见上） */
+  stale: boolean
+  /** 不新鲜的项数（0 时 stale 必为 false） */
+  staleCount?: number
+  /**
+   * 本次主要数据来源。`local` = 纯本地文件（watch.json/positions.json/ledger.json，
+   * 不经任何上游）；`mixed` = 多源混用（明细见 `sources`）；`none` = 一个源都没给出数据。
+   */
+  source: QuoteSource | 'local' | 'mixed' | 'none'
+  /** 按来源计数，如 { em: 18, tencent: 4 } */
+  sources?: Record<string, number>
+  /**
+   * 拿不到的项及其原因。每条必须能回答"是上游没有这份数据，还是这次暂时失败"——
+   * 这两件事对 agent 的下一步动作完全不同（前者改口径，后者等重试）。
+   */
+  missing: MissingField[]
+  /** 休市定稿零回源（与 stale 并存：定稿同时某项可能又是兜底值） */
+  cached?: boolean
+}
+
+export interface MissingField {
+  /** 缺失的对象：标的代码 / 字段名 / 模块名 */
+  what: string
+  /**
+   * 缺失原因。必须是这两类之一，不许含糊：
+   *   - `no-source`：上游根本没有这份数据（如新浪源不提供市值、腾讯源不提供分单资金流）；
+   *   - `transient`：这次请求失败/超时，稍后重试可能拿到。
+   */
+  why: 'no-source' | 'transient'
+  /** 人类可读的说明（含"多久能补"之类可操作信息） */
+  note: string
+}
 
 /** 日线（轻量，用于位置/概率计算） */
 export interface DailyBarLite {
@@ -848,6 +963,31 @@ export interface RescueSnapshot {
   }
   /** 无实时数据时的说明 */
   note?: string
+  /**
+   * 采样窗口（P0-1/P0-4）。非采样时段分数位显示 `—` 并旁注「采样暂停 · 下次 …」，
+   * 而不是让人以为"坏了"；`sampling` 为 false 时 `gap` 只反映当日真实失败。
+   */
+  activeWindow?: RescueActiveWindow
+  /** 阈值标定日期（P0-1）：YYYY-MM-DD，供阈值漂移回溯（分差从哪天开始偏） */
+  calibratedAt?: string
+  /** 因子对总分的贡献度（P0-7）：权 × 因子分，求和应等于 总分 ÷ 时点系数 */
+  factorContrib?: Array<{ id: RescueFactor['id']; label: string; weight: number; score: number; contribution: number }>
+}
+
+/** 护盘采样窗口状态（非活跃时段必须显式说明"暂停"而不是沉默） */
+export interface RescueActiveWindow {
+  /** 当前是否在采样时段内 */
+  sampling: boolean
+  /** 不在采样时段时的原因 */
+  reason?: 'closed' | 'weekend' | 'noon-break' | 'disabled'
+  /** 下次采样时刻（epoch ms）；已收盘时为下一交易日开盘，disabled 时为 null */
+  nextAt: number | null
+  /** 下次采样时刻的人类可读说明，如「10-09 09:25」 */
+  nextLabel: string | null
+  /** 当前生效采样间隔（秒） */
+  intervalSec: number
+  /** 当日已采样次数 */
+  samples: number
 }
 
 export interface RescueDaySummary {

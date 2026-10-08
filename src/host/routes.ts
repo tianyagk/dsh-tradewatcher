@@ -10,7 +10,7 @@
  */
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { MutatePortBody, MutateWatchBody, QuoteRow } from '../shared/model.ts'
-import { SECID_RE } from '../shared/model.ts'
+import { RESCUE_LEVEL_LABEL, SECID_RE } from '../shared/model.ts'
 import { isTrustedApiRequest } from './fence.ts'
 import * as em from './em.ts'
 import { assemblePortfolio, ledgerViews } from './portfolio.ts'
@@ -20,6 +20,7 @@ import { RescueMonitor } from './rescue.ts'
 import { QUOTE_HOSTS, HISTORY_HOSTS } from './em.ts'
 import { breakerSummary } from './breaker.ts'
 import { HttpError, httpStatusOf, retryAfterSecondsOf } from './http.ts'
+import { describeConflicts, makeBundle, verifyBundle } from './backup.ts'
 import { log, type PluginWebRoute } from './context.ts'
 
 const MAX_BODY = 256 * 1024
@@ -147,6 +148,117 @@ export function makeTradeRoutes(
       handler: (req, res) => {
         if (!needGate(req, res)) return
         send(res, 200, { ok: true, name: 'dsh-tradewatcher', time: Date.now(), breaker: breakerSummary(upstreamHosts) })
+      },
+    },
+    {
+      kind: 'exact',
+      path: '/tradewatcher/backup',
+      /**
+       * 导出（GET）/ 导入（POST，P0-9）。
+       *
+       * POST body：`{ mode: 'preview' | 'apply', bundle }`
+       *   - `preview` 只校验 + 给出冲突预览（不写任何文件）；
+       *   - `apply` 校验通过才覆盖，且覆盖前由 store 写 `.bak`。
+       * 校验不通过一律 400 并**逐条**给出原因（校验逻辑在 backup.ts，纯函数、可单测）。
+       */
+      handler: async (req, res) => {
+        if (!needGate(req, res)) return
+        try {
+          await store.init()
+          if (req.method === 'GET') {
+            const raw = await store.exportFiles()
+            if (raw.unreadable.includes('ledger.json')) {
+              // 账本读不出来时导出会是"一份没有流水的持仓"，比不导出更危险
+              throw new HttpError('ledger.json 无法解析，导出会缺少全部流水；请先修复或从 .corrupt-* 备份恢复', 400)
+            }
+            const bundle = makeBundle(
+              {
+                watch: raw.watch ?? { v: 1, groups: [], items: [] },
+                positions: raw.positions ?? { v: 1, groups: [], items: [] },
+                ledger: raw.ledger ?? { v: 1, entries: [] },
+                prefs: (raw.prefs ?? {}) as Record<string, unknown>,
+              } as Parameters<typeof makeBundle>[0],
+              `dsh-tradewatcher/${__TW_VERSION__}`,
+            )
+            send(res, 200, { ok: true, bundle, unreadable: raw.unreadable })
+            return
+          }
+          if (req.method === 'POST') {
+            const body = (await readBody(req)) as { mode?: unknown; bundle?: unknown }
+            const mode = body.mode === 'apply' ? 'apply' : 'preview'
+            const check = verifyBundle(body.bundle)
+            const port = store.portData()
+            const current = {
+              watchGroups: store.watchData().groups.length,
+              watchItems: store.watchData().items.length,
+              portGroups: port.groups.length,
+              portItems: port.items.length,
+              ledgerEntries: store.ledgerEntries().length,
+              ledgerTo: store.ledgerEntries().reduce<number | null>((a, e) => (a === null || e.ts > a ? e.ts : a), null),
+            }
+            if (!check.ok || check.files === null) {
+              send(res, 400, { ok: false, mode, errors: check.errors, summary: check.summary, conflicts: [] })
+              return
+            }
+            const conflicts = describeConflicts(check, current)
+            if (mode === 'preview') {
+              send(res, 200, { ok: true, mode, errors: [], summary: check.summary, conflicts, current })
+              return
+            }
+            const { backedUp } = await store.importFiles(check.files)
+            send(res, 200, { ok: true, mode, errors: [], summary: check.summary, conflicts, current, backedUp })
+            return
+          }
+          send(res, 405, { error: 'method not allowed' })
+        } catch (error) {
+          fail(res, error)
+        }
+      },
+    },
+    {
+      kind: 'exact',
+      path: '/tradewatcher/badge',
+      /**
+       * 侧栏徽标数据（P0-3）。
+       *
+       * 关键约束：**不发起新的采样**。护盘等级直接取 `rescue.snapshot()`（内存里的最近一次
+       * 成功采样，必要时才用当日复盘兜底），持仓当日盈亏走行情 TTL 缓存。徽标是常驻的，
+       * 如果它自己去打一遍上游，就等于把"看一眼侧栏"变成一次真实的取数压力。
+       *
+       * 徽标与面板顶部数字同源：两者都读同一份 rescue 快照与同一份 store 数据，
+       * 不存在"徽标一套算法、面板另一套"的可能。
+       */
+      handler: async (req, res) => {
+        if (!needGate(req, res)) return
+        try {
+          await store.init()
+          const port = store.portData()
+          const secids = [...new Set(port.items.map((p) => p.secid))]
+          const q = secids.length > 0 ? await em.fetchQuotesWithProvenance(secids) : null
+          const { view } = assemblePortfolio(port.groups, port.items, store.ledgerEntries(), q?.items ?? {})
+          const snap = rescue?.snapshot() ?? null
+          const win = snap?.activeWindow ?? null
+          // 沪深300 点位：隐身视图下只显示点位（不显示任何金额/盈亏）
+          const indexRow = q?.items['1.000300'] ?? q?.items['1.000001'] ?? null
+          const dayPnlBase = view.grand.dayPnl
+          const dayPnlPct = view.grand.totalMv > 0 ? (dayPnlBase / view.grand.totalMv) * 100 : null
+          send(res, 200, {
+            level: snap?.level ?? 0,
+            levelLabel: snap === null ? null : RESCUE_LEVEL_LABEL[snap.level],
+            dayPnl: Math.round(dayPnlBase * 100) / 100,
+            dayPnlPct: dayPnlPct === null ? null : Math.round(dayPnlPct * 100) / 100,
+            indexPoint: indexRow?.price ?? null,
+            indexPct: indexRow?.pct ?? null,
+            indexName: indexRow?.name ?? null,
+            // 收盘后缀「收」：只有在"非采样时段且原因是已收盘/周末"时才加
+            settled: win !== null && win.sampling !== true && (win.reason === 'closed' || win.reason === 'weekend'),
+            asOf: q?.provenance.asOf ?? snap?.lastSampleTs ?? null,
+            source: q?.provenance.source ?? 'none',
+            missingCount: (q?.provenance.missing.length ?? 0) + (view.unpriced?.length ?? 0),
+          })
+        } catch (error) {
+          fail(res, error)
+        }
       },
     },
     {

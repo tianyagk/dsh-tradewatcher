@@ -304,6 +304,51 @@ export function EmptyHint(props: { children?: React.ReactNode; action?: React.Re
   )
 }
 
+/**
+ * 轻量 toast（P0-6 口径切换、P0-8 视图切换等"一次性动作的说明"）。
+ *
+ * 为什么不是 console 或就地改文案：这些动作**改变了全页面的解释口径**
+ * （成本口径切换会让总盈亏整体跳一下、视图切换会让金额变模糊），
+ * 不给一句"从 X 变成 Y、影响了多少"的说明，用户只会看到数字无缘无故变了。
+ *
+ * 自动消失（默认 6s），可手动关；同一时刻只留最后一条（不做队列，
+ * 队列会把"刚才那一下到底发生了什么"推迟到看不见的地方）。
+ */
+export function useToast(): { text: string | null; show: (text: string) => void; clear: () => void } {
+  const [text, setText] = useState<string | null>(null)
+  const timer = useRef<number | null>(null)
+  const show = useCallback((next: string): void => {
+    if (timer.current !== null) window.clearTimeout(timer.current)
+    setText(next)
+    timer.current = window.setTimeout(() => {
+      timer.current = null
+      setText(null)
+    }, 6000)
+  }, [])
+  const clear = useCallback((): void => {
+    if (timer.current !== null) {
+      window.clearTimeout(timer.current)
+      timer.current = null
+    }
+    setText(null)
+  }, [])
+  useEffect(() => () => {
+    if (timer.current !== null) window.clearTimeout(timer.current)
+  }, [])
+  return { text, show, clear }
+}
+
+export function Toast(props: { text: string | null; onClose?: () => void }): React.ReactElement | null {
+  const text = props.text
+  if (text === null || text === '') return null
+  return React.createElement('div', { className: 'tw-toast', role: 'status', 'aria-live': 'polite' },
+    React.createElement('span', null, text),
+    props.onClose !== undefined
+      ? React.createElement('button', { className: 'tw-toast-x', onClick: props.onClose, 'aria-label': '关闭提示' }, '×')
+      : null,
+  )
+}
+
 export function useForceNow(): [number, () => void] {
   const [now, setNow] = useState(() => Date.now())
   const bump = useCallback(() => setNow(Date.now()), [])

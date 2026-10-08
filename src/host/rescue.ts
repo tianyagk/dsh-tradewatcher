@@ -19,8 +19,8 @@
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import type {
-  DailyBarLite, RescueBottomLane, RescueConfig, RescueDaySummary, RescueEtfMeta, RescueEtfView, RescueFactor,
-  RescueIntradayPoint, RescueLevel, RescueSignalEvent, RescueSnapshot, RescueThresholdSource,
+  DailyBarLite, RescueActiveWindow, RescueBottomLane, RescueConfig, RescueDaySummary, RescueEtfMeta, RescueEtfView,
+  RescueFactor, RescueIntradayPoint, RescueLevel, RescueSignalEvent, RescueSnapshot, RescueThresholdSource,
 } from '../shared/model.ts'
 import { RESCUE_CORE_OUTFLOW_VETO, RESCUE_CORE_INDEXES, RESCUE_PERIPHERAL_FLOW_DISCOUNT, rescueUniverseMeta } from '../shared/model.ts'
 import { RESCUE_CALIBRATION } from './rescue-thresholds.ts'
@@ -147,11 +147,30 @@ export function stripSnapshot(s: RescueSnapshot): PersistedSnapshot {
   return { ts, level, score, summary, factors, etfs, indexPct, indexName, timeCoef, resonance, pulseBand, completeness, thresholdSource, selfSampleDays, config, activeIntervalSec, flowSource, lastFailTs }
 }
 
+/** 一条出分日志（P0-7）：把各因子的原始值 + 当次生效阈值一起落盘，供阈值漂移回溯 */
+interface ScoreLogEntry {
+  ts: number
+  hhmm: string
+  score: number
+  /** 未乘时点系数的原始分 */
+  rawScore: number
+  timeCoef: number
+  /** 评分引擎版本：口径改动后旧条目仍能说明"当时用的是哪套权重" */
+  engine: string
+  factors: Array<{ id: string; score: number; weight: number; actual: string; threshold: string; hit: boolean }>
+}
+
 interface DayLog {
   events: RescueSignalEvent[]
   intraday: RescueIntradayPoint[]
   samples: number
   gap: boolean
+  /**
+   * 出分日志（P0-7）。粒度=**5 分钟刻度 + 等级变化时**，而不是每 15/30 秒一条：
+   * 后者在 60 天滚动窗口下会产生数万条记录（日志变成负担），而阈值漂移的回溯
+   * 分辨率本来就不需要秒级 —— 分差不会在 5 分钟内漂。
+   */
+  scoreLog?: ScoreLogEntry[]
   /** 当日各标的的超大单净额/20日均额 峰值（供 F2 自建分位升级） */
   etfPeak?: Record<string, number>
   /** 当日各通道最后一次成功采样的完整视图（上游中断时用于复盘展示） */
@@ -284,6 +303,13 @@ export interface RescueScoreResult {
   factors: RescueFactor[]
   summary: string
   completeness: RescueCompleteness
+  /**
+   * 时点系数（P0-7）。总分 = round(Σ 贡献度 × timeCoef)，
+   * 界面必须能据此复算：只给总分不给系数时，"这一分是谁加的"永远答不上来。
+   */
+  timeCoef: number
+  /** Σ 贡献度（= 未乘时点系数的原始分）。与 score 的差全部来自 timeCoef 与四舍五入 */
+  rawScore: number
 }
 
 const fmt = (v: number | null, unit: string, digits = 2): string => (v === null ? '—' : `${v.toFixed(digits)}${unit}`)
@@ -446,7 +472,27 @@ export function scoreRescue(input: RescueFactorInput): RescueScoreResult {
   const base = level === 0 || hits === '' ? '宽基 ETF 量能与资金流均在常态区间（无异动）' : hits
   const incomplete = missing.length > 0 ? `；因子 ${completeness.available}/${completeness.total}（缺 ${missing.join('、')}，评分偏保守）` : ''
   const summary = `${base}${caps.length > 0 ? ` —— ${caps.join('；')}` : ''}（评分 ${score}，时点系数 ${coef}${incomplete}）`
-  return { score, level, factors, summary, completeness }
+  return { score, level, factors, summary, completeness, timeCoef: coef, rawScore: raw }
+}
+
+/**
+ * 因子贡献度（P0-7）：权 × 因子分。
+ *
+ * 存在的理由：此前只给总分与六因子，用户看到 `评分 68` 与 `量能 ×2.1`、`超大单 ×0.3`
+ * 无法判断"这一分到底是谁加的"——是量能撑起来的，还是背离（跌出来的）撑起来的，
+ * 两者的操作含义完全相反。贡献度列把总分拆开，且**求和可复算**（见 selftest）。
+ */
+export function factorContributions(
+  factors: readonly RescueFactor[],
+  timeCoef: number,
+): Array<{ id: RescueFactor['id']; label: string; weight: number; score: number; contribution: number }> {
+  return factors.map((f) => ({
+    id: f.id,
+    label: f.label,
+    weight: f.weight,
+    score: f.score,
+    contribution: f.weight * f.score * timeCoef,
+  }))
 }
 
 /**
@@ -466,6 +512,52 @@ export function inTradingWindow(ts: number): boolean {
   if (dow === 0 || dow === 6) return false
   const hhmm = hhmmOf(ts)
   return (hhmm >= '09:25' && hhmm <= '11:35') || (hhmm >= '12:55' && hhmm <= '15:05')
+}
+
+/** 采样时段分段（与 inTradingWindow 必须同源：窗口边界只有这一份） */
+const SAMPLE_WINDOWS: ReadonlyArray<{ from: string; to: string }> = [
+  { from: '09:25', to: '11:35' },
+  { from: '12:55', to: '15:05' },
+]
+
+/**
+ * 采样窗口状态（P0-4）。分数位在非采样时段是空的，必须能说清"暂停采样"而不是"坏了"，
+ * 因此这里给出原因与**下次采样时刻**，供界面显示 `采样暂停 · 下次 10-09 09:25`。
+ *
+ * 纯函数（只依赖 `ts` 与配置），因此可以直接断言跨周末/跨午休的边界。
+ */
+export function samplingWindow(
+  ts: number,
+  opts: { enabled: boolean; intervalSec: number; samples: number },
+): RescueActiveWindow {
+  const intervalSec = opts.intervalSec
+  if (!opts.enabled) {
+    return { sampling: false, reason: 'disabled', nextAt: null, nextLabel: null, intervalSec, samples: opts.samples }
+  }
+  const dow = shWeekdayOf(ts)
+  const hhmm = hhmmOf(ts)
+  const sampling = inTradingWindow(ts)
+  if (sampling) {
+    return { sampling: true, nextAt: null, nextLabel: null, intervalSec, samples: opts.samples }
+  }
+  const reason: RescueActiveWindow['reason'] =
+    dow === 0 || dow === 6 ? 'weekend' : hhmm > '11:35' && hhmm < '12:55' ? 'noon-break' : 'closed'
+  // 下一个窗口起点：今天剩下的窗口 → 否则回溯到下一个工作日 09:25（周末/假期靠逐日推进）
+  let nextAt: number | null = null
+  for (let i = 0; i < 10 && nextAt === null; i += 1) {
+    const day = shDayOf(ts + i * 86_400_000)
+    const wd = shWeekdayOf(Date.parse(`${day}T00:00:00+08:00`))
+    if (wd === 0 || wd === 6) continue
+    for (const w of SAMPLE_WINDOWS) {
+      const at = Date.parse(`${day}T${w.from}:00+08:00`)
+      if (at > ts) {
+        nextAt = at
+        break
+      }
+    }
+  }
+  const nextLabel = nextAt === null ? null : dayOf(nextAt).slice(5) + ' ' + hhmmOf(nextAt)
+  return { sampling: false, reason, nextAt, nextLabel, intervalSec, samples: opts.samples }
 }
 
 /** 采样点（窗口资金流统计的输入） */
@@ -1292,6 +1384,7 @@ export class RescueMonitor {
       })
       if (this.today.events.length > 60) this.today.events.splice(0, this.today.events.length - 60)
       this.lastLevel = scored.level
+      this.pushScoreLog(ts, scored)
       await this.persist(true)
     }
     const minuteMark = Math.floor(elapsed / 5) * 5
@@ -1302,6 +1395,7 @@ export class RescueMonitor {
         timeAdjMult: maxMult, superVsAvg: coreSuperVsAvg ?? peripheralSuperVsAvg, persistShare: persistBest,
       })
       if (this.today.intraday.length > 120) this.today.intraday.splice(0, this.today.intraday.length - 120)
+      this.pushScoreLog(ts, scored)
     }
     // 记住每通道最后一次成功值：上游中断/收盘后重启时，面板可据此复盘而不是空白
     {
@@ -1329,6 +1423,9 @@ export class RescueMonitor {
       flowSource: source,
       bottom: this.buildBottom(etfs),
       thresholdSource: this.f2Source(), selfSampleDays: this.selfSampleDays(),
+      calibratedAt: RESCUE_CALIBRATION.generatedAt,
+      activeWindow: samplingWindow(ts, { enabled: this.config.enabled, intervalSec: this.activeIntervalSec(ts), samples: this.today.samples }),
+      factorContrib: factorContributions(scored.factors, timeCoefficient(elapsed)),
       config: this.getConfig(), activeIntervalSec: this.activeIntervalSec(ts),
       today: [...this.today.events].reverse(), intraday: [...this.today.intraday],
       sampleCount: this.today.samples, lastSampleTs: ts, gap: false, lastFailTs: null,
@@ -1559,6 +1656,30 @@ export class RescueMonitor {
     }
   }
 
+  /**
+   * 写一条出分日志（P0-7）。与 `events`/`intraday` 同一份 DayLog，因此跟着 60 天
+   * 滚动归档一起老化，不需要第二套清理逻辑。
+   */
+  private pushScoreLog(ts: number, scored: RescueScoreResult): void {
+    const log = (this.today.scoreLog ??= [])
+    const entry: ScoreLogEntry = {
+      ts,
+      hhmm: hhmmOf(ts),
+      score: scored.score,
+      rawScore: Math.round(scored.rawScore * 100) / 100,
+      timeCoef: scored.timeCoef,
+      engine: ENGINE_VERSION,
+      factors: scored.factors.map((f) => ({
+        id: f.id, score: f.score, weight: f.weight, actual: f.actual, threshold: f.threshold, hit: f.hit,
+      })),
+    }
+    // 同一 5 分钟刻度内只保留最后一条（tick 与事件两条路径可能在同一刻度各写一次）
+    const mark = entry.hhmm.slice(0, 15)
+    if (log.length > 0 && log[log.length - 1].hhmm.slice(0, 15) === mark) log[log.length - 1] = entry
+    else log.push(entry)
+    if (log.length > 240) log.splice(0, log.length - 240)
+  }
+
   snapshot(): RescueSnapshot {
     if (this.lastSnapshot === null && this.file.lastSnapshot != null) {
       // 兜底：本次会话还没采到数据（例如收盘后重启），用上次成功快照，注明为旧数据
@@ -1570,6 +1691,9 @@ export class RescueMonitor {
         today: [...this.today.events].reverse(), intraday: [...this.today.intraday],
         sampleCount: this.today.samples,
         note: `本会话尚未采样（如收盘后重启），显示上次成功采样（${hhmmOf(p.ts)}）的数据`,
+        calibratedAt: RESCUE_CALIBRATION.generatedAt,
+        activeWindow: samplingWindow(Date.now(), { enabled: this.config.enabled, intervalSec: this.activeIntervalSec(), samples: this.today.samples }),
+        factorContrib: factorContributions(p.factors, p.timeCoef ?? 1),
         config: this.getConfig(), activeIntervalSec: this.activeIntervalSec(), selfSampleDays: this.selfSampleDays(),
       }
     }
@@ -1582,6 +1706,9 @@ export class RescueMonitor {
         thresholdSource: this.f2Source(),
         selfSampleDays: this.selfSampleDays(),
         gap: this.today.gap,
+        calibratedAt: RESCUE_CALIBRATION.generatedAt,
+        activeWindow: samplingWindow(Date.now(), { enabled: this.config.enabled, intervalSec: this.activeIntervalSec(), samples: this.today.samples }),
+        factorContrib: factorContributions(this.lastSnapshot.factors, this.lastSnapshot.timeCoef ?? 1),
       }
     }
     const fb = this.fallbackFromDayLog()
@@ -1599,6 +1726,8 @@ export class RescueMonitor {
         },
         completeness: { available: 0, total: 6, missing: ['量能放大', '超大单强度', '脉冲', '持续性', '量价背离'] },
         thresholdSource: this.f2Source(), selfSampleDays: this.selfSampleDays(),
+        calibratedAt: RESCUE_CALIBRATION.generatedAt,
+        activeWindow: samplingWindow(Date.now(), { enabled: this.config.enabled, intervalSec: this.activeIntervalSec(), samples: this.today.samples }),
         config: this.getConfig(), activeIntervalSec: this.activeIntervalSec(),
         today: [...this.today.events].reverse(), intraday: [...this.today.intraday],
         sampleCount: this.today.samples, lastSampleTs: null, gap: true, stale: true,
@@ -1622,6 +1751,9 @@ export class RescueMonitor {
       completeness: { available: 0, total: 6, missing: ['量能放大', '超大单强度', '脉冲', '持续性', '量价背离'] },
       thresholdSource: this.f2Source(),
       selfSampleDays: this.selfSampleDays(), config: this.getConfig(), activeIntervalSec: this.activeIntervalSec(),
+      calibratedAt: RESCUE_CALIBRATION.generatedAt,
+      activeWindow: samplingWindow(Date.now(), { enabled: this.config.enabled, intervalSec: this.activeIntervalSec(), samples: this.today.samples }),
+      factorContrib: [],
       today: [...this.today.events].reverse(), intraday: [...this.today.intraday], sampleCount: this.today.samples,
       lastSampleTs: null, gap: this.today.gap, note: '等待首次采样',
     }
@@ -1730,6 +1862,13 @@ export class RescueMonitor {
 
   intradayOf(day: string): RescueIntradayPoint[] {
     return this.file.days[day]?.intraday ?? []
+  }
+
+  /** 出分日志（P0-7）：阈值漂移回溯用；不传 day 取当日 */
+  scoreLogOf(day?: string): Array<Record<string, unknown>> {
+    const key = day ?? dayOf(Date.now())
+    const log = this.file.days[key]?.scoreLog ?? (key === this.todayKey ? this.today.scoreLog : undefined) ?? []
+    return log.map((e) => ({ ...e, factors: e.factors.map((f) => ({ ...f })) }))
   }
 
   eventsOf(day: string): RescueSignalEvent[] {

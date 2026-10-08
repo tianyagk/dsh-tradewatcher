@@ -8,7 +8,7 @@
  * tools read the live files + live quotes; the plain JSON is additionally
  * documented in README for file-tool based analysis.
  */
-import { TW_ROWS, type CalEvent, type QuoteRow } from '../shared/model.ts'
+import { TW_ROWS, type CalEvent, type DataProvenance, type MissingField, type QuoteRow } from '../shared/model.ts'
 import { SECID_RE } from '../shared/model.ts'
 import * as em from './em.ts'
 import { assemblePortfolio, ledgerViews, verbLabel } from './portfolio.ts'
@@ -17,7 +17,8 @@ import { CalendarStore, calToday } from './calendar.ts'
 import { RescueMonitor } from './rescue.ts'
 import { RESCUE_LEVEL_LABEL } from '../shared/model.ts'
 import { CAL_CATEGORY_LABEL } from '../shared/model.ts'
-import type { PluginContext, PluginToolDefinition, PluginToolRuntime, PluginSystemPrompt } from './context.ts'
+import type { PluginContext, PluginToolDefinition, PluginToolExec, PluginToolRuntime, PluginSystemPrompt } from './context.ts'
+import { WriteJournal } from './writeLog.ts'
 
 const PREFIX = 'tradewatcher_'
 
@@ -40,6 +41,41 @@ function pnlLine(label: string, value: number | null | undefined): string {
   if (value === null || value === undefined) return `${label}: —`
   const sign = value > 0 ? '+' : ''
   return `${label}: ${sign}${fmtMoney(value)}`
+}
+
+// ── P0-1 数据出处契约 ──────────────────────────────────────────────────────
+
+/** 纯本地文件的出处：`source='local'`，asOf 取文件最后写入时刻（不许拿响应时刻顶替） */
+function localProvenance(asOf: number | null, missing: MissingField[] = []): DataProvenance {
+  return { asOf, stale: false, source: 'local', missing, cached: undefined }
+}
+
+/** 出处的单行文本摘要，附在每个工具的 render 尾部（agent 读到数就看得到口径） */
+function provenanceLine(p: DataProvenance | undefined): string {
+  if (p === undefined) return ''
+  const parts: string[] = []
+  parts.push(p.asOf === null ? '数据时刻：未取得' : `数据时刻 ${new Date(p.asOf).toLocaleString('zh-CN', { hour12: false })}`)
+  parts.push(`来源 ${p.source}`)
+  if (p.sources !== undefined && Object.keys(p.sources).length > 0) {
+    parts.push(Object.entries(p.sources).map(([k, n]) => `${k}×${n}`).join('+'))
+  }
+  if (p.cached === true) parts.push('休市定稿（未回源）')
+  if (p.stale) parts.push(`降级复用 ${p.staleCount ?? 0} 项`)
+  if (p.missing.length > 0) {
+    // 缺失必须能回答"上游没有"还是"这次失败" —— 二者的下一步动作不同
+    const noSrc = p.missing.filter((m) => m.why === 'no-source').length
+    const trans = p.missing.filter((m) => m.why === 'transient').length
+    parts.push(`缺失 ${p.missing.length}（无此数据源 ${noSrc} / 本次失败 ${trans}）`)
+  }
+  return `【数据出处】${parts.join(' · ')}`
+}
+
+/** 缺失明细的逐条文本（只在有缺失时输出，避免正常路径变啰嗦） */
+function missingLines(p: DataProvenance | undefined, limit = 8): string[] {
+  if (p === undefined || p.missing.length === 0) return []
+  const head = p.missing.slice(0, limit).map((m) => `  · ${m.what}（${m.why === 'no-source' ? '上游无此数据' : '本次失败'}）：${m.note}`)
+  if (p.missing.length > limit) head.push(`  · …另有 ${p.missing.length - limit} 项`)
+  return ['缺失明细：', ...head]
 }
 
 // ── quote helpers shared by tools ─────────────────────────────────────────
@@ -88,10 +124,18 @@ export function makeAgentTools(
   store: DataStore,
   calendar?: CalendarStore,
   rescue?: RescueMonitor,
+  /** 写操作日志（P0-11）；不传则用默认数据目录 */
+  journal: WriteJournal = new WriteJournal(),
 ): {
   registerTools: (tools: PluginToolRuntime, prompt: PluginSystemPrompt | undefined) => () => void
 } {
   const defs: PluginToolDefinition[] = []
+
+  /** 从 exec 里取写入者标识（会话 id）；取不到时如实标 unknown，不编一个假 id */
+  const writerOf = (exec?: PluginToolExec): string => {
+    const id = exec?.agent?.id
+    return typeof id === 'string' && id !== '' ? id : 'unknown'
+  }
 
   defs.push({
     name: `${PREFIX}portfolio`,
@@ -116,6 +160,10 @@ export function makeAgentTools(
           groups: { type: 'array', items: {} },
           positions: { type: 'array', items: {} },
           stale: { type: 'number' },
+          provenance: { type: 'object', additionalProperties: true },
+          fxMode: { type: 'string' },
+          unpriced: { type: 'array', items: {} },
+          unpricedMv: { type: 'number' },
         },
       },
       render: (_args, value) => {
@@ -131,6 +179,9 @@ export function makeAgentTools(
             }>
           }
           stale?: number
+          provenance?: DataProvenance
+          fxMode?: string
+          unpriced?: Array<{ secid: string; name: string; why: string; note: string }>
           error?: string
         }
         if (v.error !== undefined) return textBlock(`错误：${v.error}`)
@@ -154,24 +205,49 @@ export function makeAgentTools(
             `    市值 ${fmtMoney(p.mv)}  持仓盈亏(摊薄) ${fmtMoney(p.dilutedPnl)}  浮动盈亏(均价) ${fmtMoney(p.floatPnl)}  当日 ${fmtMoney(p.dayPnl)}  已实现 ${fmtMoney(p.realized)}`,
           )
         }
+        const np = v.unpriced ?? []
+        const unpricedLines = np.length > 0
+          ? [
+              `未计入总额 ${np.length} 项（fxMode=${v.fxMode ?? 'none'}）：`,
+              ...np.map((u) => `  · ${u.name}（${u.secid}）${u.why === 'no-fx' ? '非人民币计价且未折算' : '无可用行情源'}：${u.note}`),
+            ]
+          : []
         const body = [
           head,
           ...(groupLines.length > 0 ? ['分组：', ...groupLines] : ['暂无分组。']),
           ...(posLines.length > 0 ? ['持仓明细：', ...posLines] : ['暂无持仓。']),
+          ...unpricedLines,
+          provenanceLine(v.provenance),
+          ...missingLines(v.provenance),
         ]
-        return textBlock(body.join('\n'))
+        return textBlock(body.filter((x) => x !== '').join('\n'))
       },
     },
     async execute(args) {
       try {
         const port = store.portData()
         const secids = [...new Set(port.items.map((p) => p.secid))]
-        const quotes = secids.length > 0 ? await em.fetchQuotes(secids) : {}
-        const { view, stale } = assemblePortfolio(port.groups, port.items, store.ledgerEntries(), quotes)
+        const q = secids.length > 0 ? await em.fetchQuotesWithProvenance(secids) : null
+        const { view, stale } = assemblePortfolio(port.groups, port.items, store.ledgerEntries(), q?.items ?? {})
         if (args.includeEmpty !== true) {
           view.positions = view.positions.filter((p) => p.qty > 0)
         }
-        return { view, stale }
+        // 无持仓标的时也要给得出处的形状（source='local'，asOf 取持仓文件落盘时刻）
+        const base = q?.provenance
+          ?? localProvenance(await store.fileMtime('positions.json'))
+        // 非人民币、无行情的持仓并进 missing[]，让"总额缺一块"有出处
+        const extra: MissingField[] = (view.unpriced ?? []).map((u) => ({
+          what: `${u.name}（${u.secid}）`,
+          why: u.why === 'no-fx' ? ('no-source' as const) : ('transient' as const),
+          note: u.note,
+        }))
+        const provenance: DataProvenance = { ...base, missing: [...base.missing, ...extra] }
+        return {
+          view, stale, provenance,
+          fxMode: view.fxMode ?? 'none',
+          unpriced: view.unpriced ?? [],
+          unpricedMv: view.unpricedMv ?? 0,
+        }
       } catch (error) {
         return { error: error instanceof Error ? error.message : String(error) }
       }
@@ -208,13 +284,14 @@ export function makeAgentTools(
               },
             },
           },
+          provenance: { type: 'object', additionalProperties: true },
         },
       },
       render: (_args, value) => {
-        const v = value as { entries?: Array<Record<string, unknown>>; error?: string }
+        const v = value as { entries?: Array<Record<string, unknown>>; provenance?: DataProvenance; error?: string }
         if (v.error !== undefined) return textBlock(`错误：${v.error}`)
         const rows = v.entries ?? []
-        if (rows.length === 0) return textBlock('暂无流水记录。')
+        if (rows.length === 0) return textBlock([`暂无流水记录。`, provenanceLine(v.provenance)].filter((x) => x !== '').join('\n'))
         const lines = rows.map((r) => {
           const ts = new Date(Number(r.ts)).toLocaleString('zh-CN', { hour12: false })
           const where = [r.groupName ?? null, r.posName ?? null].filter(Boolean).join(' / ')
@@ -224,7 +301,7 @@ export function makeAgentTools(
           const note = r.note !== undefined && r.note !== null && String(r.note) !== '' ? ` — ${String(r.note)}` : ''
           return `[${ts}] ${verbLabel(r.verb as never)} ${where}${qty}${price}${fee}${note}（${String(r.actor) === 'tool' ? '会话' : '界面'}）`
         })
-        return textBlock(lines.join('\n'))
+        return textBlock([...lines, provenanceLine(v.provenance)].join('\n'))
       },
     },
     async execute(args) {
@@ -234,7 +311,8 @@ export function makeAgentTools(
         const limit = typeof args.limit === 'number' ? Math.min(500, Math.max(1, Math.round(args.limit))) : 100
         const port = store.portData()
         const entries = ledgerViews(store.ledgerEntries(), port.groups, port.items, { posId, groupId, limit })
-        return { entries }
+        // 账本是纯本地文件：出处 = 文件落盘时刻（不是"这次读它"的时刻）
+        return { entries, provenance: localProvenance(await store.fileMtime('ledger.json')) }
       } catch (error) {
         return { error: error instanceof Error ? error.message : String(error) }
       }
@@ -253,26 +331,29 @@ export function makeAgentTools(
       schema: {
         type: 'object',
         additionalProperties: true,
-        properties: { groups: { type: 'array', items: {} }, items: { type: 'array', items: {} } },
+        properties: {
+          groups: { type: 'array', items: {} }, items: { type: 'array', items: {} },
+          provenance: { type: 'object', additionalProperties: true },
+        },
       },
       render: (_a, value) => {
-        const v = value as { groups?: Array<{ id: string; name: string; archived?: boolean }>; items?: Array<{ id: string; groupId: string; name: string; secid: string; note?: string }>; error?: string }
+        const v = value as { groups?: Array<{ id: string; name: string; archived?: boolean }>; items?: Array<{ id: string; groupId: string; name: string; secid: string; note?: string }>; provenance?: DataProvenance; error?: string }
         if (v.error !== undefined) return textBlock(`错误：${v.error}`)
         const groups = (v.groups ?? []).filter((g) => g.archived !== true)
-        if (groups.length === 0) return textBlock('暂无自选分组。可在侧边栏「盯盘 → 自选」中添加。')
+        if (groups.length === 0) return textBlock(['暂无自选分组。可在侧边栏「盯盘 → 自选」中添加。', provenanceLine(v.provenance)].filter((x) => x !== '').join('\n'))
         const lines: string[] = []
         for (const g of groups) {
           const items = (v.items ?? []).filter((i) => i.groupId === g.id)
           lines.push(`▸ ${g.name}（${items.length}）`)
           for (const it of items) lines.push(`   ${it.name}（${it.secid}）${it.note !== undefined && it.note !== '' ? ` — ${it.note}` : ''}`)
         }
-        return textBlock(lines.join('\n'))
+        return textBlock([...lines, provenanceLine(v.provenance)].join('\n'))
       },
     },
     async execute() {
       try {
         const w = store.watchData()
-        return { groups: w.groups, items: w.items }
+        return { groups: w.groups, items: w.items, provenance: localProvenance(await store.fileMtime('watch.json')) }
       } catch (error) {
         return { error: error instanceof Error ? error.message : String(error) }
       }
@@ -295,19 +376,28 @@ export function makeAgentTools(
       schema: {
         type: 'object',
         additionalProperties: true,
-        properties: { ts: { type: 'number' }, items: { type: 'object', additionalProperties: true } },
+        properties: {
+          ts: { type: 'number' }, items: { type: 'object', additionalProperties: true },
+          provenance: { type: 'object', additionalProperties: true },
+        },
       },
       render: (_a, value) => {
-        const v = value as { items?: Record<string, QuoteRow>; ts?: number; error?: string }
+        const v = value as { items?: Record<string, QuoteRow>; ts?: number; provenance?: DataProvenance; error?: string }
         if (v.error !== undefined) return textBlock(`错误：${v.error}`)
-        return textBlock(renderQuotes(v.items ?? {}))
+        return textBlock([
+          renderQuotes(v.items ?? {}),
+          provenanceLine(v.provenance),
+          ...missingLines(v.provenance),
+        ].filter((x) => x !== '').join('\n'))
       },
     },
     async execute(args) {
       try {
         const ids = await resolveQuoteIds(args.secids)
-        const items = await em.fetchQuotes(ids)
-        return { ts: Date.now(), items }
+        // P0-1：必须走 Detailed 入口 —— fetchQuotes 会把 asOf/stale/source/missing 全丢掉，
+        // agent 于是只能看到一串没有出处的数字
+        const { items, provenance } = await em.fetchQuotesWithProvenance(ids)
+        return { ts: Date.now(), items, provenance }
       } catch (error) {
         return { error: error instanceof Error ? error.message : String(error) }
       }
@@ -327,19 +417,20 @@ export function makeAgentTools(
       schema: {
         type: 'object',
         additionalProperties: true,
-        properties: { hits: { type: 'array', items: {} } },
+        properties: { hits: { type: 'array', items: {} }, provenance: { type: 'object', additionalProperties: true } },
       },
       render: (_a, value) => {
-        const v = value as { hits?: Array<{ name: string; code: string; secid: string; kind: string; hasFallback?: boolean }>; error?: string }
+        const v = value as { hits?: Array<{ name: string; code: string; secid: string; kind: string; hasFallback?: boolean }>; provenance?: DataProvenance; error?: string }
         if (v.error !== undefined) return textBlock(`错误：${v.error}`)
         const hits = v.hits ?? []
-        if (hits.length === 0) return textBlock('未找到匹配证券。')
+        if (hits.length === 0) return textBlock(['未找到匹配证券。', provenanceLine(v.provenance)].filter((x) => x !== '').join('\n'))
         // 如实标注"仅东财源"：这类标的在东财被限流期间必然取不到价
-        return textBlock(
+        return textBlock([
           hits
             .map((h) => `${h.name}（${h.code}）${h.kind} → ${h.secid}${h.hasFallback === false ? '（仅东财源，无腾讯/新浪兜底）' : ''}`)
             .join('\n'),
-        )
+          provenanceLine(v.provenance),
+        ].filter((x) => x !== '').join('\n'))
       },
     },
     async execute(args) {
@@ -347,7 +438,19 @@ export function makeAgentTools(
         const query = typeof args.query === 'string' ? args.query.trim() : ''
         if (query === '') throw new Error('query 是必填参数')
         const hits = await em.searchSymbols(query)
-        return { hits }
+        if (hits.length === 0) {
+          // 空结果必须区分"上游没这个证券"与"上游这次挂了"：前者改关键词，后者重试
+          return {
+            hits,
+            provenance: {
+              asOf: Date.now(), stale: true, source: 'none', missing: [{
+                what: `搜索「${query}」`, why: 'transient' as const,
+                note: '东财搜索接口本次未返回任何候选（可能被限流）。请稍后重试；若持续为空，再用 tradewatcher_quotes 直接试代码',
+              }],
+            },
+          }
+        }
+        return { hits, provenance: { asOf: Date.now(), stale: false, source: 'em', missing: [] } }
       } catch (error) {
         return { error: error instanceof Error ? error.message : String(error) }
       }
@@ -370,18 +473,31 @@ export function makeAgentTools(
       },
     },
     output: {
-      schema: { type: 'object', additionalProperties: true, properties: { events: { type: 'array', items: {} }, syncedAt: { type: 'number' } } },
+      schema: {
+        type: 'object', additionalProperties: true,
+        properties: { events: { type: 'array', items: {} }, syncedAt: { type: 'number' }, provenance: { type: 'object', additionalProperties: true } },
+      },
       render: (_a, value) => {
-        const v = value as { events?: CalEvent[]; syncedAt?: number; error?: string }
+        const v = value as { events?: CalEvent[]; syncedAt?: number; provenance?: DataProvenance; error?: string }
         if (v.error !== undefined) return textBlock(`错误：${v.error}`)
         const rows = v.events ?? []
-        if (rows.length === 0) return textBlock('该区间暂无事件。')
+        if (rows.length === 0) {
+          return textBlock(['该区间暂无事件。', provenanceLine(v.provenance), ...missingLines(v.provenance)].filter((x) => x !== '').join('\n'))
+        }
         const mark = (i: number): string => (i === 3 ? '【高】' : i === 2 ? '【中】' : '')
         const lines = rows.map((e) =>
           `${e.date} ${mark(e.importance)}${e.title}（${CAL_CATEGORY_LABEL[e.category] ?? e.category}${e.source === 'auto' ? '·自动' : ''}）` +
           (e.note !== undefined && e.note !== '' ? ` — ${e.note}` : ''),
         )
-        return textBlock(`共 ${rows.length} 条：\n${lines.join('\n')}`)
+        const auto = rows.filter((e) => e.source === 'auto').length
+        const tail = [
+          provenanceLine(v.provenance),
+          // 自动/手动事件的时间口径不同（一个来自上游同步、一个由用户本地维护），
+          // 混在一个 asOf 里说不清，因此分开报数
+          auto > 0 ? `事件构成：自动同步 ${auto} 条（时刻以上方数据时刻为准）· 手动 ${rows.length - auto} 条（本地维护）` : '事件构成：全部为手动事件（本地维护）',
+          ...missingLines(v.provenance),
+        ].filter((x) => x !== '')
+        return textBlock(`共 ${rows.length} 条：\n${lines.join('\n')}\n${tail.join('\n')}`)
       },
     },
     async execute(args) {
@@ -390,6 +506,7 @@ export function makeAgentTools(
         const from = typeof args.from === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(args.from) ? args.from : calToday(0)
         const to = typeof args.to === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(args.to) ? args.to : calToday(30)
         await calendar.init()
+        let syncError: string | null = null
         try {
           const port = store.portData()
           const codes = new Set<string>()
@@ -400,13 +517,25 @@ export function makeAgentTools(
           for (const it of store.watchData().items) push(it.secid)
           for (const it of port.items) push(it.secid)
           await calendar.sync([...codes], false)
-        } catch {
-          /* 同步失败不影响读取 */
+        } catch (error) {
+          // 静默吞掉同步失败等于让 agent 以为"日历里没有就是没有事件"——
+          // 必须把这次失败如实写进 missing[]
+          syncError = error instanceof Error ? error.message : String(error)
         }
         const cat = typeof args.category === 'string' && args.category !== '' ? args.category : null
         let events = calendar.list(from, to)
         if (cat !== null) events = events.filter((e) => e.category === cat)
-        return { events, syncedAt: calendar.syncedAt }
+        const provenance: DataProvenance = {
+          // 自动事件的数据时刻 = 上一次成功同步时刻；一次都没同步过时是 null
+          asOf: calendar.syncedAt > 0 ? calendar.syncedAt : null,
+          stale: syncError !== null,
+          source: calendar.syncedAt > 0 ? 'em' : 'local',
+          missing: syncError === null ? [] : [{
+            what: '自动事件（新股/财报/分红）', why: 'transient',
+            note: `本次同步失败（${syncError.slice(0, 80)}）；下方事件仅含本地已同步的部分 + 手动事件，稍后重试可补齐`,
+          }],
+        }
+        return { events, syncedAt: calendar.syncedAt, provenance }
       } catch (error) {
         return { error: error instanceof Error ? error.message : String(error) }
       }
@@ -432,27 +561,150 @@ export function makeAgentTools(
       },
     },
     output: {
-      schema: { type: 'object', additionalProperties: true, properties: { ok: { type: 'boolean' }, event: {} } },
+      schema: {
+        type: 'object', additionalProperties: true,
+        properties: {
+          ok: { type: 'boolean' }, event: {},
+          writeId: { type: 'string' }, by: { type: 'string' },
+        },
+      },
       render: (_a, value) => {
-        const v = value as { ok?: boolean; error?: string; event?: CalEvent }
+        const v = value as { ok?: boolean; error?: string; event?: CalEvent; writeId?: string }
         if (v.error !== undefined) return textBlock(`错误：${v.error}`)
         const e = v.event
-        return textBlock(e === undefined ? '已写入' : `已加入日历：${e.date} ${e.title}（${CAL_CATEGORY_LABEL[e.category] ?? e.category}，重要度 ${e.importance}）`)
+        if (e === undefined) return textBlock('已写入')
+        return textBlock(
+          `已加入日历：${e.date} ${e.title}（${CAL_CATEGORY_LABEL[e.category] ?? e.category}，重要度 ${e.importance}）` +
+          (v.writeId !== undefined ? `\n写入 id ${v.writeId} —— 写错了可用 tradewatcher_undo（id 或 last=1）撤回` : ''),
+        )
       },
     },
-    async execute(args) {
+    async execute(args, exec) {
       if (calendar === undefined) return { error: '日历模块未挂载' }
       try {
+        // P0-11 ①：先过写节流 —— 同一秒超限直接报错（不静默丢一次写入）
+        await journal.init()
+        const throttled = journal.throttleReason()
+        if (throttled !== null) return { error: throttled }
+        const by = writerOf(exec)
         const before = new Set((await calendar.init(), calendar.list(calToday(-365), calToday(365))).map((e) => e.id))
         const events = await calendar.mutate({ ...args, op: 'add' })
         const created = events.find((e) => !before.has(e.id))
-        return { ok: true, event: created }
+        // P0-11 ②：登记反向操作（自动事件不可删，这里只登记手动事件）
+        const rec = await journal.record({
+          by,
+          tool: `${PREFIX}calendar_add`,
+          summary: `新增日历事件 ${created?.date ?? String(args.date)} ${created?.title ?? String(args.title)}`,
+          undo: created === undefined || created.source === 'auto'
+            ? null
+            : { kind: 'calendar.remove', targetId: created.id, label: `删除日历事件 ${created.date} ${created.title}` },
+        })
+        return { ok: true, event: created, writeId: rec.id, by }
       } catch (error) {
         return { error: error instanceof Error ? error.message : String(error) }
       }
     },
   })
 
+
+  // ── 撤销（P0-11） ──────────────────────────────────────────────────
+  defs.push({
+    name: `${PREFIX}undo`,
+    description:
+      '撤销本插件做过的**写入**（目前是日历事件的新增）。可传 id（来自写入回包或 writeLog 列表），' +
+      '或 last=N 撤销最近 N 次尚未撤销的写入（默认 1）。撤销只作用于本插件登记过的写入，' +
+      '不删除历史（撤销本身也留痕）。Triggers: 撤销/回滚/写错了/undo/退回去.',
+    parameters: {
+      type: 'object', additionalProperties: false,
+      properties: {
+        id: { type: 'string', description: '写入 id（写入回包的 writeId）' },
+        last: { type: 'number', description: '撤销最近 N 次写入（默认 1，最大 20）' },
+        listOnly: { type: 'boolean', description: 'true 时只列出可撤销的写入，不执行撤销' },
+      },
+    },
+    output: {
+      schema: {
+        type: 'object', additionalProperties: true,
+        properties: {
+          ok: { type: 'boolean' },
+          undone: { type: 'array', items: {} },
+          pending: { type: 'array', items: {} },
+          error: { type: 'string' },
+        },
+      },
+      render: (_a, value) => {
+        const v = value as {
+          error?: string
+          undone?: Array<{ id: string; tool: string; summary: string; undone: boolean; reason?: string }>
+          pending?: Array<{ id: string; ts: number; tool: string; summary: string; by: string }>
+        }
+        if (v.error !== undefined) return textBlock(`错误：${v.error}`)
+        const out: string[] = []
+        if (v.undone !== undefined) {
+          if (v.undone.length === 0) out.push('没有可撤销的写入。')
+          for (const u of v.undone) {
+            out.push(u.undone
+              ? `已撤销 ${u.id}：${u.summary}`
+              : `未能撤销 ${u.id}：${u.summary} —— ${u.reason ?? '原因未知'}`)
+          }
+        }
+        if (v.pending !== undefined) {
+          out.push(`可撤销的写入（${v.pending.length} 条，最新在前）：`)
+          for (const p of v.pending) {
+            out.push(`  ${p.id} · ${new Date(p.ts).toLocaleString('zh-CN', { hour12: false })} · ${p.tool} · ${p.summary} · by ${p.by}`)
+          }
+        }
+        return textBlock(out.join('\n'))
+      },
+    },
+    async execute(args, exec) {
+      try {
+        await journal.init()
+        const by = writerOf(exec)
+        const pending = journal.list(200).filter((e) => e.undoneBy === undefined && e.undo !== null)
+        if (args.listOnly === true) {
+          return { ok: true, pending: pending.map((p) => ({ id: p.id, ts: p.ts, tool: p.tool, summary: p.summary, by: p.by })) }
+        }
+        const explicit = typeof args.id === 'string' && args.id !== '' ? args.id : null
+        const lastRaw = typeof args.last === 'number' && Number.isFinite(args.last) ? Math.round(args.last) : 1
+        const last = Math.max(1, Math.min(20, lastRaw))
+        const targets = explicit !== null
+          ? pending.filter((p) => p.id === explicit)
+          : pending.slice(0, last)
+        if (explicit !== null && targets.length === 0) {
+          return { error: `写入 id ${explicit} 不存在、已撤销，或没有可撤销的反向操作（tradewatcher_undo 传 listOnly=true 可列出全部可撤销项）` }
+        }
+        if (calendar === undefined) return { error: '日历模块未挂载' }
+        const undone: Array<{ id: string; tool: string; summary: string; undone: boolean; reason?: string }> = []
+        for (const t of targets) {
+          const act = t.undo
+          if (act === null) {
+            undone.push({ id: t.id, tool: t.tool, summary: t.summary, undone: false, reason: '该写入没有可自动反向的操作' })
+            continue
+          }
+          try {
+            if (act.kind === 'calendar.remove') {
+              await calendar.mutate({ op: 'remove', id: act.targetId })
+            } else {
+              // 未知类型必须报错而不是静默跳过（否则调用方以为撤销成功了）
+              undone.push({ id: t.id, tool: t.tool, summary: t.summary, undone: false, reason: `不支持的反向操作类型 ${String((act as { kind: string }).kind)}` })
+              continue
+            }
+            await journal.markUndone(t.id, by)
+            undone.push({ id: t.id, tool: t.tool, summary: t.summary, undone: true })
+          } catch (error) {
+            undone.push({
+              id: t.id, tool: t.tool, summary: t.summary, undone: false,
+              reason: error instanceof Error ? error.message : String(error),
+            })
+          }
+        }
+        return { ok: undone.every((u) => u.undone), undone, by }
+      } catch (error) {
+        return { error: error instanceof Error ? error.message : String(error) }
+      }
+    },
+  })
 
   defs.push({
     name: `${PREFIX}rescue`,
@@ -482,6 +734,11 @@ export function makeAgentTools(
           factors: { type: 'array', items: {} },
           etfs: { type: 'array', items: {} },
           history: { type: 'array', items: {} },
+          provenance: { type: 'object', additionalProperties: true },
+          activeWindow: { type: 'object', additionalProperties: true },
+          calibratedAt: { type: 'string' },
+          factorContrib: { type: 'array', items: {} },
+          scoreLog: { type: 'array', items: {} },
         },
       },
       render: (_args, value) => {
@@ -495,6 +752,12 @@ export function makeAgentTools(
           selfSampleDays?: number
           indexPct?: number | null
           gap?: boolean
+          provenance?: DataProvenance
+          activeWindow?: { sampling: boolean; reason?: string; nextLabel: string | null; intervalSec: number; samples: number }
+          calibratedAt?: string
+          timeCoef?: number
+          factorContrib?: Array<{ label: string; weight: number; score: number; contribution: number }>
+          scoreLog?: Array<{ hhmm: string; score: number; rawScore: number; timeCoef: number; factors: Array<{ id: string; score: number }> }>
           factors?: Array<{ 因子: string; 实测: string; 得分: number; 命中: boolean }>
           etfs?: Array<Record<string, unknown>>
           history?: Array<{ day: string; maxLevel: number; maxScore: number; events: number; peakHhmm: string | null }>
@@ -502,25 +765,48 @@ export function makeAgentTools(
         if (v.error !== undefined) return textBlock(`护盘信号读取失败：${v.error}`)
         const pct = (n: unknown): string => (typeof n === 'number' ? `${n.toFixed(2)}x` : '—')
         const yi = (n: unknown): string => (typeof n === 'number' ? `${(n / 1e8).toFixed(2)}亿` : '—')
+        // P0-4：非采样时段必须说清"暂停"而不是让人以为坏了；暂停时不得出现「采样缺口」
+        const w = v.activeWindow
+        const winText = w === undefined
+          ? ''
+          : w.sampling
+            ? `采样中 · 每 ${w.intervalSec}s · 今日已采 ${w.samples} 次`
+            : w.reason === 'disabled'
+              ? '采样暂停（监测已关闭）'
+              : `采样暂停 · 下次 ${w.nextLabel ?? '—'}（${w.reason === 'weekend' ? '周末' : w.reason === 'noon-break' ? '午休' : '已收盘'}）`
+        const gapText = v.gap === true
+          ? w !== undefined && !w.sampling ? '（当日曾出现采样缺口；当前为暂停时段，不是正在失败）' : ' ⚠ 采样有缺口'
+          : ''
+        const contrib = v.factorContrib ?? []
+        const contribSum = contrib.reduce((a, c) => a + c.contribution, 0)
         const lines = [
           `护盘信号：${v.levelLabel ?? '—'}（评分 ${v.score ?? 0}/100，${v.trading === true ? '采样中' : '非交易时段'}）`,
           `归因：${v.summary ?? '—'}`,
-          `阈值来源：${v.thresholdSource ?? '—'}（自建样本 ${v.selfSampleDays ?? 0} 天）  沪深300 ${typeof v.indexPct === 'number' ? `${v.indexPct.toFixed(2)}%` : '—'}${v.gap === true ? '  ⚠ 采样有缺口' : ''}`,
+          winText === '' ? '' : `采样窗口：${winText}`,
+          `阈值来源：${v.thresholdSource ?? '—'}（自建样本 ${v.selfSampleDays ?? 0} 天，标定日 ${v.calibratedAt ?? '—'}）  沪深300 ${typeof v.indexPct === 'number' ? `${v.indexPct.toFixed(2)}%` : '—'}${gapText}`,
           '因子：',
           ...(v.factors ?? []).map((f) => `  ${f.命中 ? '●' : '○'} ${f.因子} 实测 ${f.实测} 得分 ${f.得分}`),
+          // P0-7：贡献度列，且给出可复算的等式（权重×得分×时点系数）
+          contrib.length > 0
+            ? `贡献度（权×得分×时点系数，合计 ${contribSum.toFixed(1)} ≈ 总分 ${v.score ?? 0}）：`
+            : '',
+          ...contrib.map((c) => `  ${c.label} ${c.weight.toFixed(2)}×${c.score}×${v.timeCoef ?? 1} = ${c.contribution.toFixed(1)}`),
           '通道：',
           ...(v.etfs ?? []).map((e) =>
             `  ${String(e.通道 ?? '')} 量能 ${pct(e['同时点量能倍数'])}  超大单 ${yi(e['超大单净额'])}（比20日均额 ${pct(e['超大单比20日均额'])}）  脉冲 ${pct(e['脉冲倍数'])}${e['自身触发'] === true ? '  ← 触发' : ''}`,
           ),
           `近 ${(v.history ?? []).length} 日最高等级：`,
           ...(v.history ?? []).slice(0, 7).map((h) => `  ${h.day} 等级 ${h.maxLevel} 峰值 ${h.maxScore}${h.peakHhmm !== null ? ` @${h.peakHhmm}` : ''} 触发 ${h.events} 次`),
+          provenanceLine(v.provenance),
+          ...missingLines(v.provenance),
         ]
-        return textBlock(lines.join('\n'))
+        return textBlock(lines.filter((x) => x !== '').join('\n'))
       },
     },
     execute: async (args: Record<string, unknown>) => {
       if (rescue === undefined) return { error: '护盘监测未启用' }
       try {
+        const day = typeof args.day === 'string' ? args.day : null
         const snapshot = args.force === true ? await rescue.sampleNow() : rescue.snapshot()
         const brief = {
           ts: snapshot.ts,
@@ -543,8 +829,39 @@ export function makeAgentTools(
           })),
           todayEvents: snapshot.today,
           history: rescue.history(30),
+          // P0-1：护盘也有出处。asOf = 最近一次成功采样（不是 ts —— 那是快照生成时刻）；
+          // 采样失败与降级复用都进 stale + missing[]
+          provenance: {
+            asOf: snapshot.lastSampleTs ?? null,
+            stale: snapshot.stale === true || snapshot.gap === true,
+            staleCount: snapshot.stale === true || snapshot.gap === true ? 1 : 0,
+            source: snapshot.flowSource ?? 'none',
+            cached: false,
+            missing: [
+              ...(snapshot.completeness?.missing ?? []).map((m): MissingField => ({
+                what: `护盘因子「${m}」`,
+                // 腾讯源没有分单资金流 → 这是上游结构性缺口；东财源下才是本次失败
+                why: snapshot.flowSource === 'tencent' ? 'no-source' : 'transient',
+                note: snapshot.flowSource === 'tencent'
+                  ? '本次数据来自腾讯备用源，该源不提供分单资金流（超大单/主力净额），重试不会补齐'
+                  : '东财源下冷启动回填或盘中采样满 5 分钟后自动补齐',
+              })),
+              ...(snapshot.lastFailTs !== null && snapshot.lastFailTs !== undefined
+                ? [{
+                    what: '最近一次采样',
+                    why: 'transient' as const,
+                    note: `采样失败于 ${new Date(snapshot.lastFailTs).toLocaleString('zh-CN', { hour12: false })}；上方数据为上一次成功采样结果`,
+                  }]
+                : []),
+            ],
+          },
+          activeWindow: snapshot.activeWindow,
+          calibratedAt: snapshot.calibratedAt,
+          timeCoef: snapshot.timeCoef,
+          factorContrib: snapshot.factorContrib,
+          // P0-7：出分日志（5 分钟刻度 + 等级变化），阈值漂移回溯用
+          scoreLog: rescue.scoreLogOf(day ?? undefined).slice(-24),
         }
-        const day = typeof args.day === 'string' ? args.day : null
         if (day !== null && /^\d{4}-\d{2}-\d{2}$/.test(day)) {
           return { ...brief, day, dayEvents: rescue.eventsOf(day), dayIntraday: rescue.intradayOf(day) }
         }
@@ -562,8 +879,11 @@ export function makeAgentTools(
       'tradewatcher_ledger（买卖与分组流水，可按 posId/groupId 过滤）、tradewatcher_watchlist（自选分组）、' +
       'tradewatcher_quotes（行情：cn/intl/commodity/all 预设或任意代码）、tradewatcher_search（证券搜索）、' +
       'tradewatcher_calendar（财经日历：宏观/IPO/财报/分红，自动同步）、tradewatcher_calendar_add（写入重要日期）、' +
+      'tradewatcher_undo（撤销本插件做过的写入）、' +
       'tradewatcher_rescue（护盘信号：宽基 ETF 放量+超大单净流入的概率性识别，含六因子与历史回看）。' +
-      '持仓与流水由侧边栏「盯盘」页签维护；工具只读，需要修改请在页面操作。' +
+      '持仓与流水由侧边栏「盯盘」页签维护；除日历与撤销外工具只读。' +
+      '每个读数都会带【数据出处】（数据时刻/来源/是否降级/缺失原因）；' +
+      '缺失分「上游无此数据」与「本次失败」两类，前者重试无用、应改口径，后者稍后重试即可。' +
       '当用户问及持仓/仓位/盈亏/市值/交易历史/自选行情/护盘或国家队动向时，主动调用 tradewatcher_* 查询，不要臆造数据；' +
       '护盘是行为模式识别（汇金/国新/诚通不披露日内成交），回答时不要断言「国家队已入场」。'
     )
@@ -582,7 +902,7 @@ export function makeAgentTools(
           const rawExecute = def.execute
           const execute = async (
             args: Record<string, unknown>,
-            exec?: { signal?: AbortSignal },
+            exec?: PluginToolExec,
           ): Promise<unknown> => losslessJson(await rawExecute(args, exec))
           disposers.push(tools.register({ ...def, execute }))
         } catch (error) {
