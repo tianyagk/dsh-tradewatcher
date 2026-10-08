@@ -363,7 +363,8 @@ export function PortfolioPage(props: {
           ? null
           : rows.length === 0
             ? React.createElement('div', { className: 'tw-hint', style: { padding: 8 } }, '空分组：点「+持仓」添加证券，随后在行上「买/卖」录入。')
-            : rows.map((row) =>
+            : React.createElement('div', { className: 'tw-poslist' },
+              ...rows.map((row) =>
                 React.createElement(PosRow, {
                   key: row.posId,
                   row,
@@ -388,6 +389,7 @@ export function PortfolioPage(props: {
                   },
                 }),
               ),
+            ),
       )
     }),
     showArchived && archivedGroups.length > 0

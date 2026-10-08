@@ -264,7 +264,8 @@ export function WatchlistPage(props: {
         ),
         isCollapsed || items.length === 0
           ? null
-          : items.map((it) => {
+          : React.createElement('div', { className: 'tw-wlist' },
+            ...items.map((it) => {
               const q = quotes[it.secid]
               const alert = alertOf.get(it.secid)
               const cls = dirClass(q?.chg ?? null, prefs.redUp)
@@ -379,6 +380,7 @@ export function WatchlistPage(props: {
                 }),
               )
             }),
+          ),
       )
     }),
     showArchived && archived.length > 0

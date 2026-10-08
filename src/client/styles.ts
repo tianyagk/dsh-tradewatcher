@@ -50,13 +50,17 @@ color-scheme:dark}
 .tw-iconbtn{color:var(--tw-dim);border:1px solid var(--tw-border);border-radius:8px;padding:1px 8px;font-size:11px;line-height:19px;background:var(--tw-card);transition:color .12s,border-color .12s}
 .tw-iconbtn:hover{color:var(--tw-text);border-color:var(--tw-border-strong)}
 .tw-iconbtn:disabled{opacity:.5;cursor:default}
-.tw-strip{display:flex;align-items:stretch;gap:8px;margin:6px 0}
-.tw-strip-label{flex:none;width:56px;display:flex;align-items:center;color:var(--tw-muted);font-size:11px;letter-spacing:.02em;padding-right:2px}
-.tw-strip-cards{flex:1;min-width:0;display:flex;gap:6px;overflow-x:auto;padding-bottom:2px;scrollbar-width:thin;align-items:stretch}
+.tw-strip{display:flex;align-items:flex-start;gap:8px;margin:6px 0}
+.tw-strip-label{flex:none;width:56px;display:flex;align-items:center;color:var(--tw-muted);font-size:11px;letter-spacing:.02em;padding-right:2px;padding-top:8px;align-self:flex-start}
+/* 行情条：改为自动填充网格。
+   之前是 flex + overflow-x:auto —— 在宽屏上卡片被拉成 300px+ 的"空壳"（内容只占左边一角），
+   在窄屏上又把超出部分藏进横向滚动（要滚才知道还有几只）。
+   自动填充两头都解决：宽屏多列、窄屏换行，**没有内容被藏起来**。 */
+.tw-strip-cards{flex:1;min-width:0;display:grid;grid-template-columns:repeat(auto-fill,minmax(112px,1fr));gap:6px;align-content:start}
 .tw-strip-cards::-webkit-scrollbar{height:6px}
 .tw-strip-cards::-webkit-scrollbar-thumb{background:var(--tw-border-strong);border-radius:4px}
 .tw-strip-cards::-webkit-scrollbar-track{background:transparent}
-.tw-qcard{flex:1 1 100px;min-width:100px;min-height:54px;background:var(--tw-card);border:1px solid var(--tw-border);border-radius:10px;padding:4px 9px 5px;position:relative;overflow:hidden;transition:border-color .12s,background .12s;cursor:pointer}
+.tw-qcard{min-width:0;min-height:54px;background:var(--tw-card);border:1px solid var(--tw-border);border-radius:10px;padding:4px 9px 5px;position:relative;overflow:hidden;transition:border-color .12s,background .12s;cursor:pointer}
 .tw-qcard:hover{border-color:var(--tw-accent);background:var(--tw-hover)}
 /* toast（P0-6/P0-8）：一次性动作的说明，贴在面板底部，不遮挡行情条 */
 .tw-toast{position:absolute;left:10px;right:10px;bottom:10px;z-index:40;display:flex;align-items:flex-start;gap:8px;padding:7px 10px;border:1px solid var(--tw-border-strong);border-radius:9px;background:var(--tw-card);box-shadow:var(--tw-shadow-lg);color:var(--tw-text);font-size:11.5px;line-height:1.5}
@@ -92,6 +96,16 @@ color-scheme:dark}
 /* 读屏专用文本（P2-3）：视觉上不可见，但读屏软件可朗读。
    用 clip 而不是 display:none —— 后者会让读屏软件也读不到。 */
 .tw-sr{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0}
+
+/* 宽屏利用率（布局优化）────────────────────────────────
+   列表行按侧栏宽度设计（~360px），摊到 1800px+ 的宽屏上就是"名字在左、价格在右、中间一片空"。
+   与其把行拉长，不如在宽屏下多铺几列 —— 同样的高度里能看到两倍的条目，滚动也更少。
+   用 minmax(520px,1fr) 而不是固定列数：窗口变窄会自动退回单列。 */
+@media (min-width:1500px){
+  .tw-wlist,.tw-poslist{display:grid;grid-template-columns:repeat(auto-fill,minmax(520px,1fr));column-gap:16px;align-content:start}
+  /* 两列并排时，行分隔线要能区分左右两列 → 左边一列不画竖线，靠列间距分隔 */
+  .tw-wlist>.tw-wrow:first-child,.tw-poslist>.tw-posrow:first-child{border-top-color:transparent}
+}
 
 /* 数字模糊（P2-2, data-blur=1）────────────────────────────
    目标集合来自「所有使用 --tw-mono 的数字面」的证据清单（styles.ts 里逐条可查），
@@ -244,7 +258,7 @@ color-scheme:dark}
 .tw-field{margin-bottom:10px}
 .tw-field label{display:block;font-size:11px;color:var(--tw-muted);margin-bottom:4px}
 .tw-err{color:var(--tw-up);background:var(--tw-up-bg);border-radius:8px;padding:5px 10px;margin:6px 0;font-size:12px}
-.tw-hint{color:var(--tw-muted);font-size:11px;margin:2px 0 6px;line-height:1.55}
+.tw-hint{color:var(--tw-muted);font-size:11px;margin:2px 0 6px;line-height:1.55;max-width:96ch}
 
 /* ── segmented controls / search ───────────────────────── */
 .tw-seg{display:inline-flex;border:1px solid var(--tw-border);border-radius:8px;overflow:hidden;background:var(--tw-card)}
