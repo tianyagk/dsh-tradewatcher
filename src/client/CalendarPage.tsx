@@ -130,17 +130,31 @@ export function CalendarPage(_props: { prefs: PortPrefs }): React.ReactElement {
     setMonth0(d.getMonth())
   }
 
-  const pill = (e: CalEvent, compact = true): React.ReactElement =>
-    React.createElement('span', {
+  /**
+   * 事件胶囊（P1-10）。
+   * 勾稽标记：**实心 ●=有持仓 / 空心 ○=仅自选 / 无标记=与我的持仓自选无关**。
+   * 用字形而不是颜色：重要性已经占了颜色，再拿颜色区分勾稽会造成"红点到底是高重要度还是有持仓"。
+   */
+  const pill = (e: CalEvent, compact = true): React.ReactElement => {
+    const mark = e.link?.held === true ? '●' : e.link?.watched === true ? '○' : ''
+    const linkText = e.link?.held === true ? '持仓标的' : e.link?.watched === true ? '自选标的' : ''
+    const changeText = e.changes !== undefined && e.changes.length > 0 ? `（改期 ${e.changes.length} 次）` : ''
+    return React.createElement('span', {
       key: e.id,
       className: 'tw-cal-pill',
-      title: `${e.time !== undefined ? `${e.time} ` : ''}${e.title}${e.note !== undefined ? ` — ${e.note}` : ''}`,
+      title:
+        `${e.time !== undefined ? `${e.time} ` : ''}${e.title}${e.note !== undefined ? ` — ${e.note}` : ''}` +
+        `${linkText === '' ? '' : ` · ${linkText}`}${changeText}`,
       style: { color: IMP_COLOR[e.importance], borderColor: IMP_COLOR[e.importance] },
       onClick: (ev: React.MouseEvent) => {
         ev.stopPropagation()
         setDayOpen(e.date)
       },
-    }, compact ? e.title : `${e.title} · ${CAL_CATEGORY_LABEL[e.category]}`)
+    },
+      mark === '' ? null : React.createElement('span', { style: { marginRight: 3, opacity: 0.85 } }, mark),
+      compact ? e.title : `${e.title} · ${CAL_CATEGORY_LABEL[e.category]}`,
+    )
+  }
 
   return React.createElement(
     'div',
@@ -267,10 +281,35 @@ function DayModal(props: {
   mutate: (body: Record<string, unknown>) => void
 }): React.ReactElement {
   const weekday = WEEKDAYS[(new Date(`${props.date}T00:00:00`).getDay() + 6) % 7]
+  // P1-10：默认按**勾稽**排（持仓 → 自选 → 其他），组内按重要度与时刻。
+  // 也可切成纯重要度排序 —— 有时只想看"今天最重要的事是什么"。
+  const [byLink, setByLink] = React.useState(true)
+  const rank = (e: CalEvent): number => (e.link?.held === true ? 0 : e.link?.watched === true ? 1 : 2)
+  const sorted = React.useMemo(() => {
+    const arr = [...props.events]
+    arr.sort((a, b) => {
+      if (byLink) {
+        const d = rank(a) - rank(b)
+        if (d !== 0) return d
+      }
+      if (a.importance !== b.importance) return b.importance - a.importance
+      return (a.time ?? '99:99').localeCompare(b.time ?? '99:99')
+    })
+    return arr
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [props.events, byLink])
+  const linkLabel = (e: CalEvent): string | null =>
+    e.link?.held === true ? '持仓标的' : e.link?.watched === true ? '自选标的' : null
   return React.createElement(Modal, { title: `${props.date} 周${weekday} · ${props.events.length} 个事件`, onClose: props.onClose, width: 560 },
+    props.events.length > 1
+      ? React.createElement('div', { className: 'tw-seg', style: { marginBottom: 6 } },
+          React.createElement('button', { 'data-on': byLink, onClick: () => setByLink(true), title: '持仓 → 自选 → 其他；组内按重要度' }, '按勾稽排序'),
+          React.createElement('button', { 'data-on': !byLink, onClick: () => setByLink(false) }, '按重要度排序'),
+        )
+      : null,
     props.events.length === 0
       ? React.createElement('div', { className: 'tw-muted', style: { padding: 8 } }, '当天暂无事件记录。')
-      : props.events.map((e) =>
+      : sorted.map((e) =>
           React.createElement('div', { key: e.id, className: 'tw-cal-card', style: { borderLeftColor: IMP_COLOR[e.importance] } },
             React.createElement('div', { style: { display: 'flex', alignItems: 'baseline', gap: 8, flexWrap: 'wrap' } },
               e.time !== undefined
@@ -280,6 +319,23 @@ function DayModal(props: {
               React.createElement('span', { className: 'tw-badge' }, `${CAL_CATEGORY_LABEL[e.category]} · ${IMP_LABEL[e.importance]}`),
               e.endDate !== undefined ? React.createElement('span', { className: 'tw-badge' }, `至 ${e.endDate}`) : null,
               React.createElement('span', { className: 'tw-badge' }, e.source === 'auto' ? '自动同步' : '手动'),
+              // P1-10 勾稽：与我的持仓/自选有关的事件才值得先看
+              linkLabel(e) !== null
+                ? React.createElement('span', {
+                    className: 'tw-badge',
+                    style: { color: 'var(--tw-accent)', borderColor: 'var(--tw-accent)' },
+                  }, linkLabel(e) as string)
+                : null,
+              // P1-10 改期：必须显式标出并给出 from → to，否则用户不知道自己按旧日期准备过
+              e.changes !== undefined && e.changes.length > 0
+                ? React.createElement('span', {
+                    className: 'tw-badge',
+                    style: { color: '#e8a33d', borderColor: '#e8a33d' },
+                    title: e.changes
+                      .map((c) => `${new Date(c.at).toLocaleString('zh-CN', { hour12: false })}：${c.field} ${c.from === '' ? '（无）' : c.from} → ${c.to}`)
+                      .join('\n'),
+                  }, `可能变更 ×${e.changes.length}`)
+                : null,
               e.symbol !== undefined ? React.createElement('span', { className: 'tw-muted', style: { fontSize: 11 } }, e.symbol) : null,
             ),
             e.note !== undefined && e.note !== ''

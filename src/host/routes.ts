@@ -21,6 +21,9 @@ import { QUOTE_HOSTS, HISTORY_HOSTS } from './em.ts'
 import { breakerSummary } from './breaker.ts'
 import { HttpError, httpStatusOf, retryAfterSecondsOf } from './http.ts'
 import { describeConflicts, makeBundle, verifyBundle } from './backup.ts'
+import { detectAnomalies } from './anomaly.ts'
+import { BREADTH_MIN_DAYS, BREADTH_WINDOW, BreadthStore, breadthUsable, percentileOf, upRatio } from './breadth.ts'
+import { dayOf } from './time.ts'
 import { log, type PluginWebRoute } from './context.ts'
 
 const MAX_BODY = 256 * 1024
@@ -105,17 +108,27 @@ async function portfolioWithQuotes(store: DataStore): Promise<{ view: unknown; s
   return { view, stale }
 }
 
-/** 关注标的 → 6 位代码（仅 A股，供财报/分红数据源过滤） */
-function focusCodes(store: DataStore): string[] {
+/**
+ * 关注标的 → 6 位代码（仅 A股，供财报/分红数据源过滤）。
+ * `heldOnly` 为真时只取持仓（P1-10 的勾稽要区分"有持仓"与"仅自选"）。
+ */
+function focusCodes(store: DataStore, heldOnly = false): string[] {
   const codes = new Set<string>()
   const push = (secid: string): void => {
     const m = /^(\d{1,3})\.([A-Za-z0-9]+)$/.exec(secid)
     if (m === null) return
     if (m[1] === '0' || m[1] === '1') codes.add(m[2])
   }
-  for (const it of store.watchData().items) push(it.secid)
+  if (!heldOnly) for (const it of store.watchData().items) push(it.secid)
   for (const it of store.portData().items) push(it.secid)
   return [...codes]
+}
+
+/** 事件关联标的 → 6 位代码（symbol 可能是代码或 secid） */
+function symbolCode(symbol: string | undefined): string | null {
+  if (symbol === undefined || symbol === '') return null
+  const m = /(\d{6})/.exec(symbol)
+  return m === null ? null : m[1]
 }
 
 export function makeTradeRoutes(
@@ -123,6 +136,7 @@ export function makeTradeRoutes(
   trustedHosts: readonly string[],
   calendar: CalendarStore,
   rescue?: RescueMonitor,
+  breadth: BreadthStore = new BreadthStore(),
 ): TradeRoutes {
   const gate = (req: IncomingMessage): boolean => isTrustedApiRequest(req, trustedHosts)
   /** 上游主机组：503 时用它给出 retry-after，并聚合展示熔断明细（去重后 3 台） */
@@ -210,6 +224,90 @@ export function makeTradeRoutes(
             return
           }
           send(res, 405, { error: 'method not allowed' })
+        } catch (error) {
+          fail(res, error)
+        }
+      },
+    },
+    {
+      kind: 'exact',
+      path: '/tradewatcher/breadth',
+      /**
+       * 涨跌家数 + 历史分位（P1-8）。
+       *
+       * 数据源与「大盘」页**同一处**：上证指数（1.000001）与深证成指（0.399001）行情里的
+       * 涨/跌/平家数与成交额（东财 f104/f105/f106/f6）。不另开一条链路 ——
+       * 两处各算一套，迟早会对不上。
+       *
+       * 收盘后（15:05 起）会把当日快照写入 breadth.json；分位按"之前 N 个交易日"算（不含今天）。
+       */
+      handler: async (req, res) => {
+        if (!needGate(req, res)) return
+        try {
+          await breadth.init()
+          const ids = ['1.000001', '0.399001']
+          const q = await em.fetchQuotesWithProvenance(ids)
+          const sh = q.items['1.000001']
+          const sz = q.items['0.399001']
+          const usable = breadthUsable([sh?.up, sh?.down, sh?.even, sz?.up, sz?.down, sz?.even])
+          const today = dayOf(Date.now())
+          const current = usable
+            ? {
+                up: (sh?.up ?? 0) + (sz?.up ?? 0),
+                down: (sh?.down ?? 0) + (sz?.down ?? 0),
+                even: (sh?.even ?? 0) + (sz?.even ?? 0),
+                amount: (sh?.amount ?? 0) + (sz?.amount ?? 0),
+              }
+            : null
+          // 只有拿到真实数字才记；记不进去（盘中/周末/已定稿）不是错误
+          const stored = current === null ? false : await breadth.record(Date.now(), current)
+          const ratio = current === null ? null : upRatio(current)
+          const pct = percentileOf(ratio, breadth.history(BREADTH_WINDOW, today))
+          send(res, 200, {
+            current: current === null
+              ? null
+              : { ...current, ratio, asOf: q.provenance.asOf, source: q.provenance.source },
+            percentile: pct,
+            // 窗口与最小样本一起给界面：缺了它，"没有分位"会被读成"分位是 0"
+            window: BREADTH_WINDOW,
+            minDays: BREADTH_MIN_DAYS,
+            storedDays: breadth.days,
+            storedThisCall: stored,
+            // 数据不可用时如实说明：涨跌家数在部分行情源下没有（备用源不含 f104/f105/f106）
+            missing: current !== null
+              ? q.provenance.missing
+              : [{
+                  what: '沪深涨跌家数',
+                  why: 'no-source' as const,
+                  note: '本轮行情未返回涨/跌/平家数（东财 f104/f105/f106）；备用源（腾讯/新浪）不提供该字段，稍后随行情轮询重试',
+                }],
+          })
+        } catch (error) {
+          fail(res, error)
+        }
+      },
+    },
+    {
+      kind: 'exact',
+      path: '/tradewatcher/anomaly',
+      /**
+       * 自选异动（P1-4）：`ids=` 逗号分隔。
+       * 只用 K 线本地缓存 + 行情涨跌幅，不额外打上游（除非缓存过期需要增量更新）。
+       * 判定规则与阈值在 `host/anomaly.ts`，那里同时给出**为什么不判定**（样本不足/非交易时段）——
+       * 与"判定过且无异常"严格区分，界面不能把前者显示成"正常"。
+       */
+      handler: async (req, res) => {
+        if (!needGate(req, res)) return
+        try {
+          const { ids } = splitIds(queryOf(req).get('ids'))
+          if (ids.length === 0) {
+            send(res, 200, { rows: [], asOf: Date.now(), missing: [] })
+            return
+          }
+          const q = await em.fetchQuotesWithProvenance(ids)
+          const items = ids.map((secid) => ({ secid, name: q.items[secid]?.name ?? secid }))
+          const result = await detectAnomalies(items, q.items)
+          send(res, 200, { ...result, source: q.provenance.source, stale: q.provenance.stale })
         } catch (error) {
           fail(res, error)
         }
@@ -582,7 +680,16 @@ export function makeTradeRoutes(
                 /* 同步失败仍返回本地事件 */
               }
             }
-            send(res, 200, { events: calendar.list(from, to), syncedAt: calendar.syncedAt, symbolCount: codes.length })
+            // P1-10 勾稽：持仓（实心）/ 仅自选（空心）/ 无关，三种由宿主判定，
+            // 避免客户端自己拿两份数据拼（那样两处会不一致）
+            const heldSet = new Set(focusCodes(store, true))
+            const watchSet = new Set(focusCodes(store, false))
+            const events = calendar.list(from, to).map((e) => {
+              const code = symbolCode(e.symbol)
+              if (code === null) return e
+              return { ...e, link: { held: heldSet.has(code), watched: !heldSet.has(code) && watchSet.has(code) } }
+            })
+            send(res, 200, { events, syncedAt: calendar.syncedAt, symbolCount: codes.length })
             return
           }
           if (req.method === 'POST') {

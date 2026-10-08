@@ -89,6 +89,28 @@ export function MarketPage(props: {
   }, [scope, sort, loadBoard])
 
   // Breadth & turnover from the two composite indices (full-market counters).
+  // P1-8：涨跌家数历史分位。宿主持每日快照（收盘后写），这里只读。
+  const [breadth, setBreadth] = useState<Awaited<ReturnType<typeof api.breadth>> | null>(null)
+  const [breadthErr, setBreadthErr] = useState<string | null>(null)
+  useEffect(() => {
+    let alive = true
+    api
+      .breadth()
+      .then((b) => {
+        if (alive) {
+          setBreadth(b)
+          setBreadthErr(null)
+        }
+      })
+      .catch((e: Error) => {
+        if (alive) setBreadthErr(e.message)
+      })
+    return () => {
+      alive = false
+    }
+    // 行情每轮刷新后顺带重读（分位只在收盘后变化，但当日数值要跟着动）
+  }, [props.quotes])
+
   const sh = quotes['1.000001']
   const sz = quotes['0.399001']
   const upSum = (sh?.up ?? 0) + (sz?.up ?? 0)
@@ -146,6 +168,30 @@ export function MarketPage(props: {
         statCell('上证', sh?.price !== undefined && sh?.price !== null ? fmtPrice(sh.price) : '—', dirClass(sh?.chg ?? null, redUp)),
         statCell('深成', sz?.price !== undefined && sz?.price !== null ? fmtPrice(sz.price) : '—', dirClass(sz?.chg ?? null, redUp)),
       ),
+      // P1-8：分位必须带口径与样本量一起读；样本不足或取不到时不显示分位（而不是显示 0）
+      breadthErr !== null
+        ? React.createElement('div', { className: 'tw-hint', style: { color: 'var(--tw-up)' } }, `涨跌家数分位本次未取到：${breadthErr}（稍后随行情轮询自动重试）`)
+        : breadth !== null
+          ? React.createElement('div', { className: 'tw-hint', style: { display: 'flex', gap: 12, flexWrap: 'wrap' } },
+              breadth.current === null
+                ? React.createElement('span', { style: { color: 'var(--tw-up)' } }, breadth.missing[0]?.note ?? '涨跌家数不可用')
+                : React.createElement(React.Fragment, null,
+                    React.createElement('span', null,
+                      `上涨占比 ${breadth.percentile.value === null ? '—' : (breadth.percentile.value * 100).toFixed(1) + '%'}`),
+                    breadth.percentile.pct === null
+                      ? React.createElement('span', { className: 'tw-muted' },
+                          breadth.percentile.sampleSmall
+                            ? `分位样本不足（已存 ${breadth.percentile.n} 个交易日，需 ≥ ${breadth.minDays}）—— 样本太少的"分位"是噪音，故不显示`
+                            : '分位不可算')
+                      : React.createElement('span', {
+                          title: `${breadth.percentile.metric}；分位定义：历史中 ≤ 当前值的比例（0 低 / 100 高）`,
+                        }, `近 ${breadth.percentile.n} 日分位 ${breadth.percentile.pct}%`),
+                  ),
+              breadth.storedDays > 0
+                ? React.createElement('span', { className: 'tw-muted' }, `· 每日快照已存 ${breadth.storedDays} 天（收盘后记录；窗口 ${breadth.window} 日）`)
+                : React.createElement('span', { className: 'tw-muted' }, '· 尚无历史快照（每个交易日收盘后记一条，累积到 5 天后开始显示分位）'),
+            )
+          : null,
       React.createElement('div', { className: 'tw-tablewrap' },
         React.createElement('table', { className: 'tw-table', style: { minWidth: 560 } },
           React.createElement('thead', null,

@@ -9,7 +9,7 @@
  * 当前 key），所以挂载即等价于旧版的 visible —— 未选中时组件卸载，轮询自然停止。
  */
 import React, { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react'
-import { DEFAULT_PREFS, TW_ROWS, VIEW_MODES, type PortPrefs, type QuoteRow, type ViewMode } from '../shared/model.ts'
+import { DEFAULT_PREFS, TW_ROWS, VIEW_MODES, normalizePanelOpacity, type PortPrefs, type QuoteRow, type ViewMode } from '../shared/model.ts'
 import { api } from './api.ts'
 import { useQuoteEngine } from './useQuotes.ts'
 import { TopBar } from './TopBar.tsx'
@@ -314,13 +314,18 @@ function Dashboard(): React.ReactElement {
           ? '视图：完整（恢复说明文字与全部金额）'
           : next === 'compact'
             ? '视图：紧凑（已隐藏说明文字与脚注；Alt+M 继续切换）'
-            : '视图：隐身（金额已模糊为 ¥••••、涨跌色转灰阶；只影响显示，取数与告警不变。Alt+M 继续切换）',
+            : // 隐身的两项"细化"（不透明度/数字模糊）在「▣ 截图」里，这里提示一句，否则没人知道还有这一层
+              '视图：隐身（金额已模糊为 ¥••••、涨跌色转灰阶）。若要连价格/百分比一起糊住，见行情条右侧「▣ 截图」里的数字模糊。Alt+M 继续切换',
       )
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
     // prefs?.viewMode 是读当前档位的唯一来源，必须进依赖
   }, [prefs?.viewMode, toast])
+
+  // P2-2：面板不透明度与数字模糊。两者都只作用于本面板（见 styles.ts 的说明）
+  const panelOpacity = normalizePanelOpacity(prefs?.panelOpacity, 1)
+  const blurDigits = prefs?.blurDigits === true
 
   const refreshSec = prefs?.refreshSec ?? 10
 
@@ -354,7 +359,17 @@ function Dashboard(): React.ReactElement {
 
   const pageEl = (): React.ReactNode => {
     if (page === 'watch') {
-      return React.createElement(WatchlistPage, { quotes, missing: engine.missing, quotesReady: engine.ts !== null, prefs: prefs ?? DEFAULT_PREFS, setPrefs, onSymbols: onWatchSymbols, onOpenDetail: openDetail })
+      return React.createElement(WatchlistPage, {
+        quotes,
+        missing: engine.missing,
+        quotesReady: engine.ts !== null,
+        // 异动判定跟着行情刷新走（行情没更新就重判等于白跑一轮 K 线）
+        quoteTs: engine.ts,
+        prefs: prefs ?? DEFAULT_PREFS,
+        setPrefs,
+        onSymbols: onWatchSymbols,
+        onOpenDetail: openDetail,
+      })
     }
     if (page === 'portfolio') {
       return React.createElement(PortfolioPage, {
@@ -389,7 +404,17 @@ function Dashboard(): React.ReactElement {
 
   return React.createElement(
     'div',
-    { className: 'tw-root', 'data-theme': theme, 'data-view': viewMode, style: { flex: 1, height: '100%', minHeight: 0, display: 'flex', flexDirection: 'column', minWidth: 0 } },
+    {
+      className: 'tw-root',
+      'data-theme': theme,
+      'data-view': viewMode,
+      'data-blur': blurDigits ? '1' : '0',
+      style: {
+        flex: 1, height: '100%', minHeight: 0, display: 'flex', flexDirection: 'column', minWidth: 0,
+        // 不透明度只挂在本面板根节点：宿主其余界面不受影响
+        opacity: panelOpacity,
+      },
+    },
     React.createElement(TopBar, {
       quotes,
       missing: engine.missing,

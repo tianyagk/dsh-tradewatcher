@@ -199,6 +199,29 @@ export const CAL_CATEGORY_LABEL: Record<CalCategory, string> = {
 /** 重要性：3=高（红）2=中（橙）1=低（灰蓝） */
 export type CalImportance = 1 | 2 | 3
 
+/**
+ * 自动事件的一次改期/改名记录（P1-10）。
+ *
+ * 来源方（东财）会悄悄改期：新股上市日延后、财报预约披露日调整、分红除权日变动。
+ * 只显示"最新日期"会让人以为一直是这个日期 —— 于是"我按 10-09 准备的，怎么变成 10-16 了"
+ * 无人能回答。因此保留 from→to 的历史，并在事件上标「可能变更」。
+ */
+export interface CalChange {
+  /** 发现时刻（epoch ms） */
+  at: number
+  field: 'date' | 'endDate' | 'title'
+  from: string
+  to: string
+}
+
+/** 事件与持仓/自选的勾稽关系（P1-10） */
+export interface CalLink {
+  /** 该标的当前有持仓 */
+  held: boolean
+  /** 该标的在自选里（未持仓） */
+  watched: boolean
+}
+
 export interface CalEvent {
   id: string
   /** YYYY-MM-DD */
@@ -215,6 +238,10 @@ export interface CalEvent {
   source: 'auto' | 'manual'
   /** 自动事件的稳定去重键 */
   autoKey?: string
+  /** 历次改期/改名（最新在后，最多保留 5 条）；非空即表示"这个日期变过" */
+  changes?: CalChange[]
+  /** 与持仓/自选的勾稽（由宿主按当前持仓与自选计算，不落盘） */
+  link?: CalLink
 }
 
 export interface CalPayload {
@@ -395,6 +422,24 @@ export type ViewMode = 'full' | 'compact' | 'incognito'
 export const VIEW_MODES: readonly ViewMode[] = ['full', 'compact', 'incognito']
 export const VIEW_MODE_LABEL: Record<ViewMode, string> = { full: '完整', compact: '紧凑', incognito: '隐身' }
 
+/**
+ * 面板不透明度的取值范围（P2-2）。下限 0.35 是"还能看出这是块面板"的经验底线：
+ * 再低就和桌面混在一起、连区域边界都认不出来，反而不好用。
+ */
+export const PANEL_OPACITY_MIN = 0.35
+export const PANEL_OPACITY_MAX = 1
+
+/**
+ * 面板不透明度归一化（纯函数，可单测）。
+ * 非法值**回退到 1（完全不透明）**而不是回退到下限：
+ * 一个坏偏好不该把面板变得看不清 —— 不可读比不透明更糟。
+ */
+export function normalizePanelOpacity(v: unknown, fallback = 1): number {
+  if (typeof v !== 'number' || !Number.isFinite(v)) return fallback
+  const clamped = Math.min(PANEL_OPACITY_MAX, Math.max(PANEL_OPACITY_MIN, v))
+  return Math.round(clamped * 100) / 100
+}
+
 export interface PortPrefs {
   theme: 'auto' | 'light' | 'dark'
   refreshSec: number
@@ -409,6 +454,16 @@ export interface PortPrefs {
   rescue: RescueConfig
   /** 视图档位（P0-8）：Alt+M 轮换，持久化 */
   viewMode?: ViewMode
+  /**
+   * 面板不透明度（P2-2）：0.35–1，供截图/录屏时让面板不抢画面。
+   * 只作用于**本插件面板**（`.tw-root`），不影响宿主其余界面。
+   */
+  panelOpacity?: number
+  /**
+   * 数字模糊（P2-2）：把价格/盈亏/成交额等**数字**糊住（hover 所在行/卡时显形），
+   * 用于截图或录屏时不泄露具体数值。只影响显示，取数与工具返回不受影响。
+   */
+  blurDigits?: boolean
 }
 
 export const DEFAULT_PREFS: PortPrefs = {
@@ -420,6 +475,8 @@ export const DEFAULT_PREFS: PortPrefs = {
   portSort: { key: 'default', desc: true },
   rescue: { enabled: true, intervalSec: 30, tailIntervalSec: 15, tailFrom: '14:30', universe: [] },
   viewMode: 'full',
+  panelOpacity: 1,
+  blurDigits: false,
 }
 
 /** One derived position row (accounting from ledger + live quote). */

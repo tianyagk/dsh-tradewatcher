@@ -487,7 +487,12 @@ export function makeAgentTools(
         const mark = (i: number): string => (i === 3 ? '【高】' : i === 2 ? '【中】' : '')
         const lines = rows.map((e) =>
           `${e.date} ${mark(e.importance)}${e.title}（${CAL_CATEGORY_LABEL[e.category] ?? e.category}${e.source === 'auto' ? '·自动' : ''}）` +
-          (e.note !== undefined && e.note !== '' ? ` — ${e.note}` : ''),
+          (e.note !== undefined && e.note !== '' ? ` — ${e.note}` : '') +
+          // P1-10：改期必须说出来（"我按 10-09 准备的怎么变成 10-16 了"）
+          (e.changes !== undefined && e.changes.length > 0
+            ? ` ⚠ 可能变更：${e.changes.map((c) => `${c.field} ${c.from === '' ? '（无）' : c.from}→${c.to}`).join('，')}`
+            : '') +
+          (e.link?.held === true ? ' ●持仓' : e.link?.watched === true ? ' ○自选' : ''),
         )
         const auto = rows.filter((e) => e.source === 'auto').length
         const tail = [
@@ -525,6 +530,21 @@ export function makeAgentTools(
         const cat = typeof args.category === 'string' && args.category !== '' ? args.category : null
         let events = calendar.list(from, to)
         if (cat !== null) events = events.filter((e) => e.category === cat)
+        // P1-10 勾稽：与路由同源（持仓=held / 仅自选=watched），避免两处口径分叉
+        const codes6 = (secid: string): string | null => {
+          const m = /^(\d{1,3})\.(\d{6})$/.exec(secid)
+          return m === null ? null : m[2]
+        }
+        const held = new Set<string>()
+        const watched = new Set<string>()
+        for (const it of store.portData().items) { const c = codes6(it.secid); if (c !== null) held.add(c) }
+        for (const it of store.watchData().items) { const c = codes6(it.secid); if (c !== null) watched.add(c) }
+        events = events.map((e) => {
+          const m = e.symbol === undefined ? null : /(\d{6})/.exec(e.symbol)
+          if (m === null) return e
+          const code = m[1]
+          return { ...e, link: { held: held.has(code), watched: !held.has(code) && watched.has(code) } }
+        })
         const provenance: DataProvenance = {
           // 自动事件的数据时刻 = 上一次成功同步时刻；一次都没同步过时是 null
           asOf: calendar.syncedAt > 0 ? calendar.syncedAt : null,

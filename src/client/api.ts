@@ -69,6 +69,39 @@ export const api = {
   }> {
     return request('/tradewatcher/backup', { method: 'POST', body: JSON.stringify({ mode, bundle }) })
   },
+  /** 涨跌家数 + 历史分位（P1-8） */
+  breadth(): Promise<{
+    current: { up: number; down: number; even: number; amount: number; ratio: number | null; asOf: number | null; source: string } | null
+    percentile: { metric: string; value: number | null; n: number; pct: number | null; sampleSmall: boolean; samples: number[] }
+    window: number
+    minDays: number
+    storedDays: number
+    storedThisCall: boolean
+    missing: Array<{ what: string; why: string; note: string }>
+  }> {
+    return request('/tradewatcher/breadth')
+  },
+  /** 自选异动（P1-4）：放量/异动判定，含"为什么不判定"的原因 */
+  anomaly(secids: string[]): Promise<{
+    rows: Array<{
+      secid: string
+      name: string
+      kind: 'volume' | 'price' | 'both' | null
+      mult: number | null
+      samples: number
+      pct: number | null
+      reasons: string[]
+      skip: string[]
+    }>
+    asOf: number
+    missing: Array<{ what: string; why: 'no-source' | 'transient'; note: string }>
+    source?: string
+    stale?: boolean
+  }> {
+    const ids = [...new Set(secids)].join(',')
+    if (ids === '') return Promise.resolve({ rows: [], asOf: Date.now(), missing: [] })
+    return request(`/tradewatcher/anomaly?ids=${encodeURIComponent(ids)}`)
+  },
   /** 侧栏徽标（P0-3）：与面板顶部同源的汇总数，不触发新采样 */
   badge(): Promise<{
     level: number

@@ -13,6 +13,7 @@ import {
   ACTOR_WEB,
   DEFAULT_PREFS,
   PORT_SORT_KEYS,
+  normalizePanelOpacity,
   RESCUE_ETF_CATALOG,
   SECID_RE,
   WATCH_SORT_KEYS,
@@ -404,6 +405,8 @@ export class DataStore {
         portSort: safeSortPref(loaded.portSort, PORT_SORT_KEYS, DEFAULT_PREFS.portSort),
         // 老 prefs.json 没有 viewMode → 回退完整视图（启动不该因一个坏偏好失败）
         viewMode: loaded.viewMode === 'compact' || loaded.viewMode === 'incognito' ? loaded.viewMode : 'full',
+        panelOpacity: normalizePanelOpacity(loaded.panelOpacity, DEFAULT_PREFS.panelOpacity ?? 1),
+        blurDigits: loaded.blurDigits === true,
       }
       // Coherence: drop descriptors that reference missing groups (never drop ledger).
       const groupIds = new Set(this.port.groups.map((g) => g.id))
@@ -928,6 +931,16 @@ export class DataStore {
       this.prefs.refreshSec = Math.round(r)
     }
     if (patch.redUp !== undefined) this.prefs.redUp = patch.redUp === true
+    // P2-2：截图/录屏相关的两个偏好。不透明度越界按边界收（而不是报错丢弃整个 patch），
+    // 但类型不对必须拒绝 —— 那说明调用方写错了字段
+    if (patch.panelOpacity !== undefined) {
+      if (!isFiniteNumber(patch.panelOpacity)) throw new Error('panelOpacity 必须是数字')
+      this.prefs.panelOpacity = normalizePanelOpacity(patch.panelOpacity)
+    }
+    if (patch.blurDigits !== undefined) {
+      if (typeof patch.blurDigits !== 'boolean') throw new Error('blurDigits 必须是布尔值')
+      this.prefs.blurDigits = patch.blurDigits
+    }
     // P0-8：视图档位。非法值拒绝而不是回退 —— 回退会让"点了没反应"变成静默行为
     if (patch.viewMode !== undefined) {
       if (patch.viewMode !== 'full' && patch.viewMode !== 'compact' && patch.viewMode !== 'incognito') {

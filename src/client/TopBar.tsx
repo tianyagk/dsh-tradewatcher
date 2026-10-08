@@ -8,6 +8,8 @@ import { fmtClock, fmtPct, fmtPrice, fmtSigned, dirClass } from './format.ts'
 import { QUOTE_STATE_COLOR, QUOTE_STATE_LABEL, quoteStateOf, quoteStateTitle, summarizeQuoteStates, type QuoteState } from './quoteState.ts'
 import { useNow } from './useNow.ts'
 import { Sparkline } from './charts.tsx'
+import { Btn, Modal } from './ui.tsx'
+import { PANEL_OPACITY_MAX, PANEL_OPACITY_MIN, normalizePanelOpacity } from '../shared/model.ts'
 import type { PortPrefs } from '../shared/model.ts'
 
 interface HoverState {
@@ -354,10 +356,57 @@ export function TopBar(props: {
     TW_ROWS.flatMap((row) => (row.items as ReadonlyArray<{ secid: string }>).map((it) => stateOf(it.secid))),
   )
 
+  // P2-2：当前值（缺省 1 / false，与宿主默认一致）
+  const opacity = normalizePanelOpacity(prefs.panelOpacity, 1)
+  const blurDigits = prefs.blurDigits === true
+
   const themeBtn = (): void => {
     const next = prefs.theme === 'auto' ? 'light' : prefs.theme === 'light' ? 'dark' : 'auto'
     setPrefs({ theme: next as PortPrefs['theme'] })
   }
+
+  // P2-2：截图/录屏设置（不透明度 + 数字模糊）
+  const [shotOpen, setShotOpen] = useState(false)
+  const shotModal = shotOpen
+    ? React.createElement(Modal, { title: '截图 / 录屏（面板不透明度与数字模糊）', onClose: () => setShotOpen(false) },
+        React.createElement('div', { className: 'tw-hint', style: { marginBottom: 8 } },
+          '这两项只影响**本插件面板的显示**：取数、告警、agent 工具返回都不受影响。' +
+          '面板不透明度让面板不抢画面（录屏时压在下层内容之上）；数字模糊把价格/盈亏/成交额等数字糊住，' +
+          '鼠标移到某一行或某张卡上时该行临时显形 —— 既能录进画面，又不泄露具体数值。',
+        ),
+        React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 10, margin: '6px 0' } },
+          React.createElement('span', { style: { minWidth: 84, fontSize: 12 } }, '面板不透明度'),
+          React.createElement('input', {
+            type: 'range',
+            min: Math.round(PANEL_OPACITY_MIN * 100),
+            max: Math.round(PANEL_OPACITY_MAX * 100),
+            step: 5,
+            value: Math.round(opacity * 100),
+            style: { flex: 1, border: 'none', padding: 0, background: 'none' },
+            onChange: (e: React.ChangeEvent<HTMLInputElement>) => setPrefs({ panelOpacity: normalizePanelOpacity(Number(e.target.value) / 100) }),
+          }),
+          React.createElement('span', { style: { fontFamily: 'var(--tw-mono)', minWidth: 44, textAlign: 'right' } }, `${Math.round(opacity * 100)}%`),
+        ),
+        React.createElement('label', { style: { display: 'flex', alignItems: 'center', gap: 8, margin: '8px 0', fontSize: 12, cursor: 'pointer' } },
+          React.createElement('input', {
+            type: 'checkbox',
+            checked: blurDigits,
+            onChange: (e: React.ChangeEvent<HTMLInputElement>) => setPrefs({ blurDigits: e.target.checked }),
+          }),
+          '数字模糊（价格/涨跌/盈亏/成交额；hover 该行显形）',
+        ),
+        React.createElement('div', { className: 'tw-hint' },
+          '隐蔽性说明：数字模糊只覆盖**本插件渲染的数字**。表格里的名称、代码与提示文字不在模糊范围内（它们不是数字）；' +
+          '若需要整屏不可读，请配合隐身视图（Alt+M）使用 —— 隐身会把金额替换为 ¥••••。',
+        ),
+        React.createElement('div', { style: { display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 10 } },
+          React.createElement(Btn, {
+            onClick: () => setPrefs({ panelOpacity: 1, blurDigits: false }),
+          }, '恢复默认'),
+          React.createElement(Btn, { primary: true, onClick: () => setShotOpen(false) }, '完成'),
+        ),
+      )
+    : null
 
   return React.createElement(
     'div',
@@ -405,6 +454,12 @@ export function TopBar(props: {
           style: { fontSize: 9.5 },
         }, `备用源 ${alt}`)
       })(),
+      React.createElement('button', {
+        className: 'tw-iconbtn',
+        onClick: () => setShotOpen(true),
+        title: `截图/录屏：面板不透明度 ${Math.round(opacity * 100)}% · 数字模糊${blurDigits ? '已开' : '关'}`,
+        'aria-label': '截图与录屏设置',
+      }, '▣'),
       React.createElement('button', {
         className: 'tw-iconbtn',
         onClick: themeBtn,
@@ -476,6 +531,7 @@ export function TopBar(props: {
         ),
       ),
     ),
+    shotModal,
     hover !== null && !popupDisabled
       ? React.createElement(HoverCard, {
           hover,

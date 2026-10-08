@@ -82,6 +82,33 @@ color-scheme:dark}
 --tw-up:#8a8f98;--tw-down:#8a8f98;--tw-up-bg:rgba(138,143,152,.12);--tw-down-bg:rgba(138,143,152,.12)}
 /* 图表口径条（P0-5）：紧贴图上方一行，等宽字体便于对齐数字 */
 .tw-caliber{padding:5px 8px 4px;font-size:10.5px;color:var(--tw-dim);font-family:var(--tw-mono);border-bottom:1px dashed var(--tw-border);background:var(--tw-bg2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+/* 自选异动（P1-4）：呼吸高亮。用左边的竖条 + 缓慢呼吸的背景，
+   而不是整行变红 —— 整行变红与"跌了"的语义冲突（红既是跌也是警示）。 */
+@keyframes tw-breathe{0%,100%{background:transparent}50%{background:rgba(229,72,77,.10)}}
+.tw-wrow[data-alert]{box-shadow:inset 3px 0 0 var(--tw-up);animation:tw-breathe 2.6s ease-in-out infinite}
+.tw-wrow[data-alert][data-alert=price]{box-shadow:inset 3px 0 0 var(--tw-flat)}
+@media (prefers-reduced-motion:reduce){.tw-wrow[data-alert]{animation:none;background:rgba(229,72,77,.08)}}
+
+/* 数字模糊（P2-2, data-blur=1）────────────────────────────
+   目标集合来自「所有使用 --tw-mono 的数字面」的证据清单（styles.ts 里逐条可查），
+   而不是凭印象写：漏一个面就等于隐身不彻底。新增数字展示面时必须同时加进这两条规则。
+   hover 所在行/卡会显形 —— 既能录进画面，又能在需要时读某一行的数。 */
+.tw-root[data-blur=1] :is(.tw-qcard .px, .tw-qcard .chg, .tw-chg-chip,
+  .tw-stat .v, .tw-pps .v, .tw-pps .meta, .tw-pos-price .px, .tw-pos-price .meta,
+  .tw-pop .ph .px, .tw-pop .ph .tag, .tw-pop .pl,
+  .tw-group-h .gsum, .tw-wrow .wq, .tw-gh-metrics,
+  .tw-dkv .v, .tw-rescue-card-grid .v, .tw-table td,
+  .tw-caliber, .tw-chartnote, .tw-zoom-bar, .tw-topmeta .tw-uptime){
+  filter:blur(3.2px);transition:filter .12s}
+.tw-root[data-blur=1] :is(.tw-qcard, .tw-wrow, .tw-posrow, tr, .tw-pop, .tw-stat, .tw-pps,
+  .tw-dkv, .tw-rescue-card-grid, .tw-panel):hover :is(.tw-qcard .px, .tw-qcard .chg, .tw-chg-chip,
+  .tw-stat .v, .tw-pps .v, .tw-pps .meta, .tw-pos-price .px, .tw-pos-price .meta,
+  .tw-pop .ph .px, .tw-pop .ph .tag, .tw-pop .pl,
+  .tw-group-h .gsum, .tw-wrow .wq, .tw-gh-metrics,
+  .tw-dkv .v, .tw-rescue-card-grid .v, .tw-table td,
+  .tw-caliber, .tw-chartnote, .tw-zoom-bar){
+  filter:none}
+
 /* 三态降级占位（P0-10）：iframe 超时后不留空白 */
 .tw-placeholder{flex:1;min-height:200px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;text-align:center;padding:24px 18px;color:var(--tw-dim);font-size:12px;background:var(--tw-card2);border-top:1px solid var(--tw-border)}
 .tw-badge[data-state=timeout]{color:var(--tw-up);border-color:var(--tw-up)}

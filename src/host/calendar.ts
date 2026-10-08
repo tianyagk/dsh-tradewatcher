@@ -223,6 +223,41 @@ async function fetchEconomicCalendar(start: string, end: string): Promise<EmCalR
   return out
 }
 
+/**
+ * 把改期/改名历史带进新一轮同步结果（P1-10，纯函数）。
+ *
+ * 上游（东财）会悄悄把上市日/披露日往后挪；只显示"最新日期"等于把变更事实抹掉 ——
+ * 用户无法回答"我按 10-09 准备的怎么变成 10-16 了"。这里按 `autoKey` 对上一条，
+ * 把 date/endDate/title 的变化记进 `changes`（最新在后，最多 5 条）。
+ *
+ * 为什么只留 5 条：改期历史再长也没有可操作性，反而把详情卡撑爆；真正要回答的是
+ * "变过没有、从什么变成什么"。
+ */
+export function withChangeHistory(
+  prevEvents: readonly CalEvent[],
+  fresh: readonly CalEvent[],
+  now: number,
+): CalEvent[] {
+  const prevByKey = new Map<string, CalEvent>()
+  for (const e of prevEvents) {
+    if (e.source === 'auto' && e.autoKey !== undefined) prevByKey.set(e.autoKey, e)
+  }
+  return fresh.map((e) => {
+    const prev = e.autoKey === undefined ? undefined : prevByKey.get(e.autoKey)
+    if (prev === undefined) return e
+    const changes = [...(prev.changes ?? [])]
+    const push = (field: 'date' | 'endDate' | 'title', from: string, to: string): void => {
+      if (from === to) return
+      changes.push({ at: now, field, from, to })
+    }
+    push('date', prev.date, e.date)
+    push('endDate', prev.endDate ?? '', e.endDate ?? '')
+    push('title', prev.title, e.title)
+    if (changes.length === 0) return e
+    return { ...e, changes: changes.slice(-5) }
+  })
+}
+
 export class CalendarStore {
   private dir: string
   private file: CalFile = { v: 1, events: [], hiddenAutoKeys: [], syncedAt: 0 }
@@ -453,7 +488,7 @@ export class CalendarStore {
       const keptAuto = this.file.events.filter(
         (e) => e.source === 'auto' && e.date >= cutoff && e.autoKey !== undefined && !autoKeySet.has(e.autoKey),
       )
-      this.file.events = [...manual, ...keptAuto, ...fresh]
+      this.file.events = [...manual, ...keptAuto, ...withChangeHistory(this.file.events, fresh, Date.now())]
       this.file.syncedAt = Date.now()
       await this.persist()
     })()

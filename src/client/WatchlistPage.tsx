@@ -6,6 +6,7 @@ import { dirClass, fmtAmt, fmtPct, fmtPrice, fmtSigned, pctArrow } from './forma
 import { Btn, EmptyHint, ErrorNote, Field, Modal, MoreMenu, Skeleton, SuggestInput } from './ui.tsx'
 import { MiniTrend } from './charts.tsx'
 import { useMiniTrends } from './mini.ts'
+import { SILENCE_MS, useWatchAlerts, type AlertRow } from './alerts.ts'
 import { SortBar } from './SortBar.tsx'
 import { WATCH_SORT_HINT, WATCH_SORT_KEYS, WATCH_SORT_LABEL, normalizeSortState, sortWatch, type WatchSortKey } from './sort.ts'
 
@@ -19,6 +20,8 @@ type ModalState =
 
 export function WatchlistPage(props: {
   quotes: Record<string, QuoteRow>
+  /** 共享行情引擎最近一次成功更新的时间戳：异动判定跟着它走（行情没变就不重判） */
+  quoteTs?: number | null
   /** 没有任何源给出价格的标的（大写键）；用于区分"暂无行情源"与"还没刷新" */
   missing?: Set<string>
   quotesReady: boolean
@@ -29,6 +32,7 @@ export function WatchlistPage(props: {
   onOpenDetail?: (secid: string, name: string) => void
 }): React.ReactElement {
   const { quotes, missing, quotesReady, prefs, setPrefs, onSymbols, onOpenDetail } = props
+  const [alertsOpen, setAlertsOpen] = useState(false)
   const openDetail = (secid: string, name: string): void => onOpenDetail?.(secid, name)
   const noSource = (secid: string): boolean => missing?.has(secid.toUpperCase()) === true
   // 兼容"客户端已刷新、宿主还没重启"：旧 /prefs 响应里没有 watchSort 字段，
@@ -45,6 +49,20 @@ export function WatchlistPage(props: {
     return [...ids]
   }, [watch])
   const minis = useMiniTrends(miniIds, true)
+  const alertIds = React.useMemo(() => {
+    const ids = new Set<string>()
+    if (watch !== null) for (const it of watch.items) ids.add(it.secid)
+    return [...ids]
+  }, [watch])
+  // P1-4：异动判定（宿主侧算，客户端只负责提醒策略与静默窗口）
+  const alerts = useWatchAlerts(alertIds, props.quoteTs ?? null, true)
+  const alertOf = React.useMemo(() => {
+    const m = new Map<string, AlertRow>()
+    for (const a of alerts.alerts) m.set(a.secid, a)
+    // 被静默压制的也算"正在异动"：行高亮不该因为"提醒过了"就消失
+    for (const a of alerts.suppressed) m.set(a.secid, a)
+    return m
+  }, [alerts.alerts, alerts.suppressed])
   const [inds, setInds] = useState<Record<string, { name: string; pct: number | null }>>({})
   /**
    * 行业/板块请求的状态（P1-3）。
@@ -137,11 +155,65 @@ export function WatchlistPage(props: {
         ariaLabel: '自选排序',
       }),
       React.createElement('span', { style: { flex: 1 } }),
+      // P1-4：异动徽标队列。数字是"需要提醒的条数"；被静默压制的单独标出，
+      // 否则"我明明看到它在异动，为什么徽标是 0"会变成新的困惑
+      alerts.alerts.length > 0 || alerts.suppressed.length > 0
+        ? React.createElement('span', {
+            className: 'tw-badge',
+            style: { cursor: 'pointer', color: alerts.alerts.length > 0 ? 'var(--tw-up)' : 'var(--tw-muted)', borderColor: alerts.alerts.length > 0 ? 'var(--tw-up)' : undefined },
+            title: '点击展开异动队列（同一条目 30 分钟内只提醒一次，静默不改变"它正在异动"这个事实）',
+            onClick: () => setAlertsOpen((v) => !v),
+          }, `异动 ${alerts.alerts.length}${alerts.suppressed.length > 0 ? `（静默 ${alerts.suppressed.length}）` : ''}${alertsOpen ? ' ▲' : ' ▼'}`)
+        : null,
       archived.length > 0
         ? React.createElement(Btn, { onClick: () => setShowArchived((v) => !v) }, `已归档 ${archived.length}`)
         : null,
       React.createElement(Btn, { primary: true, onClick: () => setModal({ kind: 'addGroup' }) }, '+ 新建分组'),
     ),
+    // 异动队列（P1-4）
+    alertsOpen
+      ? React.createElement('div', { className: 'tw-panel', style: { padding: '6px 8px' } },
+          React.createElement('div', { className: 'tw-sub-h' }, '异动队列',
+            React.createElement('span', { style: { flex: 1 } }),
+            React.createElement('span', { className: 'tw-muted', style: { fontSize: 10.5 } },
+              alerts.asOf === null ? '尚未判定' : `判定于 ${new Date(alerts.asOf).toLocaleTimeString('zh-CN', { hour12: false })} · 静默窗口 ${SILENCE_MS / 60000} 分钟`),
+          ),
+          alerts.alerts.length === 0 && alerts.suppressed.length === 0
+            ? React.createElement('div', { className: 'tw-hint', style: { margin: 0 } },
+                alerts.calm > 0 ? `${alerts.calm} 条已判定、均无异常。` : '本轮没有可判定的条目。')
+            : React.createElement('div', null,
+                ...alerts.alerts.map((a) =>
+                  React.createElement('div', { key: a.secid, className: 'tw-wrow', style: { borderTop: '1px solid var(--tw-border)', padding: '4px 2px', cursor: 'pointer' }, onClick: () => openDetail(a.secid, a.name) },
+                    React.createElement('div', { className: 'nm' },
+                      React.createElement('b', null, a.name),
+                      React.createElement('span', { className: 'tw-code' }, a.secid),
+                    ),
+                    React.createElement('div', { className: 'tw-hint', style: { margin: 0, flex: 1 } }, a.reasons.join(' · ')),
+                  ),
+                ),
+                ...alerts.suppressed.map((a) =>
+                  React.createElement('div', { key: `s-${a.secid}`, className: 'tw-wrow', style: { borderTop: '1px solid var(--tw-border)', padding: '4px 2px', opacity: 0.6 } },
+                    React.createElement('div', { className: 'nm' }, React.createElement('b', null, a.name), ' ', React.createElement('span', { className: 'tw-muted', style: { fontSize: 10.5 } }, '静默中')),
+                    React.createElement('div', { className: 'tw-hint', style: { margin: 0, flex: 1 } }, a.reasons.join(' · ')),
+                  ),
+                ),
+              ),
+          // 「没判定」必须与「判定过且正常」分开说：样本不足时说"正常"是错的信息
+          alerts.skipped.length > 0
+            ? React.createElement('div', { className: 'tw-hint', style: { marginTop: 4 } },
+                `${alerts.skipped.length} 条本次**未判定**（不等于正常）：` +
+                [...new Set(alerts.skipped.flatMap((s) => s.skip))].join('；'),
+              )
+            : null,
+          alerts.missing.length > 0
+            ? React.createElement('div', { className: 'tw-hint', style: { color: 'var(--tw-up)' } },
+                `${alerts.missing.length} 条取不到日线：${alerts.missing[0].note}`)
+            : null,
+          alerts.error !== null
+            ? React.createElement('div', { className: 'tw-hint', style: { color: 'var(--tw-up)' } }, `异动判定接口不可用：${alerts.error}`)
+            : null,
+        )
+      : null,
     // 行业/板块请求失败必须说出来（否则每一行都"看起来本来就没有行业"）
     indState.status === 'error'
       ? React.createElement('div', { className: 'tw-hint', style: { color: 'var(--tw-up)' } },
@@ -194,6 +266,7 @@ export function WatchlistPage(props: {
           ? null
           : items.map((it) => {
               const q = quotes[it.secid]
+              const alert = alertOf.get(it.secid)
               const cls = dirClass(q?.chg ?? null, prefs.redUp)
               const pct = q?.pct ?? null
               const mini = minis[it.secid]
@@ -208,9 +281,12 @@ export function WatchlistPage(props: {
                 {
                   key: it.id,
                   className: 'tw-wrow',
+                  // P1-4：异动行呼吸高亮（CSS 动画；静默只压制提醒，不改变"它在异动"）
+                  'data-alert': alert === undefined ? undefined : alert.kind,
+                  title: alert === undefined ? undefined : `异动：${alert.reasons.join(' · ')}`,
                   tabIndex: 0,
                   role: 'button',
-                  'aria-label': `${it.name} ${it.secid}，回车打开分时明细`,
+                  'aria-label': `${it.name} ${it.secid}${alert === undefined ? '' : '（异动）'}，回车打开分时明细`,
                   onKeyDown: (e: React.KeyboardEvent) => {
                     if (e.key === 'Enter' || e.key === ' ') {
                       e.preventDefault()
@@ -235,6 +311,13 @@ export function WatchlistPage(props: {
                   React.createElement('div', null,
                     React.createElement('b', null, it.name),
                     React.createElement('span', { className: 'tw-code' }, it.secid),
+                    alert !== undefined
+                      ? React.createElement('span', {
+                          className: 'tw-badge',
+                          style: { marginLeft: 6, color: 'var(--tw-up)', borderColor: 'var(--tw-up)' },
+                          title: alert.reasons.join(' · '),
+                        }, alert.kind === 'volume' ? '放量' : alert.kind === 'price' ? '异动' : '量价')
+                      : null,
                   ),
                   React.createElement('small', { style: { display: 'flex', gap: 6, alignItems: 'baseline', flexWrap: 'wrap' } },
                     q?.amount !== null && q?.amount !== undefined && q.amount > 0
