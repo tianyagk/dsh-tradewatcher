@@ -23,6 +23,8 @@
 | 12 | replay 吞掉异常流水（P1） | ✅ 做了 |
 | — | 顺手修（非本批编号） | 2 处：未定义的两个 CSS token、竞品站点"约 8 秒"未验证数字（见 §9） |
 
+> 批三（task-10）的图表 bug 修复另见 **§13**（本文件末尾）—— 那一批是装机后由用户反馈的独立缺陷，不属于本表 12 项。
+
 `npm run check`：typecheck 通过 · **156 条测试 × 2 时区全绿**（批一 126 → 批二 146 → D1 150 → D1b 154 → 收口 156）· 宿主自检 `ALL HOST CHECKS PASSED (live probes soft)` · 构建 75 项片段校验通过。
 
 ## 1. 大盘页 0 顶替缺失涨跌家数（P0-1）
@@ -372,3 +374,99 @@ build:     built lib/index.js + lib/client.js （v0.29.0，客户端片段校验
    成本未知期间卖出的部分记入 `realizedUnknownQty`、已实现给 `—` 并说明"其中 N 股在成本录入前卖出"；
    若补录的成本流水 ts 早于该笔卖出，重放即可正确算出（实测 150）。残留：`adjust` 仍不会**自动改写**历史流水的成本
    （这是刻意的：账本是追加式记录），要"算对"需要成本流水的时点确实在卖出之前。
+
+## 13. 批三（task-10，本批）：图表 bug —— 国际指数/外盘商品的分时、五日与「拿不到没原因」
+
+装机反馈：国际市场/大宗商品的日K与五日「加载失败」，分时被画成一条**假的平线**
+（y 轴 `0.000/2000/4000`、成交量印 `1.00`）。Lead 已取到实机回包，逐条对应到四个根因。
+
+### A（根因）缺失被编码成 0 —— 均价 / 成交量 / 成交额
+
+**现象**：`GET /tradewatcher/trend?secid=122.XAU` 的 462 个点里 `avg`、`vol`、`amount` **全是 0**
+（价格本身正常：390 个不同值、4274.05 ~ 4302.99）。0 被当成真实值进入 y 轴域 ⇒ 走势被压进 0~4303；
+成交量窗格的 `max` 兜底成 1 ⇒ 印出 `成交量 1.00`。
+
+**修法**：
+- `shared/model.ts` 新增纯函数 `normalizeTrendSeries(points)`，两类字段**判定方式不同**：
+  `avg` 逐点判（真实 VWAP 不可能 ≤ 0 ⇒ `!(v>0)` 就是"没有" ⇒ `null`）；
+  `vol`/`amount` 按**整条序列**判（只要有一个 > 0 就说明该源确实提供，其余点照原样保留 ——
+  安静的分钟真的是 0，逐点抹零会把"没成交"改成"没数据"）。
+- 宿主三处分时来源（东财单日、新浪/腾讯多日、腾讯当日兜底）都过一遍归一；
+  **并且在 `trendWithFallback` 的出口再归一遍**：LKG 是上一次运行落盘的文件，里面还存着修复前写进去的
+  `avg: 0`（实机确认 `trends-lkg.json` 里 `122.XAU|1` 就是这种），只在解析处归一的话断网/休市走 LKG 时
+  `curl` 仍会看到 0，等于没修。归一幂等。
+- 客户端新增纯模块 `client/trendView.ts`：`trendScale()` 只由**有效**价格/均价（+昨收）决定坐标域；
+  `isUsableAvg()` 连 `≤0` 一起挡掉（纵深防御：老宿主回 0 时图也不会被压扁）；
+  `hasVolumeSeries()` 判"整条序列有没有量"。`kline.tsx` 的 `TrendChart` 改用它们，
+  无量数据时窗格标题显示「该市场不提供成交量」而不是 `1.00`；均价线遇无效值断线。
+
+**验收（断言 + 实机）**：`client/trendView.test.ts` 4 条 + 用实机抓到的 122.XAU 点做 fixture 的 3 条
+（归一后不得再有 `avg=0`、域必须贴价格 4270~4310、`hasVolumeSeries` 为 false）。
+
+### B 没有多日分钟源时，五日必须如实
+
+**事实（按代码整理，不猜）**：多日分钟源只有**沪/深**（`fetchMultiDayTrend` → 新浪 5 分钟线 → 腾讯 5 分钟线；
+`sinaSymbol` 只映射沪/深）。当日分时：沪/深/港股有腾讯分钟线兜底（`tencentCode`），
+国际指数/外盘商品/期货**只有东财 trends2**（`em.ts` 里新增的"分钟源覆盖表"注释写全了这张表）。
+
+**修法**：`shared/model.ts` 新增 `trendDayCount(points)`（按标签前 10 位去重）；
+抽屉的「五日」档在 `≤1` 个交易日时**先显示一句**"五日不可用：该市场只有当日分时（下图仅显示当日）。
+多日分钟源只覆盖沪/深，港股/国际指数/外盘商品/期货都没有 —— 不是本页故障。"（可聚焦、`role="note"`），
+再照常画当日。**不再把当日静默当五日画。**
+
+### C `trend/kline` 为 null 时必须带原因（no-source / transient 分清）
+
+**现象**：`GET /trend?secid=100.HSI` → `{"trend":null}`；`GET /kline?secid=101.HG00Y` → `{"kline":null}`；
+客户端只剩一句「该周期暂无数据（停牌/新股/接口限流）」，把"该市场本来就没有分时源"与
+"东财这会儿被限流"混成同一句。
+
+**修法**：
+- `em.ts` 新增 `trendMissingReason(secid)` / `klineMissingReason(secid,klt)` / `detailMissingReason()`，
+  口径与 `quoteProvenance` 一致（`no-source` = 上游结构性没有、重试无用；`transient` = 上游此刻不可达、等恢复）。
+- **归因靠"本链路实际失败过"记账**（`noteUpstreamFailure('trend'|'kline'|'detail')` + 120s 窗口 +
+  该链路主机是否全部熔断）：`fetchTrend`/`requestKlineRaw` 把上游异常吞在函数内部，路由层只看"东财整体是否不可用"
+  会猜错方向 —— 实机出现过"明明上游挂了却判成结构性缺失/重试无用"的情形，已修正。
+  `requestKlineRaw` 还区分"有回包但没这个标的"（no-source）与"一个成功回包都没拿到"（transient）。
+- 路由：`/trend`、`/kline` 在 null 时回 `missing:[{what,why,note}]`；客户端 `ChartPayload` 新增
+  `kind:'unavailable'` 变体承载它，抽屉把 `why` 与 `note` 显示出来（`no-source` 明说"重试无用"）。
+- **`/detail` 保持原语义**：上游抛错仍是 `503 + retry-after`（熔断期快速失败、不要继续打上游 ——
+  既有测试锁着这条），只在"上游可达但没有该标的详情字段"（返回 null 而不抛）时补 `missing`；
+  客户端把「详情加载失败」补成"行情上游当前不可达（东财熔断/限流时如此）—— 稍等自动重试，
+  频繁点「重试」只会加重限流"。
+
+### D `/kline` 缓存键：老命名命中不被打断（并补断言）
+
+把缓存文件名抽成纯函数 `klineCacheFileNames(secid,klt,fqt)`：
+现行 `<secid>_<klt>_<fqt>.json`，**仅当 `fqt=0`** 才追加老命名 `<secid>_<klt>.json`
+（v0.22.0 及以前一律 `fqt=0`，所以那**就是**不复权缓存）。指数/期货被 `normalizeFq` 归一为 0，
+命中的正是这份老文件（实机 `100.HSI` 命中）。断言锁住：fqt=0 时两个名字都在、fqt=1/2 时**不得**含老名字
+（前复权吃不复权缓存会在图上造成无解释的跳空）。行为零变化。
+
+### 实机 before / after
+
+```
+# before（本机 127.0.0.1:3080，修复前）
+trend?secid=122.XAU → {"points":[{"t":1790200800000,"label":"2026-09-24 06:00","price":4290.72,"avg":0,"vol":0,"amount":0},…]}   # 462 点，avg/vol/amount 全 0
+trend?secid=100.HSI → {"trend":null}
+kline?secid=101.HG00Y&klt=101&fqt=0 → {"kline":null}
+detail?secid=100.HSI → HTTP 503 {"error":"fetch failed"}
+
+# after（同一份**实际落盘**的 LKG —— 里面还存着旧进程写的 avg:0 —— 走新代码出口）
+122.XAU → 462 点，avg 全为 null ? true ｜ vol/amount 全为 null ? true ｜ avg 里还有 0 吗 ? false
+          首点 {"t":1790200800000,"label":"2026-09-24 06:00","price":4290.72,"avg":null,"vol":null,"amount":null}
+          价格范围 4274.05 ~ 4302.99（不变）⇒ y 轴域回到价格域
+trend?secid=100.HSI → {"trend":null,"missing":[{"what":"分时","why":"transient","note":"东财行情主机当前不可达（熔断/限流），而该标的没有腾讯分钟线兜底…等东财恢复即可，不是"该标的没有分时""}]}
+kline?secid=101.HG00Y → {"kline":null,"missing":[{"what":"日K","why":"transient","note":"本地没有该周期的缓存，该标的也不在腾讯的 K 线覆盖内…等东财恢复即可…"}]}
+detail?secid=100.HSI → 503 + retry-after（语义未变）；客户端文案已给出"上游不可达、稍后自动重试"
+```
+
+（宿主改动需重启 `dsh web` 才在跑着的实例上生效 —— 上面的 after 是把源码装进**进程内**路由跑出来的，
+用的是同一份落盘数据，没有访问任何上游做探活。用户实例重启后即为该行为。）
+
+**新增断言 12 条**（162 → 174）：`client/trendView.test.ts` 7（含实机 fixture 的 A 项）、
+`host/chart-source.test.ts` 5（归因口径 + D 项缓存命名）。
+
+**没做/做不到**：国际指数、外盘商品、期货**没有**多日分钟源（腾讯/新浪都不覆盖）——
+这不是本批能修的，只能如实标注；五日档现在是"显示当日 + 明说不可用"。恒生的分时源同理：
+实测 `100.HSI` 在当前环境拿不到，原因归为 `transient`（东财不可达）并在说明里点明"没有腾讯兜底"，
+东财恢复后若仍无数据，会自动变成 `no-source`（同一套判定，不需要改代码）。

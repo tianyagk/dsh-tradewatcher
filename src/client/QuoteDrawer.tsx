@@ -5,13 +5,14 @@
  * reopening the same stock costs zero requests while the entry is fresh.
  */
 import React, { useEffect, useRef, useState } from 'react'
-import type { FqMode, StockDetail, TradeMark } from '../shared/model.ts'
+import type { FqMode, MissingField, StockDetail, TradeMark } from '../shared/model.ts'
 import { FQ_LABEL } from '../shared/model.ts'
 import { api } from './api.ts'
 import { dirClass, fmtAmt, fmtBig, fmtPct, fmtPrice, fmtSigned } from './format.ts'
 import { Btn, Skeleton} from './ui.tsx'
 import type { CandleMarker, SparkMarker } from './charts.tsx'
 import { KlineChart, TrendChart } from './kline.tsx'
+import { trendDayCount } from '../shared/model.ts'
 import {
   FQ_ORDER,
   KLINE_PLAN,
@@ -52,6 +53,8 @@ export function QuoteDrawer(props: { secid: string; name: string; redUp: boolean
   const [payload, setPayload] = useState<ChartPayload | null>(null)
   const [loading, setLoading] = useState(true)
   const [err, setErr] = useState<string | null>(null)
+  /** 头部详情为 null 时的原因（宿主回的 missing[0]）；不为 null 就是"拿得到"或用不着解释 */
+  const [infoNote, setInfoNote] = useState<MissingField | null>(null)
   const [detail, setDetail] = useState<StockDetail | null>(null)
   const [industry, setIndustry] = useState<{ name: string; pct: number | null } | null>(null)
   const [infoErr, setInfoErr] = useState(false)
@@ -63,7 +66,11 @@ export function QuoteDrawer(props: { secid: string; name: string; redUp: boolean
   useEffect(() => {
     let alive = true
     setInfoErr(false)
-    api.detail(secid).then((r) => { if (alive) setDetail(r.detail) }).catch(() => { if (alive) setInfoErr(true) })
+    api.detail(secid).then((r) => {
+      if (!alive) return
+      setDetail(r.detail)
+      setInfoNote(r.detail === null ? (r.missing?.[0] ?? null) : null)
+    }).catch(() => { if (alive) setInfoErr(true) })
     api.industry(secid).then((r) => { if (alive) setIndustry(r.industry) }).catch(() => undefined)
     api.trades(secid).then((r) => { if (alive) setTrades(r.trades) }).catch(() => { if (alive) setTrades([]) })
     return () => { alive = false }
@@ -125,9 +132,17 @@ export function QuoteDrawer(props: { secid: string; name: string; redUp: boolean
   const headerRows = (): React.ReactNode => {
     if (detail === null) {
       if (infoErr) {
+        // 宿主对上游熔断会回 503 + retry-after（快速失败，避免继续打上游）——
+        // 所以这里要说清"是上游这会儿不可达、稍后自动重试"，而不是留一句无法追问的"加载失败"
         return React.createElement('div', { className: 'tw-hint', style: { display: 'flex', alignItems: 'center', gap: 10 } },
-          '详情加载失败', React.createElement(Btn, { onClick: () => setRetry((x) => x + 1) }, '重试'),
+          '详情加载失败：行情上游当前不可达（东财熔断/限流时如此；行情详情只有东财一个上游）—— 稍等自动重试，频繁点「重试」只会加重限流',
+          React.createElement(Btn, { onClick: () => setRetry((x) => x + 1) }, '重试'),
         )
+      }
+      // 拿不到详情时把**原因**显示出来（此前只会停在骨架屏，用户以为一直在加载）
+      if (infoNote !== null) {
+        return React.createElement('div', { className: 'tw-hint', tabIndex: 0, role: 'note', 'aria-label': `详情不可用：${infoNote.note}` },
+          `${infoNote.what}不可用（${infoNote.why === 'no-source' ? '结构性缺失，重试无用' : '上游暂时不可用，等它恢复'}）：${infoNote.note}`)
       }
       return React.createElement(Skeleton, { lines: 3, height: 14, style: { maxWidth: 420 } })
     }
@@ -182,6 +197,27 @@ export function QuoteDrawer(props: { secid: string; name: string; redUp: boolean
       return React.createElement('div', { 'aria-busy': true, 'aria-label': '图表加载中' },
         React.createElement('div', { className: 'tw-skel', style: { height: chartHeight, width: '100%' } }))
     }
+    /**
+     * 宿主明确回"这份数据拿不到"（`trend/kline: null`）时会带 `missing[]` ——
+     * 必须把原因显示出来：`no-source`（该市场本来就没有这个源，等也没用）与
+     * `transient`（上游这会儿不可达，稍后自动重试）对用户的下一步动作完全不同。
+     */
+    if (payload.kind === 'unavailable') {
+      const m = payload.missing[0]
+      return React.createElement('div', { style: { display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8, padding: 56 } },
+        React.createElement('span', { className: 'tw-muted' }, '该周期暂无数据'),
+        m !== undefined
+          ? React.createElement('span', {
+              className: 'tw-hint',
+              style: { maxWidth: 520, textAlign: 'center', color: m.why === 'no-source' ? 'var(--tw-muted)' : undefined },
+              tabIndex: 0,
+              role: 'note',
+              'aria-label': `${m.what}不可用（${m.why === 'no-source' ? '结构性缺失' : '上游暂时不可用'}）：${m.note}`,
+            }, `${m.what}不可用（${m.why === 'no-source' ? '结构性缺失，重试无用' : '上游暂时不可用，等它恢复'}）：${m.note}`)
+          : null,
+        React.createElement(Btn, { onClick: () => setRetry((x) => x + 1) }, '重试'),
+      )
+    }
     if (payload.kind === 'trend') {
       const t = payload.trend
       const points = t.points.map((p) => ({ t: p.t, value: p.price, label: p.label.slice(11) }))
@@ -221,7 +257,7 @@ export function QuoteDrawer(props: { secid: string; name: string; redUp: boolean
         if (pts[i].label.slice(0, 10) !== pts[i - 1].label.slice(0, 10)) breaks.push(i)
       }
       void lastUp
-      return React.createElement(TrendChart, {
+      const chart = React.createElement(TrendChart, {
         points: pts,
         baseline: null,
         width,
@@ -231,8 +267,24 @@ export function QuoteDrawer(props: { secid: string; name: string; redUp: boolean
         volH: 52,
         macdH: 62,
       })
+      // 五日档靠"多日分钟点"拼图，而多日分钟源只有沪/深（见 em.ts 的分钟源覆盖表）——
+      // 覆盖不足时必须**明说**，不能把当日静默当五日画
+      if (trendDayCount(pts) <= 1) {
+        return React.createElement('div', null,
+          React.createElement('div', {
+            className: 'tw-hint',
+            tabIndex: 0,
+            role: 'note',
+            style: { padding: '4px 2px' },
+            'aria-label': '五日不可用：该市场只有当日分时，下图仅显示当日。多日分钟源只覆盖沪市/深市（新浪 5 分钟线 → 腾讯 5 分钟线），港股、国际指数、外盘商品与期货都没有',
+          }, '五日不可用：该市场只有当日分时（下图仅显示当日）。多日分钟源只覆盖沪/深，港股/国际指数/外盘商品/期货都没有 —— 不是本页故障。'),
+          chart,
+        )
+      }
+      return chart
     }
     if (!isKlineTab(tab)) return null
+    if (payload.kind !== 'kline') return null
     const plan = KLINE_PLAN[tab]
     const bars = payload.kline.days.map((d) => ({ date: d.date, open: d.open, close: d.close, high: d.high, low: d.low, vol: d.vol }))
     const klineMarkers: CandleMarker[] = trades
@@ -267,7 +319,7 @@ export function QuoteDrawer(props: { secid: string; name: string; redUp: boolean
           ? `昨收 ${fmtPrice(t.prePrice)} · ${first.label.slice(11)} ~ ${last.label.slice(11)}`
           : `共 ${dates.size} 个交易日 · ${first.label.slice(5, 10)} ~ ${last.label.slice(5, 10)}（末行为今日）`
       }
-    } else {
+    } else if (payload.kind === 'kline') {
       const k = payload.kline
       const first = k.days[0]
       const last = k.days[k.days.length - 1]

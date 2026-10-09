@@ -15,7 +15,7 @@
  *  4) 复权口径进缓存键 —— 前复权与不复权是两套价格序列，互相顶替会在图上
  *     造成无解释的跳空；分时/五日不含复权序列，仍共用同一个键。
  */
-import type { FqMode, KlineData, TrendData } from '../shared/model.ts'
+import type { FqMode, KlineData, MissingField, TrendData } from '../shared/model.ts'
 import { FQ_LABEL } from '../shared/model.ts'
 import { api } from './api.ts'
 
@@ -46,6 +46,20 @@ export const isKlineTab = (t: ChartTab): t is KlineTab =>
 export type ChartPayload =
   | { kind: 'trend'; tab: 'trend' | '5d'; trend: TrendData; fromCache?: boolean; fallback?: boolean }
   | { kind: 'kline'; tab: KlineTab; kline: KlineData; fromCache?: boolean; fallback?: boolean }
+  /**
+   * 宿主明确说"这份数据拿不到"，且**带了原因**（no-source / transient）。
+   *
+   * 以前这种情况一律返回 null，抽屉只剩一句「该周期暂无数据（停牌/新股/接口限流）」——
+   * 把"该市场本来就没有分时源"和"东财这会儿被限流"混成同一句，用户无从判断该不该等。
+   */
+  | {
+      kind: 'unavailable'
+      tab: ChartTab
+      missing: MissingField[]
+      /** 与上面两种 payload 同形：缓存返回时同样标 fromCache/fallback，界面不必特判 */
+      fromCache?: boolean
+      fallback?: boolean
+    }
 
 /** 盘中 TTL：分时 30s（宿主每 60s 才重算一次），五日 2min，K 线 10min */
 const TTL_MS: Record<ChartTab, number> = {
@@ -73,13 +87,13 @@ const TTL_FALLBACK_MS = 20_000
 /** 单次请求：把 secid+tab(+复权口径) 变成一个 payload（宿主负责兜底与落盘缓存） */
 export async function fetchChartPayload(secid: string, tab: ChartTab, fqt: FqMode = 1): Promise<ChartPayload | null> {
   if (tab === 'trend' || tab === '5d') {
-    const { trend } = await api.trend(secid, tab === 'trend' ? 1 : 5)
-    if (trend === null) return null
+    const { trend, missing } = await api.trend(secid, tab === 'trend' ? 1 : 5)
+    if (trend === null) return { kind: 'unavailable', tab, missing: missing ?? [] }
     return { kind: 'trend', tab, trend }
   }
   const plan = KLINE_PLAN[tab]
-  const { kline } = await api.kline(secid, plan.klt, plan.lmt, fqt)
-  if (kline === null) return null
+  const { kline, missing } = await api.kline(secid, plan.klt, plan.lmt, fqt)
+  if (kline === null) return { kind: 'unavailable', tab, missing: missing ?? [] }
   return { kind: 'kline', tab, kline }
 }
 
@@ -103,9 +117,10 @@ export interface ChartCache {
 
 type Loader = (secid: string, tab: ChartTab, fqt: FqMode) => Promise<ChartPayload | null>
 
-/** 宿主是否已经把这份数据冻结（休市定稿） */
+/** 宿主是否已经把这份数据冻结（休市定稿）；"拿不到"不是定稿，给短 TTL 让它有机会恢复 */
 function settled(value: ChartPayload | null): boolean {
   if (value === null) return false
+  if (value.kind === 'unavailable') return false
   return value.kind === 'trend' ? value.trend.cached === true : value.kline.cached === true
 }
 
@@ -206,6 +221,8 @@ export function fqNoteOf(kline: KlineData): string {
 /** 图表脚注里的缓存来源说明（诚实标注，不假装是刚取到的新数据） */
 export function cacheNoteOf(payload: ChartPayload | null): string {
   if (payload === null) return ''
+  // "拿不到"没有缓存口径可谈（原因由 missing 说明，别在这里重复）
+  if (payload.kind === 'unavailable') return ''
   const isSettled = settled(payload)
   if (payload.fallback === true) return ' · 显示上次成功数据（本次刷新失败）'
   if (isSettled) return ' · 休市定稿缓存（未回源）'

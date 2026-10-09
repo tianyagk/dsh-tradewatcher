@@ -7,6 +7,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { CandleMarker, SparkMarker } from './charts.tsx'
 import { fmtAxis, ma, macd, niceTicks } from './indicators.ts'
+import { hasVolumeSeries, isUsableAvg, trendScale } from './trendView.ts'
 
 const PAD_X = 8
 const PAD_TOP = 8
@@ -87,12 +88,14 @@ function volumePane(args: {
   innerW: number
 }): React.ReactNode[] {
   const { top, height, vols, up, xAt, barW, padX, innerW } = args
-  const max = Math.max(1, ...vols.map((v) => v ?? 0))
+  // 有无成交量是**整条序列**的属性：全无 ⇒ 该源不提供，明说而不是拿 `max` 兜底成 1 印个假数
+  const hasVol = hasVolumeSeries(vols)
+  const max = hasVol ? Math.max(...vols.map((v) => (v ?? 0))) : 1
   const baseY = top + height
   const out: React.ReactNode[] = [
     React.createElement('line', { key: 'vb', x1: padX, y1: baseY, x2: padX + innerW, y2: baseY, style: { stroke: 'var(--tw-border)' }, strokeWidth: 1 }),
     React.createElement('text', { key: 'vt', x: padX, y: top + 9, style: { fill: 'var(--tw-muted)', fontSize: 9 } },
-      `成交量 ${fmtAxis(max)}`),
+      hasVol ? `成交量 ${fmtAxis(max)}` : '该市场不提供成交量'),
   ]
   vols.forEach((v, i) => {
     if (v === null || v <= 0) return
@@ -192,13 +195,9 @@ export function TrendChart(props: {
     const xAt = (i: number): number => PAD_X + (eff[i] / span) * innerW
     const values = points.map((p) => p.value)
     const avgs = points.map((p) => p.avg)
-    const candidates = [...values, ...avgs.filter((v): v is number => v !== null)]
-    if (props.baseline !== null && props.baseline !== undefined) candidates.push(props.baseline)
-    let lo = Math.min(...candidates)
-    let hi = Math.max(...candidates)
-    const pad = (hi - lo) * 0.06 || 1
-    lo -= pad
-    hi += pad
+    // 域只由有效价格 + 有效均价（+昨收基准）决定：均价缺失时域就等于价格域
+    // （此前 `avg: 0` 被当成真实值，把国际指数/外盘商品压成 0~4303 的"平线"）
+    const { lo, hi } = trendScale(values, avgs, props.baseline)
     const yOf = (v: number): number => PAD_TOP + ((hi - v) / (hi - lo)) * mainH
     const m = macd(values)
     const up = values.map((v, i) => (i === 0 ? true : v >= values[i - 1]))
@@ -218,7 +217,8 @@ export function TrendChart(props: {
     let d = ''
     let open = false
     avgs.forEach((v, i) => {
-      if (v === null) { open = false; return }
+      // `null` 与 `≤0` 都不是有效 VWAP（老宿主可能回 0）：断线，不能画到 0 去
+      if (!isUsableAvg(v)) { open = false; return }
       d += `${open ? 'L' : 'M'}${xAt(i).toFixed(1)},${yOf(v).toFixed(1)} `
       open = true
     })

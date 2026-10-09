@@ -115,6 +115,44 @@ export interface TrendPoint {
   amount?: number | null
 }
 
+/**
+ * 分时序列的缺失值归一（图表 bug 的根因修复）：**缺失不许编码成 0**。
+ *
+ * 症状：国际指数/外盘商品的分时被画成一条"平线"，y 轴 0.000/2000/4000、成交量显示 `1.00`。
+ * 成因：东财 `trends2` 对这类标的一律回 `avg=0, vol=0, amount=0`，而 0 被当成真实值参与
+ * y 轴域计算（把 4274~4303 的走势压进 0~4303 的轴），成交量窗格又把 `max` 兜底成 1。
+ *
+ * 归一规则（两类字段判定方式不同，别混）：
+ *  - `avg`（当日均价/VWAP）**逐点**判：真实 VWAP 不可能 ≤ 0，所以 `!(v > 0)` 就是"没有" ⇒ `null`；
+ *  - `vol` / `amount` **按整条序列**判：只要序列里存在一个 > 0 的值，就说明该源确实提供这个字段，
+ *    其余点照原样保留（安静的分钟真的可能是 0）；整条都没有 ⇒ 该源不提供 ⇒ 全部 `null`。
+ *    逐点抹零会把"这一分钟真的没成交"误报成"没有数据"，同样是造假。
+ *
+ * 幂等：对已经归一过的序列再跑一次结果不变（客户端可防御性地再跑）。
+ */
+export function normalizeTrendSeries(points: readonly TrendPoint[]): TrendPoint[] {
+  const hasVol = points.some((p) => typeof p.vol === 'number' && p.vol > 0)
+  const hasAmount = points.some((p) => typeof p.amount === 'number' && p.amount > 0)
+  return points.map((p) => ({
+    ...p,
+    avg: typeof p.avg === 'number' && p.avg > 0 ? p.avg : null,
+    vol: hasVol ? (typeof p.vol === 'number' ? p.vol : null) : null,
+    amount: hasAmount ? (typeof p.amount === 'number' ? p.amount : null) : null,
+  }))
+}
+
+/**
+ * 分时点覆盖了几个交易日（按标签前 10 位 `YYYY-MM-DD` 去重）。
+ *
+ * 用途：`五日` 档靠"多日分钟点"拼图 —— 但很多市场（国际指数/外盘商品/恒生）的分钟源
+ * 只有当日，于是五日会静默退化成当日。界面据此**明说**"该市场只有当日分时"。
+ */
+export function trendDayCount(points: readonly { label: string }[]): number {
+  const days = new Set<string>()
+  for (const p of points) days.add(p.label.slice(0, 10))
+  return days.size
+}
+
 export interface TrendData {
   secid: string
   /** The feed's own previous-close/settlement baseline. */

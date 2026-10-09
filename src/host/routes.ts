@@ -501,7 +501,9 @@ export function makeTradeRoutes(
           if (!SECID_RE.test(secid)) throw new HttpError('secid 非法', 400)
           const ndays = Number(queryOf(req).get('ndays') ?? 1) || 1
           const trend = await em.fetchTrend(secid, ndays)
-          send(res, 200, { trend })
+          // C/B：拿不到就带原因 —— no-source（结构性没有）与 transient（东财这会儿不可达）
+          // 与 quoteProvenance 同一口径，客户端据此显示"为什么没有"，而不是一句光秃秃的失败
+          send(res, 200, { trend, ...(trend === null ? { missing: [em.trendMissingReason(secid)] } : {}) })
         } catch (error) {
           fail(res, error)
         }
@@ -525,7 +527,7 @@ export function makeTradeRoutes(
           const rawFqt = Number(queryOf(req).get('fqt') ?? 1)
           const fqt = rawFqt === 0 || rawFqt === 2 ? rawFqt : 1
           const kline = await em.fetchKline(secid, klt, lmt, fqt)
-          send(res, 200, { kline })
+          send(res, 200, { kline, ...(kline === null ? { missing: [em.klineMissingReason(secid, klt)] } : {}) })
         } catch (error) {
           fail(res, error)
         }
@@ -576,8 +578,10 @@ export function makeTradeRoutes(
         try {
           const secid = String(queryOf(req).get('secid') ?? '').trim()
           if (!SECID_RE.test(secid)) throw new HttpError('secid 非法', 400)
+          // 注意：上游**抛错**时保持原有语义（503 + retry-after，熔断期"快速失败不要重试"），
+          // 只有"上游可达但这个标的没有详情字段"（返回 null 而不抛）才补原因。
           const detail = await em.fetchStockDetail(secid)
-          send(res, 200, { detail })
+          send(res, 200, { detail, ...(detail === null ? { missing: [em.detailMissingReason()] } : {}) })
         } catch (error) {
           fail(res, error)
         }

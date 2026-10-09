@@ -24,7 +24,7 @@ import type {
   TrendData,
   TrendPoint,
 } from '../shared/model.ts'
-import { SECID_RE } from '../shared/model.ts'
+import { SECID_RE, normalizeTrendSeries } from '../shared/model.ts'
 import { mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { breakerFor, hostsAllowed, minutesToRecover } from './breaker.ts'
 import { fetchSinaEtfRanking, fetchSinaQuotes, sinaSymbol as sinaQuoteSymbol } from './sina.ts'
@@ -516,8 +516,39 @@ let lastEmBatchFailAt = 0
 /** 整批失败后的"算作现在不可用"窗口：超过它就不再拿旧失败说事 */
 const EM_FAIL_RECENT_MS = 120_000
 
-/** 东财此刻是否不可用：熔断中，或最近 2 分钟内整批失败过 */
-function emUnavailableNow(): boolean {
+/**
+ * 每条取数链路"最近一次尝试是否**因为上游失败**"（trend / kline / detail 各自记账）。
+ *
+ * 为什么需要它：`fetchTrend`/`requestKlineRaw` 把上游异常吞在内部、只返回 `null`，
+ * 于是"东财被限流"与"东财可达但没有这个标的"在路由层看起来一模一样 —— 只能靠猜。
+ * 由**实际发起请求的那一层**记账，`missing[].why` 才是事实而不是猜测。
+ * 窗口与 `missing` 的判定一致（超出窗口就不拿旧失败说事）。
+ */
+const upstreamFailAt: Record<'trend' | 'kline' | 'detail', number> = { trend: 0, kline: 0, detail: 0 }
+
+/** 记账入口（导出是为了可测：测试用它把状态机推到"上游刚失败过"） */
+export function noteUpstreamFailure(kind: 'trend' | 'kline' | 'detail'): void {
+  upstreamFailAt[kind] = Date.now()
+}
+
+/** 该链路最近是否因上游失败过（窗口外视为没有） */
+export function upstreamFailedRecently(kind: 'trend' | 'kline' | 'detail'): boolean {
+  const at = upstreamFailAt[kind]
+  return at > 0 && Date.now() - at <= EM_FAIL_RECENT_MS
+}
+
+/** 这组主机是否全部处于熔断冷却中（该链路"现在根本发不出请求"） */
+export function hostsUnavailable(hosts: readonly string[]): boolean {
+  return hosts.length > 0 && hosts.every((host) => !breakerFor(host).allow())
+}
+
+/**
+ * 东财此刻是否不可用：熔断中，或最近 2 分钟内整批失败过。
+ *
+ * 公开给路由层：`missing[].why` 的 `no-source` / `transient` 判定必须与 `quoteProvenance` 同口径 ——
+ * "东财这会儿挂了"⇒ transient（等恢复），"东财可达但没有这个标的"⇒ no-source（重试无用）。
+ */
+export function emUnavailableNow(): boolean {
   if (QUOTE_HOSTS.every((host) => !breakerFor(host).allow())) return true
   return lastEmBatchFailed && Date.now() - lastEmBatchFailAt <= EM_FAIL_RECENT_MS
 }
@@ -993,7 +1024,7 @@ export function lastGoodTrend(secid: string, ndays: number, maxAgeMs = Infinity)
 }
 
 /** 分时取数统一入口：内存新鲜缓存 → 休市定稿复用 → 上游（带重试）→ last-known-good */
-async function trendWithFallback(
+async function trendWithFallbackRaw(
   secid: string,
   ndays: number,
   loader: () => Promise<TrendData | null>,
@@ -1027,6 +1058,8 @@ async function trendWithFallback(
       cache.set(key, { exp: Date.now() + 20_000, value: lkg, grace: 0 })
       return lkg
     }
+    // 走到这里说明上游这次没给数据 —— 记账（"东财被限流"与"该标的没有分时"必须能分开）
+    noteUpstreamFailure('trend')
     // 没有 last-known-good 时用腾讯分钟线兜底（自选/持仓的缩略图与抽屉图）
     const viaTencent = await tencentTrend(secid).catch(() => null)
     if (viaTencent !== null) {
@@ -1038,6 +1071,23 @@ async function trendWithFallback(
     // 仍然拿不到：返回 null（路由回 200 + trend:null），客户端按"暂无分时"降级
     return null
   }
+}
+
+/**
+ * 分时序列的**出口**：无论数据来自上游、内存缓存还是落盘的 last-known-good，
+ * 一律过一遍 `normalizeTrendSeries`。
+ *
+ * 为什么必须在出口而不只在解析上游时：LKG 是**上一次运行落盘的文件**，里面可能还存着
+ * 修复前写进去的 `avg: 0`（旧进程的产物）—— 只在解析处归一的话，断网/休市走 LKG 时
+ * `curl /tradewatcher/trend` 仍会看到 0，等于没修。归一幂等，重复跑没有副作用。
+ */
+async function trendWithFallback(
+  secid: string,
+  ndays: number,
+  loader: () => Promise<TrendData | null>,
+): Promise<TrendData | null> {
+  const data = await trendWithFallbackRaw(secid, ndays, loader)
+  return data === null ? null : { ...data, points: normalizeTrendSeries(data.points) }
 }
 
 /** 腾讯分钟线 → 分时序列（价格 + 当日均价 VWAP），供东财不可用时兜底 */
@@ -1053,11 +1103,12 @@ async function tencentTrend(secid: string): Promise<TrendData | null> {
       return { t: p.ts, label, price: p.price as number, avg, vol: cumVol, amount: null }
     })
   if (trendPoints.length < 5) return null
+  const clean = normalizeTrendSeries(trendPoints)
   return {
     secid,
     prePrice: null,
-    points: trendPoints,
-    last: trendPoints[trendPoints.length - 1]?.price ?? null,
+    points: clean,
+    last: clean[clean.length - 1]?.price ?? null,
     staleAt: undefined,
   }
 }
@@ -1082,7 +1133,9 @@ async function fetchTrendSingleDay(secid: string): Promise<TrendData | null> {
     }
     if (points.length === 0) return null
     const pre = num(data.prePrice) ?? num(data.preClose) ?? null
-    return { secid, prePrice: pre, points, last: points[points.length - 1]?.price ?? null }
+    // 缺失不许编码成 0：东财对国际指数/外盘商品一律回 avg/vol/amount = 0（见 normalizeTrendSeries）
+    const clean = normalizeTrendSeries(points)
+    return { secid, prePrice: pre, points: clean, last: clean[clean.length - 1]?.price ?? null }
   })
 }
 
@@ -1179,11 +1232,28 @@ async function fetchMultiDayTrend(secid: string, days: number): Promise<TrendDat
     .filter((b) => keep.has(b.label.slice(0, 10)))
     .map((b) => ({ t: b.t, label: b.label, price: b.price, avg: null, vol: b.vol }))
   if (points.length === 0) return null
-  return { secid, prePrice: null, points, last: points[points.length - 1]?.price ?? null }
+  const clean = normalizeTrendSeries(points)
+  return { secid, prePrice: null, points: clean, last: clean[clean.length - 1]?.price ?? null }
 }
 
-/** 分时序列：ndays=1 用东财当日分时；ndays>1 优先 5 分钟 K 拼接（新浪/腾讯），
- *  不支持的市场退回首日数据（客户端会如实显示交易日数量）。 */
+/**
+ * 分钟源覆盖表（**按代码事实**整理，不猜 —— 每一项都能在下面各函数里找到出处）：
+ *
+ * | 市场 | 当日分时 | 五日（多日分钟） | 均价 / 成交量 / 成交额 |
+ * | --- | --- | --- | --- |
+ * | 沪(1)/深(0) 股票·ETF | 东财 trends2 → 腾讯分钟线兜底 → 本地 LKG | ✅ 新浪 5 分钟线 → 腾讯 5 分钟线 | 都有 |
+ * | 港股(116) | 东财 trends2 → 腾讯分钟线兜底 → 本地 LKG | ❌（`sinaSymbol` 不映射港股） | 东财通常都有 |
+ * | 美股(105/106/107) | 只有东财 trends2 → 本地 LKG | ❌ | 视东财回包 |
+ * | 国际指数(100) / 外盘商品(101·112) | 只有东财 trends2 → 本地 LKG | ❌ | **实测只有价格**：trends2 回 0（已归一为 null） |
+ * | 国内期货(113·114·115) / 板块(90) | 只有东财 trends2 → 本地 LKG | ❌ | 以实际回包为准 |
+ *
+ * 出处：当日分时 `fetchTrendSingleDay`（东财）+ `tencentTrend`（腾讯，仅 `tencentCode` 覆盖的沪/深/港股）；
+ * 五日 `fetchMultiDayTrend`（`sinaSymbol` 只映射沪/深，腾讯 5 分钟线同样只在沪/深）。
+ * 结论：**只有沪/深有"多日分钟"源**；其它市场的五日只能显示当日 —— 界面必须如实标注
+ * （`trendDayCount` + 抽屉里的提示），不许静默把当日当五日画。
+ *
+ * 分时序列：ndays=1 用东财当日分时；ndays>1 优先 5 分钟 K 拼接（新浪/腾讯），
+ * 不支持的市场退回首日数据（客户端会如实显示交易日数量）。 */
 export async function fetchTrend(secid: string, ndays = 1): Promise<TrendData | null> {
   if (!SECID_RE.test(secid)) return null
   const days = Math.min(5, Math.max(1, Math.round(ndays)))
@@ -1249,16 +1319,22 @@ interface KlineEntry {
 
 const klineMem = new Map<string, KlineEntry>()
 
-function klineFile(secid: string, klt: number, fqt: FqMode): string {
-  return join(dataHome(), 'klines', `${secid}_${klt}_${fqt}.json`)
+/**
+ * 该 (secid, klt, fqt) 依次尝试的缓存**文件名**（纯函数，便于断言）。
+ *
+ * - 现行命名：`<secid>_<klt>_<fqt>.json`（复权口径各自一份，混存会造成图上无解释的跳空）；
+ * - v0.22.0 及以前是 `<secid>_<klt>.json`，那时的取数一律 `fqt=0`，所以它**就是**不复权口径的缓存
+ *   —— 只在 `fqt=0` 时兜底复用，不迁移、不重命名（指数/期货被 `normalizeFq` 归一为 0，
+ *   因此它们命中的正是这份老文件）。
+ */
+export function klineCacheFileNames(secid: string, klt: number, fqt: FqMode): string[] {
+  const names = [`${secid}_${klt}_${fqt}.json`]
+  if (fqt === 0) names.push(`${secid}_${klt}.json`)
+  return names
 }
 
-/**
- * v0.22.0 及以前的缓存文件名是 `<secid>_<klt>.json`，那时的取数一律 `fqt=0`，
- * 所以它**就是**不复权口径的缓存 —— 只在 fqt=0 时兜底复用，不迁移、不重命名。
- */
-function legacyKlineFile(secid: string, klt: number): string {
-  return join(dataHome(), 'klines', `${secid}_${klt}.json`)
+function klineFile(secid: string, klt: number, fqt: FqMode): string {
+  return join(dataHome(), 'klines', `${secid}_${klt}_${fqt}.json`)
 }
 
 async function loadKlineCache(secid: string, klt: number, fqt: FqMode): Promise<KlineEntry> {
@@ -1266,7 +1342,7 @@ async function loadKlineCache(secid: string, klt: number, fqt: FqMode): Promise<
   const hit = klineMem.get(key)
   if (hit !== undefined && hit.loaded) return hit
   const entry: KlineEntry = hit ?? { bars: [], loaded: false, updatedAt: 0 }
-  const paths = fqt === 0 ? [klineFile(secid, klt, fqt), legacyKlineFile(secid, klt)] : [klineFile(secid, klt, fqt)]
+  const paths = klineCacheFileNames(secid, klt, fqt).map((name) => join(dataHome(), 'klines', name))
   for (const path of paths) {
     try {
       const raw = await readFile(path, 'utf8')
@@ -1427,6 +1503,8 @@ async function requestKlineFromTencent(secid: string, klt: number, lmt: number, 
 
 /** 单主机取 K 线；空数组视为失败（push2delay/push2 会返回 200 + 空）。优先腾讯。 */
 async function requestKlineRaw(secid: string, klt: number, lmt: number, fqt: FqMode): Promise<DayBar[] | null> {
+  /** 至少有一个源给了**成功回包**（哪怕没有这个标的的 K 线）—— 决定 missing 的 why 是 no-source 还是 transient */
+  let replied = false
   const fromTencent = await requestKlineFromTencent(secid, klt, lmt, fqt)
   if (fromTencent !== null) return fromTencent
   const fields2 = 'f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61'
@@ -1435,6 +1513,7 @@ async function requestKlineRaw(secid: string, klt: number, lmt: number, fqt: FqM
     for (const host of HISTORY_HOSTS) {
       try {
         const json = await fetchFromHost(host, path, 9000)
+        replied = true
         const data = (bodyOf(json)?.data ?? null) as { klines?: unknown } | null
         const raw = Array.isArray(data?.klines) ? data?.klines ?? [] : []
         const bars: DayBar[] = []
@@ -1461,6 +1540,8 @@ async function requestKlineRaw(secid: string, klt: number, lmt: number, fqt: FqM
     }
     if (attempt === 0) await new Promise((r) => setTimeout(r, 500))
   }
+  // 全程一个成功回包都没有 ⇒ 上游故障（transient）；有回包但没数据 ⇒ 结构性缺失（no-source）
+  if (!replied) noteUpstreamFailure('kline')
   return null
 }
 
@@ -1507,6 +1588,80 @@ export async function fetchKline(
     asOf: entry.updatedAt > 0 ? entry.updatedAt : Date.now(),
     barOpen,
     ...(settled ? { cached: true } : {}),
+  }
+}
+
+/**
+ * 「这份数据拿不到」的**原因**（A/B/C 项的 C）：与 `quoteProvenance` 同一口径，
+ * `no-source`（上游结构性没有，重试无用）/ `transient`（上游这会儿不可达，等恢复）。
+ *
+ * 之前路由只回 `{trend:null}` / `{kline:null}` / `{detail:null}`，客户端只能给一句
+ * 「详情加载失败 重试」—— 用户无从知道是"该市场本来就没有"还是"东财被限流了"。
+ */
+export interface UpstreamReason {
+  what: string
+  why: 'no-source' | 'transient'
+  note: string
+}
+
+/** 分时（trend）拿不到时的原因。腾讯分钟线只覆盖沪/深/港股（见 `tencentCode`），其余市场没有兜底。 */
+export function trendMissingReason(secid: string, opts: { emDown?: boolean } = {}): UpstreamReason {
+  const tencentMinute = tencentCode(secid) !== null
+  // 判定顺序：注入值（测试）→ 本链路刚失败过 → 本链路主机熔断中 → 东财整体不可用
+  const down = opts.emDown ?? (upstreamFailedRecently('trend') || hostsUnavailable(HISTORY_HOSTS) || emUnavailableNow())
+  if (down) {
+    return {
+      what: '分时',
+      why: 'transient',
+      note: tencentMinute
+        ? '东财行情主机当前不可达（熔断/限流），腾讯分钟线这次也没取到，本地又没有可用快照 —— 稍后会自动重试，等东财恢复即可'
+        : '东财行情主机当前不可达（熔断/限流），而该标的没有腾讯分钟线兜底（腾讯只覆盖沪/深/港股），本地也没有可用快照 —— 等东财恢复即可，不是"该标的没有分时"',
+    }
+  }
+  return {
+    what: '分时',
+    why: 'no-source',
+    note: '东财当前可达但没有返回该标的的分时数据，且本插件没有别的分钟源可兜底（腾讯只覆盖沪/深/港股）—— 属结构性缺分时，重试无用',
+  }
+}
+
+/**
+ * 日K/周K/月K 拿不到时的原因。
+ * K 线的上游：腾讯 fqkline（**只覆盖沪/深/港股/美股**，见 `tencentSymbol`）→ 东财 push2his → 本地增量缓存。
+ */
+export function klineMissingReason(secid: string, klt: number, opts: { emDown?: boolean } = {}): UpstreamReason {
+  const label = klt === 101 ? '日K' : klt === 102 ? '周K' : klt === 103 ? '月K' : '年K'
+  const tencentKline = tencentSymbol(secid) !== null
+  const down = opts.emDown ?? (upstreamFailedRecently('kline') || hostsUnavailable(HISTORY_HOSTS) || emUnavailableNow())
+  if (down) {
+    return {
+      what: label,
+      why: 'transient',
+      note: tencentKline
+        ? '本地没有该周期的缓存，东财行情主机当前不可达（熔断/限流），腾讯这次也没取到 —— 稍后自动重试，等东财恢复即可'
+        : '本地没有该周期的缓存，该标的也不在腾讯的 K 线覆盖内（腾讯只覆盖沪/深/港股/美股），而东财行情主机当前不可达（熔断/限流）—— 等东财恢复即可，不需要反复重试',
+    }
+  }
+  return {
+    what: label,
+    why: 'no-source',
+    note: '腾讯与东财当前都可达但没有返回该标的的 K 线，本地也没有缓存 —— 属结构性缺失，重试无用',
+  }
+}
+
+/** 个股详情（抽屉头部）拿不到时的原因。 */
+export function detailMissingReason(opts: { emDown?: boolean } = {}): UpstreamReason {
+  if (opts.emDown ?? (upstreamFailedRecently('detail') || hostsUnavailable(QUOTE_HOSTS) || emUnavailableNow())) {
+    return {
+      what: '详情',
+      why: 'transient',
+      note: '东财行情主机当前不可达（熔断/限流）—— 行情详情（开高低收/量额/市值）只有东财一个上游，稍后自动重试即可',
+    }
+  }
+  return {
+    what: '详情',
+    why: 'no-source',
+    note: '东财当前可达但没有返回该标的的详情字段（这类标的常见于指数/外盘商品）—— 重试无用',
   }
 }
 

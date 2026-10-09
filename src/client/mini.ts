@@ -10,6 +10,7 @@
  */
 import { useEffect, useMemo, useState } from 'react'
 import { api } from './api.ts'
+import { isUsableAvg } from './trendView.ts'
 
 export interface MiniData {
   values: number[]
@@ -44,7 +45,10 @@ async function fetchMini(secid: string): Promise<MiniData | null> {
         values,
         up: last >= first,
         // 均价线只在**整段都有值**时才画：中间缺点的折线会在图上造成假的跳变
-        avg: trend.points.every((p) => typeof p.avg === 'number') ? trend.points.map((p) => p.avg ?? null) : undefined,
+        // 均价线只在**每个点都有有效均价**时才画（`avg` 缺失/null 就整体不画，不画半条线）
+        avg: trend.points.length > 0 && trend.points.every((p) => isUsableAvg(p.avg))
+          ? trend.points.map((p) => p.avg ?? null)
+          : undefined,
         open: first,
         high: Math.max(...values),
         low: Math.min(...values),

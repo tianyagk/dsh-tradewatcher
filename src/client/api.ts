@@ -4,6 +4,7 @@ import type {
   CorporateAction,
   FqMode,
   KlineData,
+  MissingField,
   MutatePortBody,
   MutateWatchBody,
   PortPrefs,
@@ -159,11 +160,12 @@ export const api = {
     }
     return request(`/tradewatcher/quotes?ids=${encodeURIComponent(ids)}`)
   },
-  trend(secid: string, ndays = 1): Promise<{ trend: TrendData | null }> {
+  /** `missing` 只在 `trend === null` 时给出：为什么没有（no-source / transient，见共享的 MissingField） */
+  trend(secid: string, ndays = 1): Promise<{ trend: TrendData | null; missing?: MissingField[] }> {
     return request(`/tradewatcher/trend?secid=${encodeURIComponent(secid)}&ndays=${ndays}`)
   },
   /** fqt：0=不复权 1=前复权（默认）2=后复权；实际生效口径见回包 kline.fqt */
-  kline(secid: string, klt: 101 | 102 | 103 | 104 = 101, lmt = 120, fqt: FqMode = 1): Promise<{ kline: KlineData | null }> {
+  kline(secid: string, klt: 101 | 102 | 103 | 104 = 101, lmt = 120, fqt: FqMode = 1): Promise<{ kline: KlineData | null; missing?: MissingField[] }> {
     return request(`/tradewatcher/kline?secid=${encodeURIComponent(secid)}&klt=${klt}&lmt=${lmt}&fqt=${fqt}`)
   },
   calendar(from: string, to: string, force = false): Promise<{
@@ -202,7 +204,7 @@ export const api = {
     if (ids === '') return Promise.resolve({ map: {} })
     return request(`/tradewatcher/industries?secids=${encodeURIComponent(ids)}`)
   },
-  detail(secid: string): Promise<{ detail: StockDetail | null }> {
+  detail(secid: string): Promise<{ detail: StockDetail | null; missing?: MissingField[] }> {
     return request(`/tradewatcher/detail?secid=${encodeURIComponent(secid)}`)
   },
   suggest(q: string): Promise<{ hits: SuggestItem[] }> {
