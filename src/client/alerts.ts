@@ -1,9 +1,4 @@
 /**
- * 自选异动的客户端侧：取数 + 静默记录 + 轮询（P1-4）。
- *
- * 判定策略（谁该提醒、谁被压制）在 `alertRules.ts`（纯函数、可单测）。
- * 这里只做三件事：按行情刷新拉一次判定、维护 localStorage 里的静默记录、把结果交给界面。
- * 静默状态记在 localStorage：刷新页面后不该把刚看过的异动再"提醒"一遍。
  */
 import { useEffect, useRef, useState } from 'react'
 import { api } from './api.ts'

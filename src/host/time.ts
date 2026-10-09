@@ -1,18 +1,6 @@
 /**
- * 统一时区工具（**唯一口径：Asia/Shanghai**）。
- *
  * 为什么必须钉死：本插件判断"是否在交易时段""当前处于哪个阶段""今天是哪一天"
- * 全都基于墙上时钟。此前 rescue.ts / calendar.ts 用宿主本地时间
- * （`new Date(ts).getHours()` 等），而 portfolio.ts 用 `Intl.DateTimeFormat('Asia/Shanghai')`
- * —— 同一插件内两套口径并存。
- *
- * 实测后果（TZ=UTC，Docker / 云主机 / CI 的默认值）：
- *   北京时间 10:00（真实盘中）→ inTradingWindow=false、phase='pre'
- *   → **护盘采样一次都不触发**；反而在北京时间 17:25–19:35 / 20:55–23:05 采样，
- *     且时点系数、阶段语义、脉冲锚点全部错位（晚间盘面按"早盘"给 0.4 折）。
- *
  * 因此所有时间标签一律走本模块，且回归断言必须在 TZ=UTC 与 TZ=Asia/Shanghai
- * 两个环境下都成立（见 src/host/time.test.ts 与 npm test 的双 TZ 跑法）。
  */
 const SH_TZ = 'Asia/Shanghai'
 

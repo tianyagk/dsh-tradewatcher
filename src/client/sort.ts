@@ -1,12 +1,4 @@
 /**
- * 列表排序（自选 / 持仓）。纯函数，无 React 依赖，便于直接测。
- *
- * 两条容易踩的坑，都在这里一次性约定：
- *  1. **空值恒排最后**：无行情、无市值、无盈亏的条目不该因为"升序"跑到最前 ——
- *     让 `null` 混进数值比较是这类功能最常见的错误（`null` 参与减法会变成 0，
- *     出现在"涨幅最小"的位置）。因此无论升序降序，无效值一律沉底。
- *  2. **稳定且可预期**：同值条目保持原顺序（默认顺序 = 用户自己添加的顺序），
- *     排序不会在每次轮询后重新洗牌；非有限值（NaN/Infinity）按无效值处理。
  */
 
 import { PORT_SORT_KEYS, WATCH_SORT_KEYS, type PortSortKey, type SortState, type WatchSortKey } from '../shared/model.ts'

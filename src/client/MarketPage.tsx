@@ -4,7 +4,7 @@
 import React, { useCallback, useEffect, useState } from 'react'
 import type { BoardRow, QuoteRow, StockDetail, TrendData } from '../shared/model.ts'
 import { api } from './api.ts'
-import { UPDOWN_MISSING_NOTE, breadthCells, upDownPair } from './breadthView.ts'
+import { UPDOWN_MISSING_NOTE, breadthCells, pickBreadthCounts, upDownPair } from './breadthView.ts'
 import { dirClass, fmtAmt, fmtBig, fmtPct, fmtPrice, fmtSigned } from './format.ts'
 import { CN_PHASE_LABEL, cnSessionState } from './marketTime.ts'
 import { useNow } from './useNow.ts'
@@ -14,6 +14,13 @@ import { RescuePanel } from './RescuePanel.tsx'
 import type { PortPrefs, QuoteSource } from '../shared/model.ts'
 
 type Scope = 'industry' | 'concept' | 'etf'
+
+/** 时刻一律 `HH:mm:ss`（用词表：页面级"数据时刻"；禁用 toLocaleString 的默认输出） */
+function hhmmssOf(ts: number): string {
+  const d = new Date(ts)
+  const p = (n: number): string => String(n).padStart(2, '0')
+  return `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`
+}
 type Sort = 'pct' | 'money' | 'amount'
 
 const SCOPE_LABEL: Record<Scope, string> = { industry: '行业板块', concept: '概念板块', etf: 'ETF排行' }
@@ -90,7 +97,7 @@ export function MarketPage(props: {
   }, [scope, sort, loadBoard])
 
   // Breadth & turnover from the two composite indices (full-market counters).
-  // P1-8：涨跌家数历史分位。宿主持每日快照（收盘后写），这里只读。
+ // 涨跌家数历史分位。宿主持每日快照（收盘后写），这里只读。
   const [breadth, setBreadth] = useState<Awaited<ReturnType<typeof api.breadth>> | null>(null)
   const [breadthErr, setBreadthErr] = useState<string | null>(null)
   useEffect(() => {
@@ -116,7 +123,24 @@ export function MarketPage(props: {
   const sz = quotes['0.399001']
   // 涨跌家数与成交额：任一分量缺失即整格 `—` + 原因（**不用 0 顶替**，见 breadthView.ts）
   const cells = breadthCells(sh, sz)
-  const breadthOk = cells.countsOk
+  /**
+   * 家数取哪一份：**指数行情优先，拿不到才用自统计**。
+   *
+   * 指数行情走备用源时 `f104/f105/f106` 就没有了，此时必须用 `/tradewatcher/breadth` 的
+   * `current`（本插件自行统计）顶上 —— 否则会出现"三格 `—` ＋ 一行说家数是自己统计的 ＋ 一个占比"
+   * 这种同屏自相矛盾的读数。
+   */
+  const picked = pickBreadthCounts(cells, breadth?.current ?? null)
+  const selfCount = picked.from === 'self' ? breadth?.current ?? null : null
+  const { up, down, even } = picked
+  const breadthOk = picked.from !== 'none'
+  // 自统计时三格要带自己的时刻与口径（`em-index` = 上游直接给的，不标）
+  const countsTitle = selfCount === null || selfCount.source === 'em-index'
+    ? undefined
+    : `${selfCount.caliber ?? '本插件自行统计的沪深A股家数'}；数据时刻 ${
+        selfCount.asOf === null ? '未知' : hhmmssOf(selfCount.asOf)
+      }（不是行情条那一刻）`
+  const countsReason = breadth?.missing[0]?.note ?? cells.reason ?? null
 
   const cnIndices: Array<{ secid: string; name: string }> = [
     { secid: '1.000001', name: '上证指数' },
@@ -144,8 +168,8 @@ export function MarketPage(props: {
       .finally(() => setDetailLoading(false))
   }
 
-  const statCell = (label: string, v: React.ReactNode, cls?: string): React.ReactElement =>
-    React.createElement('div', { className: 'tw-stat' },
+  const statCell = (label: string, v: React.ReactNode, cls?: string, title?: string): React.ReactElement =>
+    React.createElement('div', { className: 'tw-stat', ...(title === undefined ? {} : { title }) },
       React.createElement('div', { className: 'k' }, label),
       React.createElement('div', { className: `v ${cls ?? ''}` }, v),
     )
@@ -159,55 +183,66 @@ export function MarketPage(props: {
         React.createElement('span', { className: 'tw-muted' }, '沪深两市'),
       ),
       React.createElement('div', { className: 'tw-statrow' },
-        statCell('上涨', cells.countsOk ? String(cells.up) : '—', breadthOk ? (redUp ? 'tw-up' : 'tw-down') : ''),
-        statCell('下跌', cells.countsOk ? String(cells.down) : '—', breadthOk ? (redUp ? 'tw-down' : 'tw-up') : ''),
-        statCell('平盘', cells.countsOk ? String(cells.even) : '—'),
+        statCell('上涨', up === null ? '—' : String(up), breadthOk ? (redUp ? 'tw-up' : 'tw-down') : '', countsTitle),
+        statCell('下跌', down === null ? '—' : String(down), breadthOk ? (redUp ? 'tw-down' : 'tw-up') : '', countsTitle),
+        statCell('平盘', even === null ? '—' : String(even), undefined, countsTitle),
         React.createElement('div', { className: 'tw-stat-sep' }),
         statCell('两市成交额', cells.amountOk ? `${fmtAmt(cells.amount)}` : '—'),
         statCell('上证', sh?.price !== undefined && sh?.price !== null ? fmtPrice(sh.price) : '—', dirClass(sh?.chg ?? null, redUp)),
         statCell('深成', sz?.price !== undefined && sz?.price !== null ? fmtPrice(sz.price) : '—', dirClass(sz?.chg ?? null, redUp)),
       ),
       // 缺失必须能被键盘/触屏读到（不能只挂在 title 上：那是鼠标专属）
-      cells.countsOk
+      breadthOk
         ? null
         : React.createElement('div', {
             className: 'tw-hint',
             style: { color: 'var(--tw-up)' },
             tabIndex: 0,
             role: 'note',
-            'aria-label': `涨跌家数本次未取到：${cells.reason}`,
-          }, `涨跌家数本次未取到：${cells.reason}`),
+            'aria-label': `涨跌家数本次未取到：${countsReason ?? '原因未给出'}`,
+          }, `涨跌家数本次未取到：${countsReason ?? '原因未给出'}`),
       // P1-8：分位必须带口径与样本量一起读；样本不足或取不到时不显示分位（而不是显示 0）
       breadthErr !== null
         ? React.createElement('div', { className: 'tw-hint', style: { color: 'var(--tw-up)' } }, `涨跌家数分位本次未取到：${breadthErr}（稍后随行情轮询自动重试）`)
         : breadth !== null
           ? React.createElement('div', { className: 'tw-hint', style: { display: 'flex', gap: 12, flexWrap: 'wrap' } },
               breadth.current === null
-                ? React.createElement('span', { style: { color: 'var(--tw-up)' } }, breadth.missing[0]?.note ?? '涨跌家数不可用')
+                ? React.createElement('span', { style: { color: 'var(--tw-up)' } }, breadth.missing[0]?.note ?? '涨跌家数未取到')
                 : React.createElement(React.Fragment, null,
                     React.createElement('span', null,
                       `上涨占比 ${breadth.percentile.value === null ? '—' : (breadth.percentile.value * 100).toFixed(1) + '%'}`),
                     breadth.percentile.pct === null
-                      ? React.createElement('span', { className: 'tw-muted' },
+                      ? React.createElement('span', {
+                          className: 'tw-muted',
+                          tabIndex: 0,
+                          role: 'note',
+                          title: breadth.percentile.sampleSmall
+                            ? `已存 ${breadth.percentile.n} 个交易日，需 ≥ ${breadth.minDays} 天；样本太少的"分位"是噪音，故不显示`
+                            : '分位不可算（原因见数据来源）',
+                        },
                           breadth.percentile.sampleSmall
-                            ? `分位样本不足（已存 ${breadth.percentile.n} 个交易日，需 ≥ ${breadth.minDays}）—— 样本太少的"分位"是噪音，故不显示`
+                            ? `样本不足 ${breadth.percentile.n}/${breadth.minDays} 天`
                             : '分位不可算')
                       : React.createElement('span', {
                           title: `${breadth.percentile.metric}；分位定义：历史中 ≤ 当前值的比例（0 低 / 100 高）`,
                         }, `近 ${breadth.percentile.n} 日分位 ${breadth.percentile.pct}%`),
-                    // 家数可能是**本插件自己统计**出来的（源 A 拿不到时）：来源与统计时刻必须与上游给的能区分开
+                    // 家数可能是**本插件自己统计**出来的（源 A 拿不到时）：来源与时刻必须与上游给的能区分开。
+                    // 正文压到 ≤12 字，口径全文进 title/aria（读屏无法悬停 ⇒ aria 必须自包含）
                     breadth.current.source === 'em-index'
                       ? null
                       : React.createElement('span', {
                           tabIndex: 0,
                           role: 'note',
                           title: breadth.current.caliber ?? '本插件自行统计',
-                          'aria-label': `涨跌家数由本插件自行统计。${breadth.current.caliber ?? ''}统计于 ${breadth.current.asOf === null ? '时刻未知' : new Date(breadth.current.asOf).toLocaleTimeString('zh-CN', { hour12: false })}`,
-                        }, `· 家数由本插件自行统计（统计于 ${breadth.current.asOf === null ? '—' : new Date(breadth.current.asOf).toLocaleTimeString('zh-CN', { hour12: false })}）`),
+                          'aria-label': `涨跌家数由本插件自行统计。${breadth.current.caliber ?? ''}数据时刻 ${
+                            breadth.current.asOf === null ? '未知' : hhmmssOf(breadth.current.asOf)
+                          }`,
+                        }, `· 自统计 ${breadth.current.asOf === null ? '—' : hhmmssOf(breadth.current.asOf)}`),
                   ),
-              breadth.storedDays > 0
-                ? React.createElement('span', { className: 'tw-muted' }, `· 每日快照已存 ${breadth.storedDays} 天（收盘后记录；窗口 ${breadth.window} 日）`)
-                : React.createElement('span', { className: 'tw-muted' }, '· 尚无历史快照（每个交易日收盘后记一条，累积到 5 天后开始显示分位）'),
+              React.createElement('span', {
+                className: 'tw-muted',
+                title: `每日快照在收盘后记录一条；窗口 ${breadth.window} 日。累积到 ${breadth.minDays} 天后开始显示分位`,
+              }, breadth.storedDays > 0 ? `· 快照 ${breadth.storedDays}/${breadth.window} 天` : `· 快照累积中（${breadth.minDays} 天后出分位）`),
             )
           : null,
       React.createElement('div', { className: 'tw-tablewrap' },
@@ -281,7 +316,7 @@ export function MarketPage(props: {
               React.createElement('button', { 'data-on': sort === 'pct', onClick: () => setSort('pct') }, '涨跌幅'),
               React.createElement('button', { 'data-on': sort === 'money', onClick: () => setSort('money') }, '主力资金'),
             ),
-        // P1-7：主力资金排行下的两种口径（金额 / 占比）
+ // 主力资金排行下的两种口径（金额 / 占比）
         sort === 'money' && scope !== 'etf'
           ? React.createElement('div', { className: 'tw-seg', title: '主力净额为本插件直接取用的上游字段；占比＝净额 ÷ 成交额（本页内重排，见下方说明）' },
               React.createElement('button', { 'data-on': moneySort === 'money', onClick: () => setMoneySort('money') }, '金额'),
@@ -292,7 +327,7 @@ export function MarketPage(props: {
       React.createElement(ErrorNote, { error: boardError }),
       // 数据来源与新鲜度：东财行情 CDN 被限流时这里会显示备用源或上次成功结果，
       // 且明确标注"主力净流入不可用"（该列仅东财提供）
-      // P1-7：口径与时刻常显（不再只在降级时才出现）。
+ // 口径与时刻常显（不再只在降级时才出现）。
       // 15:00 之后上游不再更新板块资金流 → 标「定稿」；这是"数据不会再变"，不是"降级"。
       React.createElement('div', {
         className: 'tw-hint',

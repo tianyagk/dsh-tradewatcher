@@ -1,11 +1,4 @@
 /**
- * 图表客户端缓存的回归测试。
- *
- * 存在的理由：用户反馈"每次都拉取全量历史数据"。宿主侧已有落盘缓存与增量拉取，
- * 但客户端此前每开一次抽屉/每划过一次卡片就发一次 HTTP。这组断言把三件事锁住：
- *   1) 命中缓存 = 零请求（这是"优化拉取逻辑"的可验证定义）；
- *   2) 同键并发只发一个请求（悬浮卡与抽屉同时要同一份数据）；
- *   3) 失败不把图变空 —— 保留上次成功值并标 fallback，让界面如实说明。
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
@@ -184,10 +177,11 @@ test('脚注标注诚实：缓存 / 定稿 / 失败回退三种措辞互不混�
     cacheNoteOf({ kind: 'kline', tab: 'day', kline: klineOf(true) }),
     ' · 休市定稿缓存（未回源）',
   )
-  assert.equal(
+  // E1：统一成「上次成功数据（MM-DD HH:mm）」，日期必须来自数据自己（K 线取最后一根）
+  assert.match(
     cacheNoteOf({ kind: 'kline', tab: 'day', kline: klineOf(true), fromCache: true, fallback: true }),
-    ' · 显示上次成功数据（本次刷新失败）',
-    '刷新失败时必须优先说明这点，不能只写"本地缓存"',
+    /^ · 上次成功数据（10-09）$/,
+    '刷新失败时必须说明这是上次成功的数据、并带上它自己的时间（不能只写"本地缓存"）',
   )
 })
 

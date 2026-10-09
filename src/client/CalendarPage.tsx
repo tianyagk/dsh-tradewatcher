@@ -12,6 +12,8 @@ import {
 } from '../shared/model.ts'
 import { api } from './api.ts'
 import { Btn, ErrorNote, Field, Modal, Skeleton } from './ui.tsx'
+import { MISSING_TIER_LABEL } from '../shared/model'
+import { fmtStamp } from './format.ts'
 
 const WEEKDAYS = ['一', '二', '三', '四', '五', '六', '日']
 
@@ -188,7 +190,7 @@ export function CalendarPage(_props: { prefs: PortPrefs }): React.ReactElement {
         React.createElement('span', { style: { flex: 1 } }),
         syncedAt !== null
           ? React.createElement('span', { className: 'tw-muted', style: { fontSize: 10.5 } },
-              `同步于 ${new Date(syncedAt).toLocaleString('zh-CN', { hour12: false })}${syncInfo?.stale === true ? '（本次未全部成功）' : ''}`)
+              `同步于 ${fmtStamp(syncedAt)}${syncInfo?.stale === true ? '（本次未全部成功）' : ''}`)
           : React.createElement('span', {
               className: 'tw-muted',
               style: { fontSize: 10.5 },
@@ -207,12 +209,12 @@ export function CalendarPage(_props: { prefs: PortPrefs }): React.ReactElement {
             style: { color: 'var(--tw-up)', padding: '2px 10px 0' },
             tabIndex: 0,
             role: 'note',
-            'aria-label': `日历同步未全部成功：${syncInfo.missing.map((m) => `${m.what}（${m.why === 'no-source' ? '上游无此数据' : '本次失败'}）`).join('；') || '原因未给出'}`,
+            'aria-label': `日历同步未全部成功：${syncInfo.missing.map((m) => `${m.what}（${MISSING_TIER_LABEL[m.why === 'no-source' ? 'no-source' : 'transient']}）`).join('；') || '原因未给出'}。手动事件不受影响。`,
+            title: '手动事件不受影响；自动事件每次同步都会重试（下方显示的是最近一次成功同步的结果）',
           },
-            `日历同步未全部成功：${syncInfo.missing.map((m) => `${m.what}（${m.why === 'no-source' ? '上游无此数据' : '本次失败'}）`).join('；') || '原因未给出'}。` +
-            (syncedAt === null
-              ? '本地还没有成功同步过的事件，稍后自动重试；手动事件不受影响。'
-              : `下方自动事件仍是上次成功同步（${new Date(syncedAt).toLocaleString('zh-CN', { hour12: false })}）的结果，手动事件不受影响，稍后自动重试。`))
+            syncedAt === null
+              ? `同步未全部成功 · 本地还没有成功同步过的事件（稍后自动重试）`
+              : `同步未全部成功 · 下方为 ${fmtStamp(syncedAt)} 的结果`)
         : null,
       // 过滤与图例
       React.createElement('div', { className: 'tw-cal-bar' },
@@ -315,7 +317,7 @@ function DayModal(props: {
   mutate: (body: Record<string, unknown>) => void
 }): React.ReactElement {
   const weekday = WEEKDAYS[(new Date(`${props.date}T00:00:00`).getDay() + 6) % 7]
-  // P1-10：默认按**勾稽**排（持仓 → 自选 → 其他），组内按重要度与时刻。
+ // 默认按**勾稽**排（持仓 → 自选 → 其他），组内按重要度与时刻。
   // 也可切成纯重要度排序 —— 有时只想看"今天最重要的事是什么"。
   const [byLink, setByLink] = React.useState(true)
   const rank = (e: CalEvent): number => (e.link?.held === true ? 0 : e.link?.watched === true ? 1 : 2)
@@ -353,7 +355,7 @@ function DayModal(props: {
               React.createElement('span', { className: 'tw-badge' }, `${CAL_CATEGORY_LABEL[e.category]} · ${IMP_LABEL[e.importance]}`),
               e.endDate !== undefined ? React.createElement('span', { className: 'tw-badge' }, `至 ${e.endDate}`) : null,
               React.createElement('span', { className: 'tw-badge' }, e.source === 'auto' ? '自动同步' : '手动'),
-              // P1-10 勾稽：与我的持仓/自选有关的事件才值得先看
+ // 勾稽：与我的持仓/自选有关的事件才值得先看
               linkLabel(e) !== null
                 ? React.createElement('span', {
                     className: 'tw-badge',
@@ -366,7 +368,7 @@ function DayModal(props: {
                     className: 'tw-badge',
                     style: { color: '#e8a33d', borderColor: '#e8a33d' },
                     title: e.changes
-                      .map((c) => `${new Date(c.at).toLocaleString('zh-CN', { hour12: false })}：${c.field} ${c.from === '' ? '（无）' : c.from} → ${c.to}`)
+                      .map((c) => `${fmtStamp(c.at)}：${c.field} ${c.from === '' ? '（无）' : c.from} → ${c.to}`)
                       .join('\n'),
                   }, `可能变更 ×${e.changes.length}`)
                 : null,

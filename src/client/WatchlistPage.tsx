@@ -12,7 +12,7 @@ import { SortBar } from './SortBar.tsx'
 import { SortHeader } from './SortHeader.tsx'
 import { WATCH_COLUMNS, WATCH_SORT_HINT, WATCH_SORT_KEYS, WATCH_SORT_LABEL, normalizeSortState, sortWatch, type WatchSortKey } from './sort.ts'
 import { useYtd } from './useYtd.ts'
-import { useWideLayout } from './useWide.ts'
+import { useSortEntry, useWideLayout } from './useWide.ts'
 import { ytdMissingSummary, ytdText, ytdTooltip } from './ytdView.ts'
 
 type ModalState =
@@ -59,7 +59,7 @@ export function WatchlistPage(props: {
     if (watch !== null) for (const it of watch.items) ids.add(it.secid)
     return [...ids]
   }, [watch])
-  // P1-4：异动判定（宿主侧算，客户端只负责提醒策略与静默窗口）
+ // 异动判定（宿主侧算，客户端只负责提醒策略与静默窗口）
   const alerts = useWatchAlerts(alertIds, props.quoteTs ?? null, true)
   const alertOf = React.useMemo(() => {
     const m = new Map<string, AlertRow>()
@@ -124,6 +124,8 @@ export function WatchlistPage(props: {
   const ytdSummary = ytdMissingCount > 0 ? ytdMissingSummary(ytdRows) : null
   // 宽窄判定：**只挂其中一个**排序控件（此前是两个都挂、靠 CSS 藏一个，实测会同时出现）
   const wide = useWideLayout()
+ // 排序入口由**宽窄 + 列头是否真的可见**共同决定（样式表缺失时也不会一个入口都没有）
+  const entry = useSortEntry(wide)
 
   const reload = useCallback(() => {
     api
@@ -175,18 +177,19 @@ export function WatchlistPage(props: {
       React.createElement('span', { className: 't' }, '自选分组'),
       // 排序：分组内生效（同一设置应用到所有分组），存进 prefs 所以重开面板仍生效
       // 窄屏才挂段控；宽屏挂列头（见下方）。**互斥由这里决定，不再依赖 CSS 隐藏**
-      wide
-        ? null
-        : React.createElement(SortBar<WatchSortKey>, {
+      // 互斥由 `useSortEntry` 决定：条目恰好是一个（宽屏量过列头可见性，样式缺失时退回段控）
+      entry === 'bar'
+        ? React.createElement(SortBar<WatchSortKey>, {
             keys: WATCH_SORT_KEYS,
             labels: WATCH_SORT_LABEL,
             hints: WATCH_SORT_HINT,
             state: watchSort,
             onChange: (next) => setPrefs({ watchSort: next }),
             ariaLabel: '自选排序',
-          }),
+          })
+        : null,
       React.createElement('span', { style: { flex: 1 } }),
-      // P1-4：异动徽标队列。数字是"需要提醒的条数"；被静默压制的单独标出，
+ // 异动徽标队列。数字是"需要提醒的条数"；被静默压制的单独标出
       // 否则"我明明看到它在异动，为什么徽标是 0"会变成新的困惑
       alerts.alerts.length > 0 || alerts.suppressed.length > 0
         ? React.createElement('span', {
@@ -207,7 +210,7 @@ export function WatchlistPage(props: {
           React.createElement('div', { className: 'tw-sub-h' }, '异动队列',
             React.createElement('span', { style: { flex: 1 } }),
             React.createElement('span', { className: 'tw-muted', style: { fontSize: 10.5 } },
-              alerts.asOf === null ? '尚未判定' : `判定于 ${new Date(alerts.asOf).toLocaleTimeString('zh-CN', { hour12: false })} · 静默窗口 ${SILENCE_MS / 60000} 分钟`),
+              alerts.asOf === null ? '尚未判定' : `数据时刻 ${new Date(alerts.asOf).toLocaleTimeString('zh-CN', { hour12: false })} · 静默窗口 ${SILENCE_MS / 60000} 分钟`),
           ),
           alerts.alerts.length === 0 && alerts.suppressed.length === 0
             ? React.createElement('div', { className: 'tw-hint', style: { margin: 0 } },
@@ -265,7 +268,7 @@ export function WatchlistPage(props: {
       : null,
     // 列头排序（宽屏）：与段控读写**同一份** watchSort 偏好。两者由 `wide` 二选一挂载，
     // 因此任一宽度下都只有一个排序入口（此前靠 CSS 隐藏，实测会同时出现两个）
-    wide
+    entry === 'header'
       ? React.createElement(SortHeader<WatchSortKey>, {
           columns: WATCH_COLUMNS,
           state: watchSort,
@@ -359,7 +362,7 @@ export function WatchlistPage(props: {
                 {
                   key: it.id,
                   className: 'tw-wrow',
-                  // P1-4：异动行呼吸高亮（CSS 动画；静默只压制提醒，不改变"它在异动"）
+ // 异动行呼吸高亮（CSS 动画；静默只压制提醒，不改变"它在异动"）
                   'data-alert': alert === undefined ? undefined : alert.kind,
                   title: alert === undefined ? undefined : `异动：${alert.reasons.join(' · ')}`,
                   tabIndex: 0,
@@ -379,7 +382,7 @@ export function WatchlistPage(props: {
                 },
                 React.createElement('button', {
                   className: 'tw-mini',
-                  // P1-1：开/高/低/振幅放在 hover 里显示 —— 缩略图只有 56×20，往图上加字就是噪音
+ // 开/高/低/振幅放在 hover 里显示 —— 缩略图只有 56×20，往图上加字就是噪音
                   title: miniHover(it.name, mini),
                   onClick: () => openDetail(it.secid, it.name),
                 },
@@ -445,9 +448,9 @@ export function WatchlistPage(props: {
                     // 不可算就显示 — 并说明原因 —— 不用 0 顶替
                     React.createElement('span', {
                       className: `tw-num tw-ytd ${dirClass(ytdRow?.ytd ?? null, prefs.redUp)}`,
-                      title: ytdTooltip(it.name, ytdRow, ytd.loaded),
+                      title: ytdTooltip(it.name, ytdRow, ytd.loaded, { stale: ytd.stale, source: ytd.source }),
                       ...(ytdRow?.ytd == null
-                        ? { tabIndex: 0, role: 'note', 'aria-label': ytdTooltip(it.name, ytdRow, ytd.loaded) }
+                        ? { tabIndex: 0, role: 'note', 'aria-label': ytdTooltip(it.name, ytdRow, ytd.loaded, { stale: ytd.stale, source: ytd.source }) }
                         : {}),
                     }, `YTD ${ytdText(ytdRow)}`),
                     it.note !== undefined && it.note !== '' ? React.createElement('span', { className: 'tw-muted' }, it.note) : null,

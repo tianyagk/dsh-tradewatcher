@@ -1,12 +1,4 @@
 /**
- * 北京时间交易时段判定（纯函数，可单测）。
- *
- * 与宿主 `host/time.ts` 的 `inSession` 同一口径（工作日 09:25–15:05），但这里是**展示层**
- * 需要的粗粒度状态：用来决定"这一屏数据是不是已经定稿"、以及页面上该写「定稿」还是「实时」。
- *
- * 为什么不用 `new Date().getHours()`：那读的是**宿主时区**。浏览器时区可能是 UTC 或任意
- * 时区（用户在国外、或容器里的 headless 浏览器），用本地小时会把收盘后判成盘中。
- * 因此一律按 Asia/Shanghai 取墙上时钟。
  */
 
 export type CnSessionPhase = 'pre' | 'am' | 'noon' | 'pm' | 'closed' | 'weekend'

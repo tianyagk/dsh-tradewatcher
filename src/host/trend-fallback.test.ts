@@ -1,13 +1,6 @@
 /**
- * 分时兜底顺序的断言（P0）：`上游 → 活的备用源（腾讯分钟线）→ 本地 LKG`。
- *
- * 缺陷形态（装机实测）：早上 09:38，1.510300 / 1.000001 还显示 **10-08 的整场**（昨天），
- * 而 1.600519 是 10-09 的实时分钟线 —— 差别只在"有没有昨日 LKG"：有 LKG 的标的被
  * 过期的 LKG 挡住，根本不试活的备用源。判据必须是**数据是不是今天的**，不是"有没有 LKG"。
- *
- * 三条断言（都可构造）：
  *  ① 上游抛错 + 有昨日 LKG + 备用源可用 ⇒ 必须返回**备用源的当日数据**，且没有 staleAt；
- *  ② 上游抛错 + 有昨日 LKG + 备用源也失败 ⇒ 回 LKG，且**带 sessionDay**（等于 LKG 那天）；
  *  ③ 休市定稿 ⇒ 仍复用本地（不许被这次改动破坏），且**不去打上游/备用源**。
  */
 import { test } from 'node:test'
@@ -131,4 +124,24 @@ test('③ 休市定稿 ⇒ 仍复用本地，且不去打上游/备用源（不�
   assert.equal(got.cached, true, '定稿复用本地并如实标注')
   assert.equal(upstreamCalls, 0, '定稿期不回源')
   assert.equal(backupCalls, 0, '定稿期也不打备用源')
+})
+
+test('P1-2：上游回的是过去某交易日的序列 ⇒ 回包必须带 sessionDay（否则会被读成今天）', async () => {
+  const secid = '1.518880' // 未被其它用例用过，避免命中 peek 缓存
+  const staleDay = trendOf('2026-10-01')
+  const got = await fetchTrend(secid, 1, {
+    now: Date.parse(`${DAY_TODAY}T10:00:00+08:00`),
+    upstream: async () => staleDay,
+    fallbackSource: async () => null,
+  })
+  assert.ok(got !== null)
+  assert.equal(got.points[0].label.slice(0, 10), '2026-10-01')
+  assert.equal(got.sessionDay, '2026-10-01', '非当日数据必须留下痕迹（客户端据此写「非当日数据（10-01）」）')
+  // 是今天的序列 ⇒ 不标（免得每张图都多一句噪声）
+  const fresh = await fetchTrend('1.518880', 2, {
+    now: Date.parse(`${DAY_TODAY}T10:00:00+08:00`),
+    upstream: async () => trendOf(DAY_TODAY),
+    fallbackSource: async () => null,
+  })
+  assert.equal(fresh?.sessionDay, undefined)
 })

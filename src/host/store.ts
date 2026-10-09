@@ -1,10 +1,4 @@
 /**
- * dsh-tradewatcher data store: append-only trade/audit ledger + group/item
- * descriptors, persisted as JSON under ~/.dsh/dsh-tradewatcher/ (DSH_HOME
- * aware). All mutations validate first, append a ledger entry, and write
- * through atomically. Position quantities/costs are NEVER stored — they are
- * derived from the ledger by replay, so the JSON files are the durable record
- * for in-session analysis and the UI can rebuild any state from scratch.
  */
 import { copyFile, mkdir, readFile, rename, stat, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
@@ -35,6 +29,7 @@ import {
   type WatchItem,
 } from '../shared/model.ts'
 import { log } from './context.ts'
+import { numOrNull } from '../shared/model.ts'
 import { shanghaiDayStart } from './time.ts'
 
 const NAME_MAX = 40
@@ -56,9 +51,7 @@ function str(v: unknown, max = 64): string | null {
   return typeof v === 'string' && v !== '' && v.length <= max ? v : null
 }
 
-function numOrNull(v: unknown): number | null {
-  return typeof v === 'number' && Number.isFinite(v) ? v : null
-}
+// 与其它模块共用 shared 的实现（S7；字符串解析类的不在此列，见那里的说明）
 
 export const LEDGER_VERBS = new Set([
   'buy', 'sell', 'adjust', 'add', 'remove', 'gcreate', 'grename', 'gdelete', 'grestore', 'gmove', 'pnote',
@@ -108,11 +101,6 @@ export function normalizeLedgerDetailed(raw: unknown): { file: LedgerFile; dropp
     else entries.push(ok)
   }
   return { file: { v: numOrNull(raw.v) ?? 1, entries }, dropped, total: raw.entries.length }
-}
-
-export function normalizeLedger(raw: unknown): LedgerFile | null {
-  const d = normalizeLedgerDetailed(raw)
-  return d === null ? null : d.file
 }
 
 export function normalizePortFile(raw: unknown): PortFile | null {
@@ -606,7 +594,7 @@ export class DataStore {
    * 数据文件最后写入时刻（epoch ms；文件不存在/读不到 → null）。
    *
    * P0-1 用：纯本地读工具（watchlist/ledger）必须能回答"这份数据是几点落盘的"，
-   * 而不是把"响应生成时间"当成数据时刻 —— 那正是 v0.22 之前在行情上修过的同一个错。
+ * 而不是把"响应生成时间"当成数据时刻 —— 那正是 之前在行情上修过的同一个错。
    */
   async fileMtime(file: string): Promise<number | null> {
     try {
@@ -822,7 +810,7 @@ export class DataStore {
       if (qty > state.qty + 1e-9) {
         throw new Error(`卖出数量超过当前持仓（持有 ${state.qty}）`)
       }
-      // P1-8：可用（可卖）数量。此前只校验总持仓，于是可以录出一笔"当日买入、当日卖出"的
+ // 可用（可卖）数量。此前只校验总持仓，于是可以录出一笔"当日买入、当日卖出"的
       // A股成交 —— 券商端不存在这笔交易，当日盈亏与已实现会随之偏离真实。
       if (!isT0Secid(pos.secid)) {
         const available = availableQtyAt(this.sortedLedger(), pos.id, ts)
@@ -1028,7 +1016,7 @@ export class DataStore {
       this.prefs.refreshSec = Math.round(r)
     }
     if (patch.redUp !== undefined) this.prefs.redUp = patch.redUp === true
-    // P2-2：截图/录屏相关的两个偏好。不透明度越界按边界收（而不是报错丢弃整个 patch），
+ // 截图/录屏相关的两个偏好。不透明度越界按边界收（而不是报错丢弃整个 patch）
     // 但类型不对必须拒绝 —— 那说明调用方写错了字段
     if (patch.panelOpacity !== undefined) {
       if (!isFiniteNumber(patch.panelOpacity)) throw new Error('panelOpacity 必须是数字')
@@ -1042,7 +1030,7 @@ export class DataStore {
       if (typeof patch.trendArchive !== 'boolean') throw new Error('trendArchive 必须是布尔值')
       this.prefs.trendArchive = patch.trendArchive
     }
-    // P1-11：折算口径。`live` 明确拒绝并给出理由 —— 实时汇率源尚未验证，
+ // 折算口径。`live` 明确拒绝并给出理由 —— 实时汇率源尚未验证
     // 接受它只会让用户以为开了实时折算、实际什么都没算
     if (patch.fxMode !== undefined) {
       if (patch.fxMode === 'live') {
@@ -1057,7 +1045,7 @@ export class DataStore {
       }
       this.prefs.fxRates = normalizeFxRates(patch.fxRates)
     }
-    // P0-8：视图档位。非法值拒绝而不是回退 —— 回退会让"点了没反应"变成静默行为
+ // 视图档位。非法值拒绝而不是回退 —— 回退会让"点了没反应"变成静默行为
     if (patch.viewMode !== undefined) {
       if (patch.viewMode !== 'full' && patch.viewMode !== 'compact' && patch.viewMode !== 'incognito') {
         throw new Error('viewMode 必须是 full/compact/incognito')
@@ -1084,10 +1072,6 @@ export function secidKey(secid: string): string {
 /** Rounding helper for money display. */
 export function money(n: number | null | undefined): number | null {
   if (n === null || n === undefined || !Number.isFinite(n)) return null
-  return roundMoney(n)
-}
-
-export function clampMoney(n: number): number {
   return roundMoney(n)
 }
 

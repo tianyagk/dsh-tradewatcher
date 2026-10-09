@@ -1,11 +1,4 @@
 /**
- * 客户端侧 YTD 展示逻辑（纯函数，无 React 依赖，便于直接测）。
- *
- * 口径文案**只有一处**（`shared/model.ts` 的 `YTD_CALIBER`）：界面 tooltip 与 agent 工具
- * 引用的是同一句 —— 两处各写一套迟早会对不上。
- *
- * 两条硬约定：
- *  - 取不到就显示 `—` + 原因（**不用 0 顶替**：0 会被读成"没涨没跌"）；
  *  - 指数/期货按原始价格算，tooltip 必须说明"该标的不适用复权"（否则会被当成"前复权出问题了"）。
  */
 import { FQ_LABEL, YTD_CALIBER, type YtdRow } from '../shared/model.ts'
@@ -18,8 +11,18 @@ export function ytdText(row: YtdRow | undefined): string {
 }
 
 /** 悬浮提示：口径 + 基准 + 实际生效的复权口径；不可算时给原因 */
-export function ytdTooltip(name: string, row: YtdRow | undefined, loaded: boolean): string {
-  const head = `${name} 标的的年初至今（YTD）\n口径：${YTD_CALIBER}`
+export function ytdTooltip(
+  name: string,
+  row: YtdRow | undefined,
+  loaded: boolean,
+  /** 回包的降级信息（来源 / 是否旧基准）；不给就不写这一行 */
+  prov?: { stale?: boolean; source?: string },
+): string {
+  const head = `${name} 标的的年初至今（YTD）\n口径：${YTD_CALIBER}${
+    prov === undefined
+      ? ''
+      : `\n来源：${prov.source ?? 'em'}${prov.stale === true ? '（本次是上次成功的结果，基准按日缓存 + 失败冷却期间不会重取）' : ''}`
+  }`
   if (row === undefined) {
     return `${head}\n本轮没有该标的的结果：${loaded ? '路由未返回它' : '尚未取到，下一轮行情刷新后自动重试'}`
   }
@@ -28,7 +31,7 @@ export function ytdTooltip(name: string, row: YtdRow | undefined, loaded: boolea
   }
   const parts: string[] = []
   const listing = row.baseKind === 'listing'
-  parts.push(`基准 ${row.baseDate} 收盘 ${row.baseClose.toFixed(3)}${listing ? '（该标的本年内上市：基准是「上市首日」，因此这个数读作"上市首日至今"，不是"年初至今" —— 按年初读会高估）' : '（本年内第一个交易日）'}`)
+  parts.push(`基准 ${row.baseDate} 收盘 ${row.baseClose.toFixed(3)}${listing ? '（本年内上市，基准为上市首日）' : '（本年内第一个交易日）'}`)
   parts.push(`现价 ${row.price === null ? '—' : row.price.toFixed(3)}`)
   parts.push(row.fqSupported
     ? `复权口径：${FQ_LABEL[row.fq]}（复权口径由宿主回包决定，不是界面请求值）`

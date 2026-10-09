@@ -1,14 +1,4 @@
 /**
- * 自绘行业热力图（P2-5）。
- *
- * 为什么自绘：第三方 iframe（云图页）**标不了口径** —— 面积是按流通市值还是成交额、
- * 颜色是涨跌幅还是资金流、数据是几点的，全都在别人的页面里。自绘这一版把口径写在图上方：
- * 面积 = 成交额、色深 = 涨跌幅、数据时刻与来源随图一起给出。
- *
- * 与 iframe 并存（云图页可切换），默认自绘。
- *
- * 布局用 squarified treemap：把矩形按面积切成近似正方形的块（长条状的块既难看也难比较）。
- * 布局是**纯函数**（`squarify`），因此可以直接断言"面积成比例、不越界、不重叠"。
  */
 import React, { useEffect, useMemo, useState } from 'react'
 import type { BoardRow } from '../shared/model.ts'
@@ -80,7 +70,7 @@ export function IndustryHeatmap(props: { redUp: boolean; width: number; height: 
       : null,
     dropped > 0
       ? React.createElement('div', { className: 'tw-hint' },
-          `${dropped} 个板块没有成交额（备用源不含该字段），未参与面积分配 —— 图上的面积总和因此小于全市场。`)
+          `${dropped} 个板块无成交额，未计入面积`)
       : null,
     rows === null
       ? React.createElement(Skeleton, { lines: 6, height: 40 })
@@ -121,8 +111,7 @@ export function IndustryHeatmap(props: { redUp: boolean; width: number; height: 
           ),
     // 口径说明写进图里而不是藏起来：这是自绘相对 iframe 的唯一意义
     React.createElement('div', { className: 'tw-hint', style: { marginTop: 4 } },
-      '口径：面积为板块成交额（按成交额取前 60 个板块，因此图不是全市场）；色深为当日涨跌幅，±5% 封顶以免单个涨停压平色阶。' +
-      '与「第三方站点」的区别正在于此 —— 那张图的面积/颜色口径由站点决定，本插件无法保证。',
+      '口径：面积为板块成交额（按成交额取前 60 个板块，因此图不是全市场）；色深为当日涨跌幅，±5% 封顶以免单个涨停压平色阶。',
     ),
   )
 }

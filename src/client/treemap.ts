@@ -1,12 +1,5 @@
 /**
- * squarified treemap 布局（纯函数，P2-5）。
- *
- * 单独成模块的理由与 quoteState/alertRules 一样：这是可断言的几何逻辑
- * （面积成比例、不越界、不重叠、长宽比不退化），而组件那边要引 React。
  * 混在 .tsx 里会让纯逻辑的测试必须装 React。
- *
- * 为什么用 squarified 而不是"从大到小切条"：后者在"一个极大值 + 一堆小值"时
- * 会切出针一样的细条 —— 细条的面积既量不准也看不清，热力图就失去了比较意义。
  */
 
 export interface Rect {

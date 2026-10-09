@@ -67,3 +67,24 @@ test('非法日期 / 非法价格被丢弃：拼接结果里不得出现不可�
   assert.deepEqual(r.coverage.have, ['2026-10-09'])
   assert.equal(r.points.length, 3, 'price=0 与 NaN 都不是有效分时点，只剩 3 个有效点')
 })
+
+test('拼接按 limitDays 裁剪：传 12 天 + limit=5 ⇒ 只拼最近 5 天（不再画出 12 天的跨度）', () => {
+  const days = Array.from({ length: 12 }, (_, i) => {
+    const d = new Date(Date.UTC(2026, 8, 14 + i))   // 09-14 起连续 12 天
+    const day = d.toISOString().slice(0, 10)
+    return {
+      day,
+      points: [
+        { t: d.getTime() + 3_600_000, label: `${day} 09:30`, price: 1, avg: null, vol: null },
+        { t: d.getTime() + 3_660_000, label: `${day} 10:30`, price: 1.1, avg: null, vol: null },
+      ],
+    }
+  })
+  const r = stitchTrendDays(days, { limitDays: 5, today: '2026-09-25' })
+  assert.equal(r.coverage.have.length, 5, '覆盖清单只能有最近 5 天')
+  assert.equal(r.coverage.limit, 5)
+  const inPoints = [...new Set(r.points.map((p) => p.label.slice(0, 10)))]
+  assert.equal(inPoints.length, 5, `图上只能有 5 天，实际 ${inPoints.join('/')}`)
+  assert.equal(inPoints[0], r.coverage.have[0], '首日 = 裁剪后的首日')
+  assert.ok(!inPoints.includes('2026-09-14'), '被裁掉的那天不许出现在图上')
+})

@@ -1,11 +1,4 @@
 /**
- * dsh-tradewatcher client styles — dark-saas (Linear-inspired) token system
- * from the dsh-design-skills pack, implemented symmetrically for light/dark:
- *   near-black canvas + surface-layered panels + hairline dividers (dark);
- *   near-white canvas + white cards + hairline dividers (light); one accent
- *   (#5e6ad2); semantic up/down colors only as 8–12% translucent chips;
- *   tabular/mono numerals for every figure; compact info-dense density.
- * Injected once as a <style> element; every class is scoped under `.tw-*`.
  */
 export const STYLE_ID = 'dsh-tradewatcher-style'
 

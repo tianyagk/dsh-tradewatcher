@@ -1,12 +1,4 @@
 /**
- * dsh-tradewatcher — host half.
- *
- * One dual-face bundle row (`tradewatcher` / `dsh-tradewatcher`):
- *  - node half (this file): quote relay + tradewatcher file store +
- *    /tradewatcher/* routes + read-only agent tools + prompt guidance;
- *  - browser half (src/client): registers the 「盯盘」 global panel through the
- *    Harness Slots service (`sidebar.panellist` + `main`) and talks to this half
- *    over same-origin fetch.
  */
 import { makeTradeRoutes } from './host/routes.ts'
 import { makeAgentTools, servicesOf } from './host/tools.ts'

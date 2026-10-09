@@ -12,10 +12,10 @@ import type {
   SuggestItem,
   YtdRow,
 } from '../shared/model.ts'
-import { DEFAULT_PREFS, realizedUnknownNote, realizedUnknownQtyOf, realizedUnknownRows, realizedUnknownShort } from '../shared/model.ts'
+import { LEDGER_VERB_LABEL, DEFAULT_PREFS, realizedUnknownNote, realizedUnknownQtyOf, realizedUnknownRows, realizedUnknownShort } from '../shared/model.ts'
 import { availableLockNote, feeShareNote, ytdBaseNote } from './portfolioMeta.ts'
 import { api } from './api.ts'
-import { dirClass, fmtAmt, fmtMoneySigned, fmtPct, fmtPrice, fmtRaw } from './format.ts'
+import { fmtStamp, dirClass, fmtAmt, fmtMoneySigned, fmtPct, fmtPrice, fmtRaw } from './format.ts'
 import { Btn, EmptyHint, ErrorNote, Field, Modal, MoreMenu, Skeleton, SuggestInput } from './ui.tsx'
 import { MiniTrend } from './charts.tsx'
 import { useMiniTrends, type MiniData } from './mini.ts'
@@ -24,22 +24,11 @@ import { SortBar } from './SortBar.tsx'
 import { SortHeader } from './SortHeader.tsx'
 import { PORT_COLUMNS, PORT_SORT_HINT, PORT_SORT_KEYS, PORT_SORT_LABEL, normalizeSortState, sortPositions, weightOf, type PortSortKey } from './sort.ts'
 import { useYtd } from './useYtd.ts'
-import { useWideLayout } from './useWide.ts'
+import { useSortEntry, useWideLayout } from './useWide.ts'
 import { ytdText, ytdTooltip } from './ytdView.ts'
 
-const VERB_LABEL: Record<LedgerEntry['verb'], string> = {
-  buy: '买入',
-  sell: '卖出',
-  adjust: '调整',
-  add: '新建持仓',
-  remove: '移除持仓',
-  gcreate: '新建分组',
-  grename: '分组改名',
-  gdelete: '归档分组',
-  grestore: '还原分组',
-  gmove: '移动/编辑',
-  pnote: '备注',
-}
+// 与宿主共用一份（shared/model.ts）——此前两边各写一份逐字相同的映射
+const VERB_LABEL: Record<LedgerEntry['verb'], string> = LEDGER_VERB_LABEL
 
 function verbLabel(verb: LedgerView['verb']): string {
   return VERB_LABEL[verb] ?? verb
@@ -120,6 +109,8 @@ export function PortfolioPage(props: {
   // M3：面板级不再写 YTD 缺失摘要（与行级 tooltip 重复）—— 缺失原因由每行的悬停承担
   // 宽窄判定：排序控件二选一挂载（详见 useWide.ts —— 此前两个都挂、靠 CSS 藏一个，实测会同时出现）
   const wide = useWideLayout()
+ // 排序入口由**宽窄 + 列头是否真的可见**共同决定（样式表缺失时也不会一个入口都没有）
+  const entry = useSortEntry(wide)
 
   useEffect(() => {
     if (view === null) return
@@ -262,17 +253,17 @@ export function PortfolioPage(props: {
           'aria-label': '口径说明',
         }, 'ⓘ'),
         // 排序：分组内生效，存进 prefs（重开面板仍生效）
-        // 窄屏才挂段控；宽屏挂列头。互斥由 `wide` 决定，不依赖 CSS 隐藏（见 useWide.ts 的说明）
-        wide
-          ? null
-          : React.createElement(SortBar<PortSortKey>, {
+        // 互斥由 `useSortEntry` 决定（宽屏量过列头可见性；样式表缺失时退回段控，见 useWide.ts）
+        entry === 'bar'
+          ? React.createElement(SortBar<PortSortKey>, {
               keys: PORT_SORT_KEYS,
               labels: PORT_SORT_LABEL,
               hints: PORT_SORT_HINT,
               state: portSort,
               onChange: (next) => setPrefs({ portSort: next }),
               ariaLabel: '持仓排序',
-            }),
+            })
+          : null,
         // P1-11：折算口径常显 —— "这个人民币数字怎么来的"必须答得上来
         React.createElement(Btn, {
           onClick: () => setFxOpen(true),
@@ -297,7 +288,7 @@ export function PortfolioPage(props: {
             onDone: () => { void reload() },
           })
         : null,
-      // P2-4：除权除息提示。只提示"要变"，**不自动改账** —— 送转到账数量以券商为准，
+ // 除权除息提示。只提示"要变"，**不自动改账** —— 送转到账数量以券商为准
       // 自动改会把用户唯一的交易记录改成一个"看起来对但没人能核对"的状态。
       actions.length > 0
         ? React.createElement('div', { className: 'tw-hint', style: { padding: '2px 2px 0', color: '#e8a33d' } },
@@ -471,6 +462,8 @@ export function PortfolioPage(props: {
                   mini: minis[row.secid],
                   ytd: ytd.map[row.secid],
                   ytdLoaded: ytd.loaded,
+                  ytdStale: ytd.stale,
+                  ytdSource: ytd.source,
                   // 同一持仓可能有多条（登记日 + 除权日），取最近的一条提示
                   action: actions.filter((a) => a.posId === row.posId).sort((a, b) => a.date.localeCompare(b.date))[0],
                   onTrade: (verb) => setModal({ kind: 'trade', verb, pos: row, groupName: grp.name }),
@@ -761,7 +754,7 @@ function TradeModal(props: {
   const pN = Number(price)
   const fN = Number(fee) || 0
   const title = verb === 'buy' ? '买入' : verb === 'sell' ? '卖出' : '调整持仓'
-  // P1-8：可用（可卖）口径的说明（T+1 品种今日买入的部分不可卖；T+0 不受限）
+ // 可用（可卖）口径的说明（T+1 品种今日买入的部分不可卖；T+0 不受限）
   const sellHint = pos.t0
     ? 'T+0：当日买入当日可卖（与本面板的可用数量口径一致）'
     : `可用（可卖）${pos.availableQty} —— A股 T+1：今日买入的部分当日不可卖`
@@ -796,7 +789,7 @@ function TradeModal(props: {
         onClick: () => {
           if (!Number.isFinite(qN) || qN <= 0) { setErr('请输入有效数量'); return }
           if (verb === 'sell' && qN > pos.qty + 1e-9) { setErr(`卖出数量超过持有（${pos.qty}）`); return }
-          // P1-8：可用（可卖）数量。宿主侧有同一道校验（两处都不放行），这里先拦是为了
+ // 可用（可卖）数量。宿主侧有同一道校验（两处都不放行），这里先拦是为了
           // 不让用户填完一整张表才收到 400 —— 也顺带把"为什么不能卖"讲清楚
           if (verb === 'sell' && !pos.t0 && qN > pos.availableQty + 1e-9) {
             setErr(`可用（可卖）${pos.availableQty} 少于本次卖出 ${qN}：${sellHint}。请核对券商端的可用数量（本插件按流水推导，T+1 部分今日买入不可卖）`)
@@ -900,7 +893,7 @@ function LedgerModal(props: { target: { mode: string; id: string; title: string;
                     r.posName !== null ? ` ${r.posName}` : r.groupName !== null ? ` ${r.groupName}` : '',
                   ),
                   React.createElement('small', null,
-                    `${new Date(r.ts).toLocaleString('zh-CN', { hour12: false })}${r.groupName !== null && r.posName !== null ? ` · ${r.groupName}` : ''}${r.actor === 'tool' ? ' · 会话操作' : ''}`,
+                    `${fmtStamp(r.ts)}${r.groupName !== null && r.posName !== null ? ` · ${r.groupName}` : ''}${r.actor === 'tool' ? ' · 会话操作' : ''}`,
                   ),
                 ),
                 React.createElement('div', { className: 'wq', style: { gap: 4 } },
@@ -935,6 +928,9 @@ function PosRow(props: {
   ytd: YtdRow | undefined
   /** 是否至少成功取到过一次 YTD（区分"还没结果"与"真的没有"） */
   ytdLoaded: boolean
+  /** YTD 回包的降级信息（来源 / 是否旧基准）：进 tooltip 的一行 */
+  ytdStale?: boolean
+  ytdSource?: string
   /** 该标的最近的除权除息（P2-4）：只提示"要变"，不自动改账 */
   action: CorporateAction | undefined
   onTrade: (verb: 'buy' | 'sell' | 'adjust') => void
@@ -983,7 +979,7 @@ function PosRow(props: {
     React.createElement('div', { className: 'tw-pos-main' },
       React.createElement('button', {
         className: 'tw-mini',
-        // P1-1：开/高/低/振幅走 hover（缩略图太小，图上不加常驻文字）
+ // 开/高/低/振幅走 hover（缩略图太小，图上不加常驻文字）
         title: miniHover(row.name, props.mini),
         'aria-label': `${row.name} 分时明细`,
         onClick: props.onOpenChart,
@@ -1071,10 +1067,10 @@ function PosRow(props: {
       pps('标的年初至今',
         React.createElement('span', {
           className: `tw-ytd ${dirClass(props.ytd?.ytd ?? null, redUp)}`,
-          title: ytdTooltip(row.name, props.ytd, props.ytdLoaded),
+          title: ytdTooltip(row.name, props.ytd, props.ytdLoaded, { stale: props.ytdStale, source: props.ytdSource }),
           // 算不出时才可聚焦：可计算的行不需要多一个 Tab 停靠点
           ...(props.ytd?.ytd == null
-            ? { tabIndex: 0, role: 'note', 'aria-label': ytdTooltip(row.name, props.ytd, props.ytdLoaded) }
+            ? { tabIndex: 0, role: 'note', 'aria-label': ytdTooltip(row.name, props.ytd, props.ytdLoaded, { stale: props.ytdStale, source: props.ytdSource }) }
             : {}),
         }, ytdText(props.ytd)),
         // M2：常态基准（年初）不占位 —— tooltip 里已写；只有"年内上市、基准是上市首日"必须常显
@@ -1083,7 +1079,7 @@ function PosRow(props: {
         ytdBaseNote(props.ytd?.baseDate, props.ytd?.baseKind)),
       pps(diluted ? '累计已实现（已计入上栏）' : '累计已实现',
         React.createElement('span', { className: 'tw-dim' }, fmtMoneySigned(row.realized)),
-        // S18：行内只给短句（80 字解释只留面板级一处，避免同一句在每行重复）
+ // 行内只给短句（80 字解释只留面板级一处，避免同一句在每行重复）
         (row.realizedUnknownQty ?? 0) > 0
           ? React.createElement('span', { className: 'tw-muted', title: realizedUnknownNote(row.realizedUnknownQty ?? 0) },
               realizedUnknownShort(row.realizedUnknownQty ?? 0))
@@ -1091,7 +1087,7 @@ function PosRow(props: {
             ? React.createElement('span', { className: 'tw-muted', title: '成本未录入：市值照算，但盈亏、盈亏率与已实现显示 —（拿 0 当成本会把全部市值算成盈利）' },
                 '成本未录入 → 已实现不可算')
             : undefined),
-      // P1-5 + M1：可用（可卖）数量。口径（T+1/T+0）进 title —— 此前两个分支**每只持仓都写一行**，
+ // + M1：可用（可卖）数量。口径（T+1/T+0）进 title —— 此前两个分支**每只持仓都写一行**
       // 且今日无买入时"今日买入 0 份…故可用少于持仓"是假话（R3）。正文只在真有不可卖部分时给一句短的。
       pps('可用（可卖）',
         React.createElement('span', { className: row.availableQty < row.qty ? 'tw-flat' : undefined },
@@ -1100,7 +1096,7 @@ function PosRow(props: {
         row.t0
           ? 'T+0：当日买入当日可卖（ETF/LOF、港股、美股等）'
           : 'T+1：今日买入的部分当日不可卖，所以"可用（可卖）"可能少于持仓'),
-      // P1-5 + M4：费用列。未录费用（fees=0）时整条说明不出（值列已有 0.00）；
+ // + M4：费用列。未录费用（fees=0）时整条说明不出（值列已有 0.00）；
       // 有费用时压成 `占成交额 X%`（"累计"与成交额列重复，R1）
       pps('累计费用',
         React.createElement('span', { className: 'tw-dim' }, fmtAmt(row.fees)),

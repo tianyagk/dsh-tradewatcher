@@ -1,22 +1,8 @@
 /**
- * 图表面板的客户端缓存（分时 / 五日 / 日K / 周K / 月K / 年K）。
- *
- * 为什么需要：抽屉与顶栏悬浮卡会反复请求同一个 secid+tab —— 来回切周期、鼠标
- * 反复划过同一张卡、关掉再打开。宿主侧已经有两级缓存（内存 TTL + K 线落盘增量），
- * 但客户端此前每次交互都发一次 HTTP。本模块把**已解析的 payload**记在浏览器侧，
- * 命中即零请求。
- *
- * 三条约定：
- *  1) 同键并发合并 —— 悬浮卡与抽屉同时要同一份数据时只发一个请求；
- *  2) 绝不因为一次失败把图变空 —— 失败时保留上一份成功值（短 TTL，稍后重试），
- *     并把它标成 fallback，界面如实说明「显示上次成功数据」；
- *  3) 宿主若回 `cached: true`（休市定稿，宿主根本没回源），客户端给更长的 TTL，
- *     收盘后反复开关面板不会产生任何请求。
- *  4) 复权口径进缓存键 —— 前复权与不复权是两套价格序列，互相顶替会在图上
- *     造成无解释的跳空；分时/五日不含复权序列，仍共用同一个键。
  */
-import type { FqMode, KlineData, MissingField, TrendData, TrendPoint } from '../shared/model.ts'
+import type { FqMode, KlineData, MissingField, TrendData } from '../shared/model.ts'
 import { FQ_LABEL } from '../shared/model.ts'
+import { cacheNoteOf as noteOf, settled as noteSettled } from './chartNote.ts'
 import { api } from './api.ts'
 
 export type ChartTab = 'trend' | '5d' | 'day' | 'week' | 'month' | 'year'
@@ -117,11 +103,11 @@ export interface ChartCache {
 
 type Loader = (secid: string, tab: ChartTab, fqt: FqMode) => Promise<ChartPayload | null>
 
-/** 宿主是否已经把这份数据冻结（休市定稿）；"拿不到"不是定稿，给短 TTL 让它有机会恢复 */
+/** 宿主是否已经把这份数据冻结（休市定稿）；"拿不到"不是定稿，给短 TTL 让它有机会恢复。
+ *  判据与脚注共用同一处实现（`chartNote.settled`），避免"缓存用一套、文案用另一套" */
 function settled(value: ChartPayload | null): boolean {
-  if (value === null) return false
-  if (value.kind === 'unavailable') return false
-  return value.kind === 'trend' ? value.trend.cached === true : value.kline.cached === true
+  if (value === null || value.kind === 'unavailable') return false
+  return noteSettled(value as unknown as Parameters<typeof noteSettled>[0])
 }
 
 export function createChartCache(load: Loader = fetchChartPayload): ChartCache {
@@ -218,33 +204,7 @@ export function fqNoteOf(kline: KlineData): string {
   return mode === 0 ? ' · 不复权' : ` · ${FQ_LABEL[mode]}（详情头为真实成交价）`
 }
 
-/** 图表脚注里的缓存来源说明（诚实标注，不假装是刚取到的新数据） */
-/**
- * 「显示上次成功数据」要带上**这份数据自己的时间**。
- *
- * 为什么：分时兜底会回上一次成功取到的序列（`staleAt`），若只写"本次刷新失败"，
- * 用户会以为图上是今天的行情 —— 实测早上 09:38 仍显示 10-08 的整场，看着就像"今天横盘"。
- * 时间取自序列最后一个点的 `label`（不造时间），跨日时以 `sessionDay` 为准。
- */
-function lastSuccessNote(trend: { points: TrendPoint[]; sessionDay?: string }): string {
-  const last = trend.points[trend.points.length - 1]
-  if (last === undefined) return ' · 显示上次成功数据'
-  const day = trend.sessionDay ?? last.label.slice(0, 10)
-  const hhmm = last.label.slice(11, 16)
-  return ` · 显示上次成功数据（${day}${hhmm === '' ? '' : ` ${hhmm}`}）`
-}
-
+/** 图表脚注说明：实现与用词统一在 `chartNote.ts`（E1：降级复用一律带日期） */
 export function cacheNoteOf(payload: ChartPayload | null): string {
-  if (payload === null) return ''
-  // "拿不到"没有缓存口径可谈（原因由 missing 说明，别在这里重复）
-  if (payload.kind === 'unavailable') return ''
-  const isSettled = settled(payload)
-  if (payload.fallback === true) {
-    return payload.kind === 'trend' ? lastSuccessNote(payload.trend) : ' · 显示上次成功数据（本次刷新失败）'
-  }
-  // 宿主回了 last-known-good（staleAt 有值）⇒ 这是"上次成功数据"，必须把日期说清
-  if (payload.kind === 'trend' && payload.trend.staleAt !== undefined) return lastSuccessNote(payload.trend)
-  if (isSettled) return ' · 休市定稿缓存（未回源）'
-  if (payload.fromCache === true) return ' · 本地缓存'
-  return ''
+  return noteOf(payload as unknown as Parameters<typeof noteOf>[0])
 }

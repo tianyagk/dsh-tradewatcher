@@ -1,14 +1,6 @@
 /**
- * Agent-facing read-only tools + system-prompt guidance. Registered on the
- * host `tools` registry (when the service is present) with plain object
- * literals (structural face — no runtime dependency on @deepseek-ai/dsh-tools).
- *
- * Everything the sidebar panel writes lives in the same JSON files, so a
- * session can analyse holdings, reconstruct the ledger and optimise: the
- * tools read the live files + live quotes; the plain JSON is additionally
- * documented in README for file-tool based analysis.
  */
-import { TW_ROWS, type CalEvent, type DataProvenance, type MissingField, type QuoteRow } from '../shared/model.ts'
+import { MISSING_TIER_LABEL, TW_ROWS, type CalEvent, type DataProvenance, type MissingField, type QuoteRow } from '../shared/model.ts'
 import { SECID_RE } from '../shared/model.ts'
 import { FQ_LABEL, YTD_CALIBER, type YtdRow } from '../shared/model.ts'
 import * as em from './em.ts'
@@ -45,7 +37,7 @@ function pnlLine(label: string, value: number | null | undefined): string {
   return `${label}: ${sign}${fmtMoney(value)}`
 }
 
-// ── P0-1 数据出处契约 ──────────────────────────────────────────────────────
+// ── 数据出处契约 ──────────────────────────────────────────────────────
 
 /** 纯本地文件的出处：`source='local'`，asOf 取文件最后写入时刻（不许拿响应时刻顶替） */
 function localProvenance(asOf: number | null, missing: MissingField[] = []): DataProvenance {
@@ -75,7 +67,7 @@ function provenanceLine(p: DataProvenance | undefined): string {
 /** 缺失明细的逐条文本（只在有缺失时输出，避免正常路径变啰嗦） */
 function missingLines(p: DataProvenance | undefined, limit = 8): string[] {
   if (p === undefined || p.missing.length === 0) return []
-  const head = p.missing.slice(0, limit).map((m) => `  · ${m.what}（${m.why === 'no-source' ? '上游无此数据' : '本次失败'}）：${m.note}`)
+  const head = p.missing.slice(0, limit).map((m) => `  · ${m.what}（${MISSING_TIER_LABEL[m.why === 'no-source' ? 'no-source' : 'transient']}）：${m.note}`)
   if (p.missing.length > limit) head.push(`  · …另有 ${p.missing.length - limit} 项`)
   return ['缺失明细：', ...head]
 }
@@ -287,7 +279,7 @@ export function makeAgentTools(
           why: u.why === 'no-fx' ? ('no-source' as const) : ('transient' as const),
           note: u.note,
         }))
-        // P1-5：未应用的流水进 missing[]（agent 只看出处行也知道账没算平）
+ // 未应用的流水进 missing[]（agent 只看出处行也知道账没算平）
         const skippedCount = view.positions.reduce((a, p) => a + (p.skippedLedger ?? 0), 0)
         if (skippedCount > 0) {
           extra.push({
@@ -668,7 +660,7 @@ export function makeAgentTools(
         const cat = typeof args.category === 'string' && args.category !== '' ? args.category : null
         let events = calendar.list(from, to)
         if (cat !== null) events = events.filter((e) => e.category === cat)
-        // P1-10 勾稽：与路由同源（持仓=held / 仅自选=watched），避免两处口径分叉
+ // 勾稽：与路由同源（持仓=held / 仅自选=watched），避免两处口径分叉
         const codes6 = (secid: string): string | null => {
           const m = /^(\d{1,3})\.(\d{6})$/.exec(secid)
           return m === null ? null : m[2]
@@ -742,7 +734,7 @@ export function makeAgentTools(
     async execute(args, exec) {
       if (calendar === undefined) return { error: '日历模块未挂载' }
       try {
-        // P0-11 ①：先过写节流 —— 同一秒超限直接报错（不静默丢一次写入）
+ // ①：先过写节流 —— 同一秒超限直接报错（不静默丢一次写入）
         await journal.init()
         const throttled = journal.throttleReason()
         if (throttled !== null) return { error: throttled }
@@ -750,7 +742,7 @@ export function makeAgentTools(
         const before = new Set((await calendar.init(), calendar.list(calToday(-365), calToday(365))).map((e) => e.id))
         const events = await calendar.mutate({ ...args, op: 'add' })
         const created = events.find((e) => !before.has(e.id))
-        // P0-11 ②：登记反向操作（自动事件不可删，这里只登记手动事件）
+ // ②：登记反向操作（自动事件不可删，这里只登记手动事件）
         const rec = await journal.record({
           by,
           tool: `${PREFIX}calendar_add`,
@@ -946,7 +938,7 @@ export function makeAgentTools(
           `阈值来源：${v.thresholdSource ?? '—'}（自建样本 ${v.selfSampleDays ?? 0} 天，标定日 ${v.calibratedAt ?? '—'}）  沪深300 ${typeof v.indexPct === 'number' ? `${v.indexPct.toFixed(2)}%` : '—'}${gapText}`,
           '因子：',
           ...(v.factors ?? []).map((f) => `  ${f.命中 ? '●' : '○'} ${f.因子} 实测 ${f.实测} 得分 ${f.得分}`),
-          // P0-7：贡献度列，且给出可复算的等式（权重×得分×时点系数）
+ // 贡献度列，且给出可复算的等式（权重×得分×时点系数）
           contrib.length > 0
             ? `贡献度（权×得分×时点系数，合计 ${contribSum.toFixed(1)} ≈ 总分 ${v.score ?? 0}）：`
             : '',
@@ -989,7 +981,7 @@ export function makeAgentTools(
           })),
           todayEvents: snapshot.today,
           history: rescue.history(30),
-          // P0-1：护盘也有出处。asOf = 最近一次成功采样（不是 ts —— 那是快照生成时刻）；
+ // 护盘也有出处。asOf = 最近一次成功采样（不是 ts —— 那是快照生成时刻）；
           // 采样失败与降级复用都进 stale + missing[]
           provenance: {
             asOf: snapshot.lastSampleTs ?? null,
@@ -1019,7 +1011,7 @@ export function makeAgentTools(
           calibratedAt: snapshot.calibratedAt,
           timeCoef: snapshot.timeCoef,
           factorContrib: snapshot.factorContrib,
-          // P0-7：出分日志（5 分钟刻度 + 等级变化），阈值漂移回溯用
+ // 出分日志（5 分钟刻度 + 等级变化），阈值漂移回溯用
           scoreLog: rescue.scoreLogOf(day ?? undefined).slice(-24),
         }
         if (day !== null && /^\d{4}-\d{2}-\d{2}$/.test(day)) {

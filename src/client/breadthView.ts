@@ -1,14 +1,5 @@
 /**
- * 大盘宽度（涨跌家数）的显示口径（纯函数，无 react，可被 `node --test` 直接跑）。
- *
- * 为什么单独抽出来：`/quotes` 里的涨/跌/平家数（东财 f104/f105/f106）**只有东财源提供**，
- * 备用源（腾讯/新浪）没有这三个字段。此前页面直接 `(sh?.up ?? 0) + (sz?.up ?? 0)` 求和，后果有两个：
- *
- *  1. 只有沪市返回时「上涨 / 下跌」静默减半，`上涨占比` 跟着错 —— 看起来像"市场宽度收敛"；
- *  2. `up` 有值而 `down` 缺失时显示 `1234 / 0`，会被读作**"没有一只下跌"**。
- *
  * 约定（与 README「缺失不许用 0 代替」一致）：**任一分量缺失 ⇒ 整格 `—` + 原因**，
- * 绝不把缺失编码成 0；而真正的 0（当天真的没有一只上涨/下跌）仍然照常显示 0。
  */
 export interface BreadthLeg {
   up: number | null
@@ -91,3 +82,25 @@ export function upDownPair(up: number | null | undefined, down: number | null | 
 export const UPDOWN_MISSING_NOTE =
   '涨跌家数未取到：备用源（腾讯/新浪）不含该字段（东财 f104/f105/f106），等东财恢复后自动重试。' +
   '这里不显示 0 —— 0 会被读成"没有一只下跌"，那是错的信息'
+
+/**
+ * 家数三格取哪一份（P0-1）：**指数行情优先，拿不到才用自统计**。
+ *
+ * 为什么必须有这一步：指数行情走备用源时 `f104/f105/f106` 就没有了（三格全 `—`），
+ * 而 `/tradewatcher/breadth` 的 `current` 可能是本插件自行统计出来的 —— 不接上就会出现
+ * "三格 `—` ＋ 一行说家数是自己统计的 ＋ 一个 62.1% 的占比"这种同屏自相矛盾的读数。
+ *
+ * `current` 为 `null` 时（自统计也没成）返回 `from:'none'`，三格一律 `—`（不用 0 顶替）。
+ */
+export function pickBreadthCounts(
+  cells: Pick<BreadthCells, 'countsOk' | 'up' | 'down' | 'even'>,
+  current: { up: number; down: number; even: number } | null | undefined,
+): { up: number | null; down: number | null; even: number | null; from: 'index' | 'self' | 'none' } {
+  if (cells.countsOk && cells.up !== null && cells.down !== null && cells.even !== null) {
+    return { up: cells.up, down: cells.down, even: cells.even, from: 'index' }
+  }
+  if (current !== null && current !== undefined) {
+    return { up: current.up, down: current.down, even: current.even, from: 'self' }
+  }
+  return { up: null, down: null, even: null, from: 'none' }
+}

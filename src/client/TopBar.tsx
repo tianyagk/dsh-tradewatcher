@@ -356,7 +356,7 @@ export function TopBar(props: {
     TW_ROWS.flatMap((row) => (row.items as ReadonlyArray<{ secid: string }>).map((it) => stateOf(it.secid))),
   )
 
-  // P2-2：当前值（缺省 1 / false，与宿主默认一致）
+ // 当前值（缺省 1 / false，与宿主默认一致）
   const opacity = normalizePanelOpacity(prefs.panelOpacity, 1)
   const blurDigits = prefs.blurDigits === true
   const trendArchive = prefs.trendArchive !== false // 默认开：只有显式 false 才是关
@@ -366,7 +366,7 @@ export function TopBar(props: {
     setPrefs({ theme: next as PortPrefs['theme'] })
   }
 
-  // P2-2：截图/录屏设置（不透明度 + 数字模糊）
+ // 截图/录屏设置（不透明度 + 数字模糊）
   const [shotOpen, setShotOpen] = useState(false)
   const shotModal = shotOpen
     ? React.createElement(Modal, { title: '截图 / 录屏（面板不透明度与数字模糊）', onClose: () => setShotOpen(false) },

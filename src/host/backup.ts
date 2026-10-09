@@ -1,15 +1,5 @@
 /**
- * 多设备导出 / 导入（P0-9）。
- *
- * 不做账号体系与自建云同步（见 README「明确不做」），走**文件**：
- * 导出把 watch/positions/ledger/prefs 打成一份 JSON（带 `schemaVersion` 与校验和），
- * 导入前先预览冲突，覆盖前写 `.bak`。
- *
  * 最硬的一条：**账本重放不一致直接拒绝导入**。宁可不导入，也不能导入一份算不平的账 ——
- * 一旦写进去，之后所有的成本、盈亏、已实现都会建立在一个错的账本上，
- * 而且用户没有任何手段看出来"从哪一天开始不对"。
- *
- * 本文件的校验逻辑是纯函数（不碰 IO），因此可以直接单测。
  */
 import { createHash } from 'node:crypto'
 import type { LedgerEntry, PortGroup, PortItem, PortPrefs, WatchGroup, WatchItem } from '../shared/model.ts'

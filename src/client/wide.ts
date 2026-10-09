@@ -1,16 +1,5 @@
 /**
- * 宽窄布局的判定（纯函数，无 React 依赖）。
- *
- * 为什么要有这个模块：v0.30.0 的列头排序与分段开关此前是**两个都渲染、靠一条 CSS 隐藏其中一个**
- * （`.tw-root [data-wide-hide=1]{display:none !important}`）。实测出现了两者同时可见的情况 ——
- * 只要那条选择器链的任何一环失配（祖先类名、媒体查询、内联样式优先级），用户就会看到两套排序控件
- * 各说一套。**"靠 CSS 藏起来"不是互斥，只是看起来互斥**。
- *
- * 现在改为：由这里判定当前该用哪个控件，**只挂那一个**。于是"两个控件同时出现"在结构上不可能，
- * CSS 里那条隐藏规则退化为兜底（保留，但不再是唯一防线）。
- *
  * 断点值必须与 `styles.ts` 的多列网格（`.tw-wlist`/`.tw-poslist` 的 `columns:520px` 生效阈值）
- * 和列头样式保持一致 —— 不一致会出现"列头没挂但段控被藏"这种最坏情况。
  */
 export const WIDE_MIN_PX = 1080
 
@@ -27,4 +16,20 @@ export type LayoutMode = 'wide' | 'narrow'
 /** 布局档位：判定不出宽度时返回 `narrow`（= 保留段控，任何情况下都有一个排序入口） */
 export function layoutModeOf(width: number | null | undefined): LayoutMode {
   return isWideWidth(width) ? 'wide' : 'narrow'
+}
+
+/** 排序入口：宽屏挂列头、窄屏挂段控 */
+export type SortEntry = 'header' | 'bar'
+
+/**
+ * 排序入口的选择（P1-4）：**必须恰有一个**。
+ *
+ * 只按宽度判定是不够的：列头默认 `display:none`、靠样式表的媒体查询才显示 ⇒ 样式表缺失或陈旧时
+ * 宽屏会变成"一个排序入口都没有"（v0.30.1 修的是镜像问题："两个同时出现"）。
+ * 因此宽屏要求列头**真的可见**（量过 `getComputedStyle`）才用列头；量不到就退回段控。
+ * 段控是**始终可用**的那一个，失败方向安全。
+ */
+export function pickSortEntry(args: { wide: boolean; headerVisible: boolean | null }): SortEntry {
+  if (!args.wide) return 'bar'
+  return args.headerVisible === true ? 'header' : 'bar'
 }

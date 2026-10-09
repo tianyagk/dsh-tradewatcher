@@ -1,9 +1,4 @@
 /**
- * 分时图坐标域与均价/成交量可用性的断言（图表 bug 的回归锁）。
- *
- * 缺陷形态：国际指数/外盘商品的分时 `avg/vol/amount` 全被回成 0，
- * 0 作为"真实值"进入 y 轴域 ⇒ 4274~4303 的走势被压进 0~4303 的轴（看着是平线），
- * 成交量窗格的 `max` 又兜底成 1 ⇒ 印出 `成交量 1.00`。
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'

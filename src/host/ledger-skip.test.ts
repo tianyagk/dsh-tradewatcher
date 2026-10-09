@@ -1,9 +1,5 @@
 /**
  * 账本重放"跳过条目"必须可读（P1-5）的断言。
- *
- * 缺陷形态：`replayPosition` 对未能应用的流水 `catch {}` 静默保留前值 ——
- * 账本里能看到 5 笔、持仓快照却少一块，而没有任何标记说明"有 N 条流水没被应用"。
- * 这是账务口径的静默降级：用户对不上账时无从下手。
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'

@@ -1,13 +1,9 @@
 /**
- * 大盘宽度显示口径的断言（`node --test` 直跑，不打网络）。
- *
  * 这组断言的重点只有一个，但它必须被锁死：**缺失不许编码成 0**。
- * `up=null` 时若返回 0，界面就会显示"上涨 0"或"下跌 0"，而这两句话
- * 在 A 股语境里都是确定的错信息（"全市场没有一只上涨"/"没有一只下跌"）。
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { type BreadthLeg, breadthCells, upDownPair } from './breadthView.ts'
+import { pickBreadthCounts, type BreadthLeg, breadthCells, upDownPair } from './breadthView.ts'
 
 interface Overrides {
   sh?: number | null
@@ -83,4 +79,17 @@ test('upDownPair：一侧缺失 → 整对不可用（不留 1234 / 0）', () =>
   assert.deepEqual(upDownPair(null, 999), { ok: false, up: null, down: null })
   assert.deepEqual(upDownPair(undefined, undefined), { ok: false, up: null, down: null })
   assert.deepEqual(upDownPair(Number.NaN, 1), { ok: false, up: null, down: null })
+})
+
+test('家数取值（P0-1）：指数行情有就用它；没有则用自统计，绝不留在 —', () => {
+  const ok = { countsOk: true, up: 3120, down: 1840, even: 120 }
+  const none = { countsOk: false, up: null, down: null, even: null }
+  const self = { up: 3000, down: 2200, even: 100 }
+  // 指数行情可用时以它为准（即使自统计也在）
+  assert.deepEqual(pickBreadthCounts(ok, self), { up: 3120, down: 1840, even: 120, from: 'index' })
+  // 用户实测场景：指数行情走备用源 ⇒ 三格必须显示自统计数，而不是 —
+  assert.deepEqual(pickBreadthCounts(none, self), { up: 3000, down: 2200, even: 100, from: 'self' })
+  // 两路都没有 ⇒ 三格 —（不许 0 顶替）
+  assert.deepEqual(pickBreadthCounts(none, null), { up: null, down: null, even: null, from: 'none' })
+  assert.deepEqual(pickBreadthCounts(none, undefined), { up: null, down: null, even: null, from: 'none' })
 })

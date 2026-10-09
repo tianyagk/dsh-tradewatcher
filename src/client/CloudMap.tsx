@@ -1,19 +1,9 @@
 /**
- * 大盘云图: embeds the third-party free A-share heat-map page.
- *
- * 三态降级（P0-10）：**加载中 / 已加载 / 超时**。
- * 此前只有一个 `loaded` 布尔，于是"白了就是白了"——分不清是没网、站点挂了，
- * 还是自己还在加载。现在：
- *   - 懒加载：进入本页才开始计时（面板本身只在被选中时挂载）；
- *   - 8s 超时：超时显示占位（域名 + 最后成功时间），而不是留一块空白 iframe；
- *   - 超时态给一次「重试」，重试会重建 iframe（换 key）并重新计时；
- *   - 最后成功时间记在 localStorage，跨会话可见（"上次是几点还能用的"）。
- *
- * 本仓库只做展示与降级说明，**不抓取**该站内容（见 README「明确不做」）。
  */
 import React, { useEffect, useRef, useState } from 'react'
 import { Btn } from './ui.tsx'
 import { IndustryHeatmap } from './IndustryHeatmap.tsx'
+import { fmtStamp } from './format.ts'
 
 /** 第三方源站（展示用；实现里只引用这一处，域名不散落） */
 const CLOUD_MAP_URL = 'https://52etf.site/'
@@ -116,7 +106,7 @@ export function CloudMap(props: {
 
   const lastOkText = lastOk === null
     ? '尚无成功记录'
-    : new Date(lastOk).toLocaleString('zh-CN', { hour12: false })
+    : fmtStamp(lastOk)
 
   if (source === 'self') {
     return React.createElement(
@@ -146,8 +136,8 @@ export function CloudMap(props: {
         React.createElement('button', { 'data-on': false, onClick: () => setSource('self') }, '自绘'),
         React.createElement('button', { 'data-on': true, onClick: () => setSource('third') }, '第三方站点'),
       ),
-      React.createElement('span', { className: 'tw-hint', style: { margin: 0 } }, '面积=流通市值，颜色=涨跌幅，自动刷新（频率以站点实际为准），滚轮缩放、双击看K线、方向键复盘'),
-      // S13：该站点的色义与本插件**相反**且改不了 —— 只有相反时才出徽标（一致时是零信息，R4）；
+      React.createElement('span', { className: 'tw-hint', style: { margin: 0 } }, '面积=流通市值 · 双击看K线'),
+ // 该站点的色义与本插件**相反**且改不了 —— 只有相反时才出徽标（一致时是零信息，R4）；
       // 文案压成 12 字，完整口径进 title（K7：同屏两套色义，相反时必须写出来）
       redUp
         ? React.createElement('span', {
@@ -168,9 +158,6 @@ export function CloudMap(props: {
           React.createElement('div', {}, `无法在 ${TIMEOUT_MS / 1000} 秒内加载 ${CLOUD_MAP_HOST}`),
           React.createElement('div', { className: 'tw-hint', style: { margin: '4px 0 0' } },
             `可能是本机网络不通，或该第三方站点暂时不可用（本插件无法区分二者，也不会去抓取它的内容）。最后成功加载：${lastOkText}`,
-          ),
-          React.createElement('div', { className: 'tw-hint', style: { margin: '4px 0 0' } },
-            '可以点「重试」，或点「新窗口打开」在浏览器里直接访问以确认到底是哪一边的问题。',
           ),
         )
       : null,

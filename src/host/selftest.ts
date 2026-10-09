@@ -134,7 +134,7 @@ async function main(): Promise<void> {
     ok(r2?.dayPnl !== null && r2 !== undefined && Math.abs(r2.dayPnl - 450) < 1e-6, `dayPnl with overnight base → 450 (got ${r2?.dayPnl})`)
     ok(r2?.dayPnlPct !== null && r2 !== undefined && Math.abs(r2.dayPnlPct - 30) < 0.01, `dayPnlPct overnight → 30 (got ${r2?.dayPnlPct})`)
 
-    // P1-8：A股 T+1 —— 当日买入的部分当日不可卖（另起临时目录，避免影响上面的账本断言）
+ // A股 T+1 —— 当日买入的部分当日不可卖（另起临时目录，避免影响上面的账本断言）
     const t1store = new DataStore(mkdtempSync(join(tmpdir(), 'tw-selftest-t1-')))
     await t1store.init()
     await t1store.mutatePortfolio({ op: 'addGroup', name: 'T+1 验证' })

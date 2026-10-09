@@ -7,7 +7,8 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import type { LedgerEntry, PortGroup, PortItem } from '../shared/model.ts'
-import { assemblePortfolio, isT0Secid } from './portfolio.ts'
+import { isT0Secid } from '../shared/model.ts'
+import { assemblePortfolio } from './portfolio.ts'
 
 test('P1-5 T+0 判定：场内基金/港股/美股为 T+0，A股股票为 T+1', () => {
   // 沪深 ETF/LOF（T+0）

@@ -1,9 +1,4 @@
 /**
- * 【护盘信号】默认阈值与基准 —— 由 scripts/calibrate-rescue.mjs 生成，请勿手改。
- * 标定日 2026-09-24；方法：F1: Tencent daily kline (vol×100×close ≈ amount), 20-day rolling ratio percentiles; progress: Sina 5-min cumulative volume share
- *   F1 量能倍数：2886 个样本（6 只宽基 ETF × 约 481 个交易日的 20 日滚动量比）
- *   日内进度曲线：126 个交易日（新浪 5 分钟线）
- *   F2 超大单强度：免费源已无日频资金流历史 → 经验锚点，由 host 采样器自建样本满 20 交易日后重算
  */
 export interface RescueCalibration {
   generatedAt: string

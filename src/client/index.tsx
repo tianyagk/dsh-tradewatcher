@@ -1,12 +1,4 @@
 /**
- * dsh-tradewatcher — browser half. Registers a global panel through the
- * Harness Slots service（`sidebar.panellist` 图标 + 同名 `main` 面板键）and
- * renders the full dashboard: three-strip TopBar with hover intraday charts,
- * inner tabs (自选 / 持仓 / 大盘 / 云图 / 日历), all data served by the host
- * half over same-origin /tradewatcher/* routes.
- *
- * 注意：面板只在「被选中」时挂载（shell 用 renderSlot('main', …, {entryKey}) 只渲染
- * 当前 key），所以挂载即等价于旧版的 visible —— 未选中时组件卸载，轮询自然停止。
  */
 import React, { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react'
 import { DEFAULT_PREFS, TW_ROWS, VIEW_MODES, normalizePanelOpacity, type PortPrefs, type QuoteRow, type ViewMode } from '../shared/model.ts'
@@ -289,7 +281,7 @@ function Dashboard(): React.ReactElement {
   const toast = useToast()
 
   const viewMode: ViewMode = prefs?.viewMode ?? 'full'
-  // P0-8：金额遮罩做在格式化出口里，因此这一行就够全局生效（取数/告警/工具返回不受影响）
+ // 金额遮罩做在格式化出口里，因此这一行就够全局生效（取数/告警/工具返回不受影响）
   useEffect(() => {
     setMoneyMask(viewMode === 'incognito')
     // 徽标字形随视图档位变化（隐身档只显示点位），必须立刻重取一次
@@ -323,7 +315,7 @@ function Dashboard(): React.ReactElement {
     // prefs?.viewMode 是读当前档位的唯一来源，必须进依赖
   }, [prefs?.viewMode, toast])
 
-  // P2-2：面板不透明度与数字模糊。两者都只作用于本面板（见 styles.ts 的说明）
+ // 面板不透明度与数字模糊。两者都只作用于本面板（见 styles.ts 的说明）
   const panelOpacity = normalizePanelOpacity(prefs?.panelOpacity, 1)
   const blurDigits = prefs?.blurDigits === true
 

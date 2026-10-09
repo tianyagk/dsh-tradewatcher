@@ -1,9 +1,4 @@
 /**
- * Browser-trust fence for the /tradewatcher/* routes, behaviorally identical
- * to the /api gateway's fence (and to dsh-better-sidebar's own trust-fence):
- * Host-header loopback or a configured trusted authority passes; cross-site
- * browser markers refuse. This is a DNS-rebinding / cross-site defense, not
- * authentication. (Same helper the ecosystem starter plugin ships.)
  */
 import type { IncomingHttpHeaders } from 'node:http'
 

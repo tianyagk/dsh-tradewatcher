@@ -314,7 +314,8 @@ export function QuoteDrawer(props: { secid: string; name: string; redUp: boolean
       const first = k.days[0]
       const last = k.days[k.days.length - 1]
       if (first !== undefined && last !== undefined) {
-        note = `共 ${k.days.length} 根${fqNoteOf(k)} · ${first.date} ~ ${last.date} · MA5/10/30/60 · 滚轮或拖动滑块缩放日期区间${k.stale === true ? ' · 缓存数据（上游暂不可用）' : ''}`
+        // D4：降级说明只留一处（下面 `cacheNoteOf` 的统一写法）；这里不再各写一句
+        note = `共 ${k.days.length} 根${fqNoteOf(k)} · ${first.date} ~ ${last.date} · MA5/10/30/60 · 滚轮或拖动滑块缩放日期区间`
       } else {
         note = fqNoteOf(k).replace(/^ · /, '')
       }
@@ -353,10 +354,8 @@ export function QuoteDrawer(props: { secid: string; name: string; redUp: boolean
             : trendDayCount(t.points) <= 1
               ? ' · 仅当日（该市场无多日源）'
               : ''
-        const archiveMarker = t.archive !== undefined && t.archive.skipped.length > 0
-          ? ` · 本次未归档（${t.archive.skipped[0].reason}）`
-          : ''
-        return base + fiveMarker + archiveMarker
+        // 归档失败属运维细节：正文不再占位，原因并入口径条的完整解释（见 caliberExplain）
+        return base + fiveMarker
       }
       return ''
     }
@@ -388,7 +387,11 @@ export function QuoteDrawer(props: { secid: string; name: string; redUp: boolean
         (cov.missing.length > 0
           ? `，缺 ${cov.missing.join('、')}（工作日里没有归档的日子；本插件没有交易日历，节假日也会列在这里）`
           : '') +
-        `。归档**从本版起累积**（每天打开一次该标的即可 +1 天），保留最近 12 个交易日，可在「截图/录屏」设置里关闭。`
+        `。归档**从本版起累积**（每天打开一次该标的即可 +1 天），保留最近 12 个交易日，可在「截图/录屏」设置里关闭。` +
+        // 归档失败属运维细节：正文不占位，原因写在这里（一次）
+        (payload.trend.archive !== undefined && payload.trend.archive.skipped.length > 0
+          ? `本次有 ${payload.trend.archive.skipped.length} 天未归档：${payload.trend.archive.skipped[0].reason}。`
+          : '')
     }
     if (trendDayCount(payload.trend.points) <= 1) {
       return '该市场没有多日分钟源（多日分钟源只覆盖沪/深：新浪 5 分钟线 → 腾讯 5 分钟线），' +
@@ -456,7 +459,7 @@ export function QuoteDrawer(props: { secid: string; name: string; redUp: boolean
           ? React.createElement('div', {
               className: 'tw-caliber',
               // 有五日覆盖说明时把完整解释放进来，并让键盘也能读到（tabIndex/aria）——P1-5 的同一约定
-              title: caliberExplain ?? '图上每个数都按这一行口径解释：周期 klt 来自实际请求参数，复权口径来自宿主回包的实际生效值；「截至」是本地最近一次成功取数时刻（未收盘当根在上游没有收盘时间，不用「现在」顶替）',
+              title: caliberExplain ?? '口径取自实际请求与宿主回包生效值',
               ...(caliberExplain !== null ? { tabIndex: 0, role: 'note', 'aria-label': `${caliber}。${caliberExplain}` } : {}),
             }, caliber)
           : null,
@@ -468,7 +471,7 @@ export function QuoteDrawer(props: { secid: string; name: string; redUp: boolean
       React.createElement('div', { className: 'tw-drawer-foot' },
         React.createElement('span', { className: 'tw-muted' }, `${name} · ${secid}`),
         React.createElement('span', { style: { flex: 1 } }),
-        React.createElement('span', { className: 'tw-muted' }, '数据为延迟行情，仅作参考'),
+        React.createElement('span', { className: 'tw-muted' }, '延迟行情'),
       ),
     ),
   )

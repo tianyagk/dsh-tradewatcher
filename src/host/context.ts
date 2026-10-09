@@ -1,10 +1,4 @@
 /**
- * Structural faces of the host services dsh-tradewatcher consumes. This plugin
- * resolves outside the DSH monorepo's single cordis instance, so the upstream
- * `declare module '@deepseek-ai/cordis'` augmentations do not reliably reach
- * this Context — the members below mirror the actual runtime shapes (the same
- * approach dsh-better-sidebar and ecosystem plugins take). The real `ctx`
- * passed by the loader satisfies these structurally.
  */
 import type { IncomingMessage, ServerResponse } from 'node:http'
 

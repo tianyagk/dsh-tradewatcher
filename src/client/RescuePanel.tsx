@@ -1,11 +1,4 @@
 /**
- * 【护盘信号】面板：国家队潜在护盘行为的概率性监测。
- *
- * 设计要点：
- *  - 常驻状态条（等级/评分/归因/采样节奏），信号 ≥ 疑似时面板自动展开
- *  - 六因子明细表把「实测值 / 阈值 / 来源」全部摆出来，便于自查，不做黑箱
- *  - 分时量能图：分钟成交额柱 + 同时点基准线（用标定的日内进度曲线算），超出 2× 的柱子高亮
- *  - 信号时间线 + 近 60 日历史回看（自采样器上线日起）
  */
 import * as React from 'react'
 import type {
@@ -22,6 +15,7 @@ function shortReason(text: string, max = 42): string {
 
 import { api } from './api'
 import { Btn, ErrorNote, Field, Modal, Skeleton } from './ui'
+import { fmtStamp } from './format.ts'
 
 const LEVEL_COLOR: Record<RescueLevel, string> = {
   0: 'var(--tw-fg-dim, #8b93a7)',
@@ -357,7 +351,7 @@ export function RescuePanel(props: {
   }
 
   const level = snapshot?.level ?? 0
-  // P0-4：采样窗口状态由宿主给出（含下次采样时刻）；老宿主没有该字段时不冒充"暂停"
+ // 采样窗口状态由宿主给出（含下次采样时刻）；老宿主没有该字段时不冒充"暂停"
   const win = snapshot?.activeWindow
   const paused = snapshot !== null && win !== undefined && win.sampling !== true
   const pauseReason = win?.reason === 'weekend' ? '周末休市'
@@ -389,7 +383,7 @@ export function RescuePanel(props: {
         ? React.createElement('span', {
             className: 'tw-muted',
             style: { fontFamily: 'var(--tw-mono)', fontSize: 11 },
-            // P0-4：非采样时段分数位显示 —（不是把上一次的分数留在那里假装是当前分）
+ // 非采样时段分数位显示 —（不是把上一次的分数留在那里假装是当前分）
             title: paused
               ? `采样暂停（${pauseReason}）：分数位显示 —，因为当前没有在采样；下方与该分数相关的结论都是最近一次采样的结果`
               : '本次快照评分（Σ 权×因子分×时点系数）',
@@ -420,8 +414,8 @@ export function RescuePanel(props: {
             className: 'tw-muted',
             style: { fontSize: 10.5 },
             title: [
-              snapshot.lastSampleTs !== null ? `最近一次成功采样：${new Date(snapshot.lastSampleTs).toLocaleString('zh-CN', { hour12: false })}` : '尚未成功采样',
-              snapshot.lastFailTs !== null && snapshot.lastFailTs !== undefined ? `最近一次采样失败：${new Date(snapshot.lastFailTs).toLocaleString('zh-CN', { hour12: false })}` : null,
+              snapshot.lastSampleTs !== null ? `最近一次成功采样：${fmtStamp(snapshot.lastSampleTs)}` : '尚未成功采样',
+              snapshot.lastFailTs !== null && snapshot.lastFailTs !== undefined ? `最近一次采样失败：${fmtStamp(snapshot.lastFailTs)}` : null,
               snapshot.flowSource === 'tencent' ? '数据来源：腾讯备用源（无分单资金流）' : snapshot.flowSource === 'em' ? '数据来源：东方财富（含分单资金流）' : null,
               snapshot.note ?? null,
             ].filter(Boolean).join('\n'),
@@ -435,7 +429,7 @@ export function RescuePanel(props: {
             `${snapshot.flowSource === 'tencent' ? ' · 腾讯源' : ''}` +
             // 两种"不新鲜"必须分开说：有失败时刻 = 采样失败；只有缺口标记 = 当日有过缺口
             //（磁盘上的旧快照、会话未采样等）；仅 stale（本会话未采样）由「上次数据」红标说明。
-            // P0-4：**暂停时段一律不出现「采样缺口」字样** —— 那时缺口不是正在发生的事，
+ // **暂停时段一律不出现「采样缺口」字样** —— 那时缺口不是正在发生的事
             // 说成"缺口"会让人以为要处理；改为陈述"当日曾中断"。
             `${paused
               ? snapshot.lastFailTs !== null && snapshot.lastFailTs !== undefined
@@ -516,9 +510,12 @@ export function RescuePanel(props: {
           'aria-label': `护盘通道本次未取到：${error ?? '上游未返回宽基通道数据（下一次采样自动重试）'}`,
         },
           React.createElement('span', { className: 'tw-muted' }, '护盘通道 —'),
-          error === null
-            ? React.createElement('span', { className: 'tw-muted' }, '上游本次未返回宽基通道数据（下一次采样自动重试）')
-            : React.createElement('span', { className: 'tw-muted', title: error }, shortReason(error)),
+          error !== null
+            ? React.createElement('span', { className: 'tw-muted', title: error }, shortReason(error))
+            : paused
+              // 时段性（收盘/午休/周末/未开盘）：这不是故障，别写成"上游未返回"
+              ? React.createElement('span', { className: 'tw-muted' }, `${pauseReason}，无采样（下次开盘自动重试）`)
+              : React.createElement('span', { className: 'tw-muted' }, '上游本次未取到（下次采样自动重试）'),
           React.createElement(Btn, { onClick: () => load(true) }, '重试'),
         )
       : !expanded && snapshot !== null

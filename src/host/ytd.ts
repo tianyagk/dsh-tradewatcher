@@ -1,23 +1,6 @@
 /**
- * 年初至今（YTD）。
- *
- * 口径**写死在 `shared/model.ts` 的 `YTD_CALIBER`**（界面 tooltip 与 agent 工具引用同一句）：
- *
- *   YTD = (现价 − 本年内第一个交易日收盘价) ÷ 该收盘价 × 100%，序列用**前复权**。
- *
  * 三条实现约定（都是"宁可显示 — 也不给一个看着正常的错数"）：
- *
  *  1. **基准必须已收盘**：年内第一个交易日的**收盘价**才是基准。若该日就是今天
- *     （一年里只有这一天会撞上：1 月第一个交易日）则本轮不给数 —— 不拿未收盘价当基准，
- *     也不拿上一年收盘顶替（那属于另一条口径，混进来就说不清了）。
- *  2. **本年内上市要标出来**：序列里没有更早的交易日时，基准是**上市首日**而不是年初，
- *     按"年初至今"读会高估，因此 `baseKind='listing'`，界面单独给 tooltip。
- *  3. **指数/期货不适用复权**：`fqSupported=false` 时按原始价格（点位/合约价）计算，
- *     并在 tooltip 说明 —— 与 K 线详情图的复权开关同一套判定（`em.fqSupported`）。
- *
- * 取数复用 `em.fetchKline`（磁盘缓存 + 增量 + 单飞），因此**不会每个轮询周期重算**：
- * 基准按 (secid, 交易日) memo 一天一次，失败结果带冷却（默认 10 分钟）以免重试轰炸上游。
- * 批量并发有界（≤4），与 `anomaly.ts` 的写法保持一致。
  */
 import type { DayBar, FqMode, KlineData, MissingField, YtdBaseKind, YtdRow } from '../shared/model.ts'
 import * as em from './em.ts'
@@ -181,10 +164,6 @@ export async function ytdBaseOf(secid: string, day: string, deps: YtdDeps = {}):
 /** 默认 memo（进程级，按日粒度；路由与 agent 工具共用同一份，避免各算一遍） */
 const defaultMemo = new YtdMemo()
 
-export function defaultYtdMemo(): YtdMemo {
-  return defaultMemo
-}
-
 export interface YtdItem {
   secid: string
   name: string
@@ -219,7 +198,7 @@ export async function computeYtds(items: readonly YtdItem[], deps: YtdDeps = {})
         ? null
         : await ytdBaseOf(it.secid, day, { ...deps, memo })
       if (base === null) {
-        const why = '无可用行情（现价缺失），YTD 无法计算：稍后随行情轮询自动重试'
+        const why = '未取到现价，YTD 无法计算：稍后随行情轮询自动重试'
         rows.push({
           secid: it.secid,
           name: it.name,

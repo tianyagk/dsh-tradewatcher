@@ -1,20 +1,4 @@
 /**
- * 【护盘信号】国家队护盘行为的概率性识别。
- *
- * 口径与诚实边界（重要）：
- *  - 汇金/国新/诚通不披露日内成交，本模块识别的是「符合国家队历史行为模式的
- *    宽基 ETF 放量 + 超大单净流入」，输出**概率性信号**，不等于证明买入方身份。
- *  - 超大单为东财按单笔金额的分类口径（非席位数据）；ETF 成交额含做市双边报价与
- *    套利盘，天量 ≠ 净买入，因此始终用「超大单净额」与「量价背离」交叉验证。
- *
- * 阈值来源（全部在 UI 标注，不藏黑箱）：
- *  - F1 量能倍数：历史分位数标定（scripts/calibrate-rescue.mjs，2886 个样本）
- *  - 日内进度曲线：126 个交易日的新浪 5 分钟线标定
- *  - F2 超大单强度：免费源已无日频资金流历史 → 经验锚点，host 采样器自建样本满
- *    20 个交易日后改用自建分位数（thresholdSource = 'self'）
- *
- * 数据文件：<dataHome>/rescue-log.json（60 天滚动）
- * 采样节奏：常态 30s，尾盘（默认 14:30 后）15s，仅交易时段活跃，每次采样 1 个批量请求。
  */
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
@@ -22,7 +6,7 @@ import type {
   DailyBarLite, RescueActiveWindow, RescueBottomLane, RescueConfig, RescueDaySummary, RescueEtfMeta, RescueEtfView,
   RescueFactor, RescueIntradayPoint, RescueLevel, RescueSignalEvent, RescueSnapshot, RescueThresholdSource,
 } from '../shared/model.ts'
-import { RESCUE_CORE_OUTFLOW_VETO, RESCUE_CORE_INDEXES, RESCUE_PERIPHERAL_FLOW_DISCOUNT, rescueUniverseMeta } from '../shared/model.ts'
+import { numOrNull, RESCUE_CORE_OUTFLOW_VETO, RESCUE_CORE_INDEXES, RESCUE_PERIPHERAL_FLOW_DISCOUNT, rescueUniverseMeta } from '../shared/model.ts'
 import { RESCUE_CALIBRATION } from './rescue-thresholds.ts'
 import { hostsAllowed } from './breaker.ts'
 import { QUOTE_HOSTS as EM_QUOTE_HOSTS, HISTORY_HOSTS as EM_HISTORY_HOSTS, fetchAny as fetchAnyJson } from './em.ts'
@@ -601,19 +585,8 @@ export function windowFlowStats(
   return { persistShare, retraceRatio }
 }
 
-/**
- * 脉冲参考点选择（纯函数，便于断言）。
- *
- * 规则：只有在 `[evalAt - windowMs - 容差, evalAt - windowMs + 容差]` **窗口内**的序列点
- * 才能当作"5 分钟前"的参考；且序列末端必须贴近 evalAt（`evalTs - last <= maxLagMs`）。
- *
- * 为什么必须卡这两个边界（v0.21.0 修的 bug）：分钟序列此前**每天只在冷启动回填写一次**，
- * 而参考点选择以"序列末端"为锚点（`evalAt = min(evalTs, last)`）—— 序列过期后，
- * 分子变成"序列末端→现在"的累计成交额（可达几十分钟），分母仍是"5 分钟"的预期，
- * 于是脉冲被系统性放大。实测（假时钟 10:30 盘中、同一份真实行情）：
- * 过期序列 → 5.01x，采样环口径 → 1.12x（因子分 60 vs 22）。
- * 卡住窗口后，过期序列提供不了窗口内的点 → 自然退回采样环口径，**算错变成不可能**。
- */
+ // 才能当作"5 分钟前"的参考；且序列末端必须贴近 evalAt（`evalTs - last <= maxLagMs`）。
+ // 为什么必须卡这两个边界（v0.21.0 修的 bug）：分钟序列此前**每天只在冷启动回填写一次**，
 export function pickPulseRef(
   series: readonly { ts: number; amount: number }[],
   evalTs: number,
@@ -677,7 +650,8 @@ export interface RescueQuoteRow {
   low: number | null
 }
 
-const num = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null)
+// 与其它模块共用 shared 的实现（S7）
+const num = numOrNull
 
 /** 批量快照（含 ETF 资金流字段；ETF 的 f62/f66 东财同样提供） */
 export async function fetchRescueQuotes(secids: string[]): Promise<Record<string, RescueQuoteRow>> {

@@ -5,7 +5,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { ema, fmtAxis, ma, macd, niceTicks } from './indicators.ts'
-import { fmtAmt, fmtBig, fmtPct, fmtPrice, fmtSigned, fmtTime } from './format.ts'
+import { fmtAmt, fmtBig, fmtPct, fmtPrice, fmtSigned } from './format.ts'
 
 test('ma：长度对齐、空/单点/period>len 不抛错', () => {
   assert.deepEqual(ma([], 3), [])
@@ -58,7 +58,6 @@ test('format：空值统一为占位符、不抛错', () => {
     assert.equal(typeof fmtAmt(v), 'string')
     assert.equal(typeof fmtBig(v), 'string')
     assert.equal(typeof fmtSigned(v), 'string')
-    assert.equal(typeof fmtTime(v), 'string')
   }
   // 双重编码：方向由箭头承担，数值只给量级（颜色由主题语义决定）
   assert.equal(fmtPct(1.235), '▲1.24%')

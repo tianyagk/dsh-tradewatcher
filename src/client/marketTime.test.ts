@@ -1,10 +1,5 @@
 /**
- * 北京时间交易时段判定的断言。
- *
  * 与宿主侧 `host/time.test.ts` 同一个思路：**在任意宿主时区下都必须成立**。
- * 客户端的时区由浏览器决定（可能是 UTC、America/New_York，或容器里的 headless 环境），
- * 用 `new Date().getHours()` 会把"收盘后"判成"盘中"，于是「定稿」标记永远不出现。
- * `npm test` 会跑两遍（宿主 TZ 与 TZ=UTC），只有显式切 TZ 才锁得住这一点。
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'

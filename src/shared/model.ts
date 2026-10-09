@@ -115,21 +115,7 @@ export interface TrendPoint {
   amount?: number | null
 }
 
-/**
- * 分时序列的缺失值归一（图表 bug 的根因修复）：**缺失不许编码成 0**。
- *
- * 症状：国际指数/外盘商品的分时被画成一条"平线"，y 轴 0.000/2000/4000、成交量显示 `1.00`。
- * 成因：东财 `trends2` 对这类标的一律回 `avg=0, vol=0, amount=0`，而 0 被当成真实值参与
- * y 轴域计算（把 4274~4303 的走势压进 0~4303 的轴），成交量窗格又把 `max` 兜底成 1。
- *
- * 归一规则（两类字段判定方式不同，别混）：
- *  - `avg`（当日均价/VWAP）**逐点**判：真实 VWAP 不可能 ≤ 0，所以 `!(v > 0)` 就是"没有" ⇒ `null`；
- *  - `vol` / `amount` **按整条序列**判：只要序列里存在一个 > 0 的值，就说明该源确实提供这个字段，
- *    其余点照原样保留（安静的分钟真的可能是 0）；整条都没有 ⇒ 该源不提供 ⇒ 全部 `null`。
- *    逐点抹零会把"这一分钟真的没成交"误报成"没有数据"，同样是造假。
- *
- * 幂等：对已经归一过的序列再跑一次结果不变（客户端可防御性地再跑）。
- */
+ // 分时序列的缺失值归一（图表 bug 的根因修复）：**缺失不许编码成 0**。
 export function normalizeTrendSeries(points: readonly TrendPoint[]): TrendPoint[] {
   const hasVol = points.some((p) => typeof p.vol === 'number' && p.vol > 0)
   const hasAmount = points.some((p) => typeof p.amount === 'number' && p.amount > 0)
@@ -375,13 +361,6 @@ export interface CalEvent {
   link?: CalLink
 }
 
-export interface CalPayload {
-  events: CalEvent[]
-  syncedAt: number
-  /** 自动同步覆盖的标的代码（来自自选+持仓） */
-  symbolCount: number
-}
-
 /** 一笔买卖（图上的 B/S 标记，来自持仓流水）。 */
 export interface TradeMark {
   id: string
@@ -554,8 +533,6 @@ export const PORT_SORT_KEYS: readonly PortSortKey[] = ['default', 'mv', 'pnl', '
 export type ViewMode = 'full' | 'compact' | 'incognito'
 
 export const VIEW_MODES: readonly ViewMode[] = ['full', 'compact', 'incognito']
-export const VIEW_MODE_LABEL: Record<ViewMode, string> = { full: '完整', compact: '紧凑', incognito: '隐身' }
-
 /**
  * 面板不透明度的取值范围（P2-2）。下限 0.35 是"还能看出这是块面板"的经验底线：
  * 再低就和桌面混在一起、连区域边界都认不出来，反而不好用。
@@ -723,12 +700,6 @@ export interface PositionRow {
    * 界面与工具据此给出原因（`realizedUnknownNote`），而不是只甩一个 `—`。
    */
   realizedUnknownQty?: number
-}
-
-/** 所属行业板块快照（个股详情抽屉用；非 A股 返回 null）。 */
-export interface IndustryInfo {
-  name: string
-  pct: number | null
 }
 
 export interface GroupView {
@@ -930,12 +901,51 @@ export function marketOf(secid: string): Market {
  * 每个调用点只补"**具体是谁不可达 / 为什么没有兜底**"那半句，这半句永远来自这里 ——
  * 它决定用户的下一步动作（等 vs 改口径），所以措辞必须稳定且两档可区分。
  */
-export const MISSING_TIER_ADVICE: Record<'transient' | 'no-source', string> = {
-  transient: '上游暂时不可达，稍后自动重试',
-  'no-source': '结构性缺失，重试无用',
+/**
+ * 流水动词的中文名（**宿主与客户端共用这一份**）。
+ *
+ * 为什么要共享：宿主侧（工具输出）与客户端（流水弹窗）此前各写一份逐字相同的映射 ——
+ * 改一处忘另一处，同一笔买卖在两个界面就会叫两个名字。
+ */
+export const LEDGER_VERB_LABEL = {
+  buy: '买入',
+  sell: '卖出',
+  adjust: '调整',
+  add: '新建持仓',
+  remove: '移除持仓',
+  gcreate: '新建分组',
+  grename: '分组改名',
+  gdelete: '归档分组',
+  grestore: '还原分组',
+  gmove: '移动/编辑',
+  pnote: '备注',
+} as const
+
+/**
+ * `number | null | undefined` → 有限数或 `null`（宿主多处数值判定共用这一份）。
+ *
+ * ⚠ 只处理**数字**：上游把数字当字符串给（东财 `f3: '1.23'`、`'-'` 表示无值）的那几条链路
+ * （`em.ts` 的 `num`、`tencent.ts`/`sina.ts` 的 `num`）有自己的字符串解析，**不要合并**：
+ * 把 `'1.23'` 判成 `null` 会让行情字段整片变 `—`。
+ */
+export function numOrNull(v: unknown): number | null {
+  if (v === null || v === undefined) return null
+  return typeof v === 'number' && Number.isFinite(v) ? v : null
 }
 
-/** 行内/弹窗用的短句（80 字全文只留面板级一处 —— S18，避免同一句在每行各写一遍） */
+export const MISSING_TIER_ADVICE: Record<'transient' | 'no-source', string> = {
+  // 只留**动作**：前半句已经写了"不可达/没取到"，尾句再重复同一事实就是啰嗦（R2/R3）
+  transient: '稍后自动重试',
+  'no-source': '重试无用',
+}
+
+/** 两档的**短标签**（列表/工具输出用）——与 `MISSING_TIER_ADVICE` 同一处定义，避免各处三目分叉 */
+export const MISSING_TIER_LABEL: Record<'transient' | 'no-source', string> = {
+  transient: '本次失败',
+  'no-source': '上游无此数据',
+}
+
+/** 行内/弹窗用的短句（80 字全文只留面板级一处 —— 避免同一句在每行各写一遍） */
 export function realizedUnknownShort(qty: number): string {
   const n = Math.round(qty * 1e4) / 1e4
   return `已实现不可算：${n} 股成本录入前卖出`
@@ -1397,9 +1407,4 @@ export interface RescueDaySummary {
   maxScore: number
   events: number
   peakHhmm: string | null
-}
-
-export interface RescuePayload {
-  snapshot: RescueSnapshot
-  history: RescueDaySummary[]
 }

@@ -1,12 +1,5 @@
 /**
- * 年初至今（YTD）取数（客户端侧）。
- *
- * 跟随**共享行情引擎的更新节拍**拉取（与自选异动的做法一致）：YTD 的分子是现价，
- * 行情没更新时重算没有意义。宿主的这个路由很便宜 —— 现价走行情 TTL 缓存，
- * 基准按 (secid, 交易日) memo 一天一次，因此"每次轮询拉一次"不会变成取数压力。
- *
  * 失败不清空上一次的结果（否则数字会在"有 / —"之间闪烁），只把错误单独标出来：
- * 数据有没有、这次成不成功，是两件事。
  */
 import { useEffect, useRef, useState } from 'react'
 import type { MissingField, YtdRow } from '../shared/model.ts'
@@ -16,6 +9,13 @@ export interface YtdState {
   map: Record<string, YtdRow>
   /** 行情（现价）被观测到的时刻 */
   asOf: number | null
+  /**
+   * 回包是否降级（基准按日 memo + 失败冷却 ⇒ "这个数其实是冷启动前的旧基准 + 现价"是常态）。
+   * 没有它，界面与 agent 都会把旧基准当成这一轮的新鲜数据。
+   */
+  stale: boolean
+  /** 这一轮基准/数字的来源（宿主回包的 `source`，如 em / none） */
+  source: string
   /** 本次没算出 YTD 的条目与原因（含 no-source / transient 分类） */
   missing: MissingField[]
   /** 是否因单次上限被截断 */
@@ -27,7 +27,7 @@ export interface YtdState {
   error: string | null
 }
 
-const EMPTY: YtdState = { map: {}, asOf: null, missing: [], truncated: false, limit: 0, loaded: false, error: null }
+const EMPTY: YtdState = { map: {}, asOf: null, stale: false, source: 'none', missing: [], truncated: false, limit: 0, loaded: false, error: null }
 
 export function useYtd(secids: string[], quoteTs: number | null, enabled: boolean): YtdState {
   const [state, setState] = useState<YtdState>(EMPTY)
@@ -44,7 +44,7 @@ export function useYtd(secids: string[], quoteTs: number | null, enabled: boolea
         if (n !== seq.current) return
         const map: Record<string, YtdRow> = {}
         for (const row of r.rows) map[row.secid] = row
-        setState({ map, asOf: r.asOf, missing: r.missing, truncated: r.truncated, limit: r.limit, loaded: true, error: null })
+        setState({ map, asOf: r.asOf, stale: r.stale === true, source: r.source, missing: r.missing, truncated: r.truncated, limit: r.limit, loaded: true, error: null })
       })
       .catch((e: Error) => {
         if (n !== seq.current) return

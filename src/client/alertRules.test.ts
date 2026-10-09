@@ -1,9 +1,6 @@
 /**
- * P1-4 提醒策略（静默窗口）的断言。
- *
  * 最容易写错的一点：静默**只压制提醒**，不能把"它正在异动"这个事实也抹掉 ——
  * 否则用户会看到"明明在放量，徽标却是 0"，然后不再相信这个徽标。
- * 另一半风险是把"没判定"混进"正常"，见 judgeAlerts 的 calm/skipped 分家。
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'

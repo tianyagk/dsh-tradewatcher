@@ -1,15 +1,4 @@
 /**
- * 腾讯行情备用源。
- *
- * 用途：东财行情主机（push2 系列与 push2his）对本机 IP 限流/封锁时，至少保住
- * **量能、脉冲与价格**这三项可观测指标；「超大单净流入」只有东财提供，无替代，
- * 因此备用源下该字段为 null，并在快照里标注数据来源，评分相应降级。
- *
- * 接口（免费、无需鉴权）：
- *  - 批量快照：https://qt.gtimg.cn/q=sh510300,sz159915  （GBK 文本，按 ~ 分隔）
- *  - 当日分钟：https://web.ifzq.gtimg.cn/appstock/app/minute/query?code=sh510300
- *    （每行 `HHmm 价 累计量(手) 累计额(元)` —— 第 4 字段是**累计成交额**，
- *      实测末行 1530 = 全天成交额，与批量快照的成交额一致）
  */
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
 
@@ -38,49 +27,11 @@ export interface TencentQuote {
   ts: number | null
 }
 
+/** ⚠ 字符串解析（腾讯把数字给成字符串）——与 shared 的 `numOrNull` 语义不同，不合并（S7） */
 const num = (v: string | undefined): number | null => {
   if (v === undefined) return null
   const n = Number(v.trim())
   return Number.isFinite(n) ? n : null
-}
-
-/** 批量快照：一次请求覆盖全部通道（GBK 响应按 latin1 读取，只取数字字段，不依赖 ICU 的 GBK 解码） */
-export async function fetchTencentQuotes(secids: string[]): Promise<Record<string, TencentQuote>> {
-  const map = new Map<string, string>()
-  for (const secid of secids) {
-    const code = tencentCode(secid)
-    if (code !== null) map.set(code, secid)
-  }
-  if (map.size === 0) return {}
-  const res = await fetch(`https://qt.gtimg.cn/q=${[...map.keys()].join(',')}`, {
-    headers: { 'user-agent': UA, referer: 'https://gu.qq.com/' },
-    signal: AbortSignal.timeout(8000),
-  })
-  if (!res.ok) throw new Error(`HTTP ${res.status} from qt.gtimg.cn`)
-  const buf = await res.arrayBuffer()
-  const text = new TextDecoder('latin1').decode(buf)
-  const out: Record<string, TencentQuote> = {}
-  for (const line of text.split(';')) {
-    const eq = line.indexOf('=')
-    if (eq < 0) continue
-    const code = line.slice(0, eq).trim().replace(/^v_/, '')
-    const secid = map.get(code)
-    if (secid === undefined) continue
-    const raw = line.slice(eq + 1).trim().replace(/^"/, '').replace(/"$/, '')
-    const f = raw.split('~')
-    // 36 号字段形如「价/量(手)/额(元)」，成交额取其中最可靠的一份
-    const tri = (f[35] ?? '').split('/')
-    const amount = num(tri[2]) ?? (num(f[37]) !== null ? (num(f[37]) as number) * 1e4 : null)
-    out[secid] = {
-      secid,
-      price: num(f[3]),
-      prev: num(f[4]),
-      pct: num(f[32]),
-      amount,
-      ts: parseTencentStamp(f[30]),
-    }
-  }
-  return out
 }
 
 /** 时间戳：A股/ETF/指数为 "20260924161456"，港股为 "2026/09/24 16:14:56" */

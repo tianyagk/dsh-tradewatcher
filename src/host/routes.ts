@@ -1,12 +1,4 @@
 /**
- * /tradewatcher/* HTTP routes (same-origin with the web GUI).
- * GET  — quote relay (quotes / trend / kline / detail / suggest / board)
- * GET  — watch / portfolio / ledger / prefs snapshots
- * POST — watch + portfolio mutations (validated by the store) and prefs
- * Every route is behind the browser-trust fence; POST bodies are capped.
- *
- * 错误语义见 http.ts：400 请求有问题 / 413 体过大 / 503 上游不可用 / 500 本插件 bug。
- * 此前一律 400，把"上游被限流"报成"你的请求写错了"。
  */
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { CorporateAction, MissingField, MutatePortBody, MutateWatchBody, QuoteRow } from '../shared/model.ts'
@@ -106,7 +98,7 @@ async function portfolioWithQuotes(store: DataStore): Promise<{ view: unknown; s
   const port = store.portData()
   const secids = [...new Set(port.items.map((p) => p.secid))]
   const quotes: Record<string, QuoteRow> = secids.length > 0 ? await em.fetchQuotes(secids) : {}
-  // P1-11：折算口径来自偏好（缺省 none = 只含 A股 + 逐项说明）
+ // 折算口径来自偏好（缺省 none = 只含 A股 + 逐项说明）
   const prefs = store.getPrefs()
   const { view, stale } = assemblePortfolio(port.groups, port.items, store.ledgerEntries(), quotes, {
     mode: prefs.fxMode ?? 'none',
@@ -198,7 +190,7 @@ export function makeTradeRoutes(
 
   /**
    * 日历同步状态 → 回包字段（GET / POST 共用一份，避免两处口径分叉）。
-   * P0-2：`syncedAt` 只认最近一次**成功**同步（从未成功为 null），失败与否由 `stale`/`missing` 说明。
+ * `syncedAt` 只认最近一次**成功**同步（从未成功为 null），失败与否由 `stale`/`missing` 说明。
    */
   const calendarStatusPayload = (): {
     syncedAt: number | null
@@ -679,7 +671,7 @@ export function makeTradeRoutes(
           await store.init()
           if (req.method === 'GET') {
             const { view, stale } = await portfolioWithQuotes(store)
-            // P2-4：除权除息提示（来源是已同步的日历事件，不新增数据源）
+ // 除权除息提示（来源是已同步的日历事件，不新增数据源）
             let actions: CorporateAction[] = []
             try {
               actions = await corporateActionsFor(store, calendar)
@@ -821,7 +813,7 @@ export function makeTradeRoutes(
                 // 界面于是分不清"这两天没有新股/分红"与"日历根本没同步上"）
               }
             }
-            // P1-10 勾稽：持仓（实心）/ 仅自选（空心）/ 无关，三种由宿主判定，
+ // 勾稽：持仓（实心）/ 仅自选（空心）/ 无关，三种由宿主判定
             // 避免客户端自己拿两份数据拼（那样两处会不一致）
             const heldSet = new Set(focusCodes(store, true))
             const watchSet = new Set(focusCodes(store, false))
@@ -881,4 +873,3 @@ export function makeTradeRoutes(
   return { routes, store }
 }
 
-export { DataStore }

@@ -348,9 +348,3 @@ export function Toast(props: { text: string | null; onClose?: () => void }): Rea
       : null,
   )
 }
-
-export function useForceNow(): [number, () => void] {
-  const [now, setNow] = useState(() => Date.now())
-  const bump = useCallback(() => setNow(Date.now()), [])
-  return [now, bump]
-}

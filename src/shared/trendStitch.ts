@@ -1,10 +1,4 @@
 /**
- * 多日分时的**本地拼接**（不 import react，纯函数）。
- *
- * 背景：`五日` 此前只走新浪/腾讯 5 分钟 K 线，而这两家**只覆盖沪/深** ——
- * 港股、国际指数、外盘商品、期货都没有多日分钟源。于是本插件改为把**每日成功取到的分时按日归档**，
- * 需要多日时本地拼接（从本版起累积，一天一天变多）。
- *
  * 三条不许（写在类型与实现里，不靠注释口头保证）：
  *  1) 不许假装立刻给出五日 —— 归档里没有的日子就**如实列进 `missing`**，不补；
  *  2) 不许用日K冒充分时 —— 输入只有分时点 `TrendPoint`，本模块不接触 K 线；
@@ -54,8 +48,11 @@ function isWeekday(day: string): boolean {
  *
  * - 日期升序；**同一天只保留一份**（重复传入时取最后一个 —— 调用方按"后到的更完整"覆盖写盘，
  *   因此后传入的就是更新的那份）；
+ * - **先按 `limitDays` 裁剪**：只保留最近 N 天再拼接。调用方读的是最近 12 天的归档，若不裁剪，
+ *   "五日图"会画出 12 天的时间跨度（形态判断直接错）且界面写出「本地拼接 12/5 天」这种自相矛盾读数；
  * - 空序列 / 点不足 2 个的日期不计入覆盖；
- * - `missing` 只列**工作日**（见 `StitchCoverage.missing` 的说明），升序、不补。
+ * - `missing` 只列**工作日**（见 `StitchCoverage.missing` 的说明），升序、不补，
+ *   且区间**从裁剪后的首日开始**（裁剪掉的那几天不算缺口）。
  */
 export function stitchTrendDays(
   days: readonly StitchDayInput[],
@@ -72,10 +69,12 @@ export function stitchTrendDays(
     byDay.set(d.day, pts.map((p) => ({ ...p })))
   }
 
-  const have = [...byDay.entries()]
+  const available = [...byDay.entries()]
     .filter(([, pts]) => pts.length >= STITCH_MIN_POINTS_PER_DAY)
     .map(([day]) => day)
     .sort()
+  // 裁剪到最近 limit 天（再拼接）：界面声明的"最多 5 天"必须与图上跨度一致
+  const have = available.slice(-limit)
 
   const points: TrendPoint[] = []
   const breaks: number[] = []

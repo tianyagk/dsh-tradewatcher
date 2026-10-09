@@ -438,7 +438,8 @@ export function KlineChart(props: {
     const amount = list.reduce((a, t) => a + (t.qty ?? 0) * (t.price ?? 0), 0)
     const vwap = qty > 0 ? amount / qty : null
     const parts = [`${date} ${label} ${list.length} 笔`]
-    if (qty > 0) parts.push(`合计 ${Math.round(qty * 1e4) / 1e4} 股`)
+    // E14：同一标的在持仓页按「份」、这里按「股」会让人对不上券商流水 ⇒ 标签写明两种
+    if (qty > 0) parts.push(`合计 ${Math.round(qty * 1e4) / 1e4} 份/股`)
     if (vwap !== null) parts.push(`均价 ${vwap.toFixed(3)}`)
     return parts.join(' · ')
   }
@@ -529,7 +530,7 @@ export function KlineChart(props: {
           : React.createElement('span', { className: 'tw-muted' }, '区间内无买卖点'),
         buyCount + sellCount > 0
           ? React.createElement('span', { className: netQty >= 0 ? (redUp ? 'tw-up' : 'tw-down') : (redUp ? 'tw-down' : 'tw-up') },
-              `净${netQty >= 0 ? '买入' : '卖出'} ${Math.abs(netQty)} 股`)
+              `净${netQty >= 0 ? '买入' : '卖出'} ${Math.abs(netQty)} 份/股`)
           : null,
         buyCount + sellCount > 0 && buyQty > 0 && sellQty > 0
           ? React.createElement('span', { className: 'tw-muted' },

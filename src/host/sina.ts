@@ -1,9 +1,4 @@
 /**
- * 新浪备用源：ETF 排行（东财行情 CDN 被限流时使用）。
- *
- * 接口：Market_Center.getHQNodeData（node=etf_hq_fund，沪深 ETF 全量）
- *   参数 page/num/sort/asc；sort=amount（成交额）或 changepercent（涨跌幅）
- *   响应为 GBK 编码的 JSON 数组，字段：symbol/code/name/trade/changepercent/amount/volume/turnoverratio
  */
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
 
@@ -18,6 +13,7 @@ export interface SinaEtfRow {
   turnover: number | null
 }
 
+/** ⚠ 字符串解析（新浪把数字给成字符串）——与 shared 的 `numOrNull` 语义不同，不合并（S7） */
 const num = (v: unknown): number | null => {
   if (typeof v === 'number') return Number.isFinite(v) ? v : null
   if (typeof v !== 'string') return null

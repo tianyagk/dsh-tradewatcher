@@ -1,17 +1,5 @@
 /**
- * 每日分时的本地归档 —— 多日拼接的数据来源。
- *
- * 为什么要单独建目录：`trends-lkg.json` 是"每标的只留最新一次"的兜底快照（键 `secid|ndays`），
- * **没有按日归档**，所以用户提的"拿缓存的每日分时拼接出五日"在它身上拿不到历史。
- * 本归档从**本版起累积**：今天只有 1 天，之后逐日变多 —— 界面与回包都如实说明，不假装。
- *
- * 路径：`<dataHome>/trends/<secid>/<YYYY-MM-DD>.json`
- *  - **原子写**（tmp + rename），与 store 的持久化约定一致；
- *  - **幂等覆盖**：同一天重复取到就覆盖（后到的更完整），不会追加成两份；
- *  - **滚动清理**：只保留最近 `TREND_ARCHIVE_KEEP_DAYS` 个交易日，写入时清理，
- *    且**只删自己目录里形如 `YYYY-MM-DD.json` 的文件**；
  *  - **体积保护**：单文件 / 该标的总量超过上限时**不写**并如实报告（长期运行的插件不能悄悄写满磁盘）；
- *  - 坏文件 / 缺目录：**不崩、不静默** —— 坏文件进 `unreadable` 并带原因，缺目录就是"还没有归档"。
  */
 import { mkdir, readFile, readdir, rm, stat, writeFile, rename } from 'node:fs/promises'
 import { join } from 'node:path'

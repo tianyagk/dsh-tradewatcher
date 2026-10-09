@@ -1,12 +1,4 @@
 /**
- * Row-level mini intraday lines for watch/position lists. One trend fetch per
- * secid with bounded concurrency; results memoized module-wide (90s) so
- * remounting pages doesn't refetch, and a slow 150s refresh keeps them warm
- * while the page stays open.
- *
- * 稳定性：上游到东财的连接会随机被立刻关闭（瞬时失败率可达数十个百分点），
- * 因此失败**不会**抹掉已有缩略图 —— 保留上一份 good 数据继续显示，失败只短缓存
- * 15s 便于尽快重试；主机侧另有重试与 last-known-good 双保险。
  */
 import { useEffect, useMemo, useState } from 'react'
 import { api } from './api.ts'

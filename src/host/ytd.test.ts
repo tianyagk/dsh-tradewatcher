@@ -1,9 +1,4 @@
 /**
- * 年初至今（YTD）断言。
- *
- * 全部**不打上游**：K 线取数入口（`fetchKline`）是注入的，`now` 也是注入的 ——
- * 这样"按日 memo""失败冷却""并发有界"这几条都能被确定性地断言，
- * 而不是靠观察真实网络行为（那种断言在 CI 上会时红时绿）。
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
@@ -74,7 +69,7 @@ test('computeYtds：并发有界、按入参顺序返回、现价缺失不去打
   assert.equal(first.why, null)
   const nop = r.rows.at(-1)
   assert.equal(nop?.ytd, null)
-  assert.match(nop?.why ?? '', /无可用行情/)
+  assert.match(nop?.why ?? '', /未取到现价/)
   assert.equal(r.missing.length, 1)
   assert.equal(r.missing[0].why, 'transient')
 })

@@ -1,11 +1,4 @@
 /**
- * 财经日历：本地事件库 + 自动同步。
- *
- * 手动事件（宏观、未上市公司 IPO 传闻、自定义提醒）由 UI / 会话工具维护；
- * 自动事件来自东方财富数据中心（新股申购/上市、持仓与自选标的的财报预约披露、
- * 分红除权除息），按稳定 autoKey 去重，可单独隐藏。
- *
- * 数据文件：<dataHome>/calendar.json
  */
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'

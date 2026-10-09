@@ -17,7 +17,7 @@ import type {
   PositionRow,
   QuoteRow,
 } from '../shared/model.ts'
-import { FX_CURRENCY_LABEL, MISSING_TIER_ADVICE, fxCurrencyOf, isFiniteNumber, isT0Secid, marketOf, normalizeFxRate, normalizeFxRates } from '../shared/model.ts'
+import { LEDGER_VERB_LABEL, FX_CURRENCY_LABEL, MISSING_TIER_ADVICE, fxCurrencyOf, isFiniteNumber, isT0Secid, marketOf, normalizeFxRate, normalizeFxRates } from '../shared/model.ts'
 
 /** 市场显示名（unpriced 的原因说明用；与 client/format.ts 的 shortLabel 同一口径） */
 const MARKET_LABEL: Record<Market, string> = {
@@ -107,26 +107,14 @@ export function derivePosition(
   const prev = quote?.prev ?? null
   const mv = price !== null ? round2(price * total.qty) : total.qty > 0 ? null : 0
   /**
-   * 成本"未录入"≠"成本为 0"（P1-10 / D1 修正）。
-   *
-   * 新建持仓后用「调整」录了数量却没给成本时 `avgCost` 是 0，若照旧计算，
-   * 浮动盈亏 = (现价 − 0) × 数量 = 整个市值 —— 凭空多出一整笔盈利，且会污染分组与总额。
-   *
-   * 判据是**不存在产生成本的流水**（买入，或带 price>0 的调整）—— 见 `hasPricedCostEntry`：
    *   - 不能用 `turnover<=0` 表达"从未真的买卖过"：**卖出同样产生成交额**。
-   *     `adjust(100,0)` 之后卖一次，守卫就自行解除，持仓重新落回 0 成本路径
-   *     （实测：浮盈 = 剩余 50 股的全额市值、摊薄盈亏 = 市值的两倍、已实现 = "0 成本买入"的收益）；
    *   - 也不能只看 `avgCost<=0`：手工改过的流水里可能出现 price=0 的买入。
-   *
-   * 覆盖范围含"已全部卖出"的持仓：qty 归零不满足"有持仓"，但那些股是在成本未知时卖出的
-   * （`realizedUnknownQty > 0`）—— 成本同样从未录入，因此 `costUnknown` 在那里也成立。
-   * 该情形下**市值照算**（与成本无关），但盈亏 / 盈亏率 / 已实现一律给 null（界面显示 —）。
    */
   const costAmountRecorded = hasPricedCostEntry(entries, pos.id)
   const costUnknown = !costAmountRecorded && total.avgCost <= 0 && (total.qty > 1e-9 || total.realizedUnknownQty > 1e-9)
   const floatPnl = costUnknown || price === null ? (total.qty > 0 ? null : 0) : round2((price - total.avgCost) * total.qty)
   const dayPnl = dayPnlOf(slice, price, prev)
-  // P1-5：可用数量与费用。A股 T+1：今日买入的部分当日不可卖 → 可用 = 持仓 − 今日买入；
+ // 可用数量与费用。A股 T+1：今日买入的部分当日不可卖 → 可用 = 持仓 − 今日买入；
   // ETF/LOF/港股/美股 T+0 → 可用 = 持仓。规则由 isT0Secid() 单点判定。
   const t0 = isT0Secid(pos.secid)
   const todayBuyQty = slice.dayTrades.reduce((a, t) => a + (t.verb === 'buy' ? t.qty : 0), 0)
@@ -228,7 +216,6 @@ const add = (a: number, b: number | null | undefined): number => (b === null || 
  * 判定实现在 `shared/model.ts`（只依赖 `marketOf`，两端与账本校验共用同一处）——
  * 宿主侧卖出校验（store.ts）也要用它，放在 portfolio.ts 会让 store ↔ portfolio 形成循环依赖。
  */
-export { isT0Secid } from '../shared/model.ts'
 
 export interface PortfolioAssembly {
   view: PortfolioView
@@ -387,19 +374,8 @@ export function assemblePortfolio(
   view.unpricedMv = round2(unpricedMv)
   return { view, stale }
 }
-const VERB_LABEL: Record<LedgerEntry['verb'], string> = {
-  buy: '买入',
-  sell: '卖出',
-  adjust: '调整',
-  add: '新建持仓',
-  remove: '移除持仓',
-  gcreate: '新建分组',
-  grename: '分组改名',
-  gdelete: '归档分组',
-  grestore: '还原分组',
-  gmove: '移动/编辑',
-  pnote: '备注',
-}
+// 动词文案与客户端共用一份（见 shared/model.ts 的 LEDGER_VERB_LABEL）
+const VERB_LABEL: Record<LedgerEntry['verb'], string> = LEDGER_VERB_LABEL
 
 export function verbLabel(verb: LedgerEntry['verb']): string {
   return VERB_LABEL[verb] ?? verb

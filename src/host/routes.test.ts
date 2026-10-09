@@ -1,15 +1,7 @@
 /**
- * 路由层测试（node:test，零新增依赖，不依赖网络可用性）。
- *
- * 存在的理由：host 自检（selftest.ts）一直**直调模块函数**，于是 249 条断言全绿的同时，
- * 路由层的大小写规范化把 4 个商品主连整批丢掉也没人发现 —— `/tradewatcher/quotes` 是
  * 界面唯一的数据入口，它必须有断言。这里的断言分两类：
- *
  *   1. **结构不变量**（与上游是否可用无关）：`items + missing` 必须覆盖全部请求项、
  *      返回键必须等于请求时的写法（不得被改写成大写）、截断必须如实回报；
- *   2. **错误语义**：400 / 413 / 415 / 503 与 `retry-after`、信任围栏 403。
- *
- * 每个测试文件由 node 的测试运行器单独起进程，因此这里对熔断器的改动不会影响其它文件。
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
@@ -324,7 +316,7 @@ function writeKlineFixture(secid: string, klt: number, n: number, fqt: 0 | 1 | 2
     const date = new Date(now - i * 86_400_000).toISOString().slice(0, 10)
     bars.push({ date, open: 100 + i, close: 100.5 + i, high: 101 + i, low: 99 + i, vol: 1000 + i })
   }
-  // 'legacy' = v0.22.0 之前的文件名（<secid>_<klt>.json，当时一律不复权）
+ // 'legacy' = 之前的文件名（<secid>_<klt>.json，当时一律不复权）
   const name = fqt === 'legacy' ? `${secid}_${klt}.json` : `${secid}_${klt}_${fqt}.json`
   writeFileSync(join(dir, name), JSON.stringify({ v: 2, secid, klt, updatedAt: now, bars }))
   return bars

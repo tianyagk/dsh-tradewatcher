@@ -1,7 +1,4 @@
 /**
- * P0 批次（口径与状态外化）的宿主侧断言。
- *
- * 这组测试的价值在于**把"不说谎"变成可执行的约束**，而不是靠自觉：
  *   - 采样窗口：暂停时段必须给出原因与下次时刻（P0-4）；
  *   - 贡献度：因子贡献之和必须能复算出总分（P0-7）；
  *   - 出处契约：缺失必须区分"上游没有"与"这次失败"（P0-1）；
@@ -20,7 +17,7 @@ import { BACKUP_SCHEMA_VERSION, filesChecksum, makeBundle, verifyBundle } from '
 /** 北京时间 2026-09-28（周一） */
 const BJ = (hhmm: string, day = '2026-09-28'): number => Date.parse(`${day}T${hhmm}:00+08:00`)
 
-// ── P0-4 采样窗口 ─────────────────────────────────────────────────────────
+// ── 采样窗口 ─────────────────────────────────────────────────────────
 
 test('P0-4 采样窗口：盘中是采样中，无下次时刻', () => {
   const w = samplingWindow(BJ('10:00'), { enabled: true, intervalSec: 30, samples: 42 })
@@ -75,7 +72,7 @@ test('P0-4 采样窗口：窗口边界与 inTradingWindow 同源（09:25/11:35/1
   }
 })
 
-// ── P0-7 因子贡献度 ───────────────────────────────────────────────────────
+// ── 因子贡献度 ───────────────────────────────────────────────────────
 
 test('P0-7 贡献度：加权和乘时点系数 == 总分（任意快照可复算）', () => {
   const scored = scoreRescue({
@@ -97,7 +94,7 @@ test('P0-7 贡献度：加权和乘时点系数 == 总分（任意快照可复�
   assert.ok(Math.abs(scored.rawScore * scored.timeCoef - scored.score) <= 0.5)
 })
 
-// ── P0-1 行情出处契约 ─────────────────────────────────────────────────────
+// ── 行情出处契约 ─────────────────────────────────────────────────────
 
 function provenanceOf(missing: string[], sources: Record<string, number>, rows: number, priced: number, staleCount = 0): QuoteProvenance {
   return {
@@ -146,7 +143,7 @@ test('P0-1 出处：多源混用标 mixed、无数据标 none、零行时 asOf �
   assert.equal(typeof empty.cached, 'boolean')
 })
 
-// ── P0-1 持仓：未折算/无价逐项列出 ─────────────────────────────────────────
+// ── 持仓：未折算/无价逐项列出 ─────────────────────────────────────────
 
 function quote(secid: string, price: number, prev: number): QuoteRow {
   return {
@@ -185,7 +182,7 @@ test('P0-1 持仓：港股按原币种计入 unpriced（不按 1:1 偷偷加进�
   assert.equal(view.unpricedMv, 200 * 320, '未折算市值单独报出，供界面标注"不含港股市值"')
 })
 
-// ── P0-9 备份校验 ─────────────────────────────────────────────────────────
+// ── 备份校验 ─────────────────────────────────────────────────────────
 
 function validFiles(): Parameters<typeof makeBundle>[0] {
   return {

@@ -1,15 +1,4 @@
 /**
- * Eastmoney (东方财富) quote relay. All endpoints are the free public "延迟行情"
- * JSON feeds; browser CORS blocks them, so the host half fetches on behalf of
- * the GUI and normalizes everything to the shared model.
- *
- * Reliability layout (verified live against the deployed network):
- *  - push2delay.eastmoney.com  — primary quotes/boards host (very tolerant)
- *  - push2.eastmoney.com       — fallback quotes/boards
- *  - push2his.eastmoney.com    — history (intraday trends + daily klines),
- *                                with push2delay/push2 as fallbacks (all three
- *                                served trends2 during probing)
- *  - searchapi.eastmoney.com   — symbol search (suggest)
  */
 import type {
   BoardRow,
@@ -182,6 +171,8 @@ export async function fetchAny(hosts: readonly string[], pathAndQuery: string, t
 }
 
 /** Parse an EM scalar: '-' / '' / null → null, else Number. */
+/** ⚠ 与 shared 的 `numOrNull` **不合并**：这里要接受上游给的字符串（含 `'-'`＝无值），
+ *  合并会让这类字段整片变成 null（S7 的说明）。 */
 function num(v: unknown): number | null {
   if (v === null || v === undefined) return null
   if (typeof v === 'number') return Number.isFinite(v) ? v : null
@@ -324,21 +315,6 @@ export interface QuoteProvenance {
   cached: boolean
 }
 
-/**
- * 把行情新鲜度升级为 agent 可读的**数据出处契约**（P0-1）。
- *
- * 关键在 `missing[].why` 的判定：同样是"一个价都没有"，成因完全不同——
- *   - 该标的**没有备用源映射**（腾讯/新浪都不认这个 secid）**且东财可达** → `no-source`：
- *     这是上游的结构性缺口，重试一万次也没有，agent 应该改口径而不是等；
- *   - 有备用源映射但三源这次都失败了 → `transient`：稍后重试可能拿到；
- *   - 没有备用源映射**但东财此刻不可用** → 也是 `transient`（P1-7 修正）：
- *     此前只看静态映射，于是"东财被限流 + 该标的只有东财一条链路"会被判成
- *     "拆结构性缺失、重试无效"，而事实是**等东财恢复就有** —— 方向错会让 agent 放弃等待。
- *
- * 此前工具层只回 `{ ts, items }`，两者都是"列表里少几行"，agent 无从分辨。
- *
- * @param opts.emDown 覆盖"东财此刻是否不可用"（默认读熔断器与最近一次批量失败）；测试可注入
- */
 export function quoteProvenance(detail: QuoteProvenance, opts: { emDown?: boolean } = {}): DataProvenance {
   const emDown = opts.emDown ?? emUnavailableNow()
   const sources: Record<string, number> = {}
@@ -1069,15 +1045,22 @@ async function trendWithFallbackRaw(
     return null
   }
   // 缓存 TTL 按来源区分：实时值给长 TTL；LKG 不享受 peek 宽限（20s 后必须重新回源试探）
+  // 方向二：**不是今天**的数据必须留下痕迹（节假日上游会回节前那天的分时）。
+  // `expired` 就是为此算的 —— 客户端拿它写「· 非当日数据（MM-DD）」，否则旧交易日会被读成今天。
+  const annotate = (data: TrendData): TrendData =>
+    picked.sessionDay !== null && (picked.expired || picked.from === 'lkg')
+      ? { ...data, sessionDay: picked.sessionDay }
+      : data
   if (picked.from === 'lkg') {
     // 兜底回 LKG：带上这份数据自己的交易日，界面据此写明"这是哪天的"
-    const annotated: TrendData = { ...picked.data, sessionDay: picked.sessionDay ?? undefined }
+    const annotated = annotate(picked.data)
     cache.set(key, { exp: Date.now() + 20_000, value: annotated, grace: 0 })
     return annotated
   }
-  cache.set(key, { exp: Date.now() + (picked.from === 'upstream' ? 60_000 : 30_000), value: picked.data })
-  rememberTrend(secid, ndays, picked.data)
-  return picked.data
+  const annotated = annotate(picked.data)
+  cache.set(key, { exp: Date.now() + (picked.from === 'upstream' ? 60_000 : 30_000), value: annotated })
+  rememberTrend(secid, ndays, annotated)
+  return annotated
 }
 
 /**
@@ -1108,18 +1091,6 @@ export function trendSessionDay(trend: TrendData | null): string | null {
 
 export type TrendOrigin = 'upstream' | 'backup' | 'lkg' | 'none'
 
-/**
- * 分时兜底顺序的**纯决策**（非休市定稿路径）：`上游 → 活的备用源（腾讯分钟线）→ 本地 LKG`。
- *
- * 修的是什么：此前两个分支都把**过期的 LKG** 排在活的腾讯分钟线前面 ——
- * 分支 A（上游返回 null）直接 `lastGoodTrend ?? data` 根本不试腾讯；分支 B（上游抛错）也是
- * LKG 命中就 return。于是"有昨日 LKG 的标的"（指数/ETF 常有）在东财不可达时**永远显示昨天**，
- * 而恰好没有 LKG 的标的反而拿到今天的实时分钟线（实测：09:38 时 1.510300 全是 10-08，1.600519 是 10-09）。
- *
- * 判据是**数据是不是今天的**（`sessionDay` 与该序列最后一个点所属交易日），而不是"有没有 LKG"：
- * LKG 只有在"上游与备用源都拿不到"时才用，并且把 `sessionDay` 交给调用方，让界面如实写明
- * 「显示上次成功数据（10-08 15:00）」，而不是让人以为这是今天的图。
- */
 export function pickTrendFallback(args: {
   upstream: TrendData | null
   backup: TrendData | null
@@ -1329,24 +1300,9 @@ async function fetchMultiDayTrend(secid: string, days: number): Promise<TrendDat
   return { secid, prePrice: null, points: clean, last: clean[clean.length - 1]?.price ?? null }
 }
 
-/**
- * 分钟源覆盖表（**按代码事实**整理，不猜 —— 每一项都能在下面各函数里找到出处）：
- *
- * | 市场 | 当日分时 | 五日（多日分钟） | 均价 / 成交量 / 成交额 |
- * | --- | --- | --- | --- |
- * | 沪(1)/深(0) 股票·ETF | 东财 trends2 → 腾讯分钟线兜底 → 本地 LKG | ✅ 新浪 5 分钟线 → 腾讯 5 分钟线 | 都有 |
- * | 港股(116) | 东财 trends2 → 腾讯分钟线兜底 → 本地 LKG | ❌（`sinaSymbol` 不映射港股） | 东财通常都有 |
- * | 美股(105/106/107) | 只有东财 trends2 → 本地 LKG | ❌ | 视东财回包 |
- * | 国际指数(100) / 外盘商品(101·112) | 只有东财 trends2 → 本地 LKG | ❌ | **实测只有价格**：trends2 回 0（已归一为 null） |
- * | 国内期货(113·114·115) / 板块(90) | 只有东财 trends2 → 本地 LKG | ❌ | 以实际回包为准 |
- *
- * 出处：当日分时 `fetchTrendSingleDay`（东财）+ `tencentTrend`（腾讯，仅 `tencentCode` 覆盖的沪/深/港股）；
- * 五日 `fetchMultiDayTrend`（`sinaSymbol` 只映射沪/深，腾讯 5 分钟线同样只在沪/深）。
- * 结论：**只有沪/深有"多日分钟"源**；其它市场的五日只能显示当日 —— 界面必须如实标注
- * （`trendDayCount` + 抽屉里的提示），不许静默把当日当五日画。
- *
- * 分时序列：ndays=1 用东财当日分时；ndays>1 优先 5 分钟 K 拼接（新浪/腾讯），
- * 不支持的市场退回首日数据（客户端会如实显示交易日数量）。 */
+ // 结论：**只有沪/深有"多日分钟"源**；其它市场的五日只能显示当日 —— 界面必须如实标注
+ // （`trendDayCount` + 抽屉里的提示），不许静默把当日当五日画。
+ // 不支持的市场退回首日数据（客户端会如实显示交易日数量）。
 export async function fetchTrend(secid: string, ndays = 1, opts: TrendOptions = {}): Promise<TrendData | null> {
   if (!SECID_RE.test(secid)) return null
   const days = Math.min(5, Math.max(1, Math.round(ndays)))
@@ -1456,7 +1412,7 @@ const klineMem = new Map<string, KlineEntry>()
  * 该 (secid, klt, fqt) 依次尝试的缓存**文件名**（纯函数，便于断言）。
  *
  * - 现行命名：`<secid>_<klt>_<fqt>.json`（复权口径各自一份，混存会造成图上无解释的跳空）；
- * - v0.22.0 及以前是 `<secid>_<klt>.json`，那时的取数一律 `fqt=0`，所以它**就是**不复权口径的缓存
+ * - 及以前是 `<secid>_<klt>.json`，那时的取数一律 `fqt=0`，所以它**就是**不复权口径的缓存
  *   —— 只在 `fqt=0` 时兜底复用，不迁移、不重命名（指数/期货被 `normalizeFq` 归一为 0，
  *   因此它们命中的正是这份老文件）。
  */
@@ -1845,9 +1801,9 @@ export async function fetchClistPctPage(pn: number, pz: number): Promise<CountPa
   const body = bodyOf(json)
   const rawTotal = body?.data?.total
   const total = typeof rawTotal === 'number' && Number.isFinite(rawTotal) ? rawTotal : null
-  const rows = diffList(json)
-    .map((r) => num(r.f3))
-    .filter((v): v is number => v !== null)
+  // 无涨跌幅的行（停牌 / 上游给 '-'）**保留为 null 占位**：既不能当 0，也不能悄悄丢掉 ——
+  // 丢掉会让"三类之和 = 上游总数"的等式永远不成立（当日有 1 只停牌就判失败）
+  const rows = diffList(json).map((r) => num(r.f3))
   return { rows, total }
 }
 
@@ -2098,13 +2054,3 @@ export async function searchSymbols(query: string): Promise<SuggestItem[]> {
   }
   return out
 }
-
-export async function searchBest(query: string): Promise<SuggestItem | null> {
-  const hits = await searchSymbols(query)
-  if (hits.length === 0) return null
-  const bare = query.trim().toUpperCase()
-  const exactCode = hits.find((h) => h.code.toUpperCase() === bare || h.name === query.trim())
-  return exactCode ?? hits[0]
-}
-
-export { cache as _cache }

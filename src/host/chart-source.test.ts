@@ -1,12 +1,4 @@
 /**
- * 「拿不到就带原因」与 K 线缓存命名的断言（task-10 的 C / D 项）。
- *
- * 背景：国际指数/外盘商品的图表此前只回 `{trend:null}` / `{kline:null}`，
- * 客户端只能给一句「该周期暂无数据（停牌/新股/接口限流）」—— 把"该市场本来就没有分时源"
- * 与"东财这会儿被限流"混成一句，用户无从判断该不该等。这里锁住三件事：
- *   1) `why` 的判定与既有 `quoteProvenance` 同口径（no-source / transient）；
- *   2) 无兜底源的市场（国际指数/外盘商品/期货）在说明里点明"没有别的源"；
- *   3) K 线缓存的**老命名** `<secid>_<klt>.json` 只在 fqt=0 时兜底复用（指数/期货被归一为 0，命中的就是它）。
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
