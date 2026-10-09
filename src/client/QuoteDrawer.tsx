@@ -248,7 +248,7 @@ export function QuoteDrawer(props: { secid: string; name: string; redUp: boolean
       }
       if (tab === 'trend') {
         return React.createElement(TrendChart, {
-          points: t.points.map((p) => ({ t: p.t, value: p.price, vol: p.vol, avg: p.avg, label: p.label })),
+          points: t.points.map((p) => ({ t: p.t, value: p.price, vol: p.vol, avg: p.avg, label: p.label, amount: p.amount ?? null })),
           baseline: isUsableBaseline(t.prePrice) ? t.prePrice : null,
           markers: dayMarkers,
           // 交易时段网格：有表的市场横轴固定为完整时段（部分数据右侧留白），其余回落压缩轴
@@ -264,7 +264,7 @@ export function QuoteDrawer(props: { secid: string; name: string; redUp: boolean
       // 五日：连续拼接（午休/隔夜已由压缩时间轴折叠），交易日之间画分隔线
       // 日分隔线与"按天"底部标签由 TrendChart 内部的 trendDayAxis 从点的 label 切出来
       //（此前这里自算 breaks 传进去；现在统一在图表里算，避免两套口径）
-      const pts = t.points.map((p) => ({ t: p.t, value: p.price, vol: p.vol, avg: p.avg, label: p.label }))
+      const pts = t.points.map((p) => ({ t: p.t, value: p.price, vol: p.vol, avg: p.avg, label: p.label, amount: p.amount ?? null }))
       void lastUp
       const chart = React.createElement(TrendChart, {
         points: pts,

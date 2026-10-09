@@ -9,6 +9,8 @@ import type { CandleMarker, SparkMarker } from './charts.tsx'
 import { fmtAxis, ma, macd, niceTicks } from './indicators.ts'
 import { hasVolumeSeries, isUsableAvg, isUsableBaseline, plausibleAvgs, trendDayAxis, trendScale } from './trendView.ts'
 import { sessionAxis, type SessionDef } from './sessionAxis.ts'
+import { klineReadout, nearestIndex, tipPlacement, trendReadout, type TipLine } from './chartCursor.ts'
+import { trendDayCount } from '../shared/model.ts'
 
 const PAD_X = 8
 const PAD_TOP = 8
@@ -28,6 +30,32 @@ interface Point {
   vol: number | null
   avg: number | null
   label: string
+  /** 成交额（卡片要显示；缺失 ⇒ 卡片写 —） */
+  amount?: number | null
+}
+
+/** 卡片宽度（CSS 里也是这个值；摆放计算要提前知道尺寸，故写常量并断言） */
+const TIP_W = 152
+/** 卡片高度估算：标题行 + 每行 16px + 内边距（与 CSS 的 line-height 对齐） */
+function tipHeightOf(lines: readonly TipLine[]): number {
+  return 14 + lines.length * 16
+}
+
+/** 半透明细节卡（DOM 覆盖层，`position:absolute` 由调用方容器承载） */
+function TipCard(lines: readonly TipLine[], pos: { left: number; top: number }): React.ReactElement {
+  return React.createElement('div', {
+    className: 'tw-chart-tip',
+    style: { left: pos.left, top: pos.top, width: TIP_W },
+    role: 'status',
+    'aria-live': 'off',
+  },
+    ...lines.map((l, i) => React.createElement('div', { key: `t${i}`, className: 'tw-chart-tip-row' },
+      React.createElement('span', { className: 'tw-chart-tip-k' }, l.label),
+      React.createElement('span', {
+        className: l.tone === undefined ? 'tw-chart-tip-v' : `tw-chart-tip-v ${l.tone === 'up' ? 'tw-up' : l.tone === 'down' ? 'tw-down' : 'tw-muted'}`,
+      }, l.value),
+    )),
+  )
 }
 
 /** 压缩时间轴：大于中位步长的跳空（午休/隔夜/周末）按中位步长折叠。 */
@@ -205,6 +233,9 @@ export function TrendChart(props: {
   /** 分时（有昨收基准 + 有时段表）时右侧多留一列 ±% 刻度；其它档保持原边距 */
   const pctScale = isUsableBaseline(props.baseline) && (props.session ?? null) !== null
   const innerW = width - PAD_X - (pctScale ? 44 : PAD_X)
+  /** 光标所在数据点（null = 不显示）。鼠标移动只改这一个 state，不重建图的数据。 */
+  const [cursor, setCursor] = useState<number | null>(null)
+  const multiDay = props.points.length > 1 && trendDayCount(props.points) > 1
 
   const view = useMemo(() => {
     if (points.length < 2) return null
@@ -221,7 +252,7 @@ export function TrendChart(props: {
       const m0 = macd(values0)
       const up0 = values0.map((v, i) => (i === 0 ? true : v >= values0[i - 1]))
       const barW0 = Math.max(1, Math.min(6, (innerW / points.length) * 0.7))
-      return { xAt: xAt0, yOf: yOf0, lo: lo0, hi: hi0, values: values0, avgs: avgs0, m: m0, up: up0, barW: barW0, ax }
+      return { xAt: xAt0, yOf: yOf0, lo: lo0, hi: hi0, values: values0, avgs: avgs0, m: m0, up: up0, barW: barW0, ax, xs: ax.xs }
     }
     const { eff, span } = compressedAxis(points.map((p) => p.t))
     const xAt = (i: number): number => PAD_X + (eff[i] / span) * innerW
@@ -235,7 +266,7 @@ export function TrendChart(props: {
     const m = macd(values)
     const up = values.map((v, i) => (i === 0 ? true : v >= values[i - 1]))
     const barW = Math.max(1, Math.min(6, (innerW / points.length) * 0.7))
-    return { xAt, yOf, lo, hi, values, avgs, m, up, barW, ax: null }
+    return { xAt, yOf, lo, hi, values, avgs, m, up, barW, ax: null, xs: eff.map((v) => v / span) }
   }, [points, innerW, mainH, props.baseline, props.session])
 
   if (view === null) {
@@ -380,7 +411,55 @@ export function TrendChart(props: {
     }, points[lastIndex].label.slice(5, 16)))
   }
 
-  return React.createElement('svg', { width, height, viewBox: `0 0 ${width} ${height}`, style: { display: 'block' } }, children)
+  // 十字光标：竖虚线 + 当前点小圆点（画在最后 ⇒ 压在最上层）
+  const cx = cursor !== null && cursor >= 0 && cursor < points.length ? xAt(cursor) : null
+  const cy = cursor !== null && cursor >= 0 && cursor < points.length ? yOf(values[cursor]) : null
+  if (cx !== null && cy !== null) {
+    children.push(React.createElement('line', {
+      key: 'cursor', x1: cx, y1: PAD_TOP, x2: cx, y2: height - AXIS_H,
+      style: { stroke: 'var(--tw-muted)' }, strokeWidth: 1, strokeDasharray: '2 2', opacity: 0.9,
+    }))
+    children.push(React.createElement('circle', {
+      key: 'cursorDot', cx, cy, r: 2.6, style: { fill: mainColor, stroke: 'var(--tw-card)' }, strokeWidth: 1,
+    }))
+  }
+
+  const svg = React.createElement('svg', {
+    width, height, viewBox: `0 0 ${width} ${height}`,
+    style: { display: 'block' },
+    tabIndex: 0,
+    role: 'img',
+    'aria-label': cursor === null ? '分时图' : '分时图（已选中某一点，详见卡片）',
+    onMouseMove: (ev: React.MouseEvent<SVGSVGElement>) => {
+      const rect = ev.currentTarget.getBoundingClientRect()
+      setCursor(nearestIndex(ev.clientX - rect.left, view.xs, PAD_X, innerW))
+    },
+    onMouseLeave: () => setCursor(null),
+    onKeyDown: (ev: React.KeyboardEvent) => {
+      if (ev.key === 'Escape') { setCursor(null); return }
+      const start = cursor !== null ? cursor : lastIndex
+      if (ev.key === 'ArrowLeft' || ev.key === 'ArrowRight') {
+        ev.preventDefault()
+        const next = Math.max(0, Math.min(points.length - 1, start + (ev.key === 'ArrowLeft' ? -1 : 1)))
+        setCursor(next)
+      } else if (ev.key === 'Enter' || ev.key === ' ') {
+        ev.preventDefault()
+        setCursor(start)
+      }
+    },
+  }, children)
+
+  const tipLeft = cx ?? 0
+  const tipTop = cy ?? 0
+  const lines = cursor === null ? [] : trendReadout({
+    points: points.map((p) => ({ label: p.label, price: p.value, avg: p.avg, vol: p.vol, amount: p.amount })),
+    i: cursor,
+    baseline: props.baseline,
+    multiDay,
+    macd: m,
+  })
+  const pos = cursor === null || cx === null ? null : tipPlacement(tipLeft, tipTop, width, height, TIP_W, tipHeightOf(lines))
+  return React.createElement('div', { className: 'tw-cursorwrap' }, svg, pos === null ? null : TipCard(lines, pos))
 }
 
 /** ───────────────────────── 日/周/月/年 K ───────────────────────── */
@@ -412,6 +491,8 @@ export function KlineChart(props: {
     Math.max(0, bars.length - defaultWindow(klt)),
     bars.length,
   ])
+  /** 光标数据点（null = 不显示卡片）；鼠标移动只改它，不重建图 */
+  const [cursor, setCursor] = useState<number | null>(null)
   useEffect(() => {
     setRange([Math.max(0, bars.length - defaultWindow(klt)), bars.length])
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -553,7 +634,35 @@ export function KlineChart(props: {
       style: { fill: 'var(--tw-muted)', fontSize: 9 },
     }, bars[i].date))
   })
-  const svg = React.createElement('svg', { width, height, viewBox: `0 0 ${width} ${height}`, style: { display: 'block' } }, children)
+  // 十字光标：竖虚线 + 收盘处小圆点（画在最后 ⇒ 压在最上层）
+  const cursorInWindow = cursor !== null && cursor >= s && cursor < e
+  if (cursorInWindow) {
+    const cxi = xAt(cursor)
+    children.push(React.createElement('line', {
+      key: 'cursor', x1: cxi, y1: PAD_TOP, x2: cxi, y2: height - AXIS_H,
+      style: { stroke: 'var(--tw-muted)' }, strokeWidth: 1, strokeDasharray: '2 2', opacity: 0.9,
+    }))
+    children.push(React.createElement('circle', {
+      key: 'cursorDot', cx: cxi, cy: yOf(bars[cursor].close), r: 2.8,
+      style: { fill: 'var(--tw-card)', stroke: 'var(--tw-muted)' }, strokeWidth: 1.2,
+    }))
+  }
+  /** 可见窗口内每根柱的归一化中心（nearestIndex 用；与时段网格/压缩轴同一口径） */
+  const xsInWindow = Array.from({ length: count }, (_, k) => (k + 0.5) / count)
+  const svg = React.createElement('svg', {
+    width, height, viewBox: `0 0 ${width} ${height}`, style: { display: 'block' },
+    onMouseMove: (ev: React.MouseEvent<SVGSVGElement>) => {
+      const rect = ev.currentTarget.getBoundingClientRect()
+      const k = nearestIndex(ev.clientX - rect.left, xsInWindow, PAD_X, innerW)
+      if (k === null) return
+      setCursor(Math.min(bars.length - 1, s + k))
+    },
+    onMouseLeave: () => setCursor(null),
+  }, children)
+  const tipLines = cursor === null ? [] : klineReadout({ bars, i: cursor, mas, macd: m })
+  const tipPos = cursorInWindow
+    ? tipPlacement(xAt(cursor), yOf(bars[cursor].close), width, height, TIP_W, tipHeightOf(tipLines))
+    : null
 
   const legend = React.createElement('div', { className: 'tw-ma-legend', style: { display: 'flex', gap: 10, flexWrap: 'wrap', fontSize: 10, fontFamily: 'var(--tw-mono)', margin: '4px 0 0' } },
     ...mas.map((ser) => {
@@ -637,6 +746,27 @@ export function KlineChart(props: {
   const chartKey = (ev: React.KeyboardEvent): void => {
     const step = ev.shiftKey ? 10 : 1
     const width = e - s
+    // 卡片显示时：←/→ 移动**光标**（窗口随之滚动，保证光标始终可见）
+    if (ev.key === 'Escape') {
+      setCursor(null)
+      return
+    }
+    if (ev.key === 'Enter' || ev.key === ' ') {
+      ev.preventDefault()
+      if (cursor === null) setCursor(e - 1)
+      return
+    }
+    if ((ev.key === 'ArrowLeft' || ev.key === 'ArrowRight') && cursor !== null) {
+      ev.preventDefault()
+      const next = Math.max(0, Math.min(bars.length - 1, cursor + (ev.key === 'ArrowLeft' ? -step : step)))
+      setCursor(next)
+      if (next < s) setRange([Math.max(0, next), Math.max(0, next) + width])
+      else if (next >= e) {
+        const ns = Math.min(Math.max(0, bars.length - width), next - width + 1)
+        setRange([ns, ns + width])
+      }
+      return
+    }
     if (ev.key === 'ArrowLeft') {
       ev.preventDefault()
       const ns = Math.max(0, s - step)
@@ -668,11 +798,12 @@ export function KlineChart(props: {
       tabIndex: 0,
       role: 'img',
       'aria-label': summary,
-      title: '键盘：←/→ 平移（Shift 加速），+/- 缩放，Home/End 到两端',
-      style: { outlineOffset: 2 },
+      title: '键盘：←/→ 平移（未显示卡片时）／移动光标并显示细节卡（Shift 加速），Enter 显示，Esc 隐藏，+/- 缩放，Home/End 到两端',
+      style: { outlineOffset: 2, position: 'relative' },
       onKeyDown: chartKey,
     },
       React.createElement(WheelZoom, { bars, range: [s, e], width, onChange: setRange }, svg),
+      tipPos === null ? null : TipCard(tipLines, tipPos),
     ),
     // 读屏专用：完整摘要（含买卖点明细），视觉上不可见但可被朗读
     React.createElement('div', { className: 'tw-sr' }, summary),

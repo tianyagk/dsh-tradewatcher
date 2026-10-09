@@ -132,6 +132,7 @@ color-scheme:dark}
   .tw-group-h .gsum, .tw-wrow .wq, .tw-wrow .tw-num, .tw-ytd, .tw-gh-metrics,
   .tw-dkv .v, .tw-rescue-card-grid .v, .tw-table td,
   .tw-chart-pct,
+  .tw-chart-tip-v,
   .tw-caliber, .tw-chartnote, .tw-zoom-bar, .tw-topmeta .tw-uptime){
   filter:blur(3.2px);transition:filter .12s}
 .tw-root[data-blur=1] :is(.tw-qcard, .tw-wrow, .tw-posrow, tr, .tw-pop, .tw-stat, .tw-pps,
@@ -141,6 +142,7 @@ color-scheme:dark}
   .tw-group-h .gsum, .tw-wrow .wq, .tw-wrow .tw-num, .tw-ytd, .tw-gh-metrics,
   .tw-dkv .v, .tw-rescue-card-grid .v, .tw-table td,
   .tw-chart-pct,
+  .tw-chart-tip-v,
   .tw-caliber, .tw-chartnote, .tw-zoom-bar){
   filter:none}
 
@@ -405,6 +407,17 @@ color-scheme:dark}
 .tw-rescue-pool{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:3px 10px;font-size:11.5px}
 .tw-rescue-pool-item{display:flex;align-items:center;gap:5px;color:var(--tw-muted);cursor:pointer}
 .tw-rescue-pool-item[data-on=true]{color:var(--tw-text)}
+
+/* 图表细节卡（跟随光标的半透明卡片）+ 光标层容器 —— task-28 */
+.tw-cursorwrap{position:relative}
+.tw-cursorwrap svg{outline:none}
+.tw-cursorwrap svg:focus-visible{outline:2px solid var(--tw-accent);outline-offset:1px}
+.tw-chart-tip{position:absolute;z-index:5;pointer-events:none;padding:6px 8px;border-radius:8px;
+  border:1px solid var(--tw-border-strong);background:color-mix(in srgb, var(--tw-card) 82%, transparent);
+  backdrop-filter:blur(3px);box-shadow:0 2px 10px rgba(0,0,0,.18)}
+.tw-chart-tip-row{display:flex;justify-content:space-between;gap:10px;font-size:11px;line-height:16px;white-space:nowrap}
+.tw-chart-tip-k{color:var(--tw-muted)}
+.tw-chart-tip-v{font-family:var(--tw-mono);font-variant-numeric:tabular-nums;color:var(--tw-text)}
 `
 
 let injected = false
