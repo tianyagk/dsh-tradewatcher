@@ -500,7 +500,8 @@ export function makeTradeRoutes(
           const secid = String(queryOf(req).get('secid') ?? '').trim()
           if (!SECID_RE.test(secid)) throw new HttpError('secid 非法', 400)
           const ndays = Number(queryOf(req).get('ndays') ?? 1) || 1
-          const trend = await em.fetchTrend(secid, ndays)
+          // 归档开关来自 prefs（默认开）：关掉后不再写 trends/<secid>/，五日在无真实多日源的市场只能是当日
+          const trend = await em.fetchTrend(secid, ndays, { archive: store.getPrefs().trendArchive !== false })
           // C/B：拿不到就带原因 —— no-source（结构性没有）与 transient（东财这会儿不可达）
           // 与 quoteProvenance 同一口径，客户端据此显示"为什么没有"，而不是一句光秃秃的失败
           send(res, 200, { trend, ...(trend === null ? { missing: [em.trendMissingReason(secid)] } : {}) })

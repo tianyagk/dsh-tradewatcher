@@ -487,6 +487,7 @@ export class DataStore {
         viewMode: loaded.viewMode === 'compact' || loaded.viewMode === 'incognito' ? loaded.viewMode : 'full',
         panelOpacity: normalizePanelOpacity(loaded.panelOpacity, DEFAULT_PREFS.panelOpacity ?? 1),
         blurDigits: loaded.blurDigits === true,
+        trendArchive: loaded.trendArchive !== false, // 默认开；只有显式 false 才关
         // live 是"未验证源"，装载时按 none 处理（启动不该因为一个不可用档位就崩）
         fxMode: loaded.fxMode === 'fixed' ? 'fixed' : 'none',
         fxRates: normalizeFxRates(loaded.fxRates),
@@ -1036,6 +1037,10 @@ export class DataStore {
     if (patch.blurDigits !== undefined) {
       if (typeof patch.blurDigits !== 'boolean') throw new Error('blurDigits 必须是布尔值')
       this.prefs.blurDigits = patch.blurDigits
+    }
+    if (patch.trendArchive !== undefined) {
+      if (typeof patch.trendArchive !== 'boolean') throw new Error('trendArchive 必须是布尔值')
+      this.prefs.trendArchive = patch.trendArchive
     }
     // P1-11：折算口径。`live` 明确拒绝并给出理由 —— 实时汇率源尚未验证，
     // 接受它只会让用户以为开了实时折算、实际什么都没算

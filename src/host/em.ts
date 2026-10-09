@@ -25,6 +25,8 @@ import type {
   TrendPoint,
 } from '../shared/model.ts'
 import { SECID_RE, normalizeTrendSeries } from '../shared/model.ts'
+import { stitchTrendDays } from '../shared/trendStitch.ts'
+import { TREND_ARCHIVE_KEEP_DAYS, archiveTrendDays, loadTrendArchive, type TrendArchiveEntry } from './trendArchive.ts'
 import { mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { breakerFor, hostsAllowed, minutesToRecover } from './breaker.ts'
 import { fetchSinaEtfRanking, fetchSinaQuotes, sinaSymbol as sinaQuoteSymbol } from './sina.ts'
@@ -1081,13 +1083,48 @@ async function trendWithFallbackRaw(
  * 修复前写进去的 `avg: 0`（旧进程的产物）—— 只在解析处归一的话，断网/休市走 LKG 时
  * `curl /tradewatcher/trend` 仍会看到 0，等于没修。归一幂等，重复跑没有副作用。
  */
+/** 分时取数的选项：`archive` = 是否把取到的每日分时落盘归档（默认开，见 prefs.trendArchive） */
+export interface TrendOptions {
+  archive?: boolean
+}
+
+/**
+ * 把一份分时序列按**交易日**归档（同一天覆盖写）。归档失败绝不能影响取数：
+ * 这里吞掉异常，只把"没写成功"的原因带进回包让界面说明。
+ */
+async function archiveTrendData(secid: string, points: readonly TrendPoint[]): Promise<TrendData['archive']> {
+  const byDay = new Map<string, TrendPoint[]>()
+  for (const p of points) {
+    const day = p.label.slice(0, 10)
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) continue
+    const list = byDay.get(day)
+    if (list === undefined) byDay.set(day, [p])
+    else list.push(p)
+  }
+  const entries: TrendArchiveEntry[] = [...byDay.entries()].map(([day, pts]) => ({ day, points: pts }))
+  if (entries.length === 0) return undefined
+  try {
+    const r = await archiveTrendDays(secid, entries)
+    return r.skipped.length > 0 ? { saved: r.saved, skipped: r.skipped } : undefined
+  } catch (error) {
+    console.warn('[tradewatcher] 归档每日分时失败:', String(error).slice(0, 120))
+    return { saved: [], skipped: entries.map((e) => ({ day: e.day, reason: `归档异常：${String(error).slice(0, 60)}` })) }
+  }
+}
+
 async function trendWithFallback(
   secid: string,
   ndays: number,
   loader: () => Promise<TrendData | null>,
+  opts: TrendOptions = {},
 ): Promise<TrendData | null> {
   const data = await trendWithFallbackRaw(secid, ndays, loader)
-  return data === null ? null : { ...data, points: normalizeTrendSeries(data.points) }
+  if (data === null) return null
+  const clean = { ...data, points: normalizeTrendSeries(data.points) }
+  // 归档放在**出口**：上游、内存缓存、落盘 LKG 命中的都在这里过一遍
+  // （用户要的"拿缓存的每日分时拼接"必须连 LKG 那次也归档，否则永远只有今天）
+  const archive = opts.archive === false ? undefined : await archiveTrendData(secid, clean.points)
+  return archive === undefined ? clean : { ...clean, archive }
 }
 
 /** 腾讯分钟线 → 分时序列（价格 + 当日均价 VWAP），供东财不可用时兜底 */
@@ -1114,7 +1151,7 @@ async function tencentTrend(secid: string): Promise<TrendData | null> {
 }
 
 /** 东财单日分时（trends2 实测只提供当日；ndays 参数被上游忽略）。 */
-async function fetchTrendSingleDay(secid: string): Promise<TrendData | null> {
+async function fetchTrendSingleDay(secid: string, opts: TrendOptions = {}): Promise<TrendData | null> {
   const fields2 = 'f51,f52,f53,f54,f55,f56,f57,f58'
   return trendWithFallback(secid, 1, async () => {
     const json = await fetchAny(
@@ -1136,7 +1173,7 @@ async function fetchTrendSingleDay(secid: string): Promise<TrendData | null> {
     // 缺失不许编码成 0：东财对国际指数/外盘商品一律回 avg/vol/amount = 0（见 normalizeTrendSeries）
     const clean = normalizeTrendSeries(points)
     return { secid, prePrice: pre, points: clean, last: clean[clean.length - 1]?.price ?? null }
-  })
+  }, opts)
 }
 
 /** 该标的是否有备用源（腾讯或新浪报价映射）；用于搜索结果与工具输出如实标注"仅东财源"。 */
@@ -1254,17 +1291,57 @@ async function fetchMultiDayTrend(secid: string, days: number): Promise<TrendDat
  *
  * 分时序列：ndays=1 用东财当日分时；ndays>1 优先 5 分钟 K 拼接（新浪/腾讯），
  * 不支持的市场退回首日数据（客户端会如实显示交易日数量）。 */
-export async function fetchTrend(secid: string, ndays = 1): Promise<TrendData | null> {
+export async function fetchTrend(secid: string, ndays = 1, opts: TrendOptions = {}): Promise<TrendData | null> {
   if (!SECID_RE.test(secid)) return null
   const days = Math.min(5, Math.max(1, Math.round(ndays)))
   if (days > 1) {
+    // 1) 真实多日源（新浪 5 分钟线 → 腾讯 5 分钟线）：**只覆盖沪/深**
     const multi = await trendWithFallback(secid, days, async () => {
       const got = await fetchMultiDayTrend(secid, days)
       return got !== null && got.points.length > 0 ? got : null
-    })
+    }, opts)
     if (multi !== null && multi.points.length > 1) return multi
+    // 2) 其余市场（或真实源失败）⇒ 本地归档拼接：**从本版起累积**，覆盖情况如实回包
+    const stitched = await stitchFromArchive(secid, days, opts)
+    if (stitched !== null) return stitched
   }
-  return fetchTrendSingleDay(secid)
+  return fetchTrendSingleDay(secid, opts)
+}
+
+/**
+ * 本地归档拼接出来的多日分时。
+ *
+ * 三条不许（对应任务里的硬要求）：
+ *  1) **不假装立刻有五日**：只有归档里真实存在的日子会进结果，`coverage.missing` 如实列出缺口；
+ *  2) **不用日K冒充分时**：只用按日归档的 `TrendPoint`（K 线数据完全不参与）；
+ *  3) **不凭空补齐**：`have`/`missing` 与 `points` 由同一个纯函数 `stitchTrendDays` 产出。
+ *
+ * 归档里一天都没有时，先取当日（顺带归档）再拼 —— 这样"今天"必然在内，
+ * 界面看到的是"本地拼接 1/5 天 · 仅当日（本版起累积）"，而不是一句失败。
+ */
+async function stitchFromArchive(secid: string, days: number, opts: TrendOptions = {}): Promise<TrendData | null> {
+  const today = dayOf(Date.now())
+  const readStitched = async (): Promise<ReturnType<typeof stitchTrendDays>> => {
+    const load = await loadTrendArchive(secid, { keepDays: TREND_ARCHIVE_KEEP_DAYS }).catch(() => null)
+    return stitchTrendDays(load?.days ?? [], { limitDays: days, today })
+  }
+  let stitched = await readStitched()
+  if (stitched.coverage.have.length === 0) {
+    // 归档里还没有任何一天：用当日分时的取数补上（成功即归档），再拼一次
+    const single = await fetchTrendSingleDay(secid, opts)
+    if (single === null) return null
+    stitched = await readStitched()
+  }
+  if (stitched.points.length < 2) return null
+  return {
+    secid,
+    prePrice: null,
+    points: stitched.points,
+    last: stitched.points[stitched.points.length - 1]?.price ?? null,
+    // 如实标注来源与覆盖：这不是上游给的五日，是从本版起累积的本地归档拼出来的
+    source: 'local-stitch',
+    coverage: stitched.coverage,
+  }
 }
 
 // ───────────────────────────── daily kline ────────────────────────────────

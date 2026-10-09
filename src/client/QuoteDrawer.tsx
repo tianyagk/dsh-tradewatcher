@@ -132,17 +132,21 @@ export function QuoteDrawer(props: { secid: string; name: string; redUp: boolean
   const headerRows = (): React.ReactNode => {
     if (detail === null) {
       if (infoErr) {
-        // 宿主对上游熔断会回 503 + retry-after（快速失败，避免继续打上游）——
-        // 所以这里要说清"是上游这会儿不可达、稍后自动重试"，而不是留一句无法追问的"加载失败"
-        return React.createElement('div', { className: 'tw-hint', style: { display: 'flex', alignItems: 'center', gap: 10 } },
-          '详情加载失败：行情上游当前不可达（东财熔断/限流时如此；行情详情只有东财一个上游）—— 稍等自动重试，频繁点「重试」只会加重限流',
+        // 宿主对上游熔断会回 503 + retry-after（快速失败，避免继续打上游）。
+        // 这里只留**一行**（用户抱怨过红条把图挤掉）：长解释进 title/aria-label，
+        // 红色只表示"故障"，结构性限制走下面的不红那一支。
+        const long = '行情详情只有东财一个上游：东财熔断/限流时它就拿不到。宿主已按熔断冷却快速失败并给了 retry-after，' +
+          '稍等会自动重试；频繁点「重试」只会让本机 IP 的限流更严重。'
+        return React.createElement('div', { className: 'tw-hint', style: { display: 'flex', alignItems: 'center', gap: 8 } },
+          React.createElement('span', { tabIndex: 0, role: 'note', title: long, 'aria-label': `详情不可用：上游限流，稍后自动重试。${long}` },
+            '⚠ 详情不可用 · 上游限流，稍后自动重试'),
           React.createElement(Btn, { onClick: () => setRetry((x) => x + 1) }, '重试'),
         )
       }
       // 拿不到详情时把**原因**显示出来（此前只会停在骨架屏，用户以为一直在加载）
       if (infoNote !== null) {
-        return React.createElement('div', { className: 'tw-hint', tabIndex: 0, role: 'note', 'aria-label': `详情不可用：${infoNote.note}` },
-          `${infoNote.what}不可用（${infoNote.why === 'no-source' ? '结构性缺失，重试无用' : '上游暂时不可用，等它恢复'}）：${infoNote.note}`)
+        return React.createElement('div', { className: 'tw-hint', tabIndex: 0, role: 'note', title: infoNote.note, 'aria-label': `详情不可用：${infoNote.note}` },
+          `详情不可用 · ${infoNote.why === 'no-source' ? '该标的无详情字段（重试无用）' : '上游限流，稍后自动重试'}`)
       }
       return React.createElement(Skeleton, { lines: 3, height: 14, style: { maxWidth: 420 } })
     }
@@ -267,20 +271,9 @@ export function QuoteDrawer(props: { secid: string; name: string; redUp: boolean
         volH: 52,
         macdH: 62,
       })
-      // 五日档靠"多日分钟点"拼图，而多日分钟源只有沪/深（见 em.ts 的分钟源覆盖表）——
-      // 覆盖不足时必须**明说**，不能把当日静默当五日画
-      if (trendDayCount(pts) <= 1) {
-        return React.createElement('div', null,
-          React.createElement('div', {
-            className: 'tw-hint',
-            tabIndex: 0,
-            role: 'note',
-            style: { padding: '4px 2px' },
-            'aria-label': '五日不可用：该市场只有当日分时，下图仅显示当日。多日分钟源只覆盖沪市/深市（新浪 5 分钟线 → 腾讯 5 分钟线），港股、国际指数、外盘商品与期货都没有',
-          }, '五日不可用：该市场只有当日分时（下图仅显示当日）。多日分钟源只覆盖沪/深，港股/国际指数/外盘商品/期货都没有 —— 不是本页故障。'),
-          chart,
-        )
-      }
+      // 五日档的"只有当日/覆盖不足"**不再单独占一条横幅**（用户抱怨过两条红条把图挤掉）：
+      // 统一并入上方口径条那一行（见 caliberLine），完整解释进它的 title。
+      void trendDayCount(pts)
       return chart
     }
     if (!isKlineTab(tab)) return null
@@ -350,7 +343,23 @@ export function QuoteDrawer(props: { secid: string; name: string; redUp: boolean
       if (payload !== null && payload.kind === 'trend') {
         const t = payload.trend
         const last = t.points[t.points.length - 1]
-        return `${TAB_LABEL[payload.tab]} · 不复权（分时序列无除权概念） · 截至 ${last !== undefined ? last.label.slice(5, 16) : '—'}`
+        const base = `${TAB_LABEL[payload.tab]} · 不复权（分时序列无除权概念） · 截至 ${last !== undefined ? last.label.slice(5, 16) : '—'}`
+        // 五日：覆盖情况写进**这一行**（结构性限制不配单独横幅）。
+        // 本地拼接时给出 have/limit 与缺口；真实多日源只有 1 天时明说"仅当日（该市场无多日源）"。
+        const cov = t.coverage
+        const fiveMarker = payload.tab !== '5d'
+          ? ''
+          : cov !== undefined
+            ? ` · 本地拼接 ${cov.have.length}/${cov.limit} 天${
+                cov.have.length <= 1 ? '（仅当日，从本版起累积）' : ''
+              }${cov.missing.length > 0 ? ` · 缺 ${cov.missing.join('、')}` : ''}`
+            : trendDayCount(t.points) <= 1
+              ? ' · 仅当日（该市场无多日源）'
+              : ''
+        const archiveMarker = t.archive !== undefined && t.archive.skipped.length > 0
+          ? ` · 本次未归档（${t.archive.skipped[0].reason}）`
+          : ''
+        return base + fiveMarker + archiveMarker
       }
       return ''
     }
@@ -370,6 +379,26 @@ export function QuoteDrawer(props: { secid: string; name: string; redUp: boolean
     return `${mode} · klt ${plan.klt} · ${fq} · 截至 ${at}（${tail}）`
   }
   const caliber = caliberLine()
+  /**
+   * 口径条的**完整解释**（title/aria）：五日的"只有当日/本地拼接覆盖"属于**结构性限制**，
+   * 因此按用户要求不单独占一条横幅，而是并入口径条 —— 但完整解释必须鼠标与键盘都能读到。
+   */
+  const caliberExplain = ((): string | null => {
+    if (payload === null || payload.kind !== 'trend' || payload.tab !== '5d') return null
+    const cov = payload.trend.coverage
+    if (cov !== undefined) {
+      return `五日是本地归档拼接出来的（不是上游给的）：当前有 ${cov.have.length} 天（${cov.have.join('、') || '—'}）` +
+        (cov.missing.length > 0
+          ? `，缺 ${cov.missing.join('、')}（工作日里没有归档的日子；本插件没有交易日历，节假日也会列在这里）`
+          : '') +
+        `。归档**从本版起累积**（每天打开一次该标的即可 +1 天），保留最近 12 个交易日，可在「截图/录屏」设置里关闭。`
+    }
+    if (trendDayCount(payload.trend.points) <= 1) {
+      return '该市场没有多日分钟源（多日分钟源只覆盖沪/深：新浪 5 分钟线 → 腾讯 5 分钟线），' +
+        '所以五日只能显示当日 —— 不是本页故障。从本版起会按日归档本地分时，之后五日会逐日变长。'
+    }
+    return null
+  })()
 
   // 复权段控：只在 K 线周期出现；宿主判定"不适用"时禁用，并把原因写在 title 与角标上
   const fqDisabled = payload !== null && payload.kind === 'kline' && payload.kline.fqSupported === false
@@ -429,7 +458,9 @@ export function QuoteDrawer(props: { secid: string; name: string; redUp: boolean
         caliber !== ''
           ? React.createElement('div', {
               className: 'tw-caliber',
-              title: '图上每个数都按这一行口径解释：周期 klt 来自实际请求参数，复权口径来自宿主回包的实际生效值；「截至」是本地最近一次成功取数时刻（未收盘当根在上游没有收盘时间，不用「现在」顶替）',
+              // 有五日覆盖说明时把完整解释放进来，并让键盘也能读到（tabIndex/aria）——P1-5 的同一约定
+              title: caliberExplain ?? '图上每个数都按这一行口径解释：周期 klt 来自实际请求参数，复权口径来自宿主回包的实际生效值；「截至」是本地最近一次成功取数时刻（未收盘当根在上游没有收盘时间，不用「现在」顶替）',
+              ...(caliberExplain !== null ? { tabIndex: 0, role: 'note', 'aria-label': `${caliber}。${caliberExplain}` } : {}),
             }, caliber)
           : null,
         chartBody(),

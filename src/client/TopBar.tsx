@@ -359,6 +359,7 @@ export function TopBar(props: {
   // P2-2：当前值（缺省 1 / false，与宿主默认一致）
   const opacity = normalizePanelOpacity(prefs.panelOpacity, 1)
   const blurDigits = prefs.blurDigits === true
+  const trendArchive = prefs.trendArchive !== false // 默认开：只有显式 false 才是关
 
   const themeBtn = (): void => {
     const next = prefs.theme === 'auto' ? 'light' : prefs.theme === 'light' ? 'dark' : 'auto'
@@ -394,6 +395,18 @@ export function TopBar(props: {
             onChange: (e: React.ChangeEvent<HTMLInputElement>) => setPrefs({ blurDigits: e.target.checked }),
           }),
           '数字模糊（价格/涨跌/盈亏/成交额；hover 该行显形）',
+        ),
+        React.createElement('label', {
+          style: { display: 'flex', alignItems: 'center', gap: 8, margin: '8px 0', fontSize: 12, cursor: 'pointer' },
+          title: '把每天成功取到的分时按日归档（trends/<secid>/<日期>.json，保留最近 12 个交易日，单日/总量超限就不写）。' +
+            '这是"五日"在没有真实多日源的市场（港股/国际指数/外盘商品/期货）能拼出多日的唯一途径：从本版起累积，今天只有 1 天。',
+        },
+          React.createElement('input', {
+            type: 'checkbox',
+            checked: trendArchive,
+            onChange: (e: React.ChangeEvent<HTMLInputElement>) => setPrefs({ trendArchive: e.target.checked }),
+          }),
+          '归档每日分时（供"五日"本地拼接，从本版起累积）',
         ),
         React.createElement('div', { className: 'tw-hint' },
           '隐蔽性说明：数字模糊只覆盖「本插件渲染的数字」。表格里的名称、代码与提示文字不在模糊范围内（它们不是数字）；' +

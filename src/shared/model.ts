@@ -153,6 +153,22 @@ export function trendDayCount(points: readonly { label: string }[]): number {
   return days.size
 }
 
+/** 多日分时的覆盖报告（本地拼接用）：有哪几天、缺哪几天、请求几天 */
+export interface TrendCoverage {
+  /** 实际有数据（且够 2 个点）的交易日，升序 */
+  have: string[]
+  /** 窗口内工作日里没有数据的日子（升序）。没有交易日历 ⇒ 法定假日也会落在这里，如实列出不猜 */
+  missing: string[]
+  /** 请求的天数（分母）：界面显示"3/5 天" */
+  limit: number
+}
+
+/** 本次归档的结果（只在真的有"没写成功"时出现在回包里，界面据此说明"本次未归档"） */
+export interface TrendArchiveInfo {
+  saved: string[]
+  skipped: Array<{ day: string; reason: string }>
+}
+
 export interface TrendData {
   secid: string
   /** The feed's own previous-close/settlement baseline. */
@@ -162,6 +178,16 @@ export interface TrendData {
   last: number | null
   /** 该序列来自 last-known-good 时，记录快照时间（上游瞬时失败兜底） */
   staleAt?: number
+  /**
+   * `'local-stitch'` = 多日序列是**本地归档拼接**出来的（不是真实多日源），
+   * 覆盖情况见 `coverage`；缺省表示来自上游（东财/腾讯/新浪）。
+   * 界面对两者必须给出不同说明：拼接是"从本版起累积"，不是"上游给了五日"。
+   */
+  source?: 'local-stitch'
+  /** 拼接的覆盖报告（`source === 'local-stitch'` 时给出） */
+  coverage?: TrendCoverage
+  /** 本次归档：有 `skipped` 时界面要说明"本次未归档"（体积保护/写失败都算） */
+  archive?: TrendArchiveInfo
   /**
    * true = 直接吃本地缓存、**没有回源**：休市且快照已越过最近一次收盘，
    * 当天的分时/五日序列不会再变（数据是确定的，不是降级）。
@@ -572,6 +598,13 @@ export interface PortPrefs {
   fxMode?: FxMode
   /** 固定汇率表（1 外币 = N 人民币），仅 fxMode='fixed' 时生效 */
   fxRates?: FxRates
+  /**
+   * 每日分时归档（多日拼接的数据来源，默认开）。
+   *
+   * 关掉后：不再往 `trends/<secid>/` 写任何文件（已有的不动），五日在没有真实多日源的市场
+   * 就只能是当日 —— 界面会如实说明"未归档"，不会假装有历史。
+   */
+  trendArchive?: boolean
 }
 
 export const DEFAULT_PREFS: PortPrefs = {
@@ -587,6 +620,7 @@ export const DEFAULT_PREFS: PortPrefs = {
   blurDigits: false,
   fxMode: 'none',
   fxRates: {},
+  trendArchive: true,
 }
 
 /**
