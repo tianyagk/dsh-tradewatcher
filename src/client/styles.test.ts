@@ -41,3 +41,15 @@ test('STYLE_ID 稳定（换 id 会让旧样式表留下来与新样式表并存�
   assert.ok(STYLE_ID.length > 0)
   assert.ok(TW_CSS.length > 1000, '样式表内容不应为空')
 })
+
+test('卡片的涨跌色必须作用域提升、且位于 .tw-chart-tip-v 之后（否则被中性色覆盖）', () => {
+  const base = TW_CSS.indexOf('.tw-chart-tip-v{')
+  assert.ok(base >= 0, '卡片值样式必须存在')
+  for (const cls of ['tw-up', 'tw-down', 'tw-muted']) {
+    const scoped = TW_CSS.indexOf(`.tw-chart-tip .${cls}{`)
+    assert.ok(scoped > base, `.tw-chart-tip .${cls} 必须存在且位于 .tw-chart-tip-v 之后（实际 ${scoped} vs ${base}）`)
+  }
+  // 特异性必须是 0,2,0（两个类）——单类选择器会与 .tw-chart-tip-v 打成平手再被顺序决定
+  assert.match(TW_CSS, /\.tw-chart-tip \.tw-up\{color:var\(--tw-up\)\}/)
+  assert.match(TW_CSS, /\.tw-chart-tip \.tw-down\{color:var\(--tw-down\)\}/)
+})

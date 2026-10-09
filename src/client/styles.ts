@@ -418,6 +418,12 @@ color-scheme:dark}
 .tw-chart-tip-row{display:flex;justify-content:space-between;gap:10px;font-size:11px;line-height:16px;white-space:nowrap}
 .tw-chart-tip-k{color:var(--tw-muted)}
 .tw-chart-tip-v{font-family:var(--tw-mono);font-variant-numeric:tabular-nums;color:var(--tw-text)}
+/* ⚠ 涨跌色必须**作用域提升**：tw-up/tw-down 是单类选择器（0,1,0），而上面的
+   .tw-chart-tip-v{color:var(--tw-text)} 同为 0,1,0 且位置在后 ⇒ 会把涨跌色覆盖成中性色
+   （实测：卡片里百分比挂上了 tw-up/tw-down 也不生效）。这里用 0,2,0 稳赢，不依赖规则顺序。 */
+.tw-chart-tip .tw-up{color:var(--tw-up)}
+.tw-chart-tip .tw-down{color:var(--tw-down)}
+.tw-chart-tip .tw-muted{color:var(--tw-muted)}
 `
 
 let injected = false

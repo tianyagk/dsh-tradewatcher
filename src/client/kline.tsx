@@ -49,7 +49,12 @@ function TipCard(lines: readonly TipLine[], pos: { left: number; top: number }, 
     role: 'status',
     'aria-live': 'off',
   },
-    ...lines.map((l, i) => React.createElement('div', { key: `t${i}`, className: 'tw-chart-tip-row' },
+    ...lines.map((l, i) => React.createElement('div', {
+      key: `t${i}`, className: 'tw-chart-tip-row',
+      // 口径的长解释不占正文：进 title + aria-label（读屏也读得到）
+      title: l.hint,
+      'aria-label': l.hint === undefined ? undefined : `${l.label} ${l.value} —— ${l.hint}`,
+    },
       React.createElement('span', { className: 'tw-chart-tip-k' }, l.label),
       React.createElement('span', {
         // 涨跌着色**必须**跟随 redUp（写死映射会在"绿涨红跌"档位与全站相反）

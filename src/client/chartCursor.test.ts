@@ -5,6 +5,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { klineReadout, nearestIndex, timeCell, tipPlacement, toneClass, trendPctLine, trendReadout } from './chartCursor.ts'
 import { SESSION_CN } from './sessionAxis.ts'
+import { dirClass } from './format.ts'
 import { macd } from './indicators.ts'
 
 test('nearestIndex：两端 / 中点 / 越界 / 空 / 单点都有确定行为', () => {
@@ -73,8 +74,8 @@ test('trendReadout：缺失一律 —（无昨收 / 无均价 / 无成交额都�
   const get = (ls: ReturnType<typeof trendReadout>, k: string): string => ls.find((l) => l.label === k)?.value ?? ''
   assert.equal(get(noBase, '时间'), '09:30')
   assert.equal(get(noBase, '价格'), '3755.05')
-  // 口径已改为"距开盘/距首点"：第 0 点是相对自身 ⇒ 0.00%（真实值，不是"缺失"）
-  assert.equal(get(noBase, '涨跌(距首点)'), '0.00%', '首点对自身 ⇒ 0.00%（这里 0 是真实值）')
+  // 口径已改为"距开盘/距首点"（可见标签一律「涨跌幅」，口径进 hint）：第 0 点是相对自身 ⇒ 0.00%（真实值）
+  assert.equal(get(noBase, '涨跌幅'), '0.00%', '首点对自身 ⇒ 0.00%（这里 0 是真实值）')
   assert.equal(get(noBase, '均价'), '—', '均价缺失 ⇒ —（不是 0）')
   assert.equal(get(noBase, '成交量'), '—')
   assert.equal(get(noBase, '成交额'), '—')
@@ -147,10 +148,11 @@ test('距开盘口径：首点 100 → 当前 105 ⇒ +5.00%；首点缺失或�
     { label: '2026-10-09 10:00', price: 105, avg: null, vol: null, amount: null },
   ]
   const ok = trendPctLine(pts, 1, { session: SESSION_CN })
-  assert.equal(ok.label, '涨跌(距开盘)', '首点正是 09:30 ⇒ 敢说"距开盘"')
+  assert.equal(ok.label, '涨跌幅', '可见标签一律「涨跌幅」')
+  assert.ok(ok.hint.includes('相对当日开盘价'), '首点正是 09:30 ⇒ 口径是"距开盘"（进 hint）')
   assert.equal(ok.pct, 5, '+5%')
   const lines = trendReadout({ points: pts, i: 1, session: SESSION_CN })
-  assert.equal(lines.find((l) => l.label === '涨跌(距开盘)')?.value, '▲5.00%')
+  assert.equal(lines.find((l) => l.label === '涨跌幅')?.value, '▲5.00%')
   // 首点为 0 / 首点缺失 ⇒ 不可算
   const zero = trendPctLine([{ label: '2026-10-09 09:30', price: 0 }, { label: '2026-10-09 10:00', price: 5 }], 1, { session: SESSION_CN })
   assert.equal(zero.pct, null, '首点为 0 ⇒ 不可算')
@@ -160,19 +162,34 @@ test('距开盘口径：首点 100 → 当前 105 ⇒ +5.00%；首点缺失或�
   assert.deepEqual(empty, [], '空序列 ⇒ 空卡片')
 })
 
-test('口径标签：有时段表且首点==开盘时刻 ⇒ 距开盘；无时段表 ⇒ 距首点（不许含糊）', () => {
+test('口径进 hint：可见标签一律「涨跌幅」，而 hint 必须区分三种口径（读屏也读得到）', () => {
   const atOpen = [{ label: '2026-10-09 09:30', price: 100 }, { label: '2026-10-09 09:31', price: 101 }]
-  assert.equal(trendPctLine(atOpen, 1, { session: SESSION_CN }).label, '涨跌(距开盘)')
+  const open = trendPctLine(atOpen, 1, { session: SESSION_CN })
+  assert.equal(open.label, '涨跌幅')
+  assert.ok(open.hint.includes('相对当日开盘价') && !open.hint.includes('首点'), '距开盘的口径句')
   // 无时段表（美股/商品/期货）：122.XAU 首点 06:00 —— 那不是开盘
   const xau = [{ label: '2026-10-09 06:00', price: 4274.05 }, { label: '2026-10-09 06:05', price: 4280 }]
-  assert.equal(trendPctLine(xau, 1, { session: null }).label, '涨跌(距首点)', '无表 ⇒ 只能说"距首点"')
-  // 有表但首点不在开盘（数据从 09:45 开始）
+  const first = trendPctLine(xau, 1, { session: null })
+  assert.equal(first.label, '涨跌幅')
+  assert.ok(first.hint.includes('相对该序列首点'), '无表 ⇒ 口径句只能写"首点"')
+  // 有表但首点不在开盘（数据从 09:45 开始）⇒ 同样退化，且 hint 要说明原因
   const late = [{ label: '2026-10-09 09:45', price: 100 }, { label: '2026-10-09 09:50', price: 101 }]
-  assert.equal(trendPctLine(late, 1, { session: SESSION_CN }).label, '涨跌(距首点)', '首点不是开盘 ⇒ 不许声称距开盘')
-  // 调用方给了真实开盘价 ⇒ 用它（并保留"距开盘"标签）
+  assert.ok(trendPctLine(late, 1, { session: SESSION_CN }).hint.includes('首点不是开盘时刻'), '说明为什么不能称距开盘')
+  // 调用方给了真实开盘价 ⇒ 用它
   const withOpen = trendPctLine(late, 1, { session: SESSION_CN, open: 99 })
-  assert.equal(withOpen.label, '涨跌(距开盘)', '有真实开盘价 ⇒ 可以称距开盘')
+  assert.ok(withOpen.hint.includes('相对当日开盘价'), '有真实开盘价 ⇒ 口径是距开盘')
   assert.ok(Math.abs((withOpen.pct ?? 0) - ((101 - 99) / 99) * 100) < 1e-9, '用传入的开盘价算')
+  // 三种口径的 hint 互不相同（否则读者区分不出来）
+  const dayOpen = trendPctLine(
+    [{ label: '2026-10-08 09:30', price: 100 }, { label: '2026-10-09 09:30', price: 200 }, { label: '2026-10-09 10:00', price: 210 }],
+    2, { multiDay: true, session: SESSION_CN })
+  const hints = new Set([open.hint, first.hint, dayOpen.hint])
+  assert.equal(hints.size, 3, '三种口径的 hint 必须互不相同')
+  // 卡片行：可见标签一律「涨跌幅」
+  const card = trendReadout({ points: xau, i: 1, session: null })
+  assert.equal(card.filter((l) => l.label.startsWith('涨跌')).length, 1)
+  assert.equal(card.find((l) => l.label.startsWith('涨跌'))?.label, '涨跌幅')
+  assert.ok((card.find((l) => l.label === '涨跌幅')?.hint ?? '').length > 0, 'hint 必须有内容（title/aria 要用）')
 })
 
 test('五日档：与"同一天的首点"比（跨天比五天前没有意义）', () => {
@@ -183,7 +200,8 @@ test('五日档：与"同一天的首点"比（跨天比五天前没有意义）
     { label: '2026-10-09 10:00', price: 210 },
   ]
   const r = trendPctLine(pts, 3, { multiDay: true, session: SESSION_CN })
-  assert.equal(r.label, '涨跌(距当日开盘)')
+  assert.equal(r.label, '涨跌幅', '可见标签仍是「涨跌幅」')
+  assert.ok(r.hint.includes('同日开盘'), '多日档口径进 hint')
   assert.equal(r.pct, 5, '210 对**当天**首点 200 = +5%（而不是对 10-08 的 100 = +110%）')
 })
 
@@ -225,4 +243,22 @@ test('K 线档口径**未被改动**：仍对前收盘；首根无前收盘 ⇒ 
   const l0 = klineReadout({ bars, i: 0, macd: null })
   assert.equal(get(l0, '涨跌幅'), '—', '第一根没有前收盘 ⇒ —')
   assert.equal(l1.some((x) => x.value === '0' || x.value === '0.00%'), false, '不许 0 顶替')
+})
+
+test('一致性：卡片着色与全站 dirClass 对同一个值给出同一个颜色', () => {
+  // dirClass 的口径（format.ts）：n>0 且 redUp ⇒ tw-up，否则 tw-down；0 ⇒ tw-flat
+  assert.equal(dirClass(1.2, true), 'tw-up')
+  assert.equal(dirClass(-1.2, true), 'tw-down')
+  assert.equal(dirClass(1.2, false), 'tw-down', '绿涨红跌：上涨用"跌"色')
+  assert.equal(dirClass(-1.2, false), 'tw-up', '绿涨红跌：下跌用"涨"色')
+  // 卡片侧：tone 由 pct 的方向决定 ⇒ 两条路径必须一致（同一个下跌值 ⇒ 同一个类）
+  for (const redUp of [true, false]) {
+    assert.equal(toneClass('down', redUp), dirClass(-1.2, redUp), `redUp=${String(redUp)} 时下跌色必须一致`)
+    assert.equal(toneClass('up', redUp), dirClass(1.2, redUp), `redUp=${String(redUp)} 时上涨色必须一致`)
+  }
+  // 中性：dirClass 对 0 给 tw-flat，卡片的中性行给 tw-muted —— 都是中性色，但**刻意不同物**
+  // （tw-flat 是"涨跌为零"的语义色，tw-muted 是"这一行不表示涨跌"）。故这里只断言两者都不落在涨跌类上。
+  assert.equal(dirClass(0, true), 'tw-flat')
+  assert.equal(toneClass(undefined, true), 'tw-muted')
+  assert.ok(!['tw-up', 'tw-down'].includes(toneClass(undefined, true)))
 })

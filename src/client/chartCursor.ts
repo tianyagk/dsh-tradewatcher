@@ -13,8 +13,13 @@ import type { SessionDef } from './sessionAxis.ts'
 export interface TipLine {
   label: string
   value: string
-  /** 涨/跌着色（K 线卡片的收盘与涨跌幅用；不带则用默认色） */
+  /** 涨/跌着色（K 线卡片的收盘与涨跌幅用；不带/`muted` ⇒ 中性） */
   tone?: 'up' | 'down' | 'muted'
+  /**
+   * 口径的长解释（**不占正文**）：渲染成该行的 `title` 与 `aria-label`。
+   * 开发原则：常驻可见文本只留一行（"影响什么 + 原因"），长解释进 title/aria（读屏也读得到）。
+   */
+  hint?: string
 }
 
 export interface TipPos {
@@ -88,6 +93,16 @@ export function toneClass(tone: 'up' | 'down' | 'muted' | undefined, redUp: bool
   return 'tw-muted'
 }
 
+/**
+ * 分时档涨跌幅的三种口径 → 给读屏/悬停看的说明句（**可见标签一律「涨跌幅」**）。
+ * `first.label` 之类不进来：这句要能独立读懂。
+ */
+export const PCT_HINTS: Record<'open' | 'first' | 'dayOpen', string> = {
+  open: '涨跌幅＝当前价相对当日开盘价',
+  first: '涨跌幅＝当前价相对该序列首点（该标的不适用分时段网格，首点不是开盘时刻）',
+  dayOpen: '涨跌幅＝当前价相对同日开盘（多日档按当天首点计算）',
+}
+
 /** 时间列：五日档必须带日期（`MM-DD HH:mm`），单日档只要时刻（`HH:mm`） */
 export function timeCell(label: string, multiDay: boolean): string {
   if (multiDay) return label.slice(5, 16) // YYYY-MM-DD HH:mm → MM-DD HH:mm
@@ -139,13 +154,13 @@ export function trendPctLine(
   points: readonly TrendPointLike[],
   i: number,
   opts: { multiDay?: boolean; session?: SessionDef | null; open?: number | null } = {},
-): { label: string; pct: number | null } {
+): { label: string; pct: number | null; hint: string } {
   const p = points[i]
-  if (p === undefined) return { label: '涨跌(距首点)', pct: null }
+  if (p === undefined) return { label: '涨跌幅', pct: null, hint: PCT_HINTS.first }
   const first = points[0]
   const explicit = typeof opts.open === 'number' && Number.isFinite(opts.open) && opts.open > 0 ? opts.open : null
   let ref: number | null = explicit
-  let label = '涨跌(距首点)'
+  let caliber: 'open' | 'first' | 'dayOpen' = 'first'
   if (opts.multiDay === true) {
     // 五日档：与"同一天的首点"比（跨天比五天前没有意义）
     const day = p.label.slice(0, 10)
@@ -156,7 +171,7 @@ export function trendPctLine(
       break
     }
     ref = explicit ?? sameDayFirst
-    label = '涨跌(距当日开盘)'
+    caliber = 'dayOpen'
   } else {
     const session = opts.session ?? null
     const openAtSessionOpen =
@@ -167,10 +182,11 @@ export function trendPctLine(
     // 调用方给了真实开盘价 —— 那就是开盘，不必再看首点时间
     const openKnown = explicit !== null || openAtSessionOpen
     ref = explicit ?? (first !== undefined && Number.isFinite(first.price) ? first.price : null)
-    label = openKnown ? '涨跌(距开盘)' : '涨跌(距首点)'
+    caliber = openKnown ? 'open' : 'first'
   }
-  if (ref === null || !(ref > 0)) return { label, pct: null }
-  return { label, pct: ((p.price - ref) / ref) * 100 }
+  // 可见标签一律「涨跌幅」；口径进 hint（title + aria-label）
+  if (ref === null || !(ref > 0)) return { label: '涨跌幅', pct: null, hint: PCT_HINTS[caliber] }
+  return { label: '涨跌幅', pct: ((p.price - ref) / ref) * 100, hint: PCT_HINTS[caliber] }
 }
 
 const numOrDash = (v: number | null | undefined, digits = 2): string => {
@@ -195,7 +211,7 @@ export function trendReadout(args: TrendReadoutArgs): TipLine[] {
   const lines: TipLine[] = [
     { label: '时间', value: timeCell(p.label, args.multiDay === true), tone: 'muted' },
     { label: '价格', value: fmtPrice(p.price), tone: pctTone(pct) },
-    { label: pl.label, value: pct === null ? '—' : fmtPct(pct), tone: pctTone(pct) },
+    { label: pl.label, value: pct === null ? '—' : fmtPct(pct), tone: pctTone(pct), hint: pl.hint },
   ]
   if (macd !== null) {
     lines.push({ label: 'MACD', value: numOrDash(macd.hist[i], 4), tone: 'muted' })

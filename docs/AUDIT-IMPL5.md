@@ -145,3 +145,78 @@ export function toneClass(tone: 'up' | 'down' | 'muted' | undefined, redUp: bool
 2. **距开盘标签的差异**：A股指数（有时段表+首点在开盘）应显示「涨跌(距开盘)」，
    `122.XAU`/`100.SPX`（无时段表）应显示「涨跌(距首点)」，五日档应显示「距当日开盘」；
 3. 中性行（MACD/DIF/DEA/量额/开高低）在两种配色下都不变色。
+
+---
+
+## 追加（task-30）：原则入库 + 标签简化 + 卡片涨跌色被 CSS 覆盖的真因
+
+### ① 原则入库（可执行版）
+
+- **`README.md`「开发」节**新增子节 **「开发原则：不冗余解释、不啰嗦（可执行版本）」**，七条：
+  ① 常驻可见说明**只留一行**且只写"影响什么 + 原因"，长解释进 `title`/`aria-label`（读屏要读得到）；
+  ② **同一事实全局只留一处**（行级 tooltip > 面板级 hint > 正文）；
+  ③ 恒真/恒假句不渲染，**空值不占位**（`—` + 原因，不用 0）；
+  ④ 状态词/时间格式/单位**用词表统一**（`未取到`／`上游无此数据`／`数据时刻`／`HH:mm:ss`／`MM-DD HH:mm`）；
+  ⑤ **结构性限制不进红色告警**（红色只留给故障）；
+  ⑥ **口径标签只写通用词**（`涨跌幅`），具体口径进 `title`/`aria`；
+  ⑦ 新数字面必须登记进两条 `data-blur=1` 清单；涨跌着色一律走 `toneClass`/`dirClass`，**不许写死红绿**。
+- **`docs/DECISIONS.md`** 新增同题决策条目（含规则出处 = `AUDIT-COPY2` 用词表 + v0.34–v0.37 经验、背景四条实测踩坑、两条最关键执行面）。
+
+### ② 可见标签改回「涨跌幅」，口径进 `title`/`aria-label`
+
+- before：`涨跌(距开盘)` / `涨跌(距首点)` / `涨跌(距当日开盘)`（可见文本里堆解释）
+- after：可见标签**一律** `涨跌幅`；口径句进该行 `title` 与 `aria-label`：
+```ts
+export const PCT_HINTS = {
+  open:    '涨跌幅＝当前价相对当日开盘价',
+  first:   '涨跌幅＝当前价相对该序列首点（该标的不适用分时段网格，首点不是开盘时刻）',
+  dayOpen: '涨跌幅＝当前价相对同日开盘（多日档按当天首点计算）',
+}
+```
+  `TipCard` 的每一行都渲染 `title: l.hint` 与 `aria-label: "涨跌幅 ▲1.23% —— 涨跌幅＝…"`（读屏完整可读）。
+- 断言改为：`trendPctLine/TrendReadout` 的可见标签**一律 `涨跌幅`**，三种口径的 `hint` **互不相同**且各自含关键短语
+  （"相对当日开盘价" / "相对该序列首点" / "同日开盘"），空序列/不可算仍写 `—`。
+
+### ③ 涨跌色被 CSS 覆盖：真因与修法
+
+**真因**：`.tw-up/.tw-down` 是**单类**选择器（特异性 0,1,0，`styles.ts:161`），而 `.tw-chart-tip-v{…;color:var(--tw-text)}`
+同为 0,1,0 但**位置在后**（`styles.ts:420`）⇒ 覆盖涨跌色，卡片里所有值都被染成中性色（tone 计算本身是对的）。
+
+**修法（不依赖顺序，0,2,0 稳赢）** —— 行号实测：
+```
+161  .tw-up{color:var(--tw-up)} .tw-down{…} .tw-flat{…}
+420  .tw-chart-tip-v{font-family:…;color:var(--tw-text)}
+424  .tw-chart-tip .tw-up{color:var(--tw-up)}      ← 作用域提升
+425  .tw-chart-tip .tw-down{color:var(--tw-down)}
+426  .tw-chart-tip .tw-muted{color:var(--tw-muted)}
+```
+
+**同类冲突扫描**（脚本核对：单类 `color` 规则 + 源码里与 `dirClass`/`toneClass` 同挂一个元素的 class）：
+
+| 候选 | 结论 |
+| --- | --- |
+| `.tw-chart-tip-v` + `tw-up/tw-down` | **真冲突**（唯一一处）⇒ 已按上面修 |
+| `.tw-chart-tip-k` | 只是标签，**不带 tone** ⇒ 无冲突 |
+| `.tw-num` / `.tw-ytd` + `dirClass`（自选 α、YTD 列） | 两条规则只设 `font-family`/模糊清单，**不设 `color`** ⇒ 无冲突 |
+| `.tw-metric .v` / `.tw-idxcard .px` | 它们在**本仓库不存在**（`grep` 零命中）⇒ 无需处理 |
+
+**一致性核对**：`redUp=false` 时 `toneClass('down') → tw-up`，与全站 `dirClass(-1.2, false) → tw-up` **同色**
+（新增断言双向覆盖四个组合：`toneClass('up'|'down', redUp) === dirClass(±1.2, redUp)`）；中性侧刻意不同物：
+`dirClass(0) → tw-flat`（"涨跌为零"的语义色）vs 卡片中性行 `tw-muted`（"这一行不表示涨跌"），断言只保证两者**都不落在涨跌类上**。
+
+### 断言与实测
+
+```
+✔ 口径进 hint：可见标签一律「涨跌幅」，而 hint 必须区分三种口径（读屏也读得到）
+✔ 一致性：卡片着色与全站 dirClass 对同一个值给出同一个颜色
+✔ 卡片的涨跌色必须作用域提升、且位于 .tw-chart-tip-v 之后（否则被中性色覆盖）
+   （读 CSS 文本断言 .tw-chart-tip .tw-up/.tw-down/.tw-muted 存在、行号在 .tw-chart-tip-v 之后、特异性为两个类）
+```
+
+测试总数 **258 → 260**；`npm run check` 全绿（260 × 2 时区、75 项片段；`build.mjs` 未改）。
+
+### 需装机复核（无浏览器，**未做视觉验证**）
+
+1. **渲染观感需装机复核**：卡片里涨跌幅的红/绿是否真的出来了（样式层只能证明"类挂得上且规则赢"，证明不了渲染像素）；
+2. 两档配色（红涨 / 绿涨）下卡片与全站颜色一致；
+3. `title`/`aria-label` 在当前 DSH Web GUI 的悬停行为（是否能弹出、读屏是否读到口径句）。
