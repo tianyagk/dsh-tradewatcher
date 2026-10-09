@@ -3,6 +3,7 @@
 import React, { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react'
 import { DEFAULT_PREFS, TW_ROWS, VIEW_MODES, normalizePanelOpacity, type PortPrefs, type QuoteRow, type ViewMode } from '../shared/model.ts'
 import { api } from './api.ts'
+import { badgeView, type BadgeState } from './badgeView.ts'
 import { useQuoteEngine } from './useQuotes.ts'
 import { TopBar } from './TopBar.tsx'
 import { WatchlistPage } from './WatchlistPage.tsx'
@@ -26,14 +27,6 @@ const PANEL_ID = 'tradewatcher'
  * 之间唯一不引入新依赖的通道；而且这样"徽标数据"只有一份，天然满足
  * 「徽标数字与面板顶部数字同源」的要求。
  */
-interface BadgeState {
-  text: string
-  /** 徽标颜色键：rescue 等级 / 上涨 / 下跌 / 平静 */
-  tone: 'rescue' | 'up' | 'down' | 'flat'
-  /** 展开态侧栏标题用的完整说明（图标里放不下的部分放这里） */
-  detail: string
-}
-
 const badgeState: BadgeState = { text: '', tone: 'flat', detail: '' }
 const badgeListeners = new Set<() => void>()
 
@@ -45,53 +38,6 @@ function setBadge(next: BadgeState): void {
   for (const fn of badgeListeners) fn()
 }
 
-/**
- * 徽标文案（P0-3）。
- *
- * 图标只有 18px，因此字形最多 4 个字符；完整语义（含"收盘"后缀）放 `detail`，
- * 由侧栏展开态的标题与 aria-label 呈现 —— 而不是把「护收」这类两字组合硬塞进图标
- * （那样只会两边都看不清）。
- *
- * 隐身视图下**只显示点位**（`¥••••` 之外的绝对值一律不出现），这是 ROADMAP 的硬要求。
- */
-function badgeView(
-  b: Awaited<ReturnType<typeof api.badge>>,
-  masked: boolean,
-): BadgeState {
-  const asOfText = b.asOf === null ? '—' : new Date(b.asOf).toLocaleTimeString('zh-CN', { hour12: false })
-  // 护盘 ≥ 疑似护盘（level ≥ 2）优先：那是"今天市场有事"的信号，比个人盈亏更该被看到
-  if (b.level >= 2) {
-    return {
-      text: '护',
-      tone: 'rescue',
-      detail: `护盘信号 ${b.levelLabel ?? ''}（等级 ${b.level}）· 数据 ${asOfText}${b.settled ? ' · 已收盘' : ''}`,
-    }
-  }
-  if (masked) {
-    const point = b.indexPoint === null ? null : Math.round(b.indexPoint)
-    return {
-      text: point === null ? '••' : String(point).slice(0, 4),
-      tone: 'flat',
-      detail: `隐身视图：只显示点位（${b.indexName ?? '沪深300'} ${point ?? '—'}）· 数据 ${asOfText}${b.settled ? ' · 已收盘' : ''}`,
-    }
-  }
-  if (b.dayPnlPct === null || b.dayPnlPct === 0) {
-    return {
-      text: b.dayPnlPct === null ? '' : '0.0',
-      tone: 'flat',
-      detail: `持仓当日盈亏 0.00%（${b.dayPnl.toFixed(2)} 元）· 数据 ${asOfText}${b.settled ? ' · 已收盘' : ''}`,
-    }
-  }
-  const pct = b.dayPnlPct
-  const sign = pct > 0 ? '+' : '-'
-  const mag = Math.abs(pct)
-  const text = `${sign}${mag >= 10 ? '10+' : mag.toFixed(1)}`
-  return {
-    text,
-    tone: pct > 0 ? 'up' : 'down',
-    detail: `持仓当日盈亏 ${sign}${mag.toFixed(2)}%（${b.dayPnl >= 0 ? '+' : ''}${b.dayPnl.toFixed(2)} 元）· 数据 ${asOfText}${b.settled ? ' · 已收盘' : ''}`,
-  }
-}
 
 /** 立即重取一次徽标（视图档位切换后必须马上反映，否则要等 60s 轮询） */
 let badgeRefresh: (() => void) | null = null
