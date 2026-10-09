@@ -12,6 +12,7 @@ import { join } from 'node:path'
 import type { CalCategory, CalEvent, CalImportance, MissingField } from '../shared/model.ts'
 import { dataHome } from './store.ts'
 import { calToday as shCalToday } from './time.ts'
+import { MISSING_TIER_ADVICE } from '../shared/model.ts'
 
 const AUTO_SYNC_TTL = 6 * 3600_000
 /**
@@ -418,13 +419,13 @@ export class CalendarStore {
       what: s.label,
       // 失败原因都是"这次没拿到"（上游超时/限流/不可达），稍后重试可恢复
       why: 'transient',
-      note: `本次同步未取到（${s.error ?? '上游不可用'}）；该类别仍是上一次成功同步的事件（若有），稍后会自动重试`,
+      note: `本次同步未取到（${s.error ?? '上游不可用'}）；该类别仍是上一次成功同步的事件（若有）—— ${MISSING_TIER_ADVICE.transient}`,
     }))
     if (this.lastThrown !== null) {
       missing.push({
         what: '日历同步',
         why: 'transient',
-        note: `本次同步过程出错（${this.lastThrown}）；返回的是本地已有事件 + 手动事件，稍后重试可补齐`,
+        note: `本次同步过程出错（${this.lastThrown}）；返回的是本地已有事件 + 手动事件 —— ${MISSING_TIER_ADVICE.transient}`,
       })
     }
     return {

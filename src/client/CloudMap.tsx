@@ -147,12 +147,15 @@ export function CloudMap(props: {
         React.createElement('button', { 'data-on': true, onClick: () => setSource('third') }, '第三方站点'),
       ),
       React.createElement('span', { className: 'tw-hint', style: { margin: 0 } }, '面积=流通市值，颜色=涨跌幅，自动刷新（频率以站点实际为准），滚轮缩放、双击看K线、方向键复盘'),
-      // 该站点的色义与本插件**相反**且改不了：不写出来，用户就会以为云图跟自己的配色设置一致
-      React.createElement('span', {
-        className: 'tw-badge',
-        style: { color: '#e0a94a', borderColor: '#e0a94a' },
-        title: '第三方站点的涨跌配色由它自己决定，本插件无法修改，也不抓取它的内容。它的口径是「红=跌、绿=涨」',
-      }, redUp ? '该站：红=跌 绿=涨（与本面板相反）' : '该站：红=跌 绿=涨（与本面板当前设置一致）'),
+      // S13：该站点的色义与本插件**相反**且改不了 —— 只有相反时才出徽标（一致时是零信息，R4）；
+      // 文案压成 12 字，完整口径进 title（K7：同屏两套色义，相反时必须写出来）
+      redUp
+        ? React.createElement('span', {
+            className: 'tw-badge',
+            style: { color: '#e0a94a', borderColor: '#e0a94a' },
+            title: '第三方站点的涨跌配色由它自己决定，本插件无法修改，也不抓取它的内容。它的口径是「红=跌、绿=涨」',
+          }, '该站红跌绿涨，与本面板相反')
+        : null,
       // 加载状态常驻可见：超时不是"静默等待"，要能一眼看出现在处于哪一态
       React.createElement('span', { className: 'tw-badge', 'data-state': state, title: `最后成功加载：${lastOkText}` },
         state === 'loading' ? '加载中…' : state === 'loaded' ? '已加载' : '加载超时'),

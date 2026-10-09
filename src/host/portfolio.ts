@@ -17,7 +17,7 @@ import type {
   PositionRow,
   QuoteRow,
 } from '../shared/model.ts'
-import { FX_CURRENCY_LABEL, fxCurrencyOf, isFiniteNumber, isT0Secid, marketOf, normalizeFxRate, normalizeFxRates } from '../shared/model.ts'
+import { FX_CURRENCY_LABEL, MISSING_TIER_ADVICE, fxCurrencyOf, isFiniteNumber, isT0Secid, marketOf, normalizeFxRate, normalizeFxRates } from '../shared/model.ts'
 
 /** 市场显示名（unpriced 的原因说明用；与 client/format.ts 的 shortLabel 同一口径） */
 const MARKET_LABEL: Record<Market, string> = {
@@ -361,7 +361,7 @@ export function assemblePortfolio(
     if (p.price === null) {
       unpriced.push({
         posId: p.posId, secid: p.secid, name: p.name, qty: p.qty, why: 'no-quote',
-        note: '行情源未给出可用价格（东财与备用源均未返回），故不计入总额；重试可能恢复',
+        note: `行情源未给出可用价格（东财与备用源均未返回），故不计入总额 —— ${MISSING_TIER_ADVICE.transient}`,
       })
       continue
     }

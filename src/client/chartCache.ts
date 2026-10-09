@@ -15,7 +15,7 @@
  *  4) 复权口径进缓存键 —— 前复权与不复权是两套价格序列，互相顶替会在图上
  *     造成无解释的跳空；分时/五日不含复权序列，仍共用同一个键。
  */
-import type { FqMode, KlineData, MissingField, TrendData } from '../shared/model.ts'
+import type { FqMode, KlineData, MissingField, TrendData, TrendPoint } from '../shared/model.ts'
 import { FQ_LABEL } from '../shared/model.ts'
 import { api } from './api.ts'
 
@@ -219,12 +219,31 @@ export function fqNoteOf(kline: KlineData): string {
 }
 
 /** 图表脚注里的缓存来源说明（诚实标注，不假装是刚取到的新数据） */
+/**
+ * 「显示上次成功数据」要带上**这份数据自己的时间**。
+ *
+ * 为什么：分时兜底会回上一次成功取到的序列（`staleAt`），若只写"本次刷新失败"，
+ * 用户会以为图上是今天的行情 —— 实测早上 09:38 仍显示 10-08 的整场，看着就像"今天横盘"。
+ * 时间取自序列最后一个点的 `label`（不造时间），跨日时以 `sessionDay` 为准。
+ */
+function lastSuccessNote(trend: { points: TrendPoint[]; sessionDay?: string }): string {
+  const last = trend.points[trend.points.length - 1]
+  if (last === undefined) return ' · 显示上次成功数据'
+  const day = trend.sessionDay ?? last.label.slice(0, 10)
+  const hhmm = last.label.slice(11, 16)
+  return ` · 显示上次成功数据（${day}${hhmm === '' ? '' : ` ${hhmm}`}）`
+}
+
 export function cacheNoteOf(payload: ChartPayload | null): string {
   if (payload === null) return ''
   // "拿不到"没有缓存口径可谈（原因由 missing 说明，别在这里重复）
   if (payload.kind === 'unavailable') return ''
   const isSettled = settled(payload)
-  if (payload.fallback === true) return ' · 显示上次成功数据（本次刷新失败）'
+  if (payload.fallback === true) {
+    return payload.kind === 'trend' ? lastSuccessNote(payload.trend) : ' · 显示上次成功数据（本次刷新失败）'
+  }
+  // 宿主回了 last-known-good（staleAt 有值）⇒ 这是"上次成功数据"，必须把日期说清
+  if (payload.kind === 'trend' && payload.trend.staleAt !== undefined) return lastSuccessNote(payload.trend)
   if (isSettled) return ' · 休市定稿缓存（未回源）'
   if (payload.fromCache === true) return ' · 本地缓存'
   return ''

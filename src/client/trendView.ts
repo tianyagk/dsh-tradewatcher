@@ -41,3 +41,59 @@ export function trendScale(
   const pad = (max - min) * 0.06 || 1
   return { lo: min - pad, hi: max + pad }
 }
+
+// ── 五日/多日分时：底部"按天"轴（读不出天 = 用户看不懂这张图）──────────────────
+
+/** 一个交易日对应的点区间（左闭右闭，都是点数组下标） */
+export interface TrendDaySegment {
+  /** 该天第一个点的下标（日分隔线画在这里；0 表示就是图的左端，不画线） */
+  startIndex: number
+  /** 该天最后一个点的下标 */
+  endIndex: number
+  /** `YYYY-MM-DD`：取自点里的 `label`，不是自己算的日期 */
+  day: string
+  /** 底部轴上的文字：该天第一个点 `label` 的 `MM-DD` 段（**不造日期**） */
+  text: string
+}
+
+/**
+ * 把多日点序列切成"每天一段"，并挑出底部轴要显示的标签。
+ *
+ * 为什么需要：五日档此前只在**内部**日边界画虚线 + 图内左上角 9px 小字，且 `brk <= 0` 被跳过
+ * ⇒ 第一天永远没有标签、底部轴只有首末两个时间戳，用户读不出"哪一段是哪一天"。
+ *
+ * 规则：
+ *  - 只有 1 天（或 0 天）⇒ `segments`/`labels` 都为空数组，调用方走原来的时间轴（单日不看"天"）；
+ *  - `labels` 是 `segments` 的子集：超过 `maxLabels` 时**均匀抽样且首末必留**（不重叠）；
+ *  - 标签文字一律取该天第一个点 `label` 的 `MM-DD`（`label` 太短就留空，绝不用别处日期顶替）。
+ */
+export function trendDayAxis(
+  points: readonly { label: string }[],
+  maxLabels: number,
+): { segments: TrendDaySegment[]; labels: TrendDaySegment[] } {
+  const segments: TrendDaySegment[] = []
+  for (let i = 0; i < points.length; i += 1) {
+    const label = points[i]?.label ?? ''
+    const day = label.slice(0, 10)
+    const text = label.slice(5, 10)
+    const last = segments[segments.length - 1]
+    if (last !== undefined && last.day === day) {
+      last.endIndex = i
+      continue
+    }
+    segments.push({ startIndex: i, endIndex: i, day, text })
+  }
+  if (segments.length <= 1) return { segments: [], labels: [] }
+  const cap = Math.max(1, Math.floor(maxLabels))
+  if (segments.length <= cap) return { segments, labels: segments }
+  // 均匀抽样：首末必留（i=0 → 第 0 段；i=cap-1 → 最后一段）
+  const labels: TrendDaySegment[] = []
+  const used = new Set<number>()
+  for (let i = 0; i < cap; i += 1) {
+    const idx = Math.round((i * (segments.length - 1)) / (cap - 1))
+    if (used.has(idx)) continue
+    used.add(idx)
+    labels.push(segments[idx])
+  }
+  return { segments, labels }
+}

@@ -8,7 +8,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { normalizeTrendSeries, trendDayCount, type TrendPoint } from '../shared/model.ts'
-import { hasVolumeSeries, isUsableAvg, trendScale } from './trendView.ts'
+import { hasVolumeSeries, isUsableAvg, trendDayAxis, trendScale } from './trendView.ts'
 
 const prices = [4274.05, 4287.4, 4290.72, 4302.99]
 
@@ -86,4 +86,60 @@ test('B：trendDayCount 如实区分"只有当日"与"真的多日"', () => {
   ]
   assert.equal(trendDayCount(twoDays), 2)
   assert.equal(trendDayCount([]), 0)
+})
+
+// ── 五日：底部"按天"轴（读不出天 = 看不懂图）──────────────────────────────────
+
+/** 造 n 天的点：每天 `perDay` 个，label 形如 `2026-10-0X 09:3X` */
+const multiDay = (days: string[], perDay: number): Array<{ label: string }> =>
+  days.flatMap((d) => Array.from({ length: perDay }, (_, i) => ({ label: `${d} 09:${String(i).padStart(2, '0')}` })))
+
+test('按天轴：3 天 3 个标签，且标签落在各自区段中间（第一天也有）', () => {
+  const pts = multiDay(['2026-09-28', '2026-09-29', '2026-09-30'], 4)
+  const { segments, labels } = trendDayAxis(pts, 5)
+  assert.equal(segments.length, 3)
+  assert.deepEqual(segments.map((x) => x.startIndex), [0, 4, 8], '每天第一个点的下标')
+  assert.deepEqual(segments.map((x) => x.endIndex), [3, 7, 11])
+  assert.deepEqual(labels.map((x) => x.text), ['09-28', '09-29', '09-30'], '第一天必须有标签（此前 brk<=0 被跳过）')
+  for (const seg of labels) {
+    const center = (seg.startIndex + seg.endIndex) / 2
+    assert.equal(center, Math.floor(center) + 0.5, '区段中心落在两点之间 ⇒ 标签居中')
+  }
+  assert.equal(segments[0].startIndex, 0, '第一天从 0 开始（调用方据此不画左端分隔线）')
+})
+
+test('按天轴：只有 1 天（或空）⇒ 返回空，走原来的时间轴', () => {
+  assert.deepEqual(trendDayAxis(multiDay(['2026-10-09'], 5), 5), { segments: [], labels: [] })
+  assert.deepEqual(trendDayAxis([], 5), { segments: [], labels: [] })
+})
+
+test('按天轴：天数超过可容纳数时均匀抽样，且首末必留', () => {
+  const days = ['2026-09-25', '2026-09-28', '2026-09-29', '2026-09-30', '2026-10-08', '2026-10-09', '2026-10-10', '2026-10-13']
+  const pts = multiDay(days, 3)
+  const { segments, labels } = trendDayAxis(pts, 5)
+  assert.equal(segments.length, 8, '分隔线用全部 8 天')
+  assert.equal(labels.length, 5, '标签只放得下 5 个')
+  assert.equal(labels[0].day, days[0], '首个必留')
+  assert.equal(labels[labels.length - 1].day, days[days.length - 1], '末个必留')
+  // 均匀：相邻被选中的段间隔最多差 1
+  const idx = labels.map((l) => segments.indexOf(l))
+  const gaps = idx.slice(1).map((v, i) => v - idx[i])
+  assert.ok(Math.max(...gaps) - Math.min(...gaps) <= 1, `抽样要均匀（实际间隔 ${gaps.join(',')}）`)
+  // 容量为 1 时也不崩：首末只能留一个 ⇒ 至少留一个，且是首或末
+  const one = trendDayAxis(pts, 1)
+  assert.equal(one.labels.length, 1)
+})
+
+test('按天轴：标签文本等于该天点里的 label 前缀（不许自己造日期）', () => {
+  // 故意让 label 的日期与"外部传入的日期"不一致：标签只能来自 label
+  const pts = [
+    { label: '2026-10-07 09:30' }, { label: '2026-10-07 09:31' },
+    { label: '2026-10-09 09:30' }, { label: '2026-10-09 09:31' },
+  ]
+  const { labels } = trendDayAxis(pts, 5)
+  assert.deepEqual(labels.map((x) => x.text), ['10-07', '10-09'])
+  assert.deepEqual(labels.map((x) => x.day), ['2026-10-07', '2026-10-09'])
+  // label 太短时留空（不是"猜一个日期"）
+  const shortPts = [{ label: 'x' }, { label: 'y' }, { label: '2026-10-09 09:30' }, { label: '2026-10-09 09:31' }]
+  assert.equal(trendDayAxis(shortPts, 5).labels[0].text, '')
 })

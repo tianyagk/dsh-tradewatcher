@@ -6,7 +6,7 @@ import { dirClass, fmtAmt, fmtPct, fmtPrice, fmtSigned, pctArrow } from './forma
 import { Btn, EmptyHint, ErrorNote, Field, Modal, MoreMenu, Skeleton, SuggestInput } from './ui.tsx'
 import { MiniTrend } from './charts.tsx'
 import { useMiniTrends } from './mini.ts'
-import { NO_SOURCE_LABEL, PENDING_LABEL, PENDING_TITLE } from './quoteState.ts'
+import { NO_SOURCE_LABEL, NO_SOURCE_TITLE, PENDING_LABEL, PENDING_TITLE } from './quoteState.ts'
 import { SILENCE_MS, useWatchAlerts, type AlertRow } from './alerts.ts'
 import { SortBar } from './SortBar.tsx'
 import { SortHeader } from './SortHeader.tsx'
@@ -119,7 +119,9 @@ export function WatchlistPage(props: {
   }
 
   // 页面级 YTD 缺失摘要：逐行给 tooltip，整体只说"有几项算不出 + 第一条原因"
-  const ytdSummary = ytd.loaded ? ytdMissingSummary(Object.values(ytd.map)) : null
+  const ytdRows = ytd.loaded ? Object.values(ytd.map) : []
+  const ytdMissingCount = ytdRows.filter((r) => r.ytd === null).length
+  const ytdSummary = ytdMissingCount > 0 ? ytdMissingSummary(ytdRows) : null
   // 宽窄判定：**只挂其中一个**排序控件（此前是两个都挂、靠 CSS 藏一个，实测会同时出现）
   const wide = useWideLayout()
 
@@ -253,9 +255,9 @@ export function WatchlistPage(props: {
           role: 'note',
           'aria-label':
             `板块涨跌与 α 本次未取到（${indState.error ?? '上游不可用'}）。` +
-            '板块涨幅与 α 显示 — 而不是 0：0 会被读成"没涨没跌"，那是错的；下一次行情轮询会自动重试。',
+            '板块涨幅与 α 本次未取到：下一次行情轮询会自动重试。',
           title:
-            '板块涨幅与 α 显示 — 而不是 0：0 会被读成"没涨没跌"，那是错的。' +
+            '板块涨幅与 α 本次未取到。' +
             '行业归属与板块行情取不到时，下一次行情轮询会自动重试。',
         },
           `板块涨跌与 α 本次未取到 · ${indState.at === null ? '时刻未知' : new Date(indState.at).toLocaleTimeString('zh-CN', { hour12: false })} · ${indState.error ?? '上游不可用'}`,
@@ -274,7 +276,7 @@ export function WatchlistPage(props: {
     // 年初至今（YTD）的失败与上限必须说出来：数字静静变 — 会被读成"这只票今年没动"
     ytd.error !== null
       ? React.createElement('div', { className: 'tw-hint', style: { color: 'var(--tw-up)' } },
-          `年初至今（YTD）本次未取到：${ytd.error}。已取到的数字保留上一次结果，取不到的显示 —（不用 0 顶替）。`)
+          `YTD 本次未取到 · ${ytd.error}（已取到的保留上一次结果）`)
       : null,
     ytd.truncated
       ? React.createElement('div', {
@@ -287,9 +289,9 @@ export function WatchlistPage(props: {
           className: 'tw-hint',
           tabIndex: 0,
           role: 'note',
-          'aria-label': `年初至今：${ytdSummary}。取不到的一律显示 — 而不是 0：0 会被读成"今年没涨没跌"。逐行原因见各行的悬停提示。`,
-          title: '取不到的一律显示 — 而不是 0：0 会被读成"今年没涨没跌"。逐行原因见各行的悬停提示。',
-        }, `YTD：${ytdSummary}`)
+          'aria-label': `YTD 缺 ${ytdMissingCount} 项：逐行原因见各行悬停`,
+          title: `${ytdSummary}\n逐行原因见各行悬停提示。`,
+        }, `YTD 缺 ${ytdMissingCount} 项`)
       : null,
     active.length === 0
       ? React.createElement(EmptyHint, { action: React.createElement(Btn, { primary: true, onClick: () => setModal({ kind: 'addGroup' }) }, '+ 新建分组') }, '暂无自选分组：新建分组后，往组里添加证券（支持搜索代码/名称）。')
@@ -414,10 +416,10 @@ export function WatchlistPage(props: {
                                 // 那是错的信息，而"取不到"是另一件事
                                 // 原因不能只挂在 title 上：title 是鼠标专属（键盘/触屏拿不到），
                                 // 因此缺失态补 tabIndex + aria-label（P1-5）
-                                title: '板块当日涨幅未取到：该板块不在本次榜单返回里，或板块行情接口暂不可用（稍后随行情轮询重试）。这里显示 — 而不是 0，因为 0 会被读成"没涨没跌"——那是错的',
+                                title: '板块当日涨幅未取到：该板块不在本次榜单返回里，或板块行情接口暂不可用（稍后随行情轮询重试）',
                                 tabIndex: 0,
                                 role: 'note',
-                                'aria-label': '板块当日涨幅未取到：该板块不在本次榜单返回里，或板块行情接口暂不可用（稍后随行情轮询重试）。这里显示 — 而不是 0，因为 0 会被读成"没涨没跌"',
+                                'aria-label': '板块当日涨幅未取到：该板块不在本次榜单返回里，或板块行情接口暂不可用（稍后随行情轮询重试）',
                               }, '板块 —'),
                           React.createElement('span', {
                             className: 'tw-num ' + dirClass(alpha, prefs.redUp),
@@ -463,11 +465,11 @@ export function WatchlistPage(props: {
                       ? React.createElement('div', { className: 'wq' },
                           React.createElement('span', {
                             className: 'tw-badge',
-                            title: '东财、腾讯、新浪三个源都没有返回该标的的可用价格。若为期货主连/商品合约，请核对代码大小写（如 114.lhm 与 114.LHM 是同一标的，现已大小写无关匹配）。',
+                            title: NO_SOURCE_TITLE,
                             style: { fontSize: 9.5, color: '#e0a94a' },
                             tabIndex: 0,
                             role: 'note',
-                            'aria-label': '无行情源：东财、腾讯、新浪三个源都没有返回该标的的可用价格。若为期货主连/商品合约，请核对代码大小写（114.lhm 与 114.LHM 是同一标的，现已大小写无关匹配）',
+                            'aria-label': NO_SOURCE_LABEL,
                           }, NO_SOURCE_LABEL))
                       : React.createElement('div', { className: 'wq' }, React.createElement('span', {
                           className: 'tw-muted',

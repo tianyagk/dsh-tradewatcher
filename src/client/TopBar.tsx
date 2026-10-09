@@ -5,7 +5,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { TW_ROWS, type QuoteRow, type TrendData, type KlineData } from '../shared/model.ts'
 import { chartCache } from './chartCache.ts'
 import { fmtClock, fmtPct, fmtPrice, fmtSigned, dirClass } from './format.ts'
-import { QUOTE_STATE_COLOR, QUOTE_STATE_LABEL, quoteStateOf, quoteStateTitle, summarizeQuoteStates, type QuoteState } from './quoteState.ts'
+import { NO_SOURCE_LABEL, NO_SOURCE_TITLE, QUOTE_STATE_COLOR, QUOTE_STATE_LABEL, quoteStateOf, quoteStateTitle, summarizeQuoteStates, type QuoteState } from './quoteState.ts'
 import { useNow } from './useNow.ts'
 import { Sparkline } from './charts.tsx'
 import { Btn, Modal } from './ui.tsx'
@@ -449,7 +449,7 @@ export function TopBar(props: {
         if (n === 0) return null
         return React.createElement('span', {
           className: 'tw-badge',
-          title: `其中 ${n} 个标的三源都没有可用价格（东财/腾讯/新浪）；这些卡片显示 —，请在自选或持仓页查看明细`,
+          title: `其中 ${n} 个${NO_SOURCE_LABEL}；这些卡片显示 —，明细见自选或持仓页\n${NO_SOURCE_TITLE}`,
           style: { fontSize: 9.5, color: '#e0a94a' },
         }, `无行情源 ${n}`)
       })(),

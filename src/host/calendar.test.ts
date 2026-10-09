@@ -58,7 +58,8 @@ test('日历：全部源失败时 syncedAt 保持不变、syncAttemptAt 推进�
   assert.equal(afterFail.stale, true)
   assert.equal(afterFail.allFailed, true)
   assert.equal(afterFail.missing.length, 4, '四个源各一条缺失（含具体原因）')
-  assert.ok(afterFail.missing.every((m) => m.why === 'transient' && m.note.includes('稍后会自动重试')))
+  // 措辞统一走 MISSING_TIER_ADVICE.transient（S19）：同一档全局只留一种说法
+  assert.ok(afterFail.missing.every((m) => m.why === 'transient' && m.note.includes('稍后自动重试')))
   assert.ok(afterFail.missing.every((m) => m.note.includes('upstream timeout')), '缺失原因里要带上游给的原因')
   assert.equal(store.list('2026-10-01', '2026-10-31').length, eventsAfterOk, '全失败时不伪造新事件，也不清空旧事件')
 

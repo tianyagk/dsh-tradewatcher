@@ -179,6 +179,13 @@ export interface TrendData {
   /** 该序列来自 last-known-good 时，记录快照时间（上游瞬时失败兜底） */
   staleAt?: number
   /**
+   * 这份序列自己的**交易日**（最后一个点所属的 `YYYY-MM-DD`）。
+   *
+   * 兜底回 LKG 时必须带上：界面要能写「显示上次成功数据（10-08 15:00）」——
+   * 否则用户会以为图上是今天的行情（实测正是这个坑：09:38 还显示 10-08 的整场）。
+   */
+  sessionDay?: string
+  /**
    * `'local-stitch'` = 多日序列是**本地归档拼接**出来的（不是真实多日源），
    * 覆盖情况见 `coverage`；缺省表示来自上游（东财/腾讯/新浪）。
    * 界面对两者必须给出不同说明：拼接是"从本版起累积"，不是"上游给了五日"。
@@ -917,6 +924,23 @@ export function marketOf(secid: string): Market {
  * 三处各写一套 filter 迟早分叉（分叉出的差额就是"静默缺口"——用户看到合计少了却不知道为什么）。
  * 两个提示合起来**恰好**覆盖所有 `realized === null` 的行：不重复计，也不漏。
  */
+/**
+ * 「缺失两档」措辞的**唯一出处**（K1：两档必须可区分；S19：同义长句不再一处写一遍）。
+ *
+ * 每个调用点只补"**具体是谁不可达 / 为什么没有兜底**"那半句，这半句永远来自这里 ——
+ * 它决定用户的下一步动作（等 vs 改口径），所以措辞必须稳定且两档可区分。
+ */
+export const MISSING_TIER_ADVICE: Record<'transient' | 'no-source', string> = {
+  transient: '上游暂时不可达，稍后自动重试',
+  'no-source': '结构性缺失，重试无用',
+}
+
+/** 行内/弹窗用的短句（80 字全文只留面板级一处 —— S18，避免同一句在每行各写一遍） */
+export function realizedUnknownShort(qty: number): string {
+  const n = Math.round(qty * 1e4) / 1e4
+  return `已实现不可算：${n} 股成本录入前卖出`
+}
+
 export function realizedUnknownRows<T extends { realizedUnknownQty?: number; costUnknown?: boolean }>(
   rows: readonly T[],
 ): T[] {

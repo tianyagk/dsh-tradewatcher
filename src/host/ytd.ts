@@ -22,6 +22,7 @@
 import type { DayBar, FqMode, KlineData, MissingField, YtdBaseKind, YtdRow } from '../shared/model.ts'
 import * as em from './em.ts'
 import { dayOf } from './time.ts'
+import { MISSING_TIER_ADVICE } from '../shared/model.ts'
 
 /** 年内第一个交易日收盘价的取数窗口：一年约 245 个交易日，400 根足够覆盖，且命中缓存后只增量拉最新几根 */
 export const YTD_BARS = 400
@@ -153,8 +154,8 @@ export async function ytdBaseOf(secid: string, day: string, deps: YtdDeps = {}):
       fqSupported: supported,
       asOf: null,
       why: failure === null
-        ? '日线本次取不到（上游限流或超时），稍后自动重试'
-        : `日线本次取不到：${failure}。稍后自动重试`,
+        ? `日线本次取不到（上游限流或超时）—— ${MISSING_TIER_ADVICE.transient}`
+        : `日线本次取不到：${failure} —— ${MISSING_TIER_ADVICE.transient}`,
       failed: true,
     }
     memo.set(secid, day, at, base)

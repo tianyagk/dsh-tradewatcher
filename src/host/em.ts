@@ -24,7 +24,7 @@ import type {
   TrendData,
   TrendPoint,
 } from '../shared/model.ts'
-import { SECID_RE, normalizeTrendSeries } from '../shared/model.ts'
+import { MISSING_TIER_ADVICE, SECID_RE, normalizeTrendSeries } from '../shared/model.ts'
 import { stitchTrendDays } from '../shared/trendStitch.ts'
 import { TREND_ARCHIVE_KEEP_DAYS, archiveTrendDays, loadTrendArchive, type TrendArchiveEntry } from './trendArchive.ts'
 import { mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
@@ -357,20 +357,21 @@ export function quoteProvenance(detail: QuoteProvenance, opts: { emDown?: boolea
         return {
           what: secid,
           why: 'transient' as const,
-          note: '东财行情主机本次不可用（熔断中或整批失败），而该标的没有腾讯/新浪备用源映射 —— 等东财恢复就会有（不是结构性缺失），稍后自动重试即可',
+          // 「等东财恢复」是**原因对象**（具体等谁），不是 tier 建议句：S19 要求"差异只在原因对象上另加半句"
+          note: `东财行情主机本次不可用（熔断中或整批失败），而该标的没有腾讯/新浪备用源映射（等东财恢复就会有）—— ${MISSING_TIER_ADVICE.transient}`,
         }
       }
       if (noFallback) {
         return {
           what: secid,
           why: 'no-source' as const,
-          note: '该标的无腾讯/新浪备用源映射（东财之外的源不提供它），且东财本次可正常取数 —— 属结构性缺失，重试无效',
+          note: `该标的无腾讯/新浪备用源映射（东财之外的源不提供它），且东财本次可正常取数 —— ${MISSING_TIER_ADVICE['no-source']}`,
         }
       }
       return {
         what: secid,
         why: 'transient' as const,
-        note: '东财与备用源本次都未给出可用价格（限流或超时），稍后重试可能恢复',
+        note: `东财与备用源本次都未给出可用价格（限流或超时）—— ${MISSING_TIER_ADVICE.transient}`,
       }
     }),
     // 这一批是否"休市定稿零回源"：定稿时 asOf 会停在收盘时刻，且没有任何兜底行
@@ -1030,6 +1031,7 @@ async function trendWithFallbackRaw(
   secid: string,
   ndays: number,
   loader: () => Promise<TrendData | null>,
+  opts: TrendOptions = {},
 ): Promise<TrendData | null> {
   await loadTrendLkg()
   const key = `trend:${secid}:${ndays}`
@@ -1038,41 +1040,43 @@ async function trendWithFallbackRaw(
   // 休市且本地快照已越过最近一次收盘 → 当天的分时/五日序列不会再变，直接吃本地
   // （进程重启后仍生效：trendLkg 是落盘的）。盘中 / 快照过期一律走上游。
   const settled = trendLkg.get(trendKey(secid, ndays))
-  if (settled !== undefined && settled.trend.points.length >= 2 && isSettledOffline(settled.at)) {
+  // 休市定稿分支**不动**：那时当天的序列不会再变，复用本地是正确行为
+  if (settled !== undefined && settled.trend.points.length >= 2 && isSettledOffline(settled.at, opts.now ?? Date.now())) {
     const reused: TrendData = { ...settled.trend, cached: true }
     cache.set(key, { exp: Date.now() + 300_000, value: reused })
     return reused
   }
+  // ⚠ 顺序：**上游 → 活的备用源（腾讯分钟线）→ LKG**（判据见 pickTrendFallback）。
+  // 决不能在备用源之前吃 LKG：那会让"有昨日 LKG 的标的"在东财不可达时永远显示昨天。
+  let upstream: TrendData | null = null
+  let upstreamThrew = false
   try {
-    const data = await loader()
-    if (data === null || data.points.length < 2) {
-      return lastGoodTrend(secid, ndays) ?? data
-    }
-    cache.set(key, { exp: Date.now() + 60_000, value: data })
-    rememberTrend(secid, ndays, data)
-    return data
-  } catch (error) {
-    const lkg = lastGoodTrend(secid, ndays)
-    if (lkg !== null) {
-      // 短缓存兜底结果：断网期间避免每行请求都重新跑满重试（行数多时会形成风暴），
-      // 20s 后再试上游，恢复后立刻回到实时数据
-      // 兜底项不享受 peek 宽限：20s 后必须重新回源试探（此前被 45s 宽限吞掉）
-      cache.set(key, { exp: Date.now() + 20_000, value: lkg, grace: 0 })
-      return lkg
-    }
-    // 走到这里说明上游这次没给数据 —— 记账（"东财被限流"与"该标的没有分时"必须能分开）
-    noteUpstreamFailure('trend')
-    // 没有 last-known-good 时用腾讯分钟线兜底（自选/持仓的缩略图与抽屉图）
-    const viaTencent = await tencentTrend(secid).catch(() => null)
-    if (viaTencent !== null) {
-      cache.set(key, { exp: Date.now() + 30_000, value: viaTencent })
-      rememberTrend(secid, ndays, viaTencent)
-      return viaTencent
-    }
-    void error
-    // 仍然拿不到：返回 null（路由回 200 + trend:null），客户端按"暂无分时"降级
+    upstream = await loader()
+  } catch {
+    upstreamThrew = true
+  }
+  let backup: TrendData | null = null
+  if (upstream === null || upstream.points.length < 2) {
+    backup = await (opts.fallbackSource ?? tencentTrend)(secid).catch(() => null)
+  }
+  const now = opts.now ?? Date.now()
+  const picked = pickTrendFallback({ upstream, backup, lkg: lastGoodTrend(secid, ndays), today: dayOf(now) })
+  if (picked.data === null) {
+    // 上游与备用源都没给数据 —— 记账（"东财被限流"与"该标的没有分时"必须能分开）
+    if (upstreamThrew) noteUpstreamFailure('trend')
+    // 返回 null（路由回 200 + trend:null），客户端按"暂无分时"降级
     return null
   }
+  // 缓存 TTL 按来源区分：实时值给长 TTL；LKG 不享受 peek 宽限（20s 后必须重新回源试探）
+  if (picked.from === 'lkg') {
+    // 兜底回 LKG：带上这份数据自己的交易日，界面据此写明"这是哪天的"
+    const annotated: TrendData = { ...picked.data, sessionDay: picked.sessionDay ?? undefined }
+    cache.set(key, { exp: Date.now() + 20_000, value: annotated, grace: 0 })
+    return annotated
+  }
+  cache.set(key, { exp: Date.now() + (picked.from === 'upstream' ? 60_000 : 30_000), value: picked.data })
+  rememberTrend(secid, ndays, picked.data)
+  return picked.data
 }
 
 /**
@@ -1083,9 +1087,58 @@ async function trendWithFallbackRaw(
  * 修复前写进去的 `avg: 0`（旧进程的产物）—— 只在解析处归一的话，断网/休市走 LKG 时
  * `curl /tradewatcher/trend` 仍会看到 0，等于没修。归一幂等，重复跑没有副作用。
  */
-/** 分时取数的选项：`archive` = 是否把取到的每日分时落盘归档（默认开，见 prefs.trendArchive） */
+/** 分时取数的选项 */
 export interface TrendOptions {
+  /** 是否把取到的每日分时落盘归档（默认开，见 prefs.trendArchive） */
   archive?: boolean
+  /** 注入"现在"（测试用：休市定稿判定与"是不是今天的"判据都依赖它） */
+  now?: number
+  /** 注入上游取数（测试用；默认走东财 trends2 / 新浪·腾讯多日链） */
+  upstream?: (secid: string, ndays: number) => Promise<TrendData | null>
+  /** 注入活的备用源（测试用；默认腾讯分钟线） */
+  fallbackSource?: (secid: string) => Promise<TrendData | null>
+}
+
+/** 一份分时序列的交易日（最后一个点属于哪天）；没有点返回 null */
+export function trendSessionDay(trend: TrendData | null): string | null {
+  const last = trend?.points[trend.points.length - 1]
+  return last === undefined ? null : last.label.slice(0, 10)
+}
+
+export type TrendOrigin = 'upstream' | 'backup' | 'lkg' | 'none'
+
+/**
+ * 分时兜底顺序的**纯决策**（非休市定稿路径）：`上游 → 活的备用源（腾讯分钟线）→ 本地 LKG`。
+ *
+ * 修的是什么：此前两个分支都把**过期的 LKG** 排在活的腾讯分钟线前面 ——
+ * 分支 A（上游返回 null）直接 `lastGoodTrend ?? data` 根本不试腾讯；分支 B（上游抛错）也是
+ * LKG 命中就 return。于是"有昨日 LKG 的标的"（指数/ETF 常有）在东财不可达时**永远显示昨天**，
+ * 而恰好没有 LKG 的标的反而拿到今天的实时分钟线（实测：09:38 时 1.510300 全是 10-08，1.600519 是 10-09）。
+ *
+ * 判据是**数据是不是今天的**（`sessionDay` 与该序列最后一个点所属交易日），而不是"有没有 LKG"：
+ * LKG 只有在"上游与备用源都拿不到"时才用，并且把 `sessionDay` 交给调用方，让界面如实写明
+ * 「显示上次成功数据（10-08 15:00）」，而不是让人以为这是今天的图。
+ */
+export function pickTrendFallback(args: {
+  upstream: TrendData | null
+  backup: TrendData | null
+  lkg: TrendData | null
+  today: string
+}): { data: TrendData | null; from: TrendOrigin; sessionDay: string | null; expired: boolean } {
+  const usable = (t: TrendData | null): t is TrendData => t !== null && t.points.length >= 2
+  if (usable(args.upstream)) {
+    const day = trendSessionDay(args.upstream)
+    return { data: args.upstream, from: 'upstream', sessionDay: day, expired: day !== null && day !== args.today }
+  }
+  if (usable(args.backup)) {
+    const day = trendSessionDay(args.backup)
+    return { data: args.backup, from: 'backup', sessionDay: day, expired: day !== null && day !== args.today }
+  }
+  if (usable(args.lkg)) {
+    const day = trendSessionDay(args.lkg)
+    return { data: args.lkg, from: 'lkg', sessionDay: day, expired: day !== null && day !== args.today }
+  }
+  return { data: null, from: 'none', sessionDay: null, expired: false }
 }
 
 /**
@@ -1118,7 +1171,7 @@ async function trendWithFallback(
   loader: () => Promise<TrendData | null>,
   opts: TrendOptions = {},
 ): Promise<TrendData | null> {
-  const data = await trendWithFallbackRaw(secid, ndays, loader)
+  const data = await trendWithFallbackRaw(secid, ndays, loader, opts)
   if (data === null) return null
   const clean = { ...data, points: normalizeTrendSeries(data.points) }
   // 归档放在**出口**：上游、内存缓存、落盘 LKG 命中的都在这里过一遍
@@ -1154,6 +1207,8 @@ async function tencentTrend(secid: string): Promise<TrendData | null> {
 async function fetchTrendSingleDay(secid: string, opts: TrendOptions = {}): Promise<TrendData | null> {
   const fields2 = 'f51,f52,f53,f54,f55,f56,f57,f58'
   return trendWithFallback(secid, 1, async () => {
+    // 注入上游（测试用）：让"上游抛错/没数据"这些分支可以构造，不必真去打上游
+    if (opts.upstream !== undefined) return opts.upstream(secid, 1)
     const json = await fetchAny(
       HISTORY_HOSTS,
       `/api/qt/stock/trends2/get?secid=${encodeURIComponent(secid)}&fields1=f1,f2,f3,f4,f5,f6,f7,f8,f9,f10,f11,f12,f13&fields2=${fields2}&ndays=1&iscr=0`,
@@ -1691,14 +1746,14 @@ export function trendMissingReason(secid: string, opts: { emDown?: boolean } = {
       what: '分时',
       why: 'transient',
       note: tencentMinute
-        ? '东财行情主机当前不可达（熔断/限流），腾讯分钟线这次也没取到，本地又没有可用快照 —— 稍后会自动重试，等东财恢复即可'
-        : '东财行情主机当前不可达（熔断/限流），而该标的没有腾讯分钟线兜底（腾讯只覆盖沪/深/港股），本地也没有可用快照 —— 等东财恢复即可，不是"该标的没有分时"',
+        ? `东财行情主机当前不可达（熔断/限流），腾讯分钟线这次也没取到，本地又没有可用快照 —— ${MISSING_TIER_ADVICE.transient}`
+        : `东财行情主机当前不可达（熔断/限流），而该标的没有腾讯分钟线兜底（腾讯只覆盖沪/深/港股），本地也没有可用快照 —— ${MISSING_TIER_ADVICE.transient}（不是"该标的没有分时"）`,
     }
   }
   return {
     what: '分时',
     why: 'no-source',
-    note: '东财当前可达但没有返回该标的的分时数据，且本插件没有别的分钟源可兜底（腾讯只覆盖沪/深/港股）—— 属结构性缺分时，重试无用',
+    note: `东财当前可达但没有返回该标的的分时数据，且本插件没有别的分钟源可兜底（腾讯只覆盖沪/深/港股）—— ${MISSING_TIER_ADVICE['no-source']}`,
   }
 }
 
@@ -1715,14 +1770,14 @@ export function klineMissingReason(secid: string, klt: number, opts: { emDown?: 
       what: label,
       why: 'transient',
       note: tencentKline
-        ? '本地没有该周期的缓存，东财行情主机当前不可达（熔断/限流），腾讯这次也没取到 —— 稍后自动重试，等东财恢复即可'
-        : '本地没有该周期的缓存，该标的也不在腾讯的 K 线覆盖内（腾讯只覆盖沪/深/港股/美股），而东财行情主机当前不可达（熔断/限流）—— 等东财恢复即可，不需要反复重试',
+        ? `本地没有该周期的缓存，东财行情主机当前不可达（熔断/限流），腾讯这次也没取到 —— ${MISSING_TIER_ADVICE.transient}`
+        : `本地没有该周期的缓存，该标的也不在腾讯的 K 线覆盖内（腾讯只覆盖沪/深/港股/美股），而东财行情主机当前不可达（熔断/限流）—— ${MISSING_TIER_ADVICE.transient}`,
     }
   }
   return {
     what: label,
     why: 'no-source',
-    note: '腾讯与东财当前都可达但没有返回该标的的 K 线，本地也没有缓存 —— 属结构性缺失，重试无用',
+    note: `腾讯与东财当前都可达但没有返回该标的的 K 线，本地也没有缓存 —— ${MISSING_TIER_ADVICE['no-source']}`,
   }
 }
 
@@ -1732,13 +1787,13 @@ export function detailMissingReason(opts: { emDown?: boolean } = {}): UpstreamRe
     return {
       what: '详情',
       why: 'transient',
-      note: '东财行情主机当前不可达（熔断/限流）—— 行情详情（开高低收/量额/市值）只有东财一个上游，稍后自动重试即可',
+      note: `东财行情主机当前不可达（熔断/限流）—— 行情详情（开高低收/量额/市值）只有东财一个上游；${MISSING_TIER_ADVICE.transient}`,
     }
   }
   return {
     what: '详情',
     why: 'no-source',
-    note: '东财当前可达但没有返回该标的的详情字段（这类标的常见于指数/外盘商品）—— 重试无用',
+    note: `东财当前可达但没有返回该标的的详情字段（这类标的常见于指数/外盘商品）—— ${MISSING_TIER_ADVICE['no-source']}`,
   }
 }
 

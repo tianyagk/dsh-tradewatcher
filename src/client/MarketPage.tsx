@@ -285,17 +285,22 @@ export function MarketPage(props: {
       // 且明确标注"主力净流入不可用"（该列仅东财提供）
       // P1-7：口径与时刻常显（不再只在降级时才出现）。
       // 15:00 之后上游不再更新板块资金流 → 标「定稿」；这是"数据不会再变"，不是"降级"。
-      React.createElement('div', { className: 'tw-hint', style: { padding: '2px 2px 4px' } },
+      React.createElement('div', {
+        className: 'tw-hint',
+        style: { padding: '2px 2px 4px' },
+        title: scope === 'etf'
+          ? '口径：ETF 排行按涨跌幅/成交额/换手，该类排行没有资金流字段'
+          : '口径：主力净额＝超大单＋大单净流入（上游口径，仅东财提供）；占比＝净额 ÷ 成交额。'
+            + '占比排序只在「本页 40 条」内重排 —— 上游按净额取前 40，本插件没有"按净占比的全市场排行"这一口径，因此不把它呈现成全市场排行。',
+      },
         React.createElement('span', { className: 'tw-badge', style: { marginRight: 6 } },
           cnSession.settled ? '定稿' : CN_PHASE_LABEL[cnSession.phase]),
         `数据时刻 ${boardMeta?.asOf !== undefined ? new Date(boardMeta.asOf).toLocaleTimeString('zh-CN', { hour12: false }) : '—'}` +
         ` · 来源 ${boardMeta?.source ?? 'em'}${boardMeta?.stale === true ? '（上次成功结果）' : ''}` +
-        (scope === 'etf'
-          ? ' · ETF 排行口径：涨跌幅/成交额/换手，无资金流字段'
-          : ' · 主力净额＝超大单＋大单净流入（上游口径，仅东财提供）；占比＝净额 ÷ 成交额') +
-        (sort === 'money' && scope !== 'etf' && moneySort === 'share'
-          ? '。注意：占比排序只在「本页 40 条」内重排 —— 上游按净额取前 40，本插件没有"按净占比的全市场排行"这一口径，因此不把它呈现成全市场排行。'
-          : ''),
+        // 口径常显会占掉一行（≈90 字）：压成「口径 ⓘ」，全文进 title（R1）——但下面这句**必须常显**（K9：
+        // 删了会把"本页 40 条内重排"读成全市场排行）
+        ' · 口径 ⓘ' +
+        (sort === 'money' && scope !== 'etf' && moneySort === 'share' ? ' · 占比排序仅本页 40 条内' : ''),
       ),
       boardMeta !== null && (boardMeta.stale === true || boardMeta.source === 'tencent' || boardMeta.source === 'sina')
         ? React.createElement('div', { className: 'tw-hint', style: { padding: '2px 2px 4px' } },

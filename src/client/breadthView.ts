@@ -66,10 +66,10 @@ export function breadthCells(sh: BreadthLeg | undefined, sz: BreadthLeg | undefi
     amount: amountOk ? (amounts[0] as number) + (amounts[1] as number) : null,
     countsOk,
     amountOk,
+    // M5：只说原因；"为什么不能显示 0"全局只在 UPDOWN_MISSING_NOTE 里讲一次
     reason: countsOk
       ? null
-      : `${missingParts.join('、')}未取到（备用源不含涨跌家数字段，等东财恢复后随行情轮询自动重试）。` +
-        '这里显示 — 而不是 0：0 会被读成"全市场没有一只上涨/下跌"',
+      : `${missingParts.join('、')}未取到（备用源不含涨跌家数字段，等东财恢复后随行情轮询自动重试）`,
     missingParts,
   }
 }

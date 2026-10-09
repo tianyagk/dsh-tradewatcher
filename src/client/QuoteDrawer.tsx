@@ -255,18 +255,15 @@ export function QuoteDrawer(props: { secid: string; name: string; redUp: boolean
       }
       if (tab !== '5d') return null
       // 五日：连续拼接（午休/隔夜已由压缩时间轴折叠），交易日之间画分隔线
+      // 日分隔线与"按天"底部标签由 TrendChart 内部的 trendDayAxis 从点的 label 切出来
+      //（此前这里自算 breaks 传进去；现在统一在图表里算，避免两套口径）
       const pts = t.points.map((p) => ({ t: p.t, value: p.price, vol: p.vol, avg: p.avg, label: p.label }))
-      const breaks: number[] = []
-      for (let i = 1; i < pts.length; i += 1) {
-        if (pts[i].label.slice(0, 10) !== pts[i - 1].label.slice(0, 10)) breaks.push(i)
-      }
       void lastUp
       const chart = React.createElement(TrendChart, {
         points: pts,
         baseline: null,
         width,
         redUp,
-        dayBreaks: breaks,
         mainH: 200,
         volH: 52,
         macdH: 62,

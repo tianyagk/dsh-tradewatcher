@@ -7,7 +7,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { CandleMarker, SparkMarker } from './charts.tsx'
 import { fmtAxis, ma, macd, niceTicks } from './indicators.ts'
-import { hasVolumeSeries, isUsableAvg, trendScale } from './trendView.ts'
+import { hasVolumeSeries, isUsableAvg, trendDayAxis, trendScale } from './trendView.ts'
 
 const PAD_X = 8
 const PAD_TOP = 8
@@ -177,7 +177,6 @@ export function TrendChart(props: {
   width: number
   redUp: boolean
   /** 五日：每个交易日起始索引（画分隔线 + 日期） */
-  dayBreaks?: number[]
   mainH?: number
   volH?: number
   macdH?: number
@@ -273,30 +272,47 @@ export function TrendChart(props: {
     ))
   }
 
-  // 五日分隔线
-  for (const brk of props.dayBreaks ?? []) {
-    if (brk <= 0 || brk >= points.length) continue
-    const x = xAt(brk)
-    children.push(React.createElement('line', {
-      key: `brk${brk}`, x1: x, y1: PAD_TOP, x2: x, y2: PAD_TOP + mainH,
-      style: { stroke: 'var(--tw-border-strong)' }, strokeWidth: 1, strokeDasharray: '2 2', opacity: 0.8,
-    }))
-    children.push(React.createElement('text', {
-      key: `brkt${brk}`, x: x + 3, y: PAD_TOP + 9, style: { fill: 'var(--tw-muted)', fontSize: 9 },
-    }, points[brk].label.slice(5, 10)))
-  }
-
   children.push(...volumePane({ top: volTop, height: volH, vols: points.map((p) => p.vol), up, xAt, barW, padX: PAD_X, innerW }))
   children.push(...macdPane({
     top: macdTop, height: macdH, dif: m.dif, dea: m.dea, hist: m.hist, xAt, barW, padX: PAD_X, innerW,
     upColor: redUp ? 'var(--tw-up)' : 'var(--tw-down)', downColor: redUp ? 'var(--tw-down)' : 'var(--tw-up)',
   }))
-  children.push(React.createElement('text', {
-    key: 'x0', x: PAD_X, y: height - 4, style: { fill: 'var(--tw-muted)', fontSize: 9 },
-  }, points[0].label.slice(5)))
-  children.push(React.createElement('text', {
-    key: 'x1', x: PAD_X + innerW, y: height - 4, textAnchor: 'end', style: { fill: 'var(--tw-muted)', fontSize: 9 },
-  }, points[lastIndex].label.slice(5, 16)))
+  /**
+   * 多日（五日）的**按天**底部轴：每天一个标签、居各自区段中间，日分隔线从主图延伸到底部轴。
+   *
+   * 此前只在**内部**日边界画虚线 + 图内左上角 9px 小字，且 `brk <= 0` 被跳过 ⇒ 第一天没有标签、
+   * 底部只有首末两个时间戳，用户读不出"哪一段是哪一天"（实测 1.510300 覆盖 5 天却看不出来）。
+   * 标签文本一律来自点里的 `label`（`trendDayAxis` 保证），天数多时均匀抽样、首末必留。
+   * 单日分时保持原样：仍是最左/最右两个时间戳。
+   */
+  const dayMaxLabels = Math.max(2, Math.min(8, Math.floor(innerW / 56)))
+  const { segments: daySegments, labels: dayLabels } = trendDayAxis(points.map((p) => ({ label: p.label })), dayMaxLabels)
+  const axisLabelY = height - 4
+  for (const seg of daySegments) {
+    if (seg.startIndex <= 0 || seg.startIndex >= points.length) continue
+    const x = xAt(seg.startIndex)
+    children.push(React.createElement('line', {
+      key: `brk${seg.startIndex}`, x1: x, y1: PAD_TOP, x2: x, y2: axisLabelY - 10,
+      style: { stroke: 'var(--tw-border-strong)' }, strokeWidth: 1, strokeDasharray: '2 2', opacity: 0.8,
+    }))
+  }
+  if (dayLabels.length > 0) {
+    for (const seg of dayLabels) {
+      // 居中：取该天首末两点横坐标的中点（时间轴被压缩过，用索引中点会偏）
+      const x = (xAt(seg.startIndex) + xAt(seg.endIndex)) / 2
+      children.push(React.createElement('text', {
+        key: `day${seg.startIndex}`, x, y: axisLabelY, textAnchor: 'middle',
+        style: { fill: 'var(--tw-muted)', fontSize: 9 },
+      }, seg.text))
+    }
+  } else {
+    children.push(React.createElement('text', {
+      key: 'x0', x: PAD_X, y: axisLabelY, style: { fill: 'var(--tw-muted)', fontSize: 9 },
+    }, points[0].label.slice(5)))
+    children.push(React.createElement('text', {
+      key: 'x1', x: PAD_X + innerW, y: axisLabelY, textAnchor: 'end', style: { fill: 'var(--tw-muted)', fontSize: 9 },
+    }, points[lastIndex].label.slice(5, 16)))
+  }
 
   return React.createElement('svg', { width, height, viewBox: `0 0 ${width} ${height}`, style: { display: 'block' } }, children)
 }

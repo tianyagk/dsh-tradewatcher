@@ -54,7 +54,8 @@ test('breadthCells：任一家数缺失 → 三格全 null（不得返回 0）�
     assert.equal(c.up, null, `${name}：不得用 0 顶替上涨`)
     assert.equal(c.down, null, `${name}：不得用 0 顶替下跌`)
     assert.equal(c.even, null, name)
-    assert.ok(c.reason !== null && c.reason.includes('显示 — 而不是 0'), `${name}：原因必须写成"显示 — 而不是 0"`)
+    // M5：理由只说原因（"为什么不能显示 0"由 upDownPair/UPDOWN_MISSING_NOTE 那一处承担）
+    assert.ok(c.reason !== null && c.reason.includes('未取到'), `${name}：缺失必须给出原因`)
     assert.ok(c.missingParts.length > 0, name)
   }
   // 具体到审计里的那个例子：up 有值而 down 缺失，不得出现 "1234 / 0"
