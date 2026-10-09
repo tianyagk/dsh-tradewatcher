@@ -213,3 +213,56 @@ if (missingPages > 0) {
 ① "基准缺失"的指数（`lastUp` 退回"与首点比"、无虚线、域=价格域）卡片观感；
 ② "基准正常"标的仍画虚线、曲线有起伏；
 ③ 抽屉大图的 `昨收 —` 与左侧价格刻度/右侧 ±% 的对齐。
+
+---
+
+## 追加（task-26）：删除列头排序（保留段控）—— 两排功能重复
+
+**用户的决定**：持仓页/自选页**保留面板头部的排序段控**（红框），**删掉列表上方那排列头排序**（蓝框）。
+
+### 删除清单（净 −183 行 + 组件 61 行）
+
+| 位置 | 删了什么 | 行数 |
+| --- | --- | --- |
+| `src/client/SortHeader.tsx` | 整个文件（列头组件：原生 button + aria-sort + ▲/▼ + 「↺ 默认顺序」） | −61 |
+| `src/client/styles.ts` | `.tw-sorthead` / `.tw-sorthead-cap` / `-cell` / `-btn` / `-static` / `-reset` 及其 `@media (min-width:1080px)` 块与注释 | −27 |
+| `src/client/wide.ts` | `SortEntry` 类型与 `pickSortEntry()`；顶部注释里的"两个控件互斥"历史改为"只剩宽窄判定" | −15 |
+| `src/client/useWide.ts` | `useSortEntry()`（量列头可见性的那个 hook） | −29 |
+| `src/client/WatchlistPage.tsx` | `SortHeader` 挂载、`useSortEntry`/`useWideLayout` 调用、列头注释；段控改**无条件常驻** | −41 |
+| `src/client/PortfolioPage.tsx` | 同上 | −39 |
+| `src/client/sort.ts` | `WATCH_COLUMNS` / `PORT_COLUMNS` / `NO_NAME_SORT`（列头专用数据） | −21 |
+| `src/client/wide.test.ts` | P1-4 那条断言（排序入口恰有一个） | −9 |
+| `src/client/sort.test.ts` | 「列头定义」整条用例 | −25 |
+| `README.md` / `docs/ROADMAP.md` | 见下"文档改动" | ±5 |
+
+**保留未动**：`WATCH_SORT_KEYS`/`PORT_SORT_KEYS`、`prefs.watchSort/portSort` 的键集与校验（段控仍能排全部键）；
+`SortBar` 组件本体（只清掉了为互斥服务的注释）；`build.mjs` 片段表（**一项未删**，`自选排序`/`持仓排序`/`仓位占比` 仍由段控提供 ⇒ 构建校验通过）。
+
+### 测试条数：239 → **237**（删 2 条）
+
+- 删 `wide.test.ts` 的「P1-4：排序入口恰有一个 —— 宽屏列头不可见时退回段控」：列头已不存在，这条断言的前提消失；
+- 删 `sort.test.ts` 的「列头定义：有数值来源的列才可排…」：`WATCH_COLUMNS`/`PORT_COLUMNS` 已随列头一起删除；
+- 改写 1 条（不是删）：`styles.test.ts` 的宽屏断点下限 `>= 3` → `>= 2`（列头那处断点随功能删除；"所有 min-width 必须等于 `WIDE_MIN_PX`"这条规则本身继续跑）。
+- 后端/纯函数断言一条未减（家数、五日、YTD、脚注、时段网格等全部保留）。
+
+### 静态核对
+
+```
+$ grep -rn "SortHeader\|sorthead\|useSortEntry\|pickSortEntry" src/     → 0 命中（含注释）
+$ grep -c "SortBar<" src/client/WatchlistPage.tsx src/client/PortfolioPage.tsx  → 1 / 1（各只剩一个入口）
+$ npm run check → 237 条 × 2 时区全绿；75 项片段校验通过（build.mjs 未改）
+```
+
+### 文档改动（只改两处）
+
+- `README.md` 排序那条：
+  - before：`…；**宽屏（≥1080px）改用列头排序** —— 点列头按该列排序、再点翻转方向、列头显示 ▲/▼、原生按钮键盘可达并带 aria-sort，另有「↺ 默认顺序」复位；窄屏保留原分段开关；两者的互斥由 useWideLayout() 决定只挂哪一个…`
+  - after：`…；**排序沿用面板头部的段控**（v0.36.0 起不再有列头排序 —— 列表上方那排列头与段控功能重复，已按用户要求删除），任何宽度下都只有这一个入口`
+  - 目录树里 `client/SortHeader.tsx # 宽屏列头排序…` 一行删除。
+- `docs/ROADMAP.md` 对应条目：`**列头点击排序 ✅（v0.30.0）**` → `**列头点击排序（v0.30.0 引入 → v0.36.0 删除）**`，写明删除原因与"排序沿用段控"；同一段里"断点按容器而非视口"的待做项与"渲染层从未真正执行过"的限制句同步去掉列头字样。
+
+### 那句根因结论（一眼）
+
+**未查明**（未为它加班）。当前源码里两排结构上不可能同时出现（两个挂载点由同一个 `entry` 值互斥），
+而截图里两排同时在 ⇒ 最可能是**跑着的客户端仍是旧构建**（本仓库此前已记录"宿主进程未重启、`lib/` 新而进程旧"），
+那一版是"两个都渲染、靠 CSS 藏一个"的形态；用户的选择让这个形态连同它的诊断一起消失了。

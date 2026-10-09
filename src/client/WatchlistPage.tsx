@@ -9,10 +9,8 @@ import { useMiniTrends } from './mini.ts'
 import { NO_SOURCE_LABEL, NO_SOURCE_TITLE, PENDING_LABEL, PENDING_TITLE } from './quoteState.ts'
 import { SILENCE_MS, useWatchAlerts, type AlertRow } from './alerts.ts'
 import { SortBar } from './SortBar.tsx'
-import { SortHeader } from './SortHeader.tsx'
-import { WATCH_COLUMNS, WATCH_SORT_HINT, WATCH_SORT_KEYS, WATCH_SORT_LABEL, normalizeSortState, sortWatch, type WatchSortKey } from './sort.ts'
+import { WATCH_SORT_HINT, WATCH_SORT_KEYS, WATCH_SORT_LABEL, normalizeSortState, sortWatch, type WatchSortKey } from './sort.ts'
 import { useYtd } from './useYtd.ts'
-import { useSortEntry, useWideLayout } from './useWide.ts'
 import { ytdMissingSummary, ytdText, ytdTooltip } from './ytdView.ts'
 
 type ModalState =
@@ -122,10 +120,6 @@ export function WatchlistPage(props: {
   const ytdRows = ytd.loaded ? Object.values(ytd.map) : []
   const ytdMissingCount = ytdRows.filter((r) => r.ytd === null).length
   const ytdSummary = ytdMissingCount > 0 ? ytdMissingSummary(ytdRows) : null
-  // 宽窄判定：**只挂其中一个**排序控件（此前是两个都挂、靠 CSS 藏一个，实测会同时出现）
-  const wide = useWideLayout()
- // 排序入口由**宽窄 + 列头是否真的可见**共同决定（样式表缺失时也不会一个入口都没有）
-  const entry = useSortEntry(wide)
 
   const reload = useCallback(() => {
     api
@@ -175,19 +169,16 @@ export function WatchlistPage(props: {
       'div',
       { className: 'tw-panel', style: { display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' } },
       React.createElement('span', { className: 't' }, '自选分组'),
-      // 排序：分组内生效（同一设置应用到所有分组），存进 prefs 所以重开面板仍生效
-      // 窄屏才挂段控；宽屏挂列头（见下方）。**互斥由这里决定，不再依赖 CSS 隐藏**
-      // 互斥由 `useSortEntry` 决定：条目恰好是一个（宽屏量过列头可见性，样式缺失时退回段控）
-      entry === 'bar'
-        ? React.createElement(SortBar<WatchSortKey>, {
-            keys: WATCH_SORT_KEYS,
-            labels: WATCH_SORT_LABEL,
-            hints: WATCH_SORT_HINT,
-            state: watchSort,
-            onChange: (next) => setPrefs({ watchSort: next }),
-            ariaLabel: '自选排序',
-          })
-        : null,
+      // 排序：分组内生效（同一设置应用到所有分组），存进 prefs 所以重开面板仍生效。
+      // v0.36.0 起**只有这一个入口**：列表上方的列头排序已删除（两排功能重复）
+      React.createElement(SortBar<WatchSortKey>, {
+        keys: WATCH_SORT_KEYS,
+        labels: WATCH_SORT_LABEL,
+        hints: WATCH_SORT_HINT,
+        state: watchSort,
+        onChange: (next) => setPrefs({ watchSort: next }),
+        ariaLabel: '自选排序',
+      }),
       React.createElement('span', { style: { flex: 1 } }),
  // 异动徽标队列。数字是"需要提醒的条数"；被静默压制的单独标出
       // 否则"我明明看到它在异动，为什么徽标是 0"会变成新的困惑
@@ -265,16 +256,6 @@ export function WatchlistPage(props: {
         },
           `板块涨跌与 α 本次未取到 · ${indState.at === null ? '时刻未知' : new Date(indState.at).toLocaleTimeString('zh-CN', { hour12: false })} · ${indState.error ?? '上游不可用'}`,
         )
-      : null,
-    // 列头排序（宽屏）：与段控读写**同一份** watchSort 偏好。两者由 `wide` 二选一挂载，
-    // 因此任一宽度下都只有一个排序入口（此前靠 CSS 隐藏，实测会同时出现两个）
-    entry === 'header'
-      ? React.createElement(SortHeader<WatchSortKey>, {
-          columns: WATCH_COLUMNS,
-          state: watchSort,
-          onChange: (next) => setPrefs({ watchSort: next }),
-          ariaLabel: '自选列头排序',
-        })
       : null,
     // 年初至今（YTD）的失败与上限必须说出来：数字静静变 — 会被读成"这只票今年没动"
     ytd.error !== null

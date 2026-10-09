@@ -18,18 +18,3 @@ export function layoutModeOf(width: number | null | undefined): LayoutMode {
   return isWideWidth(width) ? 'wide' : 'narrow'
 }
 
-/** 排序入口：宽屏挂列头、窄屏挂段控 */
-export type SortEntry = 'header' | 'bar'
-
-/**
- * 排序入口的选择（P1-4）：**必须恰有一个**。
- *
- * 只按宽度判定是不够的：列头默认 `display:none`、靠样式表的媒体查询才显示 ⇒ 样式表缺失或陈旧时
- * 宽屏会变成"一个排序入口都没有"（v0.30.1 修的是镜像问题："两个同时出现"）。
- * 因此宽屏要求列头**真的可见**（量过 `getComputedStyle`）才用列头；量不到就退回段控。
- * 段控是**始终可用**的那一个，失败方向安全。
- */
-export function pickSortEntry(args: { wide: boolean; headerVisible: boolean | null }): SortEntry {
-  if (!args.wide) return 'bar'
-  return args.headerVisible === true ? 'header' : 'bar'
-}

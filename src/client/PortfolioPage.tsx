@@ -21,10 +21,8 @@ import { MiniTrend } from './charts.tsx'
 import { useMiniTrends, type MiniData } from './mini.ts'
 import { NO_SOURCE_TITLE, NO_SOURCE_LABEL, PENDING_LABEL } from './quoteState.ts'
 import { SortBar } from './SortBar.tsx'
-import { SortHeader } from './SortHeader.tsx'
-import { PORT_COLUMNS, PORT_SORT_HINT, PORT_SORT_KEYS, PORT_SORT_LABEL, normalizeSortState, sortPositions, weightOf, type PortSortKey } from './sort.ts'
+import { PORT_SORT_HINT, PORT_SORT_KEYS, PORT_SORT_LABEL, normalizeSortState, sortPositions, weightOf, type PortSortKey } from './sort.ts'
 import { useYtd } from './useYtd.ts'
-import { useSortEntry, useWideLayout } from './useWide.ts'
 import { ytdText, ytdTooltip } from './ytdView.ts'
 import { isUsableBaseline } from './trendView.ts'
 
@@ -108,10 +106,6 @@ export function PortfolioPage(props: {
   // 年初至今（YTD）：**标的**的年初至今涨幅（不是持仓收益），现价与其它面板同源、基准由宿主按日 memo
   const ytd = useYtd(miniIds, props.quoteTs ?? null, active)
   // M3：面板级不再写 YTD 缺失摘要（与行级 tooltip 重复）—— 缺失原因由每行的悬停承担
-  // 宽窄判定：排序控件二选一挂载（详见 useWide.ts —— 此前两个都挂、靠 CSS 藏一个，实测会同时出现）
-  const wide = useWideLayout()
- // 排序入口由**宽窄 + 列头是否真的可见**共同决定（样式表缺失时也不会一个入口都没有）
-  const entry = useSortEntry(wide)
 
   useEffect(() => {
     if (view === null) return
@@ -253,18 +247,16 @@ export function PortfolioPage(props: {
             : '买入均价（移动加权含费）；浮动盈亏 = (现价 − 均价) × 数量，已实现盈亏单列。当日盈亏 = 隔夜(现价−昨收)×数量 + 日内买卖差额 − 费用，与券商 App 一致。',
           'aria-label': '口径说明',
         }, 'ⓘ'),
-        // 排序：分组内生效，存进 prefs（重开面板仍生效）
-        // 互斥由 `useSortEntry` 决定（宽屏量过列头可见性；样式表缺失时退回段控，见 useWide.ts）
-        entry === 'bar'
-          ? React.createElement(SortBar<PortSortKey>, {
-              keys: PORT_SORT_KEYS,
-              labels: PORT_SORT_LABEL,
-              hints: PORT_SORT_HINT,
-              state: portSort,
-              onChange: (next) => setPrefs({ portSort: next }),
-              ariaLabel: '持仓排序',
-            })
-          : null,
+        // 排序：分组内生效，存进 prefs（重开面板仍生效）。
+        // v0.36.0 起**只有这一个入口**：列表上方的列头排序已删除（两排功能重复）
+        React.createElement(SortBar<PortSortKey>, {
+          keys: PORT_SORT_KEYS,
+          labels: PORT_SORT_LABEL,
+          hints: PORT_SORT_HINT,
+          state: portSort,
+          onChange: (next) => setPrefs({ portSort: next }),
+          ariaLabel: '持仓排序',
+        }),
         // P1-11：折算口径常显 —— "这个人民币数字怎么来的"必须答得上来
         React.createElement(Btn, {
           onClick: () => setFxOpen(true),
@@ -335,15 +327,6 @@ export function PortfolioPage(props: {
         new Date(view.generatedAt).toLocaleTimeString('zh-CN', { hour12: false }),
       ),
     ),
-    // 列头排序（宽屏）：与面板顶部段控读写**同一份** `portSort` 偏好。两者由 `wide` 二选一挂载
-    wide
-      ? React.createElement(SortHeader<PortSortKey>, {
-          columns: PORT_COLUMNS,
-          state: portSort,
-          onChange: (next) => setPrefs({ portSort: next }),
-          ariaLabel: '持仓列头排序',
-        })
-      : null,
     ytd.error !== null
       ? React.createElement('div', {
           className: 'tw-hint',

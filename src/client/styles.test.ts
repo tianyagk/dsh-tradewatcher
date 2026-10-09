@@ -7,9 +7,10 @@ import assert from 'node:assert/strict'
 import { STYLE_ID, TW_CSS, cssInjectAction } from './styles.ts'
 import { WIDE_MIN_PX } from './wide.ts'
 
-test('CSS 里的宽屏断点全部等于 WIDE_MIN_PX（两处 min-width + 一处组头）', () => {
+test('CSS 里的宽屏断点全部等于 WIDE_MIN_PX（多列 + 组头）', () => {
   const found = [...TW_CSS.matchAll(/@media \(min-width:(\d+)px\)/g)].map((m) => Number(m[1]))
-  assert.ok(found.length >= 3, `宽屏断点应至少 3 处（多列/列头/组头），实际 ${found.length}`)
+  // v0.36.0 删除列头排序后少了一处断点：现在至少 2 处（多列 / 组头）
+  assert.ok(found.length >= 2, `宽屏断点应至少 2 处（多列/组头），实际 ${found.length}`)
   const bad = found.filter((px) => px !== WIDE_MIN_PX)
   assert.deepEqual(bad, [], `以下断点与 WIDE_MIN_PX(${WIDE_MIN_PX}) 不一致：${bad.join(', ')}`)
 })

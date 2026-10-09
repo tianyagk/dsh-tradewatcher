@@ -61,30 +61,11 @@ export interface SortColumn<K extends string> {
   hint: string
 }
 
-/** 名称列不排序的理由（自选/持仓共用一句，避免两处说法不一致） */
-const NO_NAME_SORT =
   '名称列不做排序：本插件的排序契约是「数值比较」（无效值恒沉底、同值保持原顺序）；' +
   '中文名的顺序取决于运行环境的排序表（ICU），不同环境可能给出不同结果 —— 排错比不排更糟。' +
   '要回到自定义顺序请选「默认」'
 
-export const WATCH_COLUMNS: readonly SortColumn<WatchSortKey>[] = [
-  { label: '名称', key: null, hint: NO_NAME_SORT },
-  { label: '成交额', key: 'amount', hint: WATCH_SORT_HINT.amount },
-  { label: '市值', key: 'mv', hint: WATCH_SORT_HINT.mv },
-  { label: '涨跌', key: 'chg', hint: WATCH_SORT_HINT.chg },
-  { label: '涨跌幅', key: 'pct', hint: WATCH_SORT_HINT.pct },
-  { label: '行业 α', key: 'alpha', hint: WATCH_SORT_HINT.alpha },
-]
 
-export const PORT_COLUMNS: readonly SortColumn<PortSortKey>[] = [
-  { label: '名称', key: null, hint: NO_NAME_SORT },
-  { label: '市值', key: 'mv', hint: PORT_SORT_HINT.mv },
-  { label: '成本', key: 'cost', hint: PORT_SORT_HINT.cost },
-  { label: '现价', key: 'price', hint: PORT_SORT_HINT.price },
-  { label: '盈亏', key: 'pnl', hint: PORT_SORT_HINT.pnl },
-  { label: '当日', key: 'dayPnl', hint: PORT_SORT_HINT.dayPnl },
-  { label: '仓位', key: 'weight', hint: PORT_SORT_HINT.weight },
-]
 
 /** 有限数值才算有效；NaN / Infinity / 缺失一律视为无效值 */
 export function sortValue(v: number | null | undefined): number | null {

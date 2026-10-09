@@ -111,35 +111,12 @@ color-scheme:dark}
    1. **按列填充**，不是按行填充：grid 的 auto-fill 会把"第 2 名"放到第 1 名右侧，
       顺左列往下读变成 1/3/5 名 —— 排序的全部意义就是名次，因此改用 CSS 多列（竖向填满）。
    2. **断点 1080px**（两列所需 520×2 + 16 间距 + 内边距），不是 1500px。
-      ⚠ 本断点在**两处**必须一致：这里与 .tw-sorthead（列头）。两处的 1080 由 styles.test.ts
-      直接读 CSS 文本比对 WIDE_MIN_PX（写死在注释里的一致性迟早会漂）。 */
+      ⚠ 断点必须与 client/wide.ts 的 WIDE_MIN_PX 一致（由 styles.test.ts 直接读 CSS 文本比对；
+      写死在注释里的一致性迟早会漂）。v0.36.0 起列头排序已删除，这条断点只服务多列网格。 */
 @media (min-width:1080px){
   .tw-wlist,.tw-poslist{columns:520px;column-gap:16px}
   /* 多列下行不能被拦腰截断 */
   .tw-wlist>.tw-wrow,.tw-poslist>.tw-posrow{break-inside:avoid}
-}
-
-/* 列头排序（宽屏）────────────────────────────────────────
-   窄屏不显示：侧栏那点宽度塞不下列头，继续用分段开关（SortBar）。
-   两者读写**同一份**排序偏好（watchSort / portSort），列头里另带「↺ 默认顺序」，
-   因此宽屏收起段控不丢操作，也不会出现"两个控件各说一套"。
-   ⚠ 断点必须与 .tw-wlist/.tw-poslist 的多列一致（见上方注释；由 styles.test.ts 锁）。 */
-.tw-sorthead{display:none}
-@media (min-width:1080px){
-  .tw-sorthead{display:flex;align-items:center;gap:2px;flex-wrap:wrap;padding:3px 8px;border:1px solid var(--tw-border);border-radius:8px;background:var(--tw-bg2)}
-  .tw-sorthead-cap{font-size:10px;color:var(--tw-muted);letter-spacing:.02em;margin:0 4px 0 2px}
-  .tw-sorthead-cell{display:inline-flex;align-items:center}
-  .tw-sorthead-btn,.tw-sorthead-static,.tw-sorthead-reset{font-size:11px;line-height:18px;padding:0 7px;border-radius:6px;border:1px solid transparent;color:var(--tw-dim);white-space:nowrap}
-  .tw-sorthead-btn:hover,.tw-sorthead-reset:hover{color:var(--tw-text);background:var(--tw-hover);border-color:var(--tw-border-strong)}
-  .tw-sorthead-btn:focus-visible,.tw-sorthead-reset:focus-visible{outline:2px solid var(--tw-accent);outline-offset:1px}
-  /* 没有排序键的列（名称）只作标签：不装成可点的样子 */
-  .tw-sorthead-static{color:var(--tw-muted);cursor:help;border-color:transparent}
-  .tw-sorthead-cell[data-on=true] .tw-sorthead-btn{color:var(--tw-accent);font-weight:600;background:var(--tw-accent-soft);border-color:var(--tw-accent)}
-  .tw-sorthead-reset{background:var(--tw-card);border-color:var(--tw-border);cursor:pointer}
-  /* 注意：这里**没有**"宽屏隐藏段控"的规则了。
-     排序控件的互斥由 JS 决定**只挂一个**（client/useWide.ts + useWideLayout()），
-     原先那条 [data-wide-hide=1]{display:none} 因"藏起来≠互斥"（实测两个控件同时出现）
-     已在 v0.30.1 删除；断点一致性由 styles.test.ts 直接比对 CSS 文本锁住。 */
 }
 /* 行内数字面（额 / 市值 / α / YTD）：与其它数字面同一套等宽数字，并且**必须**出现在
    上面的模糊选择器清单里（漏一个就等于隐身不彻底）。 */

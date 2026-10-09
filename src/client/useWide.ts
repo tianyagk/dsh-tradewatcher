@@ -5,7 +5,7 @@
  * 拿不到 `matchMedia`（老环境/测试）时按**窄**处理 —— 窄布局用的是始终可用的段控，失败方向安全。
  */
 import { useEffect, useState } from 'react'
-import { WIDE_MEDIA_QUERY, pickSortEntry, type SortEntry } from './wide.ts'
+import { WIDE_MEDIA_QUERY } from './wide.ts'
 
 function queryNow(): boolean {
   if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return false
@@ -32,30 +32,3 @@ export function useWideLayout(): boolean {
   return wide
 }
 
-/**
- * 排序入口（P1-4）：宽屏先量一次列头是否**真的可见**（`display !== 'none'`），再决定挂哪个。
- *
- * 量不到（文档里没有列头 / 拿不到计算样式）时按"用段控"处理 —— 段控始终可用，
- * 于是"排序功能整块消失"在结构上不可能。
- */
-export function useSortEntry(wide: boolean): SortEntry {
-  const [headerVisible, setHeaderVisible] = useState<boolean | null>(null)
-
-  useEffect(() => {
-    if (typeof window === 'undefined' || typeof document === 'undefined') return
-    const read = (): void => {
-      const el = document.querySelector('.tw-sorthead')
-      if (el === null) {
-        setHeaderVisible(null)
-        return
-      }
-      const style = typeof window.getComputedStyle === 'function' ? window.getComputedStyle(el) : null
-      setHeaderVisible(style === null ? null : style.display !== 'none')
-    }
-    read()
-    window.addEventListener('resize', read)
-    return () => window.removeEventListener('resize', read)
-  }, [wide])
-
-  return pickSortEntry({ wide, headerVisible })
-}

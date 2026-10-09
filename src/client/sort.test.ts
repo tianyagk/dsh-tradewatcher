@@ -7,7 +7,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
-  PORT_COLUMNS, PORT_SORT_KEYS, WATCH_COLUMNS, WATCH_SORT_KEYS, nextSortState, normalizeSortState, sortArrow,
+  PORT_SORT_KEYS, WATCH_SORT_KEYS, nextSortState, normalizeSortState, sortArrow,
   sortByNumber, sortPositions, sortValue, sortWatch, weightOf,
 } from './sort.ts'
 
@@ -83,29 +83,6 @@ test('sortWatch：列头新增的成交额/涨跌额/行业α 三个键各自可
   assert.equal(sortWatch(items, { key: 'alpha', desc: true }, inputOf).at(-1)?.secid, '1.c')
 })
 
-test('列头定义：有数值来源的列才可排，键必须在白名单内且不重复', () => {
-  assert.deepEqual(WATCH_COLUMNS.map((c) => c.label), ['名称', '成交额', '市值', '涨跌', '涨跌幅', '行业 α'])
-  assert.deepEqual(PORT_COLUMNS.map((c) => c.label), ['名称', '市值', '成本', '现价', '盈亏', '当日', '仓位'])
-  assert.equal(WATCH_COLUMNS[0].key, null, '名称列没有排序键（排序契约是数值比较，中文名顺序依赖运行环境的排序表）')
-  assert.equal(PORT_COLUMNS[0].key, null)
-  assert.match(WATCH_COLUMNS[0].hint, /不做排序/)
-  assert.match(PORT_COLUMNS[0].hint, /不做排序/)
-  for (const c of WATCH_COLUMNS) {
-    if (c.key !== null) assert.ok(WATCH_SORT_KEYS.includes(c.key), `${c.label} 的键 ${c.key} 必须在 prefs 白名单里`)
-    assert.ok(c.hint.length > 0, `${c.label} 必须有口径提示`)
-  }
-  for (const c of PORT_COLUMNS) {
-    if (c.key !== null) assert.ok(PORT_SORT_KEYS.includes(c.key), `${c.label} 的键 ${c.key} 必须在 prefs 白名单里`)
-    assert.ok(c.hint.length > 0, `${c.label} 必须有口径提示`)
-  }
-  const watchKeys = WATCH_COLUMNS.map((c) => c.key).filter((k) => k !== null)
-  const portKeys = PORT_COLUMNS.map((c) => c.key).filter((k) => k !== null)
-  assert.equal(new Set(watchKeys).size, watchKeys.length, '同一个键不能在两个列头上出现（否则"当前列"标记会同时出现在两处）')
-  assert.equal(new Set(portKeys).size, portKeys.length)
-  // 白名单里除 'default'（由「↺ 默认顺序」承载）以外的每个键都必须能在列头点到
-  for (const k of WATCH_SORT_KEYS) if (k !== 'default') assert.ok(watchKeys.includes(k), `自选列头缺少排序键 ${k}`)
-  for (const k of PORT_SORT_KEYS) if (k !== 'default') assert.ok(portKeys.includes(k), `持仓列头缺少排序键 ${k}`)
-})
 
 test('sortPositions：六个键各自可用，盈亏跟随口径，占比按总市值', () => {
   const rows = [
