@@ -29,6 +29,8 @@ import {
   type ChartTab,
 } from './chartCache.ts'
 
+import { sessionOf } from './sessionAxis.ts'
+
 function useContainerWidth(): [React.RefObject<HTMLDivElement>, number] {
   const ref = useRef<HTMLDivElement | null>(null)
   const [width, setWidth] = useState(620)
@@ -246,6 +248,8 @@ export function QuoteDrawer(props: { secid: string; name: string; redUp: boolean
           points: t.points.map((p) => ({ t: p.t, value: p.price, vol: p.vol, avg: p.avg, label: p.label })),
           baseline: t.prePrice,
           markers: dayMarkers,
+          // 交易时段网格：有表的市场横轴固定为完整时段（部分数据右侧留白），其余回落压缩轴
+          session: sessionOf(secid),
           width,
           redUp,
           mainH: 210,
@@ -262,6 +266,8 @@ export function QuoteDrawer(props: { secid: string; name: string; redUp: boolean
       const chart = React.createElement(TrendChart, {
         points: pts,
         baseline: null,
+        // 五日：每天各自套自己的时段网格（相邻两天之间仍用现有的日分隔线与按天标签）
+        session: sessionOf(secid),
         width,
         redUp,
         mainH: 200,
@@ -355,7 +361,9 @@ export function QuoteDrawer(props: { secid: string; name: string; redUp: boolean
               ? ' · 仅当日（该市场无多日源）'
               : ''
         // 归档失败属运维细节：正文不再占位，原因并入口径条的完整解释（见 caliberExplain）
-        return base + fiveMarker
+        // 该标的不适用分时段网格（美股/国际指数/外盘商品/期货）⇒ 一句话如实说明
+        const gridNote = sessionOf(secid) === null ? ' · 该标的不适用分时段网格' : ''
+        return base + fiveMarker + gridNote
       }
       return ''
     }

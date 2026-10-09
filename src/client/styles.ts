@@ -154,6 +154,7 @@ color-scheme:dark}
   .tw-pop .ph .px, .tw-pop .ph .tag, .tw-pop .pl,
   .tw-group-h .gsum, .tw-wrow .wq, .tw-wrow .tw-num, .tw-ytd, .tw-gh-metrics,
   .tw-dkv .v, .tw-rescue-card-grid .v, .tw-table td,
+  .tw-chart-pct,
   .tw-caliber, .tw-chartnote, .tw-zoom-bar, .tw-topmeta .tw-uptime){
   filter:blur(3.2px);transition:filter .12s}
 .tw-root[data-blur=1] :is(.tw-qcard, .tw-wrow, .tw-posrow, tr, .tw-pop, .tw-stat, .tw-pps,
@@ -162,6 +163,7 @@ color-scheme:dark}
   .tw-pop .ph .px, .tw-pop .ph .tag, .tw-pop .pl,
   .tw-group-h .gsum, .tw-wrow .wq, .tw-wrow .tw-num, .tw-ytd, .tw-gh-metrics,
   .tw-dkv .v, .tw-rescue-card-grid .v, .tw-table td,
+  .tw-chart-pct,
   .tw-caliber, .tw-chartnote, .tw-zoom-bar){
   filter:none}
 

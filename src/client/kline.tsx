@@ -8,6 +8,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { CandleMarker, SparkMarker } from './charts.tsx'
 import { fmtAxis, ma, macd, niceTicks } from './indicators.ts'
 import { hasVolumeSeries, isUsableAvg, trendDayAxis, trendScale } from './trendView.ts'
+import { sessionAxis, type SessionDef } from './sessionAxis.ts'
 
 const PAD_X = 8
 const PAD_TOP = 8
@@ -56,6 +57,8 @@ function yGrid(args: {
   innerW: number
   count?: number
   unit?: string
+  /** 昨收：给了就在右列画 **±%**（与左侧价格刻度同源、以昨收为 0.00%，券商 App 口径） */
+  baseline?: number | null
 }): React.ReactNode[] {
   const { top, height, lo, hi, padX, innerW } = args
   const ticks = niceTicks(lo, hi, args.count ?? 4)
@@ -72,6 +75,15 @@ function yGrid(args: {
       x: padX + innerW - 1, y: y - 2, textAnchor: 'end',
       style: { fill: 'var(--tw-muted)', fontSize: 9 },
     }, `${fmtAxis(v)}${args.unit ?? ''}`))
+    if (args.baseline !== null && args.baseline !== undefined && args.baseline !== 0) {
+      const pct = ((v - args.baseline) / args.baseline) * 100
+      out.push(React.createElement('text', {
+        key: `gp${v}`,
+        x: padX + innerW + 3, y: y - 2, textAnchor: 'start',
+        className: 'tw-chart-pct',
+        style: { fill: pct >= 0 ? 'var(--tw-up)' : 'var(--tw-down)', fontSize: 9 },
+      }, `${pct >= 0 ? '+' : ''}${pct.toFixed(2)}%`))
+    }
   }
   return out
 }
@@ -176,7 +188,11 @@ export function TrendChart(props: {
   markers?: SparkMarker[]
   width: number
   redUp: boolean
-  /** 五日：每个交易日起始索引（画分隔线 + 日期） */
+  /**
+   * 该标的的交易时段表（`sessionOf(secid)`；无时段表的市场给 `null`）。
+   * 有表 ⇒ 横轴固定为完整时段（午休零宽度、部分数据右侧留白）；无表 ⇒ 回落压缩轴。
+   */
+  session?: SessionDef | null
   mainH?: number
   volH?: number
   macdH?: number
@@ -186,10 +202,26 @@ export function TrendChart(props: {
   const volH = props.volH ?? 54
   const macdH = props.macdH ?? 64
   const height = PAD_TOP + mainH + GAP + volH + GAP + macdH + AXIS_H
-  const innerW = width - PAD_X * 2
+  /** 分时（有昨收基准 + 有时段表）时右侧多留一列 ±% 刻度；其它档保持原边距 */
+  const pctScale = props.baseline !== null && props.baseline !== undefined && (props.session ?? null) !== null
+  const innerW = width - PAD_X - (pctScale ? 44 : PAD_X)
 
   const view = useMemo(() => {
     if (points.length < 2) return null
+    // 有交易时段表 ⇒ 横轴**固定为完整时段**（券商 App 口径）：`x = 时段内已过分钟 / 时段总分钟`，
+    // 午休零宽度、部分数据右侧留白；没有时段表的市场回落压缩轴（美股/商品/期货时段会漂移，不硬编码）。
+    const ax = sessionAxis(points.map((p) => ({ label: p.label })), props.session ?? null)
+    if (ax !== null) {
+      const xAt0 = (i: number): number => PAD_X + ax.xs[i] * innerW
+      const values0 = points.map((p) => p.value)
+      const avgs0 = points.map((p) => p.avg)
+      const { lo: lo0, hi: hi0 } = trendScale(values0, avgs0, props.baseline)
+      const yOf0 = (v: number): number => PAD_TOP + ((hi0 - v) / (hi0 - lo0)) * mainH
+      const m0 = macd(values0)
+      const up0 = values0.map((v, i) => (i === 0 ? true : v >= values0[i - 1]))
+      const barW0 = Math.max(1, Math.min(6, (innerW / points.length) * 0.7))
+      return { xAt: xAt0, yOf: yOf0, lo: lo0, hi: hi0, values: values0, avgs: avgs0, m: m0, up: up0, barW: barW0, ax }
+    }
     const { eff, span } = compressedAxis(points.map((p) => p.t))
     const xAt = (i: number): number => PAD_X + (eff[i] / span) * innerW
     const values = points.map((p) => p.value)
@@ -201,14 +233,14 @@ export function TrendChart(props: {
     const m = macd(values)
     const up = values.map((v, i) => (i === 0 ? true : v >= values[i - 1]))
     const barW = Math.max(1, Math.min(6, (innerW / points.length) * 0.7))
-    return { xAt, yOf, lo, hi, values, avgs, m, up, barW }
-  }, [points, innerW, mainH, props.baseline])
+    return { xAt, yOf, lo, hi, values, avgs, m, up, barW, ax: null }
+  }, [points, innerW, mainH, props.baseline, props.session])
 
   if (view === null) {
     return React.createElement('div', { className: 'tw-muted', style: { textAlign: 'center', padding: 40 } }, '暂无分时数据')
   }
 
-  const { xAt, yOf, lo, hi, values, avgs, m, up, barW } = view
+  const { xAt, yOf, lo, hi, values, avgs, m, up, barW, ax } = view
   const volTop = PAD_TOP + mainH + GAP
   const macdTop = volTop + volH + GAP
   const linePath = values.map((v, i) => `${i === 0 ? 'M' : 'L'}${xAt(i).toFixed(1)},${yOf(v).toFixed(1)}`).join(' ')
@@ -237,7 +269,7 @@ export function TrendChart(props: {
       React.createElement('stop', { offset: '100%', style: { stopColor: mainColor, stopOpacity: 0.02 } }),
     ),
   ))
-  children.push(...yGrid({ top: PAD_TOP, height: mainH, lo, hi, padX: PAD_X, innerW }))
+  children.push(...yGrid({ top: PAD_TOP, height: mainH, lo, hi, padX: PAD_X, innerW, baseline: pctScale ? props.baseline : null }))
   children.push(React.createElement('path', { key: 'area', d: area, fill: 'url(#tw-trend-fill)', style: { stroke: 'none' } }))
   if (props.baseline !== null && props.baseline !== undefined) {
     const y = yOf(props.baseline)
@@ -285,9 +317,41 @@ export function TrendChart(props: {
    * 标签文本一律来自点里的 `label`（`trendDayAxis` 保证），天数多时均匀抽样、首末必留。
    * 单日分时保持原样：仍是最左/最右两个时间戳。
    */
+  const axisLabelY = height - 4
+  // ── 交易时段网格（有表时）：竖格线按"每时段中点"等分，午休一条线；单日档同时承担底部刻度 ──
+  if (ax !== null) {
+    const lines = ax.daySlots === 1
+      ? ax.gridLines
+      : ax.gridLines.filter((g) => g.noon).map((g, i) => ({ at: (i + g.at) / ax.daySlots, label: '', noon: true }))
+    for (const g of lines) {
+      const x = PAD_X + g.at * innerW
+      children.push(React.createElement('line', {
+        key: `sg${g.at.toFixed(4)}${g.label}`, x1: x, y1: PAD_TOP, x2: x, y2: axisLabelY - 10,
+        style: { stroke: g.noon ? 'var(--tw-border-strong)' : 'var(--tw-border)' },
+        strokeWidth: 1, strokeDasharray: g.noon ? '2 2' : '1 3', opacity: g.noon ? 0.85 : 0.7,
+      }))
+      if (g.label !== '') {
+        children.push(React.createElement('text', {
+          key: `sl${g.at.toFixed(4)}${g.label}`, x, y: axisLabelY, textAnchor: 'middle',
+          style: { fill: 'var(--tw-muted)', fontSize: 9 },
+        }, g.label))
+      }
+    }
+    if (ax.daySlots === 1) {
+      // 首末标开盘/收盘时刻（与内部分隔线同一套刻度：整段固定宽度，未到的时段留白）
+      const open = props.session?.spans[0]?.start ?? ''
+      const spans = props.session?.spans ?? []
+      const close = spans.length > 0 ? spans[spans.length - 1].end : ''
+      if (open !== '') children.push(React.createElement('text', {
+        key: 'sopen', x: PAD_X, y: axisLabelY, style: { fill: 'var(--tw-muted)', fontSize: 9 },
+      }, open))
+      if (close !== '') children.push(React.createElement('text', {
+        key: 'sclose', x: PAD_X + innerW, y: axisLabelY, textAnchor: 'end', style: { fill: 'var(--tw-muted)', fontSize: 9 },
+      }, close))
+    }
+  }
   const dayMaxLabels = Math.max(2, Math.min(8, Math.floor(innerW / 56)))
   const { segments: daySegments, labels: dayLabels } = trendDayAxis(points.map((p) => ({ label: p.label })), dayMaxLabels)
-  const axisLabelY = height - 4
   for (const seg of daySegments) {
     if (seg.startIndex <= 0 || seg.startIndex >= points.length) continue
     const x = xAt(seg.startIndex)
@@ -305,7 +369,7 @@ export function TrendChart(props: {
         style: { fill: 'var(--tw-muted)', fontSize: 9 },
       }, seg.text))
     }
-  } else {
+  } else if (ax === null) {
     children.push(React.createElement('text', {
       key: 'x0', x: PAD_X, y: axisLabelY, style: { fill: 'var(--tw-muted)', fontSize: 9 },
     }, points[0].label.slice(5)))
