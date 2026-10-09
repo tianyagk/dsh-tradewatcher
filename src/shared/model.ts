@@ -119,9 +119,23 @@ export interface TrendPoint {
 export function normalizeTrendSeries(points: readonly TrendPoint[]): TrendPoint[] {
   const hasVol = points.some((p) => typeof p.vol === 'number' && p.vol > 0)
   const hasAmount = points.some((p) => typeof p.amount === 'number' && p.amount > 0)
+  /**
+   * 均价必须落在**当日价格区间内**：VWAP 不可能跑到最低价之下/最高价之上（±2% 容差是因为
+   * 采样点未必覆盖真实极值）。判据是**数据自证**，不依赖字段含义 —— 实测 A股指数分时里那个
+   * `avg` 字段量纲完全不同（上证指数价格 ~3755–3824 而 avg ~15），放它进纵轴域会把价格线压成平线。
+   * **逐点判**：同一条序列里可能一部分点越界、一部分正常（外盘商品就是那样）。
+   * ⚠ 客户端另有一份同规则实现（`client/trendView.ts` 的 `plausibleAvgs`）——宿主不能反向依赖客户端，
+   * 且跑着的宿主可能是旧构建，所以两边都要有。
+   */
+  const prices = points.map((p) => p.price).filter((v) => typeof v === 'number' && Number.isFinite(v))
+  const avgMin = prices.length > 0 ? Math.min(...prices) * 0.98 : null
+  const avgMax = prices.length > 0 ? Math.max(...prices) * 1.02 : null
   return points.map((p) => ({
     ...p,
-    avg: typeof p.avg === 'number' && p.avg > 0 ? p.avg : null,
+    avg: typeof p.avg === 'number' && p.avg > 0
+      && (avgMin === null || avgMax === null || (p.avg >= avgMin && p.avg <= avgMax))
+      ? p.avg
+      : null,
     vol: hasVol ? (typeof p.vol === 'number' ? p.vol : null) : null,
     amount: hasAmount ? (typeof p.amount === 'number' ? p.amount : null) : null,
   }))

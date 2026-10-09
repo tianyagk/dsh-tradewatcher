@@ -3,7 +3,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { normalizeTrendSeries, trendDayCount, type TrendPoint } from '../shared/model.ts'
-import { chartDomain, isUsableBaseline, hasVolumeSeries, isUsableAvg, trendDayAxis, trendScale } from './trendView.ts'
+import { plausibleAvgs, chartDomain, isUsableBaseline, hasVolumeSeries, isUsableAvg, trendDayAxis, trendScale } from './trendView.ts'
 
 const prices = [4274.05, 4287.4, 4290.72, 4302.99]
 
@@ -198,4 +198,58 @@ test('大图（trendScale）与缩略图（chartDomain）对基准 0 的处理�
   // 正常基准时两者都包含基准
   assert.ok(trendScale(values, [], 4005).hi > 4005)
   assert.ok(chartDomain(values, 4005).hi > 4005)
+})
+
+test('回归（真机那组）：上证指数价格 ~3755–3824 + avg 恒为 ~15 ⇒ 域=价格域、均线不画', () => {
+  // 本机运行实例回包实测：1.000001 price[3755.05,3824.07] / avg[15.15,17.05]（量纲不同）
+  const values = [3755.05, 3790.4, 3812.3, 3824.07, 3801.6]
+  const avgs = [15.15, 16.02, 16.5, 17.05, 16.4]
+  const cleaned = plausibleAvgs(values, avgs)
+  assert.deepEqual(cleaned, [null, null, null, null, null], '越界均价必须**逐点**置 null')
+  const { lo, hi } = trendScale(values, avgs, null)
+  const min = 3755.05
+  const max = 3824.07
+  assert.ok(Math.abs(lo - (min - (max - min) * 0.06)) < 1e-6, `域下界应等于价格域：${lo}`)
+  assert.ok(Math.abs(hi - (max + (max - min) * 0.06)) < 1e-6, `域上界应等于价格域：${hi}`)
+  assert.ok(lo > 3700, `域下界必须 > 3700（不许把 15 并进来）：${lo}`)
+  assert.ok(hi - lo < 100, `域宽应约 75（价格波动 + 呼吸位），实际 ${(hi - lo).toFixed(2)}`)
+  // 均线路径：清理后没有任何可信点 ⇒ 折线不画（不是画一条贴底的线）
+  assert.equal(cleaned.some((v) => v !== null), false)
+})
+
+test('正常市场：均价落在价格区间内 ⇒ 保留、参与域、折线可画', () => {
+  const values = [100, 101, 102, 103]
+  const avgs = [100.5, 101.2, 101.8, 102.4]
+  const cleaned = plausibleAvgs(values, avgs)
+  assert.deepEqual(cleaned, avgs, '区间内的均价原样保留')
+  const { lo, hi } = trendScale(values, avgs, null)
+  assert.ok(lo <= Math.min(...avgs) && hi >= Math.max(...avgs), '域包含均价')
+})
+
+test('边界：恰在 lo*0.98 / hi*1.02 之内保留，之外拒绝（±2% 容差）', () => {
+  const values = [100, 110]
+  const lo = 100 * 0.98      // 98
+  const hi = 110 * 1.02      // 112.2
+  const cleaned = plausibleAvgs(values, [lo, hi, lo - 0.01, hi + 0.01])
+  assert.equal(cleaned[0], lo, '恰在下界上 ⇒ 保留')
+  assert.equal(cleaned[1], hi, '恰在上界上 ⇒ 保留')
+  assert.equal(cleaned[2], null, '刚越过下界 ⇒ 拒绝')
+  assert.equal(cleaned[3], null, '刚越过上界 ⇒ 拒绝')
+})
+
+test('部分越界逐点过滤（114.LHM 那种形态）：正常的点照旧、坏的点置 null', () => {
+  // 实测 114.LHM price[10345,10570] / avg[0,10558.7] ⇒ 前半段是 0（已被 isUsableAvg 挡），后半段正常
+  const values = [10345, 10400, 10500, 10570]
+  const avgs = [0, 10405.2, 10498.7, 10560.1]
+  const cleaned = plausibleAvgs(values, avgs)
+  assert.deepEqual(cleaned, [null, 10405.2, 10498.7, 10560.1], '只丢坏点，不整条丢掉')
+})
+
+test('反向保护：isUsableAvg 的语义不变（正数即有效），区间校验只是叠在它之上', () => {
+  assert.equal(isUsableAvg(0), false, '0 仍是缺失（老宿主可能回 0）')
+  assert.equal(isUsableAvg(-1), false)
+  assert.equal(isUsableAvg(1e-9), true, '正数仍算"有值"——区间校验由 plausibleAvgs 负责')
+  assert.equal(isUsableAvg(Number.NaN), false)
+  // 价格序列为空时，一切均价都视为不可信（没有区间可依据）
+  assert.deepEqual(plausibleAvgs([], [1, 2]), [null, null])
 })

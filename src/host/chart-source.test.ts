@@ -2,6 +2,7 @@
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { normalizeTrendSeries } from '../shared/model.ts'
 import {
   detailMissingReason,
   klineCacheFileNames,
@@ -69,4 +70,23 @@ test('K 线缓存文件名：fqt=0 才兜底复用老命名 <secid>_<klt>.json',
   // 前复权/后复权是另一套价格序列，绝不能吃不复权缓存（会造成图上无解释的跳空）
   assert.deepEqual(klineCacheFileNames('1.600519', 101, 1), ['1.600519_101_1.json'])
   assert.deepEqual(klineCacheFileNames('1.600519', 102, 2), ['1.600519_102_2.json'])
+})
+
+test('宿主归一：越界的"均价"逐点置 null（量纲不同/非价格量不许进纵轴域）', () => {
+  // 实测：A股指数价格 ~3755–3824 而上游那列 ~15（量纲完全不同）；外盘商品前半段是 0、后半段正常
+  const squashed = normalizeTrendSeries([
+    { t: 1, label: '2026-10-09 09:30', price: 3755.05, avg: 15.15, vol: null },
+    { t: 2, label: '2026-10-09 09:31', price: 3824.07, avg: 17.05, vol: null },
+  ])
+  assert.deepEqual(squashed.map((p) => p.avg), [null, null], '指数那条量纲不同的列必须被拒')
+  const partial = normalizeTrendSeries([
+    { t: 1, label: '2026-10-09 09:30', price: 10345, avg: 0, vol: null },
+    { t: 2, label: '2026-10-09 09:31', price: 10570, avg: 10560.1, vol: null },
+  ])
+  assert.deepEqual(partial.map((p) => p.avg), [null, 10560.1], '逐点过滤：只丢坏点，不整条丢掉')
+  const fine = normalizeTrendSeries([
+    { t: 1, label: '2026-10-09 09:30', price: 100, avg: 100.5, vol: 1 },
+    { t: 2, label: '2026-10-09 09:31', price: 103, avg: 102.4, vol: 1 },
+  ])
+  assert.deepEqual(fine.map((p) => p.avg), [100.5, 102.4], '区间内的均价原样保留（44 条正常序列行为不变）')
 })

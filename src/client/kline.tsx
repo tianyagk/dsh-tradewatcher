@@ -7,7 +7,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { CandleMarker, SparkMarker } from './charts.tsx'
 import { fmtAxis, ma, macd, niceTicks } from './indicators.ts'
-import { hasVolumeSeries, isUsableAvg, isUsableBaseline, trendDayAxis, trendScale } from './trendView.ts'
+import { hasVolumeSeries, isUsableAvg, isUsableBaseline, plausibleAvgs, trendDayAxis, trendScale } from './trendView.ts'
 import { sessionAxis, type SessionDef } from './sessionAxis.ts'
 
 const PAD_X = 8
@@ -214,7 +214,8 @@ export function TrendChart(props: {
     if (ax !== null) {
       const xAt0 = (i: number): number => PAD_X + ax.xs[i] * innerW
       const values0 = points.map((p) => p.value)
-      const avgs0 = points.map((p) => p.avg)
+      // 均价先过"必须落在当日价格区间内"的判据：非价格量（指数分时那个字段）会把域拉坏
+      const avgs0 = plausibleAvgs(values0, points.map((p) => p.avg))
       const { lo: lo0, hi: hi0 } = trendScale(values0, avgs0, props.baseline)
       const yOf0 = (v: number): number => PAD_TOP + ((hi0 - v) / (hi0 - lo0)) * mainH
       const m0 = macd(values0)
@@ -225,9 +226,10 @@ export function TrendChart(props: {
     const { eff, span } = compressedAxis(points.map((p) => p.t))
     const xAt = (i: number): number => PAD_X + (eff[i] / span) * innerW
     const values = points.map((p) => p.value)
-    const avgs = points.map((p) => p.avg)
-    // 域只由有效价格 + 有效均价（+昨收基准）决定：均价缺失时域就等于价格域
-    // （此前 `avg: 0` 被当成真实值，把国际指数/外盘商品压成 0~4303 的"平线"）
+    // 域与均线折线**共用**同一份过滤结果（只修域会让线画到图外/贴底）
+    const avgs = plausibleAvgs(values, points.map((p) => p.avg))
+    // 域只由有效价格 + 可信均价（+昨收基准）决定：均价都不可信时域就等于价格域
+    // （`avg: 0` 与"越界的非价格量"都会把域拉成 0~4303 / 15~3824 那种"平线"）
     const { lo, hi } = trendScale(values, avgs, props.baseline)
     const yOf = (v: number): number => PAD_TOP + ((hi - v) / (hi - lo)) * mainH
     const m = macd(values)

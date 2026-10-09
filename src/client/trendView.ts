@@ -7,6 +7,27 @@ export function isUsableAvg(v: number | null | undefined): v is number {
   return typeof v === 'number' && Number.isFinite(v) && v > 0
 }
 
+/**
+ * 可信均价的判定（**数据自证**，不靠字段含义）：分时 VWAP 必须落在**当日价格区间内** ——
+ * 它不可能跑到当天最低价之下或最高价之上。
+ *
+ * 为什么需要它：A股指数分时里上游那个 `avg` 字段并不是均价（量纲完全不同，实测上证指数
+ * 价格 ~3755–3824 而 `avg` 恒为 ~15）——只判"正数"就会把它并进纵轴域，域从 ~15 到 3824，
+ * 价格线被压成贴顶的一条平线。±2% 容差是因为采样点未必覆盖当日真实极值。
+ *
+ * 域与均价折线**共用这一个函数**：只修域不修线会出现"线画在图外/贴底"。
+ */
+export function plausibleAvgs(
+  values: readonly number[],
+  avgs: readonly (number | null | undefined)[],
+): Array<number | null> {
+  const nums = values.filter((v) => typeof v === 'number' && Number.isFinite(v))
+  if (nums.length === 0) return avgs.map(() => null)
+  const min = Math.min(...nums) * 0.98
+  const max = Math.max(...nums) * 1.02
+  return avgs.map((v) => (isUsableAvg(v) && v >= min && v <= max ? v : null))
+}
+
 /** 这条序列到底有没有成交量数据（全 `null` ⇒ 该市场不提供，界面应明说而不是画一条假量） */
 export function hasVolumeSeries(vols: readonly (number | null | undefined)[]): boolean {
   return vols.some((v) => typeof v === 'number' && Number.isFinite(v) && v > 0)
@@ -65,7 +86,7 @@ export function trendScale(
 ): { lo: number; hi: number } {
   const candidates: number[] = []
   for (const v of values) if (typeof v === 'number' && Number.isFinite(v)) candidates.push(v)
-  for (const v of avgs) if (isUsableAvg(v)) candidates.push(v)
+  for (const v of plausibleAvgs(values, avgs)) if (v !== null) candidates.push(v)
   if (isUsableBaseline(baseline)) candidates.push(baseline)
   if (candidates.length === 0) return { lo: -1, hi: 1 }
   const min = Math.min(...candidates)
