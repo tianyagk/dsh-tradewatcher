@@ -263,7 +263,6 @@ export function RescuePanel(props: {
   redUp: boolean
   onPrefs?: (p: PortPrefs) => void
   /** 12 栏网格里的占位（大盘页 B3 用）；不传则不写属性（其它挂载点不受影响） */
-  span?: number
 }): React.ReactElement {
   const [data, setData] = React.useState<RescueData | null>(null)
   const [error, setError] = React.useState<string | null>(null)
@@ -371,7 +370,7 @@ export function RescuePanel(props: {
   const lanes: RescueEtfMeta[] = rescueUniverseMeta(config.universe)
   const laneBase = snapshot?.etfs.find((e) => e.secid === lane)?.avgAmt20 ?? null
 
-  return React.createElement('div', { className: 'tw-panel tw-rescue', ...(props.span === undefined ? {} : { 'data-span': props.span }) },
+  return React.createElement('div', { className: 'tw-panel tw-rescue' },
     React.createElement('div', { className: 'tw-panel-h' },
       React.createElement('span', {
         className: 'tw-rescue-dot', style: { background: LEVEL_COLOR[level], boxShadow: level >= 2 ? `0 0 8px ${LEVEL_COLOR[level]}` : undefined },
@@ -415,7 +414,7 @@ export function RescuePanel(props: {
             className: 'tw-muted',
             style: { fontSize: 10.5 },
             title: [
-              snapshot.lastSampleTs !== null ? `最近一次成功采样：${fmtStamp(snapshot.lastSampleTs)}` : '尚未成功采样',
+              snapshot.lastSampleTs !== null ? `数据时刻 ${fmtStamp(snapshot.lastSampleTs)}（最近一次成功采样）` : '尚未成功采样',
               snapshot.lastFailTs !== null && snapshot.lastFailTs !== undefined ? `最近一次采样失败：${fmtStamp(snapshot.lastFailTs)}` : null,
               snapshot.flowSource === 'tencent' ? '数据来源：腾讯备用源（无分单资金流）' : snapshot.flowSource === 'em' ? '数据来源：东方财富（含分单资金流）' : null,
               snapshot.note ?? null,
@@ -470,7 +469,7 @@ export function RescuePanel(props: {
         : snapshot.stale === true || snapshot.fallback !== undefined
           ? '当前显示上次成功采样/当日复盘数据'
           // 来源未知时（例如客户端已刷新、宿主未重启）不猜测取自哪个源，只陈述可核对的事实
-          : '当前快照来自最近一次成功采样（时刻见上方「数据」）'
+          : '当前快照取自最近一次成功采样（数据时刻见上方「数据」）'
       return React.createElement(
         'div',
         {
@@ -508,7 +507,7 @@ export function RescuePanel(props: {
           style: { padding: '2px 10px 8px', display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' },
           tabIndex: 0,
           role: 'note',
-          'aria-label': `护盘通道本次未取到：${error ?? '上游未返回宽基通道数据（下一次采样自动重试）'}`,
+          'aria-label': `护盘通道本次未取到：${error ?? '上游未取到宽基通道数据（下一次采样自动重试）'}`,
         },
           React.createElement('span', { className: 'tw-muted' }, '护盘通道 —'),
           error !== null
@@ -521,7 +520,7 @@ export function RescuePanel(props: {
         )
       : !expanded && snapshot !== null
         ? React.createElement('div', { className: 'tw-hint', style: { padding: '2px 10px 8px' } },
-            `${RESCUE_LEVEL_DESC[level]}${level >= 2 ? '' : '（信号达到「疑似护盘」时本面板会自动展开）'}`)
+            RESCUE_LEVEL_DESC[level])
         : null,
     // 上游不可用时的「当日记录」条：通道本身由常规卡片区渲染（含复盘态）
     snapshot !== null && snapshot.fallback !== undefined

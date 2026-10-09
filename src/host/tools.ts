@@ -1,6 +1,6 @@
 /**
  */
-import { MISSING_TIER_LABEL, TW_ROWS, type CalEvent, type DataProvenance, type MissingField, type QuoteRow } from '../shared/model.ts'
+import { ACTOR_TOOL, MISSING_TIER_LABEL, TW_ROWS, type CalEvent, type DataProvenance, type MissingField, type QuoteRow } from '../shared/model.ts'
 import { SECID_RE } from '../shared/model.ts'
 import { FQ_LABEL, YTD_CALIBER, type YtdRow } from '../shared/model.ts'
 import * as em from './em.ts'
@@ -346,7 +346,7 @@ export function makeAgentTools(
           const price = r.price !== undefined && r.price !== null ? `@${fmtNum(r.price as number)}` : ''
           const fee = r.fee !== undefined && r.fee !== null && Number(r.fee) !== 0 ? ` 费${r.fee}` : ''
           const note = r.note !== undefined && r.note !== null && String(r.note) !== '' ? ` — ${String(r.note)}` : ''
-          return `[${ts}] ${verbLabel(r.verb as never)} ${where}${qty}${price}${fee}${note}（${String(r.actor) === 'tool' ? '会话' : '界面'}）`
+          return `[${ts}] ${verbLabel(r.verb as never)} ${where}${qty}${price}${fee}${note}（${String(r.actor) === ACTOR_TOOL ? '会话' : '界面'}）`
         })
         return textBlock([...lines, provenanceLine(v.provenance)].join('\n'))
       },
@@ -569,7 +569,7 @@ export function makeAgentTools(
             provenance: {
               asOf: Date.now(), stale: true, source: 'none', missing: [{
                 what: `搜索「${query}」`, why: 'transient' as const,
-                note: '东财搜索接口本次未返回任何候选（可能被限流）。请稍后重试；若持续为空，再用 tradewatcher_quotes 直接试代码',
+                note: '东财搜索接口本次未取到任何候选（可能被限流）。请稍后重试；若持续为空，再用 tradewatcher_quotes 直接试代码',
               }],
             },
           }
@@ -1030,7 +1030,7 @@ export function makeAgentTools(
       '会话内优先用只读工具：tradewatcher_portfolio（持仓总览与盈亏，由流水核算、费用已计入）、' +
       'tradewatcher_ledger（买卖与分组流水，可按 posId/groupId 过滤）、tradewatcher_watchlist（自选分组）、' +
       'tradewatcher_quotes（行情：cn/intl/commodity/all 预设或任意代码）、' +
-      'tradewatcher_ytd（年初至今涨跌幅：前复权序列算，指数/期货按原始价格，取不到给原因、不用 0 顶替）、' +
+      'tradewatcher_ytd（年初至今涨跌幅：前复权序列算，指数/期货按原始价格，未取到给原因、不用 0 顶替）、' +
       'tradewatcher_search（证券搜索）、' +
       'tradewatcher_calendar（财经日历：宏观/IPO/财报/分红，自动同步）、tradewatcher_calendar_add（写入重要日期）、' +
       'tradewatcher_undo（撤销本插件做过的写入）、' +

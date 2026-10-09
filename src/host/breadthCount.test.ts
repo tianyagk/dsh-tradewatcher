@@ -98,7 +98,7 @@ test('D1 缺页诊断：第 3 页抛错 / 第 3 页空 / 每页少给行 ⇒ 都
     assert.equal(r.counts, null, `${c.name}：必须失败`)
     assert.match(r.reason ?? '', c.expect, `${c.name}：原因里要有逐页诊断 —— 实际「${r.reason}」`)
     assert.ok(!/TypeError|iterable/.test(r.reason ?? ''), `${c.name}：不得出现 TypeError —— 实际「${r.reason}」`)
-    assert.ok(r.checks.some((x) => x.includes('没取到') || x.includes('原始行数')), `${c.name}：checks 要留诊断`)
+    assert.ok(r.checks.some((x) => x.includes('未取到') || x.includes('原始行数')), `${c.name}：checks 要留诊断`)
   }
   // 缺页数真的能数出来（稀疏数组的坑：filter/some 会跳过空槽）
   const sparse: Array<number[] | undefined> = new Array(3)

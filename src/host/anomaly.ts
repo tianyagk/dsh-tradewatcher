@@ -132,7 +132,7 @@ export async function detectAnomalies(
         const k = await fetchKlineZero(it.secid)
         bars = k ?? []
       } catch {
-        missing.push({ what: `${it.name}（${it.secid}）`, why: 'transient', note: '日线本次取不到（上游限流或超时），本轮不给异动判定；稍后随行情轮询自动重试' })
+        missing.push({ what: `${it.name}（${it.secid}）`, why: 'transient', note: '日线本次未取到（上游限流或超时），本轮不给异动判定；稍后随行情轮询自动重试' })
       }
       const judged = judgeAnomaly({ bars, pct: quotes[it.secid]?.pct ?? null, hhmm, inSessionNow: sessionNow, today })
       rows.push({ secid: it.secid, name: it.name, pct: quotes[it.secid]?.pct ?? null, ...judged })

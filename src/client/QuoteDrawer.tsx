@@ -31,6 +31,7 @@ import {
 
 import { sessionOf } from './sessionAxis.ts'
 import { isUsableBaseline } from './trendView.ts'
+import { missingBrief } from '../shared/trendStitch.ts'
 
 function useContainerWidth(): [React.RefObject<HTMLDivElement>, number] {
   const ref = useRef<HTMLDivElement | null>(null)
@@ -97,7 +98,7 @@ export function QuoteDrawer(props: { secid: string; name: string; redUp: boolean
       .then((value) => {
         if (!alive) return
         setPayload(value)
-        setErr(value === null ? '该周期暂无数据（停牌/新股/接口限流）' : null)
+        setErr(value === null ? '该周期未取到（停牌/新股/接口限流）' : null)
         // 宿主认定该标的不适用复权（指数/期货）：把口径归位到它实际用的 0，
         // 后续请求与缓存键都对齐，界面上也不会显示一个没生效的选择
         if (value !== null && value.kind === 'kline' && value.kline.fqSupported === false && fqt !== 0) {
@@ -212,7 +213,7 @@ export function QuoteDrawer(props: { secid: string; name: string; redUp: boolean
     if (payload.kind === 'unavailable') {
       const m = payload.missing[0]
       return React.createElement('div', { style: { display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8, padding: 56 } },
-        React.createElement('span', { className: 'tw-muted' }, '该周期暂无数据'),
+        React.createElement('span', { className: 'tw-muted' }, '该周期未取到'),
         m !== undefined
           ? React.createElement('span', {
               className: 'tw-hint',
@@ -359,13 +360,13 @@ export function QuoteDrawer(props: { secid: string; name: string; redUp: boolean
           : cov !== undefined
             ? ` · 本地拼接 ${cov.have.length}/${cov.limit} 天${
                 cov.have.length <= 1 ? '（仅当日，从本版起累积）' : ''
-              }${cov.missing.length > 0 ? ` · 缺 ${cov.missing.join('、')}` : ''}`
+              }${cov.missing.length > 0 ? ` · ${missingBrief(cov.missing)}` : ''}`
             : trendDayCount(t.points) <= 1
               ? ' · 仅当日（该市场无多日源）'
               : ''
         // 归档失败属运维细节：正文不再占位，原因并入口径条的完整解释（见 caliberExplain）
         // 该标的不适用分时段网格（美股/国际指数/外盘商品/期货）⇒ 一句话如实说明
-        const gridNote = sessionOf(secid) === null ? ' · 该标的不适用分时段网格' : ''
+        const gridNote = sessionOf(secid) === null ? ' · 无固定交易时段' : ''
         return base + fiveMarker + gridNote
       }
       return ''

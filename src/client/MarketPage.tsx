@@ -41,6 +41,8 @@ export function MarketPage(props: {
   const [boardLoading, setBoardLoading] = useState(false)
   const [boardError, setBoardError] = useState<string | null>(null)
   const [boardMeta, setBoardMeta] = useState<{ stale?: boolean; asOf?: number; source?: QuoteSource } | null>(null)
+  /** 备用源是否含金额类字段（A4）：只有东财给钱，腾讯/新浪只给涨跌幅 */
+  const boardMoneyOk = boardMeta === null || boardMeta.source === 'em'
   /**
    * 资金流排行的排序口径（P1-7）：`money` = 主力净额（上游排行键）；
    * `share` = 主力净额 ÷ 成交额（本页内重排）。
@@ -200,8 +202,10 @@ export function MarketPage(props: {
             style: { color: 'var(--tw-up)' },
             tabIndex: 0,
             role: 'note',
-            'aria-label': `涨跌家数本次未取到：${countsReason ?? '原因未给出'}`,
-          }, `涨跌家数本次未取到：${countsReason ?? '原因未给出'}`),
+            // M1：正文 8 字，长原因与"备用源不含该字段"这类结构性说明进 title/aria（原则 1/5）
+            title: `涨跌家数本次未取到 —— ${countsReason ?? '原因未给出'}`,
+            'aria-label': `涨跌家数未取到 —— ${countsReason ?? '原因未给出'}`,
+          }, '涨跌家数未取到'),
       // P1-8：分位必须带口径与样本量一起读；样本不足或取不到时不显示分位（而不是显示 0）
       breadthErr !== null
         ? React.createElement('div', { className: 'tw-hint', style: { color: 'var(--tw-up)' } }, `涨跌家数分位本次未取到：${breadthErr}（稍后随行情轮询自动重试）`)
@@ -311,17 +315,37 @@ export function MarketPage(props: {
         scope === 'etf'
           ? React.createElement('div', { className: 'tw-seg' },
               React.createElement('button', { 'data-on': sort === 'pct', onClick: () => setSort('pct') }, '涨跌幅'),
-              React.createElement('button', { 'data-on': sort === 'amount', onClick: () => setSort('amount') }, '成交额'),
+              // A4：备用源（腾讯/新浪）不含成交额/主力净额字段 ⇒ 这两档排序点了也没效果，
+              // 置灰并给出原因（不许留"看着能用的空功能"）
+              React.createElement('button', {
+                'data-on': sort === 'amount',
+                disabled: !boardMoneyOk,
+                title: boardMoneyOk ? undefined : '当前数据来自备用源（不含成交额字段），该排序暂不可用；东财恢复后自动可用',
+                onClick: () => { if (boardMoneyOk) setSort('amount') },
+              }, '成交额'),
             )
           : React.createElement('div', { className: 'tw-seg' },
               React.createElement('button', { 'data-on': sort === 'pct', onClick: () => setSort('pct') }, '涨跌幅'),
-              React.createElement('button', { 'data-on': sort === 'money', onClick: () => setSort('money') }, '主力资金'),
+              React.createElement('button', {
+                'data-on': sort === 'money',
+                disabled: !boardMoneyOk,
+                title: boardMoneyOk ? undefined : '当前数据来自备用源（不含主力净额字段），该排序暂不可用；东财恢复后自动可用',
+                onClick: () => { if (boardMoneyOk) setSort('money') },
+              }, '主力资金'),
             ),
  // 主力资金排行下的两种口径（金额 / 占比）
         sort === 'money' && scope !== 'etf'
           ? React.createElement('div', { className: 'tw-seg', title: '主力净额为本插件直接取用的上游字段；占比＝净额 ÷ 成交额（本页内重排，见下方说明）' },
-              React.createElement('button', { 'data-on': moneySort === 'money', onClick: () => setMoneySort('money') }, '金额'),
-              React.createElement('button', { 'data-on': moneySort === 'share', onClick: () => setMoneySort('share') }, '占比'),
+              React.createElement('button', {
+                'data-on': moneySort === 'money', disabled: !boardMoneyOk,
+                title: boardMoneyOk ? undefined : '备用源不含主力净额字段',
+                onClick: () => { if (boardMoneyOk) setMoneySort('money') },
+              }, '金额'),
+              React.createElement('button', {
+                'data-on': moneySort === 'share', disabled: !boardMoneyOk,
+                title: boardMoneyOk ? undefined : '备用源不含主力净额字段',
+                onClick: () => { if (boardMoneyOk) setMoneySort('share') },
+              }, '占比'),
             )
           : null,
       ),

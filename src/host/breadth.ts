@@ -1,10 +1,11 @@
 /**
  * 三条口径必须写死并在界面标注，否则分位会被当成"预测"：
  */
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
+import { mkdir, readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { dataHome } from './store.ts'
 import { dayOf, hhmmOf, weekdayOf } from './time.ts'
+import { writeJsonAtomic } from './atomic.ts'
 
 /** 分位窗口（交易日） */
 export const BREADTH_WINDOW = 60
@@ -125,10 +126,7 @@ export class BreadthStore {
 
   private persist(): Promise<void> {
     const run = this.writeChain.then(async () => {
-      const tmp = `${this.path()}.tmp`
-      await mkdir(this.dir, { recursive: true }).catch(() => undefined)
-      await writeFile(tmp, JSON.stringify(this.file, null, 1), 'utf8')
-      await rename(tmp, this.path())
+      await writeJsonAtomic(this.path(), this.file)
     })
     this.writeChain = run.catch(() => undefined)
     return run

@@ -101,3 +101,31 @@ export function stitchTrendDays(
 
   return { points, breaks, coverage: { have, missing, limit } }
 }
+
+/**
+ * 缺口的**简报**（常显文本用）：最多列 `max` 个日期，其余折叠成「另有 N 天」。
+ *
+ * 为什么需要：实测 100.SPX 的 `have=2` 却有 **11 个** missing 日期，全拼进常显口径条
+ * 会变成一行十几个日期（开发原则 1/2：常驻可见文本只留一行、长解释进 title）。
+ * 完整列表仍留在回包里（title/工具/调试用），这里只负责"给人看的那一行"。
+ */
+export function missingBrief(missing: readonly string[], max = 3): string {
+  if (missing.length === 0) return ''
+  const shown = missing.slice(0, Math.max(0, max))
+  const rest = missing.length - shown.length
+  const head = `缺 ${shown.join('、')}`
+  return rest > 0 ? `${head}，另有 ${rest} 天` : head
+}
+
+/**
+ * 上游结果是不是**真的多日**（判据：不同日期数 ≥2）。
+ *
+ * 为什么单列一条：上游"点数 > 1"根本不能证明多日 —— 腾讯备用源对港股/美股给的就是
+ * **当日** 1 分钟线（实测 272 点、只有 1 天）。旧判据 `points.length > 1` 会让五日档
+ * 只显示当天，本地归档**写了从不读**；现在只有真多日才认上游，否则落到归档拼接。
+ */
+export function isMultiDayTrend(points: readonly { label: string }[]): boolean {
+  const days = new Set<string>()
+  for (const p of points) days.add(p.label.slice(0, 10))
+  return days.size >= 2
+}

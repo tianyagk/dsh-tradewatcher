@@ -1,9 +1,10 @@
 /**
  * 存在理由：agent 能写数据（日历等）之后，"写错了怎么退"必须有答案。
  */
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
+import { mkdir, readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { dataHome } from './store.ts'
+import { writeJsonAtomic } from './atomic.ts'
 
 /** 撤销一条写入所需的全部信息（描述"怎么退回去"，不是"退到哪里"） */
 export interface UndoAction {
@@ -70,12 +71,9 @@ export class WriteJournal {
 
   private persist(): Promise<void> {
     const run = this.writeChain.then(async () => {
-      const tmp = `${this.path()}.tmp`
       const kept = this.file.entries.slice(-KEEP)
       this.file = { v: 1, entries: kept }
-      await mkdir(this.dir, { recursive: true }).catch(() => undefined)
-      await writeFile(tmp, JSON.stringify(this.file, null, 1), 'utf8')
-      await rename(tmp, this.path())
+      await writeJsonAtomic(this.path(), this.file)
     })
     this.writeChain = run.catch(() => undefined)
     return run

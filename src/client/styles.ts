@@ -1,5 +1,13 @@
 /**
  */
+/**
+ * 宽屏断点（px）：**唯一的数字来源**，CSS 里的每个 `@media (min-width:…)` 必须等于它。
+ *
+ * 为什么放在这里：断言（`styles.test.ts`）直接读 CSS 文本比对，常量与样式同文件就不会漂。
+ * v0.36.0 起列头排序已删除，这条断点只服务多列网格（`.tw-wlist`/`.tw-poslist`）。
+ */
+export const WIDE_MIN_PX = 1080
+
 export const STYLE_ID = 'dsh-tradewatcher-style'
 
 export const TW_CSS = `
@@ -94,10 +102,10 @@ color-scheme:dark}
 .tw-caliber{padding:5px 8px 4px;font-size:10.5px;color:var(--tw-dim);font-family:var(--tw-mono);border-bottom:1px dashed var(--tw-border);background:var(--tw-bg2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 /* 自选异动（P1-4）：呼吸高亮。用左边的竖条 + 缓慢呼吸的背景，
    而不是整行变红 —— 整行变红与"跌了"的语义冲突（红既是跌也是警示）。 */
-@keyframes tw-breathe{0%,100%{background:transparent}50%{background:rgba(229,72,77,.10)}}
+@keyframes tw-breathe{0%,100%{background:transparent}50%{background:color-mix(in srgb, var(--tw-up) 10%, transparent)}}
 .tw-wrow[data-alert]{box-shadow:inset 3px 0 0 var(--tw-up);animation:tw-breathe 2.6s ease-in-out infinite}
 .tw-wrow[data-alert][data-alert=price]{box-shadow:inset 3px 0 0 var(--tw-flat)}
-@media (prefers-reduced-motion:reduce){.tw-wrow[data-alert]{animation:none;background:rgba(229,72,77,.08)}}
+@media (prefers-reduced-motion:reduce){.tw-wrow[data-alert]{animation:none;background:color-mix(in srgb, var(--tw-up) 8%, transparent)}}
 
 /* 读屏专用文本（P2-3）：视觉上不可见，但读屏软件可朗读。
    用 clip 而不是 display:none —— 后者会让读屏软件也读不到。 */
@@ -111,8 +119,9 @@ color-scheme:dark}
    1. **按列填充**，不是按行填充：grid 的 auto-fill 会把"第 2 名"放到第 1 名右侧，
       顺左列往下读变成 1/3/5 名 —— 排序的全部意义就是名次，因此改用 CSS 多列（竖向填满）。
    2. **断点 1080px**（两列所需 520×2 + 16 间距 + 内边距），不是 1500px。
-      ⚠ 断点必须与 client/wide.ts 的 WIDE_MIN_PX 一致（由 styles.test.ts 直接读 CSS 文本比对；
-      写死在注释里的一致性迟早会漂）。v0.36.0 起列头排序已删除，这条断点只服务多列网格。 */
+      ⚠ 断点必须与同文件的 WIDE_MIN_PX 一致（由 styles.test.ts 直接读 CSS 文本比对；
+      写死在注释里的一致性迟早会漂）。v0.36.0 起列头排序已删除；client/wide.ts 已于 v0.39.0 删除，
+      常量现在就在本文件，这条断点只服务多列网格。 */
 @media (min-width:1080px){
   .tw-wlist,.tw-poslist{columns:520px;column-gap:16px}
   /* 多列下行不能被拦腰截断 */
@@ -133,6 +142,7 @@ color-scheme:dark}
   .tw-dkv .v, .tw-rescue-card-grid .v, .tw-table td,
   .tw-chart-pct,
   .tw-chart-tip-v,
+  .tw-pos-title small,
   .tw-caliber, .tw-chartnote, .tw-zoom-bar, .tw-topmeta .tw-uptime){
   filter:blur(3.2px);transition:filter .12s}
 .tw-root[data-blur=1] :is(.tw-qcard, .tw-wrow, .tw-posrow, tr, .tw-pop, .tw-stat, .tw-pps,
@@ -143,6 +153,7 @@ color-scheme:dark}
   .tw-dkv .v, .tw-rescue-card-grid .v, .tw-table td,
   .tw-chart-pct,
   .tw-chart-tip-v,
+  .tw-pos-title small,
   .tw-caliber, .tw-chartnote, .tw-zoom-bar){
   filter:none}
 
@@ -313,6 +324,7 @@ color-scheme:dark}
 /* stat group divider */
 .tw-stat-sep{flex:none;width:1px;align-self:stretch;background:var(--tw-border);margin:2px 6px}
 /* inline code chip next to a watch name */
+/* 非行情数字，豁免（不登记进模糊清单）：代码/ID 不是行情数字 */
 .tw-code{color:var(--tw-muted);font-family:var(--tw-mono);font-size:11px;margin-left:6px}
 
 
@@ -337,8 +349,10 @@ color-scheme:dark}
 .tw-cal-cell:hover{border-color:var(--tw-accent);background:var(--tw-hover)}
 .tw-cal-cell.is-out{opacity:.45}
 .tw-cal-cell.is-today{border-color:var(--tw-accent);box-shadow:inset 0 0 0 1px var(--tw-accent-soft)}
+/* 非行情数字，豁免（不登记进模糊清单）：日历格子里的日号 */
 .tw-cal-day{display:flex;align-items:center;gap:4px;font-size:10.5px;font-family:var(--tw-mono);color:var(--tw-dim)}
-.tw-cal-cell.is-today .tw-cal-day{color:var(--tw-accent);font-weight:700}
+.tw-cal-cell.is-today /* 非行情数字，豁免（不登记进模糊清单）：日历格子里的日号 */
+.tw-cal-day{color:var(--tw-accent);font-weight:700}
 .tw-cal-count{margin-left:auto;font-size:9px;color:var(--tw-muted);border:1px solid var(--tw-border);border-radius:8px;padding:0 4px}
 .tw-cal-pill{font-size:10px;line-height:1.35;border:1px solid;border-radius:5px;padding:0 3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;cursor:pointer}
 .tw-cal-more{font-size:9.5px;color:var(--tw-muted);text-align:right;cursor:pointer}

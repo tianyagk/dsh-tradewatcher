@@ -232,7 +232,7 @@ export function WatchlistPage(props: {
             : null,
           alerts.missing.length > 0
             ? React.createElement('div', { className: 'tw-hint', style: { color: 'var(--tw-up)' } },
-                `${alerts.missing.length} 条取不到日线：${alerts.missing[0].note}`)
+                `${alerts.missing.length} 条未取到日线：${alerts.missing[0].note}`)
             : null,
           alerts.error !== null
             ? React.createElement('div', { className: 'tw-hint', style: { color: 'var(--tw-up)' } }, `异动判定接口不可用：${alerts.error}`)
@@ -252,7 +252,7 @@ export function WatchlistPage(props: {
             '板块涨幅与 α 本次未取到：下一次行情轮询会自动重试。',
           title:
             '板块涨幅与 α 本次未取到。' +
-            '行业归属与板块行情取不到时，下一次行情轮询会自动重试。',
+            '行业归属与板块行情未取到时，下一次行情轮询会自动重试。',
         },
           `板块涨跌与 α 本次未取到 · ${indState.at === null ? '时刻未知' : new Date(indState.at).toLocaleTimeString('zh-CN', { hour12: false })} · ${indState.error ?? '上游不可用'}`,
         )
@@ -400,10 +400,11 @@ export function WatchlistPage(props: {
                                 // 那是错的信息，而"取不到"是另一件事
                                 // 原因不能只挂在 title 上：title 是鼠标专属（键盘/触屏拿不到），
                                 // 因此缺失态补 tabIndex + aria-label（P1-5）
-                                title: '板块当日涨幅未取到：该板块不在本次榜单返回里，或板块行情接口暂不可用（稍后随行情轮询重试）',
+                                // S4：原因由面板级「板块涨跌与 α」那一行承担，行级只留通用词 + 指路
+                                title: '板块当日涨幅未取到（原因见上方「板块涨跌与 α」一行）',
                                 tabIndex: 0,
                                 role: 'note',
-                                'aria-label': '板块当日涨幅未取到：该板块不在本次榜单返回里，或板块行情接口暂不可用（稍后随行情轮询重试）',
+                                'aria-label': '板块当日涨幅未取到（原因见上方「板块涨跌与 α」一行）',
                               }, '板块 —'),
                           React.createElement('span', {
                             className: 'tw-num ' + dirClass(alpha, prefs.redUp),

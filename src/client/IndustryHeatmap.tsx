@@ -75,7 +75,15 @@ export function IndustryHeatmap(props: { redUp: boolean; width: number; height: 
     rows === null
       ? React.createElement(Skeleton, { lines: 6, height: 40 })
       : usable.length === 0
-        ? React.createElement('div', { className: 'tw-muted', style: { padding: 10 } }, '暂无可绘制的板块数据。')
+        ? React.createElement('div', {
+            className: 'tw-muted',
+            style: { padding: 10 },
+            // B1：不要画一张空白图 —— 说清"为什么画不出来"
+            title: meta?.source !== undefined ? `本次数据来自 ${meta.source}` : undefined,
+          },
+            rows !== null && rows.length > 0 && dropped === rows.length
+              ? '当前源无成交额字段，云图不可用（等东财恢复后自动可用）'
+              : '本次未取到板块成交额，云图暂不可用（稍后刷新重试）')
         : React.createElement('svg', {
             width, height, viewBox: `0 0 ${width} ${height}`,
             style: { display: 'block', background: 'var(--tw-card2)' },

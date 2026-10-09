@@ -1,6 +1,6 @@
 /**
  */
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
+import { mkdir, readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import type {
   DailyBarLite, RescueActiveWindow, RescueBottomLane, RescueConfig, RescueDaySummary, RescueEtfMeta, RescueEtfView,
@@ -15,6 +15,7 @@ import { dayOf as shDayOf, hhmmOf as shHhmmOf, weekdayOf as shWeekdayOf } from '
 import { buildBottomLane, calibrateAcross } from './bottom.ts'
 import { SingleFlight } from './singleflight.ts'
 import { dataHome } from './store.ts'
+import { writeFileAtomic } from './atomic.ts'
 
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
 // 主机组与取数实现都从 em.ts 复用（单一所有者）：本地再写一份只会让两边的退避与熔断语义漂移
@@ -1014,12 +1015,8 @@ export class RescueMonitor {
       }
       this.file.updatedAt = now
       const payload = JSON.stringify(this.file)
-      const target = this.path()
-      const tmp = `${target}.tmp`
       try {
-        await mkdir(this.dir, { recursive: true }).catch(() => undefined)
-        await writeFile(tmp, payload, 'utf8')
-        await rename(tmp, target)
+        await writeFileAtomic(this.path(), payload)
       } catch (error) {
         console.warn('[tradewatcher] rescue persist failed:', String(error))
       }

@@ -15,6 +15,7 @@ import { QuoteDrawer } from './QuoteDrawer.tsx'
 import { ensureCss } from './styles.ts'
 import { isMoneyMasked, setMoneyMask } from './format.ts'
 import { Toast, useToast } from './ui.tsx'
+import { BADGE_TONE_COLOR } from './theme.ts'
 
 /** 侧栏图标与主面板共用的 id（`sidebar.panellist` 的 id == `main` 的 key）。 */
 const PANEL_ID = 'tradewatcher'
@@ -180,12 +181,6 @@ function PanelIcon(props: { size?: number; active?: boolean }): React.ReactEleme
 }
 
 /** 徽标底色：护盘用等级色系，盈亏用涨跌语义色（隐身视图下 tone 恒为 flat） */
-const BADGE_TONE_COLOR: Record<BadgeState['tone'], string> = {
-  rescue: '#d97706',
-  up: '#ff5f6d',
-  down: '#27a644',
-  flat: '#6f7787',
-}
 
 type PageKey = 'watch' | 'portfolio' | 'market' | 'cloud' | 'calendar'
 

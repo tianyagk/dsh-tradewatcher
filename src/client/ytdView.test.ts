@@ -52,14 +52,14 @@ test('ytdTooltip：本年内上市要单独说明（基准是上市首日，不�
   // "按年初读会高估"那句按文案审计压掉了（括号必须 ≤18 字）；事实本身由上面两句承载
 })
 
-test('ytdTooltip：算不出时给原因，且区分"还没结果"与"路由没返回它"', () => {
+test('ytdTooltip：算不出时给原因，且区分"还没结果"与"路由未取到它"', () => {
   const why = ytdTooltip('贵州茅台', row({ ytd: null, why: '日线本次取不到（上游限流或超时），稍后自动重试' }), true)
   assert.ok(why.includes('日线本次取不到'))
   assert.ok(why.includes(YTD_CALIBER))
   const pending = ytdTooltip('贵州茅台', undefined, false)
   assert.ok(pending.includes('尚未取到'))
   const notReturned = ytdTooltip('贵州茅台', undefined, true)
-  assert.ok(notReturned.includes('未返回'))
+  assert.ok(notReturned.includes('未取到'))
 })
 
 test('ytdMissingSummary：全都能算时为 null；有缺失时报数量与第一条原因', () => {

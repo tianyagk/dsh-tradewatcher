@@ -412,7 +412,7 @@ export async function countBreadthFromClist(
   for (let i = 0; i < pageCount; i += 1) if (pages[i] === undefined) missingPages += 1
   if (missingPages > 0) {
     // 逐页诊断必须活下来：`firstError` 是"第 N 页抛了什么"的唯一记录
-    const detail = `共 ${pageCount} 页，其中 ${missingPages} 页没取到`
+    const detail = `共 ${pageCount} 页，其中 ${missingPages} 页未取到`
     checks.push(detail + (firstError !== null ? `：${firstError}` : ''))
     return {
       counts: null,

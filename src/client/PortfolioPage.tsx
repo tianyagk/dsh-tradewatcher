@@ -333,7 +333,7 @@ export function PortfolioPage(props: {
           style: { color: 'var(--tw-up)' },
           tabIndex: 0,
           role: 'note',
-          title: '已取到的数字保留上一次成功结果；取不到的显示 —（逐行原因见各行悬停）。',
+          title: '已取到的数字保留上一次成功结果；未取到的显示 —（逐行原因见各行悬停）。',
         }, `YTD 本次未取到 · ${ytd.error}`)
       : null,
     ytd.truncated
@@ -741,7 +741,7 @@ function TradeModal(props: {
  // 可用（可卖）口径的说明（T+1 品种今日买入的部分不可卖；T+0 不受限）
   const sellHint = pos.t0
     ? 'T+0：当日买入当日可卖（与本面板的可用数量口径一致）'
-    : `可用（可卖）${pos.availableQty} —— A股 T+1：今日买入的部分当日不可卖`
+    : `可用 ${pos.availableQty} —— A股 T+1：今日买入的部分当日不可卖`
   const hint =
     verb === 'buy'
       ? `预计投入 ≈ ${fmtAmt(qN * pN + fN)}（费用计入摊薄成本）`
@@ -776,7 +776,7 @@ function TradeModal(props: {
  // 可用（可卖）数量。宿主侧有同一道校验（两处都不放行），这里先拦是为了
           // 不让用户填完一整张表才收到 400 —— 也顺带把"为什么不能卖"讲清楚
           if (verb === 'sell' && !pos.t0 && qN > pos.availableQty + 1e-9) {
-            setErr(`可用（可卖）${pos.availableQty} 少于本次卖出 ${qN}：${sellHint}。请核对券商端的可用数量（本插件按流水推导，T+1 部分今日买入不可卖）`)
+            setErr(`可用 ${pos.availableQty} 少于本次卖出 ${qN}：${sellHint}。请核对券商端的可用数量（本插件按流水推导，T+1 部分今日买入不可卖）`)
             return
           }
           if (verb !== 'adjust') {
@@ -1061,7 +1061,7 @@ function PosRow(props: {
         //（否则这个数会被读成"年初至今"而高估）。基准缺失时也不再写"本轮未算（悬停看原因）"：
         // 那个字为零信息（R3），原因在 tooltip 里。
         ytdBaseNote(props.ytd?.baseDate, props.ytd?.baseKind)),
-      pps(diluted ? '累计已实现（已计入上栏）' : '累计已实现',
+      pps(diluted ? '累计已实现' : '累计已实现',
         React.createElement('span', { className: 'tw-dim' }, fmtMoneySigned(row.realized)),
  // 行内只给短句（80 字解释只留面板级一处，避免同一句在每行重复）
         (row.realizedUnknownQty ?? 0) > 0

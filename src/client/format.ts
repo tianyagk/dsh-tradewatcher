@@ -94,17 +94,6 @@ export function dirClass(n: number | null | undefined, redUp: boolean): string {
   return (up === redIsUp) ? 'tw-up' : 'tw-down'
 }
 
-export function shortLabel(secid: string): string {
-  const m = /^(\d+)\.[A-Za-z0-9]+$/.exec(secid)
-  if (m === null) return secid
-  const market = m[1]
-  if (market === '1' || market === '0') return '沪深'
-  if (market === '116') return '港股'
-  if (market === '100') return '国际'
-  if (market === '105' || market === '106' || market === '107') return '美股'
-  return '市场'
-}
-
 /**
  * 跨日历史时间戳 `MM-DD HH:mm`（用词表）。禁写 `toLocaleString('zh-CN')` 的默认输出
  * （`2026/10/9 14:32:05` —— 同一页既有 `14:32:05` 又有 `2026/10/9 14:32:05` 会被读成两种东西）。
@@ -117,8 +106,3 @@ export function fmtStamp(ts: number | null | undefined): string {
 }
 
 /** 绝对日期 `YYYY-MM-DD`（文件名/日界用） */
-export function fmtDate(ts: number): string {
-  const d = new Date(ts)
-  const p = (n: number): string => String(n).padStart(2, '0')
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`
-}

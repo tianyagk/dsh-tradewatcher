@@ -137,8 +137,8 @@ export async function ytdBaseOf(secid: string, day: string, deps: YtdDeps = {}):
       fqSupported: supported,
       asOf: null,
       why: failure === null
-        ? `日线本次取不到（上游限流或超时）—— ${MISSING_TIER_ADVICE.transient}`
-        : `日线本次取不到：${failure} —— ${MISSING_TIER_ADVICE.transient}`,
+        ? `日线本次未取到（上游限流或超时）—— ${MISSING_TIER_ADVICE.transient}`
+        : `日线本次未取到：${failure} —— ${MISSING_TIER_ADVICE.transient}`,
       failed: true,
     }
     memo.set(secid, day, at, base)

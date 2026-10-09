@@ -1,5 +1,8 @@
 # 大盘页信息密度重设计（可执行规范）
 
+> **未落地**（v0.33.1 已回退）：这是大盘页布局的设计稿，**源码里没有 `.tw-board`**，
+> 当前大盘页是 12 栏网格（见 README「宽屏布局」）。保留此文件只为记录取舍过程，不要再照着它改代码。
+
 取证：`src/client/MarketPage.tsx`(484)、`src/client/styles.ts`(447)、`src/client/breadthView.ts`、`src/client/api.ts`、`src/client/RescuePanel.tsx:357`、`src/client/index.tsx:347/388-396`、`src/host/routes.ts:285-341`、`src/host/breadth.ts`、`docs/AUDIT-UI.md`、`README.md` 口径规范与 build.mjs 片段表。只读，未改任何源码。
 不冲突声明：不推翻 AUDIT-UI 任何结论（P0-2 缺失显式化、P0-5/P0-6 窄面板、P1-5 原因可聚焦、P1-8/9 列填充与 1080 断点、P2-4 表体内滚全部保留并复用）。
 硬约束：`styles.test.ts` 断言 **CSS 里所有 `@media (min-width:Npx)` 必须 == `WIDE_MIN_PX`(1080)** —— 本规范不引入任何别的 min-width 数值。

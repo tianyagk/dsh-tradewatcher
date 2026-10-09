@@ -3,6 +3,7 @@
  * 不另起一套算法 —— 否则列表头汇总与逐卡颜色会互相矛盾。
  */
 import type { QuoteRow } from '../shared/model.ts'
+export { QUOTE_STATE_COLOR } from './theme.ts'
 
 export type QuoteState = 'live' | 'delayed' | 'settled' | 'missing'
 
@@ -20,7 +21,7 @@ export const PENDING_LABEL = '暂无行情'
 
 export const NO_SOURCE_TITLE =
   '东财、腾讯、新浪三个源都没有返回该标的的可用价格。若为期货主连/商品合约，请核对代码大小写（如 114.lhm 与 114.LHM 是同一标的，现已大小写无关匹配）。'
-export const PENDING_TITLE = '本轮行情尚未返回该标的（还没刷新完），不是"这个标的没有行情"'
+export const PENDING_TITLE = '本轮行情未取到该标的（还没刷新完），不是"这个标的没有行情"'
 
 export const QUOTE_STATE_LABEL: Record<QuoteState, string> = {
   live: '实时',
@@ -31,12 +32,6 @@ export const QUOTE_STATE_LABEL: Record<QuoteState, string> = {
 }
 
 /** 四态色点（跟随主题 token，深/浅色都成立） */
-export const QUOTE_STATE_COLOR: Record<QuoteState, string> = {
-  live: '#27a644',
-  delayed: '#e0a94a',
-  settled: '#8a8f98',
-  missing: '#ff5f6d',
-}
 
 export interface QuoteStateInput {
   row: QuoteRow | undefined
@@ -74,7 +69,7 @@ export function quoteStateTitle(
   if (state === 'settled') return `${base}\n休市定稿：非交易时段且本批数据无兜底行，数据已确定，刷新不会产生新值`
   if (state === 'delayed') {
     return row?.source === 'lkg'
-      ? `${base}\n该价格取自最近一次成功值（上游本次未返回），重试可能恢复`
+      ? `${base}\n该价格取自最近一次成功值（上游本次未取到），重试可能恢复`
       : `${base}\n数据时刻距今已超过刷新间隔（${refreshSec}s）的 3 倍，上游可能被限流`
   }
   return `${base}\n数据时刻在刷新间隔内，视为实时`

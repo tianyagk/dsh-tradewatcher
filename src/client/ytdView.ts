@@ -24,7 +24,7 @@ export function ytdTooltip(
       : `\n来源：${prov.source ?? 'em'}${prov.stale === true ? '（本次是上次成功的结果，基准按日缓存 + 失败冷却期间不会重取）' : ''}`
   }`
   if (row === undefined) {
-    return `${head}\n本轮没有该标的的结果：${loaded ? '路由未返回它' : '尚未取到，下一轮行情刷新后自动重试'}`
+    return `${head}\n本轮没有该标的的结果：${loaded ? '路由未取到它' : '尚未取到，下一轮行情刷新后自动重试'}`
   }
   if (row.ytd === null || row.baseClose === null) {
     return `${head}\n本轮不可算：${row.why ?? '原因未给出（视为缺失，不显示 0）'}`

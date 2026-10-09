@@ -7,7 +7,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import type { TrendPoint } from './model.ts'
-import { stitchTrendDays } from './trendStitch.ts'
+import { isMultiDayTrend, missingBrief, stitchTrendDays } from './trendStitch.ts'
 
 const pt = (t: number, label: string, price: number): TrendPoint => ({ t, label, price, avg: null, vol: null })
 
@@ -87,4 +87,22 @@ test('拼接按 limitDays 裁剪：传 12 天 + limit=5 ⇒ 只拼最近 5 天�
   assert.equal(inPoints.length, 5, `图上只能有 5 天，实际 ${inPoints.join('/')}`)
   assert.equal(inPoints[0], r.coverage.have[0], '首日 = 裁剪后的首日')
   assert.ok(!inPoints.includes('2026-09-14'), '被裁掉的那天不许出现在图上')
+})
+
+test('A1 判据：只有"真多日"（不同日期 ≥2）才算上游多日源', () => {
+  const oneDay = Array.from({ length: 272 }, (_, i) => ({ label: `2026-10-09 ${String(9 + Math.floor(i / 60)).padStart(2, '0')}:${String(i % 60).padStart(2, '0')}` }))
+  assert.equal(isMultiDayTrend(oneDay), false, '272 点但只有 1 天（腾讯给港股的当日线）⇒ 不是多日')
+  assert.equal(isMultiDayTrend([{ label: '2026-10-08 15:00' }, { label: '2026-10-09 09:35' }]), true, '两天 ⇒ 是多日')
+  assert.equal(isMultiDayTrend([]), false, '空 ⇒ 不是多日')
+  assert.equal(isMultiDayTrend([{ label: '2026-10-09 09:30' }]), false, '单点 ⇒ 不是多日')
+})
+
+test('A3 简报：常显文本最多列 3 个日期，其余折叠成「另有 N 天」', () => {
+  const many = ['09-25', '09-28', '09-29', '09-30', '10-08', '10-09', '10-12', '10-13', '10-14', '10-15', '10-16']
+  const brief = missingBrief(many)
+  assert.equal(brief, '缺 09-25、09-28、09-29，另有 8 天')
+  assert.ok(brief.length <= 40, `常显文本要短（实际 ${brief.length} 字）`)
+  assert.equal(missingBrief(['09-25', '09-28']), '缺 09-25、09-28', '不足 3 个就全列')
+  assert.equal(missingBrief([]), '', '没有缺口 ⇒ 空串（不占位）')
+  assert.equal(missingBrief(many).includes('10-16'), false, '长列表里的后段不进常显文本')
 })

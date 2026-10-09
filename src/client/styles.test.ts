@@ -4,8 +4,7 @@
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { STYLE_ID, TW_CSS, cssInjectAction } from './styles.ts'
-import { WIDE_MIN_PX } from './wide.ts'
+import { STYLE_ID, TW_CSS, WIDE_MIN_PX, cssInjectAction } from './styles.ts'
 
 test('CSS 里的宽屏断点全部等于 WIDE_MIN_PX（多列 + 组头）', () => {
   const found = [...TW_CSS.matchAll(/@media \(min-width:(\d+)px\)/g)].map((m) => Number(m[1]))
@@ -23,7 +22,7 @@ test('互斥只有一个机制：CSS 里不得再出现"隐藏某个排序控件
   // 不剥就会把"解释为什么删掉"误判成"又加回来了"。
   const css = TW_CSS.replace(/\/\*[\s\S]*?\*\//g, '')
   const ruleLike = /\[data-wide-hide[^{]*\{[^}]*display\s*:\s*none/.test(css)
-  assert.ok(!ruleLike, 'CSS 里又出现了隐藏式互斥；互斥应由 useWideLayout() 决定只挂一个')
+  assert.ok(!ruleLike, 'CSS 不得用 display:none 承担互斥（v0.36.0 起排序入口只有面板头部段控一处，宽窄也不再切换控件）')
 })
 
 

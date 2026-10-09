@@ -273,3 +273,13 @@ export function klineReadout(args: KlineReadoutArgs): TipLine[] {
   lines.push({ label: '成交额', value: b.amount === null || b.amount === undefined ? '—' : fmtAmt(b.amount) })
   return lines
 }
+
+/**
+ * 图表里"涨/跌"两个颜色（**唯一来源**）：`redUp` 决定谁是红。
+ *
+ * 为什么抽出来：`kline.tsx` 里原本有 10 处内联 `redUp ? 'var(--tw-up)' : 'var(--tw-down)'` ——
+ * 每加一处新绘制面就多一次漏 `redUp` 的机会（v0.38.0 修的正是这类漏）。现在绘制面只取这两个值。
+ */
+export function upDownColors(redUp: boolean): { up: string; down: string } {
+  return redUp ? { up: 'var(--tw-up)', down: 'var(--tw-down)' } : { up: 'var(--tw-down)', down: 'var(--tw-up)' }
+}

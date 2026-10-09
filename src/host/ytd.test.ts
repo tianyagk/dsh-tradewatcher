@@ -92,7 +92,7 @@ test('computeYtds：日线取不到 → 显示 — + transient 原因；按日 m
   const r1 = await computeYtds(bad, deps)
   assert.equal(calls, 1)
   assert.equal(r1.rows[0].ytd, null)
-  assert.match(r1.rows[0].why ?? '', /日线本次取不到/)
+  assert.match(r1.rows[0].why ?? '', /日线本次未取到/)
   assert.equal(r1.missing[0].why, 'transient')
   assert.match(r1.missing[0].note, /稍后自动重试/)
 

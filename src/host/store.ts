@@ -1,6 +1,6 @@
 /**
  */
-import { copyFile, mkdir, readFile, rename, stat, writeFile } from 'node:fs/promises'
+import { copyFile, mkdir, readFile, rename, stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -31,6 +31,7 @@ import {
 import { log } from './context.ts'
 import { numOrNull } from '../shared/model.ts'
 import { shanghaiDayStart } from './time.ts'
+import { writeJsonAtomic } from './atomic.ts'
 
 const NAME_MAX = 40
 
@@ -448,11 +449,7 @@ export class DataStore {
   }
 
   private async persist(file: string, value: unknown): Promise<void> {
-    await mkdir(this.dir, { recursive: true })
-    const target = join(this.dir, file)
-    const tmp = `${target}.tmp`
-    await writeFile(tmp, JSON.stringify(value, null, 1), 'utf8')
-    await rename(tmp, target)
+    await writeJsonAtomic(join(this.dir, file), value)
   }
 
   async init(): Promise<void> {

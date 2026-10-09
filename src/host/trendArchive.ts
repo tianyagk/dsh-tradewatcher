@@ -1,11 +1,12 @@
 /**
  *  - **体积保护**：单文件 / 该标的总量超过上限时**不写**并如实报告（长期运行的插件不能悄悄写满磁盘）；
  */
-import { mkdir, readFile, readdir, rm, stat, writeFile, rename } from 'node:fs/promises'
+import { mkdir, readFile, readdir, rm, stat } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { TrendPoint } from '../shared/model.ts'
 import { SECID_RE } from '../shared/model.ts'
 import { dataHome } from './store.ts'
+import { writeFileAtomic } from './atomic.ts'
 
 /** 保留最近多少个**交易日**的归档（够五日 + 余量） */
 export const TREND_ARCHIVE_KEEP_DAYS = 12
@@ -180,10 +181,8 @@ export async function archiveTrendDays(
         continue
       }
       const target = join(dir, `${entry.day}.json`)
-      const tmp = `${target}.tmp`
       try {
-        await writeFile(tmp, payload, 'utf8')
-        await rename(tmp, target)
+        await writeFileAtomic(target, payload)
         result.saved.push(entry.day)
       } catch (error) {
         result.skipped.push({ day: entry.day, reason: `写入失败：${String(error).slice(0, 80)}` })

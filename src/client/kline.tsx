@@ -9,7 +9,7 @@ import type { CandleMarker, SparkMarker } from './charts.tsx'
 import { fmtAxis, ma, macd, niceTicks } from './indicators.ts'
 import { hasVolumeSeries, isUsableAvg, isUsableBaseline, plausibleAvgs, trendDayAxis, trendScale } from './trendView.ts'
 import { sessionAxis, type SessionDef } from './sessionAxis.ts'
-import { klineReadout, nearestIndex, tipPlacement, toneClass, trendReadout, type TipLine } from './chartCursor.ts'
+import { klineReadout, nearestIndex, tipPlacement, toneClass, trendReadout, upDownColors, type TipLine } from './chartCursor.ts'
 import { trendDayCount } from '../shared/model.ts'
 
 const PAD_X = 8
@@ -51,6 +51,8 @@ function TipCard(lines: readonly TipLine[], pos: { left: number; top: number }, 
   },
     ...lines.map((l, i) => React.createElement('div', {
       key: `t${i}`, className: 'tw-chart-tip-row',
+      // M5：没有 role 的 aria-label 读屏**不读** —— 必须显式 role
+      role: 'note',
       // 口径的长解释不占正文：进 title + aria-label（读屏也读得到）
       title: l.hint,
       'aria-label': l.hint === undefined ? undefined : `${l.label} ${l.value} —— ${l.hint}`,
@@ -241,6 +243,8 @@ export function TrendChart(props: {
   const innerW = width - PAD_X - (pctScale ? 44 : PAD_X)
   /** 光标所在数据点（null = 不显示）。鼠标移动只改这一个 state，不重建图的数据。 */
   const [cursor, setCursor] = useState<number | null>(null)
+  /** 涨跌色唯一来源（S5） */
+  const { up: UP_COLOR, down: DOWN_COLOR } = upDownColors(redUp)
   const multiDay = props.points.length > 1 && trendDayCount(props.points) > 1
 
   const view = useMemo(() => {
@@ -298,7 +302,7 @@ export function TrendChart(props: {
   const lastUp = isUsableBaseline(props.baseline)
     ? values[lastIndex] >= props.baseline
     : values[lastIndex] >= values[0]
-  const mainColor = lastUp === redUp ? 'var(--tw-up)' : 'var(--tw-down)'
+  const mainColor = lastUp === redUp ? UP_COLOR : DOWN_COLOR
   const area = `${linePath} L${xAt(lastIndex).toFixed(1)},${PAD_TOP + mainH} L${xAt(0).toFixed(1)},${PAD_TOP + mainH} Z`
 
   const children: React.ReactNode[] = []
@@ -328,7 +332,7 @@ export function TrendChart(props: {
     let idx = 0
     for (let k = 0; k < points.length; k += 1) { if (points[k].t <= mk.t) idx = k; else break }
     const isBuy = mk.kind === 'buy'
-    const color = isBuy ? (redUp ? 'var(--tw-up)' : 'var(--tw-down)') : (redUp ? 'var(--tw-down)' : 'var(--tw-up)')
+    const color = isBuy ? (UP_COLOR) : (DOWN_COLOR)
     const mx = xAt(idx)
     const my = yOf(mk.value)
     const ty = isBuy ? Math.min(my + 14, PAD_TOP + mainH - 2) : Math.max(my - 6, PAD_TOP + 8)
@@ -346,7 +350,7 @@ export function TrendChart(props: {
   children.push(...volumePane({ top: volTop, height: volH, vols: points.map((p) => p.vol), up, xAt, barW, padX: PAD_X, innerW }))
   children.push(...macdPane({
     top: macdTop, height: macdH, dif: m.dif, dea: m.dea, hist: m.hist, xAt, barW, padX: PAD_X, innerW,
-    upColor: redUp ? 'var(--tw-up)' : 'var(--tw-down)', downColor: redUp ? 'var(--tw-down)' : 'var(--tw-up)',
+    upColor: UP_COLOR, downColor: DOWN_COLOR,
   }))
   /**
    * 多日（五日）的**按天**底部轴：每天一个标签、居各自区段中间，日分隔线从主图延伸到底部轴。
@@ -501,6 +505,8 @@ export function KlineChart(props: {
   ])
   /** 光标数据点（null = 不显示卡片）；鼠标移动只改它，不重建图 */
   const [cursor, setCursor] = useState<number | null>(null)
+  /** 涨跌色唯一来源（S5） */
+  const { up: UP_COLOR, down: DOWN_COLOR } = upDownColors(redUp)
   useEffect(() => {
     setRange([Math.max(0, bars.length - defaultWindow(klt)), bars.length])
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -535,7 +541,7 @@ export function KlineChart(props: {
   for (let i = s; i < e; i += 1) {
     const b = bars[i]
     const up = b.close >= b.open
-    const color = up === redUp ? 'var(--tw-up)' : 'var(--tw-down)'
+    const color = up === redUp ? UP_COLOR : DOWN_COLOR
     const x = xAt(i)
     children.push(React.createElement('line', { key: `w${i}`, x1: x, y1: yOf(b.high), x2: x, y2: yOf(b.low), style: { stroke: color }, strokeWidth: 1 }))
     const yO = yOf(b.open)
@@ -605,16 +611,16 @@ export function KlineChart(props: {
       const my = Math.min(yOf(b.low) + 13, PAD_TOP + mainH - 1)
       children.push(React.createElement('g', { key: `mb${i}` },
         React.createElement('title', null, detailText('买入', g.buys, b.date)),
-        React.createElement('line', { x1: x, y1: yOf(b.low), x2: x, y2: my - 4, style: { stroke: redUp ? 'var(--tw-up)' : 'var(--tw-down)' }, strokeWidth: 1, opacity: 0.7 }),
-        React.createElement('text', { x, y: my, textAnchor: 'middle', style: { fill: redUp ? 'var(--tw-up)' : 'var(--tw-down)', fontSize: 9.5, fontWeight: 700, paintOrder: 'stroke', stroke: 'var(--tw-card)', strokeWidth: 2.5 } }, g.buys.length > 1 ? `B${g.buys.length}` : 'B'),
+        React.createElement('line', { x1: x, y1: yOf(b.low), x2: x, y2: my - 4, style: { stroke: UP_COLOR }, strokeWidth: 1, opacity: 0.7 }),
+        React.createElement('text', { x, y: my, textAnchor: 'middle', style: { fill: UP_COLOR, fontSize: 9.5, fontWeight: 700, paintOrder: 'stroke', stroke: 'var(--tw-card)', strokeWidth: 2.5 } }, g.buys.length > 1 ? `B${g.buys.length}` : 'B'),
       ))
     }
     if (g.sells.length > 0) {
       const my = Math.max(yOf(b.high) - 8, PAD_TOP + 8)
       children.push(React.createElement('g', { key: `ms${i}` },
         React.createElement('title', null, detailText('卖出', g.sells, b.date)),
-        React.createElement('line', { x1: x, y1: yOf(b.high), x2: x, y2: my + 4, style: { stroke: redUp ? 'var(--tw-down)' : 'var(--tw-up)' }, strokeWidth: 1, opacity: 0.7 }),
-        React.createElement('text', { x, y: my, textAnchor: 'middle', style: { fill: redUp ? 'var(--tw-down)' : 'var(--tw-up)', fontSize: 9.5, fontWeight: 700, paintOrder: 'stroke', stroke: 'var(--tw-card)', strokeWidth: 2.5 } }, g.sells.length > 1 ? `S${g.sells.length}` : 'S'),
+        React.createElement('line', { x1: x, y1: yOf(b.high), x2: x, y2: my + 4, style: { stroke: DOWN_COLOR }, strokeWidth: 1, opacity: 0.7 }),
+        React.createElement('text', { x, y: my, textAnchor: 'middle', style: { fill: DOWN_COLOR, fontSize: 9.5, fontWeight: 700, paintOrder: 'stroke', stroke: 'var(--tw-card)', strokeWidth: 2.5 } }, g.sells.length > 1 ? `S${g.sells.length}` : 'S'),
       ))
     }
   }
@@ -629,7 +635,7 @@ export function KlineChart(props: {
     top: macdTop, height: macdH,
     dif: m.dif.slice(s, e), dea: m.dea.slice(s, e), hist: m.hist.slice(s, e),
     xAt: (i) => xAt(i + s), barW, padX: PAD_X, innerW,
-    upColor: redUp ? 'var(--tw-up)' : 'var(--tw-down)', downColor: redUp ? 'var(--tw-down)' : 'var(--tw-up)',
+    upColor: UP_COLOR, downColor: DOWN_COLOR,
   }))
   // 底部日期（首/中/尾）
   const labelIdx = [s, Math.floor((s + e - 1) / 2), e - 1]
@@ -708,7 +714,7 @@ export function KlineChart(props: {
   const bsLegend = buyCount + sellCount > 0 || outCount > 0
     ? React.createElement('div', { className: 'tw-ma-legend', style: { display: 'flex', gap: 10, flexWrap: 'wrap', fontSize: 10, fontFamily: 'var(--tw-mono)', margin: '2px 0 0' } },
         buyCount + sellCount > 0
-          ? React.createElement('span', { style: { color: redUp ? 'var(--tw-up)' : 'var(--tw-down)' } },
+          ? React.createElement('span', { style: { color: UP_COLOR } },
               `区间内 B ${buyCount} 笔 / S ${sellCount} 笔`)
           : React.createElement('span', { className: 'tw-muted' }, '区间内无买卖点'),
         buyCount + sellCount > 0

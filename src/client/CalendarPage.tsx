@@ -190,7 +190,7 @@ export function CalendarPage(_props: { prefs: PortPrefs }): React.ReactElement {
         React.createElement('span', { style: { flex: 1 } }),
         syncedAt !== null
           ? React.createElement('span', { className: 'tw-muted', style: { fontSize: 10.5 } },
-              `同步于 ${fmtStamp(syncedAt)}${syncInfo?.stale === true ? '（本次未全部成功）' : ''}`)
+              `数据时刻 ${fmtStamp(syncedAt)}${syncInfo?.stale === true ? '（本次未全部成功）' : ''}`)
           : React.createElement('span', {
               className: 'tw-muted',
               style: { fontSize: 10.5 },

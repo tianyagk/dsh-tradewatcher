@@ -232,14 +232,6 @@ export function MiniTrend(props: {
 
 /** ─── candlestick chart for 日K/周K/月K/年K ─────────────────────────────── */
 
-export interface CandleBar {
-  date: string
-  open: number
-  close: number
-  high: number
-  low: number
-}
-
 export interface CandleMarker {
   date: string
   kind: 'buy' | 'sell'

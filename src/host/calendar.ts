@@ -1,11 +1,12 @@
 /**
  */
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
+import { mkdir, readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { CalCategory, CalEvent, CalImportance, MissingField } from '../shared/model.ts'
 import { dataHome } from './store.ts'
 import { calToday as shCalToday } from './time.ts'
 import { MISSING_TIER_ADVICE } from '../shared/model.ts'
+import { writeJsonAtomic } from './atomic.ts'
 
 const AUTO_SYNC_TTL = 6 * 3600_000
 /**
@@ -355,11 +356,8 @@ export class CalendarStore {
 
   private persist(): Promise<void> {
     const run = this.writeChain.then(async () => {
-      const tmp = `${this.path()}.tmp`
-      await mkdir(this.dir, { recursive: true }).catch(() => undefined)
-      await writeFile(tmp, JSON.stringify(this.file, null, 1), 'utf8')
       // 原子替换：既避免写入中途被读到半截文件，也不再残留 .tmp（旧实现是双写）
-      await rename(tmp, this.path())
+      await writeJsonAtomic(this.path(), this.file)
     })
     this.writeChain = run.catch(() => undefined)
     return run

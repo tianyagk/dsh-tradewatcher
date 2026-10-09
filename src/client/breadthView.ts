@@ -1,6 +1,8 @@
 /**
  * 约定（与 README「缺失不许用 0 代替」一致）：**任一分量缺失 ⇒ 整格 `—` + 原因**，
  */
+import { numOrNull } from '../shared/model.ts'
+
 export interface BreadthLeg {
   up: number | null
   down: number | null
@@ -28,10 +30,6 @@ export interface BreadthCells {
 const LABEL: Record<'up' | 'down' | 'even', string> = { up: '上涨家数', down: '下跌家数', even: '平盘家数' }
 
 /** 有限数值才算有效；null/undefined/NaN/Infinity 一律视为缺失 */
-function num(v: number | null | undefined): number | null {
-  return typeof v === 'number' && Number.isFinite(v) ? v : null
-}
-
 /** 涨跌家数三格 + 成交额：任一腿的家数缺失 ⇒ 家数三格全部不可用（含原因） */
 export function breadthCells(sh: BreadthLeg | undefined, sz: BreadthLeg | undefined): BreadthCells {
   const legs: Array<[string, BreadthLeg | undefined]> = [['沪市', sh], ['深市', sz]]
@@ -39,7 +37,7 @@ export function breadthCells(sh: BreadthLeg | undefined, sz: BreadthLeg | undefi
   const sums: Record<'up' | 'down' | 'even', number> = { up: 0, down: 0, even: 0 }
   for (const [market, leg] of legs) {
     for (const key of ['up', 'down', 'even'] as const) {
-      const v = num(leg?.[key])
+      const v = numOrNull(leg?.[key])
       if (v === null) {
         missingParts.push(`${market}${LABEL[key]}`)
         continue
@@ -48,7 +46,7 @@ export function breadthCells(sh: BreadthLeg | undefined, sz: BreadthLeg | undefi
     }
   }
   const countsOk = missingParts.length === 0
-  const amounts = legs.map(([, leg]) => num(leg?.amount))
+  const amounts = legs.map(([, leg]) => numOrNull(leg?.amount))
   const amountOk = amounts.every((a) => a !== null && a > 0)
   return {
     up: countsOk ? sums.up : null,
@@ -72,8 +70,8 @@ export function breadthCells(sh: BreadthLeg | undefined, sz: BreadthLeg | undefi
  * 只渲染半边会得到 `1234 / 0` 这种"没有一只下跌"的假读数。
  */
 export function upDownPair(up: number | null | undefined, down: number | null | undefined): { ok: boolean; up: number | null; down: number | null } {
-  const u = num(up)
-  const d = num(down)
+  const u = numOrNull(up)
+  const d = numOrNull(down)
   if (u === null || d === null) return { ok: false, up: null, down: null }
   return { ok: true, up: u, down: d }
 }

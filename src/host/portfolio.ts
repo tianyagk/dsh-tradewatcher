@@ -19,7 +19,7 @@ import type {
 } from '../shared/model.ts'
 import { LEDGER_VERB_LABEL, FX_CURRENCY_LABEL, MISSING_TIER_ADVICE, fxCurrencyOf, isFiniteNumber, isT0Secid, marketOf, normalizeFxRate, normalizeFxRates } from '../shared/model.ts'
 
-/** 市场显示名（unpriced 的原因说明用；与 client/format.ts 的 shortLabel 同一口径） */
+/** 市场显示名（unpriced 的原因说明用） */
 const MARKET_LABEL: Record<Market, string> = {
   cn: 'A股',
   hk: '港股',
@@ -348,7 +348,7 @@ export function assemblePortfolio(
     if (p.price === null) {
       unpriced.push({
         posId: p.posId, secid: p.secid, name: p.name, qty: p.qty, why: 'no-quote',
-        note: `行情源未给出可用价格（东财与备用源均未返回），故不计入总额 —— ${MISSING_TIER_ADVICE.transient}`,
+        note: `行情源未给出可用价格（东财与备用源均未取到），故不计入总额 —— ${MISSING_TIER_ADVICE.transient}`,
       })
       continue
     }

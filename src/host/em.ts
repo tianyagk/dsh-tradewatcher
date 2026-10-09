@@ -15,7 +15,7 @@ import type {
 } from '../shared/model.ts'
 import { MISSING_TIER_ADVICE, SECID_RE, normalizeTrendSeries } from '../shared/model.ts'
 import { BREADTH_HS_A_FS, BREADTH_PAGE_SIZE, type CountPage } from './breadthCount.ts'
-import { stitchTrendDays } from '../shared/trendStitch.ts'
+import { isMultiDayTrend, stitchTrendDays } from '../shared/trendStitch.ts'
 import { TREND_ARCHIVE_KEEP_DAYS, archiveTrendDays, loadTrendArchive, type TrendArchiveEntry } from './trendArchive.ts'
 import { mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { breakerFor, hostsAllowed, minutesToRecover } from './breaker.ts'
@@ -1315,7 +1315,10 @@ export async function fetchTrend(secid: string, ndays = 1, opts: TrendOptions = 
       const got = await fetchMultiDayTrend(secid, days)
       return got !== null && got.points.length > 0 ? got : null
     }, opts)
-    if (multi !== null && multi.points.length > 1) return multi
+    // ⚠ 判据是"**真有多天**"（不同日期数 ≥2），不是"点数 > 1"：
+    // 备用源（腾讯）对港股/美股给的就是**当日** 1 分钟线（点数几百）⇒ 旧判据会让五日档只显示当天，
+    // 本地归档写了从不读。现在这类市场会落到下面的归档拼接，并如实回 `coverage`。
+    if (multi !== null && isMultiDayTrend(multi.points)) return multi
     // 2) 其余市场（或真实源失败）⇒ 本地归档拼接：**从本版起累积**，覆盖情况如实回包
     const stitched = await stitchFromArchive(secid, days, opts)
     if (stitched !== null) return stitched
@@ -1706,7 +1709,7 @@ export function trendMissingReason(secid: string, opts: { emDown?: boolean } = {
       what: '分时',
       why: 'transient',
       note: tencentMinute
-        ? `东财行情主机当前不可达（熔断/限流），腾讯分钟线这次也没取到，本地又没有可用快照 —— ${MISSING_TIER_ADVICE.transient}`
+        ? `东财行情主机当前不可达（熔断/限流），腾讯分钟线这次也未取到，本地又没有可用快照 —— ${MISSING_TIER_ADVICE.transient}`
         : `东财行情主机当前不可达（熔断/限流），而该标的没有腾讯分钟线兜底（腾讯只覆盖沪/深/港股），本地也没有可用快照 —— ${MISSING_TIER_ADVICE.transient}（不是"该标的没有分时"）`,
     }
   }
