@@ -11,7 +11,7 @@
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { TW_CSS } from './styles.ts'
+import { STYLE_ID, TW_CSS, cssInjectAction } from './styles.ts'
 import { WIDE_MIN_PX } from './wide.ts'
 
 test('CSS 里的宽屏断点全部等于 WIDE_MIN_PX（两处 min-width + 一处组头）', () => {
@@ -30,4 +30,20 @@ test('互斥只有一个机制：CSS 里不得再出现"隐藏某个排序控件
   const css = TW_CSS.replace(/\/\*[\s\S]*?\*\//g, '')
   const ruleLike = /\[data-wide-hide[^{]*\{[^}]*display\s*:\s*none/.test(css)
   assert.ok(!ruleLike, 'CSS 里又出现了隐藏式互斥；互斥应由 useWideLayout() 决定只挂一个')
+})
+
+
+test('样式注入：内容变了必须替换（否则热重载后新 DOM 配旧 CSS，界面会变成没样式的纯文本）', () => {
+  // 实测踩到过：客户端插件热重载（不刷新页面）时，文档里那份 <style> 还是上一版的，
+  // 旧规则里没有新类名 ⇒ 新版大盘页整块失去样式，被误判为"新布局不如旧版"。
+  assert.equal(cssInjectAction(null, 'A'), 'append', '文档里没有样式表 ⇒ 注入')
+  assert.equal(cssInjectAction('A', 'A'), 'skip', '内容一致 ⇒ 不重复注入')
+  assert.equal(cssInjectAction('A', 'B'), 'replace', '内容变了 ⇒ 必须替换，不能沿用旧的')
+  assert.equal(cssInjectAction('', 'A'), 'replace', '空样式表也按"内容不同"处理')
+})
+
+test('STYLE_ID 稳定（换 id 会让旧样式表留下来与新样式表并存）', () => {
+  assert.equal(typeof STYLE_ID, 'string')
+  assert.ok(STYLE_ID.length > 0)
+  assert.ok(TW_CSS.length > 1000, '样式表内容不应为空')
 })

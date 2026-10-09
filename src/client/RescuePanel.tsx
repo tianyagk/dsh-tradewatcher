@@ -12,9 +12,14 @@ import type {
   PortPrefs, RescueConfig, RescueDaySummary, RescueEtfMeta, RescueEtfView, RescueFactor,
   RescueIntradayPoint, RescueLevel, RescueSignalEvent, RescueSnapshot, TrendData,
 } from '../shared/model'
-import { shortReason } from './boardLayout.ts'
 import { RESCUE_CORE_INDEXES, RESCUE_ETF_CATALOG, RESCUE_LEVEL_DESC, RESCUE_LEVEL_LABEL, rescueUniverseMeta } from '../shared/model'
 import type { RescueCustomChannel } from '../shared/model'
+/** 缺失原因的显示用压缩：只截断，不编造（完整原文放 title） */
+function shortReason(text: string, max = 42): string {
+  const t = text.trim()
+  return t.length <= max ? t : `${t.slice(0, max - 1)}…`
+}
+
 import { api } from './api'
 import { Btn, ErrorNote, Field, Modal, Skeleton } from './ui'
 
@@ -366,7 +371,8 @@ export function RescuePanel(props: {
    *    否则默认收起。
    */
   const rescueEmpty = snapshot !== null && snapshot.etfs.length === 0
-  const expanded = manualOpen ?? (level >= 2 && !rescueEmpty)
+  // 取数失败/无通道（etfs 为空）时不许默认展开空壳 —— 塌成一行即可，空壳只会挡住下面的内容
+  const expanded = manualOpen ?? (level >= 2 && snapshot !== null && snapshot.etfs.length > 0)
   const lanes: RescueEtfMeta[] = rescueUniverseMeta(config.universe)
   const laneBase = snapshot?.etfs.find((e) => e.secid === lane)?.avgAmt20 ?? null
 
