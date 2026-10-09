@@ -11,6 +11,7 @@ import { Sparkline } from './charts.tsx'
 import { Btn, Modal } from './ui.tsx'
 import { PANEL_OPACITY_MAX, PANEL_OPACITY_MIN, normalizePanelOpacity } from '../shared/model.ts'
 import type { PortPrefs } from '../shared/model.ts'
+import { isUsableBaseline } from './trendView.ts'
 
 interface HoverState {
   secid: string
@@ -81,7 +82,7 @@ function HoverCard(props: {
   let sub = ''
   if (kind === 'trend' && data !== null) {
     const t = data as TrendData
-    baseline = t.prePrice
+    baseline = isUsableBaseline(t.prePrice) ? t.prePrice : null
     sparkPoints = t.points.map((p) => ({ t: p.t, value: p.price, label: p.label.slice(11) }))
     const last = t.points[t.points.length - 1]
     sub = last !== undefined ? `${last.label.slice(5, 16)} 收盘` : ''

@@ -12,6 +12,7 @@ import { Btn, ErrorNote, Modal, SuggestInput } from './ui.tsx'
 import { Sparkline } from './charts.tsx'
 import { RescuePanel } from './RescuePanel.tsx'
 import type { PortPrefs, QuoteSource } from '../shared/model.ts'
+import { isUsableBaseline } from './trendView.ts'
 
 type Scope = 'industry' | 'concept' | 'etf'
 
@@ -461,8 +462,8 @@ function DetailCard(props: { detail: StockDetail; trend: TrendData | null; redUp
   const cls = dirClass(d.chg ?? null, props.redUp)
   const t = props.trend
   const points = (t?.points ?? []).map((p) => ({ t: p.t, value: p.price }))
-  const lastUp = points.length > 1 && t?.prePrice !== null && t?.prePrice !== undefined
-    ? points[points.length - 1].value >= (t.prePrice as number)
+  const lastUp = points.length > 1 && isUsableBaseline(t?.prePrice)
+    ? points[points.length - 1].value >= t.prePrice
     : null
   const kv = (k: string, v: string | null, extraCls?: string): React.ReactElement =>
     React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', gap: 12, padding: '3px 0', borderBottom: '1px solid var(--tw-border)' } },

@@ -7,7 +7,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { CandleMarker, SparkMarker } from './charts.tsx'
 import { fmtAxis, ma, macd, niceTicks } from './indicators.ts'
-import { hasVolumeSeries, isUsableAvg, trendDayAxis, trendScale } from './trendView.ts'
+import { hasVolumeSeries, isUsableAvg, isUsableBaseline, trendDayAxis, trendScale } from './trendView.ts'
 import { sessionAxis, type SessionDef } from './sessionAxis.ts'
 
 const PAD_X = 8
@@ -203,7 +203,7 @@ export function TrendChart(props: {
   const macdH = props.macdH ?? 64
   const height = PAD_TOP + mainH + GAP + volH + GAP + macdH + AXIS_H
   /** 分时（有昨收基准 + 有时段表）时右侧多留一列 ±% 刻度；其它档保持原边距 */
-  const pctScale = props.baseline !== null && props.baseline !== undefined && (props.session ?? null) !== null
+  const pctScale = isUsableBaseline(props.baseline) && (props.session ?? null) !== null
   const innerW = width - PAD_X - (pctScale ? 44 : PAD_X)
 
   const view = useMemo(() => {
@@ -256,7 +256,7 @@ export function TrendChart(props: {
     return d
   })()
   const lastIndex = points.length - 1
-  const lastUp = props.baseline !== null && props.baseline !== undefined
+  const lastUp = isUsableBaseline(props.baseline)
     ? values[lastIndex] >= props.baseline
     : values[lastIndex] >= values[0]
   const mainColor = lastUp === redUp ? 'var(--tw-up)' : 'var(--tw-down)'
@@ -269,9 +269,9 @@ export function TrendChart(props: {
       React.createElement('stop', { offset: '100%', style: { stopColor: mainColor, stopOpacity: 0.02 } }),
     ),
   ))
-  children.push(...yGrid({ top: PAD_TOP, height: mainH, lo, hi, padX: PAD_X, innerW, baseline: pctScale ? props.baseline : null }))
+  children.push(...yGrid({ top: PAD_TOP, height: mainH, lo, hi, padX: PAD_X, innerW, baseline: pctScale ? (props.baseline ?? null) : null }))
   children.push(React.createElement('path', { key: 'area', d: area, fill: 'url(#tw-trend-fill)', style: { stroke: 'none' } }))
-  if (props.baseline !== null && props.baseline !== undefined) {
+  if (isUsableBaseline(props.baseline)) {
     const y = yOf(props.baseline)
     children.push(React.createElement('line', {
       key: 'base', x1: PAD_X, y1: y, x2: PAD_X + innerW, y2: y,

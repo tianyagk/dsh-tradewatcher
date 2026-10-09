@@ -4,6 +4,7 @@
  * fallback) and the stock-detail card.
  */
 import React from 'react'
+import { chartDomain } from './trendView.ts'
 
 export interface SparkPoint {
   t: number
@@ -50,17 +51,10 @@ export function Sparkline(props: SparklineProps): React.ReactElement {
     return React.createElement('svg', { width, height }, null)
   }
   const values = points.map((p) => p.value)
-  let min = Math.min(...values)
-  let max = Math.max(...values)
-  const baseline = props.baseline
-  if (baseline !== null && baseline !== undefined && Number.isFinite(baseline)) {
-    min = Math.min(min, baseline)
-    max = Math.max(max, baseline)
-  }
-  const span = max - min
-  const lo = span > 0 ? min - span * 0.06 : min - 1
-  const hi = span > 0 ? max + span * 0.06 : max + 1
-  const range = hi - lo
+  // 域 + 基准虚线共用同一判据（`baseline = 0` 曾经把域拉到 0~4000 ⇒ 几千点波动压成一条平线）
+  const domain = chartDomain(values, props.baseline)
+  const { lo, hi } = domain
+  const range = hi - lo || 1
   // 压缩时间轴：午休/隔夜/周末等跳空按"中位步长"折叠，避免被拉成一条长直线。
   // 分时数据里常见 1 分钟步长 + 90 分钟午休跳空；日线回退里是 1 天步长 + 周末跳空。
   const deltas: number[] = []
@@ -84,10 +78,7 @@ export function Sparkline(props: SparklineProps): React.ReactElement {
   const area = `${polylinePath(xy)} L${xy[xy.length - 1][0].toFixed(1)},${(padTop + innerH).toFixed(1)} L${xy[0][0].toFixed(1)},${(padTop + innerH).toFixed(1)} Z`
   const last = xy[xy.length - 1]
   const linePath = polylinePath(xy)
-  const baselineY =
-    baseline !== null && baseline !== undefined && Number.isFinite(baseline)
-      ? padTop + ((hi - baseline) / range) * innerH
-      : null
+  const baselineY = domain.baselineY === null ? null : padTop + (1 - domain.baselineY) * innerH
   return React.createElement(
     'svg',
     { width, height, viewBox: `0 0 ${width} ${height}`, style: { display: 'block' } },

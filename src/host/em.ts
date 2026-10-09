@@ -1196,7 +1196,10 @@ async function fetchTrendSingleDay(secid: string, opts: TrendOptions = {}): Prom
       if (p !== null) points.push(p)
     }
     if (points.length === 0) return null
-    const pre = num(data.prePrice) ?? num(data.preClose) ?? null
+    // 昨收不可能是 0：上游把"没有"给成 0 时按缺失处理（缺失不许编码成 0）。
+    // ⚠ 客户端另有一道判据（`isUsableBaseline`）—— 跑着的宿主可能是旧构建，那边才是主修复。
+    const rawPre = num(data.prePrice) ?? num(data.preClose) ?? null
+    const pre = rawPre !== null && rawPre > 0 ? rawPre : null
     // 缺失不许编码成 0：东财对国际指数/外盘商品一律回 avg/vol/amount = 0（见 normalizeTrendSeries）
     const clean = normalizeTrendSeries(points)
     return { secid, prePrice: pre, points: clean, last: clean[clean.length - 1]?.price ?? null }

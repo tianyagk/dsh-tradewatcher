@@ -18,6 +18,46 @@ export function hasVolumeSeries(vols: readonly (number | null | undefined)[]): b
  *
  * `pad` 与原实现一致：上下各留 6% 的呼吸位；全程无波动时给 ±1 兜底（避免除以 0）。
  */
+/**
+ * 基准价（昨收）是否可用：**必须是有限正数**。
+ *
+ * 为什么单列一条判据：`baseline = 0` 会被当成真实值并进纵轴域 ⇒ 域从 0 起，
+ * 几千点的价格波动被压成顶部一条平线（指数卡片缩略图实测就是这样，底部那条浅色横线
+ * 就是画在 0 上的基准虚线）。昨收/基准价不可能是 0 或负数 —— 0 只代表"上游没给"。
+ * 宿主侧也做归一（见 `em.ts`），但跑着的宿主可能是旧构建 ⇒ **客户端判据才是主修复**。
+ */
+export function isUsableBaseline(v: unknown): v is number {
+  return typeof v === 'number' && Number.isFinite(v) && v > 0
+}
+
+/**
+ * 缩略图（`Sparkline`）的纵轴域与基准线位置 —— 抽成纯函数是为了让"域"与"虚线"共用**同一个判据**。
+ *
+ * 返回 `baselineY === null` 表示基准不可用（域 = 纯价格域，虚线不画）。
+ */
+export function chartDomain(
+  values: readonly number[],
+  baseline?: number | null,
+  /** 上下呼吸位（与 Sparkline 原实现一致：6%） */
+  padRatio = 0.06,
+): { lo: number; hi: number; baselineY: number | null } {
+  const nums = values.filter((v) => typeof v === 'number' && Number.isFinite(v))
+  if (nums.length === 0) return { lo: -1, hi: 1, baselineY: null }
+  let min = Math.min(...nums)
+  let max = Math.max(...nums)
+  const usable = isUsableBaseline(baseline)
+  if (usable) {
+    min = Math.min(min, baseline)
+    max = Math.max(max, baseline)
+  }
+  const span = max - min
+  const lo = span > 0 ? min - span * padRatio : min - 1
+  const hi = span > 0 ? max + span * padRatio : max + 1
+  const range = hi - lo || 1
+  const baselineY = usable ? (hi - baseline) / range : null
+  return { lo, hi, baselineY }
+}
+
 export function trendScale(
   values: readonly number[],
   avgs: readonly (number | null | undefined)[] = [],
@@ -26,7 +66,7 @@ export function trendScale(
   const candidates: number[] = []
   for (const v of values) if (typeof v === 'number' && Number.isFinite(v)) candidates.push(v)
   for (const v of avgs) if (isUsableAvg(v)) candidates.push(v)
-  if (typeof baseline === 'number' && Number.isFinite(baseline)) candidates.push(baseline)
+  if (isUsableBaseline(baseline)) candidates.push(baseline)
   if (candidates.length === 0) return { lo: -1, hi: 1 }
   const min = Math.min(...candidates)
   const max = Math.max(...candidates)

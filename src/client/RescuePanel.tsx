@@ -16,6 +16,7 @@ function shortReason(text: string, max = 42): string {
 import { api } from './api'
 import { Btn, ErrorNote, Field, Modal, Skeleton } from './ui'
 import { fmtStamp } from './format.ts'
+import { isUsableBaseline } from './trendView.ts'
 
 const LEVEL_COLOR: Record<RescueLevel, string> = {
   0: 'var(--tw-fg-dim, #8b93a7)',
@@ -143,7 +144,7 @@ function PulseChart(props: {
       fill: color, opacity: ratio >= 1.5 ? 0.95 : 0.55,
     })
   })
-  const baseline = base !== null && base > 0
+  const baseline = isUsableBaseline(base)
     ? React.createElement('polyline', {
         points: expected.map((v, i) => `${padL + i * bw + bw * 0.4},${y(v)}`).join(' '),
         fill: 'none', stroke: 'var(--tw-fg-dim, #8b93a7)', strokeWidth: 1, strokeDasharray: '3 3', opacity: 0.8,

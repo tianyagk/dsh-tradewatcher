@@ -3,7 +3,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { normalizeTrendSeries, trendDayCount, type TrendPoint } from '../shared/model.ts'
-import { hasVolumeSeries, isUsableAvg, trendDayAxis, trendScale } from './trendView.ts'
+import { chartDomain, isUsableBaseline, hasVolumeSeries, isUsableAvg, trendDayAxis, trendScale } from './trendView.ts'
 
 const prices = [4274.05, 4287.4, 4290.72, 4302.99]
 
@@ -137,4 +137,65 @@ test('按天轴：标签文本等于该天点里的 label 前缀（不许自己�
   // label 太短时留空（不是"猜一个日期"）
   const shortPts = [{ label: 'x' }, { label: 'y' }, { label: '2026-10-09 09:30' }, { label: '2026-10-09 09:31' }]
   assert.equal(trendDayAxis(shortPts, 5).labels[0].text, '')
+})
+
+test('基准 0 ⇒ 域等于价格域、虚线不画（指数卡片被压成平线的那个 bug）', () => {
+  const values = [3990, 3995, 4002, 3988, 4006]
+  const d = chartDomain(values, 0)
+  assert.equal(d.baselineY, null, '基准 0 不是有效基准：虚线不画')
+  // 域必须只由价格决定（上下各 6% 呼吸位）
+  const min = Math.min(...values)
+  const max = Math.max(...values)
+  assert.ok(Math.abs(d.lo - (min - (max - min) * 0.06)) < 1e-6, `lo 应为纯价格域：${d.lo}`)
+  assert.ok(Math.abs(d.hi - (max + (max - min) * 0.06)) < 1e-6, `hi 应为纯价格域：${d.hi}`)
+  assert.ok(d.lo > 3900, '不许把 0 并进域（那就是 0~4000 的平线）')
+})
+
+test('基准为负 / NaN / null / undefined ⇒ 一律按不可用（域=价格域，虚线不画）', () => {
+  const values = [10, 12, 11]
+  for (const bad of [-1, Number.NaN, null, undefined, 0]) {
+    const d = chartDomain(values, bad as number | null | undefined)
+    assert.equal(d.baselineY, null, `基准 ${String(bad)} 应视为不可用`)
+    assert.ok(d.lo >= 10 - 12 * 0.06 - 1e-9 && d.hi <= 12 + 12 * 0.06 + 1e-9, `域不该被 ${String(bad)} 拉宽`)
+  }
+  assert.equal(isUsableBaseline(0), false)
+  assert.equal(isUsableBaseline(-3), false)
+  assert.equal(isUsableBaseline(Number.NaN), false)
+  assert.equal(isUsableBaseline(null), false)
+  assert.equal(isUsableBaseline(12.5), true)
+})
+
+test('基准正常（区间内 / 区间外）⇒ 域包含基准，虚线落在对应位置', () => {
+  const inside = chartDomain([10, 12, 11], 11.5)
+  assert.ok(inside.lo < 11.5 && inside.hi > 11.5, '基准在域里')
+  assert.ok(inside.baselineY !== null && inside.baselineY > 0 && inside.baselineY < 1)
+  // 基准在价格区间之外：域被撑到包含它，虚线落在靠近上/下边界处（呼吸位使其不正好是 0/1）
+  const above = chartDomain([10, 12, 11], 20)
+  assert.ok(above.hi > 20, '基准在价格上方 ⇒ 域要包含它')
+  assert.ok(above.baselineY !== null && above.baselineY < 0.15, `虚线应贴着上边：${above.baselineY}`)
+  const below = chartDomain([10, 12, 11], 2)
+  assert.ok(below.lo < 2)
+  assert.ok(below.baselineY !== null && below.baselineY > 0.85, `虚线应贴着下边：${below.baselineY}`)
+})
+
+test('回归：指数在 3990 附近波动 + 基准为 0 ⇒ 域宽度接近波动幅度，不许变成 0~4000', () => {
+  const values = Array.from({ length: 60 }, (_, i) => 3990 + Math.sin(i / 4) * 12)
+  const d = chartDomain(values, 0)
+  const width = d.hi - d.lo
+  assert.ok(width < 60, `域宽度应约为 24±呼吸位，实际 ${width.toFixed(2)}`)
+  assert.ok(d.lo > 3900 && d.hi < 4100, `域应贴着 3990 附近，实际 ${d.lo.toFixed(1)}~${d.hi.toFixed(1)}`)
+  // 对照：若把 0 当有效基准，域会变成 ~3990 宽（平线的成因）
+  const wrong = chartDomain(values, 1e-9)
+  assert.ok(wrong.hi - wrong.lo > 3000, '（对照）把极小值当基准就会拉宽域 —— 所以判据必须是 > 0 且有限')
+})
+
+test('大图（trendScale）与缩略图（chartDomain）对基准 0 的处理一致', () => {
+  const values = [3990, 3995, 4002]
+  const big = trendScale(values, [], 0)
+  const small = chartDomain(values, 0)
+  assert.ok(big.lo > 3900 && big.hi < 4100, `大图也不许把 0 并进域：${big.lo}~${big.hi}`)
+  assert.ok(small.lo > 3900, '缩略图同上')
+  // 正常基准时两者都包含基准
+  assert.ok(trendScale(values, [], 4005).hi > 4005)
+  assert.ok(chartDomain(values, 4005).hi > 4005)
 })

@@ -26,6 +26,7 @@ import { PORT_COLUMNS, PORT_SORT_HINT, PORT_SORT_KEYS, PORT_SORT_LABEL, normaliz
 import { useYtd } from './useYtd.ts'
 import { useSortEntry, useWideLayout } from './useWide.ts'
 import { ytdText, ytdTooltip } from './ytdView.ts'
+import { isUsableBaseline } from './trendView.ts'
 
 // 与宿主共用一份（shared/model.ts）——此前两边各写一份逐字相同的映射
 const VERB_LABEL: Record<LedgerEntry['verb'], string> = LEDGER_VERB_LABEL
@@ -1117,7 +1118,7 @@ function miniHover(name: string, mini: { open?: number | null; high?: number | n
   if (mini.open != null) parts.push(`开 ${mini.open.toFixed(3)}`)
   if (mini.high != null) parts.push(`高 ${mini.high.toFixed(3)}`)
   if (mini.low != null) parts.push(`低 ${mini.low.toFixed(3)}`)
-  if (mini.prePrice != null && mini.prePrice > 0 && mini.high != null && mini.low != null) {
+  if (isUsableBaseline(mini.prePrice) && mini.high != null && mini.low != null) {
     parts.push(`振幅 ${(((mini.high - mini.low) / mini.prePrice) * 100).toFixed(2)}%`)
   } else {
     parts.push('振幅 —（上游未给昨收）')

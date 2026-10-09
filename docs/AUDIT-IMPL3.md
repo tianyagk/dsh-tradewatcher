@@ -165,3 +165,51 @@ if (missingPages > 0) {
 - after：`数据时刻在刷新间隔内，视为实时`（同段上一行已是"数据时刻"，前缀统一）
 
 **本批新增断言 2 条**（D1 一条 + D4 一条）；测试总数 **225 → 227**；`npm run check` 全绿（227 × 2 时区、75 项片段）。
+
+---
+
+## 追加（task-25）：基准为 0 污染纵轴域 ⇒ 指数卡片分时图被压成平线
+
+**现象**（用户截图）：实时行情里的指数卡片分时图几乎是一条没有起伏的直线，纵轴刻度 `0.000/1000/2000/3000/4000`，
+价格线贴着顶部，底部 0 处还有一条浅色横线。
+
+**根因**：**"基准为 0"被当成真实值参与了纵轴域**（两个洞同一成因）——
+`Sparkline`（卡片缩略图）与 `trendScale`（抽屉大图）都只判 `Number.isFinite(baseline)`，
+基准为 0 时域从 0 起 ⇒ 几千点波动被压成顶部一条平线；底部那条浅线就是画在 0 上的基准虚线。
+（仓库里 `RescuePanel` 与 `kline.yGrid` 早已挡过这个坑 ⇒ Sparkline 与 trendScale 是漏网的两次。）
+
+**改法（单点判据，全部基准使用点共用）**
+
+| 位置 | 改前 | 改后 |
+| --- | --- | --- |
+| `trendView.ts` | — | 新增 `isUsableBaseline(v): v is number`（`finite && v > 0`） |
+| `trendView.trendScale` | `typeof baseline === 'number' && Number.isFinite(baseline)` | `isUsableBaseline(baseline)` |
+| `charts.Sparkline` | 内联 min/max 计算 + 内联虚线判据（**两处各写一遍**） | 抽出纯函数 `chartDomain(values, baseline)` ⇒ 域与虚线**共用同一判据**；不可用时域=价格域、虚线不画 |
+| `kline.tsx` | `baseline !== null && !== undefined`（3 处：pct 刻度 / lastUp / 虚线） | `isUsableBaseline(props.baseline)` |
+| `RescuePanel.tsx` | `base !== null && base > 0` | `isUsableBaseline(base)` |
+| `MarketPage` / `QuoteDrawer` / `TopBar` / `PortfolioPage` | 直接透传 `t.prePrice`、`昨收 ${fmtPrice(t.prePrice)}`、`mini.prePrice > 0` | 一律 `isUsableBaseline(...)`；不可用时基准传 `null`、文本写 `昨收 —` |
+| `host/em.ts`（上游归一） | `num(data.prePrice) ?? num(data.preClose) ?? null`（上游把"没有"给成 0 时会把 0 当昨收） | `rawPre > 0 ? rawPre : null`（缺失不许编码成 0） |
+
+**上游侧核查结论**：`em.ts` 的 `prePrice` 只有 4 个产生点 —— 3 处写死 `null`，第 4 处（`fetchTrendSingleDay` 从东财 `trends2` 解析）
+**可能拿到上游的 0**，已按约定归一为 `null`。但**跑着的宿主是旧构建**，所以客户端判据才是主修复（宿主归一只是顺带）。
+
+**五条断言（`src/client/trendView.test.ts`，全绿）**
+
+```
+✔ 基准 0 ⇒ 域等于价格域、虚线不画（指数卡片被压成平线的那个 bug）
+     baselineY=null；lo/hi 与"纯价格域 + 6% 呼吸位"逐位相等；lo > 3900（不含 0）
+✔ 基准为负 / NaN / null / undefined ⇒ 一律按不可用（域=价格域，虚线不画）
+     0 / -3 / NaN / null 都判不可用；12.5 判可用
+✔ 基准正常（区间内 / 区间外）⇒ 域包含基准，虚线落在对应位置
+     区间内 baselineY∈(0,1)；基准在上方 ⇒ hi>基准 且 baselineY<0.15；在下方 ⇒ lo<基准 且 baselineY>0.85
+✔ 回归：指数在 3990 附近波动 + 基准为 0 ⇒ 域宽度接近波动幅度，不许变成 0~4000
+     60 点正弦（±12）⇒ 域宽 < 60、域 ∈ (3900,4100)；（对照）把极小值当基准才会拉宽到 > 3000
+✔ 大图（trendScale）与缩略图（chartDomain）对基准 0 的处理一致
+```
+
+新增断言 5 条（234 → **239**）；`npm run check` 全绿（239 × 2 时区、75 项片段）。
+
+**需装机复核**（无浏览器，未做视觉验证）：
+① "基准缺失"的指数（`lastUp` 退回"与首点比"、无虚线、域=价格域）卡片观感；
+② "基准正常"标的仍画虚线、曲线有起伏；
+③ 抽屉大图的 `昨收 —` 与左侧价格刻度/右侧 ±% 的对齐。

@@ -30,6 +30,7 @@ import {
 } from './chartCache.ts'
 
 import { sessionOf } from './sessionAxis.ts'
+import { isUsableBaseline } from './trendView.ts'
 
 function useContainerWidth(): [React.RefObject<HTMLDivElement>, number] {
   const ref = useRef<HTMLDivElement | null>(null)
@@ -227,7 +228,9 @@ export function QuoteDrawer(props: { secid: string; name: string; redUp: boolean
     if (payload.kind === 'trend') {
       const t = payload.trend
       const points = t.points.map((p) => ({ t: p.t, value: p.price, label: p.label.slice(11) }))
-      const lastUp = points.length > 1 ? points[points.length - 1].value >= (t.prePrice ?? points[0].value) : null
+      const lastUp = points.length > 1
+        ? points[points.length - 1].value >= (isUsableBaseline(t.prePrice) ? t.prePrice : points[0].value)
+        : null
       // 只在分时（当日）图上标 B/S：取交易时间落在当日区间内的流水
       const dayMarkers: SparkMarker[] = []
       if (tab === 'trend' && points.length > 0) {
@@ -246,7 +249,7 @@ export function QuoteDrawer(props: { secid: string; name: string; redUp: boolean
       if (tab === 'trend') {
         return React.createElement(TrendChart, {
           points: t.points.map((p) => ({ t: p.t, value: p.price, vol: p.vol, avg: p.avg, label: p.label })),
-          baseline: t.prePrice,
+          baseline: isUsableBaseline(t.prePrice) ? t.prePrice : null,
           markers: dayMarkers,
           // 交易时段网格：有表的市场横轴固定为完整时段（部分数据右侧留白），其余回落压缩轴
           session: sessionOf(secid),
@@ -312,7 +315,7 @@ export function QuoteDrawer(props: { secid: string; name: string; redUp: boolean
       const last = t.points[t.points.length - 1]
       if (first !== undefined && last !== undefined) {
         note = dates.size <= 1
-          ? `昨收 ${fmtPrice(t.prePrice)} · ${first.label.slice(11)} ~ ${last.label.slice(11)}`
+          ? `昨收 ${isUsableBaseline(t.prePrice) ? fmtPrice(t.prePrice) : '—'} · ${first.label.slice(11)} ~ ${last.label.slice(11)}`
           : `共 ${dates.size} 个交易日 · ${first.label.slice(5, 10)} ~ ${last.label.slice(5, 10)}（末行为今日）`
       }
     } else if (payload.kind === 'kline') {
