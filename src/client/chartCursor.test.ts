@@ -3,7 +3,8 @@
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { klineReadout, nearestIndex, timeCell, tipPlacement, trendReadout } from './chartCursor.ts'
+import { klineReadout, nearestIndex, timeCell, tipPlacement, toneClass, trendPctLine, trendReadout } from './chartCursor.ts'
+import { SESSION_CN } from './sessionAxis.ts'
 import { macd } from './indicators.ts'
 
 test('nearestIndex：两端 / 中点 / 越界 / 空 / 单点都有确定行为', () => {
@@ -72,7 +73,8 @@ test('trendReadout：缺失一律 —（无昨收 / 无均价 / 无成交额都�
   const get = (ls: ReturnType<typeof trendReadout>, k: string): string => ls.find((l) => l.label === k)?.value ?? ''
   assert.equal(get(noBase, '时间'), '09:30')
   assert.equal(get(noBase, '价格'), '3755.05')
-  assert.equal(get(noBase, '涨跌幅'), '—', '无昨收 ⇒ 不可算，写 —（不是 0.00%）')
+  // 口径已改为"距开盘/距首点"：第 0 点是相对自身 ⇒ 0.00%（真实值，不是"缺失"）
+  assert.equal(get(noBase, '涨跌(距首点)'), '0.00%', '首点对自身 ⇒ 0.00%（这里 0 是真实值）')
   assert.equal(get(noBase, '均价'), '—', '均价缺失 ⇒ —（不是 0）')
   assert.equal(get(noBase, '成交量'), '—')
   assert.equal(get(noBase, '成交额'), '—')
@@ -80,7 +82,8 @@ test('trendReadout：缺失一律 —（无昨收 / 无均价 / 无成交额都�
   assert.equal(get(withBase, '均价'), '3758.20')
   assert.equal(get(withBase, '成交量'), '12.0万')
   assert.equal(get(withBase, '成交额'), '4.50亿')
-  assert.ok(get(withBase, '涨跌幅').includes('%') && get(withBase, '涨跌幅').includes('▲'), '有昨收 ⇒ 给出方向与百分比')
+  const pctLine = withBase.find((l) => l.label.startsWith('涨跌'))
+  assert.ok(pctLine !== undefined && pctLine.value.includes('%') && pctLine.value.includes('▲'), '给出方向与百分比')
   assert.equal(withBase.some((l) => l.value === '0' || l.value === '0.00'), false, '不许出现 0 顶替')
 })
 
@@ -136,4 +139,90 @@ test('klineReadout：首根无前收盘 ⇒ 涨跌幅 —；MA/量额缺失 ⇒ 
   assert.equal(get('成交额'), '—')
   assert.equal(lines.some((l) => l.value === '0'), false, '不许出现 0 顶替')
   assert.deepEqual(klineReadout({ bars, i: 9, macd: null }), [], '下标越界 ⇒ 空卡片（调用方不显示）')
+})
+
+test('距开盘口径：首点 100 → 当前 105 ⇒ +5.00%；首点缺失或为 0 ⇒ —（不是 0）', () => {
+  const pts = [
+    { label: '2026-10-09 09:30', price: 100, avg: null, vol: null, amount: null },
+    { label: '2026-10-09 10:00', price: 105, avg: null, vol: null, amount: null },
+  ]
+  const ok = trendPctLine(pts, 1, { session: SESSION_CN })
+  assert.equal(ok.label, '涨跌(距开盘)', '首点正是 09:30 ⇒ 敢说"距开盘"')
+  assert.equal(ok.pct, 5, '+5%')
+  const lines = trendReadout({ points: pts, i: 1, session: SESSION_CN })
+  assert.equal(lines.find((l) => l.label === '涨跌(距开盘)')?.value, '▲5.00%')
+  // 首点为 0 / 首点缺失 ⇒ 不可算
+  const zero = trendPctLine([{ label: '2026-10-09 09:30', price: 0 }, { label: '2026-10-09 10:00', price: 5 }], 1, { session: SESSION_CN })
+  assert.equal(zero.pct, null, '首点为 0 ⇒ 不可算')
+  const noFirst = trendPctLine([{ label: '2026-10-09 10:00', price: 5 }], 0, { session: SESSION_CN })
+  assert.equal(noFirst.pct, 0, '整条序列就是这一点 ⇒ 相对自身 0%（不是 null）')
+  const empty = trendReadout({ points: [], i: 0 })
+  assert.deepEqual(empty, [], '空序列 ⇒ 空卡片')
+})
+
+test('口径标签：有时段表且首点==开盘时刻 ⇒ 距开盘；无时段表 ⇒ 距首点（不许含糊）', () => {
+  const atOpen = [{ label: '2026-10-09 09:30', price: 100 }, { label: '2026-10-09 09:31', price: 101 }]
+  assert.equal(trendPctLine(atOpen, 1, { session: SESSION_CN }).label, '涨跌(距开盘)')
+  // 无时段表（美股/商品/期货）：122.XAU 首点 06:00 —— 那不是开盘
+  const xau = [{ label: '2026-10-09 06:00', price: 4274.05 }, { label: '2026-10-09 06:05', price: 4280 }]
+  assert.equal(trendPctLine(xau, 1, { session: null }).label, '涨跌(距首点)', '无表 ⇒ 只能说"距首点"')
+  // 有表但首点不在开盘（数据从 09:45 开始）
+  const late = [{ label: '2026-10-09 09:45', price: 100 }, { label: '2026-10-09 09:50', price: 101 }]
+  assert.equal(trendPctLine(late, 1, { session: SESSION_CN }).label, '涨跌(距首点)', '首点不是开盘 ⇒ 不许声称距开盘')
+  // 调用方给了真实开盘价 ⇒ 用它（并保留"距开盘"标签）
+  const withOpen = trendPctLine(late, 1, { session: SESSION_CN, open: 99 })
+  assert.equal(withOpen.label, '涨跌(距开盘)', '有真实开盘价 ⇒ 可以称距开盘')
+  assert.ok(Math.abs((withOpen.pct ?? 0) - ((101 - 99) / 99) * 100) < 1e-9, '用传入的开盘价算')
+})
+
+test('五日档：与"同一天的首点"比（跨天比五天前没有意义）', () => {
+  const pts = [
+    { label: '2026-10-08 09:30', price: 100 },
+    { label: '2026-10-08 15:00', price: 110 },
+    { label: '2026-10-09 09:30', price: 200 },
+    { label: '2026-10-09 10:00', price: 210 },
+  ]
+  const r = trendPctLine(pts, 3, { multiDay: true, session: SESSION_CN })
+  assert.equal(r.label, '涨跌(距当日开盘)')
+  assert.equal(r.pct, 5, '210 对**当天**首点 200 = +5%（而不是对 10-08 的 100 = +110%）')
+})
+
+test('toneClass：redUp=true 时 up→tw-up；false 时互换；undefined/0 ⇒ 中性', () => {
+  assert.equal(toneClass('up', true), 'tw-up')
+  assert.equal(toneClass('down', true), 'tw-down')
+  assert.equal(toneClass('up', false), 'tw-down', '绿涨红跌档：涨要显示为"跌"色')
+  assert.equal(toneClass('down', false), 'tw-up')
+  assert.equal(toneClass(undefined, true), 'tw-muted')
+  assert.equal(toneClass('muted', false), 'tw-muted')
+})
+
+test('回归：翻转 redUp 只改颜色、不改数值与文案（卡片内容与开关无关）', () => {
+  const pts = [
+    { label: '2026-10-09 09:30', price: 100, avg: 100.1, vol: 1000, amount: 1e6 },
+    { label: '2026-10-09 10:00', price: 105, avg: 102.3, vol: 2000, amount: 2e6 },
+  ]
+  const lines = trendReadout({ points: pts, i: 1, session: SESSION_CN })
+  const probe = JSON.stringify(lines)
+  // 同一份 lines 在两种配色下渲染出的 class 不同，但 lines 本身必须逐字相同
+  const upCls = lines.map((l) => toneClass(l.tone, true))
+  const downCls = lines.map((l) => toneClass(l.tone, false))
+  assert.equal(JSON.stringify(lines), probe)
+  assert.notDeepEqual(upCls, downCls, '配色确实翻转了')
+  assert.deepEqual(lines, trendReadout({ points: pts, i: 1, session: SESSION_CN }), '重新计算也逐字相同')
+  // K 线档同样：口径与配色无关
+  const bars = [{ date: '2026-10-01', open: 1, close: 1, high: 1, low: 1, vol: null }, { date: '2026-10-02', open: 1, close: 2, high: 2, low: 1, vol: null }]
+  assert.deepEqual(klineReadout({ bars, i: 1, macd: null }), klineReadout({ bars, i: 1, macd: null }))
+})
+
+test('K 线档口径**未被改动**：仍对前收盘；首根无前收盘 ⇒ —（不是 0）', () => {
+  const bars = [
+    { date: '2026-10-01', open: 10, close: 10, high: 11, low: 9, vol: 1 },
+    { date: '2026-10-02', open: 10, close: 11, high: 12, low: 9.5, vol: 1 },
+  ]
+  const l1 = klineReadout({ bars, i: 1, macd: null })
+  const get = (ls: typeof l1, k: string): string => ls.find((x) => x.label === k)?.value ?? ''
+  assert.equal(get(l1, '涨跌幅'), '▲10.00%', '(11-10)/10 —— 对**前收盘**，不是对首点/开盘')
+  const l0 = klineReadout({ bars, i: 0, macd: null })
+  assert.equal(get(l0, '涨跌幅'), '—', '第一根没有前收盘 ⇒ —')
+  assert.equal(l1.some((x) => x.value === '0' || x.value === '0.00%'), false, '不许 0 顶替')
 })

@@ -8,6 +8,7 @@
  * 成交额缺失 ⇒ `—`）。五日档的时间列**必须带日期**，否则 "09:35" 会被读成"今天"。
  */
 import { fmtAmt, fmtBig, fmtPct, fmtPrice } from './format.ts'
+import type { SessionDef } from './sessionAxis.ts'
 
 export interface TipLine {
   label: string
@@ -74,6 +75,19 @@ export function tipPlacement(
   }
 }
 
+/**
+ * 涨跌着色的**唯一**映射：`redUp` 决定红/绿谁是涨。
+ *
+ * 卡片此前把 tone 写死映射成 `tw-up`（红涨），于是在"绿涨红跌"档位下与全站**相反** ——
+ * 同一个开关必须管到所有涨跌着色面（云图那个 bug 是同一类）。
+ * `undefined` / `'muted'` ⇒ 中性；非涨跌行（MACD/DIF/DEA/量额）一律走中性。
+ */
+export function toneClass(tone: 'up' | 'down' | 'muted' | undefined, redUp: boolean): string {
+  if (tone === 'up') return redUp ? 'tw-up' : 'tw-down'
+  if (tone === 'down') return redUp ? 'tw-down' : 'tw-up'
+  return 'tw-muted'
+}
+
 /** 时间列：五日档必须带日期（`MM-DD HH:mm`），单日档只要时刻（`HH:mm`） */
 export function timeCell(label: string, multiDay: boolean): string {
   if (multiDay) return label.slice(5, 16) // YYYY-MM-DD HH:mm → MM-DD HH:mm
@@ -97,12 +111,66 @@ export interface MacdSeries {
 export interface TrendReadoutArgs {
   points: readonly TrendPointLike[]
   i: number
-  /** 昨收（基准）；不可用时涨跌幅显示 `—`（不是 0.00%） */
+  /** 昨收（基准）；本卡片不再用它算涨跌幅，仅保留给调用方未来扩展 */
   baseline?: number | null
   /** 五日/多日档：时间列带日期 */
   multiDay?: boolean
   /** MACD 系列：**必须**是图上画的那一份（同一份计算） */
   macd?: MacdSeries | null
+  /**
+   * 该标的的交易时段表（`sessionOf(secid)`；无表的市场给 `null`）。
+   * 只有"有时段表 **且** 序列首点正好落在该表开盘时刻"才敢说**距开盘** ——
+   * 美股/国际指数/外盘商品/期货拉到的首点不是开盘（`122.XAU` 06:00、`100.SPX` 21:30）。
+   */
+  session?: SessionDef | null
+  /** 调用方已知的当日开盘价（payload 的 `open`）；给了就优先用它 */
+  open?: number | null
+}
+
+/**
+ * 分时档涨跌幅的口径与行标签（**口径写在标签里，不靠读者猜**）：
+ *
+ * - 多日（五日）档：与**同一天的首点**比 ⇒ `涨跌(距当日开盘)`；
+ * - 单日 + 有时段表且首点正是开盘时刻 ⇒ `涨跌(距开盘)`；
+ * - 其余（无时段表 / 首点不在开盘）⇒ `涨跌(距首点)` —— 如实说明这是"首点"口径；
+ * - 首点缺失或 ≤0 ⇒ 不可算（值为 `—`）。
+ */
+export function trendPctLine(
+  points: readonly TrendPointLike[],
+  i: number,
+  opts: { multiDay?: boolean; session?: SessionDef | null; open?: number | null } = {},
+): { label: string; pct: number | null } {
+  const p = points[i]
+  if (p === undefined) return { label: '涨跌(距首点)', pct: null }
+  const first = points[0]
+  const explicit = typeof opts.open === 'number' && Number.isFinite(opts.open) && opts.open > 0 ? opts.open : null
+  let ref: number | null = explicit
+  let label = '涨跌(距首点)'
+  if (opts.multiDay === true) {
+    // 五日档：与"同一天的首点"比（跨天比五天前没有意义）
+    const day = p.label.slice(0, 10)
+    let sameDayFirst: number | null = null
+    for (const q of points) {
+      if (q.label.slice(0, 10) !== day) continue
+      sameDayFirst = Number.isFinite(q.price) ? q.price : null
+      break
+    }
+    ref = explicit ?? sameDayFirst
+    label = '涨跌(距当日开盘)'
+  } else {
+    const session = opts.session ?? null
+    const openAtSessionOpen =
+      session !== null &&
+      first !== undefined &&
+      (session.spans[0]?.start ?? '') !== '' &&
+      first.label.slice(11, 16) === session.spans[0].start
+    // 调用方给了真实开盘价 —— 那就是开盘，不必再看首点时间
+    const openKnown = explicit !== null || openAtSessionOpen
+    ref = explicit ?? (first !== undefined && Number.isFinite(first.price) ? first.price : null)
+    label = openKnown ? '涨跌(距开盘)' : '涨跌(距首点)'
+  }
+  if (ref === null || !(ref > 0)) return { label, pct: null }
+  return { label, pct: ((p.price - ref) / ref) * 100 }
 }
 
 const numOrDash = (v: number | null | undefined, digits = 2): string => {
@@ -120,14 +188,14 @@ export function trendReadout(args: TrendReadoutArgs): TipLine[] {
   const { points, i } = args
   const p = points[i]
   if (p === undefined) return []
-  const base = args.baseline
-  const baseOk = typeof base === 'number' && Number.isFinite(base) && base > 0
-  const pct = baseOk ? ((p.price - base) / base) * 100 : null
+  // 分时档：涨跌幅口径是"距开盘/距当日开盘/距首点"（见 trendPctLine，标签里写明）
+  const pl = trendPctLine(points, i, { multiDay: args.multiDay, session: args.session, open: args.open })
+  const pct = pl.pct
   const macd = args.macd ?? null
   const lines: TipLine[] = [
     { label: '时间', value: timeCell(p.label, args.multiDay === true), tone: 'muted' },
     { label: '价格', value: fmtPrice(p.price), tone: pctTone(pct) },
-    { label: '涨跌幅', value: baseOk ? fmtPct(pct) : '—', tone: pctTone(pct) },
+    { label: pl.label, value: pct === null ? '—' : fmtPct(pct), tone: pctTone(pct) },
   ]
   if (macd !== null) {
     lines.push({ label: 'MACD', value: numOrDash(macd.hist[i], 4), tone: 'muted' })

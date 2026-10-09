@@ -9,7 +9,7 @@ import type { CandleMarker, SparkMarker } from './charts.tsx'
 import { fmtAxis, ma, macd, niceTicks } from './indicators.ts'
 import { hasVolumeSeries, isUsableAvg, isUsableBaseline, plausibleAvgs, trendDayAxis, trendScale } from './trendView.ts'
 import { sessionAxis, type SessionDef } from './sessionAxis.ts'
-import { klineReadout, nearestIndex, tipPlacement, trendReadout, type TipLine } from './chartCursor.ts'
+import { klineReadout, nearestIndex, tipPlacement, toneClass, trendReadout, type TipLine } from './chartCursor.ts'
 import { trendDayCount } from '../shared/model.ts'
 
 const PAD_X = 8
@@ -42,7 +42,7 @@ function tipHeightOf(lines: readonly TipLine[]): number {
 }
 
 /** 半透明细节卡（DOM 覆盖层，`position:absolute` 由调用方容器承载） */
-function TipCard(lines: readonly TipLine[], pos: { left: number; top: number }): React.ReactElement {
+function TipCard(lines: readonly TipLine[], pos: { left: number; top: number }, redUp: boolean): React.ReactElement {
   return React.createElement('div', {
     className: 'tw-chart-tip',
     style: { left: pos.left, top: pos.top, width: TIP_W },
@@ -52,7 +52,8 @@ function TipCard(lines: readonly TipLine[], pos: { left: number; top: number }):
     ...lines.map((l, i) => React.createElement('div', { key: `t${i}`, className: 'tw-chart-tip-row' },
       React.createElement('span', { className: 'tw-chart-tip-k' }, l.label),
       React.createElement('span', {
-        className: l.tone === undefined ? 'tw-chart-tip-v' : `tw-chart-tip-v ${l.tone === 'up' ? 'tw-up' : l.tone === 'down' ? 'tw-down' : 'tw-muted'}`,
+        // 涨跌着色**必须**跟随 redUp（写死映射会在"绿涨红跌"档位与全站相反）
+        className: `tw-chart-tip-v ${toneClass(l.tone, redUp)}`,
       }, l.value),
     )),
   )
@@ -457,9 +458,11 @@ export function TrendChart(props: {
     baseline: props.baseline,
     multiDay,
     macd: m,
+    // 有没有时段表决定标签是"距开盘"还是"距首点"（无表的市场首点不是开盘）
+    session: props.session ?? null,
   })
   const pos = cursor === null || cx === null ? null : tipPlacement(tipLeft, tipTop, width, height, TIP_W, tipHeightOf(lines))
-  return React.createElement('div', { className: 'tw-cursorwrap' }, svg, pos === null ? null : TipCard(lines, pos))
+  return React.createElement('div', { className: 'tw-cursorwrap' }, svg, pos === null ? null : TipCard(lines, pos, redUp))
 }
 
 /** ───────────────────────── 日/周/月/年 K ───────────────────────── */
@@ -803,7 +806,7 @@ export function KlineChart(props: {
       onKeyDown: chartKey,
     },
       React.createElement(WheelZoom, { bars, range: [s, e], width, onChange: setRange }, svg),
-      tipPos === null ? null : TipCard(tipLines, tipPos),
+      tipPos === null ? null : TipCard(tipLines, tipPos, redUp),
     ),
     // 读屏专用：完整摘要（含买卖点明细），视觉上不可见但可被朗读
     React.createElement('div', { className: 'tw-sr' }, summary),
