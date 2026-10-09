@@ -24,6 +24,7 @@ import { describeConflicts, makeBundle, verifyBundle } from './backup.ts'
 import { detectAnomalies } from './anomaly.ts'
 import { YTD_MAX_IDS, computeYtds } from './ytd.ts'
 import { BREADTH_MIN_DAYS, BREADTH_WINDOW, BreadthStore, breadthUsable, percentileOf, upRatio } from './breadth.ts'
+import { BREADTH_COUNT_CALIBER, BreadthCountCache, resolveBreadthCount } from './breadthCount.ts'
 import { dayOf } from './time.ts'
 import { log, type PluginWebRoute } from './context.ts'
 
@@ -175,6 +176,8 @@ export function makeTradeRoutes(
   calendar: CalendarStore,
   rescue?: RescueMonitor,
   breadth: BreadthStore = new BreadthStore(),
+  /** 涨跌家数自统计（源 B）的结果缓存：一轮快照内不重复打上游 */
+  breadthCountCache: BreadthCountCache = new BreadthCountCache(),
 ): TradeRoutes {
   const gate = (req: IncomingMessage): boolean => isTrustedApiRequest(req, trustedHosts)
   /** 上游主机组：503 时用它给出 retry-after，并聚合展示熔断明细（去重后 3 台） */
@@ -304,22 +307,44 @@ export function makeTradeRoutes(
           const sz = q.items['0.399001']
           const usable = breadthUsable([sh?.up, sh?.down, sh?.even, sz?.up, sz?.down, sz?.even])
           const today = dayOf(Date.now())
-          const current = usable
-            ? {
-                up: (sh?.up ?? 0) + (sz?.up ?? 0),
-                down: (sh?.down ?? 0) + (sz?.down ?? 0),
-                even: (sh?.even ?? 0) + (sz?.even ?? 0),
-                amount: (sh?.amount ?? 0) + (sz?.amount ?? 0),
+          const amount = usable ? (sh?.amount ?? 0) + (sz?.amount ?? 0) : null
+          // 家数走**多源链**（按成本从低到高，命中即止）：
+          //   源 A：指数行情 f104/f105/f106（最便宜）→ 源 B：东财 clist 分页自统计
+          // 自统计的结果带 source 与**统计完成时刻**（asOf 不复用行情时刻），并附自检结论
+          const resolved = await resolveBreadthCount({
+            fromIndexQuote: usable
+              ? { up: (sh?.up ?? 0) + (sz?.up ?? 0), down: (sh?.down ?? 0) + (sz?.down ?? 0), even: (sh?.even ?? 0) + (sz?.even ?? 0) }
+              : null,
+            indexAsOf: q.provenance.asOf,
+            deps: { clistPage: em.fetchClistPctPage },
+            cache: breadthCountCache,
+          })
+          const current = resolved.counts === null
+            ? null
+            : {
+                up: resolved.counts.up,
+                down: resolved.counts.down,
+                even: resolved.counts.even,
+                amount: amount ?? 0,
+                source: resolved.source,
+                checks: resolved.checks,
               }
-            : null
-          // 只有拿到真实数字才记；记不进去（盘中/周末/已定稿）不是错误
-          const stored = current === null ? false : await breadth.record(Date.now(), current)
+          // 只有拿到真实数字才记；记不进去（盘中/周末/已定稿）不是错误。
+          // 家数可能是**自统计**的，而成交额仍只有指数行情里有 —— 成交额缺失（行情走备用源）时
+          // 不记账：把 0 当成交额记进每日快照会污染分位的历史口径（不许把缺失写成 0）。
+          const stored = current === null || amount === null ? false : await breadth.record(Date.now(), current)
           const ratio = current === null ? null : upRatio(current)
           const pct = percentileOf(ratio, breadth.history(BREADTH_WINDOW, today))
           send(res, 200, {
             current: current === null
               ? null
-              : { ...current, ratio, asOf: q.provenance.asOf, source: q.provenance.source },
+              : {
+                  ...current,
+                  ratio,
+                  // 数字时刻：源 A = 行情时刻；自统计 = **统计完成时刻**（两者语义不同，不许混）
+                  asOf: resolved.asOf,
+                  caliber: resolved.source === 'em-index' ? null : BREADTH_COUNT_CALIBER,
+                },
             percentile: pct,
             // 窗口与最小样本一起给界面：缺了它，"没有分位"会被读成"分位是 0"
             window: BREADTH_WINDOW,
@@ -331,8 +356,8 @@ export function makeTradeRoutes(
               ? q.provenance.missing
               : [{
                   what: '沪深涨跌家数',
-                  why: 'no-source' as const,
-                  note: '本轮行情未返回涨/跌/平家数（东财 f104/f105/f106）；备用源（腾讯/新浪）不提供该字段，稍后随行情轮询重试',
+                  why: 'transient' as const,
+                  note: resolved.reason ?? '本轮既没有拿到指数行情的涨/跌/平家数，自统计也没成功',
                 }],
           })
         } catch (error) {

@@ -12,6 +12,7 @@ import type {
   PortPrefs, RescueConfig, RescueDaySummary, RescueEtfMeta, RescueEtfView, RescueFactor,
   RescueIntradayPoint, RescueLevel, RescueSignalEvent, RescueSnapshot, TrendData,
 } from '../shared/model'
+import { shortReason } from './boardLayout.ts'
 import { RESCUE_CORE_INDEXES, RESCUE_ETF_CATALOG, RESCUE_LEVEL_DESC, RESCUE_LEVEL_LABEL, rescueUniverseMeta } from '../shared/model'
 import type { RescueCustomChannel } from '../shared/model'
 import { api } from './api'
@@ -257,7 +258,13 @@ function FactorTable(props: {
   )
 }
 
-export function RescuePanel(props: { prefs: PortPrefs; redUp: boolean; onPrefs?: (p: PortPrefs) => void }): React.ReactElement {
+export function RescuePanel(props: {
+  prefs: PortPrefs
+  redUp: boolean
+  onPrefs?: (p: PortPrefs) => void
+  /** 12 栏网格里的占位（大盘页 B3 用）；不传则不写属性（其它挂载点不受影响） */
+  span?: number
+}): React.ReactElement {
   const [data, setData] = React.useState<RescueData | null>(null)
   const [error, setError] = React.useState<string | null>(null)
   const [loading, setLoading] = React.useState(true)
@@ -352,13 +359,18 @@ export function RescuePanel(props: { prefs: PortPrefs; redUp: boolean; onPrefs?:
     : win?.reason === 'noon-break' ? '午休'
       : win?.reason === 'disabled' ? '监测已关闭'
         : win?.reason === 'closed' ? '已收盘' : '非交易时段'
-  // 无实时数据时也展开：此时展开区里的分时图、今日时间线、抽样条、历史回看
-  // 都是真实记录，折叠起来会让人以为"面板内容越来越少"
-  const expanded = manualOpen ?? (level >= 2 || (snapshot?.etfs.length ?? 1) === 0)
+  /**
+   * 默认展开判据（DESIGN-DASHBOARD §3 / B3）：
+   *  - 取数失败（`etfs.length === 0`）**不再默认展开一个空壳** —— 塌成一行 `— + 原因 + 重试`（≤60px）；
+   *  - 有实时数据时：等级 ≥2 自动展开（此时展开区里的分时图/时间线/抽样条都是真实记录），
+   *    否则默认收起。
+   */
+  const rescueEmpty = snapshot !== null && snapshot.etfs.length === 0
+  const expanded = manualOpen ?? (level >= 2 && !rescueEmpty)
   const lanes: RescueEtfMeta[] = rescueUniverseMeta(config.universe)
   const laneBase = snapshot?.etfs.find((e) => e.secid === lane)?.avgAmt20 ?? null
 
-  return React.createElement('div', { className: 'tw-panel tw-rescue' },
+  return React.createElement('div', { className: 'tw-panel tw-rescue', ...(props.span === undefined ? {} : { 'data-span': props.span }) },
     React.createElement('div', { className: 'tw-panel-h' },
       React.createElement('span', {
         className: 'tw-rescue-dot', style: { background: LEVEL_COLOR[level], boxShadow: level >= 2 ? `0 0 8px ${LEVEL_COLOR[level]}` : undefined },
@@ -487,10 +499,26 @@ export function RescuePanel(props: { prefs: PortPrefs; redUp: boolean; onPrefs?:
           ),
         )
       : null,
-    !expanded && snapshot !== null
-      ? React.createElement('div', { className: 'tw-hint', style: { padding: '2px 10px 8px' } },
-          `${RESCUE_LEVEL_DESC[level]}${level >= 2 ? '' : '（信号达到「疑似护盘」时本面板会自动展开）'}`)
-      : null,
+    // B3 缺失收缩（DESIGN-DASHBOARD §4）：取数失败（空壳）或没有快照时，塌成**一行**
+    // `— + 原因 + 重试`（≤60px）——此前 `etfs.length===0` 会默认展开一个空壳，白占 150px。
+    rescueEmpty || (snapshot === null && error !== null && !loading)
+      ? React.createElement('div', {
+          className: 'tw-hint',
+          style: { padding: '2px 10px 8px', display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' },
+          tabIndex: 0,
+          role: 'note',
+          'aria-label': `护盘通道本次未取到：${error ?? '上游未返回宽基通道数据（下一次采样自动重试）'}`,
+        },
+          React.createElement('span', { className: 'tw-muted' }, '护盘通道 —'),
+          error === null
+            ? React.createElement('span', { className: 'tw-muted' }, '上游本次未返回宽基通道数据（下一次采样自动重试）')
+            : React.createElement('span', { className: 'tw-muted', title: error }, shortReason(error)),
+          React.createElement(Btn, { onClick: () => load(true) }, '重试'),
+        )
+      : !expanded && snapshot !== null
+        ? React.createElement('div', { className: 'tw-hint', style: { padding: '2px 10px 8px' } },
+            `${RESCUE_LEVEL_DESC[level]}${level >= 2 ? '' : '（信号达到「疑似护盘」时本面板会自动展开）'}`)
+        : null,
     // 上游不可用时的「当日记录」条：通道本身由常规卡片区渲染（含复盘态）
     snapshot !== null && snapshot.fallback !== undefined
       ? React.createElement('div', { className: 'tw-rescue-resonance' },

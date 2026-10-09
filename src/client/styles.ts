@@ -159,6 +159,7 @@ color-scheme:dark}
   .tw-pop .ph .px, .tw-pop .ph .tag, .tw-pop .pl,
   .tw-group-h .gsum, .tw-wrow .wq, .tw-wrow .tw-num, .tw-ytd, .tw-gh-metrics,
   .tw-dkv .v, .tw-rescue-card-grid .v, .tw-table td,
+  .tw-metric .v, .tw-idxcard .px, .tw-idxcard .am, .tw-distbar,
   .tw-caliber, .tw-chartnote, .tw-zoom-bar, .tw-topmeta .tw-uptime){
   filter:blur(3.2px);transition:filter .12s}
 .tw-root[data-blur=1] :is(.tw-qcard, .tw-wrow, .tw-posrow, tr, .tw-pop, .tw-stat, .tw-pps,
@@ -167,6 +168,7 @@ color-scheme:dark}
   .tw-pop .ph .px, .tw-pop .ph .tag, .tw-pop .pl,
   .tw-group-h .gsum, .tw-wrow .wq, .tw-wrow .tw-num, .tw-ytd, .tw-gh-metrics,
   .tw-dkv .v, .tw-rescue-card-grid .v, .tw-table td,
+  .tw-metric .v, .tw-idxcard .px, .tw-idxcard .am, .tw-distbar,
   .tw-caliber, .tw-chartnote, .tw-zoom-bar){
   filter:none}
 
@@ -431,6 +433,48 @@ color-scheme:dark}
 .tw-rescue-pool{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:3px 10px;font-size:11.5px}
 .tw-rescue-pool-item{display:flex;align-items:center;gap:5px;color:var(--tw-muted);cursor:pointer}
 .tw-rescue-pool-item[data-on=true]{color:var(--tw-text)}
+
+/* 大盘页 12 栏网格（DESIGN-DASHBOARD §1）────────────────────────────
+   断点只有 1080（= WIDE_MIN_PX，styles.test.ts 锁着"所有 min-width 必须等于它"）。
+   窄化一律用 max-width；不用 grid-auto-flow:dense（缺块时重排会破坏阅读顺序）。 */
+.tw-board{display:grid;grid-template-columns:minmax(0,1fr);gap:10px;align-content:start}
+@media (min-width:1080px){
+  .tw-board{grid-template-columns:repeat(12,minmax(0,1fr))}
+  .tw-board>[data-span="5"]{grid-column:span 5}
+  .tw-board>[data-span="7"]{grid-column:span 7}
+  .tw-board>[data-span="12"]{grid-column:span 12}
+}
+
+/* B1 单行指标条：一行 25px，替代原先每格 52–60px 的两行卡。
+   不动 .tw-stat/.tw-statrow（持仓页在用，且 .tw-stat .v 在数字模糊白名单里）。 */
+.tw-metricrow{display:flex;flex-wrap:wrap;gap:6px 18px;align-items:baseline;padding:2px 0}
+.tw-metric{display:inline-flex;align-items:baseline;gap:6px;min-width:0}
+.tw-metric .k{font-size:11px;color:var(--tw-muted);white-space:nowrap;line-height:1.4}
+.tw-metric .v{font-family:var(--tw-mono);font-size:15px;font-weight:650;font-variant-numeric:tabular-nums;line-height:1.4}
+.tw-metric-sep{width:1px;height:12px;background:var(--tw-border);align-self:center}
+.tw-metric-note{font-size:11px;color:var(--tw-muted);max-width:460px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+/* B1 历史分布条：近 N 日「每日上涨占比」的分布（不是当日涨跌分档），当前值一根竖线 */
+.tw-distbar{display:flex;align-items:flex-end;gap:1px;height:34px;padding:2px 0}
+.tw-distbar i{flex:1 1 auto;min-width:0;background:var(--tw-border-strong);border-radius:1px}
+.tw-distbar b{width:2px;align-self:stretch;background:var(--tw-accent)}
+.tw-distbar-cap{font-size:10px;color:var(--tw-muted);padding-top:2px}
+
+/* B2 指数卡矩阵：每卡固定 45px 两行（缺价时高度不变，副行给 —） */
+.tw-idxgrid{display:grid;grid-template-columns:minmax(0,1fr);gap:8px}
+@media (min-width:1080px){.tw-idxgrid{grid-template-columns:repeat(3,minmax(0,1fr))}}
+@media (max-width:899px){.tw-idxgrid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+.tw-idxcard{display:flex;flex-direction:column;justify-content:center;gap:2px;height:45px;min-width:0;padding:4px 8px;border-radius:8px;background:var(--tw-bg2);border:1px solid var(--tw-border);cursor:pointer}
+.tw-idxcard:hover{background:var(--tw-hover);border-color:var(--tw-border-strong)}
+.tw-idxcard .r{display:flex;align-items:baseline;justify-content:space-between;gap:6px;min-width:0}
+.tw-idxcard .nm{font-size:11px;color:var(--tw-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tw-idxcard .px{font-family:var(--tw-mono);font-size:15px;font-weight:650;font-variant-numeric:tabular-nums}
+.tw-idxcard .am{font-size:11px;color:var(--tw-muted);font-family:var(--tw-mono);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
+/* B4/B5：数值列封顶（避免 2100px 宽时数字飘到 300px 外）+ 表体高度上限（同时落地 AUDIT-UI P2-4） */
+.tw-board .tw-table td,.tw-board .tw-table th{max-width:200px}
+.tw-board .tw-tablewrap{max-height:min(46vh,360px)}
+
 `
 
 let injected = false

@@ -5,6 +5,7 @@ import React, { useCallback, useEffect, useState } from 'react'
 import type { BoardRow, QuoteRow, StockDetail, TrendData } from '../shared/model.ts'
 import { api } from './api.ts'
 import { UPDOWN_MISSING_NOTE, breadthCells, upDownPair } from './breadthView.ts'
+import { amountMetric, boardSpans, breadthMetrics, percentileBar, shortReason, type MetricItem } from './boardLayout.ts'
 import { dirClass, fmtAmt, fmtBig, fmtPct, fmtPrice, fmtSigned } from './format.ts'
 import { CN_PHASE_LABEL, cnSessionState } from './marketTime.ts'
 import { useNow } from './useNow.ts'
@@ -17,6 +18,12 @@ type Scope = 'industry' | 'concept' | 'etf'
 type Sort = 'pct' | 'money' | 'amount'
 
 const SCOPE_LABEL: Record<Scope, string> = { industry: '行业板块', concept: '概念板块', etf: 'ETF排行' }
+
+/**
+ * 12 栏网格的档位（`docs/DESIGN-DASHBOARD.md` §1）：`≥1080` 为 5/7/12/7/5。
+ * 这里只把档位单点写死；**窄屏由 CSS 的 1080 断点退回单列**（`data-span` 规则在 media query 里）。
+ */
+const SPANS = boardSpans(1440)
 
 export function MarketPage(props: {
   quotes: Record<string, QuoteRow>
@@ -116,7 +123,21 @@ export function MarketPage(props: {
   const sz = quotes['0.399001']
   // 涨跌家数与成交额：任一分量缺失即整格 `—` + 原因（**不用 0 顶替**，见 breadthView.ts）
   const cells = breadthCells(sh, sz)
-  const breadthOk = cells.countsOk
+  /**
+   * 家数优先用**路由给的那一份**：它可能是本插件自行统计出来的（指数行情走备用源时
+   * f104/f105/f106 就没有了 —— 那是用户看到三格 `—` 的原因）。自统计的数字必须
+   * 与上游直接给的区分开：tooltip 会写明来源与统计完成时刻，以及统计口径。
+   */
+  const selfCount = breadth !== null && breadth.current !== null && breadth.current.source !== 'em-index' ? breadth.current : null
+  const up = selfCount !== null ? selfCount.up : cells.countsOk ? cells.up : null
+  const down = selfCount !== null ? selfCount.down : cells.countsOk ? cells.down : null
+  const even = selfCount !== null ? selfCount.even : cells.countsOk ? cells.even : null
+  const breadthOk = up !== null && down !== null && even !== null
+  const countsTitle = selfCount === null
+    ? undefined
+    : `${selfCount.caliber ?? '本插件自行统计的沪深A股家数'}；统计完成于 ${
+        selfCount.asOf !== null ? new Date(selfCount.asOf).toLocaleTimeString('zh-CN', { hour12: false }) : '—'
+      }（与上方"数据时刻"不是同一时刻）`
 
   const cnIndices: Array<{ secid: string; name: string }> = [
     { secid: '1.000001', name: '上证指数' },
@@ -144,117 +165,160 @@ export function MarketPage(props: {
       .finally(() => setDetailLoading(false))
   }
 
-  const statCell = (label: string, v: React.ReactNode, cls?: string): React.ReactElement =>
-    React.createElement('div', { className: 'tw-stat' },
-      React.createElement('div', { className: 'k' }, label),
-      React.createElement('div', { className: `v ${cls ?? ''}` }, v),
+  // ── B1 市场宽度：单行指标条（一行 25px）────────────────────────────
+  // 家数缺失 ⇒ `breadthMetrics` 只回 1 项（三格合并成一格），原因只在该行尾出现一次（V4）
+  const countsView = { countsOk: breadthOk, up, down, even, reason: breadth?.missing[0]?.note ?? cells.reason ?? null }
+  const countItems = breadthMetrics(countsView).map((it, i) =>
+    i === 0 && countsTitle !== undefined ? { ...it, title: countsTitle } : it)
+  const amountItems = [
+    amountMetric('amount-sh', '沪市成交额', sh?.amount ?? null),
+    amountMetric('amount-sz', '深市成交额', sz?.amount ?? null),
+    amountMetric('amount-all', '两市成交额', cells.amountOk ? cells.amount : null),
+  ]
+  const ratioNow = breadth?.current?.ratio
+    ?? (up !== null && down !== null && even !== null && up + down + even > 0 ? up / (up + down + even) : null)
+  const ratioItem: MetricItem = {
+    key: 'ratio',
+    label: '上涨占比',
+    value: ratioNow === null ? null : `${(ratioNow * 100).toFixed(1)}%`,
+    dir: null,
+    reason: ratioNow === null ? '家数不可得，占比不可算（不用 0 顶替）' : null,
+  }
+  const pctItem: MetricItem = {
+    key: 'pct',
+    // 这一段字面量是 build.mjs 的片段（日分位）——不许改字
+    label: '日分位',
+    value: breadth === null || breadth.percentile.pct === null ? null : `${breadth.percentile.pct}%`,
+    dir: null,
+    reason: breadthErr !== null
+      ? `分位接口本次未取到：${breadthErr}（稍后随行情轮询重试）`
+      : breadth === null
+        ? '分位接口本次未取到（稍后随行情轮询重试）'
+        : breadth.percentile.sampleSmall
+          ? `样本不足（已存 ${breadth.percentile.n} 天，需 ≥ ${breadth.minDays} 天）`
+          : '分位不可算',
+  }
+  const metricEl = (it: MetricItem): React.ReactElement =>
+    React.createElement('span', { className: 'tw-metric', key: it.key, ...(it.title === undefined ? {} : { title: it.title }) },
+      React.createElement('span', { className: 'k' }, it.label),
+      it.value === null
+        ? React.createElement('span', {
+            className: 'v',
+            tabIndex: 0,
+            role: 'note',
+            title: it.reason ?? `${it.label}不可得`,
+            'aria-label': it.reason ?? `${it.label}不可得`,
+          }, '—')
+        : React.createElement('span', {
+            className: `v ${it.dir === null ? '' : dirClass(it.dir, redUp)}`,
+          }, it.key.startsWith('amount') ? fmtAmt(Number(it.value)) : it.value),
     )
+  // 历史分布条（B1 第三行）：数据是「近 N 日每日上涨占比」的分布，**不是**当日涨跌分档直方图
+  const dist = percentileBar(breadth?.percentile.samples ?? [], breadth?.percentile.value ?? null)
+  const distEl = React.createElement('div', null,
+    dist.ok
+      ? React.createElement('div', {
+          className: 'tw-distbar',
+          title: `${breadth?.percentile.metric ?? '上涨家数占比'}；近 ${dist.bars.length} 个交易日每日上涨占比的分布，竖线为当前值`,
+        },
+          dist.bars.map((v, i) => React.createElement('i', { key: i, style: { height: `${Math.round(12 + v * 88)}%` } })),
+          React.createElement('b', { style: { left: `${Math.round((dist.at ?? 0) * 100)}%` } }),
+        )
+      : React.createElement('div', {
+          className: 'tw-distbar-cap',
+          tabIndex: 0,
+          role: 'note',
+          title: dist.reason ?? '分布不可得',
+          'aria-label': dist.reason ?? '分布不可得',
+        }, `历史分布 —：${dist.reason ?? ''}`),
+    React.createElement('div', { className: 'tw-distbar-cap' },
+      `近 ${breadth?.percentile.n ?? 0} 日每日上涨占比的分布（不是当日涨跌分档）`),
+  )
 
   return React.createElement(
     'div',
     { className: 'tw-body' },
-    React.createElement('div', { className: 'tw-panel' },
+    // 唯一子容器：12 栏网格（窄屏退回单列，见 styles.ts）
+    React.createElement('div', { className: 'tw-board' },
+    React.createElement('div', { className: 'tw-panel', 'data-span': SPANS.b1 },
       React.createElement('div', { className: 'tw-panel-h' },
         React.createElement('span', { className: 't' }, 'A股全景'),
         React.createElement('span', { className: 'tw-muted' }, '沪深两市'),
       ),
-      React.createElement('div', { className: 'tw-statrow' },
-        statCell('上涨', cells.countsOk ? String(cells.up) : '—', breadthOk ? (redUp ? 'tw-up' : 'tw-down') : ''),
-        statCell('下跌', cells.countsOk ? String(cells.down) : '—', breadthOk ? (redUp ? 'tw-down' : 'tw-up') : ''),
-        statCell('平盘', cells.countsOk ? String(cells.even) : '—'),
-        React.createElement('div', { className: 'tw-stat-sep' }),
-        statCell('两市成交额', cells.amountOk ? `${fmtAmt(cells.amount)}` : '—'),
-        statCell('上证', sh?.price !== undefined && sh?.price !== null ? fmtPrice(sh.price) : '—', dirClass(sh?.chg ?? null, redUp)),
-        statCell('深成', sz?.price !== undefined && sz?.price !== null ? fmtPrice(sz.price) : '—', dirClass(sz?.chg ?? null, redUp)),
-      ),
-      // 缺失必须能被键盘/触屏读到（不能只挂在 title 上：那是鼠标专属）
-      cells.countsOk
-        ? null
-        : React.createElement('div', {
-            className: 'tw-hint',
-            style: { color: 'var(--tw-up)' },
-            tabIndex: 0,
-            role: 'note',
-            'aria-label': `涨跌家数本次未取到：${cells.reason}`,
-          }, `涨跌家数本次未取到：${cells.reason}`),
-      // P1-8：分位必须带口径与样本量一起读；样本不足或取不到时不显示分位（而不是显示 0）
-      breadthErr !== null
-        ? React.createElement('div', { className: 'tw-hint', style: { color: 'var(--tw-up)' } }, `涨跌家数分位本次未取到：${breadthErr}（稍后随行情轮询自动重试）`)
-        : breadth !== null
-          ? React.createElement('div', { className: 'tw-hint', style: { display: 'flex', gap: 12, flexWrap: 'wrap' } },
-              breadth.current === null
-                ? React.createElement('span', { style: { color: 'var(--tw-up)' } }, breadth.missing[0]?.note ?? '涨跌家数不可用')
-                : React.createElement(React.Fragment, null,
-                    React.createElement('span', null,
-                      `上涨占比 ${breadth.percentile.value === null ? '—' : (breadth.percentile.value * 100).toFixed(1) + '%'}`),
-                    breadth.percentile.pct === null
-                      ? React.createElement('span', { className: 'tw-muted' },
-                          breadth.percentile.sampleSmall
-                            ? `分位样本不足（已存 ${breadth.percentile.n} 个交易日，需 ≥ ${breadth.minDays}）—— 样本太少的"分位"是噪音，故不显示`
-                            : '分位不可算')
-                      : React.createElement('span', {
-                          title: `${breadth.percentile.metric}；分位定义：历史中 ≤ 当前值的比例（0 低 / 100 高）`,
-                        }, `近 ${breadth.percentile.n} 日分位 ${breadth.percentile.pct}%`),
-                  ),
-              breadth.storedDays > 0
-                ? React.createElement('span', { className: 'tw-muted' }, `· 每日快照已存 ${breadth.storedDays} 天（收盘后记录；窗口 ${breadth.window} 日）`)
-                : React.createElement('span', { className: 'tw-muted' }, '· 尚无历史快照（每个交易日收盘后记一条，累积到 5 天后开始显示分位）'),
-            )
+      // B1 市场宽度：单行指标条（25px/行）。家数缺失时三格**合并成一格**，
+      // 原因只在该行尾出现一次（V4），不再用三张 60px 的 `—` 卡占掉半个首屏。
+      React.createElement('div', { className: 'tw-metricrow' },
+        countItems.map((it) => metricEl(it)),
+        countItems.length === 1
+          ? React.createElement('span', {
+              className: 'tw-metric-note',
+              tabIndex: 0,
+              role: 'note',
+              title: countItems[0].reason ?? '',
+              'aria-label': countItems[0].reason ?? '',
+            }, shortReason(countItems[0].reason ?? ''))
           : null,
-      React.createElement('div', { className: 'tw-tablewrap' },
-        React.createElement('table', { className: 'tw-table', style: { minWidth: 560 } },
-          React.createElement('thead', null,
-            React.createElement('tr', null,
-              React.createElement('th', null, '指数'),
-              React.createElement('th', null, '现价'),
-              React.createElement('th', null, '涨跌'),
-              React.createElement('th', null, '幅度'),
-              React.createElement('th', null, '上涨/下跌'),
-              React.createElement('th', null, '成交额'),
+      ),
+      React.createElement('div', { className: 'tw-metricrow' }, amountItems.map((it) => metricEl(it))),
+      React.createElement('div', { className: 'tw-metricrow' },
+        metricEl(ratioItem),
+        React.createElement('span', { className: 'tw-metric-sep' }),
+        metricEl(pctItem),
+      ),
+      distEl,
+    ),
+    // B2 指数矩阵：6 张 45px 卡（与行情条**同一轮**数据，零新增请求）；
+    // 上/下跌家数常缺，放 aria-label（占一行不值），缺价时副行给 `—`、卡高不变
+    React.createElement('div', { className: 'tw-panel', 'data-span': SPANS.b2 },
+      React.createElement('div', { className: 'tw-panel-h' },
+        React.createElement('span', { className: 't' }, '指数'),
+        React.createElement('span', { className: 'tw-muted' }, '点击看详情'),
+      ),
+      React.createElement('div', { className: 'tw-idxgrid' },
+        cnIndices.map((it) => {
+          const q = quotes[it.secid]
+          const ud = upDownPair(q?.up, q?.down)
+          const udNote = ud.ok ? `上涨 ${q?.up} / 下跌 ${q?.down}` : UPDOWN_MISSING_NOTE
+          const price = q?.price ?? null
+          const pct = q?.pct
+          return React.createElement('div', {
+            key: it.secid,
+            className: 'tw-idxcard',
+            tabIndex: 0,
+            role: 'button',
+            'aria-label': `${it.name} 详情；${udNote}`,
+            onClick: () => openDetail(it.secid),
+            onKeyDown: (e: React.KeyboardEvent) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault()
+                openDetail(it.secid)
+              }
+            },
+          },
+            React.createElement('div', { className: 'r' },
+              React.createElement('span', { className: 'nm' }, it.name),
+              React.createElement('span', {
+                className: `tw-chg-chip ${pct === null || pct === undefined ? 'tw-chip-flat' : (pct >= 0) === redUp ? 'tw-chip-up' : 'tw-chip-down'}`,
+              }, fmtPct(pct ?? null)),
             ),
-          ),
-          React.createElement('tbody', null,
-            cnIndices.map((it) => {
-              const q = quotes[it.secid]
-              const cls = dirClass(q?.chg ?? null, redUp)
-              return React.createElement('tr', {
-                key: it.secid,
-                className: 'tw-rowhover',
-                style: { cursor: 'pointer' },
-                tabIndex: 0,
-                role: 'button',
-                'aria-label': `${it.name} 详情`,
-                onClick: () => openDetail(it.secid),
-                onKeyDown: (e: React.KeyboardEvent) => {
-                  if (e.key === 'Enter' || e.key === ' ') {
-                    e.preventDefault()
-                    openDetail(it.secid)
-                  }
-                },
-              },
-                React.createElement('td', { className: 'tl' }, it.name),
-                React.createElement('td', null, fmtPrice(q?.price ?? null)),
-                React.createElement('td', { className: cls }, fmtSigned(q?.chg ?? null)),
-                React.createElement('td', null, React.createElement('span', { className: `tw-chg-chip ${q?.pct === null || q?.pct === undefined ? 'tw-chip-flat' : (q.pct >= 0) === redUp ? 'tw-chip-up' : 'tw-chip-down'}` }, fmtPct(q?.pct ?? null))),
-                React.createElement('td', { className: 'tw-dim' },
-                  // 上涨/下跌是同一个事实的两个分量：一侧缺失就整格 —（否则会读成"没有一只下跌"）
-                  upDownPair(q?.up, q?.down).ok
-                    ? React.createElement(React.Fragment, null,
-                        React.createElement('span', { className: dirClass(1, redUp) }, String(q?.up)),
-                        ' / ',
-                        React.createElement('span', { className: dirClass(-1, redUp) }, String(q?.down)),
-                      )
-                    : React.createElement('span', { tabIndex: 0, role: 'note', 'aria-label': UPDOWN_MISSING_NOTE, title: UPDOWN_MISSING_NOTE }, '—'),
-                ),
-                React.createElement('td', null, fmtAmt(q?.amount ?? null)),
-              )
-            }),
-          ),
-        ),
+            React.createElement('div', { className: 'r' },
+              price === null
+                ? React.createElement('span', {
+                    className: 'px',
+                    tabIndex: 0,
+                    role: 'note',
+                    title: '本轮行情未给出该指数现价',
+                    'aria-label': '本轮行情未给出该指数现价',
+                  }, '—')
+                : React.createElement('span', { className: `px ${dirClass(q?.chg ?? null, redUp)}` }, fmtPrice(price)),
+              React.createElement('span', { className: 'am' }, fmtAmt(q?.amount ?? null)),
+            ),
+          )
+        }),
       ),
     ),
-    React.createElement(RescuePanel, { prefs, redUp, onPrefs: props.onPrefs }),
-    React.createElement('div', { className: 'tw-panel' },
+    React.createElement(RescuePanel, { prefs, redUp, onPrefs: props.onPrefs, span: SPANS.b3 }),
+    React.createElement('div', { className: 'tw-panel', 'data-span': SPANS.b4 },
       React.createElement('div', { className: 'tw-panel-h' },
         React.createElement('span', { className: 't' }, '板块 / 资金 / ETF'),
         React.createElement('div', { className: 'tw-seg' },
@@ -311,7 +375,7 @@ export function MarketPage(props: {
           )
         : null,
       React.createElement('div', { className: 'tw-tablewrap' },
-        React.createElement('table', { className: 'tw-table', style: { minWidth: scope === 'etf' ? 500 : 640 } },
+        React.createElement('table', { className: 'tw-table', style: { minWidth: scope === 'etf' ? 560 : 720 } },
           React.createElement('thead', null,
             React.createElement('tr', null,
               React.createElement('th', null, scope === 'etf' ? '代码' : '#'),
@@ -390,7 +454,7 @@ export function MarketPage(props: {
           : null,
       ),
     ),
-    React.createElement('div', { className: 'tw-panel' },
+    React.createElement('div', { className: 'tw-panel', 'data-span': SPANS.b5 },
       React.createElement('div', { className: 'tw-panel-h' },
         React.createElement('span', { className: 't' }, '个股 / 基金查询'),
       ),
@@ -405,6 +469,7 @@ export function MarketPage(props: {
           : detail !== null
             ? React.createElement(DetailCard, { detail, trend, redUp })
             : React.createElement('div', { className: 'tw-hint', style: { marginTop: 6 } }, '点击指数、ETF 行或搜索后显示详情（价格/分时/基础数据）。'),
+    ),
     ),
     pick !== null && detail !== null
       ? React.createElement(DetailModal, { detail, trend, redUp, onClose: () => { setPick(null); setDetail(null); setTrend(null) } })

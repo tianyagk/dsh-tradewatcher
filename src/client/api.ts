@@ -74,7 +74,21 @@ export const api = {
   },
   /** 涨跌家数 + 历史分位（P1-8） */
   breadth(): Promise<{
-    current: { up: number; down: number; even: number; amount: number; ratio: number | null; asOf: number | null; source: string } | null
+    current: {
+      up: number
+      down: number
+      even: number
+      amount: number
+      ratio: number | null
+      /** 数字时刻：源 A = 行情时刻；自统计 = **统计完成时刻**（语义不同，界面要分别标） */
+      asOf: number | null
+      /** `em-index` = 上游直接给的；`em-clist` / `page-scan` = 本插件自行统计 */
+      source: string
+      /** 自统计时给出的统计口径（含哪些板块、平盘怎么界定）；源 A 为 null */
+      caliber?: string | null
+      /** 自统计的顺序不变量自检结论（排查用） */
+      checks?: string[]
+    } | null
     percentile: { metric: string; value: number | null; n: number; pct: number | null; sampleSmall: boolean; samples: number[] }
     window: number
     minDays: number

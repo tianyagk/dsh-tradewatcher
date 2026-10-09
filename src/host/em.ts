@@ -25,6 +25,7 @@ import type {
   TrendPoint,
 } from '../shared/model.ts'
 import { MISSING_TIER_ADVICE, SECID_RE, normalizeTrendSeries } from '../shared/model.ts'
+import { BREADTH_HS_A_FS, BREADTH_PAGE_SIZE, type CountPage } from './breadthCount.ts'
 import { stitchTrendDays } from '../shared/trendStitch.ts'
 import { TREND_ARCHIVE_KEEP_DAYS, archiveTrendDays, loadTrendArchive, type TrendArchiveEntry } from './trendArchive.ts'
 import { mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
@@ -1830,6 +1831,26 @@ const ETF_FS = 'b:MK0021,b:MK0023,b:MK0022'
 const BOARD_FIELDS = 'f2,f3,f4,f5,f6,f8,f12,f13,f14,f62,f104,f105,f128,f136'
 
 /** Sector/ETF ranking. sort: pct (default) | money (boards) | amount (ETF). */
+/**
+ * 东财 clist 的**一页**（涨跌幅），供涨跌家数自统计（源 B）用。
+ *
+ * `pz` 被上游截在 100（实测），所以调用方按 100 分页；`fs` 固定为沪深A股（不含北交所，
+ * 口径写在 `BREADTH_COUNT_CALIBER` 里）。返回 `rows` = 该页每只的涨跌幅（f3），`total` = 上游给的总数。
+ */
+export async function fetchClistPctPage(pn: number, pz: number): Promise<CountPage> {
+  const p = Math.max(1, Math.round(pn))
+  const z = Math.max(1, Math.min(BREADTH_PAGE_SIZE, Math.round(pz)))
+  const path = `/api/qt/clist/get?pn=${p}&pz=${z}&po=1&np=1&fltt=2&invt=2&fid=f3&fs=${encodeURIComponent(BREADTH_HS_A_FS)}&fields=f3,f12`
+  const json = await fetchAny(QUOTE_HOSTS, path)
+  const body = bodyOf(json)
+  const rawTotal = body?.data?.total
+  const total = typeof rawTotal === 'number' && Number.isFinite(rawTotal) ? rawTotal : null
+  const rows = diffList(json)
+    .map((r) => num(r.f3))
+    .filter((v): v is number => v !== null)
+  return { rows, total }
+}
+
 export async function fetchBoard(
   scope: BoardScope,
   sort: 'pct' | 'money' | 'amount',
