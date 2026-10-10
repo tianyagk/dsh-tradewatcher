@@ -1,3 +1,4 @@
+import type { ToneRow as ToneRowDto } from './stripTone.ts'
 /** Same-origin JSON calls to the /tradewatcher/* host routes. */
 import type {
   BoardRow,
@@ -103,6 +104,14 @@ export const api = {
    * YTD =（现价 − 本年内第一个交易日收盘价）÷ 该收盘价 × 100%，前复权序列。
    * 缺失项在 `rows[].why` 与 `missing[]` 里都给出原因（不用 0 顶替）。
    */
+  /** 五档状态 badge（宿主按日 memo；取不到/样本不足时 rows 里 level=null + why） */
+  tones(secids: string[]): Promise<{ asOf: number | null; stale: boolean; source: string; day?: string; rows: ToneRowDto[]; missing: Array<{ what: string; why: string; note: string }>; requested: number; truncated: boolean; limit: number }> {
+    const ids = [...new Set(secids)].join(',')
+    if (ids === '') {
+      return Promise.resolve({ asOf: null, stale: false, source: 'none', rows: [], missing: [], requested: 0, truncated: false, limit: 0 })
+    }
+    return request(`/tradewatcher/tones?ids=${encodeURIComponent(ids)}`)
+  },
   ytd(secids: string[]): Promise<YtdPayload> {
     const ids = [...new Set(secids)].join(',')
     if (ids === '') {

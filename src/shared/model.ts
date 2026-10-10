@@ -8,6 +8,9 @@
 export const SECID_RE = /^\d{1,3}\.[A-Za-z0-9]+$/
 
 /** TopBar strips: three groups of instruments. */
+/** 卡片类型：`yield`＝收益率（上行＝债券价格下跌），`price`＝价格/指数 */
+export type StripItemKind = 'yield' | 'price'
+
 export const TW_ROWS = [
   {
     key: 'cn',
@@ -37,6 +40,18 @@ export const TW_ROWS = [
     ],
   },
   {
+    // 国债：中国可用（价格指数）；美/日/德/英是**收益率**（当前上游不可达 ⇒ 如实 — + 原因，绝不用代理）
+    key: 'bond',
+    label: '国债',
+    items: [
+      { secid: '1.000012', name: '中国国债', kind: 'price' },
+      { secid: '171.US10Y', name: '美国10Y', kind: 'yield' },
+      { secid: '171.JP10Y', name: '日本10Y', kind: 'yield' },
+      { secid: '171.DE10Y', name: '德国10Y', kind: 'yield' },
+      { secid: '171.GB10Y', name: '英国10Y', kind: 'yield' },
+    ],
+  },
+  {
     key: 'commodity',
     label: '大宗商品',
     items: [
@@ -51,6 +66,19 @@ export const TW_ROWS = [
     ],
   },
 ] as const
+
+/**
+ * 卡片类型（国债组显式标 `kind`；其余按 secid 习惯判定）。
+ * `171.*` 是**收益率**（上行＝债券价格下跌），必须标类型，否则同屏"中国涨、美国跌"无法解释。
+ */
+export function stripKindOf(secid: string): StripItemKind {
+  for (const row of TW_ROWS) {
+    for (const it of row.items) {
+      if (it.secid === secid && 'kind' in it) return (it as { kind?: StripItemKind }).kind ?? 'price'
+    }
+  }
+  return secid.startsWith('171.') ? 'yield' : 'price'
+}
 
 /** Flat list used by the client's default quote watcher. */
 export const TW_ALL_SECIDS: string[] = TW_ROWS.flatMap((row) =>
@@ -597,6 +625,13 @@ export interface PortPrefs {
   /** 固定汇率表（1 外币 = N 人民币），仅 fxMode='fixed' 时生效 */
   fxRates?: FxRates
   /**
+   * 行情卡片配置：**存隐藏集合**（`hidden: string[]` = 被隐藏的 secid）。
+   *
+   * 为什么存隐藏而不是显示：老 profile 没有这个键 ⇒ `hidden=[]` ⇒ 全部可见，
+   * 且**将来新增的卡片默认可见**。存"显示集合"会让老 profile 永远看不到后加的国债卡。
+   */
+  stripCfg?: { hidden: string[] }
+  /**
    * 每日分时归档（多日拼接的数据来源，默认开）。
    *
    * 关掉后：不再往 `trends/<secid>/` 写任何文件（已有的不动），五日在没有真实多日源的市场
@@ -619,6 +654,8 @@ export const DEFAULT_PREFS: PortPrefs = {
   fxMode: 'none',
   fxRates: {},
   trendArchive: true,
+  /** 行情卡片配置：存**隐藏集合**（老 profile 无此键 ⇒ 全可见；将来新增的卡片默认可见） */
+  stripCfg: { hidden: [] },
 }
 
 /**

@@ -213,9 +213,21 @@ function Dashboard(): React.ReactElement {
     }
   }, [])
 
+  /**
+   * 偏好写入：**乐观更新 + 失败回滚**。
+   *
+   * 此前是 `.catch(() => undefined)` —— 保存失败时本地看着一切正常、刷新后全丢，
+   * 全程无提示（宿主白名单漏 `stripCfg` 就是这么被掩盖了整轮）。现在失败要①回滚②说一声。
+   * 回滚基准取自**本次渲染闭包里的 `prefs`**（失败路径够用；连续多次写入后同时失败可能回滚到偏旧值，
+   * 这是有意的取舍：宁可回到一个确定存在的旧配置，也不要留一个"看起来生效其实没落盘"的状态）。
+   */
   const setPrefs = (patch: Partial<PortPrefs>): void => {
+    const before = prefs ?? DEFAULT_PREFS
     setPrefsState((prev) => ({ ...(prev ?? DEFAULT_PREFS), ...patch }))
-    api.setPrefs(patch).catch(() => undefined)
+    void api.setPrefs(patch).catch((err: unknown) => {
+      setPrefsState(before)
+      toast.show(`偏好保存失败（已回滚本次修改）：${String(err).slice(0, 60)}`)
+    })
   }
 
   // 单实例 toast：视图档位、成本口径等"一次性动作的说明"共用（见 ui.tsx 的说明）

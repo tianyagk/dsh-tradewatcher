@@ -142,17 +142,21 @@ color-scheme:dark}
   .tw-dkv .v, .tw-rescue-card-grid .v, .tw-table td,
   .tw-chart-pct,
   .tw-chart-tip-v,
+  .tw-tone,
+  .tw-cfg-count,
   .tw-pos-title small,
   .tw-caliber, .tw-chartnote, .tw-zoom-bar, .tw-topmeta .tw-uptime){
   filter:blur(3.2px);transition:filter .12s}
 .tw-root[data-blur=1] :is(.tw-qcard, .tw-wrow, .tw-posrow, tr, .tw-pop, .tw-stat, .tw-pps,
-  .tw-dkv, .tw-rescue-card-grid, .tw-panel):hover :is(.tw-qcard .px, .tw-qcard .chg, .tw-chg-chip,
+  .tw-dkv, .tw-rescue-card-grid, .tw-panel, .tw-cfg):hover :is(.tw-qcard .px, .tw-qcard .chg, .tw-chg-chip,
   .tw-stat .v, .tw-pps .v, .tw-pps .meta, .tw-pos-price .px, .tw-pos-price .meta,
   .tw-pop .ph .px, .tw-pop .ph .tag, .tw-pop .pl,
   .tw-group-h .gsum, .tw-wrow .wq, .tw-wrow .tw-num, .tw-ytd, .tw-gh-metrics,
   .tw-dkv .v, .tw-rescue-card-grid .v, .tw-table td,
   .tw-chart-pct,
   .tw-chart-tip-v,
+  .tw-tone,
+  .tw-cfg-count,
   .tw-pos-title small,
   .tw-caliber, .tw-chartnote, .tw-zoom-bar){
   filter:none}
@@ -421,6 +425,48 @@ color-scheme:dark}
 .tw-rescue-pool{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:3px 10px;font-size:11.5px}
 .tw-rescue-pool-item{display:flex;align-items:center;gap:5px;color:var(--tw-muted);cursor:pointer}
 .tw-rescue-pool-item[data-on=true]{color:var(--tw-text)}
+
+/* 行情卡片五档状态 badge（设计 §4）—— 独立色系（靛蓝→青→石板灰→紫→品红），不含红/绿/琥珀。
+   底色＝档位色 12%（浅）/16%（深），文字与边框＝档位色本体；色盲兜底是**文字本身**。 */
+.tw-tone{position:absolute;top:4px;right:4px;height:14px;line-height:12px;padding:0 5px;border-radius:7px;
+  font-size:10px;border:1px solid currentColor;background:currentColor;background-clip:padding-box;
+  pointer-events:none;white-space:nowrap}
+/* 让位：只动名称行的内边距与延迟点位置，卡片外框尺寸逐像素不变（价格/涨跌行不被压） */
+.tw-qcard[data-tone] .nm{padding-right:40px}
+/* 延迟绿点左移让位（badge 占右 4..36px，点占 42..48px）；无 tone 时保持原位 */
+.tw-qcard[data-tone] .tw-qdot{right:42px}
+.tw-qcard .tw-kind{color:var(--tw-muted);font-size:9px;margin-left:3px}
+/* 五档色（浅色主题） */
+.tw-tone[data-tone=过冷]{color:#2B4C9B;background:#2B4C9B1f;border-color:#2B4C9B}
+.tw-tone[data-tone=偏冷]{color:#176B87;background:#176B871f;border-color:#176B87}
+.tw-tone[data-tone=适中]{color:#5A6270;background:#5A62701f;border-color:#5A6270}
+.tw-tone[data-tone=偏热]{color:#7B3FA8;background:#7B3FA81f;border-color:#7B3FA8}
+.tw-tone[data-tone=过热]{color:#A32C7A;background:#A32C7A1f;border-color:#A32C7A}
+/* 深色主题：同色系更亮的一档（对比度 ≥4.5:1，见设计 §4 的实算） */
+.tw-root[data-theme=dark] .tw-tone[data-tone=过冷]{color:#7EA6FF;background:#7EA6FF29;border-color:#7EA6FF}
+.tw-root[data-theme=dark] .tw-tone[data-tone=偏冷]{color:#57C7E0;background:#57C7E029;border-color:#57C7E0}
+.tw-root[data-theme=dark] .tw-tone[data-tone=适中]{color:#A7B0C0;background:#A7B0C029;border-color:#A7B0C0}
+.tw-root[data-theme=dark] .tw-tone[data-tone=偏热]{color:#C4A2FF;background:#C4A2FF29;border-color:#C4A2FF}
+.tw-root[data-theme=dark] .tw-tone[data-tone=过热]{color:#F08BC7;background:#F08BC729;border-color:#F08BC7}
+
+/* 行情卡片配置窗（设计 §1）：z-index 1180 ⇒ 高于 .tw-menu(1150)/.tw-suggest(1100)，
+   低于 .tw-mask(1200)；打开时父组件隐藏悬浮卡（.tw-pop 是 9999）。 */
+.tw-cfg{position:fixed;z-index:1180;max-height:min(70vh,520px);overflow:auto;border-radius:12px;
+  background:var(--tw-card);border:1px solid var(--tw-border-strong);box-shadow:0 8px 30px rgba(0,0,0,.28);
+  backdrop-filter:blur(6px);padding:0 0 8px}
+.tw-cfg-h{display:flex;align-items:center;gap:8px;padding:8px 10px;cursor:move;touch-action:none;
+  border-bottom:1px solid var(--tw-border);position:sticky;top:0;background:inherit}
+.tw-cfg-title{flex:1;font-weight:600;font-size:12px}
+.tw-cfg-tools{display:flex;gap:6px;padding:8px 10px 4px}
+.tw-cfg-group{padding:4px 10px}
+.tw-cfg-grouphead{display:flex;align-items:center;gap:6px;font-size:12px;font-weight:600;cursor:pointer}
+.tw-cfg-groupt{flex:1}
+.tw-cfg-sub{font-size:10px;color:var(--tw-muted);font-family:var(--tw-mono)}
+.tw-cfg-items{display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:2px 8px;
+  max-height:220px;overflow:auto;padding:2px 0 2px 18px}
+.tw-cfg-item{display:flex;align-items:center;gap:5px;font-size:11.5px;cursor:pointer}
+.tw-cfg-foot{display:flex;align-items:center;gap:8px;padding:6px 10px 0;border-top:1px solid var(--tw-border)}
+.tw-cfg-count{font-family:var(--tw-mono);font-size:11px}
 
 /* 图表细节卡（跟随光标的半透明卡片）+ 光标层容器 —— task-28 */
 .tw-cursorwrap{position:relative}

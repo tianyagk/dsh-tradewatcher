@@ -2,7 +2,7 @@
  */
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { CorporateAction, MissingField, MutatePortBody, MutateWatchBody, QuoteRow } from '../shared/model.ts'
-import { RESCUE_LEVEL_LABEL, SECID_RE } from '../shared/model.ts'
+import { stripKindOf, RESCUE_LEVEL_LABEL, SECID_RE } from '../shared/model.ts'
 import { isTrustedApiRequest } from './fence.ts'
 import * as em from './em.ts'
 import { assemblePortfolio, ledgerViews } from './portfolio.ts'
@@ -15,6 +15,7 @@ import { HttpError, httpStatusOf, retryAfterSecondsOf } from './http.ts'
 import { describeConflicts, makeBundle, verifyBundle } from './backup.ts'
 import { detectAnomalies } from './anomaly.ts'
 import { YTD_MAX_IDS, computeYtds } from './ytd.ts'
+import { TONE_MAX_IDS, computeTones } from './tonesService.ts'
 import { BREADTH_MIN_DAYS, BREADTH_WINDOW, BreadthStore, breadthUsable, percentileOf, upRatio } from './breadth.ts'
 import { BREADTH_COUNT_CALIBER, BreadthCountCache, resolveBreadthCount } from './breadthCount.ts'
 import { dayOf } from './time.ts'
@@ -380,6 +381,41 @@ export function makeTradeRoutes(
           send(res, 200, { ...result, source: q.provenance.source, stale: q.provenance.stale })
         } catch (error) {
           fail(res, error)
+        }
+      },
+    },
+    {
+      kind: 'exact',
+      path: '/tradewatcher/tones',
+      /**
+       * 五档状态 badge：`ids=` 逗号分隔（上限 `TONE_MAX_IDS`）。**每日一个**（按日 memo），
+       * 复用 `em.fetchKline` 的磁盘缓存；取不到/样本不足一律 `level: null` + 原因，
+       * **绝不用「适中」冒充缺失**（见 `host/tones.ts` 的注释）。
+       */
+      handler: async (req, res) => {
+        if (!needGate(req, res)) return
+        try {
+          const { ids: all, requested, truncated } = splitIds(queryOf(req).get('ids'))
+          const ids = all.slice(0, TONE_MAX_IDS)
+          if (ids.length === 0) {
+            send(res, 200, { asOf: null, stale: false, source: 'none', rows: [], missing: [], requested, truncated: false, limit: TONE_MAX_IDS })
+            return
+          }
+          const items = ids.map((secid) => ({ secid, kind: stripKindOf(secid) }))
+          const { rows, missing, day } = await computeTones(items)
+          send(res, 200, {
+            asOf: Date.now(),
+            stale: false,
+            source: 'em-kline',
+            day,
+            missing,
+            rows,
+            requested,
+            truncated: truncated || all.length > ids.length,
+            limit: TONE_MAX_IDS,
+          })
+        } catch (error) {
+          send(res, 200, { asOf: null, stale: false, source: 'none', rows: [], missing: [{ what: '五档状态', why: 'transient', note: String(error).slice(0, 120) }], requested: 0, truncated: false, limit: TONE_MAX_IDS })
         }
       },
     },

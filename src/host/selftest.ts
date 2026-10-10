@@ -505,8 +505,11 @@ async function main(): Promise<void> {
     {
       const presets = TW_ALL_SECIDS
       const covered = presets.filter((s) => sinaSymbol(s) !== null || tencentCode(s) !== null)
-      ok(presets.length === 23, `预设标的数 ${presets.length}`)
-      ok(covered.length >= 20, `可用兜底的预设数 ${covered.length}/23（要求 ≥20）`)
+      // 28 = 6 A股指数 + 9 国际市场 + 8 大宗商品 + 5 国债（v0.39.0 加国债组）
+      // 国债那 5 张里，`1.000012` 有腾讯兜底；四个 `171.*` **故意**只有东财一路
+      //（调研实测：171.* 无腾讯/新浪映射 ⇒ 东财不可达时如实 `—` + 原因，绝不代理）
+      ok(presets.length === 28, `预设标的数 ${presets.length}`)
+      ok(covered.length >= 20, `可用兜底的预设数 ${covered.length}/28（要求 ≥20）`)
       ok(sinaCovered(presets) >= 13, `新浪专供（国际指数 + 期货/外盘商品）${sinaCovered(presets)} 只`)
       ok(sinaSymbol('113.rbm') === 'nf_RB0' && sinaSymbol('122.XAU') === 'hf_XAU' && sinaSymbol('100.N225') === 'int_nikkei', '商品/国际指数映射正确')
       ok(sinaSymbol('100.KOSPI200') === null, '韩国 KOSPI200 无兜底 → 如实返回 null（不编代码）')

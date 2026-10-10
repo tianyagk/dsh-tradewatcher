@@ -468,6 +468,7 @@ export class DataStore {
         // 排序偏好来自明文文件（可被手改）：装载时按白名单收敛，非法键回退默认而不是带进界面
         watchSort: safeSortPref(loaded.watchSort, WATCH_SORT_KEYS, DEFAULT_PREFS.watchSort),
         portSort: safeSortPref(loaded.portSort, PORT_SORT_KEYS, DEFAULT_PREFS.portSort),
+        stripCfg: normalizeStripCfg(loaded.stripCfg),
         // 老 prefs.json 没有 viewMode → 回退完整视图（启动不该因一个坏偏好失败）
         viewMode: loaded.viewMode === 'compact' || loaded.viewMode === 'incognito' ? loaded.viewMode : 'full',
         panelOpacity: normalizePanelOpacity(loaded.panelOpacity, DEFAULT_PREFS.panelOpacity ?? 1),
@@ -582,6 +583,7 @@ export class DataStore {
       rescue: { ...DEFAULT_PREFS.rescue, ...(loaded.rescue ?? {}) },
       watchSort: safeSortPref(loaded.watchSort, WATCH_SORT_KEYS, DEFAULT_PREFS.watchSort),
       portSort: safeSortPref(loaded.portSort, PORT_SORT_KEYS, DEFAULT_PREFS.portSort),
+      stripCfg: normalizeStripCfg(loaded.stripCfg),
       viewMode: loaded.viewMode === 'compact' || loaded.viewMode === 'incognito' ? loaded.viewMode : 'full',
     }
     return { backedUp }
@@ -1053,6 +1055,10 @@ export class DataStore {
     if (patch.watchSort !== undefined) this.prefs.watchSort = normalizeSortPref(patch.watchSort, WATCH_SORT_KEYS, this.prefs.watchSort, 'watchSort')
     if (patch.portSort !== undefined) this.prefs.portSort = normalizeSortPref(patch.portSort, PORT_SORT_KEYS, this.prefs.portSort, 'portSort')
     if (patch.rescue !== undefined) this.prefs.rescue = normalizeRescuePrefs(patch.rescue, this.prefs.rescue)
+    // 行情卡片配置：**存隐藏集合**。宽容过滤（非数组⇒空、混入非字符串丢掉、去重、上界 400），
+    // 不抛错 —— 与 fxRates/rescue 的"宽容归一"同族；全仓曾漏掉这个分支，导致客户端发来的
+    // stripCfg 被静默丢弃（刷新后配置全丢，P0）。
+    if (patch.stripCfg !== undefined) this.prefs.stripCfg = normalizeStripCfg(patch.stripCfg)
     await this.commit([['prefs.json', this.prefs]])
     return this.getPrefs()
   }
@@ -1093,6 +1099,14 @@ function normalizeSortPref<K extends string>(
 }
 
 /** 装载时的宽容版本：非法值回退默认（启动不该因为一个坏偏好而失败） */
+/** 行情卡片配置（隐藏集合）的归一：非数组 ⇒ 空；只留字符串、去重、上界 400（与装载宽容同规则） */
+export function normalizeStripCfg(raw: unknown): { hidden: string[] } {
+  const o = raw as { hidden?: unknown } | null | undefined
+  const list = Array.isArray(o?.hidden) ? o.hidden : []
+  const hidden = list.filter((x): x is string => typeof x === 'string' && x.trim() !== '')
+  return { hidden: [...new Set(hidden)].slice(0, 400) }
+}
+
 function safeSortPref<K extends string>(raw: unknown, keys: readonly K[], base: SortState<K>): SortState<K> {
   try {
     return normalizeSortPref(raw, keys, base, 'sort')

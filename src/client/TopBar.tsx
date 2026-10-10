@@ -2,7 +2,9 @@
  *  The popup tracks the mouse cursor (flip/clamp vs viewport) and is measured
  *  after each content change so it never runs off screen. */
 import React, { useCallback, useEffect, useRef, useState } from 'react'
-import { TW_ROWS, type QuoteRow, type TrendData, type KlineData } from '../shared/model.ts'
+import { TW_ROWS, stripKindOf, type QuoteRow, type TrendData, type KlineData } from '../shared/model.ts'
+import { StripConfig } from './StripConfig.tsx'
+import { toneBadgeView, visibleCards, type ToneRow } from './stripTone.ts'
 import { chartCache } from './chartCache.ts'
 import { fmtClock, fmtPct, fmtPrice, fmtSigned, dirClass } from './format.ts'
 import { NO_SOURCE_LABEL, NO_SOURCE_TITLE, QUOTE_STATE_COLOR, QUOTE_STATE_LABEL, quoteStateOf, quoteStateTitle, summarizeQuoteStates, type QuoteState } from './quoteState.ts'
@@ -12,6 +14,7 @@ import { Btn, Modal } from './ui.tsx'
 import { PANEL_OPACITY_MAX, PANEL_OPACITY_MIN, normalizePanelOpacity } from '../shared/model.ts'
 import type { PortPrefs } from '../shared/model.ts'
 import { isUsableBaseline } from './trendView.ts'
+import { api } from './api.ts'
 
 interface HoverState {
   secid: string
@@ -368,7 +371,36 @@ export function TopBar(props: {
   }
 
  // 截图/录屏设置（不透明度 + 数字模糊）
+  /** 生效卡片（存隐藏集合：老 profile 缺键 ⇒ 全可见；整组全隐藏 ⇒ 不渲染空组头） */
+  const stripRows = visibleCards(TW_ROWS, prefs.stripCfg?.hidden)
+  const stripIds = stripRows.flatMap((r) => r.items.map((i) => i.secid))
+  const stripKey = stripIds.join(',')
+  useEffect(() => {
+    if (stripKey === '') return
+    let alive = true
+    void api
+      .tones(stripIds)
+      .then((r) => {
+        if (!alive) return
+        const map: Record<string, ToneRow> = {}
+        for (const row of r.rows) map[row.secid] = row as ToneRow
+        setTones(map)
+      })
+      .catch(() => {
+        /* 五档是增益信息：取不到就不显示 badge（绝不猜测），不打断行情 */
+      })
+    return () => {
+      alive = false
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [stripKey])
+
   const [shotOpen, setShotOpen] = useState(false)
+  /** 配置窗开关（组件内 state，不上提、不落 prefs） */
+  const [cfgOpen, setCfgOpen] = useState(false)
+  /** 五档状态：**后到**（首屏先出卡片，badge 不拖慢行情） */
+  const [tones, setTones] = useState<Record<string, ToneRow>>({})
+  const gearRef = useRef<HTMLButtonElement | null>(null)
   const shotModal = shotOpen
     ? React.createElement(Modal, { title: '截图 / 录屏（面板不透明度与数字模糊）', onClose: () => setShotOpen(false) },
         React.createElement('div', { className: 'tw-hint', style: { marginBottom: 8 } },
@@ -469,6 +501,15 @@ export function TopBar(props: {
         }, `备用源 ${alt}`)
       })(),
       React.createElement('button', {
+        ref: gearRef,
+        className: 'tw-iconbtn',
+        onClick: () => setCfgOpen((v) => !v),
+        'aria-expanded': cfgOpen,
+        'aria-haspopup': 'dialog',
+        title: '配置实时行情卡片（Esc 关闭）',
+        'aria-label': '行情卡片配置',
+      }, '⚙'),
+      React.createElement('button', {
         className: 'tw-iconbtn',
         onClick: () => setShotOpen(true),
         title: `截图/录屏：面板不透明度 ${Math.round(opacity * 100)}% · 数字模糊${blurDigits ? '已开' : '关'}`,
@@ -488,7 +529,7 @@ export function TopBar(props: {
         'aria-label': '刷新行情',
       }, '⟳'),
     ),
-    TW_ROWS.map((row) =>
+    stripRows.map(({ row, items }) =>
       React.createElement(
         'div',
         { key: row.key, className: 'tw-strip' },
@@ -496,18 +537,25 @@ export function TopBar(props: {
         React.createElement(
           'div',
           { className: 'tw-strip-cards', onMouseLeave: scheduleClose },
-          (row.items as ReadonlyArray<{ secid: string; name: string }>).map((it) => {
+          items.map((it) => {
+            const kind = stripKindOf(it.secid)
+            const isYield = kind === 'yield'
+            const tone = toneBadgeView(tones[it.secid])
             const q = quotes[it.secid]
             const price = q?.price ?? null
             const cls = dirClass(q?.chg ?? null, prefs.redUp)
             const pctText = q?.pct ?? null
             const st = stateOf(it.secid)
+            /** 收益率：副值 ±bp（必带符号）；**不套红绿**（上行 ≠ 债券走强） */
+            const bpText = q?.chg === null || q?.chg === undefined ? '—' : `${q.chg * 100 >= 0 ? '+' : ''}${(q.chg * 100).toFixed(1)}bp`
             return React.createElement(
               'div',
               {
                 key: it.secid,
                 className: 'tw-qcard',
                 'data-state': st,
+                // 有 badge 时才让位（.tw-qcard[data-tone] .nm 的内边距规则据此生效）
+                'data-tone': tone.text === null ? undefined : tone.dataTone,
                 tabIndex: 0,
                 role: 'button',
                 title: `${QUOTE_STATE_LABEL[st]} · ${it.name}：点击打开详情（分时/五日/日K/周K/月K/年K）\n${quoteStateTitle(st, q, prefs.refreshSec)}`,
@@ -532,13 +580,25 @@ export function TopBar(props: {
                 style: { background: QUOTE_STATE_COLOR[st] },
                 'aria-label': QUOTE_STATE_LABEL[st],
               }),
-              React.createElement('div', { className: 'nm' }, it.name),
-              React.createElement('div', { className: 'px ' + (price === null ? 'tw-flat' : cls) }, fmtPrice(price)),
+              // badge 在**卡片右上角**（绝对定位，不占布局、不改卡片尺寸）；口径长句已并入卡片 title/aria
+              tone.text === null
+                ? null
+                : React.createElement('span', {
+                    className: 'tw-tone', 'data-tone': tone.dataTone, 'aria-hidden': true, title: tone.detail,
+                  }, tone.text),
+              React.createElement('div', { className: 'nm' }, it.name,
+                React.createElement('span', { className: 'tw-kind', title: isYield ? '收益率（上行＝债券价格下跌）' : '价格型（指数/ETF）' }, isYield ? '率' : '价')),
+              React.createElement('div', { className: 'px ' + (price === null ? 'tw-flat' : isYield ? 'tw-flat' : cls) },
+                isYield && price !== null ? `${price.toFixed(2)}%` : fmtPrice(price)),
               React.createElement('div', { className: 'chg' },
-                React.createElement('span', { className: 'chg ' + (q?.chg === null ? 'tw-flat' : cls) }, fmtSigned(q?.chg ?? null)),
-                React.createElement('span', { className: `tw-chg-chip ${pctText === null ? 'tw-chip-flat' : pctText >= 0 ? (prefs.redUp ? 'tw-chip-up' : 'tw-chip-down') : (prefs.redUp ? 'tw-chip-down' : 'tw-chip-up')}` },
-                  fmtPct(pctText),
-                ),
+                isYield
+                  ? React.createElement('span', { className: 'tw-flat', title: '收益率变动（bp）：上行＝债券价格下跌' }, bpText)
+                  : React.createElement('span', { className: 'chg ' + (q?.chg === null ? 'tw-flat' : cls) }, fmtSigned(q?.chg ?? null)),
+                isYield
+                  ? null
+                  : React.createElement('span', { className: `tw-chg-chip ${pctText === null ? 'tw-chip-flat' : pctText >= 0 ? (prefs.redUp ? 'tw-chip-up' : 'tw-chip-down') : (prefs.redUp ? 'tw-chip-down' : 'tw-chip-up')}` },
+                      fmtPct(pctText),
+                    ),
               ),
             )
           }),
@@ -546,7 +606,20 @@ export function TopBar(props: {
       ),
     ),
     shotModal,
-    hover !== null && !popupDisabled
+    cfgOpen
+      ? React.createElement(StripConfig, {
+          rows: TW_ROWS as unknown as Parameters<typeof StripConfig>[0]['rows'],
+          hidden: prefs.stripCfg?.hidden,
+          onChange: (next: string[]) => setPrefs({ stripCfg: { hidden: next } }),
+          onClose: () => {
+            setCfgOpen(false)
+            // Esc/× 关闭后把焦点还给齿轮（键盘用户不会掉到文档开头）
+            gearRef.current?.focus()
+          },
+        })
+      : null,
+    // 配置窗打开时不显示悬浮卡（`.tw-pop` 的 z-index 9999 会盖住窗口）
+    hover !== null && !popupDisabled && !cfgOpen
       ? React.createElement(HoverCard, {
           hover,
           quote: quotes[hover.secid],
