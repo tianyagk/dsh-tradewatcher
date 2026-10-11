@@ -31,8 +31,12 @@ export type RowId = 'core' | 'calendar' | 'watchlist' | 'portfolio' | 'market' |
 /** 行 → 该行独占的路由前缀（core 注册**其余全部**；P2–P4 再把别的行兑现） */
 const ROW_ROUTES: Record<Exclude<RowId, 'core'>, readonly string[]> = {
   calendar: ['/tradewatcher/calendar'],
-  watchlist: ['/tradewatcher/watch', '/tradewatcher/ledger', '/tradewatcher/trades'],
-  portfolio: ['/tradewatcher/portfolio'],
+  // watchlist 行（P4 复核后的准确清单）：只有自选页用的 `/watch`（GET+POST 同路径）。
+  // ⚠ `/tradewatcher/trades` 移到 core：**详情抽屉**（core）在用它（QuoteDrawer.tsx:79）⇒ 跨行共享留 core；
+  // ⚠ `/tradewatcher/ledger` 移到 portfolio 行：只有持仓页的流水弹窗用它。
+  watchlist: ['/tradewatcher/watch'],
+  // portfolio 行：持仓视图（GET+POST 同路径）+ 流水查询（持仓页的流水弹窗）
+  portfolio: ['/tradewatcher/portfolio', '/tradewatcher/ledger'],
   // market 行**独占**（P3 查证后的准确清单，见 docs/AUDIT-IMPL14.md）：
   //   /tradewatcher/breadth     涨跌家数（大盘页；顶部行情条**不**用它 —— 已 grep 查证）
   //   /tradewatcher/board       板块/概念资金流

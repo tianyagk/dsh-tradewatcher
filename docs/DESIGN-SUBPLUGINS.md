@@ -46,6 +46,20 @@
 **core 行（必需，不可关）**：`tradewatcher-core` —— host：`DataStore`（watch/positions/ledger/prefs）、`em` 取数 + LKG、`/health` `/prefs` `/backup` `/quotes` `/badge` `/tones` `/trend` `/kline` `/detail` `/suggest` `/ytd` `/undo`、`quotes`/`search`/`position`/`ytd` 工具；另持有 **`/tradewatcher/rows`**（活跃行清单）。client：外壳 + 顶部行情条 + 详情抽屉 + 侧栏图标/徽标 + 样式表 + **全部 Slot 注册**。
 **功能行（可关）**：`watchlist`（`/watch` `/ledger` `/trades`、`watchlist`/`group_rank` 工具、自选 tab）｜`portfolio`（`/portfolio`、`portfolio`/`ledger` 工具、持仓 tab）｜`market`（`/breadth` `/board` `/rescue` `/anomaly` `/industries` `/industry`、`rescue` 工具、大盘 tab + 护盘面板）｜`cloudmap`（**无 host 路由**，纯客户端 iframe，云图 tab）｜`calendar`（`/calendar`、`calendar`/`calendar_add` 工具，日历 tab）。
 **总行数**：core + 5 = 6 行；【实时行情条】不单独成行（它是 core 的外壳组件，拆出去会让 core 空转且抽屉依赖它）。若用户坚持要"行情条"也能关：加第 7 行 `strip`，client 侧仅 gate 该组件（代价：core 仍持有行情引擎）。
+### 2.1 最终归属（P1–P4 落地后复核，含工具与共享面）
+
+| 行 | 独占 host 路由 | 独占 agent 工具 | 理由 / 共享面判断 |
+| --- | --- | --- | --- |
+| **core** | 除下表之外的全部（quotes/trend/kline/detail/suggest/prefs/backup/health/undo/rows/tones/badge/ytd…） | `quotes` `search` `position` `ytd` `undo` | 跨行共用：`/trades`（详情抽屉）、`/industry`（详情抽屉）**留 core**；`undo` 是通用写入撤销（判不准 ⇒ core） |
+| `calendar` | `/tradewatcher/calendar*` | `calendar` `calendar_add` | 三者同生共死 |
+| `cloudmap` | **无**（纯前端 iframe，不调任何 `/tradewatcher/*`） | **无** | 云图的数据在 52etf 页面里，本插件只是 iframe 宿主 |
+| `market` | `/breadth` `/board` `/industries` `/rescue` `/anomaly` | `rescue` | `/breadth` 只有大盘页用（顶部行情条不用）⇒ 可独占 |
+| `watchlist` | `/watch` | `watchlist` `group_rank` | `group_rank` 的数据来源是自选分组 ⇒ 归此行；`/trades` 因被抽屉共用而移回 core |
+| `portfolio` | `/portfolio` `/ledger` | `portfolio` `ledger` | `/ledger` 只有持仓页的流水弹窗用；`dayTrades` 随 `portfolio` 工具 |
+
+**共享面一律留 core**（判断依据：被 ≥2 个行/组件调用，或 core 自己的组件在用）：
+`/tradewatcher/trades`（详情抽屉）、`/tradewatcher/industry`（详情抽屉的行业行）、行情/趋势/K线/详情/搜索类全部接口。
+
 **被否决的切法**：按"数据来源"切（行情行 / 账本行 / 日历行 / 云端行）——一个 tab 会依赖两行，关掉任一行都留下半个页面，违背"可单独开关"；也违背 §3 的"不出现空壳"。
 **取舍判据**：一个功能行 = **一条 host 路由段 + 一个 tab + 一组工具**，三者同生共死；跨行的（`ytd`/`search`/`position`/`undo`）一律留 core，避免"关掉自选导致持仓页 YTD 失效"。
 

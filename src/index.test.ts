@@ -64,11 +64,13 @@ test('apply 幂等：同进程 apply 三次，一次性副作用只跑一次', a
   __kernelStats.rows.length = 0
   __kernelStats.routeRegs.length = 0
   const a = fakeCtx()
+  // **关键**：core 行 apply 两次（同一行重复装载），其余功能行各一次 ——
+  // 只 apply"不同行各一次"时，`started` 守卫根本不需要就会被满足（验证员 V-2：那种断言不敏感）。
   apply(a.ctx)
   apply(a.ctx)
-  apply(a.ctx)
+  for (const row of ['calendar', 'cloudmap', 'market', 'watchlist', 'portfolio']) apply(a.ctx, { row })
   await new Promise((r) => setTimeout(r, 50)) // 等 store.init() 落定
-  assert.equal(__kernelStats.applies, 3, 'apply 确实被调了三次')
+  assert.equal(__kernelStats.applies, 7, 'apply 共七次（core 两次 + 五个功能行各一次）')
   assert.equal(__kernelStats.inits, 1, 'store.init() 只跑一次')
   assert.equal(__kernelStats.starts, 1, 'rescue.start() 只跑一次（采样器只有一个）')
   // 幂等的范围就是"一次性副作用"：init/start 各一次、采样器一个。
@@ -193,3 +195,52 @@ test('P3：market 行只注册独占前缀；/tradewatcher/industry 留在 core�
   assert.equal(market.tools.includes('tradewatcher_group_rank'), false, '也不属于 market')
   stopMonitor()
 })
+
+test('P4：五行（calendar/cloudmap/market/watchlist/portfolio）关闭时三处都不在', async () => {
+  const { gateTabs } = await import('./client/tabsGate.ts')
+  const TABS = [
+    { key: 'watch' as const, label: '自选', full: '自选', row: 'watchlist' },
+    { key: 'portfolio' as const, label: '持仓', full: '持仓', row: 'portfolio' },
+    { key: 'market' as const, label: '大盘', full: '大盘', row: 'market' },
+    { key: 'cloud' as const, label: '云图', full: '云图', row: 'cloudmap' },
+    { key: 'calendar' as const, label: '日历', full: '日历', row: 'calendar' },
+  ]
+  // 每个功能行关闭一次的期望：该行的 tab 消失，其余照常（core 与其它行不受影响）
+  for (const row of ['calendar', 'cloudmap', 'market', 'watchlist', 'portfolio'] as const) {
+    setKernel(null)
+    const core = fakeCtx()
+    apply(core.ctx)
+    const rows = new Set([...coreKernel()!.activeRows]) // 只 apply core ⇒ 只有 core 活跃
+    const g = gateTabs(TABS, rows, 'watch')
+    assert.equal(g.visible.some((t) => t.row === row), false, `关闭 ${row} ⇒ 它的 tab 不该出现`)
+    // 该行的独占路由一个都不在 core 的注册表里（未注册 = 404）
+    for (const p of ROW_ROUTES_FOR_TEST[row]) {
+      assert.equal(core.routes.includes(p), false, `core 不该注册 ${p}（${row} 行独占）`)
+    }
+    for (const t of ROW_TOOLS_FOR_TEST[row]) {
+      assert.equal(core.tools.includes(`tradewatcher_${t}`), false, `core 不该提供 ${t}（${row} 行独占）`)
+    }
+    stopMonitor()
+  }
+  // 回落：当前页是自选/持仓时被停用 ⇒ 必须回落到别的可用 tab
+  const off = gateTabs(TABS, new Set(['core', 'portfolio', 'market', 'cloudmap', 'calendar']), 'watch')
+  assert.equal(off.fallback, 'portfolio', '自选被停用 ⇒ 回落到首个可用（持仓）')
+  const off2 = gateTabs(TABS, new Set(['core', 'watchlist', 'market', 'cloudmap', 'calendar']), 'portfolio')
+  assert.equal(off2.fallback, 'watch', '持仓被停用 ⇒ 回落到自选')
+})
+
+/** 与 src/index.ts 的 ROW_ROUTES/ROW_TOOLS 同步的测试副本（搬迁一行就要同步改这里 + patch 断言） */
+const ROW_ROUTES_FOR_TEST: Record<string, readonly string[]> = {
+  calendar: ['/tradewatcher/calendar'],
+  cloudmap: [],
+  market: ['/tradewatcher/breadth', '/tradewatcher/board', '/tradewatcher/rescue', '/tradewatcher/anomaly', '/tradewatcher/industries'],
+  watchlist: ['/tradewatcher/watch'],
+  portfolio: ['/tradewatcher/portfolio', '/tradewatcher/ledger'],
+}
+const ROW_TOOLS_FOR_TEST: Record<string, readonly string[]> = {
+  calendar: ['calendar', 'calendar_add'],
+  cloudmap: [],
+  market: ['rescue'],
+  watchlist: ['watchlist', 'group_rank'],
+  portfolio: ['portfolio', 'ledger'],
+}

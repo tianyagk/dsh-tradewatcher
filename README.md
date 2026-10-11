@@ -339,6 +339,12 @@ bash scripts/install.sh
 
 识别的只是「符合国家队护盘行为模式的放量 + 超大单净流入」，**不能证明买入方是汇金/国新/诚通**（它们不披露日内成交），回答与展示都按**概率性信号**处理。超大单为东财按单笔金额的分类口径（非席位数据）；ETF 天量含做市双边报价与套利盘，故始终用超大单净额与量价背离交叉验证。免费源已无 ETF 资金流历史（东财 fflow 仅当日 1 行、push2his 常限流），故 F2 初期为经验锚点、历史回看自上线日起。
 
+## 子组件与开关
+
+本插件在一个 bundle 内拆成**六行**（core / calendar / cloudmap / market / watchlist / portfolio），**各自可独立开关**：
+停用某一行 = 该行的**路由 404** + **工具从列表消失** + **侧栏 tab 消失**（不灰显、不留空壳）。
+行清单与归属见 `docs/DESIGN-SUBPLUGINS.md`，落地记录见 `docs/AUDIT-IMPL12.md`–`AUDIT-IMPL15.md`。
+
 ## agent 工具索引
 
 > 本表由 `src/host/tools.ts` 的 `defs` 决定；`src/host/toolIndex.test.ts` 会**锁住名字与数量**（加了工具不改表就红）。
