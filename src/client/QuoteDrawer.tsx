@@ -31,7 +31,7 @@ import {
 
 import { sessionOf } from './sessionAxis.ts'
 import { isUsableBaseline } from './trendView.ts'
-import { missingBrief } from '../shared/trendStitch.ts'
+import { trendCaliberOf } from '../shared/trendCaliber.ts'
 
 function useContainerWidth(): [React.RefObject<HTMLDivElement>, number] {
   const ref = useRef<HTMLDivElement | null>(null)
@@ -331,7 +331,13 @@ export function QuoteDrawer(props: { secid: string; name: string; redUp: boolean
       }
     }
     // 数据来源如实标注：本地缓存 / 休市定稿 / 本次刷新失败时的上次成功数据
-    const cn = cacheNoteOf(payload)
+    let cn = cacheNoteOf(payload)
+    // 降级/快照必须说明"现在显示的是什么"（P1-10）：本地归档拼接时补上快照时刻，
+    // 与口径行用同一个 snapshotLabel()，避免两处对不上。
+    if (cn.includes('本地缓存') && payload !== null && payload.kind === 'trend' && payload.trend.source === 'local-stitch') {
+      const snap = snapshotLabel()
+      if (snap !== null && !cn.includes('快照')) cn = cn.replace('本地缓存', `本地缓存（最近一次成功快照 ${snap}）`)
+    }
     if (cn !== '') note = note === '' ? cn.replace(/^ · /, '') : note + cn
   }
 
@@ -346,6 +352,23 @@ export function QuoteDrawer(props: { secid: string; name: string; redUp: boolean
    *   - 截至：宿主给的 `kline.asOf`（本地最近一次成功取数时刻）；
    *   - 当根是否收盘：`kline.barOpen`，并明确告知 MA 是否含该根。
    */
+
+  /** 最近一次成功快照的短标签（`09-24 13:41`）——口径行与 footer 共用同一份，不各写一套 */
+  // 用函数声明（会提升）：口径行与 footer 两处都要用，而 footer 的 note 组装在本函数**之前** ——
+  // 写成 const 箭头函数会触发 "used before its declaration"（实测踩过）。
+  function snapshotLabel(): string | null {
+    if (payload === null || payload.kind !== 'trend') return null
+    const t = payload.trend
+    // 优先用宿主标注的 LKG 快照时刻（`staleAt`）；否则退回"最后一个真实点的时刻"
+    // —— 两者都是"这份数据是什么时候成功取到的"，不是"现在几点"。
+    const ts = typeof t.staleAt === 'number' && t.staleAt > 0 ? t.staleAt : null
+    if (ts !== null) {
+      return new Date(ts).toLocaleString('zh-CN', { hour12: false, month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
+    }
+    const lastPoint = t.points[t.points.length - 1]
+    return lastPoint === undefined ? null : lastPoint.label.slice(5, 16)
+  }
+
   const caliberLine = (): string => {
     if (payload === null || payload.kind !== 'kline') {
       if (payload !== null && payload.kind === 'trend') {
@@ -355,14 +378,27 @@ export function QuoteDrawer(props: { secid: string; name: string; redUp: boolean
         // 五日：覆盖情况写进**这一行**（结构性限制不配单独横幅）。
         // 本地拼接时给出 have/limit 与缺口；真实多日源只有 1 天时明说"仅当日（该市场无多日源）"。
         const cov = t.coverage
+        // 五日档的诚实化（task-49）：**滞后优先** —— 最新一天不是最近预期交易日时，
+        // 口径行先说"数据滞后 N 天（最近一次成功快照 …）"，再说"仅 N 天可画 / 归档 N 天 / 缺 N 天"。
+        // 判据与文案都在 shared/trendCaliber.ts（纯函数、有断言）：自然日差 + **工作日近似**（无交易日历）。
         const fiveMarker = payload.tab !== '5d'
           ? ''
           : cov !== undefined
-            ? ` · 本地拼接 ${cov.have.length}/${cov.limit} 天${
-                cov.have.length <= 1 ? '（仅当日，从本版起累积）' : ''
-              }${cov.missing.length > 0 ? ` · ${missingBrief(cov.missing)}` : ''}`
+            ? ((): string => {
+                const c = trendCaliberOf({
+                  // 传原始 label（`2026-09-24 13:41` 或 `09-24`）：解析在 shared/trendCaliber.dayNumberOf 里做，
+                  // 界面不要自己 slice —— 截错位置会让滞后判定静默失效（实测踩过：slice(0,5) 截出 `2026-`）
+                  lastDay: last !== undefined ? last.label : null,
+                  now: Date.now(),
+                  have: cov.have.length,
+                  limit: cov.limit,
+                  missing: cov.missing,
+                  snapshotAt: snapshotLabel(),
+                })
+                return c.text === '' ? '' : ` · ${c.text}`
+              })()
             : trendDayCount(t.points) <= 1
-              ? ' · 仅当日（该市场无多日源）'
+              ? ' · 仅 1 天可画（该市场无多日源）'
               : ''
         // 归档失败属运维细节：正文不再占位，原因并入口径条的完整解释（见 caliberExplain）
         // 该标的不适用分时段网格（美股/国际指数/外盘商品/期货）⇒ 一句话如实说明
@@ -399,15 +435,21 @@ export function QuoteDrawer(props: { secid: string; name: string; redUp: boolean
         (cov.missing.length > 0
           ? `，缺 ${cov.missing.join('、')}（工作日里没有归档的日子；本插件没有交易日历，节假日也会列在这里）`
           : '') +
-        `。归档**从本版起累积**（每天打开一次该标的即可 +1 天），保留最近 12 个交易日，可在「截图/录屏」设置里关闭。` +
+        `。归档从本版起累积（每天打开一次该标的即可 +1 天），保留最近 12 个交易日，可在「截图/录屏」设置里关闭。` +
         // 归档失败属运维细节：正文不占位，原因写在这里（一次）
         (payload.trend.archive !== undefined && payload.trend.archive.skipped.length > 0
           ? `本次有 ${payload.trend.archive.skipped.length} 天未归档：${payload.trend.archive.skipped[0].reason}。`
           : '')
     }
     if (trendDayCount(payload.trend.points) <= 1) {
-      return '该市场没有多日分钟源（多日分钟源只覆盖沪/深：新浪 5 分钟线 → 腾讯 5 分钟线），' +
-        '所以五日只能显示当日 —— 不是本页故障。从本版起会按日归档本地分时，之后五日会逐日变长。'
+      // 国内期货（114.* 郑商所之外的期货主连 / 113.*）：**连当日都取不到** ⇒ 不要承诺"归档会变长"
+      const mkt = secid.split('.')[0]
+      if (mkt === '114' || mkt === '113') {
+        return '该市场当前没有任何可用的分时源（东财 trends2 与备用源都不返回国内期货分时），' +
+          '所以五日档为空 —— 不是本页故障，也不会随归档变长（归档的前提取到过当日分时）。'
+      }
+      return '我们的两条多日渠道（新浪 5 分钟线、腾讯 5 分钟线）只覆盖沪/深，' +
+        '所以五日档改由本地归档逐日累积 —— 不是本页故障（这是"我们没覆盖"，不等于"上游没有"）。'
     }
     return null
   })()

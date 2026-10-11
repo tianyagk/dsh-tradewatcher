@@ -1081,6 +1081,11 @@ export interface TrendOptions {
   upstream?: (secid: string, ndays: number) => Promise<TrendData | null>
   /** 注入活的备用源（测试用；默认腾讯分钟线） */
   fallbackSource?: (secid: string) => Promise<TrendData | null>
+  /**
+   * 只给"验证上游多日能力"与将来接多日用：把东财 `trends2` 的 `ndays` 改成指定值。
+   * 默认 1（既有行为不变，路由也不设置它）—— 上游到底认不认 `ndays`，用我们自己的取数链实测。
+   */
+  ndays?: number
 }
 
 /** 一份分时序列的交易日（最后一个点属于哪天）；没有点返回 null */
@@ -1175,7 +1180,13 @@ async function tencentTrend(secid: string): Promise<TrendData | null> {
   }
 }
 
-/** 东财单日分时（trends2 实测只提供当日；ndays 参数被上游忽略）。 */
+/**
+ * 东财单日分时。
+ *
+ * ndays 参数：2026-10-11 本次实测（用我们自己的取数链，同一 secid 各跑 ndays=1 与 ndays=5）——
+ * 上游忽略该参数：1.000001 两次都是 1 天/242 点，100.SPX 两次都是 2 天/391 点（美盘跨北京日期，非多日能力），
+ * 101.HG00Y 两次都是 1 天/269 点。此前这里引的是“历史记录”，现在换成本次实测结论。
+ */
 async function fetchTrendSingleDay(secid: string, opts: TrendOptions = {}): Promise<TrendData | null> {
   const fields2 = 'f51,f52,f53,f54,f55,f56,f57,f58'
   return trendWithFallback(secid, 1, async () => {
@@ -1183,7 +1194,7 @@ async function fetchTrendSingleDay(secid: string, opts: TrendOptions = {}): Prom
     if (opts.upstream !== undefined) return opts.upstream(secid, 1)
     const json = await fetchAny(
       HISTORY_HOSTS,
-      `/api/qt/stock/trends2/get?secid=${encodeURIComponent(secid)}&fields1=f1,f2,f3,f4,f5,f6,f7,f8,f9,f10,f11,f12,f13&fields2=${fields2}&ndays=1&iscr=0`,
+      `/api/qt/stock/trends2/get?secid=${encodeURIComponent(secid)}&fields1=f1,f2,f3,f4,f5,f6,f7,f8,f9,f10,f11,f12,f13&fields2=${fields2}&ndays=${Math.min(5, Math.max(1, Math.round(opts.ndays ?? 1)))}&iscr=0`,
     )
     const body = bodyOf(json)
     const data = body?.data as { prePrice?: unknown; preClose?: unknown; trends?: unknown } | undefined
@@ -1276,21 +1287,30 @@ async function fetchTencent5Min(sym: string, lmt: number): Promise<MinuteBar[]> 
 
 /** 多日分时（五日）：用 5 分钟 K 线拼出最近 N 个交易日。 */
 async function fetchMultiDayTrend(secid: string, days: number): Promise<TrendData | null> {
-  const sym = sinaSymbol(secid)
-  if (sym === null) return null
+  // ⚠ 两条渠道的**符号体系是分开的**：新浪只认沪/深（`sh600519`），腾讯覆盖沪/深/**港股**（`hk00700`）。
+  // 此前这里先算一个 `sinaSymbol` 并让腾讯档复用它 ⇒ 港股/国际/商品/期货**在结构上永远进不去**
+  // （不是"上游没有多日分钟源"，而是"我们的入口把非沪深挡死了"）。现在两条各用自己的符号。
+  const sinaSym = sinaSymbol(secid)
+  const txSym = tencentCode(secid)
+  if (sinaSym === null && txSym === null) return null
   const datalen = Math.min(1000, days * 48 + 24)
-  const bars = await ttlCache<MinuteBar[]>(`trend-md:${sym}:${datalen}`, 90_000, async () => {
-    try {
-      const s = await fetchSina5Min(sym, datalen)
-      if (s.length > 0) return s
-    } catch {
-      /* 换腾讯 */
+  const bars = await ttlCache<MinuteBar[]>(`trend-md:${sinaSym ?? '-'}:${txSym ?? '-'}:${datalen}`, 90_000, async () => {
+    if (sinaSym !== null) {
+      try {
+        const s = await fetchSina5Min(sinaSym, datalen)
+        if (s.length > 0) return s
+      } catch {
+        /* 换腾讯 */
+      }
     }
-    try {
-      return await fetchTencent5Min(sym, datalen)
-    } catch {
-      return []
+    if (txSym !== null) {
+      try {
+        return await fetchTencent5Min(txSym, datalen)
+      } catch {
+        return []
+      }
     }
+    return []
   })
   if (bars.length === 0) return null
   const dates = [...new Set(bars.map((b) => b.label.slice(0, 10)))].sort()
@@ -1303,7 +1323,8 @@ async function fetchMultiDayTrend(secid: string, days: number): Promise<TrendDat
   return { secid, prePrice: null, points: clean, last: clean[clean.length - 1]?.price ?? null }
 }
 
- // 结论：**只有沪/深有"多日分钟"源**；其它市场的五日只能显示当日 —— 界面必须如实标注
+ // 结论（task-50 实测）：**我们的两条多日渠道（新浪 5 分钟线、腾讯 5 分钟线）只覆盖沪/深**；
+ // 其它市场回落本地归档逐日累积（界面如实标注）。注意这是"我们没覆盖"，不等于"上游没有"。
  // （`trendDayCount` + 抽屉里的提示），不许静默把当日当五日画。
  // 不支持的市场退回首日数据（客户端会如实显示交易日数量）。
 export async function fetchTrend(secid: string, ndays = 1, opts: TrendOptions = {}): Promise<TrendData | null> {

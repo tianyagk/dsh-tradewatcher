@@ -33,7 +33,13 @@ export interface Leak {
   text: string
 }
 
-/** 找出用户可见字符串里的 `**`（粗体标记泄漏） */
+/**
+ * 找出用户可见字符串里的 `**`（粗体标记泄漏）。
+ *
+ * 规则（比"同行必须出现引号"更严，能抓**跨行模板**里的泄漏）：
+ * 剥注释 → 去掉合法的**指数运算符**形态（`x ** 2`、`10 ** 4`、`) ** 0.5`）→ 剩下的 `**` 全算泄漏。
+ * 这样 `。归档**从本版起累积**` 这种跨行模板也逃不掉（实测确实漏过一处）。
+ */
 export function scanMarkdownLeaks(src: string, file = ''): Leak[] {
   const clean = stripComments(src)
   const out: Leak[] = []
@@ -41,8 +47,9 @@ export function scanMarkdownLeaks(src: string, file = ''): Leak[] {
   for (let i = 0; i < lines.length; i += 1) {
     const line = lines[i]
     if (!line.includes('**')) continue
-    // 只认"引号内的**"：随便给一行带 ** 的注释或代码不算
-    if (/['"`][^'"`]*\*\*/.test(line)) out.push({ file, line: i + 1, text: line.trim().slice(0, 160) })
+    // 指数运算符：左右两侧是")"/数字/标识符且右侧以数字或标识符起头（`a ** 2`、`10 ** 4`、`(w/100) ** 2`）
+    const withoutOps = line.replace(/([\w)\]])\s*\*\*\s*[\w(]/g, '$1')
+    if (withoutOps.includes('**')) out.push({ file, line: i + 1, text: line.trim().slice(0, 160) })
   }
   return out
 }
