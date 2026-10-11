@@ -1,11 +1,12 @@
 /**
  * 筹码分布取数（抽屉用）。
  *
- * 只在**支持的档位**取（分时/日K 及以上；五日档与 K 线以外的周期不取）：
- * 宿主返回 `why`（指数/期货/样本不足）时不重试、直接展示原因。
+ * **筹码只随 secid 变**：不依赖页签 / 复权 / 图表重试计数（切页签要保持数据与滑杆位置、不发请求、不闪）。
+ * 取数走 `chipsLoader`（按 secid 缓存 + 并发合并）；宿主给 `why`（指数/期货/样本不足）时直接展示原因。
  */
 import { useEffect, useRef, useState } from 'react'
 import { api } from './api.ts'
+import { loadChips } from './chipsLoader.ts'
 import type { ChipsPayload } from './api.ts'
 
 export interface ChipsState {
@@ -16,7 +17,11 @@ export interface ChipsState {
 
 const EMPTY: ChipsState = { data: null, error: null, loading: false }
 
-export function useChips(secid: string, enabled: boolean, retry = 0): ChipsState {
+/**
+ * `enabled` 只用来"该不该显示"（例如抽屉没开），**不**用来取消已有数据；
+ * `refreshKey` 是筹码**自己的**刷新信号（与图表的重试计数无关）。
+ */
+export function useChips(secid: string, enabled: boolean, refreshKey = 0): ChipsState {
   const [state, setState] = useState<ChipsState>(EMPTY)
   const seq = useRef(0)
   useEffect(() => {
@@ -25,9 +30,9 @@ export function useChips(secid: string, enabled: boolean, retry = 0): ChipsState
       return
     }
     const n = ++seq.current
-    setState((s) => ({ ...s, loading: true }))
-    api
-      .chips(secid)
+    // 只有"还没有数据"时才进加载态：已有数据时保持原样（切页签不闪、不回到骨架）
+    setState((s) => (s.data === null ? { ...s, loading: true } : s))
+    loadChips<ChipsPayload>(secid, { fetch: (id) => api.chips(id) })
       .then((r) => {
         if (n !== seq.current) return
         setState({ data: r, error: null, loading: false })
@@ -36,7 +41,7 @@ export function useChips(secid: string, enabled: boolean, retry = 0): ChipsState
         if (n !== seq.current) return
         setState({ data: null, error: e.message, loading: false })
       })
-  }, [secid, enabled, retry])
+  }, [secid, enabled, refreshKey])
   return state
 }
 

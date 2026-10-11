@@ -73,9 +73,6 @@ export function QuoteDrawer(props: {
   name: string
   redUp: boolean
   onClose: () => void
-  /** 筹码口径控件用（不给就不渲染控件：抽屉在别的宿主里也能用） */
-  prefs?: { chipsDecay?: number; chipsSpread?: 'triangle' | 'uniform' }
-  setPrefs?: (patch: { chipsDecay?: number; chipsSpread?: 'triangle' | 'uniform' }) => void
 }): React.ReactElement {
   const { secid, name, redUp, onClose } = props
   // 记住上次看的周期：关掉再打开、换一只标的时不必重新点一次
@@ -92,8 +89,10 @@ export function QuoteDrawer(props: {
   const [infoErr, setInfoErr] = useState(false)
   const [trades, setTrades] = useState<TradeMark[]>([])
   const [retry, setRetry] = useState(0)
-  // 筹码分布：只在支持的档位取（五日档不取，界面直接给原因）
-  const chipsState = useChips(secid, tab !== '5d', retry)
+  // 筹码分布：**只随 secid 取一次**（页签/复权/图表重试都不参与）——切页签不发请求、不闪；
+  // 五日档只是"不显示"（面板给原因），数据照留 ⇒ 切回来立即可见。
+  const [chipsRefresh, setChipsRefresh] = useState(0)
+  const chipsState = useChips(secid, true, chipsRefresh)
   const [containerRef, width] = useContainerWidth()
 
   // header info
@@ -567,15 +566,8 @@ export function QuoteDrawer(props: {
           redUp,
           isFiveDay: tab === '5d',
           fqSupported: fqSupportedOf(secid),
-          onRetry: () => setRetry((x) => x + 1),
-          prefs: props.prefs,
-          // 改口径 ⇒ 持久化到 prefs 并重新取一次（同一个 setRetry 自增当刷新信号）
-          setPrefs: props.setPrefs === undefined
-            ? undefined
-            : (patch) => {
-                props.setPrefs?.(patch)
-                setRetry((x) => x + 1)
-              },
+          // 筹码的重试是**它自己的**计数器（与图表 retry 无关 ⇒ 切页签/重试图表都不会连带刷新筹码）
+          onRetry: () => setChipsRefresh((x) => x + 1),
         }),
         note !== '' || legend !== ''
           ? React.createElement('div', { className: 'tw-chartnote' }, `${note}${legend}`)

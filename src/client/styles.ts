@@ -450,7 +450,10 @@ color-scheme:dark}
 .tw-chips-body{max-height:160px;display:flex;flex-direction:column;gap:3px}
 .tw-chips-slider{width:100%;margin:2px 0}
 .tw-chips-date{font-size:11px;font-family:var(--tw-mono)}
-.tw-chips-bars{display:flex;flex-direction:column;gap:1px;overflow:hidden}
+.tw-chips-chart{display:flex;gap:4px;align-items:stretch;max-height:140px;overflow:hidden}
+.tw-chips-axis{display:flex;flex-direction:column;justify-content:space-between;font-size:9.5px;color:var(--tw-muted);
+  font-family:var(--tw-mono);min-width:34px;text-align:right;line-height:1}
+.tw-chips-bars{display:flex;flex-direction:column;gap:1px;overflow:hidden;flex:1}
 .tw-chips-bar{height:3px;border-radius:1px;background:currentColor;min-width:1px}
 
 /* 复盘条（做T 收起态 + 分档卡）与批量录入模态（P2-9 / P1-3 / P2-1）*/

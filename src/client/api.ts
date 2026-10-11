@@ -17,7 +17,10 @@ export interface ChipsPayload {
   source: string
   days: ChipDayDto[]
   latest: ChipDayDto | null
+  /** 累积窗口（递推用了几根日线） */
   window: number
+  /** 展示窗口（滑杆覆盖的天数） */
+  displayWindow: number
   bucketCount: number
   decay: 'turnover' | 'half-life'
   decayReason: string | null

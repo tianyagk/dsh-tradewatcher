@@ -21,7 +21,7 @@ import { BREADTH_METHODOLOGY, BREADTH_COUNT_CALIBER, BreadthCountCache, resolveB
 import { dayOf } from './time.ts'
 import { log, type PluginWebRoute } from './context.ts'
 import { dayTradesOf } from './dayTrade.ts'
-import { CHIPS_MIN_SAMPLES, CHIPS_WINDOW, chipSeriesOf } from './chips.ts'
+import { CHIPS_DISPLAY, CHIPS_DISPLAY_MAX, CHIPS_MIN_SAMPLES, CHIPS_WINDOW, chipSeriesOf } from './chips.ts'
 
 const MAX_BODY = 256 * 1024
 const MAX_QUOTE_IDS = 160
@@ -234,10 +234,14 @@ export function makeTradeRoutes(
             send(res, 400, { error: 'secid 不合法（如 1.600519）' })
             return
           }
-          const want = Number(q.get('days') ?? CHIPS_WINDOW)
-          const days = Number.isFinite(want) ? Math.min(CHIPS_WINDOW, Math.max(CHIPS_MIN_SAMPLES, Math.round(want))) : CHIPS_WINDOW
+          // days = **累积窗口**（默认 180）；display = 展示窗口（默认 45、上限 60）。
+          // 老调用只传 days=45 ⇒ 累积 45、展示 min(45, 45) ⇒ 与旧行为一致（回包多给 displayWindow，结构不破坏）
+          const wantDays = Number(q.get('days') ?? CHIPS_WINDOW)
+          const cum = Number.isFinite(wantDays) ? Math.min(CHIPS_WINDOW, Math.max(CHIPS_MIN_SAMPLES, Math.round(wantDays))) : CHIPS_WINDOW
+          const wantDisplay = Number(q.get('display') ?? Math.min(CHIPS_DISPLAY, cum))
+          const disp = Number.isFinite(wantDisplay) ? Math.min(CHIPS_DISPLAY_MAX, Math.max(1, Math.round(wantDisplay))) : CHIPS_DISPLAY
           const supported = em.fqSupported(secid)
-          const k = supported ? await em.fetchKline(secid, 101, days, 1) : null
+          const k = supported ? await em.fetchKline(secid, 101, cum, 1) : null
           const qp = await em.fetchQuotesWithProvenance([secid])
           const qprovenance = qp.provenance
           const quote = qp.items[secid] ?? null
@@ -249,7 +253,8 @@ export function makeTradeRoutes(
             isHk: secid.startsWith('116.'),
             floatMv: quote?.floatMv ?? null,
             price: quote?.price ?? null,
-            window: days,
+            window: cum,
+            display: disp,
             decay: prefs.chipsDecay,
             spread: prefs.chipsSpread,
           })

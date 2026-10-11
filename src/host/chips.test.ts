@@ -189,3 +189,45 @@ test('默认桶数与窗口：32 桶、45 根，不足时按实际根数', () =>
   assert.ok(r.disclaimer.includes('不是支撑/压力的预测'), '合规文案必须在')
   assert.ok(r.disclaimer.includes('不是买卖建议'))
 })
+
+test('task-61 ④：累积窗口 180 / 展示窗口 45 —— 同一天两种窗口算出的分布必须不同', () => {
+  // 造 180 根：前 135 根在低价区（10 元附近），后 45 根在 20 元附近
+  const bars = Array.from({ length: 180 }, (_, i) => ({
+    date: `d${String(i).padStart(3, '0')}`,
+    close: i < 135 ? 10 + (i % 3) * 0.1 : 20 + (i % 3) * 0.1,
+    vol: 100,
+  }))
+  const wide = chipSeriesOf(bars, { fqSupported: true, floatMv: 1e8, decay: 1.5, window: 180, display: 45, minSamples: 1 })
+  const narrow = chipSeriesOf(bars, { fqSupported: true, floatMv: 1e8, decay: 1.5, window: 45, display: 45, minSamples: 1 })
+  assert.equal(wide.displayWindow, 45)
+  assert.equal(wide.days.length, 45, '展示状态数 = 45（滑杆范围）')
+  assert.equal(narrow.days.length, 45)
+  // ① 同一个展示日（各自 days[0] 是不同日期，用最新的同一天：最后一天）对比分布
+  const a = wide.latest
+  const b = narrow.latest
+  assert.ok(a !== null && b !== null)
+  assert.notDeepEqual(a.buckets, b.buckets, '180 日累积 vs 45 日累积，同一天分布必须不同（证明窗口生效）')
+  // ② 最早展示日的分布 ≠ "只有当天新增"（确实用了历史）
+  const first = wide.days[0]
+  const oneDayOnly = chipSeriesOf([bars[bars.length - 45]], { fqSupported: true, floatMv: 1e8, decay: 1.5, window: 180, display: 45, minSamples: 1 })
+  if (oneDayOnly.latest !== null) {
+    assert.notDeepEqual(first.buckets, oneDayOnly.latest.buckets, '最早展示日不能等于"只有当天新增"')
+  }
+  // ③ 守恒
+  for (const d of wide.days) {
+    const sum = d.buckets.reduce((x, y) => x + y, 0)
+    assert.ok(Math.abs(sum - 1) < 1e-6, `每天权重和应为 1（实际 ${sum}）`)
+  }
+  // ④ 老调用（只给 days=45 的语义）不破坏：window=45、displayWindow=45、结构完整
+  assert.equal(narrow.window, 45)
+  assert.equal(narrow.displayWindow, 45)
+  assert.ok(typeof narrow.methodology === 'string' && narrow.methodology.includes('近 45 根'))
+})
+
+test('task-61 ④：不足 180 根时如实写"近 N 根"（不假装够）', () => {
+  const bars = Array.from({ length: 60 }, (_, i) => ({ date: `d${i}`, close: 10 + i * 0.1, vol: 100 }))
+  const r = chipSeriesOf(bars, { fqSupported: true, floatMv: 1e8, window: 180, display: 45, minSamples: 1 })
+  assert.equal(r.samples, 60)
+  assert.ok(r.methodology.includes('用了近 60 根'), r.methodology.slice(0, 160))
+  assert.equal(r.days.length, 45, '展示 45 天（少于实际根数时按展示窗口给）')
+})

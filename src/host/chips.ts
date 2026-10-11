@@ -16,7 +16,11 @@
  *  ⑦ 平均成本 = Σ(桶价×权重)/Σ权重；**盈利比例** = Σ(桶价 **<** 现价 的权重)/Σ权重。
  */
 export const CHIPS_BUCKETS = 32
-export const CHIPS_WINDOW = 45
+/** 累积窗口（逐日递推用到的历史长度）：180 个交易日 */
+export const CHIPS_WINDOW = 180
+/** 展示窗口（滑杆覆盖的天数）：45，上限 60 */
+export const CHIPS_DISPLAY = 45
+export const CHIPS_DISPLAY_MAX = 60
 /** 换手率口径的封顶（单日最多换掉 25% 筹码，避免极端值把权重打满） */
 export const CHIPS_CAP = 0.25
 /** 固定半衰期（交易日）：港股与缺 floatMv 时使用 */
@@ -78,7 +82,10 @@ export interface ChipSeries {
   days: ChipDay[]
   /** 最后一天（界面默认显示这一天） */
   latest: ChipDay | null
+  /** 累积窗口（递推实际用了几根） */
   window: number
+  /** 展示窗口（`days` 里最后这么多天有状态；滑杆只覆盖这些天） */
+  displayWindow: number
   bucketCount: number
   decay: ChipDecay
   /** 回落原因（主口径可用时为 null；**必须如实写清**，界面直接显示） */
@@ -208,6 +215,12 @@ export interface ChipOptions {
   cap?: number
   /** 样本数下限（默认 `CHIPS_MIN_SAMPLES`；断言/离线分析可放宽） */
   minSamples?: number
+  /**
+   * 展示窗口（滑杆覆盖的天数，默认 45、上限 60）。
+   * **累积窗口**由 `window` 给（默认 180）：递推从 180 天前开始，只为最近 `display` 天记录状态 ——
+   * 否则最早那批筹码"全是获利盘"（用户指出的问题）。
+   */
+  display?: number
   /** 衰减系数 k（默认 1.5，范围 [0.5, 3.0]） */
   decay?: number
   /** 新增筹码分配形状（默认 triangle） */
@@ -218,6 +231,7 @@ export interface ChipOptions {
 export function chipSeriesOf(bars: readonly ChipBar[], opts: ChipOptions = {}): ChipSeries {
   const buckets = opts.buckets ?? CHIPS_BUCKETS
   const window = opts.window ?? CHIPS_WINDOW
+  const display = Math.min(CHIPS_DISPLAY_MAX, Math.max(1, Math.round(opts.display ?? CHIPS_DISPLAY)))
   const halfLife = opts.halfLife ?? CHIPS_HALF_LIFE
   const cap = opts.cap ?? CHIPS_CAP
   const norm = normalizeChipPrefs({ decay: opts.decay, spread: opts.spread })
@@ -227,6 +241,7 @@ export function chipSeriesOf(bars: readonly ChipBar[], opts: ChipOptions = {}): 
   const samples = win.length
   const base: Omit<ChipSeries, 'days' | 'latest'> = {
     window,
+    displayWindow: display,
     bucketCount: buckets,
     decay: 'half-life',
     decayReason: null,
@@ -307,6 +322,8 @@ export function chipSeriesOf(bars: readonly ChipBar[], opts: ChipOptions = {}): 
     const profitRatio = price === null || total <= 0
       ? null
       : norm.reduce((s, x, idx) => (centers[idx] < price ? s + x : s), 0)
+    // 只为**最近 display 天**记录状态（递推仍在整个 window 上跑）
+    if (i < win.length - display) continue
     days.push({
       date: b.date,
       buckets: norm.map((x) => round(x, 6)),
@@ -341,7 +358,7 @@ export function chipSeriesOf(bars: readonly ChipBar[], opts: ChipOptions = {}): 
       (clamped ? `；本段出现过 1−t×k < 0 的极端换手，因子已夹到 0（旧筹码全清），实际最小生效因子 ${minFactor.toFixed(4)}` : `；实际最小生效因子 ${Number.isFinite(minFactor) ? minFactor.toFixed(4) : '—'}`) +
       `。新增筹码按${shape === 'triangle' ? '三角形分布（峰在当日均价 (high+low+close)/3）' : '均匀分布'}铺到当日 [low, high]` +
       `（均价均值 ${(peakSum / Math.max(1, win.length)).toFixed(4)}）；` +
-      `窗口${samples === window ? `${window} 根` : `近 ${samples} 根（实际不足 ${window} 根）`}日线（fqt=1 前复权）；` +
+      `窗口：用了近 ${samples} 根日线${samples < CHIPS_WINDOW ? `（不足累积窗口 ${CHIPS_WINDOW} 根 ⇒ 历史越短越不准，如实标注）` : ''}（fqt=1 前复权）；` +
       `桶数 ${buckets}；支撑/压力 = 筹码累积分布的 P5/P95 价位；平均成本 = Σ(桶价×权重)/Σ权重；盈利比例 = Σ(桶价 < 现价 的权重)/Σ权重。`,
   }
 }
