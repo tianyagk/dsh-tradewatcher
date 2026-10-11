@@ -78,14 +78,21 @@ export interface CoreKernel {
 const KERNEL_KEY = 'tradewatcher.core'
 let kernel: CoreKernel | null = null
 
-/** 行配置：`config.row`（第二参数或 `ctx.config`），缺省 `core` ⇒ 老 profile 行为不变 */
-export function rowOf(config: unknown, ctxConfig?: unknown): RowId {
+/**
+ * 行配置：`config.row`（第二参数或 `ctx.config`）。
+ *
+ * **缺省 = `all`（全量）** —— 老 profile 只装一行、不带 config，必须与拆分前逐字一致：
+ * 那时所有路由/工具都在，缺省给 `core` 会把自选/持仓/大盘/日历的路由一起 404（v0.45.1 实测踩到，
+ * 用户端直接表现为"插件服务异常"）。
+ * 显式 `row: core` 才是"只要内核那一段"；认不出的值一律回退 `all`（宁可多给，不可少给）。
+ */
+export function rowOf(config: unknown, ctxConfig?: unknown): RowId | 'all' {
   const pick = (src: unknown): unknown => (typeof src === 'object' && src !== null ? (src as { row?: unknown }).row : undefined)
-  const raw = pick(config) ?? pick(ctxConfig) ?? 'core'
-  const row = typeof raw === 'string' ? raw.trim() : 'core'
+  const raw = pick(config) ?? pick(ctxConfig) ?? 'all'
+  const row = typeof raw === 'string' ? raw.trim() : 'all'
   return (['core', 'calendar', 'watchlist', 'portfolio', 'market', 'cloudmap'] as const).includes(row as RowId)
     ? (row as RowId)
-    : 'core'
+    : 'all'
 }
 
 /** 当前内核（测试与自检读它；功能行走 `ctx.get('tradewatcher.core')`） */
@@ -102,7 +109,7 @@ export function setKernel(value: CoreKernel | null): void {
  * core 行：建内核（**模块级单例 + 幂等**）、启动一次性副作用、注册 core 路由/工具与活跃行端点。
  * 无论 `apply` 被调用几次，`store.init()` 与 `rescue.start()` 都只跑一次。
  */
-function applyCore(ctx: PluginContext): void {
+function applyCore(ctx: PluginContext, full = false): void {
   const first = kernel === null
   if (first) {
     kernel = { store: new DataStore(), calendar: new CalendarStore(), rescue: new RescueMonitor(), activeRows: new Set<RowId>(['core']), started: false }
@@ -136,7 +143,7 @@ function applyCore(ctx: PluginContext): void {
   ctx.effect(() => {
     const { routes: all } = makeTradeRoutes(k.store, ctx.webRuntime.trustedHosts, k.calendar, k.rescue, undefined, undefined, () => [...k.activeRows])
     // core 注册**除功能行独占前缀之外**的全部路由（老 profile 只有 core ⇒ 与拆分前逐字一致）
-    const owned = Object.values(ROW_ROUTES).flat()
+    const owned = full ? [] : Object.values(ROW_ROUTES).flat()
     const mine = all.filter((r) => !owned.some((p) => r.path.startsWith(p)))
     const disposers = mine.map((route: PluginWebRoute) => {
       try {
@@ -166,7 +173,7 @@ function applyCore(ctx: PluginContext): void {
       log('tools service absent — agent tools not registered (UI routes still active)')
       return
     }
-    const owned = Object.values(ROW_TOOLS).flat()
+    const owned = full ? [] : Object.values(ROW_TOOLS).flat()
     const { registerTools } = makeAgentTools(k.store, k.calendar, k.rescue, undefined, { exclude: owned })
     return registerTools(tools, systemPrompt)
   }, 'dsh-tradewatcher: core agent tools')
@@ -222,6 +229,11 @@ export function apply(ctx: PluginContext, config?: unknown): void {
     log(`row「${row}」mounted`)
     return () => log(`row「${row}」unmounted`)
   }, `dsh-tradewatcher: row ${row}`)
-  if (row === 'core') applyCore(ctx)
+  if (row === 'all') {
+    // 老单行装载：全量注册（与拆分前逐字一致），并把五行都标为活跃 ⇒ 客户端 gate 显示全部 tab
+    applyCore(ctx, true)
+    const k = kernel as CoreKernel | null
+    if (k !== null) for (const r of ['calendar', 'watchlist', 'portfolio', 'market', 'cloudmap'] as const) k.activeRows.add(r)
+  } else if (row === 'core') applyCore(ctx)
   else applyFeatureRow(ctx, row)
 }

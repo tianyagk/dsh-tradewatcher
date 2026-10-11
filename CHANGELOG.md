@@ -11,6 +11,26 @@
 
 ---
 
+## v0.45.2 — 紧急修复：v0.44/v0.45 的六行装载会让插件整体不工作（回退为单行 + 缺省全量）
+
+**用户重启后报"插件服务异常"。实测**：`/tradewatcher/health`、`/rows`、`/quotes` 全部 **404**，组合后的 profile 里**没有** tradewatcher 的任何行 —— 插件的宿主半区根本没装载。**这是我造成的**，两个原因叠加：
+
+1. **我漏了安装步骤**：六行只写在**bundle 清单**（`cordis.patch.yml`）里，而 profile 的 patch（真正的组合真源）仍是当初单行安装时留下的那条 `- id: tradewatcher`（不带 `config.row`）。
+2. **我改错了缺省语义**：P2 把"无 config"的缺省行从 `core` 改成了"只有 core 自己的部分"（当时以为这样才对），于是那条 legacy 行只注册内核那一段 —— **各功能行的前缀被 core 静态排除**，`/watch`、`/portfolio`、`/ledger`、`/calendar`、`/breadth` 等几乎全部 404。
+3. 更正一处**设计假设错误**：DSH 的 `dsh-client-modules` 把"同一 package 出现多个**活跃 Loader 源**"视为 **composition error**，而本包**同时带客户端半区**（`dsh.client` + `exports['./client']`）⇒ 同包六行会被整体拒绝。要真做成可独立开关的子组件，得走"**每个子组件各自一个包**"（参考 `@linxin666/dsh-web-all` 的 `/market`、`/settings` 那样），不是同一个包开六行。
+
+### 修复
+
+- **缺省行语义改回 `all`（全量）**：不带 config ⇒ 注册**全部**路由与工具（与拆分前逐字一致）；显式 `row: core` 才是"只要内核那一段"；认不出的值一律回退 `all`（**宁可多给，不可少给** —— 少给的表现就是用户看到的"插件服务异常"）。
+- **manifest 回退为单行** `- id: tradewatcher`（与 profile 里既有的 id 匹配），并加注释写明六行为何被回退、以及要重做需要换路线。
+- 断言同步：缺省 `rowOf(...) === 'all'`；patch 断言改为"**只有一个 `id: tradewatcher`、不带 config、行级精确、数量守恒**"（保留 task-60 的防截断纪律）。
+- 代码侧仍**保留**显式行模式（`row: core` / `row: <功能行>`）与 `apply` 幂等，供将来按"一包一行"路线复用。
+
+### 验证
+
+362 条测试 × 2 时区全绿；`build.mjs` 零改动；profile 完好（`dsh-tradewatcher` 仍是指向工作区的 `link:`，其余 bundle 未受影响）。
+**待用户重启一次 `dsh web` 验证恢复**：`/tradewatcher/health` 应 200、`/rows` 应返回全部行、面板正常。
+
 ## v0.45.1 — 修正组件化归属（按实测调用方重定）与 patch 断言盲区
 
 来自 P3+P4 的独立对抗验证（`docs/AUDIT-VERIFY8.md`，结论"有条件通过"）。

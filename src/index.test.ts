@@ -81,18 +81,18 @@ test('apply 幂等：同进程 apply 三次，一次性副作用只跑一次', a
   stopMonitor()
 })
 
-test('向后兼容：无 config ⇒ row=core，且 core 兜住除功能行之外的全部路由', () => {
-  assert.equal(rowOf(undefined, undefined), 'core', '缺省就是 core')
-  assert.equal(rowOf({}, {}), 'core')
+test('向后兼容：无 config ⇒ row=all（全量，与拆分前逐字一致）', () => {
+  assert.equal(rowOf(undefined, undefined), 'all', '缺省是全量（不是 core！否则功能行路由会 404）')
+  assert.equal(rowOf({}, {}), 'all')
   assert.equal(rowOf({ row: 'calendar' }), 'calendar')
-  assert.equal(rowOf({ row: 'nonsense' }), 'core', '认不出的行退回 core（不猜）')
+  assert.equal(rowOf({ row: 'nonsense' }), 'all', '认不出的行退回全量（宁可多给，不可少给）')
   assert.equal(name, 'dsh-tradewatcher')
 })
 
 test('calendar 行：只注册日历那一段；core 行不含日历（行未激活 ⇒ 路由天然 404）', async () => {
   setKernel(null)
   const core = fakeCtx()
-  apply(core.ctx) // core
+  apply(core.ctx, { row: 'core' }) // core
   const cal = fakeCtx()
   apply(cal.ctx, { row: 'calendar' })
   await new Promise((r) => setTimeout(r, 50))
@@ -123,7 +123,7 @@ test('P2：cloudmap 行启用 ⇒ rows 含 cloudmap，gate 含云图 tab；停�
   ]
   setKernel(null)
   const core = fakeCtx()
-  apply(core.ctx)
+  apply(core.ctx, { row: 'core' })
   // 只 apply core ⇒ rows 只有 core ⇒ 云图 tab 不在 gate 结果里
   const off = gateTabs(TABS, new Set([...coreKernel()!.activeRows, 'calendar']), 'calendar')
   assert.deepEqual(off.visible.map((t) => t.key), ['calendar'], '关闭 cloudmap ⇒ 云图 tab 不出现（日历不受影响）')
@@ -146,36 +146,24 @@ test('P2：cordis.patch.yml 与代码的行集合一致（防漂移）', async (
   const raw = readFileSync(join(root, 'cordis.patch.yml'), 'utf8')
   // 注释里也会出现 `- id: …`（说明文字）⇒ 先剥掉注释行再抓
   const text = raw.split('\n').filter((l) => !l.trim().startsWith('#')).join('\n')
-  const ids = [...text.matchAll(/- id: (tradewatcher-[a-z]+)/g)].map((m) => m[1])
-  assert.deepEqual(ids, [
-    'tradewatcher-core', 'tradewatcher-calendar', 'tradewatcher-cloudmap', 'tradewatcher-market',
-    'tradewatcher-watchlist', 'tradewatcher-portfolio',
-  ], '六行齐全且顺序固定')
-  // 每行都带 config.row，且与 id 对应
-  const blocks = text.split('- id: ').slice(1)
-  for (const [i, id] of ids.entries()) {
-    const row = id.replace('tradewatcher-', '')
-    assert.ok(blocks[i].includes(`config: { row: ${row} }`), `${id} 的 config.row 必须是 ${row}`)
-  }
-  // 已搬迁的三行必须启用；未搬迁的三行必须 disabled（否则会显示成"已启用"却没有门控）
-  // P3：**六行全部启用**。watchlist/portfolio 的路由前缀在 P1 就进了 ROW_ROUTES ⇒
-  // 留成 disabled 会让 core 已经排除、行又不提供 ⇒ 真把功能弄坏（tab 也会被 gate 隐藏）。
-  const shouldEnable = [
-    'tradewatcher-core', 'tradewatcher-calendar', 'tradewatcher-cloudmap',
-    'tradewatcher-market', 'tradewatcher-watchlist', 'tradewatcher-portfolio',
-  ]
-  const shouldDisable: string[] = []
-  for (const [i, id] of ids.entries()) {
-    const isDisabled = blocks[i].includes('disabled: true')
-    assert.equal(isDisabled, shouldDisable.includes(id), `${id} 的 enabled/disabled 与搬迁进度不符`)
-  }
-  assert.equal(shouldEnable.length + shouldDisable.length, ids.length)
+  // manifest 已回退为**单行**（六行形态在本机装载失败：同包多活跃 Loader 源 + 本包带客户端半区
+  // 会触发 dsh-client-modules 的 composition error ⇒ 全部路由 404，用户端表现为"插件服务异常"）。
+  // 这里锁住"只有一个 id: tradewatcher、且不带 config"（带 config 就会退化成只有 core 一段）。
+  const ids = [...text.matchAll(/- id: ([a-z0-9-]+)/g)].map((m) => m[1])
+  assert.deepEqual(ids, ['tradewatcher'], '只装一行（老 profile 的 id），不带 config ⇒ 全量注册')
+  const rows = [...text.matchAll(/config: \{ row: ([a-z]+) \}/g)].map((m) => m[1])
+  assert.deepEqual(rows, [], 'manifest 不许带 config.row（否则缺省全量语义被绕过，功能行路由会 404）')
+  // task-60 的行级精确 + 数量守恒（防"大写/数字被正则截断"逃检）
+  const idLines = text.split('\n').map((l) => l.trim()).filter((l) => l.startsWith('- id:'))
+  assert.deepEqual(idLines, ['- id: tradewatcher'], 'id 行必须完整且唯一（截断/新增/多行都会失败）')
+  assert.equal(idLines.length, ids.length, '抓到的 id 数必须等于 - id: 行数（守恒）')
+  assert.equal(text.includes('disabled: true'), false, 'manifest 不该自己禁用行（要关由 profile 层覆盖）')
 })
 
 test('P3：market 行只注册独占前缀；/tradewatcher/industry 留在 core（详情抽屉要用）', () => {
   setKernel(null)
   const core = fakeCtx()
-  apply(core.ctx)
+  apply(core.ctx, { row: 'core' })
   const market = fakeCtx()
   apply(market.ctx, { row: 'market' })
   // market 独占的五个前缀都在该行；core 里一个都不许有
@@ -212,7 +200,7 @@ test('P4：五行（calendar/cloudmap/market/watchlist/portfolio）关闭时三�
   for (const row of ['calendar', 'cloudmap', 'market', 'watchlist', 'portfolio'] as const) {
     setKernel(null)
     const core = fakeCtx()
-    apply(core.ctx)
+    apply(core.ctx, { row: 'core' })
     const rows = new Set([...coreKernel()!.activeRows]) // 只 apply core ⇒ 只有 core 活跃
     const g = gateTabs(TABS, rows, 'watch')
     assert.equal(g.visible.some((t) => t.row === row), false, `关闭 ${row} ⇒ 它的 tab 不该出现`)
@@ -260,7 +248,7 @@ test('task-60：归属按**实测调用方所在行**（board=core / industries=
   }
   setKernel(null)
   const core = fakeCtx()
-  apply(core.ctx)
+  apply(core.ctx, { row: 'core' })
   const rows: Record<string, { routes: string[] }> = {}
   for (const row of ['watchlist', 'portfolio', 'market', 'calendar', 'cloudmap']) {
     const c = fakeCtx()
@@ -290,7 +278,7 @@ test('task-60：patch id 正则放宽 + 行级精确 + 数量守恒（两种注�
   const raw = readFileSync(join(root, 'cordis.patch.yml'), 'utf8')
   const text = raw.split('\n').filter((l) => !l.trim().startsWith('#')).join('\n')
   // ① 正则放宽到 [a-z0-9-]+（数字行 market2 不再逃过）
-  const ID_RE = /- id: (tradewatcher-[a-z0-9-]+)/g
+  const ID_RE = /- id: (tradewatcher(?:-[a-z0-9-]+)?)/g
   const ids = [...text.matchAll(ID_RE)].map((m) => m[1])
   // ② 数量守恒：抓到的 id 数 == patch 里 `- id:` 行数
   const idLines = text.split('\n').filter((l) => l.includes('- id:')).length
@@ -299,12 +287,10 @@ test('task-60：patch id 正则放宽 + 行级精确 + 数量守恒（两种注�
   //   （这条专门抓 `tradewatcher-portfolioX`：旧正则 [a-z]+ 会截成 tradewatcher-portfolio ⇒ 数量与列表都不变 ⇒ 逃过检测）
   for (const line of text.split('\n')) {
     if (!line.includes('- id:')) continue
-    assert.match(line.trim(), /^- id: tradewatcher-[a-z0-9-]+$/, `id 行有截断残留：${line.trim()}`)
+    assert.match(line.trim(), /^- id: tradewatcher(?:-[a-z0-9-]+)?$/, `id 行有截断残留：${line.trim()}`)
   }
-  assert.deepEqual(ids, [
-    'tradewatcher-core', 'tradewatcher-calendar', 'tradewatcher-cloudmap', 'tradewatcher-market',
-    'tradewatcher-watchlist', 'tradewatcher-portfolio',
-  ], '六行齐全且顺序固定')
+  // manifest 已回退为单行（六行形态装载失败：同包多活跃 Loader 源 + 带客户端半区 ⇒ composition error）
+  assert.deepEqual(ids, ['tradewatcher'], '当前只装一行（legacy id），不带 config ⇒ 全量注册')
 })
 
 test('task-60：两种注入的模拟（各证明一次断言会失败）', () => {
