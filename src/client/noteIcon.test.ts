@@ -39,11 +39,13 @@ test('筹码区块：滑杆索引边界 0 / N−1 / 越界都收敛', () => {
   assert.equal(clampIndex(0, 0), -1, '空序列 ⇒ −1（界面据此不渲染滑杆）')
 })
 
-test('筹码区块：默认展开、五日档隐藏并给原因、fqSupported=false 不给结论', () => {
+test('筹码区块：默认展开、与页签无关、fqSupported=false 与样本不足各给一行原因', () => {
   const panel = read('./ChipsPanel.tsx')
   assert.ok(panel.includes('useState(true)'), '默认展开')
-  assert.ok(panel.includes('tw-chips-off'), '隐藏/不可用要有独立样式类（一行说明，不是空白）')
-  assert.ok(panel.includes('只在分时/日K 及以上显示'), '五日档要给一行原因')
+  assert.ok(panel.includes('tw-chips-off'), '不可用要有独立样式类（一行说明，不是空白）')
+  // task-64：页签门控已删（筹码是标的属性，六页签都显示）
+  assert.equal(panel.includes('isFiveDay'), false, '不许再有页签门控')
+  assert.equal(panel.includes('五日档'), false, '那行说明文案已删除')
   assert.ok(panel.includes('d?.why'), '宿主给 why 时直接展示原因（指数/期货/样本不足）')
   assert.ok(panel.includes('dirClass('), '获利/套牢着色走 dirClass（跟随 redUp，不写死红绿）')
   assert.ok(panel.includes('disclaimer'), 'tooltip 必须带"不是预测/不是买卖建议"')

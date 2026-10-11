@@ -439,6 +439,16 @@ color-scheme:dark}
 .tw-hint-icon{position:relative;padding-right:28px}
 
 /* 筹码分布区块（抽屉内、图表下方）：默认展开 ~160px，可折叠 */
+.tw-chart-pane{display:flex;flex-direction:column}
+.tw-split{position:relative;height:9px;cursor:row-resize;user-select:none;flex:0 0 auto}
+.tw-split-line{position:absolute;left:0;right:0;top:4px;height:1px;background:var(--tw-border-strong)}
+.tw-split:focus-visible .tw-split-line{background:var(--tw-text);height:2px}
+.tw-chart-wrap{position:relative}
+.tw-chart-loading{position:absolute;inset:0;pointer-events:none;background:color-mix(in srgb,var(--tw-card) 42%,transparent)}
+.tw-chart-loading-bar{height:2px;width:38%;margin:0 auto;background:var(--tw-muted);opacity:.75;
+  animation:tw-indet 1.1s ease-in-out infinite}
+.tw-chart-loading-text{position:absolute;right:6px;bottom:4px;font-size:10.5px;color:var(--tw-muted)}
+@keyframes tw-indet{0%{transform:translateX(-40%)}50%{transform:translateX(120%)}100%{transform:translateX(-40%)}}
 .tw-chips{border-top:1px solid var(--tw-border);margin-top:6px;padding:4px 2px 2px}
 .tw-chips-off{color:var(--tw-muted);font-size:11.5px;padding:4px 2px}
 .tw-chips-head{display:flex;align-items:center;gap:8px;font-size:11.5px;flex-wrap:wrap}

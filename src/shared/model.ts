@@ -664,6 +664,8 @@ export interface PortPrefs {
   chipsDecay?: number
   /** 筹码分布的新增筹码形状（默认 triangle） */
   chipsSpread?: 'triangle' | 'uniform'
+  /** 抽屉上下分区比例（上窗占可用高度；默认 0.62，范围 [0.25, 0.75]） */
+  splitRatio?: number
   /**
    * 每日分时归档（多日拼接的数据来源，默认开）。
    *
@@ -691,6 +693,7 @@ export const DEFAULT_PREFS: PortPrefs = {
   stripCfg: { hidden: [] },
   chipsDecay: 1.5,
   chipsSpread: 'triangle',
+  splitRatio: 0.62,
 }
 
 /**

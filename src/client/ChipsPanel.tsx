@@ -1,11 +1,12 @@
 /**
- * 筹码分布区块（抽屉内、`chartBody()` 之后）：可折叠、默认展开 ~160px。
+ * 筹码分布区块（抽屉内、`chartBody()` 之后）：可折叠、默认展开 ~160px；**与页签无关**。
  *
  * 合规要点：
  *  - 获利/套牢是**盈亏语义** ⇒ 着色走 `dirClass`（跟随 `prefs.redUp`），不写死红绿；
  *  - 支撑/压力是**分布统计量**（P5/P95），tooltip 明写"不是预测、不是买卖建议"；
  *  - 容器与数字登记进 `styles.ts` 的两条 `data-blur=1` 清单（隐身档下与其它数字一起糊）；
- *  - 五日档隐藏（多日分时不是日线序列），并给一行原因。
+ *  - **与页签无关**：筹码是**标的的属性**（由日线筹码成本推出），六个页签都显示、DOM 与状态逐字不变；
+ *    只有**标的/数据**的原因才给一行说明（不复权标的、样本不足、口径偏离默认）。
  */
 import React, { useEffect, useState } from 'react'
 import { dirClass } from './format.ts'
@@ -17,15 +18,20 @@ import type { ChipsState } from './useChips.ts'
 export interface ChipsPanelProps {
   state: ChipsState
   redUp: boolean
-  /** 当前档位是否是五日（五日档隐藏并说明原因） */
-  isFiveDay: boolean
   /** 该标的是否支持前复权（指数/期货 ⇒ 宿主不给模块） */
   fqSupported: boolean
   onRetry: () => void
+  /** 下窗可用高度（由分割线决定；不再写死 160px 上限） */
+  maxBottom?: number
+  /** 折叠状态上报（抽屉据此决定是否渲染分割线） */
+  onOpenChange?: (open: boolean) => void
 }
 
 export function ChipsPanel(props: ChipsPanelProps): React.ReactElement | null {
   const [open, setOpen] = useState(true)
+  useEffect(() => {
+    props.onOpenChange?.(open)
+  }, [open])
   const [idx, setIdx] = useState<number | null>(null)
   // 挂载计数：切页签后这个数必须**保持 1**（滑杆/折叠状态跟着一起没丢）
   useEffect(() => {
@@ -36,10 +42,6 @@ export function ChipsPanel(props: ChipsPanelProps): React.ReactElement | null {
   const at = clampIndex(idx === null ? days.length - 1 : idx, days.length)
   const day = at >= 0 ? days[at] : null
 
-  if (props.isFiveDay) {
-    return React.createElement('div', { className: 'tw-chips tw-chips-off' },
-      React.createElement('span', { className: 'tw-muted' }, '筹码分布只在分时/日K 及以上显示（五日档是多日分时，不是日线序列）'))
-  }
   if (!props.fqSupported || d?.why !== null && d?.why !== undefined) {
     return React.createElement('div', { className: 'tw-chips tw-chips-off' },
       React.createElement('span', { className: 'tw-muted' }, d?.why ?? '该标的不提供筹码分布（指数/期货/板块没有前复权序列）'))

@@ -33,6 +33,7 @@ import { bulkBatchMatches, numOrNull } from '../shared/model.ts'
 import { shanghaiDayStart } from './time.ts'
 import { writeJsonAtomic } from './atomic.ts'
 import { normalizeChipPrefs } from './chips.ts'
+import { normalizeSplitRatio } from '../client/splitDrag.ts'
 
 const NAME_MAX = 40
 
@@ -470,6 +471,7 @@ export class DataStore {
         watchSort: safeSortPref(loaded.watchSort, WATCH_SORT_KEYS, DEFAULT_PREFS.watchSort),
         portSort: safeSortPref(loaded.portSort, PORT_SORT_KEYS, DEFAULT_PREFS.portSort),
         stripCfg: normalizeStripCfg(loaded.stripCfg),
+        splitRatio: normalizeSplitRatio(loaded.splitRatio).ratio,
         chipsDecay: normalizeChipPrefs({ decay: loaded.chipsDecay, spread: loaded.chipsSpread }).decay,
         chipsSpread: normalizeChipPrefs({ decay: loaded.chipsDecay, spread: loaded.chipsSpread }).spread,
       // 筹码口径：装载时同样收敛（手改坏的值不让启动失败）
@@ -1099,6 +1101,12 @@ export class DataStore {
     // stripCfg 被静默丢弃（刷新后配置全丢，P0）。
     if (patch.stripCfg !== undefined) this.prefs.stripCfg = normalizeStripCfg(patch.stripCfg)
     // 筹码口径（k / 形状）：非法值回落默认并**如实写进 notes**（不静默）；老 profile 缺键 ⇒ 默认
+    // 抽屉上下分区比例：非法值回落默认并**如实记录**（白名单必须放行，否则会被静默丢弃）
+    if (patch.splitRatio !== undefined) {
+      const next = normalizeSplitRatio(patch.splitRatio)
+      this.prefs.splitRatio = next.ratio
+      if (next.note !== null) log('分区分割比例回落：', next.note)
+    }
     if (patch.chipsDecay !== undefined || patch.chipsSpread !== undefined) {
       const cur = { decay: this.prefs.chipsDecay, spread: this.prefs.chipsSpread }
       const next = normalizeChipPrefs({

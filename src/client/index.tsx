@@ -425,6 +425,9 @@ function Dashboard(): React.ReactElement {
           secid: detail.secid,
           name: detail.name,
           redUp: (prefs ?? DEFAULT_PREFS).redUp,
+          // 上下分区比例：读写都走 prefs（老 profile 缺键 ⇒ 抽屉内用默认值）
+          splitRatio: (prefs ?? DEFAULT_PREFS).splitRatio,
+          onSplitRatio: (ratio: number) => setPrefs({ splitRatio: ratio }),
           onClose: closeDetail,
         })
       : null,

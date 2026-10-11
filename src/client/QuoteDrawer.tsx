@@ -34,6 +34,8 @@ import { isUsableBaseline } from './trendView.ts'
 import { trendCaliberOf } from '../shared/trendCaliber.ts'
 import { ChipsPanel } from './ChipsPanel.tsx'
 import { countMount } from './mounts.ts'
+import { chartFrameOf } from './chartFrame.ts'
+import { SPLIT_DEFAULT, klineHeightsOf, normalizeSplitRatio, splitDragRatio, splitHeights, splitKeyStep } from './splitDrag.ts'
 import { NoteIcon } from './NoteIcon.tsx'
 import { useChips } from './useChips.ts'
 
@@ -74,6 +76,10 @@ export function QuoteDrawer(props: {
   name: string
   redUp: boolean
   onClose: () => void
+  /** 上下分区比例（上窗占比；不给则用默认值） */
+  splitRatio?: number
+  /** 比例变更回调（宿主写 prefs；不给则只在本次会话内生效） */
+  onSplitRatio?: (ratio: number) => void
 }): React.ReactElement {
   const { secid, name, redUp, onClose } = props
   // 记住上次看的周期：关掉再打开、换一只标的时不必重新点一次
@@ -93,6 +99,31 @@ export function QuoteDrawer(props: {
   // 筹码分布：**只随 secid 取一次**（页签/复权/图表重试都不参与）——切页签不发请求、不闪；
   // 五日档只是"不显示"（面板给原因），数据照留 ⇒ 切回来立即可见。
   const [chipsRefresh, setChipsRefresh] = useState(0)
+  // 上下分区：比例来自 prefs；拖拽期间只挪线（dragRatio），松手才提交并**重绘**一次图表
+  const ratio = normalizeSplitRatio(props.splitRatio ?? SPLIT_DEFAULT).ratio
+  const [dragRatio, setDragRatio] = useState<number | null>(null)
+  const [avail, setAvail] = useState(0)
+  const dragStart = useRef<{ ratio: number; y: number } | null>(null)
+  const [chipsOpen, setChipsOpen] = useState(true)
+  // 可用高度：量容器（拿不到时用 520 兜底，保证首帧也有合理高度）
+  useEffect(() => {
+    const el = containerRef.current
+    if (el === null) return
+    const read = (): void => setAvail(el.clientHeight)
+    read()
+    if (typeof ResizeObserver === 'undefined') return
+    const ro = new ResizeObserver(read)
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [])
+  const shownRatio = dragRatio ?? ratio
+  const split = splitHeights(avail > 0 ? avail : 520, shownRatio)
+  // 图表几何：由上窗高度**重算**（固定开销不变 ⇒ 不是等比缩放）；高度不足时按最小值夹住、不重绘空图
+  const kh = klineHeightsOf(split.top)
+  const commitRatio = (next: number): void => {
+    setDragRatio(null)
+    props.onSplitRatio?.(next)
+  }
   // 抽屉自身的挂载计数：切页签不该把它重建（key 只绑在 secid 上）
   useEffect(() => {
     countMount('drawer')
@@ -125,7 +156,9 @@ export function QuoteDrawer(props: {
       setLoading(false)
     } else {
       setLoading(true)
-      setPayload((prev) => (prev !== null && prev.tab === tab ? prev : null))
+      // ⚠ 不再清空：切页签要**保留上一张图**（旧周期的数据不拿去当新周期渲染，
+      //   但也不必把它丢掉 —— 骨架替换整块图正是"整个侧栏在刷新"的观感来源）
+      setLoading(true)
     }
     chartCache
       .get(secid, tab, fqt)
@@ -159,7 +192,7 @@ export function QuoteDrawer(props: {
 
   const priceCls = dirClass(detail?.chg ?? null, redUp)
   // 三窗格（主图 + 成交量 + MACD）
-  const chartHeight = 8 + 210 + 6 + 54 + 6 + 64 + 16
+  const chartHeight = kh.chartHeight
 
   const kv = (k: string, v: string, cls?: string, title?: string): React.ReactElement =>
     React.createElement('div', { className: 'tw-dkv', title },
@@ -242,11 +275,13 @@ export function QuoteDrawer(props: {
         React.createElement('span', { className: 'tw-muted' }, err),
       )
     }
-    if (payload === null || payload.tab !== tab) {
-      // 旧周期的数据尚未被替换：显示骨架而不是拿它去渲染
+    if (payload === null) {
+      // 首帧（还没有任何上一张图可留）：允许骨架
       return React.createElement('div', { 'aria-busy': true, 'aria-label': '图表加载中' },
         React.createElement('div', { className: 'tw-skel', style: { height: chartHeight, width: '100%' } }))
     }
+    // 注意：这里**不**再判 `payload.tab !== tab` —— 旧周期的最后一帧继续渲染，
+    // 由外层叠一层加载态（`chartFrameOf`），避免切页签时整块图变骨架。
     /**
      * 宿主明确回"这份数据拿不到"（`trend/kline: null`）时会带 `missing[]` ——
      * 必须把原因显示出来：`no-source`（该市场本来就没有这个源，等也没用）与
@@ -344,9 +379,10 @@ export function QuoteDrawer(props: {
       width,
       redUp,
       klt: plan.klt,
-      mainH: 230,
-      volH: 54,
-      macdH: 64,
+      // 几何由上窗高度算出 ⇒ 高度变化会**重绘**（比例尺/轴刻度重算），不是 CSS 拉伸
+      mainH: kh.mainH,
+      volH: kh.volH,
+      macdH: kh.macdH,
     })
   }
 
@@ -532,6 +568,9 @@ export function QuoteDrawer(props: {
     )
   }
 
+  // 切页签时的帧决策：旧图继续渲染 + 叠加加载态；**只有首帧**才走骨架
+  const frame = chartFrameOf({ hasPayload: payload !== null, payloadTab: payload?.tab ?? '', tab })
+
   return React.createElement(
     'div',
     { className: 'tw-drawer-mask', onMouseDown: (e: React.MouseEvent) => { if (e.target === e.currentTarget) onClose() } },
@@ -564,15 +603,72 @@ export function QuoteDrawer(props: {
               ...(caliberExplain !== null ? { tabIndex: 0, role: 'note', 'aria-label': `${caliber}。${caliberExplain}` } : {}),
             }, caliber)
           : null,
-        chartBody(),
-        // 筹码分布（近 45 日）：可折叠、默认展开；五日档隐藏并给一行原因
+        // 上窗：固定高度（由分割线算出）——用**真实高度重绘**而不是拉伸
+        React.createElement('div', { className: 'tw-chart-pane', style: { height: split.top, overflow: 'hidden' } },
+          React.createElement('div', { className: 'tw-chart-wrap' },
+            chartBody(),
+          // 切页签时：旧图仍在渲染，上面叠半透明加载态（细进度条 + 淡遮罩，不盖住旧图内容）
+          frame.overlay
+            ? React.createElement('div', { className: 'tw-chart-loading', 'aria-busy': true, 'aria-label': `${TAB_LABEL[tab]} 加载中（显示的是上一张图）` },
+                React.createElement('div', { className: 'tw-chart-loading-bar' }),
+                React.createElement('span', { className: 'tw-chart-loading-text' }, '载入中 · 上图为上一周期'),
+                )
+              : null,
+          ),
+        ),
+        // 分割线：1px 细线 + 上下各 4px 命中区（不要装饰把手）；折叠时**不渲染**
+        chipsOpen
+          ? React.createElement('div', {
+              className: 'tw-split',
+              role: 'separator',
+              'aria-orientation': 'horizontal',
+              'aria-valuenow': Math.round(shownRatio * 100),
+              'aria-valuemin': 25,
+              'aria-valuemax': 75,
+              'aria-label': `上下分区比例 ${Math.round(shownRatio * 100)}%（上窗 ${split.top}px / 下窗 ${split.bottom}px）。上下方向键以 2% 调整；双击或回车恢复默认`,
+              title: '拖动调整上下比例（双击或回车恢复默认）',
+              tabIndex: 0,
+              onDoubleClick: () => commitRatio(SPLIT_DEFAULT),
+              onKeyDown: (e: React.KeyboardEvent) => {
+                if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+                  e.preventDefault()
+                  commitRatio(splitKeyStep(shownRatio, e.key))
+                } else if (e.key === 'Enter') {
+                  e.preventDefault()
+                  commitRatio(SPLIT_DEFAULT)
+                }
+              },
+              onMouseDown: (e: React.MouseEvent) => {
+                e.preventDefault()
+                dragStart.current = { ratio: shownRatio, y: e.clientY }
+                const move = (ev: MouseEvent): void => {
+                  const st = dragStart.current
+                  if (st === null) return
+                  // 拖拽中只挪线（不重绘图表）；松手才提交
+                  setDragRatio(splitDragRatio(st.ratio, st.y, ev.clientY, avail > 0 ? avail : 520))
+                }
+                const up = (ev: MouseEvent): void => {
+                  window.removeEventListener('mousemove', move)
+                  window.removeEventListener('mouseup', up)
+                  const st = dragStart.current
+                  dragStart.current = null
+                  if (st !== null) commitRatio(splitDragRatio(st.ratio, st.y, ev.clientY, avail > 0 ? avail : 520))
+                }
+                window.addEventListener('mousemove', move)
+                window.addEventListener('mouseup', up)
+              },
+            }, React.createElement('span', { className: 'tw-split-line' }))
+          : null,
+        // 筹码分布：**与页签无关**（它是标的的属性）。可折叠、默认展开；只有标的/样本/口径原因才给说明
         React.createElement(ChipsPanel, {
           state: chipsState,
           redUp,
-          isFiveDay: tab === '5d',
           fqSupported: fqSupportedOf(secid),
           // 筹码的重试是**它自己的**计数器（与图表 retry 无关 ⇒ 切页签/重试图表都不会连带刷新筹码）
           onRetry: () => setChipsRefresh((x) => x + 1),
+          // 高度上限由分割线决定（不再写死 160px）；折叠状态上报给抽屉 ⇒ 折叠时不渲染分割线
+          maxBottom: split.bottom,
+          onOpenChange: setChipsOpen,
         }),
         note !== '' || legend !== ''
           ? React.createElement('div', { className: 'tw-chartnote' }, `${note}${legend}`)
