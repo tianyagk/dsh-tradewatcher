@@ -144,6 +144,7 @@ color-scheme:dark}
   .tw-chart-tip-v,
   .tw-tone,
   .tw-cfg-count,
+  .tw-review-bline, .tw-daytrade-table td, .tw-bulk-table td, .tw-bulk-sum,
   .tw-pos-title small,
   .tw-caliber, .tw-chartnote, .tw-zoom-bar, .tw-topmeta .tw-uptime){
   filter:blur(3.2px);transition:filter .12s}
@@ -157,6 +158,7 @@ color-scheme:dark}
   .tw-chart-tip-v,
   .tw-tone,
   .tw-cfg-count,
+  .tw-review-bline, .tw-daytrade-table td, .tw-bulk-table td, .tw-bulk-sum,
   .tw-pos-title small,
   .tw-caliber, .tw-chartnote, .tw-zoom-bar){
   filter:none}
@@ -425,6 +427,39 @@ color-scheme:dark}
 .tw-rescue-pool{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:3px 10px;font-size:11.5px}
 .tw-rescue-pool-item{display:flex;align-items:center;gap:5px;color:var(--tw-muted);cursor:pointer}
 .tw-rescue-pool-item[data-on=true]{color:var(--tw-text)}
+
+/* 复盘条（做T 收起态 + 分档卡）与批量录入模态（P2-9 / P1-3 / P2-1）*/
+.tw-review{display:flex;flex-wrap:wrap;align-items:center;gap:8px;padding:6px 2px;border-top:1px solid var(--tw-border)}
+.tw-review-toggle{background:transparent;border:1px solid var(--tw-border-strong);border-radius:999px;
+  padding:2px 10px;font-size:11.5px;color:var(--tw-text);cursor:pointer}
+.tw-review-toggle[aria-expanded=true]{background:var(--tw-hover)}
+.tw-daytrade-table{margin:4px 0 0;font-size:11.5px;width:100%}
+.tw-daytrade-table th{color:var(--tw-muted);font-weight:500;text-align:left}
+.tw-review-note{font-size:11px;color:var(--tw-muted)}
+.tw-review-buckets{display:flex;align-items:center;gap:6px;font-size:11.5px}
+.tw-review-btitle{color:var(--tw-muted)}
+.tw-review-bline{font-family:var(--tw-mono)}
+
+.tw-bulk{position:fixed;z-index:1180;left:50%;top:8vh;transform:translateX(-50%);width:min(680px,calc(100vw - 24px));
+  max-height:80vh;overflow:auto;background:var(--tw-card);border:1px solid var(--tw-border-strong);border-radius:12px;
+  box-shadow:0 10px 34px rgba(0,0,0,.32);padding:0 0 10px}
+.tw-bulk-h{display:flex;align-items:center;gap:8px;padding:8px 12px;border-bottom:1px solid var(--tw-border);position:sticky;top:0;background:inherit}
+.tw-bulk-title{font-weight:600;font-size:12.5px}
+.tw-bulk-stage{flex:1;color:var(--tw-muted);font-size:11px}
+.tw-bulk-body{padding:10px 12px}
+.tw-bulk-tip{font-size:11px;color:var(--tw-muted);margin-bottom:6px}
+.tw-bulk-text{width:100%;font-family:var(--tw-mono);font-size:12px;background:var(--tw-card);color:var(--tw-text);
+  border:1px solid var(--tw-border-strong);border-radius:8px;padding:8px;resize:vertical}
+.tw-bulk-tools{display:flex;align-items:center;gap:8px;margin-top:8px}
+.tw-bulk-sum{font-size:11.5px;color:var(--tw-muted);font-family:var(--tw-mono)}
+.tw-bulk-foot{display:flex;justify-content:flex-end;gap:8px;margin-top:10px}
+.tw-bulk-table{width:100%;font-size:11.5px;margin-top:6px}
+.tw-bulk-table th{color:var(--tw-muted);font-weight:500;text-align:left}
+.tw-bulk-errors{margin-top:10px;border-top:1px dashed var(--tw-border);padding-top:6px}
+.tw-bulk-errh{font-size:11.5px;color:var(--tw-muted);margin-bottom:4px}
+.tw-bulk-err{font-size:11.5px;color:var(--tw-muted);display:flex;flex-direction:column;gap:2px;margin-bottom:4px}
+.tw-bulk-raw{font-family:var(--tw-mono);font-size:11px;color:var(--tw-muted);white-space:pre-wrap;word-break:break-all}
+.tw-bulk-ok{font-size:12px}
 
 /* 行情卡片五档状态 badge（设计 §4）—— 独立色系（靛蓝→青→石板灰→紫→品红），不含红/绿/琥珀。
    底色＝档位色 12%（浅）/16%（深），文字与边框＝档位色本体；色盲兜底是**文字本身**。 */

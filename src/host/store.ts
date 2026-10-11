@@ -29,7 +29,7 @@ import {
   type WatchItem,
 } from '../shared/model.ts'
 import { log } from './context.ts'
-import { numOrNull } from '../shared/model.ts'
+import { bulkBatchMatches, numOrNull } from '../shared/model.ts'
 import { shanghaiDayStart } from './time.ts'
 import { writeJsonAtomic } from './atomic.ts'
 
@@ -949,6 +949,38 @@ export class DataStore {
         await this.trade(body.op, body)
         break
       }
+      case 'deleteLedger': {
+        // 批量录入的一次撤销：按 id 或批次标记反删交易流水，并把删掉的**原件关键字段**写进一条 pnote
+        //（留痕：secid/qty/price/ts/note 都在里面，注释说的"可恢复"才真的成立）
+        const ids = (body.ids ?? []).filter((x): x is string => typeof x === 'string' && x !== '')
+        const marker = typeof body.noteMarker === 'string' && body.noteMarker.trim() !== '' ? body.noteMarker.trim() : null
+        if (ids.length === 0 && marker === null) throw new Error('ids 或 noteMarker 至少要给一个（要反删哪些流水）')
+        if (ids.length > 500) throw new Error('一次最多反删 500 条')
+        const set = new Set(ids)
+        // **整词精确匹配**（不是子串、也不是裸前缀）：反删不可恢复，`批量录入#1` 绝不能碰到 `批量录入#12`。
+        // 形状与边界见 shared/model.ts 的 BULK_BATCH_RE / bulkBatchesOf。
+        const removed = this.ledger.entries.filter((e) => set.has(e.id) || (marker !== null && bulkBatchMatches(e.note, marker)))
+        if (removed.length === 0) throw new Error('没有匹配的流水 id（可能已经撤销过）')
+        const removedIds = new Set(removed.map((e) => e.id))
+        this.ledger = { ...this.ledger, entries: this.ledger.entries.filter((e) => !removedIds.has(e.id)) }
+        const head = removed[0]
+        // D3：留痕要**真的能恢复** —— 每条原件的 verb/id/secid/数量@价格/ts/note 都写进去。
+        // 只写 id 列表等于恢复不了（那是注释与实现不一致）。
+        const detail = removed
+          .map((e) => `${e.verb} ${e.id} ${e.secid ?? ''} ${e.qty ?? ''}@${e.price ?? ''} ts=${e.ts}${e.note === undefined || e.note === '' ? '' : ` note=${JSON.stringify(e.note)}`}`)
+          .join(' ｜ ')
+        this.ledgerEntry('pnote', {
+          posId: head.posId,
+          groupId: head.groupId,
+          secid: head.secid,
+          name: head.name,
+          qty: removed.reduce((n, e) => n + (e.verb === 'buy' ? (e.qty ?? 0) : -(e.qty ?? 0)), 0),
+          note: `撤销批量录入：反删 ${removed.length} 条交易流水。原件：${detail}`,
+        })
+        await this.commit([['ledger.json', this.ledger]])
+        return
+      }
+
       case 'adjust': {
         const pos = this.posOf(this.requireId(body.posId))
         const qty = this.sanitizePrice(body.qty, true) // allow 0

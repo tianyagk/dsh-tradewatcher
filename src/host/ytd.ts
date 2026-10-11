@@ -1,20 +1,20 @@
 /**
  * 三条实现约定（都是"宁可显示 — 也不给一个看着正常的错数"）：
- *  1. **基准必须已收盘**：年内第一个交易日的**收盘价**才是基准。若该日就是今天
+ *  1. 基准必须已收盘：年内第一个交易日的收盘价才是基准。若该日就是今天
  */
 import type { DayBar, FqMode, KlineData, MissingField, YtdBaseKind, YtdRow } from '../shared/model.ts'
 import * as em from './em.ts'
 import { dayOf } from './time.ts'
 import { MISSING_TIER_ADVICE } from '../shared/model.ts'
 
-/** 年内第一个交易日收盘价的取数窗口：一年约 245 个交易日，400 根足够覆盖，且命中缓存后只增量拉最新几根 */
+/**年内第一个交易日收盘价的取数窗口：一年约 245 个交易日，400 根足够覆盖，且命中缓存后只增量拉最新几根 */
 export const YTD_BARS = 400
-/** 失败冷却：失败不重试轰炸，但也不把一个瞬时失败判成"整天都没有" */
+/**失败冷却：失败不重试轰炸，但也不把一个瞬时失败判成"整天都没有" */
 export const YTD_FAIL_COOLDOWN_MS = 10 * 60_000
-/** 批量取数并发上限（与 anomaly.ts 同口径） */
+/**批量取数并发上限（与 anomaly.ts 同口径） */
 export const YTD_CONCURRENCY = 4
 /**
- * 单次请求的标的数上限。YTD 的基准要读**日线**：每个标的第一次会触发一次全量日线拉取
+ * 单次请求的标的数上限。YTD 的基准要读日线：每个标的第一次会触发一次全量日线拉取
  * （之后进磁盘缓存 + 增量，休市时零回源），因此上限比行情的 160 更低，
  * 多出的部分如实报 `truncated`（不静默截断）。
  */
@@ -26,25 +26,25 @@ export const YTD_MAX_IDS = 60
  */
 export const YTD_METHODOLOGY =
   `YTD = (现价 − 本年内第一个交易日收盘价) ÷ 该收盘价 × 100%；前复权序列（指数/期货按原始价格，不适用复权时如实标注）；` +
-  `取数窗口 ${YTD_BARS} 根日线（含基准日与最新一根）；基准必须**已收盘**，当日未收盘不给数；算不出显示 — 并给原因。`
+  `取数窗口 ${YTD_BARS} 根日线（含基准日与最新一根）；基准必须已收盘，当日未收盘不给数；算不出显示 — 并给原因。`
 
-/** 一个标的的基准（年内第一个交易日收盘价 / 上市首日收盘价） */
+/**一个标的的基准（年内第一个交易日收盘价 / 上市首日收盘价） */
 export interface YtdBase {
   baseDate: string | null
   baseClose: number | null
   baseKind: YtdBaseKind | null
-  /** **实际生效**的复权口径（指数/期货恒为 0） */
+  /**实际生效的复权口径（指数/期货恒为 0） */
   fq: FqMode
   fqSupported: boolean
-  /** 基准序列被观测/落盘的时刻 */
+  /**基准序列被观测/落盘的时刻 */
   asOf: number | null
-  /** 取不到基准时的原因（人话）；成功时为 null */
+  /**取不到基准时的原因（人话）；成功时为 null */
   why: string | null
-  /** 这次是失败结果（冷却用；成功结果当天有效） */
+  /**这次是失败结果（冷却用；成功结果当天有效） */
   failed: boolean
 }
 
-/** K 线取数入口（可注入，便于测试打桩 —— 测试一律不打上游） */
+/**K 线取数入口（可注入，便于测试打桩 —— 测试一律不打上游） */
 export type KlineFetcher = (secid: string, klt: 101 | 102 | 103 | 104, lmt: number, fqt: FqMode) => Promise<KlineData | null>
 
 export interface YtdDeps {
@@ -72,7 +72,7 @@ export function ytdBaseFromBars(bars: readonly DayBar[], today: string, requeste
   return { baseDate: bar.date, baseClose: bar.close, baseKind }
 }
 
-/** 纯函数：YTD（%）。基准缺失或非正数、现价缺失时返回 null —— **不用 0 顶替** */
+/**纯函数：YTD（%）。基准缺失或非正数、现价缺失时返回 null —— 不用 0 顶替 */
 export function ytdPctOf(price: number | null, baseClose: number | null): number | null {
   if (price === null || baseClose === null || !Number.isFinite(price) || !Number.isFinite(baseClose) || baseClose <= 0) return null
   return Math.round(((price - baseClose) / baseClose) * 10000) / 100
@@ -118,7 +118,7 @@ export class YtdMemo {
   }
 }
 
-/** 取一个标的的基准（命中 memo 则零请求；否则走 `em.fetchKline`，其内部已有磁盘缓存/增量/单飞） */
+/**取一个标的的基准（命中 memo 则零请求；否则走 `em.fetchKline`，其内部已有磁盘缓存/增量/单飞） */
 export async function ytdBaseOf(secid: string, day: string, deps: YtdDeps = {}): Promise<YtdBase> {
   const fetchKline = deps.fetchKline ?? em.fetchKline
   const now = deps.now ?? Date.now
@@ -169,20 +169,20 @@ export async function ytdBaseOf(secid: string, day: string, deps: YtdDeps = {}):
   return base
 }
 
-/** 默认 memo（进程级，按日粒度；路由与 agent 工具共用同一份，避免各算一遍） */
+/**默认 memo（进程级，按日粒度；路由与 agent 工具共用同一份，避免各算一遍） */
 const defaultMemo = new YtdMemo()
 
 export interface YtdItem {
   secid: string
   name: string
-  /** 现价（来自行情；缺失传 null） */
+  /**现价（来自行情；缺失传 null） */
   price: number | null
 }
 
 export interface YtdBatchResult {
   rows: YtdRow[]
   missing: MissingField[]
-  /** 口径字符串（随结果返回，与算法同源） */
+  /**口径字符串（随结果返回，与算法同源） */
   methodology: string
 }
 
@@ -203,7 +203,7 @@ export async function computeYtds(items: readonly YtdItem[], deps: YtdDeps = {})
       const it = queue.shift()
       if (it === undefined) return
       const supported = em.fqSupported(it.secid)
-      // 现价缺失时**不去打日线**：算不出数，还白白触发一次全量 K 线拉取
+      // 现价缺失时不去打日线：算不出数，还白白触发一次全量 K 线拉取
       const base = it.price === null
         ? null
         : await ytdBaseOf(it.secid, day, { ...deps, memo })

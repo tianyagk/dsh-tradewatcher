@@ -15,8 +15,10 @@ import type {
 import { LEDGER_VERB_LABEL, DEFAULT_PREFS, realizedUnknownNote, realizedUnknownQtyOf, realizedUnknownRows, realizedUnknownShort } from '../shared/model.ts'
 import { availableLockNote, feeShareNote, ytdBaseNote } from './portfolioMeta.ts'
 import { api } from './api.ts'
+import type { DayTradeView } from './api.ts'
 import { fmtStamp, dirClass, fmtAmt, fmtMoneySigned, fmtPct, fmtPrice, fmtRaw } from './format.ts'
 import { Btn, EmptyHint, ErrorNote, Field, Modal, MoreMenu, Skeleton, SuggestInput } from './ui.tsx'
+import { BulkPaste } from './BulkPaste.tsx'
 import { MiniTrend } from './charts.tsx'
 import { useMiniTrends, type MiniData } from './mini.ts'
 import { NO_SOURCE_TITLE, NO_SOURCE_LABEL, PENDING_LABEL } from './quoteState.ts'
@@ -84,6 +86,8 @@ export function PortfolioPage(props: {
     setPrefs({ costBasis: next })
   }
   const [view, setView] = useState<PortfolioView | null>(null)
+  /** 做T（次日往返配对，宿主算好；界面只展示） */
+  const [dayTrades, setDayTrades] = useState<DayTradeView | null>(null)
   /** 除权除息提示（P2-4）：来自已同步的日历事件，按持仓标的勾稽 */
   const [actions, setActions] = useState<CorporateAction[]>([])
   const [backupOpen, setBackupOpen] = useState(false)
@@ -120,6 +124,7 @@ export function PortfolioPage(props: {
       .portfolio()
       .then((r) => {
         setView(r.view)
+        setDayTrades(r.dayTrades ?? null)
         setStale(r.stale)
         setActions(r.corporateActions ?? [])
         setError(null)
@@ -157,6 +162,7 @@ export function PortfolioPage(props: {
       .mutatePortfolio(body)
       .then((r) => {
         setView(r.view)
+        setDayTrades(r.dayTrades ?? null)
         setStale(r.stale)
         setActions(r.corporateActions ?? [])
         done?.()
@@ -180,6 +186,9 @@ export function PortfolioPage(props: {
 
   const groups = [...view.groups].sort((a, b) => a.order - b.order)
   const activeGroups = groups.filter((g) => g.archived !== true)
+  // 批量录入用（P2-9）：分组做落点、持仓做"建仓 or 买入"的判断；数据从同一份 view 来
+  const bulkGroups = activeGroups.map((g) => ({ id: g.id, name: g.name, archived: g.archived }))
+  const bulkItems = view.positions.filter((p) => p.qty > 0).map((p) => ({ id: p.posId, secid: p.secid, name: p.name }))
   const archivedGroups = groups.filter((g) => g.archived === true)
   const grand = view.grand
 
@@ -408,6 +417,7 @@ export function PortfolioPage(props: {
             React.createElement(MoreMenu, {
               ariaLabel: `分组 ${grp.name} 更多操作`,
               items: [
+                { label: '批量录入', onClick: () => setModal({ kind: 'bulk', groupId: grp.id }) },
                 { label: '流水记录', onClick: () => openLedger({ mode: 'group', id: grp.id, title: grp.name }) },
                 { label: '编辑分组', onClick: () => setModal({ kind: 'groupEdit', groupId: grp.id, name: grp.name, note: grp.note ?? '' }) },
                 {
@@ -480,11 +490,20 @@ export function PortfolioPage(props: {
           ),
         )
       : null,
+    React.createElement(PortfolioReview, {
+      dayTrades,
+      rows: view.positions.filter((p) => p.qty > 0),
+      redUp,
+    }),
     ledgerTarget !== null
       ? React.createElement(LedgerModal, { target: ledgerTarget, entries: ledgerEntries, redUp, diluted, onClose: () => openLedger(null) })
       : null,
     modal !== null
-      ? React.createElement(PortModalHost, { modal, key: `${modal.kind}-${'pos' in modal ? modal.pos.posId : 'groupId' in modal ? modal.groupId : 'n'}`, redUp, quotes, onClose: () => setModal(null), mutate })
+      ? React.createElement(PortModalHost, {
+        modal,
+        groups: bulkGroups,
+        items: bulkItems,
+        key: `${modal.kind}-${'pos' in modal ? modal.pos.posId : 'groupId' in modal ? modal.groupId : 'n'}`, redUp, quotes, onClose: () => setModal(null), mutate })
       : null,
   )
 }
@@ -495,6 +514,8 @@ type ModalState =
   | { kind: 'addPos'; groupId: string; groupName: string }
   | { kind: 'trade'; verb: 'buy' | 'sell' | 'adjust'; pos: PositionRow; groupName: string }
   | { kind: 'posEdit'; pos: PositionRow; groupName: string; groups: Array<{ id: string; name: string }> }
+  /** 批量粘贴录入（P2-9）：入口在分组「…」菜单里，不占常驻按钮 */
+  | { kind: 'bulk'; groupId: string }
 
 type LedgerTarget = { mode: 'group' | 'pos'; id: string; title: string; row?: PositionRow } | null
 
@@ -503,10 +524,21 @@ function PortModalHost(props: {
   modal: ModalState
   redUp: boolean
   quotes: Record<string, QuoteRow>
+  groups: ReadonlyArray<{ id: string; name: string; archived?: boolean }>
+  items: ReadonlyArray<{ id: string; secid: string; name: string }>
   onClose: () => void
   mutate: (body: MutatePortBody, done?: () => void) => void
 }): React.ReactElement {
   const m = props.modal
+  if (m.kind === 'bulk') {
+    return React.createElement(BulkPaste, {
+      groups: props.groups,
+      items: props.items,
+      defaultGroupId: m.groupId,
+      onDone: () => { /* 写入后由父级 refresh 拉新数据 */ },
+      onClose: props.onClose,
+    })
+  }
   if (m.kind === 'addGroup') {
     return React.createElement(GroupFormModal, { mode: 'create', name: '', note: '', onClose: props.onClose, mutate: props.mutate })
   }
@@ -1086,6 +1118,15 @@ function PosRow(props: {
         React.createElement('span', { className: 'tw-dim' }, fmtAmt(row.fees)),
         feeShareNote(row.fees, row.feeShare),
         '费用 ÷ 累计成交额（买卖双向，含佣金/手续费）'),
+      // P2-6：费用按每股摊销。与"累计费用"**同一事实的另一种量纲**，所以解释留在这一处：
+      // 总额给的是规模，¥x/股给的是"每股成本里有多少是费用"；数量 0（清仓）⇒ —（不给 Infinity）
+      pps('费用 ¥/股',
+        React.createElement('span', { className: 'tw-dim' },
+          row.feePerShare === null || row.feePerShare === undefined ? '—' : `¥${row.feePerShare.toFixed(4)}/股`),
+        null,
+        row.feePerShare === null || row.feePerShare === undefined
+          ? '数量为 0（或没有买入费用记录）⇒ 不给每股费用'
+          : `买入侧累计费用 ÷ 数量（分母 ${fmtRaw(row.feePerShareQty ?? 0)} 股）`),
     ),
   )
 }
@@ -1192,3 +1233,64 @@ function FxModal(props: {
     ),
   )
 }
+
+/**
+ * 复盘与摊销条（P1-3 / P2-1 / P2-6 的界面侧）：
+ *  - **做T 收起态一行**：`做T 12 次 · 净 +328.50 · 胜率 58%`，展开才看逐次，**方向如实标**（先卖后买＝反 T）；
+ *  - **分档卡**：把当前持仓按同一分档汇总成一行，**各档之和 = 总数**，缺失用 `—`（不写"未知"）。
+ *    这里的分档维度＝今日涨跌（界面手上就有 `pct`；位置口径的分档需要宿主逐只给档位，留待下一轮）。
+ *  - 数字面在隐身档下由 `data-blur=1` 清单统一模糊。
+ */
+function PortfolioReview(props: {
+  dayTrades: DayTradeView | null
+  rows: readonly PositionRow[]
+  redUp: boolean
+}): React.ReactElement | null {
+  const [open, setOpen] = useState(false)
+  const dt = props.dayTrades
+  const up = props.rows.filter((r) => (r.pct ?? null) !== null && (r.pct as number) > 0).length
+  const flat = props.rows.filter((r) => (r.pct ?? null) === 0).length
+  const down = props.rows.filter((r) => (r.pct ?? null) !== null && (r.pct as number) < 0).length
+  const miss = props.rows.length - up - flat - down
+  const buckets: Array<[string, number]> = [['上涨', up], ['平盘', flat], ['下跌', down]]
+  const bucketText = [...buckets.filter(([, n]) => n > 0).map(([k, n]) => `${n} 只${k}`), ...(miss > 0 ? [`${miss} 只 —`] : [])].join(' / ')
+  if (dt === null && props.rows.length === 0) return null
+  return React.createElement('div', { className: 'tw-review' },
+    dt === null
+      ? null
+      : React.createElement('div', { className: 'tw-review-daytrade' },
+          React.createElement('button', {
+            className: 'tw-review-toggle',
+            onClick: () => setOpen((v) => !v),
+            'aria-expanded': open,
+            'aria-label': `做T ${dt.summary.count} 次，展开明细`,
+            disabled: dt.rounds.length === 0,
+          }, `做T ${dt.summary.count} 次 · 净 ${fmtMoneySigned(dt.summary.netPnl)} · 胜率 ${dt.summary.winRate === null ? '—' : `${Math.round(dt.summary.winRate)}%`}`),
+          open
+            ? React.createElement('table', { className: 'tw-daytrade-table' },
+                React.createElement('thead', null, React.createElement('tr', null,
+                  ['日期', '方向', '数量', '买价', '卖价', '净盈亏'].map((h) => React.createElement('th', { key: h }, h)))),
+                React.createElement('tbody', null, ...dt.rounds.slice(0, 50).map((r, i) => React.createElement('tr', { key: `${r.day}-${i}` },
+                  React.createElement('td', null, r.day),
+                  // 方向如实：先卖后买就是 sell-first（不统一渲染成"买入→卖出"）
+                  React.createElement('td', null, r.direction === 'sell-first' ? '先卖后买（反T）' : '先买后卖（正T）'),
+                  React.createElement('td', { className: 'tw-num' }, String(r.qty)),
+                  React.createElement('td', { className: 'tw-num' }, fmtPrice(r.buyPrice)),
+                  React.createElement('td', { className: 'tw-num' }, fmtPrice(r.sellPrice)),
+                  React.createElement('td', { className: `tw-num ${dirClass(r.netPnl, props.redUp)}` }, fmtMoneySigned(r.netPnl)),
+                ))),
+              )
+            : null,
+          dt.unmatched.length > 0
+            ? React.createElement('span', { className: 'tw-review-note' }, `另有 ${dt.unmatched.length} 笔单边未配对（不计入往返）`)
+            : null,
+        ),
+    props.rows.length === 0
+      ? null
+      : React.createElement('div', { className: 'tw-review-buckets' },
+          React.createElement('span', { className: 'tw-review-btitle' }, `今日涨跌分档（${props.rows.length} 只）`),
+          React.createElement('span', { className: 'tw-review-bline' }, bucketText),
+        ),
+  )
+}
+

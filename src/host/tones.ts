@@ -3,43 +3,43 @@
  *
  * 口径（与 `docs/DESIGN-STRIP-CONFIG.md` §5 + Lead 裁决一致）：
  *   `R30` = 近 30 个交易日涨跌幅；`MOM` = 近 5 日涨跌幅 − 近 20 日涨跌幅；
- *   `score = 0.6·z(R30) + 0.4·z(MOM)`，`z` 用**该标的自身**历史分布标准化（250 根优先，不足降级 120 / 60）；
- *   档位 = `score` 在**该标的自身** score 分布里的分位：`<10%` 过冷 ｜ `10–30%` 偏冷 ｜ `30–70%` 适中 ｜
+ *   `score = 0.6·z(R30) + 0.4·z(MOM)`，`z` 用该标的自身历史分布标准化（250 根优先，不足降级 120 / 60）；
+ *   档位 = `score` 在该标的自身 score 分布里的分位：`<10%` 过冷 ｜ `10–30%` 偏冷 ｜ `30–70%` 适中 ｜
  *   `70–90%` 偏热 ｜ `>90%` 过热（分位法不假设正态，也不设固定 σ 阈值）。
  *
  * 两条红线：
- *   1. **收益率类先取负**（`−Δyield` = 价格方向），否则"收益率上行"会被读成"债市走强"，与股票卡语义相反；
- *   2. **缺失绝不用「适中」冒充**：样本不足 / 基准不足 / 取不到都返回 `level: null` + 原因。
+ *   1. 收益率类先取负（`−Δyield` = 价格方向），否则"收益率上行"会被读成"债市走强"，与股票卡语义相反；
+ *   2. 缺失绝不用「适中」冒充：样本不足 / 基准不足 / 取不到都返回 `level: null` + 原因。
  */
 import type { DayBar } from '../shared/model.ts'
 
 export const TONE_LEVELS = ['过冷', '偏冷', '适中', '偏热', '过热'] as const
 export type ToneLevel = (typeof TONE_LEVELS)[number]
 
-/** `R30` 需要 31 根（取 `t−30`）；低于此但 ≥5 根 ⇒ 明确说"样本不足" */
+/**`R30` 需要 31 根（取 `t−30`）；低于此但 ≥5 根 ⇒ 明确说"样本不足" */
 export const TONE_MIN_BARS = 31
-/** 分档基准下限：score 样本数不足 30 个不发布档位 */
+/**分档基准下限：score 样本数不足 30 个不发布档位 */
 export const TONE_MIN_SAMPLES = 30
-/** 标准化窗口偏好：250 根优先，不足依次降级 */
+/**标准化窗口偏好：250 根优先，不足依次降级 */
 export const TONE_WINDOWS = [250, 120, 60] as const
 
 export interface ToneComputation {
   level: ToneLevel | null
-  /** 分位（0–100，越大越热）；未发布时为 null */
+  /**分位（0–100，越大越热）；未发布时为 null */
   pct: number | null
-  /** 近 30 个交易日涨跌幅（%）；不足时 null */
+  /**近 30 个交易日涨跌幅（%）；不足时 null */
   r30: number | null
-  /** 动量（近 5 日 − 近 20 日，%）；不足时 null */
+  /**动量（近 5 日 − 近 20 日，%）；不足时 null */
   momentum: number | null
-  /** 参与分档的 score 样本数 */
+  /**参与分档的 score 样本数 */
   samples: number
-  /** 用到的收盘序列长度 */
+  /**用到的收盘序列长度 */
   bars: number
-  /** 标准化窗口（实际用到的那一档） */
+  /**标准化窗口（实际用到的那一档） */
   window: number
-  /** 未发布档位的原因（人话）；已发布时 null */
+  /**未发布档位的原因（人话）；已发布时 null */
   why: string | null
-  /** 是否属于"样本不足"（区别于"取不到"） */
+  /**是否属于"样本不足"（区别于"取不到"） */
   insufficient: boolean
 }
 
@@ -47,7 +47,7 @@ const EMPTY = (bars: number, why: string, insufficient: boolean): ToneComputatio
   level: null, pct: null, r30: null, momentum: null, samples: 0, bars, window: 0, why, insufficient,
 })
 
-/** 有效收盘序列（收益率类也是正数：4.23 = 4.23%） */
+/**有效收盘序列（收益率类也是正数：4.23 = 4.23%） */
 export function toneCloses(bars: readonly DayBar[]): number[] {
   const out: number[] = []
   for (const b of bars) {
@@ -57,9 +57,9 @@ export function toneCloses(bars: readonly DayBar[]): number[] {
 }
 
 /**
- * 收益率类的方向符号：**取负作用在"变化量"上**，不是作用在价格水平上。
+ * 收益率类的方向符号：取负作用在"变化量"上，不是作用在价格水平上。
  *
- * ⚠ 这里踩过一次：把整条序列取负对收益率是**恒等变换**（`(−b)/(−a) = b/a`），
+ * ⚠ 这里踩过一次：把整条序列取负对收益率是恒等变换（`(−b)/(−a) = b/a`），
  * 于是"收益率类先取负"完全没生效、同一段收益率序列的档位与价格型一模一样。
  * 正确做法：`R30`/`MOM` 算出来后乘 `−1` —— 收益率上行 ⇒ 债券价格走弱 ⇒ 落在"冷"侧。
  */
@@ -70,7 +70,7 @@ export function toneSign(isYield: boolean): number {
 /**
  * 近 `n` 个交易日涨跌幅（小数，如 0.05 = +5%）；下标不足或基准为 0 ⇒ null。
  *
- * ⚠ 基数用 `!== 0` 而不是 `> 0`：收益率类在内部**已经取负**（`−yield`），分母是负数，
+ * ⚠ 基数用 `!== 0` 而不是 `> 0`：收益率类在内部已经取负（`−yield`），分母是负数，
  * 用 `> 0` 会把整条序列判成"不可算"（实测就是这么踩到的）。
  */
 export function returnAt(closes: readonly number[], i: number, n: number): number | null {
@@ -92,7 +92,7 @@ export function momentumAt(closes: readonly number[], i: number): number | null 
   return r5 - r20
 }
 
-/** 样本均值与标准差（总体，n 作分母）；n<2 或 sd=0 ⇒ null（不做标准化，避免除 0 得到假分位） */
+/**样本均值与标准差（总体，n 作分母）；n<2 或 sd=0 ⇒ null（不做标准化，避免除 0 得到假分位） */
 export function meanSd(xs: readonly number[]): { mean: number; sd: number } | null {
   if (xs.length < 2) return null
   const mean = xs.reduce((a, b) => a + b, 0) / xs.length
@@ -101,13 +101,13 @@ export function meanSd(xs: readonly number[]): { mean: number; sd: number } | nu
   return sd > 0 ? { mean, sd } : null
 }
 
-/** 标准化到 z；样本不可用（<2 或 sd=0）⇒ null */
+/**标准化到 z；样本不可用（<2 或 sd=0）⇒ null */
 export function zOf(x: number, sample: readonly number[]): number | null {
   const ms = meanSd(sample)
   return ms === null ? null : (x - ms.mean) / ms.sd
 }
 
-/** 分位（0–100）：`当前值` 在样本里的秩百分位（小于它的比例） */
+/**分位（0–100）：`当前值` 在样本里的秩百分位（小于它的比例） */
 export function percentileOf(sample: readonly number[], current: number): number | null {
   if (sample.length === 0) return null
   let below = 0
@@ -115,8 +115,8 @@ export function percentileOf(sample: readonly number[], current: number): number
   return (below / sample.length) * 100
 }
 
-/** 分位 → 档位（与设计文档同一套边界） */
-/** 档位对应的**分位区间**（标签型输出必须能给区间边界，P0-9） */
+/**分位 → 档位（与设计文档同一套边界） */
+/**档位对应的分位区间（标签型输出必须能给区间边界，P0-9） */
 export const TONE_BANDS: Record<ToneLevel, string> = {
   过冷: '分位 <10%',
   偏冷: '分位 10–30%',
@@ -125,7 +125,7 @@ export const TONE_BANDS: Record<ToneLevel, string> = {
   过热: '分位 >90%',
 }
 
-/** 口径字符串随结果返回（与算法同源：改算法就必须改这里，P0-10） */
+/**口径字符串随结果返回（与算法同源：改算法就必须改这里，P0-10） */
 export const TONES_METHODOLOGY =
   'score = 0.6·z(近30日涨跌幅) + 0.4·z(近5日涨跌幅 − 近20日涨跌幅)；' +
   'z 用该标的自身历史分布标准化（窗口 250 根日线优先，不足降级 120/60）；' +
@@ -141,7 +141,7 @@ export function toneLevelOfPct(pct: number): ToneLevel {
 }
 
 /**
- * 主入口：一段**已收盘**日线 → 五档状态。
+ * 主入口：一段已收盘日线 → 五档状态。
  *
  * 样本判定（三条按序）：
  *   - `bars < 5` ⇒ 不发布（原因：日线太少）；

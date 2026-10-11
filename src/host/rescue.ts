@@ -22,7 +22,7 @@ const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
 const QUOTE_HOSTS = EM_QUOTE_HOSTS
 const KLINE_HOSTS = EM_HISTORY_HOSTS
 
-/** 因子权重（合计 1.00） */
+/**因子权重（合计 1.00） */
 export const RESCUE_WEIGHTS = {
   volume: 0.22,
   superflow: 0.26,
@@ -32,17 +32,17 @@ export const RESCUE_WEIGHTS = {
   resonance: 0.08,
 } as const
 
-/** 兜底脉冲锚点（标定数据缺失时才用；正常走 RESCUE_CALIBRATION.pulseBands） */
+/**兜底脉冲锚点（标定数据缺失时才用；正常走 RESCUE_CALIBRATION.pulseBands） */
 export const PULSE_ANCHORS: [number, number, number] = [1.5, 2.5, 4]
-/** 尾盘起点（开盘后分钟数）：14:30 */
+/**尾盘起点（开盘后分钟数）：14:30 */
 export const TAIL_FROM_ELAPSED = 180
-/** 盘中脉冲的打折系数（真尾盘的大单才更能代表主力意图） */
+/**盘中脉冲的打折系数（真尾盘的大单才更能代表主力意图） */
 export const INTRADAY_PULSE_DISCOUNT = 0.6
-/** 脉冲「命中」线（分）：对应该时段 P90】 */
+/**脉冲「命中」线（分）：对应该时段 P90】 */
 export const PULSE_HIT_SCORE = 70
-/** 持续性锚点：5 分钟内超大单净增 ÷ 该窗口成交额 → 40/70/100 分 */
+/**持续性锚点：5 分钟内超大单净增 ÷ 该窗口成交额 → 40/70/100 分 */
 export const PERSIST_ANCHORS: [number, number, number] = [0.05, 0.12, 0.25]
-/** 核心护盘通道与阈值：定义在 shared，客户端也要用于标注与展示 */
+/**核心护盘通道与阈值：定义在 shared，客户端也要用于标注与展示 */
 export const CORE_INDEXES = RESCUE_CORE_INDEXES
 export const CORE_OUTFLOW_VETO = RESCUE_CORE_OUTFLOW_VETO
 export const PERIPHERAL_FLOW_DISCOUNT = RESCUE_PERIPHERAL_FLOW_DISCOUNT
@@ -51,7 +51,7 @@ export function isTailElapsed(elapsedMin: number): boolean {
   return elapsedMin >= TAIL_FROM_ELAPSED
 }
 
-/** 交易阶段：盘前 / 上午 / 午间 / 午后 / 尾盘 / 已收盘 */
+/**交易阶段：盘前 / 上午 / 午间 / 午后 / 尾盘 / 已收盘 */
 export type RescuePhase = 'pre' | 'am' | 'noon' | 'pm' | 'tail' | 'closed'
 
 export function phaseOf(hhmm: string): RescuePhase {
@@ -63,14 +63,14 @@ export function phaseOf(hhmm: string): RescuePhase {
   return 'closed'
 }
 
-/** 脉冲因子的名称随阶段变化（盘后不再叫「尾盘突袭」，避免误读为刚发生） */
+/**脉冲因子的名称随阶段变化（盘后不再叫「尾盘突袭」，避免误读为刚发生） */
 export function pulseFactorLabel(phase: RescuePhase): string {
   if (phase === 'tail') return '尾盘突袭'
   if (phase === 'closed') return '脉冲（盘后）'
   return '盘中脉冲'
 }
 
-/** 取当前时段的脉冲锚点（P75/P90/P95 → 40/70/100） */
+/**取当前时段的脉冲锚点（P75/P90/P95 → 40/70/100） */
 export function pulseAnchorsFor(elapsedMin: number): [number, number, number] {
   const bands = RESCUE_CALIBRATION.pulseBands
   if (!Array.isArray(bands) || bands.length === 0) return PULSE_ANCHORS
@@ -84,11 +84,11 @@ export function pulseBandLabel(elapsedMin: number): string {
   const hit = Array.isArray(bands) ? bands.find((b) => elapsedMin >= b.from && elapsedMin <= b.to) : undefined
   return hit?.label ?? (isTailElapsed(elapsedMin) ? '尾盘' : '盘中')
 }
-/** 自建样本满该天数后，F2 改用自建分位数 */
+/**自建样本满该天数后，F2 改用自建分位数 */
 export const SELF_SAMPLE_MIN_DAYS = 20
 const KEEP_DAYS = 60
 const SAMPLE_RING = 40
-/** 写入事件记录的引擎版本（用于在面板上识别旧口径历史事件） */
+/**写入事件记录的引擎版本（用于在面板上识别旧口径历史事件） */
 export const ENGINE_VERSION = '0.13.0'
 const INDEX_SECID = '1.000300'
 const INDEX_NAME = '沪深300'
@@ -100,7 +100,7 @@ interface Sample {
   mainNet: number
 }
 
-/** 落盘的快照（去掉当日时间线/抽样这些已经在 days 里的重复内容） */
+/**落盘的快照（去掉当日时间线/抽样这些已经在 days 里的重复内容） */
 interface PersistedSnapshot {
   ts: number
   level: RescueLevel
@@ -118,13 +118,13 @@ interface PersistedSnapshot {
   selfSampleDays: number
   config: RescueConfig
   activeIntervalSec: number
-  /** 数据来源（em/tencent）：收盘后重启时面板要能说明为什么缺分单资金流因子 */
+  /**数据来源（em/tencent）：收盘后重启时面板要能说明为什么缺分单资金流因子 */
   flowSource?: RescueSnapshot['flowSource']
-  /** 最近一次采样失败时刻（与 ts 严格分开） */
+  /**最近一次采样失败时刻（与 ts 严格分开） */
   lastFailTs?: RescueSnapshot['lastFailTs']
 }
 
-/** 导出供自检：确认落盘时保留了"数据来源"与"失败时刻"这类诚实性字段 */
+/**导出供自检：确认落盘时保留了"数据来源"与"失败时刻"这类诚实性字段 */
 export function stripSnapshot(s: RescueSnapshot): PersistedSnapshot {
   // flowSource / lastFailTs 也要落盘：收盘后重启时面板才能说明"这份数据来自备用源
   // （所以缺分单资金流因子）"与"最近一次采样失败于何时"，而不是只剩一个时间戳
@@ -132,15 +132,15 @@ export function stripSnapshot(s: RescueSnapshot): PersistedSnapshot {
   return { ts, level, score, summary, factors, etfs, indexPct, indexName, timeCoef, resonance, pulseBand, completeness, thresholdSource, selfSampleDays, config, activeIntervalSec, flowSource, lastFailTs }
 }
 
-/** 一条出分日志（P0-7）：把各因子的原始值 + 当次生效阈值一起落盘，供阈值漂移回溯 */
+/**一条出分日志（P0-7）：把各因子的原始值 + 当次生效阈值一起落盘，供阈值漂移回溯 */
 interface ScoreLogEntry {
   ts: number
   hhmm: string
   score: number
-  /** 未乘时点系数的原始分 */
+  /**未乘时点系数的原始分 */
   rawScore: number
   timeCoef: number
-  /** 评分引擎版本：口径改动后旧条目仍能说明"当时用的是哪套权重" */
+  /**评分引擎版本：口径改动后旧条目仍能说明"当时用的是哪套权重" */
   engine: string
   factors: Array<{ id: string; score: number; weight: number; actual: string; threshold: string; hit: boolean }>
 }
@@ -151,35 +151,35 @@ interface DayLog {
   samples: number
   gap: boolean
   /**
-   * 出分日志（P0-7）。粒度=**5 分钟刻度 + 等级变化时**，而不是每 15/30 秒一条：
+   * 出分日志（P0-7）。粒度=5 分钟刻度 + 等级变化时，而不是每 15/30 秒一条：
    * 后者在 60 天滚动窗口下会产生数万条记录（日志变成负担），而阈值漂移的回溯
    * 分辨率本来就不需要秒级 —— 分差不会在 5 分钟内漂。
    */
   scoreLog?: ScoreLogEntry[]
-  /** 当日各标的的超大单净额/20日均额 峰值（供 F2 自建分位升级） */
+  /**当日各标的的超大单净额/20日均额 峰值（供 F2 自建分位升级） */
   etfPeak?: Record<string, number>
-  /** 当日各通道最后一次成功采样的完整视图（上游中断时用于复盘展示） */
+  /**当日各通道最后一次成功采样的完整视图（上游中断时用于复盘展示） */
   etfLast?: Record<string, RescueEtfView>
 }
 
 interface LogFile {
   v: number
   days: Record<string, DayLog>
-  /** 最后一次成功采样的快照（轻量版）：采样失败时作为 last-known-good 兜底 */
+  /**最后一次成功采样的快照（轻量版）：采样失败时作为 last-known-good 兜底 */
   lastSnapshot?: PersistedSnapshot | null
-  /** 每只 ETF 的 20 日均成交额基准 */
+  /**每只 ETF 的 20 日均成交额基准 */
   baselines: Record<string, { avgAmt20: number; day: string; source: 'em' | 'tencent' | 'calibrated' }>
-  /** 自建样本：每只 ETF 每日收盘的超大单净额/20日均额（用于升级 F2 阈值） */
+  /**自建样本：每只 ETF 每日收盘的超大单净额/20日均额（用于升级 F2 阈值） */
   selfSamples: Record<string, Array<{ day: string; superVsAvg: number }>>
-  /** 日内累计成交占比曲线（自建刷新） */
+  /**日内累计成交占比曲线（自建刷新） */
   progressCurve: number[] | null
   progressDays: number
   updatedAt: number
 }
 
-/** ── 纯函数（selftest 覆盖）────────────────────────────────────────────── */
+/**── 纯函数（selftest 覆盖）────────────────────────────────────────────── */
 
-/** HH:mm → 开盘后分钟数（0..240，午休折算到 120） */
+/**HH:mm → 开盘后分钟数（0..240，午休折算到 120） */
 export function sessionElapsed(hhmm: string): number {
   const m = /^(\d{1,2}):(\d{2})$/.exec(hhmm.trim())
   if (m === null) return -1
@@ -191,7 +191,7 @@ export function sessionElapsed(hhmm: string): number {
   return 240
 }
 
-/** 日内累计成交占比（曲线索引 i = 开盘后 i*5 分钟），线性插值 */
+/**日内累计成交占比（曲线索引 i = 开盘后 i*5 分钟），线性插值 */
 export function progressAt(curve: readonly number[], elapsedMin: number): number {
   if (curve.length === 0) return elapsedMin >= 240 ? 1 : Math.max(0.02, elapsedMin / 240)
   const e = Math.max(0, Math.min(240, elapsedMin))
@@ -202,7 +202,7 @@ export function progressAt(curve: readonly number[], elapsedMin: number): number
   return Math.max(0.01, Math.min(1, v))
 }
 
-/** 分段线性记分：anchors 依次对应 40 / 70 / 100 分 */
+/**分段线性记分：anchors 依次对应 40 / 70 / 100 分 */
 export function interpScore(value: number, anchors: readonly [number, number, number]): number {
   const [a40, a70, a100] = anchors
   if (!Number.isFinite(value) || value <= 0) return 0
@@ -212,7 +212,7 @@ export function interpScore(value: number, anchors: readonly [number, number, nu
   return Math.round(70 + (30 * (value - a70)) / (a100 - a70))
 }
 
-/** 量价背离：指数越跌、越符合「恐慌中被托底」的护盘特征 */
+/**量价背离：指数越跌、越符合「恐慌中被托底」的护盘特征 */
 export function divergenceScore(indexPct: number | null): number {
   if (indexPct === null || !Number.isFinite(indexPct)) return 50
   if (indexPct <= -1.0) return 100
@@ -222,7 +222,7 @@ export function divergenceScore(indexPct: number | null): number {
   return 20
 }
 
-/** 全池共振：同时触发的宽基通道数 */
+/**全池共振：同时触发的宽基通道数 */
 export function resonanceScore(count: number): number {
   if (count >= 3) return 100
   if (count === 2) return 70
@@ -230,7 +230,7 @@ export function resonanceScore(count: number): number {
   return 0
 }
 
-/** 时点系数：午后与尾盘是护盘的典型时点，早盘天量多为情绪 */
+/**时点系数：午后与尾盘是护盘的典型时点，早盘天量多为情绪 */
 export function timeCoefficient(elapsedMin: number): number {
   if (elapsedMin <= 0) return 0.4
   if (elapsedMin < 60) return 0.4
@@ -241,41 +241,41 @@ export function timeCoefficient(elapsedMin: number): number {
 
 export interface RescueFactorInput {
   timeAdjMult: number | null
-  /** 核心通道的最大 超大单/20日均额（F2 以核心通道为主） */
+  /**核心通道的最大 超大单/20日均额（F2 以核心通道为主） */
   coreSuperVsAvg: number | null
-  /** 外围通道的最大 超大单/20日均额（单独净流入时打折） */
+  /**外围通道的最大 超大单/20日均额（单独净流入时打折） */
   peripheralSuperVsAvg: number | null
   pulseMult: number | null
-  /** 持续性：最近窗口内 超大单净增 ÷ 该窗口成交额 */
+  /**持续性：最近窗口内 超大单净增 ÷ 该窗口成交额 */
   persistShare: number | null
-  /** 该窗口内单次最大回撤 ÷ 净增（>0.5 说明反复进出，打折） */
+  /**该窗口内单次最大回撤 ÷ 净增（>0.5 说明反复进出，打折） */
   retraceRatio: number | null
   indexPct: number | null
-  /** 共振：总只数 / 核心通道命中数 / 外围通道命中数 / 命中通道名 */
+  /**共振：总只数 / 核心通道命中数 / 外围通道命中数 / 命中通道名 */
   resonance: number
   coreResonance?: number
   peripheralResonance?: number
   resonanceLanes?: string[]
-  /** 核心通道中最差的 超大单占比（用于否决） */
+  /**核心通道中最差的 超大单占比（用于否决） */
   coreWorstShare?: number | null
-  /** 分单资金流是否可得（腾讯备用源下为 false） */
+  /**分单资金流是否可得（腾讯备用源下为 false） */
   flowAvailable?: boolean
-  /** F2 锚点（可被自建分位数覆盖） */
+  /**F2 锚点（可被自建分位数覆盖） */
   f2Anchors: [number, number, number]
   f2Source: RescueThresholdSource
-  /** 时点系数；缺省 1（纯函数不读时钟，便于自检） */
+  /**时点系数；缺省 1（纯函数不读时钟，便于自检） */
   timeCoef?: number
-  /** 当前是否为尾盘（14:30 后） */
+  /**当前是否为尾盘（14:30 后） */
   isTail?: boolean
-  /** 当前时段的脉冲锚点 */
+  /**当前时段的脉冲锚点 */
   pulseAnchors?: [number, number, number]
-  /** 当前时段标签（早盘/午后/尾盘…） */
+  /**当前时段标签（早盘/午后/尾盘…） */
   bandLabel?: string
-  /** 交易阶段（用于脉冲命名与完整度说明） */
+  /**交易阶段（用于脉冲命名与完整度说明） */
   phase?: RescuePhase
 }
 
-/** 因子可用度：数据缺失（如冷启动回填失败）时如实标注，不假装完整 */
+/**因子可用度：数据缺失（如冷启动回填失败）时如实标注，不假装完整 */
 export interface RescueCompleteness {
   available: number
   total: number
@@ -293,7 +293,7 @@ export interface RescueScoreResult {
    * 界面必须能据此复算：只给总分不给系数时，"这一分是谁加的"永远答不上来。
    */
   timeCoef: number
-  /** Σ 贡献度（= 未乘时点系数的原始分）。与 score 的差全部来自 timeCoef 与四舍五入 */
+  /**Σ 贡献度（= 未乘时点系数的原始分）。与 score 的差全部来自 timeCoef 与四舍五入 */
   rawScore: number
 }
 
@@ -303,10 +303,10 @@ const fmt = (v: number | null, unit: string, digits = 2): string => (v === null 
  * 六因子合成：S = Σ w·f × 时点系数，再施加防误报封顶。
  *
  * P0 修订（针对「早盘噪音被读成护盘」「脉冲过松」「持续性无门槛」）：
- *  - 时点系数**真正接入**（此前 tick 未传，运行时恒为 1 → 早盘满权重）
- *  - F2 以**核心通道**为主：只有外围通道净流入时打折；核心通道大额净流出直接否决
+ *  - 时点系数真正接入（此前 tick 未传，运行时恒为 1 → 早盘满权重）
+ *  - F2 以核心通道为主：只有外围通道净流入时打折；核心通道大额净流出直接否决
  *  - F3 改名并分档：尾盘（14:30 后）为「尾盘突袭」满分权重，盘中为「盘中脉冲」并打折
- *  - F4 从「连续递增次数」改为**时间 + 幅度**：窗口内净增 ÷ 窗口成交额
+ *  - F4 从「连续递增次数」改为时间 + 幅度：窗口内净增 ÷ 窗口成交额
  *  - 三级（强护盘）要求核心通道参与共振
  */
 export function scoreRescue(input: RescueFactorInput): RescueScoreResult {
@@ -317,10 +317,10 @@ export function scoreRescue(input: RescueFactorInput): RescueScoreResult {
 
   const f1 = interpScore(input.timeAdjMult ?? 0, [RESCUE_CALIBRATION.f1.mid, RESCUE_CALIBRATION.f1.high, RESCUE_CALIBRATION.f1.extreme])
 
-  // F2：核心通道优先，且**核心必须"真正参与"**才不带折扣 ——
+  // F2：核心通道优先，且核心必须"真正参与"才不带折扣 ——
   // 判据是核心净流入达到第一档锚点（f2Anchors[0]），而不是"大于 0"：
   // 此前只要核心为正（哪怕 0.05x，几乎等于没买）就取 Math.max(core, peri)，
-  // 外围强度按**原值**计入，而标注却写「已折算」——文本与数值不一致
+  // 外围强度按原值计入，而标注却写「已折算」——文本与数值不一致
   // （实测核心 0.05x + 外围 0.5x 被判 63 分，真按 0.7 折算应为 51）。
   const core = input.coreSuperVsAvg ?? null
   const peri = input.peripheralSuperVsAvg ?? null
@@ -465,7 +465,7 @@ export function scoreRescue(input: RescueFactorInput): RescueScoreResult {
  *
  * 存在的理由：此前只给总分与六因子，用户看到 `评分 68` 与 `量能 ×2.1`、`超大单 ×0.3`
  * 无法判断"这一分到底是谁加的"——是量能撑起来的，还是背离（跌出来的）撑起来的，
- * 两者的操作含义完全相反。贡献度列把总分拆开，且**求和可复算**（见 selftest）。
+ * 两者的操作含义完全相反。贡献度列把总分拆开，且求和可复算（见 selftest）。
  */
 export function factorContributions(
   factors: readonly RescueFactor[],
@@ -481,16 +481,16 @@ export function factorContributions(
 }
 
 /**
- * HH:mm（**北京时间**）—— 护盘的采样时段、阶段语义、时点系数全部基于它。
+ * HH:mm（北京时间）—— 护盘的采样时段、阶段语义、时点系数全部基于它。
  * 必须钉死 Asia/Shanghai：宿主为 UTC（Docker/云主机/CI 默认）时，
  * 用本地时间会把真实盘中判成"盘前"→ 采样一次都不触发（见 host/time.ts）。
  */
 const hhmmOf = (ts: number): string => shHhmmOf(ts)
 
-/** YYYY-MM-DD（北京时间自然日）：驱动 todayKey / rollDay / 60 日归档 */
+/**YYYY-MM-DD（北京时间自然日）：驱动 todayKey / rollDay / 60 日归档 */
 const dayOf = (ts: number): string => shDayOf(ts)
 
-/** 是否处于采样时段（含开盘前 5 分钟与收盘后 5 分钟收口） */
+/**是否处于采样时段（含开盘前 5 分钟与收盘后 5 分钟收口） */
 export function inTradingWindow(ts: number): boolean {
   // 星期也必须按北京时间（宿主时区下的星期会错位一天）
   const dow = shWeekdayOf(ts)
@@ -499,7 +499,7 @@ export function inTradingWindow(ts: number): boolean {
   return (hhmm >= '09:25' && hhmm <= '11:35') || (hhmm >= '12:55' && hhmm <= '15:05')
 }
 
-/** 采样时段分段（与 inTradingWindow 必须同源：窗口边界只有这一份） */
+/**采样时段分段（与 inTradingWindow 必须同源：窗口边界只有这一份） */
 const SAMPLE_WINDOWS: ReadonlyArray<{ from: string; to: string }> = [
   { from: '09:25', to: '11:35' },
   { from: '12:55', to: '15:05' },
@@ -507,7 +507,7 @@ const SAMPLE_WINDOWS: ReadonlyArray<{ from: string; to: string }> = [
 
 /**
  * 采样窗口状态（P0-4）。分数位在非采样时段是空的，必须能说清"暂停采样"而不是"坏了"，
- * 因此这里给出原因与**下次采样时刻**，供界面显示 `采样暂停 · 下次 10-09 09:25`。
+ * 因此这里给出原因与下次采样时刻，供界面显示 `采样暂停 · 下次 10-09 09:25`。
  *
  * 纯函数（只依赖 `ts` 与配置），因此可以直接断言跨周末/跨午休的边界。
  */
@@ -545,7 +545,7 @@ export function samplingWindow(
   return { sampling: false, reason, nextAt, nextLabel, intervalSec, samples: opts.samples }
 }
 
-/** 采样点（窗口资金流统计的输入） */
+/**采样点（窗口资金流统计的输入） */
 export interface FlowSample {
   ts: number
   amount: number
@@ -587,7 +587,7 @@ export function windowFlowStats(
 }
 
  // 才能当作"5 分钟前"的参考；且序列末端必须贴近 evalAt（`evalTs - last <= maxLagMs`）。
- // 为什么必须卡这两个边界（v0.21.0 修的 bug）：分钟序列此前**每天只在冷启动回填写一次**，
+ // 为什么必须卡这两个边界（v0.21.0 修的 bug）：分钟序列此前每天只在冷启动回填写一次，
 export function pickPulseRef(
   series: readonly { ts: number; amount: number }[],
   evalTs: number,
@@ -612,20 +612,20 @@ export function pickPulseRef(
   return ref === null ? null : { ref, evalAt: at }
 }
 
-/** 自建样本分位数（升序数组的线性插值分位） */
+/**自建样本分位数（升序数组的线性插值分位） */
 export function quantile(sorted: readonly number[], p: number): number | null {
   if (sorted.length === 0) return null
   const idx = Math.min(sorted.length - 1, Math.max(0, Math.round((p / 100) * (sorted.length - 1))))
   return sorted[idx]
 }
 
-/** ── 网络取数 ──────────────────────────────────────────────────────────── */
+/**── 网络取数 ──────────────────────────────────────────────────────────── */
 
 /**
- * 采样器取数：**复用行情中继的同一套骨架**（2 轮 × 每主机 2 次 + 抖动退避 + 9 秒总截止
- * + **按主机**熔断与半开探针，见 em.fetchAny）。
+ * 采样器取数：复用行情中继的同一套骨架（2 轮 × 每主机 2 次 + 抖动退避 + 9 秒总截止
+ * + 按主机熔断与半开探针，见 em.fetchAny）。
  *
- * 此前这里自己实现了一套，且用单台 push2delay 的熔断器当**整组**闸门：
+ * 此前这里自己实现了一套，且用单台 push2delay 的熔断器当整组闸门：
  *   - push2delay 冷却时，健康的 push2 被一起挡掉 → 采样器与日线一并停摆；
  *   - 反过来 push2his 熔断时闸门毫无反应，采样器仍然每 15s 打一遍不可达主机。
  * 重复实现带来的第二个后果是两条链路的退避节奏不同（抖动间隔、截止时间各写一份）。
@@ -645,7 +645,7 @@ export interface RescueQuoteRow {
   volRatio: number | null
   mainNet: number | null
   superNet: number | null
-  /** 当日开盘/最高/最低（形态计算用） */
+  /**当日开盘/最高/最低（形态计算用） */
   open: number | null
   high: number | null
   low: number | null
@@ -654,7 +654,7 @@ export interface RescueQuoteRow {
 // 与其它模块共用 shared 的实现（S7）
 const num = numOrNull
 
-/** 批量快照（含 ETF 资金流字段；ETF 的 f62/f66 东财同样提供） */
+/**批量快照（含 ETF 资金流字段；ETF 的 f62/f66 东财同样提供） */
 export async function fetchRescueQuotes(secids: string[]): Promise<Record<string, RescueQuoteRow>> {
   const data = await fetchData(QUOTE_HOSTS, `/api/qt/ulist.np/get?fltt=2&invt=2&secids=${secids.join(',')}&fields=f12,f13,f14,f2,f3,f4,f6,f8,f10,f15,f16,f17,f62,f66,f184`)
   const diff = Array.isArray(data.diff) ? (data.diff as Array<Record<string, unknown>>) : []
@@ -683,7 +683,7 @@ export async function fetchRescueQuotes(secids: string[]): Promise<Record<string
 
 interface DailyBar { date: string; close: number; vol: number; amount: number }
 
-/** 20 日均成交额基准：东财日K（含真实成交额）优先，腾讯日K（vol×100×close 近似）兜底 */
+/**20 日均成交额基准：东财日K（含真实成交额）优先，腾讯日K（vol×100×close 近似）兜底 */
 async function fetchAvgAmount20(secid: string): Promise<{ avg: number; source: 'em' | 'tencent' } | null> {
   try {
     const data = await fetchData(KLINE_HOSTS, `/api/qt/stock/kline/get?secid=${secid}&klt=101&fqt=0&lmt=25&end=20500101&fields1=f1,f2,f3&fields2=f51,f52,f53,f54,f55,f56,f57`, 9000)
@@ -726,7 +726,7 @@ async function fetchAvgAmount20(secid: string): Promise<{ avg: number; source: '
   return null
 }
 
-/** 用新浪 5 分钟线自建当日进度曲线（口径与标定脚本一致，失败则沿用标定值） */
+/**用新浪 5 分钟线自建当日进度曲线（口径与标定脚本一致，失败则沿用标定值） */
 async function fetchProgressCurve(metas: RescueEtfMeta[]): Promise<{ curve: number[]; days: number } | null> {
   const curves: number[][] = []
   for (const meta of metas.slice(0, 6)) {
@@ -776,9 +776,9 @@ async function fetchProgressCurve(metas: RescueEtfMeta[]): Promise<{ curve: numb
   return { curve, days: curves.length }
 }
 
-/** ── 冷启动回填 ──────────────────────────────────────────────────────────
+/**── 冷启动回填 ──────────────────────────────────────────────────────────
  * 采样环（内存）在进程启动时是空的，而「脉冲」与「持续性」都需要 ≥5 分钟的历史，
- * 于是**盘中重启**后这两个因子会长时间显示为空 —— 若重启发生在收盘前 5 分钟内，
+ * 于是盘中重启后这两个因子会长时间显示为空 —— 若重启发生在收盘前 5 分钟内，
  * 当天就再也算不出来（实测 9/24 14:44 重启即如此）。
  * 因此首轮采样时用当日分钟数据回填采样环：
  *   - 东财 trends2：每分钟成交额 → 累计成交额
@@ -788,15 +788,15 @@ async function fetchProgressCurve(metas: RescueEtfMeta[]): Promise<{ curve: numb
 
 export interface MinuteFlowPoint {
   ts: number
-  /** 当日累计成交额 */
+  /**当日累计成交额 */
   amount: number
-  /** 当日累计超大单净额（腾讯备用源无此数据 → null） */
+  /**当日累计超大单净额（腾讯备用源无此数据 → null） */
   superNet: number | null
-  /** 当日累计主力净额（腾讯备用源无此数据 → null） */
+  /**当日累计主力净额（腾讯备用源无此数据 → null） */
   mainNet: number | null
 }
 
-/** 解析 "YYYY-MM-DD HH:mm" → epoch ms（本地时区，与趋势接口一致） */
+/**解析 "YYYY-MM-DD HH:mm" → epoch ms（本地时区，与趋势接口一致） */
 function parseMinuteStamp(text: string): number {
   const t = Date.parse(`${text.slice(0, 10)}T${text.slice(11, 16)}:00`)
   return Number.isFinite(t) ? t : NaN
@@ -845,7 +845,7 @@ export async function fetchMinuteSeries(secid: string): Promise<MinuteFlowPoint[
   return points
 }
 
-/** 分钟序列（含成交额与分单资金流）：东财优先，失败回落腾讯（后者只有成交额） */
+/**分钟序列（含成交额与分单资金流）：东财优先，失败回落腾讯（后者只有成交额） */
 export async function fetchMinuteSeriesAny(secid: string): Promise<MinuteFlowPoint[]> {
   try {
     const em = await fetchMinuteSeries(secid)
@@ -857,10 +857,10 @@ export async function fetchMinuteSeriesAny(secid: string): Promise<MinuteFlowPoi
   return tx.map((p) => ({ ts: p.ts, amount: p.amount, superNet: null, mainNet: null }))
 }
 
-/** 快照数据来源：em = 含分单资金流；tencent = 只有量能与价格 */
+/**快照数据来源：em = 含分单资金流；tencent = 只有量能与价格 */
 export type QuoteSource = 'em' | 'tencent'
 
-/** 批量快照：东财优先，失败回落腾讯（后者无超大单/主力净额） */
+/**批量快照：东财优先，失败回落腾讯（后者无超大单/主力净额） */
 export async function fetchQuoteSource(secids: string[]): Promise<{ rows: Record<string, RescueQuoteRow>; source: QuoteSource }> {
   try {
     const rows = await fetchRescueQuotes(secids)
@@ -879,7 +879,7 @@ export async function fetchQuoteSource(secids: string[]): Promise<{ rows: Record
   return { rows, source: 'tencent' }
 }
 
-/** ── 采样器 ────────────────────────────────────────────────────────────── */
+/**── 采样器 ────────────────────────────────────────────────────────────── */
 
 export class RescueMonitor {
   private dir: string
@@ -893,51 +893,51 @@ export class RescueMonitor {
   private timer: ReturnType<typeof setTimeout> | null = null
   private running = false
   private lastPersist = 0
-  /** 落盘串行化（tmp+rename 之外的并发保护） */
+  /**落盘串行化（tmp+rename 之外的并发保护） */
   private writeChain: Promise<void> = Promise.resolve()
   private lastLevel: RescueLevel = 0
   private lastIntradayMin = -1
   private calibrating = false
   private calibratedDay = ''
-  /** 每个交易日每个标的只回填一次 */
+  /**每个交易日每个标的只回填一次 */
   private bootstrapped = new Set<string>()
   private bootstrappedCount = 0
-  /** 当日每个通道的回填尝试次数（失败上限 3 次，避免网络抖动导致整日缺因子或重试风暴） */
+  /**当日每个通道的回填尝试次数（失败上限 3 次，避免网络抖动导致整日缺因子或重试风暴） */
   private bootstrapAttempts = new Map<string, number>()
-  /** 本轮并发回填成功计数（bootstrapRings 结束时并入 bootstrappedCount） */
+  /**本轮并发回填成功计数（bootstrapRings 结束时并入 bootstrappedCount） */
   private bootstrapFilled = 0
-  /** 回填并发度 */
+  /**回填并发度 */
   private static readonly BOOTSTRAP_CONCURRENCY = 3
-  /** 回填时间预算：超过就先出快照（剩余通道后台补齐） */
+  /**回填时间预算：超过就先出快照（剩余通道后台补齐） */
   private static readonly BOOTSTRAP_BUDGET_MS = 3_000
-  /** 正在后台补算基准的通道（避免重复请求） */
+  /**正在后台补算基准的通道（避免重复请求） */
   private baselinePending = new Set<string>()
-  /** 日线缓存（位置/底部概率用，按日刷新） */
+  /**日线缓存（位置/底部概率用，按日刷新） */
   private dailyBars: Record<string, DailyBarLite[]> = {}
   private dailyDay = ''
-  /** 底部概率校准结果（跨通道合并，按日缓存） */
+  /**底部概率校准结果（跨通道合并，按日缓存） */
   private bottomCal: ReturnType<typeof calibrateAcross> | null = null
   private bottomComputing = false
-  /** 校准失败后的冷却时间戳：避免日线拉取失败时每个 tick 重跑全量回测 */
+  /**校准失败后的冷却时间戳：避免日线拉取失败时每个 tick 重跑全量回测 */
   private bottomCalRetryAfter = 0
-  /** 底部视图缓存（按节流刷新，避免每 tick 重算位置/形态） */
+  /**底部视图缓存（按节流刷新，避免每 tick 重算位置/形态） */
   private bottomCache: { at: number; key: string; view: RescueSnapshot['bottom'] } | null = null
   /**
-   * 上一次成功算出的底部视图。日线拉取失败或校准样本归零时**保留**它（标 stale），
+   * 上一次成功算出的底部视图。日线拉取失败或校准样本归零时保留它（标 stale），
    * 而不是让整块面板消失 —— 位置/形态/概率都是慢变量，几十分钟前的结论仍可参考，
    * 但必须标明"非本次计算"。
    */
   private bottomLast: { at: number; view: NonNullable<RescueSnapshot['bottom']> } | null = null
-  /** tick 合并（定时循环 / 手动刷新 / 自动补采三条路径共用一份工作） */
+  /**tick 合并（定时循环 / 手动刷新 / 自动补采三条路径共用一份工作） */
   private tickFlight = new SingleFlight()
-  /** 当日分钟序列缓存（脉冲计算用；东财或腾讯） */
+  /**当日分钟序列缓存（脉冲计算用；东财或腾讯） */
   private minutes: Record<string, MinuteFlowPoint[]> = {}
-  /** 最近一次分钟序列刷新时刻（节流用；此前只写不读 → 序列每天只冷启动写一次） */
+  /**最近一次分钟序列刷新时刻（节流用；此前只写不读 → 序列每天只冷启动写一次） */
   private lastMinuteRefresh = 0
   private minuteRefreshing = false
-  /** 分钟序列刷新间隔：与采样间隔无关，60 秒足够让脉冲参考点落在窗口内 */
+  /**分钟序列刷新间隔：与采样间隔无关，60 秒足够让脉冲参考点落在窗口内 */
   private static readonly MINUTE_REFRESH_MS = 60_000
-  /** 最近一次成功采样的数据来源（未采过样时为 null，避免把"还没采"说成"来自东财"） */
+  /**最近一次成功采样的数据来源（未采过样时为 null，避免把"还没采"说成"来自东财"） */
   private quoteSource: QuoteSource | null = null
 
   constructor(dir: string = dataHome(), config?: RescueConfig) {
@@ -1034,7 +1034,7 @@ export class RescueMonitor {
     return this.getConfig()
   }
 
-  /** 当前生效采样间隔（尾盘更密） */
+  /**当前生效采样间隔（尾盘更密） */
   activeIntervalSec(ts = Date.now()): number {
     const hhmm = hhmmOf(ts)
     const tail = this.config.tailFrom !== '' && hhmm >= this.config.tailFrom
@@ -1079,7 +1079,7 @@ export class RescueMonitor {
   /**
    * 采样失败的统一记账。
    *
-   * **不得改写 `ts`**：`ts`/`lastSampleTs` 是"这份数据是几点拿到的"，失败只是"我们
+   * 不得改写 `ts`：`ts`/`lastSampleTs` 是"这份数据是几点拿到的"，失败只是"我们
    * 在几点试过并且没成功"。此前这里写 `ts: Date.now()` —— 收盘后手动点一次「立即采样」
    * 而上游不可用时，界面顶部的「已收盘 · 21:34:43」会变成失败时刻，看起来像刚采到数据。
    * 失败的时刻另存 `lastFailTs`，与数据时刻在界面上分开表述。
@@ -1090,10 +1090,10 @@ export class RescueMonitor {
     if (this.lastSnapshot !== null) this.lastSnapshot = { ...this.lastSnapshot, gap: true, lastFailTs: at }
   }
 
-  /** 最近一次采样失败时刻（成功采样会清空它） */
+  /**最近一次采样失败时刻（成功采样会清空它） */
   private lastFailTs: number | null = null
 
-  /** 立即采样一次（手动刷新/非交易时段复盘）；与在飞的定时采样合并 */
+  /**立即采样一次（手动刷新/非交易时段复盘）；与在飞的定时采样合并 */
   async sampleNow(): Promise<RescueSnapshot> {
     await this.init()
     await this.tick()
@@ -1101,7 +1101,7 @@ export class RescueMonitor {
   }
 
   /**
-   * 采样一次。**重入守卫**：三条触发路径（定时循环 `loop`、前端手动 `sampleNow`、
+   * 采样一次。重入守卫：三条触发路径（定时循环 `loop`、前端手动 `sampleNow`、
    * 路由自动补采 `ensureFresh`）会撞在一起 —— 此前各跑一份，导致上游请求翻倍、
    * `today.samples` 重复计数、两份快照互相覆盖（样本数可能"回退"）。现统一合并：
    * 已有采样在飞时，新调用等待同一份结果，不再叠加第二次全量采样。
@@ -1110,7 +1110,7 @@ export class RescueMonitor {
     return this.tickFlight.run(() => this.tickOnce())
   }
 
-  /** 是否正在采样（自检/UI 观察用） */
+  /**是否正在采样（自检/UI 观察用） */
   get sampling(): boolean {
     return this.tickFlight.busy
   }
@@ -1120,7 +1120,7 @@ export class RescueMonitor {
     this.rollDay()
     const metas = rescueUniverseMeta(this.config.universe, this.config.custom ?? [])
     const secids = [INDEX_SECID, ...metas.map((m) => m.secid)]
-    // 冷启动回填与行情取数**并发**（此前是串行：先等行情失败 3.4s，再等回填 3s = 6.4s 首屏）
+    // 冷启动回填与行情取数并发（此前是串行：先等行情失败 3.4s，再等回填 3s = 6.4s 首屏）
     const shortRings = phaseOf(hhmmOf(Date.now())) === 'pre'
       ? []
       : metas.filter((m) => {
@@ -1414,9 +1414,9 @@ export class RescueMonitor {
    * 冷启动回填：把当日分钟序列灌进采样环（脉冲与持续性都需要 ≥5 分钟历史）。
    *
    * 两处修正（此前实测首屏 7.8s）：
-   *  1. **并发**：原来 for-await 串行拉每个通道（7 次网络往返叠加），现按 3 路并发，
+   *  1. 并发：原来 for-await 串行拉每个通道（7 次网络往返叠加），现按 3 路并发，
    *     正常上游下从数秒降到几百毫秒；
-   *  2. **时间预算**：调用方用 `withBudget` 等最多 3s，超时就先出快照（缺口如实标注），
+   *  2. 时间预算：调用方用 `withBudget` 等最多 3s，超时就先出快照（缺口如实标注），
    *     剩余通道的请求继续在后台跑完并在后续 tick 生效 —— 面板不再为回填干等。
    */
   private async bootstrapRings(metas: RescueEtfMeta[]): Promise<void> {
@@ -1439,7 +1439,7 @@ export class RescueMonitor {
   }
 
   /**
-   * 分钟序列的**节流刷新**（交易时段内每 60 秒一次）。
+   * 分钟序列的节流刷新（交易时段内每 60 秒一次）。
    *
    * 此前 `this.minutes` 只在冷启动回填时写一次：进程盘中启动后序列就冻结在那一刻，
    * 而脉冲要用"5 分钟前"的参考点 —— 序列过期就会拿几十分钟的成交额去比 5 分钟预期
@@ -1473,7 +1473,7 @@ export class RescueMonitor {
     }
   }
 
-  /** 单个通道的回填；失败放回待办（上限 3 次/日），避免一次网络抖动让该通道整日缺因子 */
+  /**单个通道的回填；失败放回待办（上限 3 次/日），避免一次网络抖动让该通道整日缺因子 */
   private async bootstrapOne(meta: RescueEtfMeta): Promise<void> {
     const key = `${this.todayKey}|${meta.secid}`
     if (this.bootstrapped.has(key)) return
@@ -1521,7 +1521,7 @@ export class RescueMonitor {
 
   /**
    * 回填被预算"抛弃"后，它仍会在后台跑完 —— 但收盘后没有定时 tick，
-   * 面板就会一直停在缺因子的那份快照上。这里在回填完成后安排**一次**补算：
+   * 面板就会一直停在缺因子的那份快照上。这里在回填完成后安排一次补算：
    * 先等当前 tick 结束（不能在这里 await 自己那一份，会自锁），再重新采样一次。
    */
   private scheduleDeferredReTick(attempt = 0): void {
@@ -1544,9 +1544,9 @@ export class RescueMonitor {
     step(attempt)
   }
 
-  /** 是否有待执行的补算（自检用） */
+  /**是否有待执行的补算（自检用） */
   private deferredReTick = false
-  /** 延迟补算的定时器句柄（stop 时要清掉） */
+  /**延迟补算的定时器句柄（stop 时要清掉） */
   private deferredTimer: ReturnType<typeof setTimeout> | null = null
 
   /**
@@ -1554,7 +1554,7 @@ export class RescueMonitor {
    *
    * 旧实现用「超大单净额连续递增的次数」——严格大于就计一次、没有幅度门槛，
    * 而东财超大单以 ~0.01 亿步长抖动，于是几乎必然出现"连续递增"，配合可配置的
-   * 采样间隔（30s/60s 语义还不同）会大量误报。改为**时间 + 幅度**口径：
+   * 采样间隔（30s/60s 语义还不同）会大量误报。改为时间 + 幅度口径：
    *   persistShare = 窗口内净增 ÷ 该窗口成交额（自归一，与采样间隔无关）
    *   retraceRatio = 窗口内单次最大回撤 ÷ 净增（揭示反复进出）
    */
@@ -1575,7 +1575,7 @@ export class RescueMonitor {
     return all.size
   }
 
-  /** F2 锚点：自建样本满 20 个交易日后用自建分位数（P75/P90/P95） */
+  /**F2 锚点：自建样本满 20 个交易日后用自建分位数（P75/P90/P95） */
   private f2Anchors(): [number, number, number] {
     const pooled: number[] = []
     for (const arr of Object.values(this.file.selfSamples)) for (const s of arr) pooled.push(s.superVsAvg)
@@ -1593,7 +1593,7 @@ export class RescueMonitor {
     return this.selfSampleDays() >= SELF_SAMPLE_MIN_DAYS ? 'self' : 'empirical'
   }
 
-  /** 每日标定：20 日均额（东财真实成交额优先）+ 自建进度曲线 */
+  /**每日标定：20 日均额（东财真实成交额优先）+ 自建进度曲线 */
   private async calibrate(metas: RescueEtfMeta[]): Promise<void> {
     if (this.calibrating) return
     this.calibrating = true
@@ -1656,7 +1656,7 @@ export class RescueMonitor {
       // 兜底：本次会话还没采到数据（例如收盘后重启），用上次成功快照，注明为旧数据
       const p = this.file.lastSnapshot
       return {
-        // 注意 gap 取**当日真实缺口标记**，而不是无条件 true：
+        // 注意 gap 取当日真实缺口标记，而不是无条件 true：
         // "本会话还没采过样"与"采样失败"是两件事，用同一个标记会让面板误报"采样缺口"。
         ...p, trading: inTradingWindow(Date.now()), stale: true, lastSampleTs: p.ts, lastFailTs: this.lastFailTs, gap: this.today.gap,
         today: [...this.today.events].reverse(), intraday: [...this.today.intraday],
@@ -1768,7 +1768,7 @@ export class RescueMonitor {
    * 底部视图：位置 + 日内形态 + 概率（概率来自跨通道合并的历史频率校准）。
    * 概率与形态分开呈现 —— 日内形态没有可回算的历史分钟数据，不进入概率。
    *
-   * 不可用时（日线还没拉到 / 校准冷却中 / 校准失败）**保留上一次成功视图**并标 `stale`：
+   * 不可用时（日线还没拉到 / 校准冷却中 / 校准失败）保留上一次成功视图并标 `stale`：
    * 此前直接 `return undefined`，整块「底部位置 / 形态 / 概率」面板会凭空消失，
    * 而这恰恰发生在上游最抖的时候 —— 用户看到的不是"数据旧"，是"功能没了"。
    */
@@ -1812,13 +1812,13 @@ export class RescueMonitor {
     return view
   }
 
-  /** 上次成功算出的底部视图（标 stale 并保留原计算时刻）；从未算出过则为 undefined */
+  /**上次成功算出的底部视图（标 stale 并保留原计算时刻）；从未算出过则为 undefined */
   private retainedBottom(): RescueSnapshot['bottom'] {
     if (this.bottomLast === null) return undefined
     return { ...this.bottomLast.view, stale: true, computedAt: this.bottomLast.at }
   }
 
-  /** 近 60 天每日摘要（历史回看） */
+  /**近 60 天每日摘要（历史回看） */
   history(limit = 30): RescueDaySummary[] {
     const out: RescueDaySummary[] = []
     for (const day of Object.keys(this.file.days).sort().reverse().slice(0, limit)) {
@@ -1835,7 +1835,7 @@ export class RescueMonitor {
     return this.file.days[day]?.intraday ?? []
   }
 
-  /** 出分日志（P0-7）：阈值漂移回溯用；不传 day 取当日 */
+  /**出分日志（P0-7）：阈值漂移回溯用；不传 day 取当日 */
   scoreLogOf(day?: string): Array<Record<string, unknown>> {
     const key = day ?? dayOf(Date.now())
     const log = this.file.days[key]?.scoreLog ?? (key === this.todayKey ? this.today.scoreLog : undefined) ?? []
@@ -1846,21 +1846,21 @@ export class RescueMonitor {
     return this.file.days[day]?.events ?? []
   }
 
-  /** 立即落盘（跳过节流）：受控入口，供测试与需要"写完再回"的调用方使用 */
+  /**立即落盘（跳过节流）：受控入口，供测试与需要"写完再回"的调用方使用 */
   async flush(): Promise<void> {
     await this.persist(true)
   }
 
-  /** 本会话是否还没有成功快照（收盘后重启即属此情形） */
+  /**本会话是否还没有成功快照（收盘后重启即属此情形） */
   get hasFreshData(): boolean {
     return this.lastSnapshot !== null
   }
 
-  /** 自动补采冷却：避免前端轮询把上游打爆 */
+  /**自动补采冷却：避免前端轮询把上游打爆 */
   private lastAutoTry = 0
   private static readonly AUTO_TRY_COOLDOWN_MS = 20_000
 
-  /** 无新鲜数据时按冷却自动采一次（供路由使用）；返回是否真的采了 */
+  /**无新鲜数据时按冷却自动采一次（供路由使用）；返回是否真的采了 */
   async ensureFresh(): Promise<boolean> {
     if (this.hasFreshData) return false
     const now = Date.now()
@@ -1877,7 +1877,7 @@ export class RescueMonitor {
     return true
   }
 
-  /** 采样健康度：最近一次采样距今是否超过 2 个间隔 */
+  /**采样健康度：最近一次采样距今是否超过 2 个间隔 */
   stale(): boolean {
     const last = this.lastSnapshot?.lastSampleTs ?? null
     if (last === null) return false
@@ -1888,7 +1888,7 @@ export class RescueMonitor {
     return { progressDays: this.file.progressDays || RESCUE_CALIBRATION.progressDays, generatedAt: RESCUE_CALIBRATION.generatedAt }
   }
 
-  /** 供前端绘制「同时点基准」用：进度曲线 + F1/F2 锚点 */
+  /**供前端绘制「同时点基准」用：进度曲线 + F1/F2 锚点 */
   get calibrationInfo(): {
     generatedAt: string
     progressCurve: number[]
@@ -1913,7 +1913,7 @@ export class RescueMonitor {
 }
 
 /**
- * 口径字符串（随结果返回）：六因子怎么算、采样窗、等级区间，以及**不能用来断言"国家队已入场"**。
+ * 口径字符串（随结果返回）：六因子怎么算、采样窗、等级区间，以及不能用来断言"国家队已入场"。
  * 三段说明（怎么算/怎么读/不能用来干什么）另见工具描述 —— 界面常驻仍然只留一行。
  */
 export const RESCUE_METHODOLOGY =

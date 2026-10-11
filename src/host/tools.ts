@@ -1,7 +1,7 @@
 /**
  */
 import { twAllSecids, twGroupSecids, ACTOR_TOOL, MISSING_TIER_LABEL, type CalEvent, type DataProvenance, type MissingField, type QuoteRow } from '../shared/model.ts'
-import { SECID_RE, lagHumanOf } from '../shared/model.ts'
+import { SECID_RE, lagAlertOf, lagHumanOf, stripKindOf } from '../shared/model.ts'
 import { FQ_LABEL, YTD_CALIBER, type YtdRow } from '../shared/model.ts'
 import * as em from './em.ts'
 import { YTD_MAX_IDS, computeYtds } from './ytd.ts'
@@ -14,6 +14,10 @@ import { CAL_CATEGORY_LABEL } from '../shared/model.ts'
 import type { PluginContext, PluginToolDefinition, PluginToolExec, PluginToolRuntime, PluginSystemPrompt } from './context.ts'
 import { WriteJournal } from './writeLog.ts'
 import { POSITION_WINDOW, positionOfBars } from './position.ts'
+import { forwardOf } from './signalForward.ts'
+import { dayTradesOf } from './dayTrade.ts'
+import { rankOf, returnBucketOf, textPercentile } from './groupRank.ts'
+import { computeTones } from './tonesService.ts'
 
 const PREFIX = 'tradewatcher_'
 
@@ -40,9 +44,9 @@ function pnlLine(label: string, value: number | null | undefined): string {
 
 // ── 数据出处契约 ──────────────────────────────────────────────────────
 
-/** 纯本地文件的出处：`source='local'`，asOf 取文件最后写入时刻（不许拿响应时刻顶替） */
+/**纯本地文件的出处：`source='local'`，asOf 取文件最后写入时刻（不许拿响应时刻顶替） */
 function localProvenance(asOf: number | null, missing: MissingField[] = []): DataProvenance {
-  // 本地文件：滞后时长是**文件落盘到现在的间隔**（"这份文件多久没更新了"）；市场状态对本地文件无意义
+  // 本地文件：滞后时长是文件落盘到现在的间隔（"这份文件多久没更新了"）；市场状态对本地文件无意义
   return {
     asOf,
     stale: false,
@@ -50,12 +54,16 @@ function localProvenance(asOf: number | null, missing: MissingField[] = []): Dat
     missing,
     cached: undefined,
     lagHuman: lagHumanOf(asOf, Date.now()) ?? undefined,
+    // 本地文件是日频语义：落后 ≥3 天才告警（周末不算滞后）
+    lagAlert: lagAlertOf(asOf, Date.now(), { source: '本地文件', isDaily: true }) ?? undefined,
   }
 }
 
-/** 出处的单行文本摘要，附在每个工具的 render 尾部（agent 读到数就看得到口径） */
+/**出处的单行文本摘要，附在每个工具的 render 尾部（agent 读到数就看得到口径） */
 function provenanceLine(p: DataProvenance | undefined): string {
   if (p === undefined) return ''
+  // 滞后告警（P1-9）：有才带；没超阈值时这一整段不出现（不许恒输出）
+  const alert = p.lagAlert === undefined ? [] : [p.lagAlert]
   const parts: string[] = []
   parts.push(p.asOf === null ? '数据时刻：未取得' : `数据时刻 ${new Date(p.asOf).toLocaleString('zh-CN', { hour12: false })}`)
   parts.push(`来源 ${p.source}`)
@@ -70,10 +78,11 @@ function provenanceLine(p: DataProvenance | undefined): string {
     const trans = p.missing.filter((m) => m.why === 'transient').length
     parts.push(`缺失 ${p.missing.length}（无此数据源 ${noSrc} / 本次失败 ${trans}）`)
   }
-  return `【数据出处】${parts.join(' · ')}`
+  // 滞后告警有才带（没超阈值时这一整段不出现 —— 不许恒输出）
+  return [`【数据出处】${parts.join(' · ')}`, ...alert].join('\n')
 }
 
-/** 缺失明细的逐条文本（只在有缺失时输出，避免正常路径变啰嗦） */
+/**缺失明细的逐条文本（只在有缺失时输出，避免正常路径变啰嗦） */
 function missingLines(p: DataProvenance | undefined, limit = 8): string[] {
   if (p === undefined || p.missing.length === 0) return []
   const head = p.missing.slice(0, limit).map((m) => `  · ${m.what}（${MISSING_TIER_LABEL[m.why === 'no-source' ? 'no-source' : 'transient']}）：${m.note}`)
@@ -81,7 +90,7 @@ function missingLines(p: DataProvenance | undefined, limit = 8): string[] {
   return ['缺失明细：', ...head]
 }
 
-/** 缺失明细去重（同一条 `what` 只留第一次出现的原因）：行情缺失与 YTD 基准缺失合并时不能刷两遍 */
+/**缺失明细去重（同一条 `what` 只留第一次出现的原因）：行情缺失与 YTD 基准缺失合并时不能刷两遍 */
 function dedupeMissing(list: readonly MissingField[]): MissingField[] {
   const seen = new Set<string>()
   const out: MissingField[] = []
@@ -96,11 +105,11 @@ function dedupeMissing(list: readonly MissingField[]): MissingField[] {
 
 // ── quote helpers shared by tools ─────────────────────────────────────────
 
-/** 预设/逗号清单 → secid 列表。**导出供断言**：预设必须按组 key 解析（位置索引会随 TW_ROWS 增删组静默错位）。 */
+/**预设/逗号清单 → secid 列表。导出供断言：预设必须按组 key 解析（位置索引会随 TW_ROWS 增删组静默错位）。 */
 export async function resolveQuoteIds(idsRaw: unknown): Promise<string[]> {
   const raw = String(idsRaw ?? '').trim()
   if (raw === '') throw new Error('secids 是必填参数（逗号分隔，如 1.000001,114.lhm）')
-  // 按**组 key** 查（不是位置）：位置索引会随 TW_ROWS 增删组静默错位
+  // 按组 key 查（不是位置）：位置索引会随 TW_ROWS 增删组静默错位
   const presets: Record<string, string[]> = {
     cn: twGroupSecids('cn'),
     intl: twGroupSecids('intl'),
@@ -143,14 +152,14 @@ export function makeAgentTools(
   store: DataStore,
   calendar?: CalendarStore,
   rescue?: RescueMonitor,
-  /** 写操作日志（P0-11）；不传则用默认数据目录 */
+  /**写操作日志（P0-11）；不传则用默认数据目录 */
   journal: WriteJournal = new WriteJournal(),
 ): {
   registerTools: (tools: PluginToolRuntime, prompt: PluginSystemPrompt | undefined) => () => void
 } {
   const defs: PluginToolDefinition[] = []
 
-  /** 从 exec 里取写入者标识（会话 id）；取不到时如实标 unknown，不编一个假 id */
+  /**从 exec 里取写入者标识（会话 id）；取不到时如实标 unknown，不编一个假 id */
   const writerOf = (exec?: PluginToolExec): string => {
     const id = exec?.agent?.id
     return typeof id === 'string' && id !== '' ? id : 'unknown'
@@ -279,6 +288,9 @@ export function makeAgentTools(
         const prefs = store.getPrefs()
         const fx = { mode: prefs.fxMode ?? 'none', rates: prefs.fxRates ?? {} }
         const { view, stale } = assemblePortfolio(port.groups, port.items, store.ledgerEntries(), q?.items ?? {}, fx)
+        // 做T（同日往返配对，P1-3）：放在持仓工具里而不是新开工具 —— 它是持仓的派生统计，
+        // 与仓位/盈亏同屏读；新工具只多一个索引项与一次授权确认。
+        const dayTradeView = dayTradesOf(store.ledgerEntries())
         if (args.includeEmpty !== true) {
           view.positions = view.positions.filter((p) => p.qty > 0)
         }
@@ -302,7 +314,8 @@ export function makeAgentTools(
         }
         const provenance: DataProvenance = { ...base, missing: [...base.missing, ...extra] }
         return {
-          view, stale, provenance,
+          view,
+          dayTrades: dayTradeView, stale, provenance,
           fxMode: view.fxMode ?? 'none',
           unpriced: view.unpriced ?? [],
           unpricedMv: view.unpricedMv ?? 0,
@@ -700,7 +713,7 @@ export function makeAgentTools(
         })
         const status = calendar.syncStatus()
         const provenance: DataProvenance = {
-          // 自动事件的数据时刻 = 最近一次**成功**同步时刻（P0-2：失败时刻不得改写数据时刻）；
+          // 自动事件的数据时刻 = 最近一次成功同步时刻（P0-2：失败时刻不得改写数据时刻）；
           // 从未成功同步过 → null，而不是"现在"
           asOf: status.syncedAt,
           // 有源失败（或从未成功同步）即降级：本次返回的事件里含上一次成功同步的旧值
@@ -882,12 +895,153 @@ export function makeAgentTools(
   })
 
   defs.push({
+    name: `${PREFIX}group_rank`,
+    description:
+      '把自选分组里的标的批量算成一屏清单：按指标（情绪/位置/涨跌幅）排序，给出每行名称+指标值+一句话状态，' +
+      '外加统计药丸（如「极冷 3 / 中性 5 / 极热 2」，各档之和＝总数）与分档汇总行（如「3 只接近低点 / 1 只区间内」）。' +
+      '缺失一律 `—` 且沉底，并计入「未取到」一档。文本分位（如「近 30 日分位 82%（↑12，8 日新高）」）' +
+      '只用算得出来的部分，算不出就不写。怎么读：这是同组内的相对位置，不是买卖建议。',
+    parameters: {
+      type: 'object',
+      properties: {
+        group: { type: 'string', description: '自选分组名或 id（缺省用第一个分组）' },
+        by: { type: 'string', description: '排序指标：情绪（默认）/位置/涨跌幅' },
+        limit: { type: 'number', description: '最多多少行（默认 30，最大 60）' },
+      },
+      required: [],
+      additionalProperties: false,
+    },
+    output: {
+      schema: {
+        type: 'object',
+        additionalProperties: true,
+        properties: {
+          rows: {
+            type: 'array',
+            items: {
+              type: 'object',
+              additionalProperties: true,
+              properties: {
+                secid: { type: 'string' }, name: { type: 'string' },
+                value: { description: '指标值（%）；缺失 null' },
+                label: { type: 'string' }, bucket: { type: 'string' }, note: { type: 'string' },
+              },
+            },
+          },
+          pills: { type: 'array', items: { type: 'object', additionalProperties: true } },
+          bucketLine: { type: 'string', description: '分档汇总一行；各档之和＝总数' },
+          total: { type: 'number' },
+          methodology: { type: 'string' },
+          provenance: { type: 'object', additionalProperties: true },
+        },
+      },
+      render: (_args, value) => {
+        const v = value as {
+          rows?: Array<Record<string, unknown>>
+          pills?: Array<{ bucket: string; count: number }>
+          bucketLine?: string
+          total?: number
+          methodology?: string
+          provenance?: DataProvenance
+          error?: string
+        }
+        if (v.error !== undefined) return textBlock(`错误：${v.error}`)
+        const rows = v.rows ?? []
+        if (rows.length === 0) return textBlock([`该分组没有标的。`, provenanceLine(v.provenance)].filter((x) => x !== '').join('\n'))
+        const lines = rows.map((r) => {
+          const val = r.value === null || r.value === undefined ? '—' : `${fmtNum(Number(r.value))}${String(r.unit ?? '')}`
+          const note = typeof r.note === 'string' && r.note !== '' ? ` · ${r.note}` : ''
+          const why = r.value === null || r.value === undefined ? `（${String(r.why ?? '未取到')}）` : ''
+          return `${String(r.name ?? r.secid)} ${val} ${String(r.bucket ?? '')}${why}${note}`
+        })
+        const pills = (v.pills ?? []).map((p) => `${p.bucket} ${p.count}`).join(' / ')
+        return textBlock([
+          ...lines,
+          pills === '' ? '' : `统计：${pills}（合计 ${String(v.total ?? 0)}）`,
+          v.bucketLine !== undefined ? `分档：${v.bucketLine}` : '',
+          v.methodology !== undefined ? `口径：${v.methodology}` : '',
+          provenanceLine(v.provenance),
+        ].filter((x) => x !== '').join('\n'))
+      },
+    },
+    async execute(args) {
+      try {
+        const wl = store.watchData()
+        const want = typeof args.group === 'string' ? args.group.trim() : ''
+        const group = want === ''
+          ? wl.groups[0]
+          : (wl.groups.find((g) => g.id === want || g.name === want) ?? undefined)
+        if (group === undefined) {
+          return { error: `没找到分组「${want}」（现有：${wl.groups.map((g) => g.name).join('、')}）` }
+        }
+        const limit = typeof args.limit === 'number' ? Math.min(60, Math.max(1, Math.round(args.limit))) : 30
+        const by = args.by === '位置' ? '位置' : args.by === '涨跌幅' ? '涨跌幅' : '情绪'
+        const items = wl.items.filter((i) => i.groupId === group.id).slice(0, limit)
+        const secids = items.map((i) => i.secid)
+        const q = await em.fetchQuotesWithProvenance(secids)
+        const rowIn: Array<{ secid: string; name: string; value: number | null; label: string | null; why?: string | null }> = []
+        const notes: Record<string, string> = {}
+        const unit = by === '情绪' ? '%' : '%'
+        if (by === '涨跌幅') {
+          for (const it of items) {
+            const row = q.items[it.secid]
+            rowIn.push({
+              secid: it.secid, name: it.name, value: row?.pct ?? null,
+              label: row?.pct === null || row?.pct === undefined ? null : row.pct >= 0 ? '上涨' : '下跌',
+              why: row?.pct === null || row?.pct === undefined ? '行情未取到' : null,
+            })
+          }
+        } else if (by === '位置') {
+          for (const it of items) {
+            const price = q.items[it.secid]?.price ?? null
+            const supported = em.fqSupported(it.secid)
+            const fq: 0 | 1 = supported ? 1 : 0
+            const k = await em.fetchKline(it.secid, 101, POSITION_WINDOW.bars, fq)
+            const r = positionOfBars(it.secid, k?.days ?? [], price, { fq, fqSupported: supported })
+            rowIn.push({ secid: it.secid, name: it.name, value: r.posPct, label: r.label, why: r.why })
+            const tp = k === null ? null : textPercentile(k.days, 30)
+            if (tp !== null) notes[it.secid] = tp.text
+          }
+        } else {
+          const itemsT = items.map((i) => ({ secid: i.secid, kind: stripKindOf(i.secid) }))
+          const t = await computeTones(itemsT)
+          const byId = new Map<string, { secid: string; level: string | null; pct: number | null; why: string | null }>(
+            t.rows.map((r) => [r.secid, { secid: r.secid, level: r.level, pct: r.pct, why: r.why }]),
+          )
+          for (const it of items) {
+            const r = byId.get(it.secid)
+            rowIn.push({
+              secid: it.secid, name: it.name,
+              // 情绪用「score 分位」当指标值（0–100），档位词就是五档；缺失照旧 —
+              value: r === undefined || r.level === null ? null : r.pct,
+              label: r?.level ?? null,
+              why: r === undefined ? '未计算' : (r.level === null ? (r.why ?? '样本不足') : null),
+            })
+          }
+        }
+        // 涨跌幅用三档（上涨/平盘/下跌），不能套分位桶 —— 否则 +3% 也会被算成「极冷」
+        const ranked = rankOf(rowIn, notes, by === '涨跌幅' ? returnBucketOf : undefined)
+        return {
+          group: { id: group.id, name: group.name },
+          by,
+          unit,
+          ...ranked,
+          methodology: `一屏排序：指标=「${by}」；${by === '情绪' ? '情绪用五档算法（score 自身分位）' : by === '位置' ? `位置=${POSITION_WINDOW.label} 区间位置%` : '涨跌幅为当日涨跌幅%'}；缺失沉底并计入「未取到」档；药丸各档之和＝总数。`,
+          provenance: q.provenance,
+        }
+      } catch (error) {
+        return { error: error instanceof Error ? error.message : String(error) }
+      }
+    },
+  })
+
+  defs.push({
     name: `${PREFIX}position`,
     description:
       '读取【位置类指标】：52 周区间位置%、距 52 周高点/低点%，并给文本标签（极接近低点/接近低点/区间内/接近高点/极接近高点）。' +
-      '**口径**：必须用**前复权**序列（不复权会把除权跳空读成下跌，分位失真）；' +
+      '口径：必须用前复权序列（不复权会把除权跳空读成下跌，分位失真）；' +
       '窗口写死成单一常量并随结果返回（`POSITION_WINDOW`），样本数与前复权口径都在回包里；' +
-      '现价缺失或窗口内样本不足一律 `null` + 原因，**不用 0% 或 50% 冒充**。' +
+      '现价缺失或窗口内样本不足一律 `null` + 原因，不用 0% 或 50% 冒充。' +
       '怎么读：位置越低＝越接近一年低点（只描述"相对自身的位置"，不是"便宜"或"该买"）；' +
       '不能用来干什么：它不是估值、不含基本面、也不是买卖信号。',
     parameters: {
@@ -1009,7 +1163,9 @@ export function makeAgentTools(
       '返回当前信号等级（平静/资金异动/疑似护盘/强护盘信号）、综合评分、六因子明细（实测值/阈值/是否命中）、' +
       '各宽基通道明细（沪深300ETF/上证50ETF/中证500ETF/中证1000ETF/科创50ETF/创业板ETF 的量能倍数、超大单净额、' +
       '脉冲倍数）、今日信号时间线与近 30 日历史。注意：汇金/国新/诚通不披露日内成交，' +
-      '这是行为模式识别而非身份确认，回答时不要断言「国家队已入场」。',
+      '这是行为模式识别而非身份确认，回答时不要断言「国家队已入场」。' +
+      '\n怎么读：等级是"当天量价模式像不像护盘"，不是身份认定；`forward` 段给的是"过去 N 次信号之后发生了什么"（含基准与持有期）。' +
+      '\n不能用来干什么：不能当买卖信号、不能外推将来、不能证明因果；`forward` 的样本过少时连描述性结论都不要下。',
     parameters: {
       type: 'object',
       properties: {
@@ -1125,6 +1281,31 @@ export function makeAgentTools(
           })),
           todayEvents: snapshot.today,
           history: rescue.history(30),
+          // 信号的前瞻表现（P1-1/P1-2）：事件=近 30 日里等级 ≥1 的日子；标的=沪深300ETF代理口径用指数 1.000300
+          ...(await (async () => {
+            const hist = rescue.history(30)
+            const events = hist
+              .filter((h) => h.maxLevel >= 1)
+              .map((h) => ({ day: h.day, level: h.maxLevel, label: RESCUE_LEVEL_LABEL[h.maxLevel] ?? String(h.maxLevel), indicators: `峰值评分 ${h.maxScore} · 峰值时刻 ${h.peakHhmm ?? '—'} · 事件 ${h.events}` }))
+            // 标的默认沪深300本身；给 secid 时算那只标的（基准仍是沪深300，必须与标的同窗口）
+            const subject = typeof args.secid === 'string' && SECID_RE.test(args.secid.trim()) ? args.secid.trim() : '1.000300'
+            const subjectBars = (await em.fetchKline(subject, 101, 300, 0))?.days ?? []
+            const benchBars = subject === '1.000300' ? subjectBars : ((await em.fetchKline('1.000300', 101, 300, 0))?.days ?? [])
+            const f = forwardOf(events, subjectBars, benchBars, '沪深300')
+            return {
+              forward: {
+                subject,
+                rows: f.rows,
+                summary: {
+                  ...f.summary,
+                  // 标的与基准相同时超额恒 0 —— 如实说明，别让读者以为"跑平基准"
+                  note: f.summary.note ?? (subject === '1.000300' ? '标的与基准相同（都取沪深300）⇒ 超额恒为 0；传 secid 指定标的才有意义' : null),
+                },
+                methodology: f.methodology,
+                disclaimer: f.disclaimer,
+              },
+            }
+          })()),
  // 护盘也有出处。asOf = 最近一次成功采样（不是 ts —— 那是快照生成时刻）；
           // 采样失败与降级复用都进 stale + missing[]
           provenance: {
@@ -1263,7 +1444,7 @@ export function losslessJson(value: unknown): unknown {
   return undefined
 }
 
-/** Host entry side-effect helper: locate optional services via ctx.get. */
+/**Host entry side-effect helper: locate optional services via ctx.get. */
 export function servicesOf(ctx: PluginContext): { tools?: PluginToolRuntime; systemPrompt?: PluginSystemPrompt } {
   const tools = ctx.get('tools') as PluginToolRuntime | undefined
   const systemPrompt = ctx.get('systemPrompt') as PluginSystemPrompt | undefined

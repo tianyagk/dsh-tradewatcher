@@ -1,23 +1,23 @@
 /**
- * **顺序不变量自检**、合理性检查。网络取数由 `em.ts` / `sina.ts` 提供，测试里注入构造的页数据。
- * 红线：不变量不成立就**不发布这个数**（宁可 `—` + 原因，也不给一个看起来正常但错的数字）。
+ * 顺序不变量自检、合理性检查。网络取数由 `em.ts` / `sina.ts` 提供，测试里注入构造的页数据。
+ * 红线：不变量不成立就不发布这个数（宁可 `—` + 原因，也不给一个看起来正常但错的数字）。
  */
 import { MISSING_TIER_ADVICE } from '../shared/model.ts'
 
-/** 沪深A股（沪市主板+科创板、深市主板+创业板；**不含北交所** —— 口径要如实标出） */
+/**沪深A股（沪市主板+科创板、深市主板+创业板；不含北交所 —— 口径要如实标出） */
 export const BREADTH_HS_A_FS = 'm:0+t:6,m:0+t:80,m:1+t:2,m:1+t:23'
-/** 上游单页上限（实测东财 clist 与新浪都被截在 100） */
+/**上游单页上限（实测东财 clist 与新浪都被截在 100） */
 export const BREADTH_PAGE_SIZE = 100
-/** 分页统计的请求预算（源 B：沪深A股约 54 页 ⇒ 预算 60 够一次全量；截断即失败） */
+/**分页统计的请求预算（源 B：沪深A股约 54 页 ⇒ 预算 60 够一次全量；截断即失败） */
 export const BREADTH_CLIST_MAX_PAGES = 60
-/** 并发（源 B） */
+/**并发（源 B） */
 export const BREADTH_CLIST_CONCURRENCY = 4
-/** 源 C 的边界搜索预算（约 6–8 次足够） */
+/**源 C 的边界搜索预算（约 6–8 次足够） */
 export const BREADTH_SINA_MAX_PAGES = 10
-/** 结果缓存（毫秒）：一轮快照的有效期，避免每次刷新都把上游打一遍 */
+/**结果缓存（毫秒）：一轮快照的有效期，避免每次刷新都把上游打一遍 */
 export const BREADTH_COUNT_TTL_MS = 120_000
 
-/** 界面/工具要照原样说明的统计口径（自己算的数不能与上游给的混为一谈） */
+/**界面/工具要照原样说明的统计口径（自己算的数不能与上游给的混为一谈） */
 export const BREADTH_COUNT_CALIBER =
   '本插件自行按沪深A股全量统计（含科创板/创业板，不含北交所）：涨跌幅 >0 记上涨、=0 记平盘、<0 记下跌'
 
@@ -27,33 +27,33 @@ export interface BreadthCounts {
   up: number
   down: number
   even: number
-  /** 参与统计的股票总数（分页统计时取上游给的 total） */
+  /**参与统计的股票总数（分页统计时取上游给的 total） */
   total: number
-  /** 实际扫过的**有效**行数（有涨跌幅的行；源 C=边界页之和） */
+  /**实际扫过的有效行数（有涨跌幅的行；源 C=边界页之和） */
   scanned: number
-  /** 扫到但**没有涨跌幅**的行数（停牌 / 上游给 `'-'`），未计入三类 —— 不是错误 */
+  /**扫到但没有涨跌幅的行数（停牌 / 上游给 `'-'`），未计入三类 —— 不是错误 */
   blank: number
-  /** 实际请求的页数 */
+  /**实际请求的页数 */
   pages: number
 }
 
-/** 一页的取数结果：涨跌幅数组（按上游排序，`null` = 该行没有可用涨跌幅）+ 上游给的总数 */
+/**一页的取数结果：涨跌幅数组（按上游排序，`null` = 该行没有可用涨跌幅）+ 上游给的总数 */
 export interface CountPage {
   rows: Array<number | null>
   total: number | null
-  /** 该页里没有涨跌幅的行数（若取数方已把那些行丢弃，用它把"原始行数"补回来） */
+  /**该页里没有涨跌幅的行数（若取数方已把那些行丢弃，用它把"原始行数"补回来） */
   blank?: number
 }
 
 export interface CountAttempt {
   counts: BreadthCounts | null
-  /** 失败原因（成功时为 null）；措辞沿用两档（transient / no-source）+ 具体原因 */
+  /**失败原因（成功时为 null）；措辞沿用两档（transient / no-source）+ 具体原因 */
   reason: string | null
-  /** 自检结论（成功时也返回，便于排查"为什么这次数变了"） */
+  /**自检结论（成功时也返回，便于排查"为什么这次数变了"） */
   checks: string[]
 }
 
-/** 只有有限数才算"有一个涨跌幅"；空/非数一律不算（不许当 0） */
+/**只有有限数才算"有一个涨跌幅"；空/非数一律不算（不许当 0） */
 function pctOf(v: unknown): number | null {
   return typeof v === 'number' && Number.isFinite(v) ? v : null
 }
@@ -61,9 +61,9 @@ function pctOf(v: unknown): number | null {
 /**
  * 合理性检查（源 B/C 共用）：明显不合理的统计按失败处理。
  *
- * ⚠ 等式基准是**有效行数**（有涨跌幅的行），**不是上游 total**：A 股常态就有停牌/无涨跌幅的行，
+ * ⚠ 等式基准是有效行数（有涨跌幅的行），不是上游 total：A 股常态就有停牌/无涨跌幅的行，
  * 拿未扣除的 total 做等式会让源 B 当日有 1 只停牌就恒失败（实测就踩过这个坑）。
- * 覆盖检查用 `scanned + blank`（扫到的**原始**行数）与 total 比，`fullScan:true` 时才做。
+ * 覆盖检查用 `scanned + blank`（扫到的原始行数）与 total 比，`fullScan:true` 时才做。
  */
 /**
  * 口径字符串（随结果返回）：家数的两条链、样本数（当日扫描行数）、分位窗口。
@@ -77,7 +77,7 @@ export const BREADTH_METHODOLOGY =
 export function sanityOfCounts(
   counts: Pick<BreadthCounts, 'up' | 'down' | 'even' | 'total' | 'scanned' | 'blank'>,
   opts: {
-    /** 源 B 的全量扫页由调用方核对覆盖（见 `countBreadthFromClist`）；此处仅在指定时校验 */
+    /**源 B 的全量扫页由调用方核对覆盖（见 `countBreadthFromClist`）；此处仅在指定时校验 */
     fullScan?: boolean
     /**
      * 三类之和与谁对齐：源 B = `scanned`（它扫的就是全市场有效行）；
@@ -110,7 +110,7 @@ export function sanityOfCounts(
 }
 
 /**
- * 源 B：把分页拿到的涨跌幅**本地计数**（>0 上涨 / =0 平盘 / <0 下跌）。
+ * 源 B：把分页拿到的涨跌幅本地计数（>0 上涨 / =0 平盘 / <0 下跌）。
  *
  * 页数组里 `null`/`NaN` 表示"这一行没有可用涨跌幅"（停牌、上游给 `'-'`）——按原样保留占位，
  * 这样"扫到多少行"与"其中多少行无效"都能如实算出来（`checks` 里会写明）。
@@ -150,7 +150,7 @@ export function countFromClistPages(pages: readonly (readonly (number | null)[] 
   return { counts, reason: null, checks }
 }
 
- // **顺序不变量自检**（任一条不成立 ⇒ 不发布这个数，返回失败 + 原因）：
+ // 顺序不变量自检（任一条不成立 ⇒ 不发布这个数，返回失败 + 原因）：
  // - 每页内部必须非递增（降序）；
  // - 三类独立计数之和必须等于 `total`。
 export async function countFromSortedPctPages(
@@ -170,7 +170,7 @@ export async function countFromSortedPctPages(
     const got = await fetchPage(page, num)
     if (total === null && got.total !== null) total = got.total
     const rows = got.rows.map((v) => pctOf(v)).filter((v): v is number => v !== null)
-    if (rows.length === 0) return null  // 该页全是无涨跌幅的行 ⇒ 视为取数失败（源 C 未接线）
+    if (rows.length === 0) return null // 该页全是无涨跌幅的行 ⇒ 视为取数失败（源 C 未接线）
     if (note) checks.push(`page ${page}：${rows.length} 行（首 ${rows[0].toFixed(2)} 末 ${rows[rows.length - 1].toFixed(2)}）`)
     return rows
   }
@@ -182,7 +182,7 @@ export async function countFromSortedPctPages(
     return rows
   }
   /**
-   * 不变量核对用**新取一次**的数据（不吃缓存）：上游排序/分页不稳定时，
+   * 不变量核对用新取一次的数据（不吃缓存）：上游排序/分页不稳定时，
    * 相邻页的关系会变 —— 那种情况必须失败，而不是拿两次不同的快照拼一个数出来。
    */
   const loadFresh = (page: number): Promise<number[] | null> => fetchRows(page, false)
@@ -197,7 +197,7 @@ export async function countFromSortedPctPages(
   }
   const lastPage = total !== null ? Math.max(1, Math.ceil(total / num)) : maxPages
 
-  /** 二分找"第一个 min < 0 的页"（即首个包含负值的页），从 from 页起 */
+  /**二分找"第一个 min < 0 的页"（即首个包含负值的页），从 from 页起 */
   const findFirstWithNegative = async (from: number): Promise<number | null> => {
     let lo = from
     let hi = lastPage
@@ -224,7 +224,7 @@ export async function countFromSortedPctPages(
       else lo = mid + 1
     }
     if (lo > lastPage) {
-      // 所有页都全正 ⇒ 全市场上涨。但"全正"必须**证明**：新取一次最后一页，
+      // 所有页都全正 ⇒ 全市场上涨。但"全正"必须证明：新取一次最后一页，
       // 它的最小值仍 > 0 才敢下这个结论（只凭首页 + 二分没找到边界是不够的）
       if (total === null) {
         checks.push('首页全正，但上游未给总数 ⇒ 无法确认"全市场上涨"')
@@ -311,7 +311,7 @@ export async function countFromSortedPctPages(
     }
   }
 
-  // ③ 三类**独立计数** + 和必须等于 total
+  // ③ 三类独立计数 + 和必须等于 total
   const positivesInP = pRows.filter((v) => v > 0).length
   const zerosInP = pRows.filter((v) => v === 0).length
   const zerosInQ = qRows.filter((v) => v === 0).length
@@ -341,16 +341,16 @@ export async function countFromSortedPctPages(
   return { counts, reason: null, checks }
 }
 
-/** 失败时用的统一原因（沿用两档措辞 + 具体原因） */
+/**失败时用的统一原因（沿用两档措辞 + 具体原因） */
 export function breadthFailReason(detail: string, why: 'transient' | 'no-source'): string {
   return `${detail} —— ${MISSING_TIER_ADVICE[why]}`
 }
 
 /**
- * 源 B：东财 clist **分页扫全量**（并发 ≤4、页数上限、请求预算内），本地按 f3 计数。
+ * 源 B：东财 clist 分页扫全量（并发 ≤4、页数上限、请求预算内），本地按 f3 计数。
  *
  * 为什么要有页数上限与预算：上游把 `pz` 截在 100，沪深A股约 54 页 —— 一旦上游返回的 total
- * 异常大（或被限流返回空页），没有上限就会一直打上游。超预算即**失败**（宁可 `—`）。
+ * 异常大（或被限流返回空页），没有上限就会一直打上游。超预算即失败（宁可 `—`）。
  */
 export async function countBreadthFromClist(
   fetchPage: (pn: number, pz: number) => Promise<CountPage>,
@@ -391,7 +391,7 @@ export async function countBreadthFromClist(
       checks,
     }
   }
-  // ⚠ 必须**显式填 undefined**：`new Array(n)` 造出的是稀疏数组，空槽会被 `filter`/`some`/`for...of` 跳过，
+  // ⚠ 必须显式填 undefined：`new Array(n)` 造出的是稀疏数组，空槽会被 `filter`/`some`/`for...of` 跳过，
   // 于是"缺页统计"恒为 0、逐页诊断丢失，最坏还会 `for (const x of undefined)` 抛 TypeError（D1）
   const pages: Array<Array<number | null> | undefined> = Array.from({ length: pageCount }, () => undefined)
   pages[0] = first.rows
@@ -429,7 +429,7 @@ export async function countBreadthFromClist(
       checks,
     }
   }
-  // 覆盖检查（全量扫页的红线）：扫到的**原始行数**（有效 + 无涨跌幅）必须不少于上游 total
+  // 覆盖检查（全量扫页的红线）：扫到的原始行数（有效 + 无涨跌幅）必须不少于上游 total
   if (total !== null && rawSeen < total) {
     checks.push(`扫到的原始行数 ${rawSeen} < 上游总数 ${total}`)
     const why = `只扫到 ${rawSeen} 行 < 总数 ${total} 行，分页可能被截断`
@@ -443,7 +443,7 @@ export async function countBreadthFromClist(
   }
 }
 
-/** 源 B/C 的结果缓存（一轮快照的有效期）：避免每次刷新都把上游打一遍 */
+/**源 B/C 的结果缓存（一轮快照的有效期）：避免每次刷新都把上游打一遍 */
 export class BreadthCountCache {
   private at = 0
   private value: { counts: BreadthCounts; source: BreadthCountSource; asOf: number } | null = null
@@ -458,7 +458,7 @@ export class BreadthCountCache {
     return this.value
   }
 
-  /** 只缓存自统计（B/C）的结果：源 A 是行情对象里现成的，没必要缓存 */
+  /**只缓存自统计（B/C）的结果：源 A 是行情对象里现成的，没必要缓存 */
   set(value: { counts: BreadthCounts; source: BreadthCountSource; asOf: number }, now: number = Date.now()): void {
     this.at = now
     this.value = value
@@ -466,12 +466,12 @@ export class BreadthCountCache {
 }
 
 export interface BreadthCountDeps {
-  /** 源 B：东财 clist 的一页 */
+  /**源 B：东财 clist 的一页 */
   clistPage: (pn: number, pz: number) => Promise<CountPage>
-  /** 源 B 的页大小（默认 100，即上游上限；测试可注入更小的页） */
+  /**源 B 的页大小（默认 100，即上游上限；测试可注入更小的页） */
   clistPageSize?: number
   /**
-   * 可选：**任何**"按涨跌幅降序返回分页"的源（边界搜索用；当前运行时未接入，
+   * 可选：任何"按涨跌幅降序返回分页"的源（边界搜索用；当前运行时未接入，
    * 见 `resolveBreadthCount` 的说明）。不传就跳过这一档。
    */
   sortedPctPage?: (page: number, num: number) => Promise<CountPage>
@@ -480,7 +480,7 @@ export interface BreadthCountDeps {
 export interface BreadthCountResolution {
   counts: BreadthCounts | null
   source: BreadthCountSource | null
-  /** 数字时刻：源 A = 行情时刻；源 B/C = **统计完成时刻**（不复用行情时刻） */
+  /**数字时刻：源 A = 行情时刻；源 B/C = 统计完成时刻（不复用行情时刻） */
   asOf: number | null
   reason: string | null
   checks: string[]
@@ -489,9 +489,9 @@ export interface BreadthCountResolution {
 /**
  * 多源家数链（按成本从低到高，命中即止）：A 指数字段 → B 东财 clist 全量统计 → C 降序分页边界搜索。
  *
- * ⚠ **C 档当前未接线**：它需要 `deps.sortedPctPage`（一个"按涨跌幅降序返回分页"的取数实现），
+ * ⚠ C 档当前未接线：它需要 `deps.sortedPctPage`（一个"按涨跌幅降序返回分页"的取数实现），
  * 而当前运行时没有可用的那条取数实现（该目标在本环境不可用）⇒ 只传 `clistPage`，链实际只走 A→B。
- * 算法 `countFromSortedPctPages` 与它的用例是**通用件**（任何降序分页源都能用），刻意保留：
+ * 算法 `countFromSortedPctPages` 与它的用例是通用件（任何降序分页源都能用），刻意保留：
  * 接线前请先给 `deps.sortedPctPage` 传实现，并按 把 `down` 改成边界页独立计数。
  *
  * 源 A 由调用方（路由）从指数行情里取出；B/C 都拿不到就返回失败 + 原因（界面维持现状的 `—`）。
@@ -535,7 +535,7 @@ export async function resolveBreadthCount(args: {
     args.cache?.set({ counts: c.counts, source: 'page-scan', asOf: at }, at)
     return { counts: c.counts, source: 'page-scan', asOf: at, reason: null, checks: c.checks }
   }
-  // 逐个列出**试过的源**与各自的原因：用户/agent 在无法探活的环境里要靠这一行判断"哪条通"
+  // 逐个列出试过的源与各自的原因：用户/agent 在无法探活的环境里要靠这一行判断"哪条通"
   const tried: string[] = []
   if (args.fromIndexQuote === null) tried.push('源A 指数 f104/f105/f106 缺失')
   tried.push(`源B 东财 clist：${b.reason ?? '失败'}`)

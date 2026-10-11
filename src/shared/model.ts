@@ -715,6 +715,13 @@ export interface PositionRow {
   name: string
   note?: string
   qty: number
+  /**
+   * 费用影响（P2-6）：`总费用 ÷ 数量`（¥/股）。数量 0 ⇒ `null`（界面 `—`）。
+   * 口径：只算**买入侧累计费用**（它已摊进成本）；卖出费用已在 `realized` 里扣过，不重复计。
+   */
+  feePerShare?: number | null
+  /** 费用影响的分母（数量），便于读者复核 */
+  feePerShareQty?: number
   /** 买入均价（移动加权，含买入费用；卖出不影响） */
   avgCost: number
   /** 摊薄成本（券商口径）：(累计买入含费 − 累计卖出净额) ÷ 剩余数量 */
@@ -905,6 +912,32 @@ export interface MutateWatchBody {
   order?: number
 }
 
+/**
+ * 批量录入的批次标记：`批量录入#` + 1–12 位 base36（客户端写定长 8 位；这里放宽到 1 位，
+ * 是为了让“整词相等”这条规则本身可测：`批量录入#1` 只该命中 `#1`，不该命中 `#12` / `#1x`）。
+ *
+ * 为什么写死格式：反删**不可恢复**，判定必须是"整词精确相等"而不是子串/前缀。
+ * 规则：标记**前**必须是串首或空白（所以 `x批量录入#1` 不算），**后**必须不是词字符
+ * （所以 `批量录入#1` 不等于 `批量录入#12`，也不等于 `批量录入#1x`）。
+ */
+export const BULK_BATCH_PREFIX = '批量录入#'
+export const BULK_BATCH_RE = /(?:^|\s)批量录入#([0-9a-z]{1,12})(?![0-9a-z])/g
+
+/** 从 note 里取出所有批次标记（整词匹配，见 `BULK_BATCH_RE`） */
+export function bulkBatchesOf(note: string | undefined): string[] {
+  if (typeof note !== 'string' || note === '') return []
+  const out: string[] = []
+  BULK_BATCH_RE.lastIndex = 0
+  let m: RegExpExecArray | null
+  while ((m = BULK_BATCH_RE.exec(note)) !== null) out.push(`${BULK_BATCH_PREFIX}${m[1]}`)
+  return out
+}
+
+/** 这条 note 是否属于**指定批次**（整词相等；`批量录入#1` 不命中 `#12`/`#1x`/`x批量录入#1`） */
+export function bulkBatchMatches(note: string | undefined, marker: string): boolean {
+  return bulkBatchesOf(note).includes(marker)
+}
+
 export interface MutatePortBody {
   op:
     | 'addGroup'
@@ -918,6 +951,8 @@ export interface MutatePortBody {
     | 'buy'
     | 'sell'
     | 'adjust'
+    // 批量录入的一次撤销：按流水 id 反删（留痕：删掉的原件写进 writeLog，可从那边恢复）
+    | 'deleteLedger'
   groupId?: string
   posId?: string
   name?: string
@@ -928,6 +963,10 @@ export interface MutatePortBody {
   price?: number
   fee?: number
   ts?: number
+  /** `deleteLedger` 用：要反删的流水 id 列表 */
+  ids?: string[]
+  /** `deleteLedger` 用：按 note 里的**批次标记**反删（整词精确匹配，见 `bulkBatchesOf`） */
+  noteMarker?: string
 }
 
 /** Actor header used by mutations coming from the model tools. */
@@ -1151,6 +1190,8 @@ export interface DataProvenance {
    * `open` 交易中；`closed` 休市中（含午休）；`unknown` 判断不了（无时刻/无交易日历）。
    */
   marketState?: 'open' | 'closed' | 'unknown'
+  /** 滞后自动告警（P1-9）：超阈值才有一行；不超时**没有这个字段**（不许恒输出） */
+  lagAlert?: string
   /**
    * 降级时**现在显示的到底是什么**（P1-10）：如「行情源暂时不可用，当前显示 15:00 快照」。
    * 只有真降级（stale/兜底/本地快照）时才给。
@@ -1164,6 +1205,34 @@ export interface DataProvenance {
  * 规则：<90s「刚刚」；<90min「N 分钟前」；<36h「N 小时前」；否则「N 天前」。
  * `asOf === null` ⇒ `null`（**不编**，也不写"刚刚"）。
  */
+/**
+ * 滞后自动告警（P1-9）：只在**超阈值**时给一行；不超就返回 null（**不许恒输出**）。
+ *
+ * 阈值按数据频率选：日线/日频数据用 `dailyDays`（默认 3 个自然日，容忍周末），
+ * 分钟/实时数据用 `intradayMinutes`（默认 30 分钟）。`asOf` 为 null ⇒ 不给告警（缺时刻是"未知"，
+ * 不是"滞后" —— 那种情况由 missing[] 说）。
+ */
+export function lagAlertOf(
+  asOf: number | null,
+  now: number,
+  opts: { source?: string; dailyDays?: number; intradayMinutes?: number; isDaily?: boolean } = {},
+): string | null {
+  if (asOf === null || !Number.isFinite(asOf)) return null
+  const gapMs = now - asOf
+  if (!(gapMs > 0)) return null
+  const src = opts.source ?? '数据源'
+  if (opts.isDaily === true) {
+    const days = Math.floor(gapMs / 86_400_000)
+    const limit = opts.dailyDays ?? 3
+    if (days < limit) return null
+    return `数据更新滞后：${src} 最新 ${new Date(asOf).toLocaleDateString('sv-SE', { timeZone: 'Asia/Shanghai' })}，落后 ${days} 天`
+  }
+  const min = Math.floor(gapMs / 60_000)
+  const limit = opts.intradayMinutes ?? 30
+  if (min < limit) return null
+  return `数据更新滞后：${src} 最新 ${new Date(asOf).toLocaleTimeString('zh-CN', { hour12: false, timeZone: 'Asia/Shanghai' })}，落后 ${min} 分钟`
+}
+
 export function lagHumanOf(asOf: number | null, now: number): string | null {
   if (asOf === null || !Number.isFinite(asOf)) return null
   const ms = now - asOf

@@ -120,3 +120,24 @@ test('出处的滞后时长人话化：不编、不写"刚刚"当缺失', async 
   assert.equal(lagHumanOf(now - 3 * 3_600_000, now), '3 小时前')
   assert.equal(lagHumanOf(now - 11 * 86_400_000, now), '11 天前', '报告要求的人话：「11 天前的快照」')
 })
+
+test('每股费用影响（P2-6）：总费用 ÷ 数量；数量 0 ⇒ null（不是 Infinity）', async () => {
+  const { assemblePortfolio } = await import('./portfolio.ts')
+  const led = (qty: number, fee: number) => ({
+    id: `e${qty}-${fee}`, ts: 1_700_000_000_000, verb: 'buy' as const, actor: 'web' as const,
+    posId: 'p1', groupId: 'g1', qty, price: 10, fee, note: '',
+  })
+  const groups = [{ id: 'g1', name: '主要持仓', createdAt: 0, archived: false }] as never
+  const items = [{ id: 'p1', groupId: 'g1', secid: '1.600519', name: 'X', createdAt: 0 }] as never
+  const a = assemblePortfolio(groups, items, [led(100, 30), led(100, 10)] as never, { '1.600519': { secid: '1.600519', price: 20, chg: 0, pct: 0 } } as never)
+  const row = a.view.positions[0]
+  // 累计买入费用 40 ÷ 200 股 = 0.2 元/股
+  assert.equal(row.feePerShare, 0.2, `每股费用（实际 ${String(row.feePerShare)}）`)
+  assert.equal(row.feePerShareQty, 200, '分母（数量）也要给出来，便于复核')
+  // 数量 0（清仓）⇒ null（不是 Infinity/NaN）
+  const b = assemblePortfolio(groups, items, [led(100, 30), led(100, 10), { ...led(200, 0), id: 's1', verb: 'sell' as const }] as never, { '1.600519': { secid: '1.600519', price: 20, chg: 0, pct: 0 } } as never)
+  const closed = b.view.positions[0]
+  assert.equal(closed.qty, 0)
+  assert.equal(closed.feePerShare, null, '数量 0 ⇒ null（界面 —），绝不给 Infinity')
+  assert.equal(closed.feePerShareQty, 0)
+})

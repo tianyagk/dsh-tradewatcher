@@ -1,3 +1,20 @@
+// 做T 视图：与宿主 `dayTrade.ts` 的返回同形（客户端只消费，不重算）
+export interface DayTradeView {
+  rounds: Array<{
+    day: string
+    direction: 'buy-first' | 'sell-first'
+    qty: number
+    buyPrice: number
+    sellPrice: number
+    grossPnl: number
+    feeShare: number
+    netPnl: number
+  }>
+  unmatched: Array<{ day: string; verb: string; qty: number; price: number | null; note: string }>
+  summary: { count: number; winRate: number | null; netPnl: number; avgNet: number | null; days: number }
+  methodology: string
+}
+
 import type { ToneRow as ToneRowDto } from './stripTone.ts'
 /** Same-origin JSON calls to the /tradewatcher/* host routes. */
 import type {
@@ -274,10 +291,12 @@ export const api = {
     stale: number
     /** 除权除息提示（P2-4），来自已同步的日历事件 */
     corporateActions?: CorporateAction[]
+    /** 做T 同日往返配对（P1-3，宿主算好给界面用；与工具同一份实现） */
+    dayTrades?: DayTradeView
   }> {
     return request('/tradewatcher/portfolio')
   },
-  mutatePortfolio(body: MutatePortBody): Promise<{ view: PortfolioView; stale: number; corporateActions?: CorporateAction[] }> {
+  mutatePortfolio(body: MutatePortBody): Promise<{ view: PortfolioView; stale: number; corporateActions?: CorporateAction[]; dayTrades?: DayTradeView }> {
     return request('/tradewatcher/portfolio', { method: 'POST', body: JSON.stringify(body) })
   },
   ledger(groupId?: string, posId?: string, limit = 300): Promise<{ entries: LedgerView[] }> {

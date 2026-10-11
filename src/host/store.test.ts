@@ -89,3 +89,40 @@ test('账本截断必须可读：返回数 / 总数 / truncated / limit 四个�
   assert.equal(ledgerTotal(entries, { posId: 'nope' }), 0)
   assert.equal(ledgerTotal(entries, { groupId: 'g2' }), 0)
 })
+
+test('D1 回归：批次标记按**整词**匹配，不允许子串/裸前缀误删', async () => {
+  const { bulkBatchesOf, bulkBatchMatches } = await import('../shared/model.ts')
+  const notes = ['批量录入#1', '批量录入#12', '批量录入#1x', 'x批量录入#1', '卖 批量录入#1']
+  assert.deepEqual(bulkBatchesOf('批量录入#1'), ['批量录入#1'])
+  assert.deepEqual(bulkBatchesOf('批量录入#12'), ['批量录入#12'])
+  assert.deepEqual(bulkBatchesOf('x批量录入#1'), [], '标记前不是串首/空白 ⇒ 不算（否则会误删别人写的备注）')
+  assert.deepEqual(bulkBatchesOf('卖 批量录入#1'), ['批量录入#1'], '方向词在前也算（客户端就是这么写的）')
+  const hit = notes.filter((n) => bulkBatchMatches(n, '批量录入#1'))
+  assert.deepEqual(hit, ['批量录入#1', '卖 批量录入#1'], `只该命中 #1 那两条（实际 ${JSON.stringify(hit)}）`)
+  // 取舍写死：`#1x` **不**被命中（x 是词字符）；`#12` 也不被命中（2 是词字符）
+  assert.equal(bulkBatchMatches('批量录入#1x', '批量录入#1'), false)
+  assert.equal(bulkBatchMatches('批量录入#12', '批量录入#1'), false)
+})
+
+test('D1 回归：deleteLedger 真的只删那一批（子串实现在这里会误删）', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'tw-d1-'))
+  const s = new DataStore(dir)
+  await s.init()
+  await s.mutatePortfolio({ op: 'addGroup', name: 'G' })
+  const gid = (await s.portData()).groups[(await s.portData()).groups.length - 1].id
+  await s.mutatePortfolio({ op: 'addPos', groupId: gid, secid: '1.600519', symbolName: 'X' })
+  const posId = (await s.portData()).items[(await s.portData()).items.length - 1].id
+  for (const note of ['批量录入#1', '批量录入#12', '批量录入#1x', 'x批量录入#1']) {
+    await s.mutatePortfolio({ op: 'buy', posId, qty: 1, price: 10, ts: Date.parse('2026-03-02T15:00:00+08:00'), note })
+  }
+  await s.mutatePortfolio({ op: 'deleteLedger', noteMarker: '批量录入#1' })
+  const alive = s.ledgerEntries().filter((e) => e.verb === 'buy').map((e) => e.note)
+  assert.deepEqual(alive, ['批量录入#12', '批量录入#1x', 'x批量录入#1'], `只该删掉 #1（实际存活 ${JSON.stringify(alive)}）`)
+  // 留痕（D3）：原件关键字段要真的写进去，否则"可恢复"是空话
+  const trace = s.ledgerEntries().filter((e) => e.verb === 'pnote').pop()
+  assert.ok(trace !== undefined)
+  assert.ok((trace?.note ?? '').includes('1.600519'), '留痕要含 secid')
+  assert.ok((trace?.note ?? '').includes('1@10'), '留痕要含 数量@价格')
+  assert.ok((trace?.note ?? '').includes('ts='), '留痕要含原始时间戳')
+  assert.ok((trace?.note ?? '').includes('批量录入#1'), '留痕要含被删那条的 note')
+})

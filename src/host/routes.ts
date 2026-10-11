@@ -20,6 +20,7 @@ import { BREADTH_MIN_DAYS, BREADTH_WINDOW, BreadthStore, breadthUsable, percenti
 import { BREADTH_METHODOLOGY, BREADTH_COUNT_CALIBER, BreadthCountCache, resolveBreadthCount } from './breadthCount.ts'
 import { dayOf } from './time.ts'
 import { log, type PluginWebRoute } from './context.ts'
+import { dayTradesOf } from './dayTrade.ts'
 
 const MAX_BODY = 256 * 1024
 const MAX_QUOTE_IDS = 160
@@ -718,7 +719,8 @@ export function makeTradeRoutes(
               /* 日历不可用时不阻断持仓视图：提示是附加信息，缺了要说但不该整页失败 */
               actions = []
             }
-            send(res, 200, { ok: true, view, stale, corporateActions: actions })
+            // 做T（同日往返配对，P1-3）：客户端要显示收起态一行；纯派生自账本，无新逻辑
+            send(res, 200, { ok: true, view, stale, corporateActions: actions, dayTrades: dayTradesOf(store.ledgerEntries()) })
             return
           }
           if (req.method === 'POST') {

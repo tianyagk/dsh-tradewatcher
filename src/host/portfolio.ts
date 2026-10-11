@@ -258,9 +258,22 @@ export function assemblePortfolio(
   const sorted = sortLedger(entries)
   const dayStart = shanghaiDayStart(Date.now())
 
+  // 每股费用影响（P2-6）：只累计**买入侧**费用（已摊进成本；卖出费用已在 realized 里扣过）
+  const buyFeeByPos = new Map<string, number>()
+  for (const e of sorted) {
+    if (e.verb !== 'buy' || typeof e.fee !== 'number') continue
+    buyFeeByPos.set(e.posId, (buyFeeByPos.get(e.posId) ?? 0) + e.fee)
+  }
   const positions: PositionRow[] = []
   for (const p of items) {
-    positions.push(derivePosition(sorted, p, quotes[p.secid], dayStart))
+    const row = derivePosition(sorted, p, quotes[p.secid], dayStart)
+    const fee = buyFeeByPos.get(p.id)
+    if (fee !== undefined && fee > 0) {
+      // 数量 0 ⇒ 不给数（`null`），界面显示 —：除以 0 会得到 Infinity，那是**错的数**
+      row.feePerShare = row.qty > 0 ? Math.round((fee / row.qty) * 10_000) / 10_000 : null
+      row.feePerShareQty = row.qty
+    }
+    positions.push(row)
   }
 
   const groupRows = groups.map((g): GroupView & { group: PortGroup } => {
