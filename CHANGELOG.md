@@ -11,6 +11,36 @@
 
 ---
 
+## v0.45.1 — 修正组件化归属（按实测调用方重定）与 patch 断言盲区
+
+来自 P3+P4 的独立对抗验证（`docs/AUDIT-VERIFY8.md`，结论"有条件通过"）。
+
+### 归属判据改成"看实测调用方"，不是看名字
+
+验证员自己解析 `api.ts` 的方法↔路径、再 grep 非测试调用点，查出三条路由的归属与真实消费者冲突：
+
+| 路由 | 原归属 | 实测调用方 | 现归属 |
+| --- | --- | --- | --- |
+| `/tradewatcher/board` | market | `MarketPage.tsx:84` **与** `IndustryHeatmap.tsx:30`（后者只被云图页 `CloudMap.tsx:125` 渲染） | **core**（≥2 行消费） |
+| `/tradewatcher/industries` | market | **只有** `WatchlistPage.tsx:89` | **watchlist** |
+| `/tradewatcher/anomaly` | market | `alerts.ts:69` ← 只被自选页引用 | **watchlist** |
+
+原来的归属会让"关掉大盘行"**连带弄坏云图页热力图与自选页的行业列/告警扫描**（诚实 404，但不是我们想要的）。
+判据已写进 `docs/DESIGN-SUBPLUGINS.md` §2.2：**按实测调用方定归属 —— 被 ≥2 个行消费 ⇒ core；单一消费方 ⇒ 该行**，并附含 file:line 的映射表（`market` 行因此缩到 `/breadth` + `/rescue`）。
+新增断言逐条锁住"归属 == 调用方所在行"，并给出"把 `/board` 加回 market ⇒ 断言失败"的证据。
+
+### patch↔一致性断言：字符类不够，还要行级精确
+
+把 id 正则从 `[a-z]+` 放宽到 `[a-z0-9-]+` 并加数量守恒后，实现者发现**仍抓不到 `tradewatcher-portfolioX`**（大写被截断后数量与列表都不变）⇒ 再补**行级精确**断言（每个 `- id:` 行必须完整匹配）。三种注入（`portfolioX`、`market2`、全小写改名）现在都会失败，证据已入档。
+
+### 验证
+
+362 条测试 × 2 时区（359 → 362）。`build.mjs` 零改动。
+
+### 待装机复核（用户重启后）
+
+① `/tradewatcher/rows` 返回六行；② 关「大盘」⇒ `/breadth`、`/rescue` 404，而 `/board`（core）、`/industries`、`/anomaly`（watchlist）**仍 200**；③ 关「自选」⇒ `/industries`、`/anomaly` 404，大盘页 `/breadth`、`/board` 照常。
+
 ## v0.45.0 — 筹码分布模块（45 日 · 换手率衰减）+「详情不可用」简化为圆形 icon
 
 ### 筹码分布（分时/K线页面上下切分，下方为筹码分布）

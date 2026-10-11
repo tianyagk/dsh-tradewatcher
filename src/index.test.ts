@@ -179,13 +179,16 @@ test('P3：market 行只注册独占前缀；/tradewatcher/industry 留在 core�
   const market = fakeCtx()
   apply(market.ctx, { row: 'market' })
   // market 独占的五个前缀都在该行；core 里一个都不许有
-  const owned = ['/tradewatcher/breadth', '/tradewatcher/board', '/tradewatcher/rescue', '/tradewatcher/anomaly', '/tradewatcher/industries']
+  // task-60 重定后 market 只剩两条（/board 移回 core、/industries 与 /anomaly 改归 watchlist）
+  const owned = ['/tradewatcher/breadth', '/tradewatcher/rescue']
   for (const p of owned) {
     assert.equal(market.routes.includes(p), true, `market 行应注册 ${p}`)
     assert.equal(core.routes.includes(p), false, `core 不该再注册 ${p}（否则关不掉大盘）`)
   }
   // 跨行共享：/tradewatcher/industry 是详情抽屉（core）用的 ⇒ 必须留 core
   assert.equal(core.routes.includes('/tradewatcher/industry'), true, '/tradewatcher/industry 必须留 core')
+  // task-60：/board 被大盘+云图两行消费 ⇒ core；/industries 与 /anomaly 只有自选页用 ⇒ watchlist 行
+  assert.equal(core.routes.includes('/tradewatcher/board'), true, '/tradewatcher/board 归 core（两行消费）')
   assert.equal(market.routes.includes('/tradewatcher/industry'), false, '它不属于 market（抽屉会因此坏掉）')
   // 工具：rescue 归 market；group_rank 属于自选（P4 再动）⇒ 本轮仍在 core 的兜底里
   assert.ok(market.tools.includes('tradewatcher_rescue'), 'market 行提供 rescue 工具')
@@ -233,8 +236,8 @@ test('P4：五行（calendar/cloudmap/market/watchlist/portfolio）关闭时三�
 const ROW_ROUTES_FOR_TEST: Record<string, readonly string[]> = {
   calendar: ['/tradewatcher/calendar'],
   cloudmap: [],
-  market: ['/tradewatcher/breadth', '/tradewatcher/board', '/tradewatcher/rescue', '/tradewatcher/anomaly', '/tradewatcher/industries'],
-  watchlist: ['/tradewatcher/watch'],
+  market: ['/tradewatcher/breadth', '/tradewatcher/rescue'],
+  watchlist: ['/tradewatcher/watch', '/tradewatcher/industries', '/tradewatcher/anomaly'],
   portfolio: ['/tradewatcher/portfolio', '/tradewatcher/ledger'],
 }
 const ROW_TOOLS_FOR_TEST: Record<string, readonly string[]> = {
@@ -244,3 +247,78 @@ const ROW_TOOLS_FOR_TEST: Record<string, readonly string[]> = {
   watchlist: ['watchlist', 'group_rank'],
   portfolio: ['portfolio', 'ledger'],
 }
+
+test('task-60：归属按**实测调用方所在行**（board=core / industries=watchlist / anomaly=watchlist）', () => {
+  // 判据：被 ≥2 个行消费 ⇒ core；单一消费方 ⇒ 该行。调用方映射（self-verified）：
+  //   /tradewatcher/board      MarketPage.tsx:84（market 行）+ IndustryHeatmap.tsx:30（只被 CloudMap.tsx:125 渲染 = cloudmap 行）
+  //   /tradewatcher/industries 只有 WatchlistPage.tsx:89（watchlist 行）
+  //   /tradewatcher/anomaly    alerts.ts:69 ← 只被 WatchlistPage 引用（watchlist 行）
+  const OWNER_BY_CALLERS: Record<string, string> = {
+    '/tradewatcher/board': 'core',
+    '/tradewatcher/industries': 'watchlist',
+    '/tradewatcher/anomaly': 'watchlist',
+  }
+  setKernel(null)
+  const core = fakeCtx()
+  apply(core.ctx)
+  const rows: Record<string, { routes: string[] }> = {}
+  for (const row of ['watchlist', 'portfolio', 'market', 'calendar', 'cloudmap']) {
+    const c = fakeCtx()
+    apply(c.ctx, { row })
+    rows[row] = { routes: c.routes }
+  }
+  for (const [path, owner] of Object.entries(OWNER_BY_CALLERS)) {
+    if (owner === 'core') {
+      assert.equal(core.routes.includes(path), true, `${path} 应归 core（被 ≥2 个行消费）`)
+      for (const [row, v] of Object.entries(rows)) {
+        assert.equal(v.routes.includes(path), false, `${path} 不该出现在 ${row} 行（否则关掉 ${row} 会把别的页弄坏）`)
+      }
+    } else {
+      assert.equal(rows[owner].routes.includes(path), true, `${path} 应归 ${owner}（单一消费方）`)
+      assert.equal(core.routes.includes(path), false, `${path} 不该留在 core（否则 ${owner} 关不掉）`)
+    }
+  }
+  // 关闭 market ⇒ 这三条仍在（分别由 core / watchlist 提供）
+  stopMonitor()
+})
+
+test('task-60：patch id 正则放宽 + 行级精确 + 数量守恒（两种注入都抓得住）', async () => {
+  const { readFileSync } = await import('node:fs')
+  const { fileURLToPath } = await import('node:url')
+  const { dirname, join } = await import('node:path')
+  const root = join(dirname(fileURLToPath(import.meta.url)), '..')
+  const raw = readFileSync(join(root, 'cordis.patch.yml'), 'utf8')
+  const text = raw.split('\n').filter((l) => !l.trim().startsWith('#')).join('\n')
+  // ① 正则放宽到 [a-z0-9-]+（数字行 market2 不再逃过）
+  const ID_RE = /- id: (tradewatcher-[a-z0-9-]+)/g
+  const ids = [...text.matchAll(ID_RE)].map((m) => m[1])
+  // ② 数量守恒：抓到的 id 数 == patch 里 `- id:` 行数
+  const idLines = text.split('\n').filter((l) => l.includes('- id:')).length
+  assert.equal(ids.length, idLines, `抓到的 id 数必须等于 - id: 行数（${ids.length} vs ${idLines}）`)
+  // ③ 行级精确：整行必须是 `- id: tradewatcher-<小写+数字+连字符>`，**不许有被正则截断的尾巴**
+  //   （这条专门抓 `tradewatcher-portfolioX`：旧正则 [a-z]+ 会截成 tradewatcher-portfolio ⇒ 数量与列表都不变 ⇒ 逃过检测）
+  for (const line of text.split('\n')) {
+    if (!line.includes('- id:')) continue
+    assert.match(line.trim(), /^- id: tradewatcher-[a-z0-9-]+$/, `id 行有截断残留：${line.trim()}`)
+  }
+  assert.deepEqual(ids, [
+    'tradewatcher-core', 'tradewatcher-calendar', 'tradewatcher-cloudmap', 'tradewatcher-market',
+    'tradewatcher-watchlist', 'tradewatcher-portfolio',
+  ], '六行齐全且顺序固定')
+})
+
+test('task-60：两种注入的模拟（各证明一次断言会失败）', () => {
+  const ID_RE = /- id: (tradewatcher-[a-z0-9-]+)/g
+  const base = "- id: tradewatcher-portfolio\n- id: tradewatcher-market\n"
+  const baseIds = [...base.matchAll(ID_RE)].map((m) => m[1])
+  // 注入 A：`portfolioX` —— 正则截断成 tradewatcher-portfolio ⇒ 数量/列表都不变 ⇒ **必须靠行级精确才抓得住**
+  const a = "- id: tradewatcher-portfolioX\n- id: tradewatcher-market\n"
+  assert.deepEqual([...a.matchAll(ID_RE)].map((m) => m[1]), baseIds, '截断后数量与列表都没变（换行级检查前确实逃过）')
+  const badLines = a.split('\n').filter((l) => l.includes('- id:') && !/^- id: tradewatcher-[a-z0-9-]+$/.test(l.trim()))
+  assert.equal(badLines.length, 1, '行级精确能抓到 portfolioX')
+  // 注入 B：`market2` —— 数字在字符类里 ⇒ 被抓成一个新 id ⇒ 列表不等 ⇒ 抓得住
+  const b = "- id: tradewatcher-portfolio\n- id: tradewatcher-market2\n"
+  const bIds = [...b.matchAll(ID_RE)].map((m) => m[1])
+  assert.deepEqual(bIds, ['tradewatcher-portfolio', 'tradewatcher-market2'], 'market2 被完整抓到')
+  assert.notDeepEqual(bIds, baseIds, '列表不同 ⇒ 断言会失败')
+})

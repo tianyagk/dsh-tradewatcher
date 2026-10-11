@@ -57,6 +57,23 @@
 | `watchlist` | `/watch` | `watchlist` `group_rank` | `group_rank` 的数据来源是自选分组 ⇒ 归此行；`/trades` 因被抽屉共用而移回 core |
 | `portfolio` | `/portfolio` `/ledger` | `portfolio` `ledger` | `/ledger` 只有持仓页的流水弹窗用；`dayTrades` 随 `portfolio` 工具 |
 
+### 2.2 判据（task-60 定稿）：**按实测调用方定归属**
+
+> **被 ≥2 个行消费 ⇒ core；单一消费方 ⇒ 该行。** 判归属**不看名字**，看 grep 出来的调用点。
+
+| 路由 | 调用方（file:line，实测） | 消费行数 | 归属 |
+| --- | --- | --- | --- |
+| `/tradewatcher/board` | `MarketPage.tsx:84` ＋ `IndustryHeatmap.tsx:30`（该组件只被 `CloudMap.tsx:125` 渲染） | **2**（market + cloudmap） | **core**（task-60 从 market 移回） |
+| `/tradewatcher/industries` | 只有 `WatchlistPage.tsx:89` | 1 | **watchlist**（task-60 从 market 改归） |
+| `/tradewatcher/anomaly` | `alerts.ts:69` ← 只被 `WatchlistPage` 引用 | 1 | **watchlist**（task-60 从 market 改归） |
+| `/tradewatcher/breadth` | 只有 `MarketPage.tsx:104` | 1 | market |
+| `/tradewatcher/rescue` | 大盘页/护盘面板 | 1 | market |
+| `/tradewatcher/trades` | `QuoteDrawer.tsx:79`（core 的抽屉） | 1（core） | core |
+| `/tradewatcher/industry` | `QuoteDrawer.tsx:78`（core 的抽屉） | 1（core） | core |
+
+**修正的动机（验证员原话的后果）**：`/board` 若留在 market，用户关掉「大盘」行 ⇒ **云图页热力图 404**；
+`/industries`/`/anomaly` 若留在 market ⇒ 关掉大盘 ⇒ **自选页行业列与告警扫描 404**。都是诚实失败，但不是我们要的。
+
 **共享面一律留 core**（判断依据：被 ≥2 个行/组件调用，或 core 自己的组件在用）：
 `/tradewatcher/trades`（详情抽屉）、`/tradewatcher/industry`（详情抽屉的行业行）、行情/趋势/K线/详情/搜索类全部接口。
 

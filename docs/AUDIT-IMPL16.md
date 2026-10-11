@@ -79,3 +79,65 @@ npm run check：359 × 2 时区全绿；75 项片段校验通过；build.mjs 零
 ① 筹码区块在 240px 高抽屉里的观感（160px 上限、分布条 3px 间隔是否看得清）；② 折叠/展开与滑杆的键盘可达性；
 ③ 口径控件改 k/形状后是否立即重取并刷新口径行；④ 隐身档下筹码数字与分布条是否一起糊、悬停是否显形；
 ⑤ 右上角 icon 的位置（是否压住标题）与 Tab 焦点环。
+
+---
+
+## 追加（task-60）：归属按实测调用方重定 + patch id 正则盲区
+
+### 1. 先自己复核映射表（解析 `api.ts` 方法↔路径，再 grep 非测试调用点）
+```
+src/client/IndustryHeatmap.tsx:30   .board('industry','amount',1)   ← 只被 CloudMap.tsx:125 渲染（云图行）
+src/client/MarketPage.tsx:84        .board(s, sortBy, pn)           ← 大盘行
+src/client/WatchlistPage.tsx:89     .industries(secs)               ← 自选行
+src/client/alerts.ts:69             .anomaly(ids)  ← alerts.ts 只被 WatchlistPage.tsx:10 引用
+```
+复核结论与验证员一致 ✓ ⇒ 按 **Lead 拍定**改：
+| 路由 | 原归属 | 新归属 | 理由（判据：≥2 行消费 ⇒ core；单一消费方 ⇒ 该行） |
+| --- | --- | --- | --- |
+| `/tradewatcher/board` | market | **core** | 大盘行 + 云图行两行消费 |
+| `/tradewatcher/industries` | market | **watchlist** | 只有自选页用 |
+| `/tradewatcher/anomaly` | market | **watchlist** | 调用链只到自选页告警扫描 |
+
+改动：`ROW_ROUTES.market` 缩小为 `['/tradewatcher/breadth','/tradewatcher/rescue']`；
+`ROW_ROUTES.watchlist` 增加 `/industries`、`/anomaly`；`/board` 与 `/industry` 留 core（均不在任何行清单里 ⇒ core 兜住）。
+判据与映射表（含 file:line）已写进 **`docs/DESIGN-SUBPLUGINS.md` §2.2**。
+
+### 2. 注册表实测（含"关闭 market 后它们仍在"）
+```
+断言（task-60 新增）：对每条路由断言"归属 == 调用方所在行"：
+  /board      ⇒ core 注册表命中，且**任何功能行都不许有**（否则关掉那一行会把别的页弄坏）
+  /industries ⇒ watchlist 注册表命中，且 core 不含（否则 watchlist 关不掉）
+  /anomaly    ⇒ watchlist 注册表命中，且 core 不含
+关闭 market（只 apply core + watchlist + 其它行）：这三条**仍在**（分别由 core / watchlist 提供）
+```
+**"改错会失败"的证据**（把 `/board` 临时加回 market 行）：
+```
+✖ P3：market 行只注册独占前缀…        AssertionError: /tradewatcher/board 归 core（两行消费）
+✖ task-60：归属按**实测调用方所在行**…
+（恢复后 11/11 通过）
+```
+
+### 3. patch id 正则盲区（验证员 P4）
+- 正则放宽到 `[a-z0-9-]+`（数字行 `market2` 不再截断）；
+- 新增**数量守恒**断言：抓到的 id 数 == patch 里 `- id:` 行数；
+- ⚠ 但仅靠字符类**抓不到 `portfolioX`**（大写被截断后数量与列表都没变）⇒ 再加一条**行级精确**断言：
+  每个 `- id:` 行必须完整匹配 `^- id: tradewatcher-[a-z0-9-]+$`，不许有被截断的尾巴。
+```
+注入 A：- id: tradewatcher-portfolioX
+  ✖ task-60：patch id 正则放宽 + 行级精确 + 数量守恒
+    AssertionError: id 行有截断残留：- id: tradewatcher-portfolioX
+注入 B：新增 - id: tradewatcher-market2（配置 row=market）
+  ✖ P2：cordis.patch.yml 与代码的行集合一致（防漂移）
+  ✖ task-60：patch id 正则放宽 + 行级精确 + 数量守恒
+（两次注入后均已恢复；恢复后 11/11 通过）
+```
+
+### 4. 测试与门禁
+```
+359 → 362（+3：归属按调用方、正则放宽+守恒+行级精确、两种注入的模拟）
+npm run check：362 × 2 时区全绿；75 项片段校验通过；build.mjs 零改动
+```
+
+### 5. 未做项
+① 真实 HTTP 验码仍待重启（跑着的宿主是旧进程）；② `/tradewatcher/industries` 的 `secids` 是一批自选标的，
+   将来若大盘页也要行业列，届时应按 §2.2 判据**移回 core**（判据已写进文档，改一处 + 断言会挡住回归）。

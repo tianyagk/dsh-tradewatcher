@@ -34,19 +34,19 @@ const ROW_ROUTES: Record<Exclude<RowId, 'core'>, readonly string[]> = {
   // watchlist 行（P4 复核后的准确清单）：只有自选页用的 `/watch`（GET+POST 同路径）。
   // ⚠ `/tradewatcher/trades` 移到 core：**详情抽屉**（core）在用它（QuoteDrawer.tsx:79）⇒ 跨行共享留 core；
   // ⚠ `/tradewatcher/ledger` 移到 portfolio 行：只有持仓页的流水弹窗用它。
-  watchlist: ['/tradewatcher/watch'],
+  watchlist: ['/tradewatcher/watch', '/tradewatcher/industries', '/tradewatcher/anomaly'],
   // portfolio 行：持仓视图（GET+POST 同路径）+ 流水查询（持仓页的流水弹窗）
   portfolio: ['/tradewatcher/portfolio', '/tradewatcher/ledger'],
-  // market 行**独占**（P3 查证后的准确清单，见 docs/AUDIT-IMPL14.md）：
-  //   /tradewatcher/breadth     涨跌家数（大盘页；顶部行情条**不**用它 —— 已 grep 查证）
-  //   /tradewatcher/board       板块/概念资金流
-  //   /tradewatcher/industries  行业列表
-  //   /tradewatcher/rescue      护盘信号
-  //   /tradewatcher/anomaly     异动
-  // ⚠ `/tradewatcher/industry`（单个 secid 的行业查询）**留 core**：详情抽屉（core）在用它，
-  //   停用大盘不该把抽屉的行业行弄没。它不是 `/tradewatcher/industries` 的前缀（后者更长），
-  //   前缀匹配天然分得开 —— 这条判断连同理由写进了报告。
-  market: ['/tradewatcher/breadth', '/tradewatcher/board', '/tradewatcher/rescue', '/tradewatcher/anomaly', '/tradewatcher/industries'],
+  // market 行**独占**（P3 初判 + **task-60 按实测调用方重定**，见 docs/DESIGN-SUBPLUGINS.md §2.1）：
+  //   /tradewatcher/breadth     涨跌家数（只有大盘页用 —— 已 grep 查证）
+  //   /tradewatcher/rescue      护盘信号（只有大盘页/护盘面板用）
+  // ⚠ 判据：**按实测调用方定归属；被 ≥2 个行消费 ⇒ core；单一消费方 ⇒ 该行**。据此调整了三条：
+  //   · /tradewatcher/board      MarketPage.tsx:84 **与** IndustryHeatmap.tsx:30（只被 CloudMap.tsx:125 渲染）
+  //                              ⇒ 大盘行 + 云图行**两行消费** ⇒ 移回 **core**
+  //   · /tradewatcher/industries 只有 WatchlistPage.tsx:89 用 ⇒ 归 **watchlist**
+  //   · /tradewatcher/anomaly    调用链 alerts.ts:69 ← 只被 WatchlistPage 引用 ⇒ 归 **watchlist**
+  //   · /tradewatcher/industry   （单 secid 行业查询）详情抽屉（core）在用 ⇒ 留 core
+  market: ['/tradewatcher/breadth', '/tradewatcher/rescue'],
   cloudmap: [],
 }
 
