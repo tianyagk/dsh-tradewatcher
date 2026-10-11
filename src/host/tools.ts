@@ -1455,9 +1455,24 @@ export function losslessJson(value: unknown): unknown {
   return undefined
 }
 
-/**Host entry side-effect helper: locate optional services via ctx.get. */
+/**
+ * Host entry side-effect helper: locate optional services via ctx.get.
+ *
+ * ⚠ 真宿主的 `ctx` 是 Cordis 的 Proxy：**访问未 inject 的属性会直接抛**，所以不能写
+ * `ctx.get(...)`（访问 `get` 本身就可能抛）。这里逐项 try/catch —— 取不到就当作"没有该服务"，
+ * 让插件继续装载（工具不注册好过整行 fiber failed）。
+ */
 export function servicesOf(ctx: PluginContext): { tools?: PluginToolRuntime; systemPrompt?: PluginSystemPrompt } {
-  const tools = ctx.get('tools') as PluginToolRuntime | undefined
-  const systemPrompt = ctx.get('systemPrompt') as PluginSystemPrompt | undefined
-  return { tools, systemPrompt }
+  const read = (name: string): unknown => {
+    try {
+      const get = (ctx as unknown as { get?: (n: string) => unknown }).get
+      return typeof get === 'function' ? get.call(ctx, name) : undefined
+    } catch {
+      return undefined
+    }
+  }
+  return {
+    tools: read('tools') as PluginToolRuntime | undefined,
+    systemPrompt: read('systemPrompt') as PluginSystemPrompt | undefined,
+  }
 }

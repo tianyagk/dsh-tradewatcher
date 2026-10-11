@@ -308,3 +308,36 @@ test('task-60：两种注入的模拟（各证明一次断言会失败）', () =
   assert.deepEqual(bIds, ['tradewatcher-portfolio', 'tradewatcher-market2'], 'market2 被完整抓到')
   assert.notDeepEqual(bIds, baseIds, '列表不同 ⇒ 断言会失败')
 })
+
+test('真宿主 ctx 是 Proxy：访问未 inject 的属性会抛 —— apply 不许因此 failed', () => {
+  // 复现 v0.45.2 的事故：真 Cordis ctx 读 `ctx.config` 抛 `cannot get property "config" without inject`，
+  // 而我们的假 ctx 是普通对象 ⇒ 漏检。这里用 Proxy 造出同样的行为。
+  setKernel(null)
+  const routes: string[] = []
+  const target: Record<string, unknown> = {
+    effect: (fn: () => unknown) => {
+      const d = fn()
+      return () => {
+        if (typeof d === 'function') (d as () => void)()
+      }
+    },
+    webServer: { register: (r: { path: string }) => {
+      routes.push(r.path)
+      return () => undefined
+    } },
+    webRuntime: { trustedHosts: [] },
+  }
+  const ctx = new Proxy(target, {
+    get(t, k) {
+      if (typeof k === 'string' && k in t) return t[k]
+      throw new Error(`cannot get property "${String(k)}" without inject`)
+    },
+    has: () => true,
+  })
+  assert.doesNotThrow(() => apply(ctx as never), 'apply 不许抛（否则整行 fiber failed、插件整体不可用）')
+  // 缺省 = 全量 ⇒ 各功能行的路由都必须注册上（这正是用户看到"插件服务异常"时缺的东西）
+  for (const path of ['/tradewatcher/health', '/tradewatcher/rows', '/tradewatcher/calendar', '/tradewatcher/watch', '/tradewatcher/ledger', '/tradewatcher/breadth', '/tradewatcher/chips']) {
+    assert.equal(routes.includes(path), true, `${path} 必须注册（row=all）`)
+  }
+  assert.equal(coreKernel()?.started, true, '内核仍应启动')
+})

@@ -75,6 +75,21 @@ export interface CoreKernel {
   started: boolean
 }
 
+/**
+ * 安全读取可选的 `ctx` 属性。
+ *
+ * ⚠ 真宿主的 `ctx` 是 Cordis 的 Proxy：**访问未 inject 的属性会直接抛**
+ * （`cannot get property "config" without inject`），所以 `?.` 救不了 —— 必须 try/catch。
+ * 这是 v0.45.3 实测踩到的：插件 fiber 直接 failed，用户端表现为"插件服务异常"。
+ */
+function ctxSafe<T = unknown>(ctx: unknown, key: string): T | undefined {
+  try {
+    return (ctx as Record<string, unknown> | null | undefined)?.[key] as T | undefined
+  } catch {
+    return undefined
+  }
+}
+
 const KERNEL_KEY = 'tradewatcher.core'
 let kernel: CoreKernel | null = null
 
@@ -115,7 +130,14 @@ function applyCore(ctx: PluginContext, full = false): void {
     kernel = { store: new DataStore(), calendar: new CalendarStore(), rescue: new RescueMonitor(), activeRows: new Set<RowId>(['core']), started: false }
   }
   const k = kernel as CoreKernel
-  ctx.provide?.(KERNEL_KEY, k)
+  const provide = ctxSafe<(name: string, value: unknown) => void>(ctx, 'provide')
+  if (typeof provide === 'function') {
+    try {
+      provide.call(ctx, KERNEL_KEY, k)
+    } catch {
+      /* 宿主没有 provide（或该名字不被接受）⇒ 功能行走模块级 kernel 兜底 */
+    }
+  }
   let disposed = false
 
   if (!k.started) {
@@ -181,7 +203,14 @@ function applyCore(ctx: PluginContext, full = false): void {
 
 /** 功能行：只注册自己那一段；内核从 core 行拿（**不许自己 new DataStore**） */
 function applyFeatureRow(ctx: PluginContext, row: Exclude<RowId, 'core'>): void {
-  const k = (ctx.get(KERNEL_KEY) as CoreKernel | undefined) ?? kernel
+  const get = ctxSafe<(name: string) => unknown>(ctx, 'get')
+  let fromCtx: unknown
+  try {
+    fromCtx = typeof get === 'function' ? get.call(ctx, KERNEL_KEY) : undefined
+  } catch {
+    fromCtx = undefined
+  }
+  const k = (fromCtx as CoreKernel | undefined) ?? kernel
   if (k === null || k === undefined) {
     log(`row「${row}」找不到 tradewatcher.core —— 未注册任何路由/工具（core 行必须先装载或同进程先 apply）`)
     return
@@ -222,7 +251,8 @@ function applyFeatureRow(ctx: PluginContext, row: Exclude<RowId, 'core'>): void 
 }
 
 export function apply(ctx: PluginContext, config?: unknown): void {
-  const row = rowOf(config, ctx.config)
+  // 只读第二参数：真宿主读 `ctx.config` 会抛（未 inject 的属性访问即抛），v0.45.3 实测
+  const row = rowOf(config, ctxSafe(ctx, 'config'))
   __kernelStats.applies += 1
   __kernelStats.rows.push(row)
   ctx.effect(() => {

@@ -11,6 +11,49 @@
 
 ---
 
+## v0.45.3 — 真因修复：真宿主的 `ctx` 是 Proxy，读未 inject 的属性会抛
+
+v0.45.2 之后插件仍不可用（插件列表里 `include:tradewatcher` 的 `fiberPhase = failed`）。**真因**用"另起一个端口的临时实例"抓到了：
+
+```
+tradewatcher (dsh-tradewatcher): Error: cannot get property "config" without inject
+    at apply (.../lib/index.js)
+```
+
+**Cordis 的 `ctx` 是 Proxy：访问未 `inject` 的属性会直接抛**（`ctx.config` 就是其中之一），所以 `ctx.config ?? …` 里的 `?.`/`??` 救不了 —— 属性访问本身就抛。我们的单元测试一直用**普通对象**当假 ctx，所以这个 bug 在被真宿主跑之前完全看不见。
+
+### 修复
+
+- 新增 `ctxSafe(ctx, key)`：try/catch 读取可选属性；`apply` 只读**第二参数**的 config（不再读 `ctx.config`，读不到就走 `all` 默认）。
+- `ctx.provide` / `ctx.get` 同样改为防御式读取（取不到就退回模块级 kernel，而不是让整行 fiber failed）。
+- `servicesOf()`（`src/host/tools.ts`）不再直接 `ctx.get(...)`，逐项 try/catch：**取不到服务只是不注册工具，不该把插件整行弄挂**。
+- **回归断言（关键）**：用 `Proxy` 造出"访问未声明属性即抛"的假 ctx，断言 `apply` 不抛、且缺省全量下 `/health`、`/rows`、`/calendar`、`/watch`、`/ledger`、`/breadth`、`/chips` 都注册上了。这条断言正是此前缺失的"真实宿主行为模型"。
+
+### 验证（真宿主实测，不是推演）
+
+在**另一个端口**起了一次真实 profile 启动（`dsh --profile web --port 0 --no-open`，不影响用户的服务）：
+
+```
+[tradewatcher] row「all」mounted
+[tradewatcher] store ready at /home/hu/.dsh/dsh-tradewatcher
+[tradewatcher] rescue monitor started interval 60s / tail 15s
+```
+```
+/health                     HTTP 200  {"ok":true,...}
+/rows                       HTTP 200  {"rows":["core","calendar","watchlist","portfolio","market","cloudmap"]}
+/calendar                   HTTP 200  {"events":[...]}
+/chips?secid=1.600519&days=45  HTTP 200  {"decay":"turnover","bucketCount":32,"window":45,...}
+/chips（缺 secid）           HTTP 400  {"error":"secid 不合法（如 1.600519）"}
+```
+日志里**没有** "tools service absent" ⇒ 真宿主上 `ctx.get('tools')` 正常，**agent 工具照常注册**（防御式改动没有把功能吃掉）。
+
+363 条测试 × 2 时区全绿；`build.mjs` 零改动。
+
+### 结论与教训
+
+- "代码 + 断言全绿"**不等于**"能在真宿主装载"：假 ctx 的形状与真宿主不一致时，测试给的信心是假的。已用 Proxy 断言把这个缺口补上。
+- 上一轮六行方案的回退（v0.45.2）仍然有效且必要：同包多活跃 Loader 源 + 带客户端半区会被 `dsh-client-modules` 判为 composition error。
+
 ## v0.45.2 — 紧急修复：v0.44/v0.45 的六行装载会让插件整体不工作（回退为单行 + 缺省全量）
 
 **用户重启后报"插件服务异常"。实测**：`/tradewatcher/health`、`/rows`、`/quotes` 全部 **404**，组合后的 profile 里**没有** tradewatcher 的任何行 —— 插件的宿主半区根本没装载。**这是我造成的**，两个原因叠加：
