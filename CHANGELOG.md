@@ -11,6 +11,43 @@
 
 ---
 
+## v0.44.0 — 组件化重构 P1–P4：bundle 内多行子组件（六行可独立开关）
+
+用户要求把本插件重构成"聚合包 + 可单独开关的子组件"（参照 `@linxin666/dsh-web-all` 形态），并按 `docs/DESIGN-SUBPLUGINS.md` 分阶段推进、每阶段独立验证。
+
+### 机制：不需要拆包，而是**同一个 package 出现在多条 Loader 行**
+
+DSH 原生支持同包多行（官方 `dsh-base/cordis.patch.yml` 即如此），靠 `id` + `config.row` 区分，**行的 `disabled` 就是插件列表那个开关**；参考包的"子路径壳"是因为它的子组件是独立 npm 包，我们不需要。**客户端是包级单实例**（同包多 resolve 属 composition error）⇒ 停用门控走 core 的活跃行端点，而不是按行拆 client bundle。
+
+### 六个行
+
+| 行 | 独占路由 / 工具 |
+| --- | --- |
+| `core`（必需） | 数据层 / prefs / 行情条 / 详情抽屉 / **全部 Slot 注册** / `/rows` 端点 / 核心工具（quotes、search、position、ytd、trades、industry、undo…） |
+| `calendar` | `/tradewatcher/calendar*` + `calendar`/`calendar_add` |
+| `cloudmap` | **无 host 面**（纯前端 iframe）—— 该行就是**客户端 tab 开关**（查证后的诚实结论） |
+| `market` | `/breadth`、`/board`、`/industries`、`/rescue`、`/anomaly` + `rescue` |
+| `watchlist` | `/watch` + `watchlist`/`group_rank` |
+| `portfolio` | `/portfolio`、`/ledger` + `portfolio`/`ledger` |
+
+**共享面一律留 core**：`/tradewatcher/industry`（详情抽屉用）、`/tradewatcher/trades`（P1 曾误挂到自选行，P4 纠正回 core）。**停用某行 = 该行路由 404 + 该行工具消失 + 该 tab 消失**（不灰显、不留空壳）。
+
+### 关键实现要点
+
+- **`apply` 幂等**（本轮头号风险）：多行装载会调用 N 次 ⇒ `store.init()`/`rescue.start()` 收进 core 分支 + 模块级守卫，**只有 1 个采样器**（实测 `inits=1/starts=1`，副本注入证明断言真的敏感）。
+- **`config.row`**：缺省 = `core`（老 profile 行为逐字一致）；未知值/非字符串一律退回 core（不静默"无行"）。
+- **内核服务化**：core `provide('tradewatcher.core')`，功能行 `inject` 消费；取不到就拒绝注册（**禁止各自 `new DataStore()`** —— 多实例会并发写坏同一 JSON）。
+- **`GET /tradewatcher/rows`** 由 core 持有、永远可用；客户端 `tabsGate` 三条语义：**端点不可达 ⇒ 失败放行**（避免抖动把界面弄没）、**全关 ⇒ 不渲染 tab 条**、**当前页被停用 ⇒ 回落首个可用**（自选/持仓互为回落对象，有断言）。
+- **patch↔代码一致性断言**：六行与 `ROW_ROUTES`/`ROW_TOOLS` 逐行对应，防漂移（改 id/disabled 会失败）。
+
+### 验证
+
+344 条测试 × 2 时区（331 → 342 → 343 → 344）。**P1+P2 已过独立对抗验证**（`docs/AUDIT-VERIFY7.md`）：幂等、三处门控、tabsGate 三语义（含"可达但停用必须真的少 tab"的反例）、`rowOf` 十例健壮、patch 断言非恒真、**云图"没有 host 面"被独立确认**。P3+P4 的验证在 `docs/AUDIT-VERIFY8.md`（进行中）。过程中验证员还纠正了两处：幂等断言必须**重复 apply 同一行**才敏感（已修）；`/trades` 的归属（已修）。
+
+### 待装机复核（本轮无法在本环境完成）
+
+**真实多行装载需要重启 `dsh web`**：跑着的宿主是旧进程（`/rows` 返回空、`/calendar` 仍 200）。重启后应确认：① `/tradewatcher/rows` 返回六行；② 逐个停用行 ⇒ 路由 404 + 工具消失 + tab 消失，且**其余 tab、行情条、详情抽屉（`/trades`、`/industry`）照常**；③ 停用自选/持仓后刷新不白屏、回落正确。
+
 ## v0.43.0 — 五日的两个问题：渠道级实测 + 陈旧呈现诚实化
 
 用户问：① 五日分时是否完全无法通过任何渠道获取？② 为什么"五日"在显示 17 天前的 09-24？本轮用**插件自己的路由与模块**实测回答（`docs/RESEARCH-5DAY-TREND.md`、`AUDIT-IMPL11.md`）。
