@@ -14,14 +14,16 @@ const require = createRequire(import.meta.url)
 const here = dirname(fileURLToPath(import.meta.url))
 const read = (rel: string): string => readFileSync(join(here, rel), 'utf8')
 
-test('① 切 6 次页签后筹码请求数仍为 1（假 fetch 计数）', async () => {
+test('①（证明的是 60s TTL 内不重复请求，不是“与页签无关”）切 6 次页签后筹码请求数仍为 1', async () => {
   resetChipsCache()
   let calls = 0
   const fetch = async (secid: string): Promise<{ secid: string }> => {
     calls += 1
     return { secid }
   }
-  // 页签不是筹码的输入：切 6 次 = 用同一个 secid 反复走同一条路径
+  // ⚠ 这条断言只能证明「同一个 secid 在 **60s TTL 内**不会重复请求」（loader 缓存 + 并发合并）。
+  //   它**证明不了**"依赖数组里没有 tab"：60s TTL 会吸收 effect 重跑 —— 把 tab 加回依赖数组，
+  //   TTL 内计数仍是 1（TTL 过期后才变 2）。依赖数组的证明在下面那条**源码字面量**断言里。
   const tabs = ['1m', '5d', 'day', 'week', 'month', 'year']
   for (const _tab of tabs) await loadChips('1.600519', { fetch })
   assert.equal(calls, 1, `切 ${tabs.length} 次页签后筹码请求数必须仍为 1（实际 ${calls}）`)
@@ -33,6 +35,20 @@ test('① 切 6 次页签后筹码请求数仍为 1（假 fetch 计数）', asyn
   calls = 0
   await Promise.all([loadChips('1.600519', { fetch }), loadChips('1.600519', { fetch }), loadChips('1.600519', { fetch })])
   assert.equal(calls, 1, '并发三个调用只发一次请求')
+})
+
+test('②（补强 2）依赖数组**逐项**等于 [secid, enabled, refreshKey]；setChipsRefresh 只挂在 onRetry', () => {
+  const hook = read('./useChips.ts')
+  const m = /\}, \[([^\]]*)\]\)/.exec(hook)
+  assert.ok(m !== null, '必须能抓到依赖数组字面量')
+  const items = (m as RegExpExecArray)[1].split(',').map((x) => x.trim()).filter((x) => x !== '')
+  assert.deepEqual(items, ['secid', 'enabled', 'refreshKey'], `依赖数组逐项必须完全等于 [secid, enabled, refreshKey]（实际 [${items.join(', ')}]）`)
+  assert.equal(items.includes('tab'), false, '依赖数组里不许出现页签')
+  const drawer = read('./QuoteDrawer.tsx')
+  // 只数**调用点**（声明处不算接线）
+  const wired = drawer.split('setChipsRefresh(').length - 1
+  assert.equal(wired, 1, `setChipsRefresh 只允许在 onRetry 上接线一次（实际出现 ${wired} 次）`)
+  assert.ok(/onRetry: \(\) => setChipsRefresh\(\(x\) => x \+ 1\)/.test(drawer), '这一处必须是 onRetry')
 })
 
 test('① 结构保证：筹码取数不接收页签/复权/图表重试；抽屉用筹码自己的刷新计数', () => {
@@ -119,7 +135,10 @@ test('task-64：筹码与页签无关（六页签全显示；那行"只在分时
   assert.equal(panel.includes('isFiveDay'), false, '面板不许再有 isFiveDay（页签门控）')
   assert.equal(panel.includes('五日档'), false, '那行"五日档隐藏"的说明文案必须删掉')
   assert.equal(/只在分时\/日K 及以上显示/.test(panel), false, '说明文案不得残留')
-  assert.equal(/isFiveDay|tab === '5d'/.test(drawer + hook + loader), false, '筹码三个文件里都不许存在页签判断')
+  assert.equal(/isFiveDay|tab === '5d'/.test(drawer + hook + loader), false, '抽屉/hook/loader 里都不许存在页签判断')
+  // ⚠ 缺口修补：扫描范围原来漏了**面板自己**（代码级注入 "面板 props 加 tab + 加回 5d 门控" 时旧断言全过）
+  assert.equal(/'5d'/.test(panel), false, '面板源码里不许出现 5d 门控')
+  assert.equal(/tab\?:\s*string/.test(panel), false, '面板 props 里不许声明 tab（筹码的输入里没有页签）')
   // ② 与标的/数据有关的原因**保留**（不是页签门控）
   assert.equal(panel.includes('不符合'), false)
   assert.equal(panel.includes('fqSupported'), true, '不复权标的的原因保留')

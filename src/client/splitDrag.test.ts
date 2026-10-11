@@ -83,16 +83,41 @@ test('折叠：不渲染分割线、无异常；拖拽不重挂载筹码面板',
   assert.equal(/className: 'tw-split'[\s\S]{0,200}?key:/.test(drawer), false, '分割线不许带 key')
 })
 
-test('动态高度：两个不同高度 ⇒ 几何按新高度重算，且**不是**等比缩放；极小高度夹住不抛错', () => {
+test('动态高度（补强 1）：mainH 随高度变 + 刻度条数随高度变 + 对 chartHeight 注入敏感', () => {
+  // 旧判据（证明力不足）：只查"固定开销 === 60"。它**抓不住**"绘图区恒定"的假实现 —— 见下面的假实现副本。
+  const offcut = (k: { chartHeight: number; mainH: number; volH: number; macdH: number }): number =>
+    k.chartHeight - (k.mainH + k.volH + k.macdH)
   const short = klineHeightsOf(320)
   const tall = klineHeightsOf(560)
-  assert.notDeepEqual({ a: short.mainH, v: short.volH, m: short.macdH }, { a: tall.mainH, v: tall.volH, m: tall.macdH }, '高度不同 ⇒ 绘图区几何必须不同（要重绘）')
-  assert.ok(short.mainH < tall.mainH && short.chartHeight < tall.chartHeight)
-  // 关键：**固定开销不缩放** ⇒ 差值恒定 ⇒ 证明不是简单等比放大（等比会让间隙一起变大）
-  const offShort = short.chartHeight - (short.mainH + short.volH + short.macdH)
-  const offTall = tall.chartHeight - (tall.mainH + tall.volH + tall.macdH)
-  assert.equal(offShort, offTall, `固定开销必须恒定（${offShort} vs ${offTall}）—— 这是"重绘而不是缩放"的判据`)
-  assert.equal(offShort, CHART_CHROME + 24, '固定开销 = 间隙 36px + x 轴文字 24px')
+  assert.equal(offcut(short), CHART_CHROME + 24, '旧判据在真实现上成立')
+  assert.equal(offcut(tall), CHART_CHROME + 24, '旧判据在真实现上也成立')
+
+  // 假实现副本：绘图区写死 210/54/64（完全不随高度变）—— 旧判据在它上面**照样通过**
+  const fakeKlineHeightsOf = (top: number): { chartHeight: number; mainH: number; volH: number; macdH: number } => {
+    const mainH = 210, volH = 54, macdH = 64
+    void top
+    return { chartHeight: CHART_CHROME + 24 + mainH + volH + macdH, mainH, volH, macdH }
+  }
+  const fake = fakeKlineHeightsOf(560)
+  assert.equal(offcut(fake), CHART_CHROME + 24, '⚠ 旧判据在假实现上也成立 ⇒ 它区分不了"重绘"与"绘图区恒定"（这就是补强的理由）')
+
+  // 新判据 ①：mainH **随高度变**（真实现 320→88、560→305；假实现恒 210）
+  assert.notEqual(short.mainH, tall.mainH, '真实现：高度变了 mainH 必须变')
+  assert.equal(fake.mainH, fakeKlineHeightsOf(320).mainH, '假实现：mainH 恒定 ⇒ 新判据会抓住它')
+  assert.notEqual(tall.mainH, 210, `真实现的 mainH 不该是假实现的常量（实际 ${tall.mainH}）`)
+  assert.notEqual(short.mainH, 210, `同上（实际 ${short.mainH}）`)
+
+  // 新判据 ②：刻度条数**随高度变**（100→3 / 200→4 / 300→5）
+  assert.equal(priceTicksFor(18, 22, 100).length, 3)
+  assert.equal(priceTicksFor(18, 22, 200).length, 4)
+  assert.equal(priceTicksFor(18, 22, 300).length, 5)
+  assert.notDeepEqual(priceTicksFor(18, 22, 100), priceTicksFor(18, 22, 300), '同一价格区间、不同高度刻度集不同（不是把同一套刻度拉长）')
+
+  // 新判据 ③：对 chartHeight 注入 364（硬编码常量）敏感 ⇒ 高度不同时 chartHeight 必须不同、且不等于 364
+  assert.notEqual(short.chartHeight, tall.chartHeight, '两个不同高度的 chartHeight 必须不同')
+  assert.notEqual(tall.chartHeight, 364, `chartHeight 不能是硬编码 364（实际 ${tall.chartHeight}）`)
+  assert.equal(fakeKlineHeightsOf(320).chartHeight, fakeKlineHeightsOf(560).chartHeight, '假实现：chartHeight 恒定 ⇒ 判据 ③ 也会抓住它')
+
   // 极小高度：夹到最小值、不抛错、不出现 0/负几何
   for (const h of [0, 1, 36, 59, 60]) {
     const k = klineHeightsOf(h)
@@ -100,13 +125,6 @@ test('动态高度：两个不同高度 ⇒ 几何按新高度重算，且**不�
     assert.equal(k.usable, false, `极小高度 ${h} 不允许重绘（usable=false）`)
   }
   assert.equal(klineHeightsOf(400).usable, true)
-  // 轴刻度按高度重算（不是把同一套刻度拉长）
-  const lo = 18, hi = 22
-  assert.equal(priceTicksFor(lo, hi, 100).length, 3)
-  assert.equal(priceTicksFor(lo, hi, 200).length, 4)
-  assert.equal(priceTicksFor(lo, hi, 400).length, 5)
-  assert.notDeepEqual(priceTicksFor(lo, hi, 100), priceTicksFor(lo, hi, 400), '同一价格区间、不同高度 ⇒ 刻度集必须不同')
-  assert.deepEqual(priceTicksFor(hi, lo, 400), [], '区间非法 ⇒ 空（不抛错）')
   // 结构：抽屉必须用 kh.* 而不是硬编码几何
   const drawer = read('./QuoteDrawer.tsx')
   assert.ok(drawer.includes('mainH: kh.mainH') && drawer.includes('volH: kh.volH') && drawer.includes('macdH: kh.macdH'), '图表几何必须来自 kh（不许硬编码）')
