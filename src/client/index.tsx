@@ -426,6 +426,8 @@ function Dashboard(): React.ReactElement {
           name: detail.name,
           redUp: (prefs ?? DEFAULT_PREFS).redUp,
           onClose: closeDetail,
+          prefs,
+          setPrefs,
         })
       : null,
     React.createElement(Toast, { text: toast.text, onClose: toast.clear }),

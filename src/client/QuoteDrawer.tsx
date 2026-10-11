@@ -32,6 +32,9 @@ import {
 import { sessionOf } from './sessionAxis.ts'
 import { isUsableBaseline } from './trendView.ts'
 import { trendCaliberOf } from '../shared/trendCaliber.ts'
+import { ChipsPanel } from './ChipsPanel.tsx'
+import { NoteIcon } from './NoteIcon.tsx'
+import { useChips } from './useChips.ts'
 
 function useContainerWidth(): [React.RefObject<HTMLDivElement>, number] {
   const ref = useRef<HTMLDivElement | null>(null)
@@ -48,7 +51,32 @@ function useContainerWidth(): [React.RefObject<HTMLDivElement>, number] {
   return [ref, width]
 }
 
-export function QuoteDrawer(props: { secid: string; name: string; redUp: boolean; onClose: () => void }): React.ReactElement {
+/**
+ * 该标的是否支持前复权（与宿主 `em.fqSupported` 同一规则：指数/期货/板块不支持）。
+ * 客户端只用它决定"要不要请求筹码分布"——**最终口径以宿主回包为准**（客户端不重算）。
+ */
+function fqSupportedOf(secid: string): boolean {
+  const dot = secid.indexOf('.')
+  if (dot <= 0) return false
+  const market = secid.slice(0, dot)
+  const code = secid.slice(dot + 1)
+  if (market === '1' || market === '0') {
+    if (market === '1' && code.startsWith('000')) return false
+    if (market === '0' && (code.startsWith('399') || code.startsWith('159') === false && code.startsWith('39'))) return false
+    return true
+  }
+  return false
+}
+
+export function QuoteDrawer(props: {
+  secid: string
+  name: string
+  redUp: boolean
+  onClose: () => void
+  /** 筹码口径控件用（不给就不渲染控件：抽屉在别的宿主里也能用） */
+  prefs?: { chipsDecay?: number; chipsSpread?: 'triangle' | 'uniform' }
+  setPrefs?: (patch: { chipsDecay?: number; chipsSpread?: 'triangle' | 'uniform' }) => void
+}): React.ReactElement {
   const { secid, name, redUp, onClose } = props
   // 记住上次看的周期：关掉再打开、换一只标的时不必重新点一次
   const [tab, setTab] = useState<ChartTab>(rememberedTab())
@@ -64,6 +92,8 @@ export function QuoteDrawer(props: { secid: string; name: string; redUp: boolean
   const [infoErr, setInfoErr] = useState(false)
   const [trades, setTrades] = useState<TradeMark[]>([])
   const [retry, setRetry] = useState(0)
+  // 筹码分布：只在支持的档位取（五日档不取，界面直接给原因）
+  const chipsState = useChips(secid, tab !== '5d', retry)
   const [containerRef, width] = useContainerWidth()
 
   // header info
@@ -141,16 +171,24 @@ export function QuoteDrawer(props: { secid: string; name: string; redUp: boolean
         // 红色只表示"故障"，结构性限制走下面的不红那一支。
         const long = '行情详情只有东财一个上游：东财熔断/限流时它就拿不到。宿主已按熔断冷却快速失败并给了 retry-after，' +
           '稍等会自动重试；频繁点「重试」只会让本机 IP 的限流更严重。'
-        return React.createElement('div', { className: 'tw-hint', style: { display: 'flex', alignItems: 'center', gap: 8 } },
-          React.createElement('span', { tabIndex: 0, role: 'note', title: long, 'aria-label': `详情不可用：上游限流，稍后自动重试。${long}` },
-            '⚠ 详情不可用 · 上游限流，稍后自动重试'),
-          React.createElement(Btn, { onClick: () => setRetry((x) => x + 1) }, '重试'),
+        // 用户第 1 条：长条 + 按钮压成右上角一个小圆形 icon（悬停给详情、点击=重试、键盘可达）
+        return React.createElement('div', { className: 'tw-hint tw-hint-icon' },
+          React.createElement(NoteIcon, {
+            reason: '详情不可用 · 上游限流，稍后自动重试',
+            detail: long,
+            onRetry: () => setRetry((x) => x + 1),
+          }),
+          React.createElement('span', { className: 'tw-muted' }, '详情暂不可用'),
         )
       }
       // 拿不到详情时把**原因**显示出来（此前只会停在骨架屏，用户以为一直在加载）
       if (infoNote !== null) {
-        return React.createElement('div', { className: 'tw-hint', tabIndex: 0, role: 'note', title: infoNote.note, 'aria-label': `详情不可用：${infoNote.note}` },
-          `详情不可用 · ${infoNote.why === 'no-source' ? '该标的无详情字段（重试无用）' : '上游限流，稍后自动重试'}`)
+        return React.createElement('div', { className: 'tw-hint tw-hint-icon' },
+          infoNote.why === 'no-source'
+            ? React.createElement(NoteIcon, { reason: '该标的无详情字段（重试无用）', detail: infoNote.note })
+            : React.createElement(NoteIcon, { reason: '上游限流，稍后自动重试', detail: infoNote.note, onRetry: () => setRetry((x) => x + 1) }),
+          React.createElement('span', { className: 'tw-muted' }, infoNote.why === 'no-source' ? '详情不可用' : '详情暂不可用'),
+        )
       }
       return React.createElement(Skeleton, { lines: 3, height: 14, style: { maxWidth: 420 } })
     }
@@ -195,9 +233,9 @@ export function QuoteDrawer(props: { secid: string; name: string; redUp: boolean
       )
     }
     if (err !== null) {
-      return React.createElement('div', { style: { display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8, padding: 60 } },
+      return React.createElement('div', { className: 'tw-hint tw-hint-icon' },
+        React.createElement(NoteIcon, { reason: `图表取数失败：${err}`, detail: `${err}\n宿主会按熔断冷却自动重试；频繁点重试只会让限流更严重。`, onRetry: () => setRetry((x) => x + 1) }),
         React.createElement('span', { className: 'tw-muted' }, err),
-        React.createElement(Btn, { onClick: () => setRetry((x) => x + 1) }, '重试'),
       )
     }
     if (payload === null || payload.tab !== tab) {
@@ -223,7 +261,12 @@ export function QuoteDrawer(props: { secid: string; name: string; redUp: boolean
               'aria-label': `${m.what}不可用（${m.why === 'no-source' ? '结构性缺失' : '上游暂时不可用'}）：${m.note}`,
             }, `${m.what}不可用（${m.why === 'no-source' ? '结构性缺失，重试无用' : '上游暂时不可用，等它恢复'}）：${m.note}`)
           : null,
-        React.createElement(Btn, { onClick: () => setRetry((x) => x + 1) }, '重试'),
+        React.createElement('span', { className: 'tw-muted' }, payload.missing[0]?.note ?? ''),
+        React.createElement(NoteIcon, {
+          reason: `数据拿不到：${m?.what ?? secid}`,
+          detail: payload.missing.map((x) => `${x.what}：${x.note}（${x.why === 'no-source' ? '上游没有这份数据，重试无用' : '本次失败，稍后自动重试'}）`).join('\n'),
+          ...(m?.why === 'no-source' ? {} : { onRetry: () => setRetry((x) => x + 1) }),
+        }),
       )
     }
     if (payload.kind === 'trend') {
@@ -518,6 +561,22 @@ export function QuoteDrawer(props: { secid: string; name: string; redUp: boolean
             }, caliber)
           : null,
         chartBody(),
+        // 筹码分布（近 45 日）：可折叠、默认展开；五日档隐藏并给一行原因
+        React.createElement(ChipsPanel, {
+          state: chipsState,
+          redUp,
+          isFiveDay: tab === '5d',
+          fqSupported: fqSupportedOf(secid),
+          onRetry: () => setRetry((x) => x + 1),
+          prefs: props.prefs,
+          // 改口径 ⇒ 持久化到 prefs 并重新取一次（同一个 setRetry 自增当刷新信号）
+          setPrefs: props.setPrefs === undefined
+            ? undefined
+            : (patch) => {
+                props.setPrefs?.(patch)
+                setRetry((x) => x + 1)
+              },
+        }),
         note !== '' || legend !== ''
           ? React.createElement('div', { className: 'tw-chartnote' }, `${note}${legend}`)
           : null,

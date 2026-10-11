@@ -1,3 +1,38 @@
+// 筹码分布：与宿主 `chips.ts` 同形（客户端只消费）
+export interface ChipDayDto {
+  date: string
+  buckets: number[]
+  centers: number[]
+  avgCost: number | null
+  support: number | null
+  resistance: number | null
+  narrow: boolean
+  profitRatio: number | null
+  samples: number
+}
+export interface ChipsPayload {
+  secid: string
+  asOf: number | null
+  stale: boolean
+  source: string
+  days: ChipDayDto[]
+  latest: ChipDayDto | null
+  window: number
+  bucketCount: number
+  decay: 'turnover' | 'half-life'
+  decayReason: string | null
+  avgCost: number | null
+  support: number | null
+  resistance: number | null
+  narrow: boolean
+  profitRatio: number | null
+  samples: number
+  methodology: string
+  why: string | null
+  disclaimer: string
+  missing: Array<{ what: string; why: string; note: string }>
+}
+
 // 做T 视图：与宿主 `dayTrade.ts` 的返回同形（客户端只消费，不重算）
 export interface DayTradeView {
   rounds: Array<{
@@ -285,6 +320,11 @@ export const api = {
   },
   mutateWatch(body: MutateWatchBody): Promise<{ watch: WatchData }> {
     return request('/tradewatcher/watch', { method: 'POST', body: JSON.stringify(body) })
+  },
+  /** 筹码分布（45 日 / 换手率衰减 / P5-P95）。宿主算好，界面只渲染 */
+  chips(secid: string, days?: number): Promise<ChipsPayload> {
+    const d = days === undefined ? '' : `&days=${Math.round(days)}`
+    return request(`/tradewatcher/chips?secid=${encodeURIComponent(secid)}${d}`)
   },
   /** 活跃行清单（core 提供，永远可用）：tab gate 用；不可达时调用方**失败放行** */
   rows(): Promise<{ rows: string[]; asOf: number }> {

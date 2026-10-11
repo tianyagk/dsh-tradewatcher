@@ -144,12 +144,13 @@ color-scheme:dark}
   .tw-chart-tip-v,
   .tw-tone,
   .tw-cfg-count,
+  .tw-chips-nums, .tw-chips-date, .tw-chips-bar,
   .tw-review-bline, .tw-daytrade-table td, .tw-bulk-table td, .tw-bulk-sum,
   .tw-pos-title small,
   .tw-caliber, .tw-chartnote, .tw-zoom-bar, .tw-topmeta .tw-uptime){
   filter:blur(3.2px);transition:filter .12s}
 .tw-root[data-blur=1] :is(.tw-qcard, .tw-wrow, .tw-posrow, tr, .tw-pop, .tw-stat, .tw-pps,
-  .tw-dkv, .tw-rescue-card-grid, .tw-panel, .tw-cfg):hover :is(.tw-qcard .px, .tw-qcard .chg, .tw-chg-chip,
+  .tw-dkv, .tw-rescue-card-grid, .tw-panel, .tw-cfg, .tw-chips):hover :is(.tw-qcard .px, .tw-qcard .chg, .tw-chg-chip,
   .tw-stat .v, .tw-pps .v, .tw-pps .meta, .tw-pos-price .px, .tw-pos-price .meta,
   .tw-pop .ph .px, .tw-pop .ph .tag, .tw-pop .pl,
   .tw-group-h .gsum, .tw-wrow .wq, .tw-wrow .tw-num, .tw-ytd, .tw-gh-metrics,
@@ -158,6 +159,7 @@ color-scheme:dark}
   .tw-chart-tip-v,
   .tw-tone,
   .tw-cfg-count,
+  .tw-chips-nums, .tw-chips-date, .tw-chips-bar,
   .tw-review-bline, .tw-daytrade-table td, .tw-bulk-table td, .tw-bulk-sum,
   .tw-pos-title small,
   .tw-caliber, .tw-chartnote, .tw-zoom-bar){
@@ -427,6 +429,29 @@ color-scheme:dark}
 .tw-rescue-pool{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:3px 10px;font-size:11.5px}
 .tw-rescue-pool-item{display:flex;align-items:center;gap:5px;color:var(--tw-muted);cursor:pointer}
 .tw-rescue-pool-item[data-on=true]{color:var(--tw-text)}
+
+/* 右上角小圆形提示 icon（替代"详情不可用 + 重试"长条）：常驻只有一个字符 */
+.tw-noteicon{position:absolute;top:6px;right:8px;width:18px;height:18px;border-radius:50%;
+  display:inline-flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;
+  border:1px solid var(--tw-border-strong);background:var(--tw-card);color:var(--tw-muted);cursor:default}
+.tw-noteicon-btn{cursor:pointer}
+.tw-noteicon:focus-visible{outline:2px solid var(--tw-border-strong);outline-offset:1px}
+.tw-hint-icon{position:relative;padding-right:28px}
+
+/* 筹码分布区块（抽屉内、图表下方）：默认展开 ~160px，可折叠 */
+.tw-chips{border-top:1px solid var(--tw-border);margin-top:6px;padding:4px 2px 2px}
+.tw-chips-off{color:var(--tw-muted);font-size:11.5px;padding:4px 2px}
+.tw-chips-head{display:flex;align-items:center;gap:8px;font-size:11.5px;flex-wrap:wrap}
+.tw-chips-toggle{background:transparent;border:0;color:var(--tw-text);font-size:11.5px;cursor:pointer;padding:0}
+.tw-chips-decay{font-size:11px}
+.tw-chips-nums{display:flex;align-items:center;gap:6px;font-family:var(--tw-mono);font-size:11px;white-space:nowrap}
+.tw-chips-sep{width:1px;height:10px;background:var(--tw-border-strong);display:inline-block}
+.tw-chips-narrow{font-size:11px;color:var(--tw-muted);padding:2px 0}
+.tw-chips-body{max-height:160px;display:flex;flex-direction:column;gap:3px}
+.tw-chips-slider{width:100%;margin:2px 0}
+.tw-chips-date{font-size:11px;font-family:var(--tw-mono)}
+.tw-chips-bars{display:flex;flex-direction:column;gap:1px;overflow:hidden}
+.tw-chips-bar{height:3px;border-radius:1px;background:currentColor;min-width:1px}
 
 /* 复盘条（做T 收起态 + 分档卡）与批量录入模态（P2-9 / P1-3 / P2-1）*/
 .tw-review{display:flex;flex-wrap:wrap;align-items:center;gap:8px;padding:6px 2px;border-top:1px solid var(--tw-border)}

@@ -660,6 +660,10 @@ export interface PortPrefs {
    * 且**将来新增的卡片默认可见**。存"显示集合"会让老 profile 永远看不到后加的国债卡。
    */
   stripCfg?: { hidden: string[] }
+  /** 筹码分布的衰减系数 k（默认 1.5；范围 [0.5, 3.0]，越大越强调近期筹码） */
+  chipsDecay?: number
+  /** 筹码分布的新增筹码形状（默认 triangle） */
+  chipsSpread?: 'triangle' | 'uniform'
   /**
    * 每日分时归档（多日拼接的数据来源，默认开）。
    *
@@ -685,6 +689,8 @@ export const DEFAULT_PREFS: PortPrefs = {
   trendArchive: true,
   /** 行情卡片配置：存**隐藏集合**（老 profile 无此键 ⇒ 全可见；将来新增的卡片默认可见） */
   stripCfg: { hidden: [] },
+  chipsDecay: 1.5,
+  chipsSpread: 'triangle',
 }
 
 /**

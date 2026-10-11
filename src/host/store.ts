@@ -32,6 +32,7 @@ import { log } from './context.ts'
 import { bulkBatchMatches, numOrNull } from '../shared/model.ts'
 import { shanghaiDayStart } from './time.ts'
 import { writeJsonAtomic } from './atomic.ts'
+import { normalizeChipPrefs } from './chips.ts'
 
 const NAME_MAX = 40
 
@@ -469,6 +470,9 @@ export class DataStore {
         watchSort: safeSortPref(loaded.watchSort, WATCH_SORT_KEYS, DEFAULT_PREFS.watchSort),
         portSort: safeSortPref(loaded.portSort, PORT_SORT_KEYS, DEFAULT_PREFS.portSort),
         stripCfg: normalizeStripCfg(loaded.stripCfg),
+        chipsDecay: normalizeChipPrefs({ decay: loaded.chipsDecay, spread: loaded.chipsSpread }).decay,
+        chipsSpread: normalizeChipPrefs({ decay: loaded.chipsDecay, spread: loaded.chipsSpread }).spread,
+      // 筹码口径：装载时同样收敛（手改坏的值不让启动失败）
         // 老 prefs.json 没有 viewMode → 回退完整视图（启动不该因一个坏偏好失败）
         viewMode: loaded.viewMode === 'compact' || loaded.viewMode === 'incognito' ? loaded.viewMode : 'full',
         panelOpacity: normalizePanelOpacity(loaded.panelOpacity, DEFAULT_PREFS.panelOpacity ?? 1),
@@ -584,6 +588,9 @@ export class DataStore {
       watchSort: safeSortPref(loaded.watchSort, WATCH_SORT_KEYS, DEFAULT_PREFS.watchSort),
       portSort: safeSortPref(loaded.portSort, PORT_SORT_KEYS, DEFAULT_PREFS.portSort),
       stripCfg: normalizeStripCfg(loaded.stripCfg),
+      // 筹码口径：装载时同样收敛（手改坏的值不让启动失败）
+      chipsDecay: normalizeChipPrefs({ decay: loaded.chipsDecay, spread: loaded.chipsSpread }).decay,
+      chipsSpread: normalizeChipPrefs({ decay: loaded.chipsDecay, spread: loaded.chipsSpread }).spread,
       viewMode: loaded.viewMode === 'compact' || loaded.viewMode === 'incognito' ? loaded.viewMode : 'full',
     }
     return { backedUp }
@@ -1091,6 +1098,17 @@ export class DataStore {
     // 不抛错 —— 与 fxRates/rescue 的"宽容归一"同族；全仓曾漏掉这个分支，导致客户端发来的
     // stripCfg 被静默丢弃（刷新后配置全丢，P0）。
     if (patch.stripCfg !== undefined) this.prefs.stripCfg = normalizeStripCfg(patch.stripCfg)
+    // 筹码口径（k / 形状）：非法值回落默认并**如实写进 notes**（不静默）；老 profile 缺键 ⇒ 默认
+    if (patch.chipsDecay !== undefined || patch.chipsSpread !== undefined) {
+      const cur = { decay: this.prefs.chipsDecay, spread: this.prefs.chipsSpread }
+      const next = normalizeChipPrefs({
+        decay: patch.chipsDecay ?? cur.decay,
+        spread: patch.chipsSpread ?? cur.spread,
+      })
+      this.prefs.chipsDecay = next.decay
+      this.prefs.chipsSpread = next.spread
+      if (next.notes.length > 0) log('筹码口径回落：', next.notes.join('；'))
+    }
     await this.commit([['prefs.json', this.prefs]])
     return this.getPrefs()
   }

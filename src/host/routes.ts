@@ -21,6 +21,7 @@ import { BREADTH_METHODOLOGY, BREADTH_COUNT_CALIBER, BreadthCountCache, resolveB
 import { dayOf } from './time.ts'
 import { log, type PluginWebRoute } from './context.ts'
 import { dayTradesOf } from './dayTrade.ts'
+import { CHIPS_MIN_SAMPLES, CHIPS_WINDOW, chipSeriesOf } from './chips.ts'
 
 const MAX_BODY = 256 * 1024
 const MAX_QUOTE_IDS = 160
@@ -217,6 +218,56 @@ export function makeTradeRoutes(
       handler: (req, res) => {
         if (!needGate(req, res)) return
         send(res, 200, { ok: true, name: 'dsh-tradewatcher', time: Date.now(), breaker: breakerSummary(upstreamHosts) })
+      },
+    },
+    {
+      // 筹码分布（45 日 / 换手率衰减 / P5-P95）。纯内存计算，不发新的上游请求：
+      // 日线走 `em.fetchKline(secid, 101, 45, 1)`（前复权），流通市值走**同一次行情缓存**。
+      kind: 'exact',
+      path: '/tradewatcher/chips',
+      handler: async (req, res) => {
+        if (!needGate(req, res)) return
+        try {
+          const q = queryOf(req)
+          const secid = String(q.get('secid') ?? '').trim()
+          if (!SECID_RE.test(secid)) {
+            send(res, 400, { error: 'secid 不合法（如 1.600519）' })
+            return
+          }
+          const want = Number(q.get('days') ?? CHIPS_WINDOW)
+          const days = Number.isFinite(want) ? Math.min(CHIPS_WINDOW, Math.max(CHIPS_MIN_SAMPLES, Math.round(want))) : CHIPS_WINDOW
+          const supported = em.fqSupported(secid)
+          const k = supported ? await em.fetchKline(secid, 101, days, 1) : null
+          const qp = await em.fetchQuotesWithProvenance([secid])
+          const qprovenance = qp.provenance
+          const quote = qp.items[secid] ?? null
+          const bars = (k?.days ?? []).map((d) => ({ date: d.date, close: d.close, vol: d.vol }))
+          // 口径来自 prefs（老 profile 缺键 ⇒ 默认 k=1.5 / triangle，由 store 的装载归一保证）
+          const prefs = store.getPrefs()
+          const series = chipSeriesOf(bars, {
+            fqSupported: supported,
+            isHk: secid.startsWith('116.'),
+            floatMv: quote?.floatMv ?? null,
+            price: quote?.price ?? null,
+            window: days,
+            decay: prefs.chipsDecay,
+            spread: prefs.chipsSpread,
+          })
+          const missing: Array<{ what: string; why: string; note: string }> = []
+          if (series.why !== null) missing.push({ what: secid, why: 'no-source', note: series.why })
+          if (series.decayReason !== null) missing.push({ what: `${secid} 衰减口径`, why: 'no-source', note: series.decayReason })
+          send(res, 200, {
+            secid,
+            // 出处沿用既有读契约：stale = 日线走缓存 或 行情降级；source 说清用了哪两处数据
+            asOf: k === null ? null : Date.now(),
+            stale: k?.stale === true || qprovenance.stale === true,
+            source: 'em-kline+quote',
+            ...series,
+            missing,
+          })
+        } catch (error) {
+          fail(res, error)
+        }
       },
     },
     {
