@@ -22,3 +22,19 @@ export const QUOTE_STATE_COLOR = {
   settled: '#8a8f98',
   missing: '#ff5f6d',
 } as const
+
+/**
+ * 筹码三条语义线的**主题 token 名**（值定义在 `styles.ts` 的深浅两套变量里）。
+ *
+ * 为什么是语义线：平均成本/压力(P95)/支撑(P5) 描述的是**筹码分布的位置**，不是涨跌 ⇒
+ * **不许**用红/绿（那两色在本插件里是涨跌语义），也别跟获利/套牢两色混。
+ * 三条线一律只引用 token 名，源码里不出现任何硬编码色值。
+ */
+export const CHIPS_LINE_TOKENS = {
+  avg: 'var(--tw-chip-avg)',
+  resistance: 'var(--tw-chip-res)',
+  support: 'var(--tw-chip-sup)',
+  grid: 'var(--tw-chips-grid)',
+} as const
+
+export type ChipsLineKind = 'avg' | 'resistance' | 'support'

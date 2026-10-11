@@ -12,7 +12,8 @@ import React, { useEffect, useState } from 'react'
 import { dirClass } from './format.ts'
 import { clampIndex } from './chipsView.ts'
 import { countMount } from './mounts.ts'
-import { axisTicks, caliberDeviates } from './chipsView.ts'
+import { CHIPS_LINE_TOKENS } from './theme.ts'
+import { axisTicks, caliberDeviates, chipsLinesOf, chipsRowHeight, ratioTicks } from './chipsView.ts'
 import type { ChipsState } from './useChips.ts'
 
 export interface ChipsPanelProps {
@@ -63,6 +64,12 @@ export function ChipsPanel(props: ChipsPanelProps): React.ReactElement | null {
     why: d.why, samples: d.samples, window: d.window,
   })
   const ticks = axisTicks(day.centers.map((c) => c))
+  const rowH = chipsRowHeight(props.maxBottom === undefined ? 140 : props.maxBottom, day.buckets.length)
+  const peakW = Math.max(...day.buckets, 0)
+  const xTicks = ratioTicks(peakW)
+  const lines = chipsLinesOf({ avgCost: day.avgCost, support: day.support, resistance: day.resistance })
+  const colorOf = (k: 'avg' | 'resistance' | 'support'): string =>
+    k === 'avg' ? CHIPS_LINE_TOKENS.avg : k === 'resistance' ? CHIPS_LINE_TOKENS.resistance : CHIPS_LINE_TOKENS.support
   const money = (v: number | null): string => (v === null ? '—' : v.toFixed(2))
   const pct = (v: number | null): string => (v === null ? '—' : `${v.toFixed(2)}%`)
 
@@ -104,18 +111,58 @@ export function ChipsPanel(props: ChipsPanelProps): React.ReactElement | null {
           React.createElement('div', { className: 'tw-chips-date tw-muted' }, `${day.date} · 样本 ${day.samples} 天`),
           // 左轴（3–5 个价格刻度）+ 横条：同一个 flex 行内 ⇒ 自然逐行对齐
           React.createElement('div', { className: 'tw-chips-chart' },
+            // 左轴：价格刻度（11px，与其它轴同字体族，不加粗）
             React.createElement('div', { className: 'tw-chips-axis' },
               ...ticks.slice().reverse().map((t) => React.createElement('span', { key: t.toFixed(2) }, t.toFixed(2))),
             ),
-            React.createElement('div', { className: 'tw-chips-bars' },
+            React.createElement('div', { className: 'tw-chips-plot', style: { flex: 1 } },
+              // 网格线（层级：网格在下、横条在上；颜色走 token，不写死 hex）
+              ...xTicks.map((t, i) => React.createElement('div', {
+                key: `gv${i}`, className: 'tw-chips-grid-v', style: { left: `calc(${t.pct}% - ${(t.pct / 100) * 44}px)` },
+              })),
+              ...ticks.map((_t, i) => React.createElement('div', {
+                key: `gh${i}`, className: 'tw-chips-grid-h',
+                style: { top: `${(i / Math.max(1, ticks.length - 1)) * 100}%` },
+              })),
+              // 三条**语义线**（横跨分布区，右端标注数值；不是涨跌 ⇒ 不用红/绿）
+              ...lines.map((l) => {
+                const idx = l.kind === 'avg' ? -1 : -1
+                const lo = day.centers[0]
+                const hi = day.centers[day.centers.length - 1]
+                const topPct = hi > lo ? ((hi - l.price) / (hi - lo)) * 100 : 50
+                void idx
+                return React.createElement('div', {
+                  key: `ln-${l.kind}`, className: 'tw-chips-refline',
+                  style: { top: `${Math.min(100, Math.max(0, topPct))}%`, color: colorOf(l.kind) },
+                  title: l.kind === 'avg' ? '平均成本（Σ(桶价×权重)/Σ权重）' : l.kind === 'resistance' ? '压力位 = 筹码累积分布 P95' : '支撑位 = 筹码累积分布 P5',
+                  'aria-hidden': true,
+                })
+              }),
+              ...lines.map((l) => {
+                const lo = day.centers[0]
+                const hi = day.centers[day.centers.length - 1]
+                const topPct = hi > lo ? ((hi - l.price) / (hi - lo)) * 100 : 50
+                return React.createElement('span', {
+                  key: `lb-${l.kind}`, className: 'tw-chips-reflabel',
+                  style: { top: `${Math.min(100, Math.max(0, topPct))}%`, color: colorOf(l.kind) },
+                  title: `${l.kind === 'avg' ? '平均成本' : l.kind === 'resistance' ? '压力位 P95' : '支撑位 P5'} = ${l.label}`,
+                }, l.label)
+              }),
+              // 横条（96 桶：每行 ≥1px，低于 1px 也照画 ⇒ 不静默丢桶）
               ...day.buckets.map((w, i) => React.createElement('div', {
                 key: i,
                 className: `tw-chips-bar ${price === null ? 'tw-flat' : dirClass(day.centers[i] - price, props.redUp)}`,
-                style: { width: `${(w / max) * 100}%` },
+                style: { height: rowH, width: `${(w / max) * 100}%` },
                 title: `${day.centers[i].toFixed(2)} 元 · 权重 ${(w * 100).toFixed(2)}%`,
               })),
             ),
           ),
+          // 横坐标刻度：该价位筹码占总筹码的比例（nice step，小数位与步长匹配）
+          xTicks.length > 0
+            ? React.createElement('div', { className: 'tw-chips-xaxis' },
+                ...xTicks.map((t) => React.createElement('span', { key: `x${t.label}` }, t.label)),
+              )
+            : null,
         )
       : null,
   )

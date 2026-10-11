@@ -13,7 +13,7 @@ export const STYLE_ID = 'dsh-tradewatcher-style'
 export const TW_CSS = `
 .tw-root{
 --tw-bg:#f5f6f8;--tw-bg2:#eceef2;--tw-card:#ffffff;--tw-card2:#f2f4f7;--tw-hover:#eef0f5;
---tw-border:#e2e5ea;--tw-border-strong:#cfd3dc;
+--tw-border:#e2e5ea;--tw-border-strong:#cfd3dc;--tw-chip-avg:#c97a1c;--tw-chip-res:#7a5cc4;--tw-chip-sup:#2f74c0;--tw-chips-grid:rgba(0,0,0,.14);
 --tw-text:#16181d;--tw-dim:#4c535f;--tw-muted:#6f7787;
 /* 图表辅助线的两个 token：此前只在救援曲线/日历里被 var() 引用、**从未定义** ——
    无 fallback 的地方会因"无效值"退回初始色（浅色主题下出现一条近黑的轴线）。
@@ -31,7 +31,7 @@ font:13px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI","Inter","PingFang SC",
 letter-spacing:-0.006em}
 .tw-root[data-theme=dark]{
 --tw-bg:#010102;--tw-bg2:#0b0c0e;--tw-card:#0f1011;--tw-card2:#16181b;--tw-hover:#1b1d21;
---tw-border:#23252a;--tw-border-strong:#34343a;
+--tw-border:#23252a;--tw-border-strong:#34343a;--tw-chip-avg:#e0913a;--tw-chip-res:#9b7bd6;--tw-chip-sup:#4a90d9;--tw-chips-grid:rgba(255,255,255,.16);
 --tw-text:#f7f8f8;--tw-dim:#c8ced8;--tw-muted:#8a8f98;
 --tw-fg-dim:var(--tw-muted);--tw-line:var(--tw-border);
 --tw-up:#ff5f6d;--tw-down:#27a644;--tw-flat:#8a8f98;
@@ -144,7 +144,7 @@ color-scheme:dark}
   .tw-chart-tip-v,
   .tw-tone,
   .tw-cfg-count,
-  .tw-chips-nums, .tw-chips-date, .tw-chips-bar,
+  .tw-chips-nums, .tw-chips-date, .tw-chips-bar, .tw-chips-reflabel, .tw-chips-xaxis,
   .tw-review-bline, .tw-daytrade-table td, .tw-bulk-table td, .tw-bulk-sum,
   .tw-pos-title small,
   .tw-caliber, .tw-chartnote, .tw-zoom-bar, .tw-topmeta .tw-uptime){
@@ -159,7 +159,7 @@ color-scheme:dark}
   .tw-chart-tip-v,
   .tw-tone,
   .tw-cfg-count,
-  .tw-chips-nums, .tw-chips-date, .tw-chips-bar,
+  .tw-chips-nums, .tw-chips-date, .tw-chips-bar, .tw-chips-reflabel, .tw-chips-xaxis,
   .tw-review-bline, .tw-daytrade-table td, .tw-bulk-table td, .tw-bulk-sum,
   .tw-pos-title small,
   .tw-caliber, .tw-chartnote, .tw-zoom-bar){
@@ -461,9 +461,15 @@ color-scheme:dark}
 .tw-chips-slider{width:100%;margin:2px 0}
 .tw-chips-date{font-size:11px;font-family:var(--tw-mono)}
 .tw-chips-chart{display:flex;gap:4px;align-items:stretch;max-height:140px;overflow:hidden}
-.tw-chips-axis{display:flex;flex-direction:column;justify-content:space-between;font-size:9.5px;color:var(--tw-muted);
+.tw-chips-axis{display:flex;flex-direction:column;justify-content:space-between;font-size:11px;color:var(--tw-muted);
   font-family:var(--tw-mono);min-width:34px;text-align:right;line-height:1}
 .tw-chips-bars{display:flex;flex-direction:column;gap:1px;overflow:hidden;flex:1}
+.tw-chips-xaxis{display:flex;justify-content:space-between;font-size:11px;color:var(--tw-muted);font-family:var(--tw-mono);padding-left:38px}
+.tw-chips-plot{position:relative}
+.tw-chips-grid-v{position:absolute;top:0;bottom:0;width:1px;background:var(--tw-chips-grid);pointer-events:none}
+.tw-chips-grid-h{position:absolute;left:0;right:0;height:1px;background:var(--tw-chips-grid);pointer-events:none}
+.tw-chips-refline{position:absolute;left:0;right:44px;height:0;border-top:1px dashed currentColor;pointer-events:none;opacity:.9}
+.tw-chips-reflabel{position:absolute;right:0;transform:translateY(-50%);font-size:10.5px;font-family:var(--tw-mono);pointer-events:none}
 .tw-chips-bar{height:3px;border-radius:1px;background:currentColor;min-width:1px}
 
 /* 复盘条（做T 收起态 + 分档卡）与批量录入模态（P2-9 / P1-3 / P2-1）*/

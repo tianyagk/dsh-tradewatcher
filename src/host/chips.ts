@@ -15,7 +15,10 @@
  *  ⑥ 支撑/压力 = 筹码累积分布的 **P5 / P95** 价位；过窄（`P95−P5 < 区间 3%`）⇒ 只给一句"区间过窄"。
  *  ⑦ 平均成本 = Σ(桶价×权重)/Σ权重；**盈利比例** = Σ(桶价 **<** 现价 的权重)/Σ权重。
  */
-export const CHIPS_BUCKETS = 32
+export const CHIPS_BUCKETS = 96
+/** 桶数的合法范围（路由参数 `buckets`）：越界夹取，非法回落默认 */
+export const CHIPS_BUCKETS_MIN = 16
+export const CHIPS_BUCKETS_MAX = 160
 /** 累积窗口（逐日递推用到的历史长度）：360 个交易日 */
 export const CHIPS_WINDOW = 360
 /** 展示窗口（滑杆覆盖的天数）：45，上限 60 */
@@ -56,6 +59,18 @@ export function normalizeChipPrefs(raw: { decay?: unknown; spread?: unknown }): 
 export const CHIPS_MIN_SAMPLES = 10
 /** "区间过窄"阈值：P95−P5 占价格区间的比例 */
 export const CHIPS_NARROW_RATIO = 0.03
+
+/** 归一桶数：非数字/越界 ⇒ 如实回落（默认 96），合法范围内夹取 */
+export function normalizeBuckets(raw: unknown): { buckets: number; note: string | null } {
+  if (raw === undefined) return { buckets: CHIPS_BUCKETS, note: null }
+  const n = typeof raw === 'number' && Number.isFinite(raw) ? Math.round(raw) : Number.NaN
+  if (!Number.isFinite(n)) return { buckets: CHIPS_BUCKETS, note: `桶数不是数字（${String(raw)}）⇒ 回落默认 ${CHIPS_BUCKETS}` }
+  if (n < CHIPS_BUCKETS_MIN || n > CHIPS_BUCKETS_MAX) {
+    const clamped = Math.min(CHIPS_BUCKETS_MAX, Math.max(CHIPS_BUCKETS_MIN, n))
+    return { buckets: clamped, note: `桶数 ${n} 超出 [${CHIPS_BUCKETS_MIN}, ${CHIPS_BUCKETS_MAX}] ⇒ 夹到 ${clamped}` }
+  }
+  return { buckets: n, note: null }
+}
 
 export interface ChipBar {
   date: string
@@ -238,7 +253,7 @@ export interface ChipOptions {
 
 /** 逐日筹码分布（含每日的 avgCost / P5 / P95 / 盈利比例） */
 export function chipSeriesOf(bars: readonly ChipBar[], opts: ChipOptions = {}): ChipSeries {
-  const buckets = opts.buckets ?? CHIPS_BUCKETS
+  const buckets = normalizeBuckets(opts.buckets).buckets
   const window = opts.window ?? CHIPS_WINDOW
   const display = Math.min(CHIPS_DISPLAY_MAX, Math.max(1, Math.round(opts.display ?? CHIPS_DISPLAY)))
   const halfLife = opts.halfLife ?? CHIPS_HALF_LIFE
@@ -339,7 +354,7 @@ export function chipSeriesOf(bars: readonly ChipBar[], opts: ChipOptions = {}): 
     if (i < win.length - display) continue
     days.push({
       date: b.date,
-      buckets: norm.map((x) => round(x, 6)),
+      buckets: norm.map((x) => round(x, 8)),
       centers: centers.map((c) => round(c, 4)),
       avgCost: avg === null ? null : round(avg, 4),
       support: support === null ? null : round(support, 4),

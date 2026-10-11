@@ -14,22 +14,24 @@ const HAND = [
 ]
 
 test('手算对照：桶中心、单价分摊与守恒', () => {
-  const centers = bucketCenters(10, 40, 4)
-  assert.deepEqual(centers, [13.75, 21.25, 28.75, 36.25], '区间 [10,40] 四等分的中点（桶宽 7.5）')
-  // 价格 20 落在中心 13.75 与 21.25 之间：t = (20−13.75)/7.5 = 0.8333 ⇒ 0.1667 / 0.8333
-  const w = [0, 0, 0, 0]
+  const centers = bucketCenters(10, 40, 16)
+  assert.deepEqual(centers.slice(0, 2), [10.9375, 12.8125], '区间 [10,40] 十六等分的中点（桶宽 1.875）')
+  // 价格 20 落在相邻两中心之间：按位置线性分摊（守恒）
+  const w = new Array(centers.length).fill(0)
   allocate(w, centers, 20, 1)
-  assert.deepEqual(w.map((x) => Math.round(x * 1e4) / 1e4), [0.1667, 0.8333, 0, 0])
+  assert.ok(Math.abs(w.reduce((a, b) => a + b, 0) - 1) < 1e-12, '分摊守恒')
+  assert.equal(w.filter((x) => x > 0).length, 2, '只落在相邻两桶')
   // 守恒：分摊前后总权重相等（这是"别差一分钱换一桶"的核心）
   const before = w.reduce((s, x) => s + x, 0)
   allocate(w, centers, 21, 0.3)
   assert.ok(Math.abs(w.reduce((s, x) => s + x, 0) - before - 0.3) < 1e-12, '分摊不创造也不丢失权重')
   // 低于最低中心/高于最高中心 ⇒ 落两端桶
-  const w2 = [0, 0, 0, 0]
+  const w2 = new Array(centers.length).fill(0)
   allocate(w2, centers, 5, 1)
-  assert.deepEqual(w2, [1, 0, 0, 0])
+  assert.deepEqual(w2, [1, ...new Array(centers.length - 1).fill(0)], '低于最低中心 ⇒ 落第一桶')
   allocate(w2, centers, 99, 1)
-  assert.deepEqual(w2, [1, 0, 0, 1])
+  assert.equal(w2[0], 1)
+  assert.equal(w2[w2.length - 1], 1, '高于最高中心 ⇒ 落最后一桶')
 })
 
 test('手算对照：换手率 × k 递推（三角形分布），逐日 chips_t 与程序输出对齐', () => {
@@ -43,11 +45,11 @@ test('手算对照：换手率 × k 递推（三角形分布），逐日 chips_t
   //   t_1 = 100000 / 10,000,000 = 0.01；k = 1.5 ⇒ 因子 = 1 − 0.015 = 0.985
   const floatMv = 10_000_000
   const k = 1.5
-  const r = chipSeriesOf(bars, { fqSupported: true, floatMv, decay: k, spread: 'triangle', buckets: 4, minSamples: 1 })
+  const r = chipSeriesOf(bars, { fqSupported: true, floatMv, decay: k, spread: 'triangle', buckets: 16, minSamples: 1 })
   assert.equal(r.decay, 'turnover')
   // 手算：每天都把历史 ×0.985 再加当日换手权重（t 每天不同：10 → 20 → 30 元 ⇒ t = 0.01 / 0.02 / 0.03）
-  const centers = bucketCenters(10, 30, 4) // [12.5, 17.5, 22.5, 27.5]
-  let hist = [0, 0, 0, 0]
+  const centers = bucketCenters(10, 30, 16) // [12.5, 17.5, 22.5, 27.5]
+  let hist = new Array(centers.length).fill(0)
   const ts = [0.01, 0.02, 0.03]
   for (let i = 0; i < bars.length; i += 1) {
     const f = Math.max(0, 1 - ts[i] * k)
@@ -58,7 +60,7 @@ test('手算对照：换手率 × k 递推（三角形分布），逐日 chips_t
     hist[best] += ts[i]
   }
   const total = hist.reduce((a, b) => a + b, 0)
-  const mine = hist.map((x) => Math.round((x / total) * 1e6) / 1e6)
+  const mine = hist.map((x) => Math.round((x / total) * 1e8) / 1e8)
   assert.deepEqual(r.latest?.buckets, mine, `桶权重必须与手算逐位一致（手算 ${JSON.stringify(mine)}）`)
   // 手算平均值：Σ(桶价×权重)
   const avg = centers.reduce((a, c, i) => a + c * (mine[i] ?? 0), 0)
@@ -73,7 +75,7 @@ test('极端换手：t×k > 1 ⇒ 因子夹到 0（旧筹码全清），methodol
   //  ⇒ 用 cap 覆盖（cap=1）+ k=3 ⇒ 1−1×3 = −2 ⇒ 必须夹到 0
   const r = chipSeriesOf(
     [{ date: 'a', close: 10, vol: 1 }, { date: 'b', close: 11, vol: 1 }, { date: 'c', close: 12, vol: 1 }],
-    { fqSupported: true, floatMv: 1, decay: 3, cap: 1, buckets: 4, minSamples: 1 },
+    { fqSupported: true, floatMv: 1, decay: 3, cap: 1, buckets: 16, minSamples: 1 },
   )
   const all = r.latest?.buckets ?? []
   assert.equal(all.every((x) => x >= 0), true, '不许出现负权重')
@@ -131,24 +133,26 @@ test('k 的语义：k 越大，近期筹码权重占比单调上升', () => {
 
 test('手算对照：P5/P95 在累积分布上的插值', () => {
   // 构造一个只落在两端的分布：权重 [0.5,0,0,0.5]，中心 13.75 / 26.25 / 38.75 / 51.25
-  const centers = bucketCenters(10, 40, 4)
-  const buckets = [0.5, 0, 0, 0.5]
-  // P5（target=0.05）落在第 0 桶内：lo=13.75（i=0 取自身）→ hi=13.75 ⇒ 13.75
-  assert.equal(percentilePrice(buckets, centers, 0.05), 13.75)
-  // P95（target=0.95）落在第 3 桶内：[28.75, 36.25]，frac=(0.95−0.5)/0.5=0.9 ⇒ 28.75+7.5×0.9=35.5
-  assert.ok(Math.abs((percentilePrice(buckets, centers, 0.95) ?? 0) - 35.5) < 1e-9)
+  const centers = bucketCenters(10, 40, 16)
+  const buckets = [0.5, ...new Array(14).fill(0), 0.5]
+  // P5（target=0.05）落在第 0 桶内：lo=hi=第一桶中心 ⇒ 就是它
+  assert.equal(percentilePrice(buckets, centers, 0.05), centers[0])
+  // P95（target=0.95）落在最后一桶内：[上一中心, 末中心]，frac=(0.95−0.5)/0.5=0.9
+  const lo = centers[centers.length - 2]
+  const hi = centers[centers.length - 1]
+  assert.ok(Math.abs((percentilePrice(buckets, centers, 0.95) ?? 0) - (lo + (hi - lo) * 0.9)) < 1e-9)
 })
 
 test('回落口径：港股必须走半衰期并写明原因；缺 floatMv 同样回落', () => {
-  const hk = chipSeriesOf(HAND, { isHk: true, floatMv: 1e12, buckets: 4, minSamples: 1 })
+  const hk = chipSeriesOf(HAND, { isHk: true, floatMv: 1e12, buckets: 16, minSamples: 1 })
   assert.equal(hk.decay, 'half-life', '港股 vol/amount 单位未标定 ⇒ 必须回落')
   assert.ok((hk.decayReason ?? '').includes('9926') || (hk.decayReason ?? '').includes('未标定'), `原因要写清（实际 ${String(hk.decayReason)}）`)
   assert.ok(hk.methodology.includes('固定半衰期'), '口径字符串要说明用了哪一档')
-  const noMv = chipSeriesOf(HAND, { floatMv: null, buckets: 4, minSamples: 1 })
+  const noMv = chipSeriesOf(HAND, { floatMv: null, buckets: 16, minSamples: 1 })
   assert.equal(noMv.decay, 'half-life')
   assert.ok((noMv.decayReason ?? '').includes('流通市值'), noMv.decayReason ?? '')
   // A股 + 有 floatMv ⇒ 走换手率口径
-  const cn = chipSeriesOf(HAND, { floatMv: 1e12, buckets: 4, window: 45, minSamples: 1 })
+  const cn = chipSeriesOf(HAND, { floatMv: 1e12, buckets: 16, window: 45, minSamples: 1 })
   assert.equal(cn.decay, 'turnover')
   assert.equal(cn.decayReason, null)
   assert.ok(cn.methodology.includes('换手率'), cn.methodology)
@@ -159,18 +163,19 @@ test('不提供模块的三种情形：指数/期货、样本不足、价格无�
   assert.equal(idx.why !== null, true)
   assert.ok((idx.why ?? '').includes('指数/期货'), idx.why ?? '')
   assert.equal(idx.latest, null)
-  const few = chipSeriesOf(HAND.slice(0, CHIPS_MIN_SAMPLES - 1), { fqSupported: true, buckets: 4 })
+  const few = chipSeriesOf(HAND.slice(0, CHIPS_MIN_SAMPLES - 1), { fqSupported: true, buckets: 16 })
   assert.ok((few.why ?? '').includes('样本不足'), few.why ?? '')
-  const flat = chipSeriesOf(Array.from({ length: 12 }, (_, i) => ({ date: `2026-02-${i + 1}`, close: 10, vol: 1 })), { fqSupported: true, buckets: 4 })
+  const flat = chipSeriesOf(Array.from({ length: 12 }, (_, i) => ({ date: `2026-02-${i + 1}`, close: 10, vol: 1 })), { fqSupported: true, buckets: 16 })
   assert.ok((flat.why ?? '').includes('没有变化'), flat.why ?? '')
 })
 
 test('现价缺失 ⇒ 盈利比例 —，但平均成本仍给；现价给出 ⇒ 用 < 现价 的权重', () => {
-  const noPrice = chipSeriesOf(HAND, { fqSupported: true, buckets: 4, price: null, minSamples: 1 })
+  const noPrice = chipSeriesOf(HAND, { fqSupported: true, buckets: 16, price: null, minSamples: 1 })
   assert.equal(noPrice.profitRatio, null, '现价缺失 ⇒ 盈利比例 —')
   assert.equal(noPrice.avgCost !== null, true, '平均成本与现价无关，仍要给')
-  // 现价 = 21.25（第二桶中心）⇒ 只算中心 < 21.25 的桶（第一桶）
-  const withPrice = chipSeriesOf(HAND, { fqSupported: true, buckets: 4, price: 21.25, minSamples: 1 })
+  // 现价 = 第二桶中心 ⇒ 只算中心 < 它的桶（第一桶）
+  const centers1Price = bucketCenters(10, 30, 16)[1]
+  const withPrice = chipSeriesOf(HAND, { fqSupported: true, buckets: 16, price: centers1Price, minSamples: 1 })
   const below = (withPrice.latest?.buckets ?? []).slice(0, 1).reduce((s, x) => s + x, 0) * 100
   assert.ok(Math.abs((withPrice.profitRatio ?? 0) - below) < 0.02, `盈利比例应=第一桶权重（实际 ${String(withPrice.profitRatio)} vs ${below}）`)
   assert.equal(withPrice.profitRatio === 0, false, '恰好相等的桶不算盈利（用 <）')
