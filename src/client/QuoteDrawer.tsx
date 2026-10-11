@@ -33,6 +33,7 @@ import { sessionOf } from './sessionAxis.ts'
 import { isUsableBaseline } from './trendView.ts'
 import { trendCaliberOf } from '../shared/trendCaliber.ts'
 import { ChipsPanel } from './ChipsPanel.tsx'
+import { countMount } from './mounts.ts'
 import { NoteIcon } from './NoteIcon.tsx'
 import { useChips } from './useChips.ts'
 
@@ -92,6 +93,10 @@ export function QuoteDrawer(props: {
   // 筹码分布：**只随 secid 取一次**（页签/复权/图表重试都不参与）——切页签不发请求、不闪；
   // 五日档只是"不显示"（面板给原因），数据照留 ⇒ 切回来立即可见。
   const [chipsRefresh, setChipsRefresh] = useState(0)
+  // 抽屉自身的挂载计数：切页签不该把它重建（key 只绑在 secid 上）
+  useEffect(() => {
+    countMount('drawer')
+  }, [])
   const chipsState = useChips(secid, true, chipsRefresh)
   const [containerRef, width] = useContainerWidth()
 

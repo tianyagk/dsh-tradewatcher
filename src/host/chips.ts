@@ -16,11 +16,13 @@
  *  ⑦ 平均成本 = Σ(桶价×权重)/Σ权重；**盈利比例** = Σ(桶价 **<** 现价 的权重)/Σ权重。
  */
 export const CHIPS_BUCKETS = 32
-/** 累积窗口（逐日递推用到的历史长度）：180 个交易日 */
-export const CHIPS_WINDOW = 180
+/** 累积窗口（逐日递推用到的历史长度）：360 个交易日 */
+export const CHIPS_WINDOW = 360
 /** 展示窗口（滑杆覆盖的天数）：45，上限 60 */
 export const CHIPS_DISPLAY = 45
 export const CHIPS_DISPLAY_MAX = 60
+/** 累积窗口的**上限**（`days` 参数最多给到这么多） */
+export const CHIPS_WINDOW_MAX = 400
 /** 换手率口径的封顶（单日最多换掉 25% 筹码，避免极端值把权重打满） */
 export const CHIPS_CAP = 0.25
 /** 固定半衰期（交易日）：港股与缺 floatMv 时使用 */
@@ -209,6 +211,13 @@ export interface ChipOptions {
   price?: number | null
   /** 该标的是否支持前复权（指数/期货/板块 ⇒ false，直接不提供模块） */
   fqSupported?: boolean
+  /**
+   * 换手率口径里的流通市值怎么取：
+   *  - `now`（默认）：`amount_t ÷ floatMv_now`（现在线上的口径）
+   *  - `price-scaled`（历史代理）：`amount_t ÷ (floatMv_now × close_t / close_now)`，
+   *    假设**股本近似不变** ⇒ 历史流通市值随价格缩放（更贴近"当年那天的市值"）
+   */
+  floatMvMode?: 'now' | 'price-scaled'
   buckets?: number
   window?: number
   halfLife?: number
@@ -237,6 +246,7 @@ export function chipSeriesOf(bars: readonly ChipBar[], opts: ChipOptions = {}): 
   const norm = normalizeChipPrefs({ decay: opts.decay, spread: opts.spread })
   const kFactor = norm.decay
   const shape = norm.spread
+  const mvMode = opts.floatMvMode ?? 'now'
   const win = bars.filter((b) => Number.isFinite(b.close) && b.close > 0).slice(-window)
   const samples = win.length
   const base: Omit<ChipSeries, 'days' | 'latest'> = {
@@ -290,7 +300,10 @@ export function chipSeriesOf(bars: readonly ChipBar[], opts: ChipOptions = {}): 
     if (useTurnover) {
       // t_i = 成交额 ÷ 流通市值（= 换手率）；vol 是"手" ⇒ ×100 得股数（上游 A股口径）
       const amount = b.vol === null ? null : b.vol * 100 * b.close
-      const raw = amount === null ? null : amount / (opts.floatMv as number)
+      const mv = mvMode === 'price-scaled'
+        ? (opts.floatMv as number) * (b.close / Math.max(1e-9, win[win.length - 1].close))
+        : (opts.floatMv as number)
+      const raw = amount === null ? null : amount / mv
       const t = raw === null ? null : Math.min(cap, Math.max(0, raw))
       // 新增筹码权重 = 当日换手率（夹到 cap）；下面递推里乘的换手率因子也用同一个 t
       w = t === null ? 0 : t
@@ -352,7 +365,9 @@ export function chipSeriesOf(bars: readonly ChipBar[], opts: ChipOptions = {}): 
       (useTurnover
         ? `递推式：chips_t = chips_{t-1} × max(0, 1 − t_t×k) + new_t；` +
           `t_t = 当日换手率 = 成交额 ÷ 流通市值（等价于 成交量 ÷ 流通股本；cap=${cap}）` +
-          `，逐日历史流通市值不可得 ⇒ 用当前 floatMv 近似（东财/腾讯市值字段）。`
+          (mvMode === 'price-scaled'
+            ? '，历史流通市值按 floatMv_now × close_t/close_now 代理（假设股本近似不变）。'
+            : '，逐日历史流通市值不可得 ⇒ 用当前 floatMv 近似（东财/腾讯市值字段）。')
         : `递推式：chips_t = chips_{t-1} × 0.5^(1/${halfLife}) + new_t（固定半衰期 ${halfLife} 日）—— ${decayReason ?? ''}`) +
       `衰减系数 k=${kFactor}（越大越强调近期筹码；>1 时旧筹码衰减更快）` +
       (clamped ? `；本段出现过 1−t×k < 0 的极端换手，因子已夹到 0（旧筹码全清），实际最小生效因子 ${minFactor.toFixed(4)}` : `；实际最小生效因子 ${Number.isFinite(minFactor) ? minFactor.toFixed(4) : '—'}`) +

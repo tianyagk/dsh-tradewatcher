@@ -7,9 +7,10 @@
  *  - 容器与数字登记进 `styles.ts` 的两条 `data-blur=1` 清单（隐身档下与其它数字一起糊）；
  *  - 五日档隐藏（多日分时不是日线序列），并给一行原因。
  */
-import React, { useState } from 'react'
+import React, { useEffect, useState } from 'react'
 import { dirClass } from './format.ts'
 import { clampIndex } from './chipsView.ts'
+import { countMount } from './mounts.ts'
 import { axisTicks, caliberDeviates } from './chipsView.ts'
 import type { ChipsState } from './useChips.ts'
 
@@ -26,6 +27,10 @@ export interface ChipsPanelProps {
 export function ChipsPanel(props: ChipsPanelProps): React.ReactElement | null {
   const [open, setOpen] = useState(true)
   const [idx, setIdx] = useState<number | null>(null)
+  // 挂载计数：切页签后这个数必须**保持 1**（滑杆/折叠状态跟着一起没丢）
+  useEffect(() => {
+    countMount('chips')
+  }, [])
   const d = props.state.data
   const days = d?.days ?? []
   const at = clampIndex(idx === null ? days.length - 1 : idx, days.length)

@@ -81,3 +81,39 @@ test('③ 纵轴刻度：3–5 个、单调、覆盖 [lo, hi]', () => {
   assert.ok(styles.includes('.tw-chips-axis{'), '左轴样式存在')
   assert.ok(styles.includes('.tw-chips-chart{'), '左轴与横条的容器样式存在')
 })
+
+test('A：切页签不重挂载 —— 结构证据 + 挂载计数已埋点', () => {
+  const drawer = read('./QuoteDrawer.tsx')
+  const panel = read('./ChipsPanel.tsx')
+  const mounts = read('./mounts.ts')
+  // ① 抽屉的 key 只绑 secid（不绑页签）⇒ 切页签不重建抽屉
+  const host = read('./index.tsx')
+  assert.equal(host.includes('key: detail.secid'), true, '抽屉的 key 必须只绑 secid（不绑页签）')
+  // ⚠ `KlineChart` 上确实有 `key: tab` —— 那是**图表自己的**身份（每个页签是不同的图种），
+  //   属于预期行为，不属于"侧栏/筹码被重建"。这里只核"抽屉外壳与筹码"这两层没有绑页签的 key。
+  assert.equal(/createElement\(\s*'div',\s*\{\s*className: 'tw-drawer'(?:-mask|-body)?'[^}]*key:/.test(drawer), false, '抽屉外壳不许有 key（有 key 就会随页签重建）')
+  assert.equal(/key:\s*tab[\s\S]{0,80}ChipsPanel/.test(drawer), false, '筹码面板与 key:tab 无关')
+  // ② 组件定义在模块作用域（不是 render 内定义的匿名组件）
+  assert.equal(/^export function QuoteDrawer\(/m.test(drawer), true, '抽屉必须是模块级函数组件')
+  assert.equal(/^export function ChipsPanel\(/m.test(panel), true, '筹码面板必须是模块级函数组件')
+  // ③ 筹码面板与 chartBody() 是**同一个 body 的兄弟** ⇒ 图表的 loading/骨架不会把它卸载
+  const body = drawer.slice(drawer.indexOf("className: 'tw-drawer-body'"))
+  assert.ok(body.indexOf('chartBody()') < body.indexOf('ChipsPanel'), '面板必须在 chartBody() 之后、同一 body 内（兄弟关系）')
+  // ④ 面板元素上没有 key（有 key 就会随 key 变化重挂）
+  assert.equal(/React\.createElement\(ChipsPanel, \{\s*key/.test(drawer), false, 'ChipsPanel 不许带 key')
+  // ⑤ 挂载计数已埋：抽屉与面板各一次（浏览器控制台 __twMounts() 可读）
+  assert.equal(drawer.includes("countMount('drawer')"), true, '抽屉埋了挂载计数')
+  assert.equal(panel.includes("countMount('chips')"), true, '面板埋了挂载计数')
+  assert.equal(mounts.includes('__twMounts'), true, '运行时可读（装机后人工复核用）')
+})
+
+test('A：五日档时面板**只隐藏不卸载**（同一实例，状态不丢）', () => {
+  const panel = read('./ChipsPanel.tsx')
+  assert.equal(panel.includes('只在分时/日K 及以上显示'), true, '五日档的说明文字保留')
+  // 五日档只是换渲染内容（.tw-chips-off），组件本身仍在同一位置 ⇒ hooks（滑杆/折叠）不重置
+  assert.equal(/if \(props\.isFiveDay\) \{[\s\S]{0,200}return React\.createElement\('div', \{ className: 'tw-chips tw-chips-off' \}/.test(panel), true,
+    '五日档走"返回一行说明"的分支，而不是让父级不渲染它')
+  const drawer = read('./QuoteDrawer.tsx')
+  assert.equal(/isFiveDay: tab === '5d'/.test(drawer), true, '五日档由 props 传入（面板始终挂载）')
+  assert.equal(/tab === '5d' \? null : React\.createElement\(ChipsPanel/.test(drawer), false, '不许在五日档时直接把面板条件渲染掉')
+})
