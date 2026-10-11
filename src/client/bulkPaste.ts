@@ -115,7 +115,7 @@ export function parseBulk(text: string, opts: { heldSecids?: readonly string[] }
     }
     const key = `${secid.toUpperCase()}|${day}|${qty}|${price}`
     if (seen.has(key)) {
-      errors.push({ line, raw, message: `与前面某行完全重复（${secid} ${day} ${qty}@${price}）——已跳过` })
+      errors.push({ line, raw, message: `与前面某行完全重复（${secid} ${day} ${qty}@${price}）——跳过` })
       continue
     }
     seen.add(key)

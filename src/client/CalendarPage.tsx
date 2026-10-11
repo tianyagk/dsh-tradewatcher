@@ -453,7 +453,7 @@ function EventModal(props: {
       React.createElement('input', { className: 'tw-input', value: symbol, onChange: (e) => setSymbol(e.target.value), placeholder: '688981 / 600938 / 1.588170' }),
     ),
     React.createElement(Field, { label: '详情备注（可选）' },
-      React.createElement('textarea', { className: 'tw-input', rows: 3, value: note, onChange: (e) => setNote(e.target.value), placeholder: '要点、预期、影响标的等' } as React.TextareaHTMLAttributes<HTMLTextAreaElement>),
+      React.createElement('textarea', { className: 'tw-input', rows: 3, value: note, onChange: (e) => setNote(e.target.value), placeholder: '要点、预期、影响标的' } as React.TextareaHTMLAttributes<HTMLTextAreaElement>),
     ),
     React.createElement('div', { style: { display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 8 } },
       React.createElement(Btn, { onClick: props.onClose }, '取消'),

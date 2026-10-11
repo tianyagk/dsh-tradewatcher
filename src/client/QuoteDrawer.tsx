@@ -206,7 +206,7 @@ export function QuoteDrawer(props: {
         // 宿主对上游熔断会回 503 + retry-after（快速失败，避免继续打上游）。
         // 这里只留**一行**（用户抱怨过红条把图挤掉）：长解释进 title/aria-label，
         // 红色只表示"故障"，结构性限制走下面的不红那一支。
-        const long = '行情详情只有东财一个上游：东财熔断/限流时它就拿不到。宿主已按熔断冷却快速失败并给了 retry-after，' +
+        const long = '行情详情只有东财一个上游：东财熔断/限流时未取到。宿主已按熔断冷却快速失败并给了 retry-after，' +
           '稍等会自动重试；频繁点「重试」只会让本机 IP 的限流更严重。'
         // 用户第 1 条：长条 + 按钮压成右上角一个小圆形 icon（悬停给详情、点击=重试、键盘可达）
         return React.createElement('div', { className: 'tw-hint tw-hint-icon' },
@@ -297,8 +297,8 @@ export function QuoteDrawer(props: {
               style: { maxWidth: 520, textAlign: 'center', color: m.why === 'no-source' ? 'var(--tw-muted)' : undefined },
               tabIndex: 0,
               role: 'note',
-              'aria-label': `${m.what}不可用（${m.why === 'no-source' ? '结构性缺失' : '上游暂时不可用'}）：${m.note}`,
-            }, `${m.what}不可用（${m.why === 'no-source' ? '结构性缺失，重试无用' : '上游暂时不可用，等它恢复'}）：${m.note}`)
+              'aria-label': `${m.what}不可用（${m.why === 'no-source' ? '上游无此数据' : '未取到'}）：${m.note}`,
+            }, `${m.what}不可用（${m.why === 'no-source' ? '上游无此数据，重试无用' : '未取到，等它恢复'}）：${m.note}`)
           : null,
         React.createElement('span', { className: 'tw-muted' }, payload.missing[0]?.note ?? ''),
         React.createElement(NoteIcon, {

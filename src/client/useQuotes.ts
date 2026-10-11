@@ -94,7 +94,7 @@ export function useQuoteEngine(secids: string[], intervalMs: number, enabled: bo
         })
         setTs(r.ts)
         // 真实数据时刻与新鲜度：上游全挂时 asOf 会停在最后一次成功观测，
-        // stale=true 让顶栏显示"滞后"而不是"刚刚更新"（此前用的是响应时刻）
+        // stale=true 让行情条显示"滞后"而不是"刚刚更新"（此前用的是响应时刻）
         setAsOf(r.asOf ?? null)
         setStale(r.stale === true)
         setStaleCount(r.staleCount ?? 0)

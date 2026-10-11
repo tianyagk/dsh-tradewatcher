@@ -51,7 +51,7 @@ interface CalFile {
 export interface CalSyncSourceResult {
   key: 'ipo' | 'earnings' | 'dividend' | 'macro'
   label: string
-  /** ok=本次成功；failed=本次失败；skipped=本次未尝试（如没有关注标的时的财报/分红源） */
+  /** ok=本次成功；failed=本次失败；skipped=本次未尝试（如没有自选 + 持仓标的时的财报/分红源） */
   state: 'ok' | 'failed' | 'skipped'
   /** 本次该源写入的自动事件数（ok 时有效） */
   count: number
@@ -475,7 +475,7 @@ export class CalendarStore {
     return this.file.events
   }
 
-  /** 自动同步（TTL 内直接返回；并发去重）。symbols = 关注标的的 6 位代码 */
+  /** 自动同步（TTL 内直接返回；并发去重）。symbols = 自选 + 持仓标的的 6 位代码 */
   async sync(symbols: string[], force = false, fetchers: CalSyncFetchers = DEFAULT_FETCHERS): Promise<void> {
     await this.init()
     // 成功过且还在 TTL 内 → 直接用本地；失败过则按冷却窗口重试，避免上游全挂时
@@ -532,7 +532,7 @@ export class CalendarStore {
           }
         }
       })
-      // 2) 关注标的的财报预约披露 + 3) 分红除权（没有关注标的时**未尝试**，不算失败）
+      // 2) 自选 + 持仓标的的财报预约披露 + 3) 分红除权（没有自选 + 持仓标的时**未尝试**，不算失败）
       if (symbols.length === 0) {
         results.push({ key: 'earnings', label: '财报预约披露', state: 'skipped', count: 0 })
         results.push({ key: 'dividend', label: '分红除权除息', state: 'skipped', count: 0 })

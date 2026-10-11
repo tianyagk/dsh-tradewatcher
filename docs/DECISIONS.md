@@ -1,12 +1,22 @@
+# 历史记录，不适用 STE 规范。
+
 # 决策与历史过程（自源码注释迁入）
 
-## 决策：测试文件按批次命名保留，不做归并（S10 关闭，2026-10-09，v0.38.2）
+# 历史记录，不适用 STE 规范。
+
+## 历史记录，不适用 STE 规范。
+
+# 决策：测试文件按批次命名保留，不做归并（S10 关闭，2026-10-09，v0.38.2）
 
 `S10` 从 v0.34 起挂了两轮（"把同模块的测试合并成一个文件"）。**本轮明确关闭**：
 `src/**/*.test.ts` 按**批次**命名（`p0/p1b/ajax/...`）能让"这条断言是哪一轮加的、为什么加"一眼可查，
 合并只会把它们变成一个大文件、丢掉批次这一层信息，收益仅是文件数少几个。**不做**，后续审计不要再挂。
 
-## 待议：非故障语义的红色应新增 `--tw-danger`（记录，本批不改）
+# 历史记录，不适用 STE 规范。
+
+## 历史记录，不适用 STE 规范。
+
+# 待议：非故障语义的红色应新增 `--tw-danger`（记录，本批不改）
 
 界面上的红色目前有**两种语义**共用同一个 `var(--tw-up)`：
 - **故障**（接口挂了、写失败）—— 14 处，红是正确的；
@@ -19,7 +29,11 @@
 留待下次做主题/配色统一时一并处理。
 
 
-## 决策：不冗余解释、不啰嗦（2026-10-09，v0.37.0）
+# 历史记录，不适用 STE 规范。
+
+## 历史记录，不适用 STE 规范。
+
+# 决策：不冗余解释、不啰嗦（2026-10-09，v0.37.0）
 
 **规则出处**：`docs/archive/AUDIT-COPY2.md` 的用词表 + v0.34–v0.37 的执行经验；可执行清单写在 `README.md` 的「开发原则」一节。
 
@@ -38,7 +52,11 @@
 > 这里保留原文以便追溯，写作用域为只读参考。
 
 
-## src/client/CloudMap.tsx
+# 历史记录，不适用 STE 规范。
+
+## 历史记录，不适用 STE 规范。
+
+# src/client/CloudMap.tsx
 
 ```
 /**
@@ -57,7 +75,11 @@
 ```
 
 
-## src/client/IndustryHeatmap.tsx
+# 历史记录，不适用 STE 规范。
+
+## 历史记录，不适用 STE 规范。
+
+# src/client/IndustryHeatmap.tsx
 
 ```
 /**
@@ -75,7 +97,11 @@
 ```
 
 
-## src/client/RescuePanel.tsx
+# 历史记录，不适用 STE 规范。
+
+## 历史记录，不适用 STE 规范。
+
+# src/client/RescuePanel.tsx
 
 ```
 /**
@@ -90,7 +116,11 @@
 ```
 
 
-## src/client/SortBar.tsx
+# 历史记录，不适用 STE 规范。
+
+## 历史记录，不适用 STE 规范。
+
+# src/client/SortBar.tsx
 
 ```
 /**
@@ -114,7 +144,11 @@
 ```
 
 
-## src/client/SortHeader.tsx
+# 历史记录，不适用 STE 规范。
+
+## 历史记录，不适用 STE 规范。
+
+# src/client/SortHeader.tsx
 
 ```
 /**
@@ -133,7 +167,11 @@
 ```
 
 
-## src/client/alertRules.test.ts
+# 历史记录，不适用 STE 规范。
+
+## 历史记录，不适用 STE 规范。
+
+# src/client/alertRules.test.ts
 
 ```
  * 提醒策略（静默窗口）的断言。
@@ -144,7 +182,11 @@
 ```
 
 
-## src/client/alertRules.ts
+# 历史记录，不适用 STE 规范。
+
+## 历史记录，不适用 STE 规范。
+
+# src/client/alertRules.ts
 
 ```
  * 自选异动的**纯策略层**（P1-4）：静默窗口判定。
@@ -158,7 +200,11 @@
 ```
 
 
-## src/client/alerts.ts
+# 历史记录，不适用 STE 规范。
+
+## 历史记录，不适用 STE 规范。
+
+# src/client/alerts.ts
 
 ```
 /**
@@ -171,7 +217,11 @@
 ```
 
 
-## src/client/breadthView.test.ts
+# 历史记录，不适用 STE 规范。
+
+## 历史记录，不适用 STE 规范。
+
+# src/client/breadthView.test.ts
 
 ```
  * 大盘宽度显示口径的断言（`node --test` 直跑，不打网络）。
@@ -182,7 +232,11 @@
 ```
 
 
-## src/client/breadthView.ts
+# 历史记录，不适用 STE 规范。
+
+## 历史记录，不适用 STE 规范。
+
+# src/client/breadthView.ts
 
 ```
  * 大盘宽度（涨跌家数）的显示口径（纯函数，无 react，可被 `node --test` 直接跑）。
@@ -198,7 +252,11 @@
 ```
 
 
-## src/client/chartCache.test.ts
+# 历史记录，不适用 STE 规范。
+
+## 历史记录，不适用 STE 规范。
+
+# src/client/chartCache.test.ts
 
 ```
 /**
@@ -213,7 +271,11 @@
 ```
 
 
-## src/client/chartCache.ts
+# 历史记录，不适用 STE 规范。
+
+## 历史记录，不适用 STE 规范。
+
+# src/client/chartCache.ts
 
 ```
 /**
@@ -236,7 +298,11 @@
 ```
 
 
-## src/client/chartNote.test.ts
+# 历史记录，不适用 STE 规范。
+
+## 历史记录，不适用 STE 规范。
+
+# src/client/chartNote.test.ts
 
 ```
  * 图表脚注用词的断言（`docs/archive/AUDIT-COPY2.md` 的 E1 + 。
@@ -247,7 +313,11 @@
 ```
 
 
-## src/client/chartNote.ts
+# 历史记录，不适用 STE 规范。
+
+## 历史记录，不适用 STE 规范。
+
+# src/client/chartNote.ts
 
 ```
  * 图表脚注里的"这份数据是什么"说明（纯函数，零 import）。
@@ -260,7 +330,11 @@
 ```
 
 
-## src/client/index.tsx
+# 历史记录，不适用 STE 规范。
+
+## 历史记录，不适用 STE 规范。
+
+# src/client/index.tsx
 
 ```
 /**
@@ -276,7 +350,11 @@
 ```
 
 
-## src/client/marketTime.test.ts
+# 历史记录，不适用 STE 规范。
+
+## 历史记录，不适用 STE 规范。
+
+# src/client/marketTime.test.ts
 
 ```
  * 北京时间交易时段判定的断言。
@@ -288,7 +366,11 @@
 ```
 
 
-## src/client/marketTime.ts
+# 历史记录，不适用 STE 规范。
+
+## 历史记录，不适用 STE 规范。
+
+# src/client/marketTime.ts
 
 ```
 /**
@@ -304,7 +386,11 @@
 ```
 
 
-## src/client/mini.ts
+# 历史记录，不适用 STE 规范。
+
+## 历史记录，不适用 STE 规范。
+
+# src/client/mini.ts
 
 ```
 /**
@@ -320,7 +406,11 @@
 ```
 
 
-## src/client/portfolioMeta.test.ts
+# 历史记录，不适用 STE 规范。
+
+## 历史记录，不适用 STE 规范。
+
+# src/client/portfolioMeta.test.ts
 
 ```
  * 「空值不占位」的断言（审计清单 M1 / M2 / M4）。
@@ -331,7 +421,11 @@
 ```
 
 
-## src/client/portfolioMeta.ts
+# 历史记录，不适用 STE 规范。
+
+## 历史记录，不适用 STE 规范。
+
+# src/client/portfolioMeta.ts
 
 ```
 /**
@@ -349,7 +443,11 @@
 ```
 
 
-## src/client/quoteState.test.ts
+# 历史记录，不适用 STE 规范。
+
+## 历史记录，不适用 STE 规范。
+
+# src/client/quoteState.test.ts
 
 ```
  * 行情卡片四态（P0-2）与金额遮罩（P0-8）的断言。
@@ -363,7 +461,11 @@
 ```
 
 
-## src/client/quoteState.ts
+# 历史记录，不适用 STE 规范。
+
+## 历史记录，不适用 STE 规范。
+
+# src/client/quoteState.ts
 
 ```
  * 行情卡片四态判定（P0-2）。
@@ -383,7 +485,11 @@
 ```
 
 
-## src/client/sort.ts
+# 历史记录，不适用 STE 规范。
+
+## 历史记录，不适用 STE 规范。
+
+# src/client/sort.ts
 
 ```
 /**
@@ -399,7 +505,11 @@
 ```
 
 
-## src/client/styles.test.ts
+# 历史记录，不适用 STE 规范。
+
+## 历史记录，不适用 STE 规范。
+
+# src/client/styles.test.ts
 
 ```
  * 断点一致性的可执行断言。
@@ -414,7 +524,11 @@
 ```
 
 
-## src/client/styles.ts
+# 历史记录，不适用 STE 规范。
+
+## 历史记录，不适用 STE 规范。
+
+# src/client/styles.ts
 
 ```
 /**
@@ -422,14 +536,20 @@
  * from the dsh-design-skills pack, implemented symmetrically for light/dark:
  *   near-black canvas + surface-layered panels + hairline dividers (dark);
  *   near-white canvas + white cards + hairline dividers (light); one accent
- *   (#5e6ad2); semantic up/down colors only as 8–12% translucent chips;
+ *   (# 历史记录，不适用 STE 规范。
+
+#5e6ad2); semantic up/down colors only as 8–12% translucent chips;
  *   tabular/mono numerals for every figure; compact info-dense density.
  * Injected once as a <style> element; every class is scoped under `.tw-*`.
  */
 ```
 
 
-## src/client/treemap.test.ts
+# 历史记录，不适用 STE 规范。
+
+## 历史记录，不适用 STE 规范。
+
+# src/client/treemap.test.ts
 
 ```
  * treemap 布局的断言（P2-5）。
@@ -440,7 +560,11 @@
 ```
 
 
-## src/client/treemap.ts
+# 历史记录，不适用 STE 规范。
+
+## 历史记录，不适用 STE 规范。
+
+# src/client/treemap.ts
 
 ```
  * squarified treemap 布局（纯函数，P2-5）。
@@ -454,7 +578,11 @@
 ```
 
 
-## src/client/trendView.test.ts
+# 历史记录，不适用 STE 规范。
+
+## 历史记录，不适用 STE 规范。
+
+# src/client/trendView.test.ts
 
 ```
 /**
@@ -467,7 +595,11 @@
 ```
 
 
-## src/client/trendView.ts
+# 历史记录，不适用 STE 规范。
+
+## 历史记录，不适用 STE 规范。
+
+# src/client/trendView.ts
 
 ```
  * 分时/五日的坐标域与"这条序列到底有没有均价/成交量"的**纯函数**（不 import react）。
@@ -482,7 +614,11 @@
 ```
 
 
-## src/client/useYtd.ts
+# 历史记录，不适用 STE 规范。
+
+## 历史记录，不适用 STE 规范。
+
+# src/client/useYtd.ts
 
 ```
  * 年初至今（YTD）取数（客户端侧）。
@@ -496,7 +632,11 @@
 ```
 
 
-## src/client/wide.test.ts
+# 历史记录，不适用 STE 规范。
+
+## 历史记录，不适用 STE 规范。
+
+# src/client/wide.test.ts
 
 ```
  * 宽窄判定的断言。
@@ -507,7 +647,11 @@
 ```
 
 
-## src/client/wide.ts
+# 历史记录，不适用 STE 规范。
+
+## 历史记录，不适用 STE 规范。
+
+# src/client/wide.ts
 
 ```
  * 宽窄布局的判定（纯函数，无 React 依赖）。
@@ -525,7 +669,11 @@
 ```
 
 
-## src/client/ytdView.test.ts
+# 历史记录，不适用 STE 规范。
+
+## 历史记录，不适用 STE 规范。
+
+# src/client/ytdView.test.ts
 
 ```
  * 客户端 YTD 展示断言（纯函数，可被 node --test 直接跑）。
@@ -537,7 +685,11 @@
 ```
 
 
-## src/client/ytdView.ts
+# 历史记录，不适用 STE 规范。
+
+## 历史记录，不适用 STE 规范。
+
+# src/client/ytdView.ts
 
 ```
  * 客户端侧 YTD 展示逻辑（纯函数，无 React 依赖，便于直接测）。
@@ -551,7 +703,11 @@
 ```
 
 
-## src/host/anomaly.ts
+# 历史记录，不适用 STE 规范。
+
+## 历史记录，不适用 STE 规范。
+
+# src/host/anomaly.ts
 
 ```
 /**
@@ -574,7 +730,11 @@
 ```
 
 
-## src/host/backup.ts
+# 历史记录，不适用 STE 规范。
+
+## 历史记录，不适用 STE 规范。
+
+# src/host/backup.ts
 
 ```
  * 多设备导出 / 导入（P0-9）。
@@ -591,7 +751,11 @@
 ```
 
 
-## src/host/bottom.ts
+# 历史记录，不适用 STE 规范。
+
+## 历史记录，不适用 STE 规范。
+
+# src/host/bottom.ts
 
 ```
  * 底部位置 / 日内形态 / 底部概率。
@@ -607,7 +771,11 @@
 ```
 
 
-## src/host/breadth.ts
+# 历史记录，不适用 STE 规范。
+
+## 历史记录，不适用 STE 规范。
+
+# src/host/breadth.ts
 
 ```
  * 涨跌家数每日快照与历史分位（P1-8）。
@@ -626,7 +794,11 @@
 ```
 
 
-## src/host/breadthCount.test.ts
+# 历史记录，不适用 STE 规范。
+
+## 历史记录，不适用 STE 规范。
+
+# src/host/breadthCount.test.ts
 
 ```
  * 涨跌家数自统计链路的断言（源 B / 源 C）。
@@ -644,7 +816,11 @@
 ```
 
 
-## src/host/breadthCount.ts
+# 历史记录，不适用 STE 规范。
+
+## 历史记录，不适用 STE 规范。
+
+# src/host/breadthCount.ts
 
 ```
  * 涨跌家数的**自统计**链路（源 B / 源 C）。
@@ -662,7 +838,11 @@
 ```
 
 
-## src/host/breadthCount.ts
+# 历史记录，不适用 STE 规范。
+
+## 历史记录，不适用 STE 规范。
+
+# src/host/breadthCount.ts
 
 ```
 /**
@@ -679,7 +859,11 @@
 ```
 
 
-## src/host/breaker.ts
+# 历史记录，不适用 STE 规范。
+
+## 历史记录，不适用 STE 规范。
+
+# src/host/breaker.ts
 
 ```
  * 上游熔断器（进程级、按主机组共享）。
@@ -698,7 +882,11 @@
 ```
 
 
-## src/host/calendar.test.ts
+# 历史记录，不适用 STE 规范。
+
+## 历史记录，不适用 STE 规范。
+
+# src/host/calendar.test.ts
 
 ```
  * 日历同步状态的断言（P0-2）。
@@ -711,7 +899,11 @@
 ```
 
 
-## src/host/calendar.ts
+# 历史记录，不适用 STE 规范。
+
+## 历史记录，不适用 STE 规范。
+
+# src/host/calendar.ts
 
 ```
 /**
@@ -726,7 +918,11 @@
 ```
 
 
-## src/host/chart-source.test.ts
+# 历史记录，不适用 STE 规范。
+
+## 历史记录，不适用 STE 规范。
+
+# src/host/chart-source.test.ts
 
 ```
 /**
@@ -742,7 +938,11 @@
 ```
 
 
-## src/host/context.ts
+# 历史记录，不适用 STE 规范。
+
+## 历史记录，不适用 STE 规范。
+
+# src/host/context.ts
 
 ```
 /**
@@ -756,7 +956,11 @@
 ```
 
 
-## src/host/em.ts
+# 历史记录，不适用 STE 规范。
+
+## 历史记录，不适用 STE 规范。
+
+# src/host/em.ts
 
 ```
 /**
@@ -775,7 +979,11 @@
 ```
 
 
-## src/host/em.ts
+# 历史记录，不适用 STE 规范。
+
+## 历史记录，不适用 STE 规范。
+
+# src/host/em.ts
 
 ```
 
@@ -797,7 +1005,11 @@
 ```
 
 
-## src/host/em.ts
+# 历史记录，不适用 STE 规范。
+
+## 历史记录，不适用 STE 规范。
+
+# src/host/em.ts
 
 ```
 
@@ -816,7 +1028,11 @@
 ```
 
 
-## src/host/em.ts
+# 历史记录，不适用 STE 规范。
+
+## 历史记录，不适用 STE 规范。
+
+# src/host/em.ts
 
 ```
 /**
@@ -839,7 +1055,11 @@
 ```
 
 
-## src/host/fence.ts
+# 历史记录，不适用 STE 规范。
+
+## 历史记录，不适用 STE 规范。
+
+# src/host/fence.ts
 
 ```
 /**
@@ -852,7 +1072,11 @@
 ```
 
 
-## src/host/http.ts
+# 历史记录，不适用 STE 规范。
+
+## 历史记录，不适用 STE 规范。
+
+# src/host/http.ts
 
 ```
 /**
@@ -873,7 +1097,11 @@
 ```
 
 
-## src/host/ledger-skip.test.ts
+# 历史记录，不适用 STE 规范。
+
+## 历史记录，不适用 STE 规范。
+
+# src/host/ledger-skip.test.ts
 
 ```
  * 账本重放"跳过条目"必须可读（P1-5）的断言。
@@ -884,7 +1112,11 @@
 ```
 
 
-## src/host/p0.test.ts
+# 历史记录，不适用 STE 规范。
+
+## 历史记录，不适用 STE 规范。
+
+# src/host/p0.test.ts
 
 ```
  * P0 批次（口径与状态外化）的宿主侧断言。
@@ -898,7 +1130,11 @@
 ```
 
 
-## src/host/p1b.test.ts
+# 历史记录，不适用 STE 规范。
+
+## 历史记录，不适用 STE 规范。
+
+# src/host/p1b.test.ts
 
 ```
  * / 的断言。
@@ -910,7 +1146,11 @@
 ```
 
 
-## src/host/portfolio-cost.test.ts
+# 历史记录，不适用 STE 规范。
+
+## 历史记录，不适用 STE 规范。
+
+# src/host/portfolio-cost.test.ts
 
 ```
 /**
@@ -924,7 +1164,11 @@
 ```
 
 
-## src/host/portfolio.ts
+# 历史记录，不适用 STE 规范。
+
+## 历史记录，不适用 STE 规范。
+
+# src/host/portfolio.ts
 
 ```
    * 成本"未录入"≠"成本为 0"（P1-10 / D1 修正）。
@@ -944,7 +1188,11 @@
 ```
 
 
-## src/host/rescue-thresholds.ts
+# 历史记录，不适用 STE 规范。
+
+## 历史记录，不适用 STE 规范。
+
+# src/host/rescue-thresholds.ts
 
 ```
 /**
@@ -957,7 +1205,11 @@
 ```
 
 
-## src/host/rescue.ts
+# 历史记录，不适用 STE 规范。
+
+## 历史记录，不适用 STE 规范。
+
+# src/host/rescue.ts
 
 ```
 /**
@@ -981,7 +1233,11 @@
 ```
 
 
-## src/host/rescue.ts
+# 历史记录，不适用 STE 规范。
+
+## 历史记录，不适用 STE 规范。
+
+# src/host/rescue.ts
 
 ```
 /**
@@ -999,7 +1255,11 @@
 ```
 
 
-## src/host/routes.test.ts
+# 历史记录，不适用 STE 规范。
+
+## 历史记录，不适用 STE 规范。
+
+# src/host/routes.test.ts
 
 ```
  * 路由层测试（node:test，零新增依赖，不依赖网络可用性）。
@@ -1016,7 +1276,11 @@
 ```
 
 
-## src/host/routes.ts
+# 历史记录，不适用 STE 规范。
+
+## 历史记录，不适用 STE 规范。
+
+# src/host/routes.ts
 
 ```
 /**
@@ -1032,7 +1296,11 @@
 ```
 
 
-## src/host/sina.ts
+# 历史记录，不适用 STE 规范。
+
+## 历史记录，不适用 STE 规范。
+
+# src/host/sina.ts
 
 ```
 /**
@@ -1045,7 +1313,11 @@
 ```
 
 
-## src/host/singleflight.ts
+# 历史记录，不适用 STE 规范。
+
+## 历史记录，不适用 STE 规范。
+
+# src/host/singleflight.ts
 
 ```
 /**
@@ -1064,7 +1336,11 @@
 ```
 
 
-## src/host/store.ts
+# 历史记录，不适用 STE 规范。
+
+## 历史记录，不适用 STE 规范。
+
+# src/host/store.ts
 
 ```
 /**
@@ -1078,7 +1354,11 @@
 ```
 
 
-## src/host/tencent.ts
+# 历史记录，不适用 STE 规范。
+
+## 历史记录，不适用 STE 规范。
+
+# src/host/tencent.ts
 
 ```
 /**
@@ -1097,7 +1377,11 @@
 ```
 
 
-## src/host/time.test.ts
+# 历史记录，不适用 STE 规范。
+
+## 历史记录，不适用 STE 规范。
+
+# src/host/time.test.ts
 
 ```
  * 时区回归测试（P0）。
@@ -1111,7 +1395,11 @@
 ```
 
 
-## src/host/time.ts
+# 历史记录，不适用 STE 规范。
+
+## 历史记录，不适用 STE 规范。
+
+# src/host/time.ts
 
 ```
  * 统一时区工具（**唯一口径：Asia/Shanghai**）。
@@ -1131,7 +1419,11 @@
 ```
 
 
-## src/host/tools.ts
+# 历史记录，不适用 STE 规范。
+
+## 历史记录，不适用 STE 规范。
+
+# src/host/tools.ts
 
 ```
 /**
@@ -1147,7 +1439,11 @@
 ```
 
 
-## src/host/trade-rules.test.ts
+# 历史记录，不适用 STE 规范。
+
+## 历史记录，不适用 STE 规范。
+
+# src/host/trade-rules.test.ts
 
 ```
 /**
@@ -1163,7 +1459,11 @@
 ```
 
 
-## src/host/trend-fallback.test.ts
+# 历史记录，不适用 STE 规范。
+
+## 历史记录，不适用 STE 规范。
+
+# src/host/trend-fallback.test.ts
 
 ```
  * 分时兜底顺序的断言（P0）：`上游 → 活的备用源（腾讯分钟线）→ 本地 LKG`。
@@ -1179,7 +1479,11 @@
 ```
 
 
-## src/host/trendArchive.test.ts
+# 历史记录，不适用 STE 规范。
+
+## 历史记录，不适用 STE 规范。
+
+# src/host/trendArchive.test.ts
 
 ```
  * 每日分时归档的断言：幂等覆盖 / 滚动清理 / 体积保护 / 坏文件 / 缺目录。
@@ -1191,7 +1495,11 @@
 ```
 
 
-## src/host/trendArchive.ts
+# 历史记录，不适用 STE 规范。
+
+## 历史记录，不适用 STE 规范。
+
+# src/host/trendArchive.ts
 
 ```
  * 每日分时的本地归档 —— 多日拼接的数据来源。
@@ -1210,7 +1518,11 @@
 ```
 
 
-## src/host/writeLog.ts
+# 历史记录，不适用 STE 规范。
+
+## 历史记录，不适用 STE 规范。
+
+# src/host/writeLog.ts
 
 ```
  * 写操作日志与节流（P0-11）。
@@ -1228,7 +1540,11 @@
 ```
 
 
-## src/host/ytd.test.ts
+# 历史记录，不适用 STE 规范。
+
+## 历史记录，不适用 STE 规范。
+
+# src/host/ytd.test.ts
 
 ```
 /**
@@ -1241,7 +1557,11 @@
 ```
 
 
-## src/host/ytd.ts
+# 历史记录，不适用 STE 规范。
+
+## 历史记录，不适用 STE 规范。
+
+# src/host/ytd.ts
 
 ```
  * 年初至今（YTD）。
@@ -1266,7 +1586,11 @@
 ```
 
 
-## src/index.ts
+# 历史记录，不适用 STE 规范。
+
+## 历史记录，不适用 STE 规范。
+
+# src/index.ts
 
 ```
 /**
@@ -1282,7 +1606,11 @@
 ```
 
 
-## src/shared/model.ts
+# 历史记录，不适用 STE 规范。
+
+## 历史记录，不适用 STE 规范。
+
+# src/shared/model.ts
 
 ```
 /**
@@ -1302,7 +1630,11 @@
 ```
 
 
-## src/shared/stats.test.ts
+# 历史记录，不适用 STE 规范。
+
+## 历史记录，不适用 STE 规范。
+
+# src/shared/stats.test.ts
 
 ```
  * 比例区间（Wilson）的断言。
@@ -1313,7 +1645,11 @@
 ```
 
 
-## src/shared/stats.ts
+# 历史记录，不适用 STE 规范。
+
+## 历史记录，不适用 STE 规范。
+
+# src/shared/stats.ts
 
 ```
  * 比例的区间估计（Wilson score interval）。
@@ -1329,7 +1665,11 @@
 ```
 
 
-## src/shared/trendStitch.ts
+# 历史记录，不适用 STE 规范。
+
+## 历史记录，不适用 STE 规范。
+
+# src/shared/trendStitch.ts
 
 ```
  * 多日分时的**本地拼接**（不 import react，纯函数）。
@@ -1344,7 +1684,11 @@
  *  3) 不许凭空补齐 —— 拼接结果只含实际归档到的点，覆盖报告与点是同一批数据算出来的。
 ```
 
-## 缺失四态里 `invalid-code` / `pending` 的启用条件（v0.41.0 记）
+# 历史记录，不适用 STE 规范。
+
+## 历史记录，不适用 STE 规范。
+
+# 缺失四态里 `invalid-code` / `pending` 的启用条件（v0.41.0 记）
 
 四态词表（`invalid-code` 代码不存在 / `no-source` 上游无此数据 / `transient` 本次失败 / `pending` 后台更新中）已落地，但**只有 `no-source` 与 `transient` 有产出点**。另两态**故意不接线**：
 

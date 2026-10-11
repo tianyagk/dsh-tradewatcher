@@ -170,7 +170,7 @@ export function createChartCache(load: Loader = fetchChartPayload): ChartCache {
   }
 }
 
-/** 全站共用一份：顶栏悬浮卡与抽屉命中同一批缓存条目 */
+/** 全站共用一份：行情条悬浮卡与抽屉命中同一批缓存条目 */
 export const chartCache = createChartCache()
 
 /** 上次查看的周期（模块级记忆：换一只标的或关掉再打开时保持同一周期） */

@@ -114,7 +114,7 @@ export function BulkPaste(props: BulkPasteProps): React.ReactElement {
   return React.createElement('div', { className: 'tw-bulk', ref, role: 'dialog', 'aria-modal': 'true', 'aria-label': '批量录入', onKeyDown },
     React.createElement('div', { className: 'tw-bulk-h' },
       React.createElement('span', { className: 'tw-bulk-title' }, '批量录入'),
-      React.createElement('span', { className: 'tw-bulk-stage' }, stage === 'input' ? '① 粘贴' : stage === 'preview' ? '② 预览' : '③ 完成'),
+      React.createElement('span', { className: 'tw-bulk-stage' }, stage === 'input' ? '① 粘贴' : stage === 'preview' ? '② 预览' : '③ 已完成'),
       React.createElement('button', { className: 'tw-iconbtn', onClick: props.onClose, 'aria-label': '关闭', title: '关闭（Esc）' }, '×'),
     ),
     error !== null ? ErrorNote({ error }) : null,

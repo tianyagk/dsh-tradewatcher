@@ -633,7 +633,7 @@ function BackupModal(props: { onClose: () => void; notify?: (text: string) => vo
     React.createElement(ErrorNote, { error: err }),
     React.createElement('div', { className: 'tw-hint' },
       '导出把 watch/positions/ledger/prefs 打包成一份 JSON（含 schemaVersion 与校验和），用于换机或备份。' +
-      '导入前会先校验并给出差异预览，确认后才覆盖；覆盖前本机原文件会写成 .bak。' +
+      '导入前先校验；覆盖前写成 .bak' +
       '账本重放不一致（引用缺失、负持仓、条目无法解析）一律拒绝导入 —— 宁可不导入，也不导入一份算不平的账。',
     ),
     React.createElement('div', { style: { display: 'flex', gap: 8, alignItems: 'center', marginTop: 8 } },
@@ -1110,7 +1110,7 @@ function PosRow(props: {
           `${fmtQty(row.availableQty)}${row.availableQty < row.qty ? ` / ${fmtQty(row.qty)}` : ''}`),
         availableLockNote(row.qty, row.availableQty),
         row.t0
-          ? 'T+0：当日买入当日可卖（ETF/LOF、港股、美股等）'
+          ? 'T+0：当日买入当日可卖（ETF/LOF、港股、美股）'
           : 'T+1：今日买入的部分当日不可卖，所以"可用（可卖）"可能少于持仓'),
  // + M4：费用列。未录费用（fees=0）时整条说明不出（值列已有 0.00）；
       // 有费用时压成 `占成交额 X%`（"累计"与成交额列重复，R1）

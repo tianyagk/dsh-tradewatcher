@@ -35,7 +35,7 @@ export function ytdTooltip(
   parts.push(`现价 ${row.price === null ? '—' : row.price.toFixed(3)}`)
   parts.push(row.fqSupported
     ? `复权口径：${FQ_LABEL[row.fq]}（复权口径由宿主回包决定，不是界面请求值）`
-    : '该标的不适用复权（指数是点位、期货是合约价，没有除权除息），按原始价格计算')
+    : '该标的不适用复权，按原始价格计算')
   return `${head}\n${parts.join('\n')}`
 }
 

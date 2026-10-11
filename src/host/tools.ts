@@ -65,7 +65,7 @@ function provenanceLine(p: DataProvenance | undefined): string {
   // 滞后告警（P1-9）：有才带；没超阈值时这一整段不出现（不许恒输出）
   const alert = p.lagAlert === undefined ? [] : [p.lagAlert]
   const parts: string[] = []
-  parts.push(p.asOf === null ? '数据时刻：未取得' : `数据时刻 ${new Date(p.asOf).toLocaleString('zh-CN', { hour12: false })}`)
+  parts.push(p.asOf === null ? '数据时刻：未取到' : `数据时刻 ${new Date(p.asOf).toLocaleString('zh-CN', { hour12: false })}`)
   parts.push(`来源 ${p.source}`)
   if (p.sources !== undefined && Object.keys(p.sources).length > 0) {
     parts.push(Object.entries(p.sources).map(([k, n]) => `${k}×${n}`).join('+'))
@@ -76,7 +76,7 @@ function provenanceLine(p: DataProvenance | undefined): string {
     // 缺失必须能回答"上游没有"还是"这次失败" —— 二者的下一步动作不同
     const noSrc = p.missing.filter((m) => m.why === 'no-source').length
     const trans = p.missing.filter((m) => m.why === 'transient').length
-    parts.push(`缺失 ${p.missing.length}（无此数据源 ${noSrc} / 本次失败 ${trans}）`)
+    parts.push(`缺失 ${p.missing.length}（${MISSING_TIER_LABEL['no-source']} ${noSrc} / ${MISSING_TIER_LABEL.transient} ${trans}）`)
   }
   // 滞后告警有才带（没超阈值时这一整段不出现 —— 不许恒输出）
   return [`【数据出处】${parts.join(' · ')}`, ...alert].join('\n')
@@ -143,7 +143,7 @@ function renderQuotes(items: Record<string, QuoteRow>): string {
       q.prev === null ? '' : `昨收 ${fmtNum(q.prev)}`
     }${q.amount === null ? '' : `  成交额 ${fmtMoney(q.amount)}`}`
   })
-  return lines.length === 0 ? '未取到行情数据（接口繁忙请稍后重试）。' : lines.join('\n')
+  return lines.length === 0 ? '未取到行情数据（上游本次失败，稍后自动重试）。' : lines.join('\n')
 }
 
 // ── tools ─────────────────────────────────────────────────────────────────
@@ -180,7 +180,7 @@ export function makeAgentTools(
     name: `${PREFIX}portfolio`,
     description:
       '读取 tradewatcher 持仓总览：按分组输出总市值、浮动盈亏、当日盈亏与累计已实现盈亏，附每只持仓的' +
-      '数量/摊薄成本/现价/市值/浮盈/当日盈亏明细与实时行情时间戳。数据由逐笔买卖流水自动核算（移动加权成本、费用计入），' +
+      '数量/摊薄成本/现价/市值/浮盈/当日盈亏明细与数据时刻。数据由逐笔买卖流水自动核算（移动加权成本、费用计入），' +
       '纯只读。Triggers: 查看持仓/我的仓位/持仓盈亏/市值, 分析持仓, 投资组合分析.',
     parameters: {
       type: 'object',
@@ -242,7 +242,7 @@ export function makeAgentTools(
         const head =
           `【持仓总览】${pnlLine('总市值', g.totalMv)} | ${pnlLine('持仓盈亏(摊薄口径)', g.dilutedPnl ?? g.floatPnl)} | ` +
           `${pnlLine('浮动盈亏(均价口径)', g.floatPnl)} | ${pnlLine('当日盈亏', g.dayPnl)} | ${pnlLine('累计已实现', g.realized)}` +
-          (v.stale && v.stale > 0 ? `（${v.stale} 只持仓行情暂缺）` : '') +
+          (v.stale && v.stale > 0 ? `（${v.stale} 只持仓行情未取到）` : '') +
           (costUnknown.length > 0
             ? `（${costUnknown.length} 只未录入成本，盈亏与已实现为 — 且未计入上述合计：${costUnknown.map((p) => p.name).join('、')}）`
             : '') +
@@ -269,7 +269,7 @@ export function makeAgentTools(
         const unpricedLines = np.length > 0
           ? [
               `未计入总额 ${np.length} 项（fxMode=${v.fxMode ?? 'none'}）：`,
-              ...np.map((u) => `  · ${u.name}（${u.secid}）${u.why === 'no-fx' ? '非人民币计价且未折算' : '无可用行情源'}：${u.note}`),
+              ...np.map((u) => `  · ${u.name}（${u.secid}）${u.why === 'no-fx' ? '非人民币计价且未折算' : '未取到行情源'}：${u.note}`),
             ]
           : []
         const skippedLines = skippedTotal > 0
@@ -616,7 +616,7 @@ export function makeAgentTools(
             provenance: {
               asOf: Date.now(), stale: true, source: 'none', missing: [{
                 what: `搜索「${query}」`, why: 'transient' as const,
-                note: '东财搜索接口本次未取到任何候选（可能被限流）。请稍后重试；若持续为空，再用 tradewatcher_quotes 直接试代码',
+                note: '东财搜索接口本次未取到任何候选。请稍后重试；若持续为空，再用 tradewatcher_quotes 直接试代码',
               }],
             },
           }
@@ -1360,17 +1360,40 @@ export function makeAgentTools(
     },
   })
 
+  /** 工具一览里每个工具的**短说明**（键 = 去掉前缀的工具名；说明可省，清单不可省） */
+  const TOOL_BLURB: Record<string, string> = {
+    portfolio: '持仓总览与盈亏，由流水核算、费用已计入',
+    ledger: '买卖与分组流水，可按 posId/groupId 过滤',
+    watchlist: '自选分组',
+    quotes: '行情：cn/intl/commodity/all 预设或任意代码',
+    ytd: '年初至今涨跌幅：前复权序列算，指数/期货按原始价格，未取到给原因、不用 0 顶替',
+    position: '位置类指标：52 周区间位置与距高低点',
+    group_rank: '自选分组一屏排序（情绪/位置/涨跌幅）',
+    season: '按自然月/季度的季节性统计',
+    calendar: '财经日历：宏观/IPO/财报/分红，自动同步',
+    calendar_add: '写入重要日期',
+    undo: '撤销本插件做过的写入',
+    rescue: '护盘信号：宽基 ETF 放量+超大单净流入的概率性识别，含六因子与历史回看',
+  }
+
+  /**
+   * 工具一览**由 `defs` 生成**（不是手抄清单）：注册了哪些工具，注入段就列哪些 ——
+   * 这样"新增工具却忘了写进注入段"在结构上不可能发生（不变量断言见 tools 的测试）。
+   */
+  function toolLine(): string {
+    return defs
+      .map((d) => {
+        const short = d.name.startsWith(PREFIX) ? d.name.slice(PREFIX.length) : d.name
+        const blurb = TOOL_BLURB[short]
+        return blurb === undefined ? d.name : `${d.name}（${blurb}）`
+      })
+      .join('、')
+  }
+
   function guidanceText(): string {
     return (
       '本机已安装 dsh-tradewatcher（盯盘）插件：数据文件在 ' + dataHome() + '（watch.json 自选 / positions.json 持仓 / ledger.json 流水 / prefs.json 偏好），均为明文 JSON，可直接用文件工具读取分析。' +
-      '会话内优先用只读工具：tradewatcher_portfolio（持仓总览与盈亏，由流水核算、费用已计入）、' +
-      'tradewatcher_ledger（买卖与分组流水，可按 posId/groupId 过滤）、tradewatcher_watchlist（自选分组）、' +
-      'tradewatcher_quotes（行情：cn/intl/commodity/all 预设或任意代码）、' +
-      'tradewatcher_ytd（年初至今涨跌幅：前复权序列算，指数/期货按原始价格，未取到给原因、不用 0 顶替）、' +
-      'tradewatcher_search（证券搜索）、' +
-      'tradewatcher_calendar（财经日历：宏观/IPO/财报/分红，自动同步）、tradewatcher_calendar_add（写入重要日期）、' +
-      'tradewatcher_undo（撤销本插件做过的写入）、' +
-      'tradewatcher_rescue（护盘信号：宽基 ETF 放量+超大单净流入的概率性识别，含六因子与历史回看）。' +
+      '会话内优先用只读工具：' + toolLine() + '。' +
       '持仓与流水由侧边栏「盯盘」页签维护；除日历与撤销外工具只读。' +
       '每个读数都会带【数据出处】（数据时刻/来源/是否降级/缺失原因）；' +
       '缺失分「上游无此数据」与「本次失败」两类，前者重试无用、应改口径，后者稍后重试即可。' +

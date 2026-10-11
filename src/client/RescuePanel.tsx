@@ -112,7 +112,7 @@ function PulseChart(props: {
   if (props.loading) return React.createElement(Skeleton, { lines: 4, height: 20 })
   const pts = (trend?.points ?? []).filter((p) => typeof p.amount === 'number' && (p.amount ?? 0) > 0)
   if (pts.length < 5) {
-    return React.createElement('div', { className: 'tw-hint', style: { padding: '10px 4px' } }, '暂无分钟成交额数据（该标的当日分时不可用）')
+    return React.createElement('div', { className: 'tw-hint', style: { padding: '10px 4px' } }, '分钟成交额未取到')
   }
   const W = 620
   const H = 118
@@ -661,7 +661,7 @@ export function RescuePanel(props: {
                         ? React.createElement('span', {
                             className: 'tw-badge',
                             style: { color: '#e0a94a', borderColor: '#e0a94a' },
-                            title: `同类样本 N=${snapshot.bottom.lanes[0].calibration.n} < 30：此时 95% 区间宽到能同时容纳"有效"与"无效"，这个概率不足以支撑行动，仅作参考`,
+                            title: `同类样本 N=${snapshot.bottom.lanes[0].calibration.n} < 30：样本不足，仅作参考`,
                           }, '样本少')
                         : null,
                       React.createElement('span', { className: 'tw-muted' }, `样本 N=${snapshot.bottom.lanes[0].calibration.n}（基线 ${snapshot.bottom.lanes[0].calibration.baseN}${snapshot.bottom.lanes[0].calibration.baseSampleSmall === true ? ' · 偏少' : ''}）`),
@@ -697,7 +697,7 @@ export function RescuePanel(props: {
                     ),
                   ),
               React.createElement('div', { className: 'tw-hint', style: { fontSize: 10.5 } },
-                '注：「旧口径」标记的事件是升级前记录的，其评分逻辑与当前不同（例如尾盘脉冲口径、时点系数未接入），不要与今天的信号直接比较。'),
+                '注：「旧口径」标记的事件是升级前记录的，其评分逻辑与当前不同（例如尾盘脉冲口径、时点系数未接入），不得与今天的信号比较。'),
               React.createElement('div', { className: 'tw-sub-h', style: { marginTop: 8 } }, `今日 5 分钟抽样（${snapshot.intraday.length}）`),
               snapshot.intraday.length === 0
                 ? React.createElement('div', { className: 'tw-hint' }, '尚未累积当日抽样点。')
@@ -807,7 +807,7 @@ function SettingsModal(props: {
     React.createElement(Field, { label: '尾盘起始时刻（HH:mm，之后切到尾盘频率）' },
       React.createElement('input', { className: 'tw-input', value: tailFrom, onChange: (e) => setTailFrom(e.target.value), placeholder: '14:30' }),
     ),
-    React.createElement(Field, { label: '监测通道（默认核心 6 只；勾选后按指数去重计入共振）' },
+    React.createElement(Field, { label: '监测通道' },
       React.createElement('div', { className: 'tw-rescue-pool' },
         ...RESCUE_ETF_CATALOG.map((m) =>
           React.createElement('label', { key: m.secid, className: 'tw-rescue-pool-item', 'data-on': universe.includes(m.secid) || (universe.length === 0 && m.core) },
@@ -852,11 +852,11 @@ function SettingsModal(props: {
       ),
       React.createElement('div', { className: 'tw-hint', style: { marginTop: 4 } },
         '代码取自东财 secid 前缀：沪市 1.（如 1.512480 半导体ETF）、深市 0.（如 0.159915）。' +
-        '自定义通道与宽基分开统计，避免板块异动被误读为国家队护盘。',
+        '自定义通道与宽基分开统计，避免把板块异动读成国家队护盘。',
       ),
     ),
     React.createElement('div', { className: 'tw-hint' },
-      '采样仅在工作日 09:25–11:35 / 12:55–15:05 进行，每次采样 1 个批量请求（约 2 请求/分钟）；' +
+      '采样时段 09:25–11:35 / 12:55–15:05，每次采样 1 个批量请求（约 2 请求/分钟）；' +
       '非交易时段不产生请求。',
     ),
     React.createElement('div', { style: { display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 10 } },

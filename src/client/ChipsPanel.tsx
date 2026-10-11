@@ -53,7 +53,7 @@ export function ChipsPanel(props: ChipsPanelProps): React.ReactElement | null {
   }
   if (d === null || day === null) {
     return React.createElement('div', { className: 'tw-chips tw-chips-off' },
-      React.createElement('span', { className: 'tw-muted' }, props.state.loading ? '筹码分布计算中…' : '暂无筹码分布'))
+      React.createElement('span', { className: 'tw-muted' }, props.state.loading ? '筹码分布计算中…' : '未取到'))
   }
   const price = day.avgCost
   const profitPct = day.profitRatio

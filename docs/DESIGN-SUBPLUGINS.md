@@ -1,6 +1,8 @@
 # 设计：一个 bundle 内的多行子组件（可独立开关）+ 迁移路径
 
-**目标**：把 `dsh-tradewatcher` 从单行插件改成「core + 功能行」的多行 bundle，使【实时行情条】【自选】【持仓】【大盘】【云图】【日历】各自可开关。**只读设计**，不改代码、不改 profile、未安装任何 bundle。
+**状态：未落地（方案记录）**。六行形态在本机**装载失败**：同一 package 多个活跃 Loader 源 + 本包带客户端半区 ⇒ `dsh-client-modules` 判为 composition error；当前 manifest **只装一行**（`cordis.patch.yml:3-9` 已回退为单行），客户端 tab 门控代码保留但不生效（`src/index.test.ts:149` 锁定单行）。
+**目标（方案）**：把 `dsh-tradewatcher` 从单行插件改成「core + 功能行」的多行 bundle，使【实时行情条】【自选】【持仓】【大盘】【云图】【日历】各自可开关。**只读设计**，不改代码、不改 profile、未安装任何 bundle。
+**现状**：单行 bundle；行映射（`ROW_ROUTES`/`ROW_TOOLS`）与 `/tradewatcher/rows` 仍在，作为将来重试的基础。
 **结论**：DSH 支持**同一 package 出现在多条 Loader 行**（靠 `id` + `config` 区分），我们**不需要**照抄参考包的"子路径壳"；但**每行的 host 半区是独立 fiber（apply 会被调用多次）**，共享内核必须靠 core 行 + service 注入。下面每条都有 file:line 或命令输出。
 
 ## 1. 机制实证
@@ -45,7 +47,7 @@
 
 **core 行（必需，不可关）**：`tradewatcher-core` —— host：`DataStore`（watch/positions/ledger/prefs）、`em` 取数 + LKG、`/health` `/prefs` `/backup` `/quotes` `/badge` `/tones` `/trend` `/kline` `/detail` `/suggest` `/ytd` `/undo`、`quotes`/`search`/`position`/`ytd` 工具；另持有 **`/tradewatcher/rows`**（活跃行清单）。client：外壳 + 顶部行情条 + 详情抽屉 + 侧栏图标/徽标 + 样式表 + **全部 Slot 注册**。
 **功能行（可关）**：`watchlist`（`/watch` `/ledger` `/trades`、`watchlist`/`group_rank` 工具、自选 tab）｜`portfolio`（`/portfolio`、`portfolio`/`ledger` 工具、持仓 tab）｜`market`（`/breadth` `/board` `/rescue` `/anomaly` `/industries` `/industry`、`rescue` 工具、大盘 tab + 护盘面板）｜`cloudmap`（**无 host 路由**，纯客户端 iframe，云图 tab）｜`calendar`（`/calendar`、`calendar`/`calendar_add` 工具，日历 tab）。
-**总行数**：core + 5 = 6 行；【实时行情条】不单独成行（它是 core 的外壳组件，拆出去会让 core 空转且抽屉依赖它）。若用户坚持要"行情条"也能关：加第 7 行 `strip`，client 侧仅 gate 该组件（代价：core 仍持有行情引擎）。
+**总行数（目标形态）**：core + 5 = 6 行；**当前 manifest 只装 1 行**（`cordis.patch.yml:15-17`）；【实时行情条】不单独成行（它是 core 的外壳组件，拆出去会让 core 空转且抽屉依赖它）。若用户坚持要"行情条"也能关：加第 7 行 `strip`，client 侧仅 gate 该组件（代价：core 仍持有行情引擎）。
 ### 2.1 最终归属（P1–P4 落地后复核，含工具与共享面）
 
 | 行 | 独占 host 路由 | 独占 agent 工具 | 理由 / 共享面判断 |
@@ -102,7 +104,7 @@
 
 - **P0 骨架（不改行为）**：`src/index.ts` 的 apply 改为读 `config.row`（缺省 `core`，且**缺省时保持现状=全部启用**，向后兼容老 profile 的无 config 行）；6 条行先全部插在 `cordis.patch.yml`，但 `config.row` 只解析 core，功能行是空操作。验收：`npm test` 全绿；`plugin_manager list_plugins` 出现 6 条 `enabled:true, fiberPhase:"active"`；界面与现在**完全一致**。
 - **P1 最小切片（证明整条链路）**：切 **【日历】**（它同时有 host 路由、工具、tab —— 三处 gate 都能验证；云图虽更小但只有 client 一处，证明力弱）。
-  验收判据（全部要跑）：① 插件列表出现 `tradewatcher-core` 与 `tradewatcher-calendar` 两行，可独立开关；② 关掉 calendar 后 `curl /tradewatcher/calendar` → 404（或未注册）、`Tool.listTools` 里 `tradewatcher_calendar`/`calendar_add` 消失、面板不再有"日历"tab **且不出现空壳**、`GET /tradewatcher/rows` 的 `rows[]` 里没有 calendar；③ core 的行情条/自选/持仓/大盘照常，无 unhandled rejection；④ 重开行后恢复；⑤ 重启 `dsh web` 后开关状态保持（在 profile patch 里）；⑥ 老 profile（无 config 的单行）启动后行为不变。
+  验收判据（**未执行**：六行装载失败，见本文件「回退记录」一节）：① 插件列表出现 `tradewatcher-core` 与 `tradewatcher-calendar` 两行，可独立开关；② 关掉 calendar 后 `curl /tradewatcher/calendar` → 404（或未注册）、`Tool.listTools` 里 `tradewatcher_calendar`/`calendar_add` 消失、面板不再有"日历"tab **且不出现空壳**、`GET /tradewatcher/rows` 的 `rows[]` 里没有 calendar；③ core 的行情条/自选/持仓/大盘照常，无 unhandled rejection；④ 重开行后恢复；⑤ 重启 `dsh web` 后开关状态保持（在 profile patch 里）；⑥ 老 profile（无 config 的单行）启动后行为不变。
 - **P2**：依 §2 顺序切 `cloudmap`（最快）→ `watchlist` → `portfolio` → `market`（含护盘采样，风险最高，放最后；`RescueMonitor` 必须留在 core 或改成 core 代管）。
 - **P3 收尾**：README/CHANGELOG 行清单与开关说明；`build.mjs` 的 75 项片段校验**无需改**（client 产物仍是单文件）；补一条断言：`cordis.patch.yml` 里每条功能行的 `config.row` 都在代码的行表里（防拼错 row 名导致静默不挂载）。
 
@@ -135,5 +137,11 @@
 ## 7. 明确不做 / 未验证
 
 - **不做**：拆多个 npm 包；为每行产出独立 client bundle；重写数据层；把 `RescueMonitor` 采样循环挪进可关闭的功能行（采样必须随 core 常驻，否则大盘行的历史信号会断档）。
+## 回退记录（v0.50.0）
+
+- 六行形态装载失败：`dsh-client-modules` 把"同一 package 多个活跃 Loader 源"判为 composition error（本包带客户端半区）。
+- 处置：`cordis.patch.yml` 回退为**单行**；`src/index.ts` 的行映射、幂等守卫与 `/tradewatcher/rows` 端点保留（有测试锁定），将来若客户端支持按行装载可直接复用。
+- 唯一权威记录在 `cordis.patch.yml:3-9`；本文件与 `README.md` 只保留指向。
+
 - **未验证**（本轮约束：只读、不安装、不改 profile）：① 同一包多行时**浏览器侧** `apply` 被调用几次（server 侧必然多次）——设计上不依赖它：gate 全在 core 的 `rows` 端点 + 模块级幂等；② `dsh.client` 是否支持按行区分（`dsh-client-modules/lib/client.js:63-68` 的解析按"包名"进行，判为不支持，未做实验）；③ 我们自己的 6 行形态**未在本机装载实测**（需 P0 阶段验证）。
 - **参考实现的两个坑要记住**：其 `README.zh.md:69` 记录过"keyed slot 用 `id` 而非必填 `key`"导致 GUI 启动失败 ⇒ 我们注册 keyed 槽（`main`）时必须给 `key`（我们已经在用 `key: PANEL_ID`，`src/client/index.tsx:114`）；其外部行标记 `"inactive": true` 时会在产物后追加 `disabled: true` 覆盖行（`README.zh.md:27`）——这正是"出厂默认关闭"的实现方式，我们照抄即可。

@@ -193,7 +193,7 @@ function Dashboard(): React.ReactElement {
   const [prefs, setPrefsState] = useState<PortPrefs | null>(null)
   const [watchIds, setWatchIds] = useState<string[]>([])
   const [posIds, setPosIds] = useState<string[]>([])
-  /** 详情抽屉：顶栏行情卡片、自选行、持仓行都走这一个入口（单一实例） */
+  /** 详情抽屉：行情条行情卡片、自选行、持仓行都走这一个入口（单一实例） */
   const [detail, setDetail] = useState<{ secid: string; name: string } | null>(null)
   const openDetail = useCallback((secid: string, name: string): void => setDetail({ secid, name }), [])
   const closeDetail = useCallback((): void => setDetail(null), [])

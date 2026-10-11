@@ -111,7 +111,7 @@ async function portfolioWithQuotes(store: DataStore): Promise<{ view: unknown; s
 }
 
 /**
- * 关注标的 → 6 位代码（仅 A股，供财报/分红数据源过滤）。
+ * 自选 + 持仓标的 → 6 位代码（仅 A股，供财报/分红数据源过滤）。
  * `heldOnly` 为真时只取持仓（P1-10 的勾稽要区分"有持仓"与"仅自选"）。
  */
 function focusCodes(store: DataStore, heldOnly = false): string[] {

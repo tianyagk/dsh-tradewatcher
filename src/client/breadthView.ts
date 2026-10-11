@@ -79,7 +79,7 @@ export function upDownPair(up: number | null | undefined, down: number | null | 
 /** 成对显示缺失时的统一说明（hover + aria-label 共用一句） */
 export const UPDOWN_MISSING_NOTE =
   '涨跌家数未取到：备用源（腾讯/新浪）不含该字段（东财 f104/f105/f106），等东财恢复后自动重试。' +
-  '这里不显示 0 —— 0 会被读成"没有一只下跌"，那是错的信息'
+  '这里不显示 0 —— 用户会把 0 读成"没有一只下跌"，那是错的信息'
 
 /**
  * 家数三格取哪一份（P0-1）：**指数行情优先，拿不到才用自统计**。

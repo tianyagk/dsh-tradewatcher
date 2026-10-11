@@ -465,7 +465,7 @@ export function MarketPage(props: {
       ),
       React.createElement(SuggestInput, {
         onPick: (item) => openDetail(item.secid),
-        placeholder: '搜索 A股/港股/ETF/基金/指数（600519、02155、茅台…）',
+        placeholder: '搜索 A股/港股/ETF/基金/指数',
       }),
       detailLoading && pick !== null
         ? React.createElement('div', { className: 'tw-loading' }, '加载行情详情…')

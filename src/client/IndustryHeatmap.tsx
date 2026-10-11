@@ -82,7 +82,7 @@ export function IndustryHeatmap(props: { redUp: boolean; width: number; height: 
             title: meta?.source !== undefined ? `本次数据来自 ${meta.source}` : undefined,
           },
             rows !== null && rows.length > 0 && dropped === rows.length
-              ? '当前源无成交额字段，云图不可用（等东财恢复后自动可用）'
+              ? '上游无此数据，云图未取到（等东财恢复后自动可用）'
               : '本次未取到板块成交额，云图暂不可用（稍后刷新重试）')
         : React.createElement('svg', {
             width, height, viewBox: `0 0 ${width} ${height}`,

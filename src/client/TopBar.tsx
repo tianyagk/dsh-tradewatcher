@@ -487,7 +487,7 @@ export function TopBar(props: {
         }, `无行情源 ${n}`)
       })(),
       truncated === true
-        ? React.createElement('span', { className: 'tw-badge', title: '一次最多请求 160 个标的，超出部分未请求；请减少自选数量或分页查看', style: { fontSize: 9.5, color: '#e0a94a' } }, '已截断 160')
+        ? React.createElement('span', { className: 'tw-badge', title: '一次最多请求 160 个标的，超出部分未请求；必须减少自选数量，或分页查看', style: { fontSize: 9.5, color: '#e0a94a' } }, '已截断 160')
         : null,
       // 东财行情不可用时部分标的走腾讯/新浪备用源：如实标注，避免误以为是东财数据
       (() => {

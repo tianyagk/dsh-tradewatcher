@@ -78,7 +78,7 @@ test('日历：从未成功同步过 → syncedAt 为 null 且 stale=true（不�
   assert.ok(after.missing.length > 0)
 })
 
-test('日历：没有关注标的时"财报/分红"记 skipped（未尝试），不算失败', async () => {
+test('日历：没有自选 + 持仓标的时"财报/分红"记 skipped（未尝试），不算失败', async () => {
   const store = new CalendarStore(dir())
   await store.init()
   await store.sync([], true, okFetchers())

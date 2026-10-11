@@ -148,7 +148,7 @@ export function CloudMap(props: {
         : null,
       // 加载状态常驻可见：超时不是"静默等待"，要能一眼看出现在处于哪一态
       React.createElement('span', { className: 'tw-badge', 'data-state': state, title: `最后成功加载：${lastOkText}` },
-        state === 'loading' ? '加载中…' : state === 'loaded' ? '已加载' : '加载超时'),
+        state === 'loading' ? '加载中…' : state === 'loaded' ? '已完成' : '加载超时'),
       React.createElement(Btn, { onClick: retry }, state === 'timeout' ? '重试' : '重新加载'),
       React.createElement(Btn, { onClick: open }, '新窗口打开'),
     ),

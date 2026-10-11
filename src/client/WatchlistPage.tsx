@@ -411,7 +411,7 @@ export function WatchlistPage(props: {
                             title: alpha !== null
                               ? `α = 个股涨跌幅 ${stockPct?.toFixed(2)}% − 板块涨跌幅 ${boardPct?.toFixed(2)}%`
                               : stockPct === null
-                                ? 'α 不可算：该标的本次没有可用行情（个股涨跌幅缺失）'
+                                ? 'α 不可算：该标的本次没有可用行情（个股涨跌幅未取到）'
                                 : 'α 不可算：板块涨跌幅未取到（见左侧「板块 —」的说明）',
                             // 不可算时给键盘/触屏一条可读的原因（可计算时不需要）
                             ...(alpha === null
@@ -419,7 +419,7 @@ export function WatchlistPage(props: {
                                   tabIndex: 0,
                                   role: 'note',
                                   'aria-label': stockPct === null
-                                    ? 'α 不可算：该标的本次没有可用行情（个股涨跌幅缺失）'
+                                    ? 'α 不可算：该标的本次没有可用行情（个股涨跌幅未取到）'
                                     : 'α 不可算：板块涨跌幅未取到（见左侧「板块 —」的说明）',
                                 }
                               : {}),

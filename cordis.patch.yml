@@ -6,7 +6,7 @@
 # 出现多个活跃 Loader 源"视为 composition error，而本包**同时带客户端半区**
 # （`dsh.client` + `exports['./client']`）⇒ 同包多行会被整体拒绝。
 # 要真正做成可独立开关的子组件，需要走"每个子组件各自一个包"的路子（参考 @linxin666/dsh-web-all），
-# 细节见 docs/DESIGN-SUBPLUGINS.md §6。
+# 细节见 docs/DESIGN-SUBPLUGINS.md 的「回退记录」一节。
 #
 # 行语义（代码侧仍然支持，供单独调试用）：
 #   - 不带 config        ⇒ `all`：全量注册（**与拆分前逐字一致**，老 profile 靠这条）
