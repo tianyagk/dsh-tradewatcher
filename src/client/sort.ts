@@ -138,11 +138,8 @@ export function sortPositions<T>(rows: readonly T[], state: SortState<PortSortKe
   return sortByNumber(rows, pick, state.desc)
 }
 
-/** 仓位占比：分母为组合总市值；总市值 <= 0 时返回 null（避免除零得到 Infinity） */
-export function weightOf(mv: number, grandTotalMv: number): number | null {
-  if (!Number.isFinite(mv) || !Number.isFinite(grandTotalMv) || grandTotalMv <= 0) return null
-  return mv / grandTotalMv
-}
+/** 权重：实现上移到 `shared/model.ts`（宿主组合构成与客户端共用同一份口径） */
+export { weightOf } from '../shared/model.ts'
 
 /**
  * 点击排序段控的行为：同键再点一次翻转方向，换键则用该键的默认方向。

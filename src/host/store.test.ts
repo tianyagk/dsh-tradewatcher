@@ -67,3 +67,25 @@ test('P0 回归：缺 stripCfg 的老 profile 读回默认（全可见）', asyn
   await s2.init()
   assert.deepEqual(s2.getPrefs().stripCfg, { hidden: [] })
 })
+
+test('账本截断必须可读：返回数 / 总数 / truncated / limit 四个字段自洽', async () => {
+  const { ledgerTotal, ledgerViews } = await import('./portfolio.ts')
+  const mk = (n: number) => Array.from({ length: n }, (_, i) => ({
+    id: `e${String(i).padStart(3, '0')}`, ts: 1_700_000_000_000 + i, verb: 'buy' as const,
+    posId: 'p1', groupId: 'g1', qty: 1, price: 10, actor: 'web' as const,
+  }))
+  const entries = mk(120)
+  // 默认 500（工具的默认值）⇒ 120 条全给，不截断
+  const full = ledgerViews(entries, [], [], { limit: 500 })
+  assert.equal(full.length, 120)
+  assert.equal(ledgerTotal(entries, {}), 120, '总数＝过滤后的条数')
+  assert.equal(120 > full.length, false, '默认上限下不应截断')
+  // 显式 limit 100 ⇒ 如实可判截断（这正是修复前缺的那一步：默认 100 且不报 truncated）
+  const cut = ledgerViews(entries, [], [], { limit: 100 })
+  assert.equal(cut.length, 100)
+  assert.equal(ledgerTotal(entries, {}) > cut.length, true, 'truncated 必须为真')
+  // 过滤后的总数：只数匹配的
+  assert.equal(ledgerTotal(entries, { posId: 'p1' }), 120)
+  assert.equal(ledgerTotal(entries, { posId: 'nope' }), 0)
+  assert.equal(ledgerTotal(entries, { groupId: 'g2' }), 0)
+})

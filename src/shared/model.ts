@@ -71,6 +71,18 @@ export const TW_ROWS = [
  * 卡片类型（国债组显式标 `kind`；其余按 secid 习惯判定）。
  * `171.*` 是**收益率**（上行＝债券价格下跌），必须标类型，否则同屏"中国涨、美国跌"无法解释。
  */
+/**
+ * 单条市值占总市值的**分数**（0.25 = 25%）—— 客户端仓位占比/排序共用这一份。
+ *
+ * ⚠ 单位是**分数不是百分比**（客户端既有调用与测试都按分数）：
+ * 组合构成那边要的是百分比，用 `composition.ts` 的 `weightPctOf`，**别把两处混用**。
+ * 缺失或总市值 ≤0 ⇒ `null`（界面 `—`），不用 0 顶替 —— 0 会让"没取到价"与"真的一文不值"看起来一样。
+ */
+export function weightOf(mv: number | null | undefined, totalMv: number): number | null {
+  if (mv === null || mv === undefined || !Number.isFinite(mv) || !(totalMv > 0)) return null
+  return mv / totalMv
+}
+
 export function stripKindOf(secid: string): StripItemKind {
   for (const row of TW_ROWS) {
     for (const it of row.items) {
@@ -78,6 +90,23 @@ export function stripKindOf(secid: string): StripItemKind {
     }
   }
   return secid.startsWith('171.') ? 'yield' : 'price'
+}
+
+/**
+ * 按**组 key**（不是位置！）取一组预设标的的 secid。
+ *
+ * ⚠ v0.40.0 插入「国债」组后 `TW_ROWS` 顺序变成 `cn/intl/bond/commodity`，
+ * 而工具侧当时是按**位置**取（`TW_ROWS[2]`）⇒ `commodity` 预设静默返回国债指数、`all` 漏掉全部商品
+ * （有价、有出处、看着完全正常的**静默错答**）。这里改成按 key 查，找不到就是空数组（不猜）。
+ */
+export function twGroupSecids(key: string): string[] {
+  const row = TW_ROWS.find((r) => r.key === key)
+  return row === undefined ? [] : row.items.map((i) => i.secid)
+}
+
+/** 全部预设标的（顺序＝ `TW_ROWS` 的组顺序） */
+export function twAllSecids(): string[] {
+  return TW_ROWS.flatMap((r) => r.items.map((i) => i.secid))
 }
 
 /** Flat list used by the client's default quote watcher. */
@@ -781,6 +810,19 @@ export interface PortfolioView {
   unpriced?: Array<{ posId: string; secid: string; name: string; qty: number; why: 'no-quote' | 'no-fx'; note: string }>
   /** 港美股市值未折算的部分（元，按原币种计价就不存在"折算"这回事，故只在 fxMode=none 时给出） */
   unpricedMv?: number
+  /**
+   * 组合构成（P0-11）：权重 / 行业·主题·市场分布 / 集中度。
+   * 权重 = 单条市值 ÷ **可计价**总市值 × 100（缺价的行不进分母，`unpriced` 如实计数）；
+   * 行业只来自**本地已有数据**（分组名），拿不到就是 `null`（界面 `—`），不按代码猜。
+   */
+  composition?: {
+    totalMv: number
+    unpriced: number
+    rows: Array<{ id: string; name: string; secid: string; market: string; mv: number | null; weightPct: number | null; sector: string | null }>
+    sectors: Array<{ key: string; weightPct: number; count: number }>
+    markets: Array<{ key: string; weightPct: number; count: number }>
+    concentration: { top1: number; top3: number; hhi: number; n: number }
+  }
 }
 
 /**
@@ -984,6 +1026,32 @@ export function numOrNull(v: unknown): number | null {
   return typeof v === 'number' && Number.isFinite(v) ? v : null
 }
 
+/**
+ * 缺失**四态**（P0-5）：`代码不存在` / `上游无此数据` / `本次失败` / `后台更新中`。
+ *
+ * 为什么单列：原先只有两态（本次失败 / 上游无此数据），于是"代码写错了"要么被说成"稍后重试"
+ * （让用户白等），要么被说成"上游没有"（把上游冤枉了）。**区分不了的不要硬造** ——
+ * 只有 `SECID_RE` 校验失败这种**结构性**判据才敢标 `invalid-code`；
+ * "查询没返回"既可能是不存在的代码、也可能是上游缺数据，如实留在 `no-source`/`transient` 里。
+ */
+export type MissingWhy = 'invalid-code' | 'no-source' | 'transient' | 'pending'
+
+/** 四态的短标签（列表/工具输出用；与旧两态标签同处一个词表） */
+export const MISSING_STATE_LABEL: Record<MissingWhy, string> = {
+  'invalid-code': '代码不存在',
+  'no-source': '上游无此数据',
+  transient: '本次失败',
+  pending: '后台更新中',
+}
+
+/** 四态的动作建议（尾句只留动作，别重复"不可达"这类形容词） */
+export const MISSING_STATE_ADVICE: Record<MissingWhy, string> = {
+  'invalid-code': '核对代码，重试无用',
+  'no-source': '重试无用',
+  transient: '稍后自动重试',
+  pending: '本轮刷新完成后自动出现',
+}
+
 export const MISSING_TIER_ADVICE: Record<'transient' | 'no-source', string> = {
   // 只留**动作**：前半句已经写了"不可达/没取到"，尾句再重复同一事实就是啰嗦（R2/R3）
   transient: '稍后自动重试',
@@ -1073,6 +1141,41 @@ export interface DataProvenance {
   missing: MissingField[]
   /** 休市定稿零回源（与 stale 并存：定稿同时某项可能又是兜底值） */
   cached?: boolean
+  /**
+   * 滞后时长的人话（P0-4）：如「11 天前」「3 分钟前」——比「已降级」有用得多。
+   * 只在 `asOf` 存在时给；不编（拿不到时刻就留空）。
+   */
+  lagHuman?: string
+  /**
+   * 市场开闭市状态（P0-4）：解释"为什么数字不动"。
+   * `open` 交易中；`closed` 休市中（含午休）；`unknown` 判断不了（无时刻/无交易日历）。
+   */
+  marketState?: 'open' | 'closed' | 'unknown'
+  /**
+   * 降级时**现在显示的到底是什么**（P1-10）：如「行情源暂时不可用，当前显示 15:00 快照」。
+   * 只有真降级（stale/兜底/本地快照）时才给。
+   */
+  showing?: string
+}
+
+/**
+ * 把人话化的滞后时长算出来（P0-4）。纯函数，便于断言。
+ *
+ * 规则：<90s「刚刚」；<90min「N 分钟前」；<36h「N 小时前」；否则「N 天前」。
+ * `asOf === null` ⇒ `null`（**不编**，也不写"刚刚"）。
+ */
+export function lagHumanOf(asOf: number | null, now: number): string | null {
+  if (asOf === null || !Number.isFinite(asOf)) return null
+  const ms = now - asOf
+  if (!Number.isFinite(ms)) return null
+  if (ms < 0) return '刚刚'
+  const sec = Math.round(ms / 1000)
+  if (sec < 90) return '刚刚'
+  const min = Math.round(sec / 60)
+  if (min < 90) return `${min} 分钟前`
+  const hour = Math.round(min / 60)
+  if (hour < 36) return `${hour} 小时前`
+  return `${Math.round(hour / 24)} 天前`
 }
 
 export interface MissingField {

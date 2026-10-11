@@ -30,6 +30,7 @@ const MARKET_LABEL: Record<Market, string> = {
 }
 import { replayPosition, replayPositionWithSkips, type TradeState, sortLedger } from './store.ts'
 import { shanghaiDayStart as shDayStart } from './time.ts'
+import { compositionOf } from './composition.ts'
 
 /**
  * ms epoch of 00:00:00 Asia/Shanghai for the trading day containing `now`.
@@ -336,6 +337,24 @@ export function assemblePortfolio(
       dayPnl: round2(grandDay),
       realized: round2(grandRealized),
     },
+    // 组合构成（P0-11）：权重/行业·主题/市场分布/集中度。
+    // 行业**只**用本地已有数据（分组名）—— 拿不到就是 null（界面 —），绝不按 secid 猜行业。
+    composition: ((): NonNullable<PortfolioView['composition']> => {
+      const groupName = new Map(groups.map((g) => [g.id, g.name]))
+      const inputs = positions
+        .filter((p) => p.qty > 0)
+        .map((p) => ({
+          id: p.posId,
+          name: p.name,
+          secid: p.secid,
+          market: marketOf(p.secid),
+          qty: p.qty,
+          price: p.price,
+          // 本地标签：分组名（用户自己写的主题/行业）；没有分组就没有行业标签
+          groupName: p.groupId === undefined ? null : (groupName.get(p.groupId) ?? null),
+        }))
+      return compositionOf(inputs)
+    })(),
   }
   const stale = positions.filter((p) => p.qty > 0 && p.price === null).length
   // P0-1：总额缺一块必须能点开看到缺的是谁、为什么。
@@ -379,6 +398,20 @@ const VERB_LABEL: Record<LedgerEntry['verb'], string> = LEDGER_VERB_LABEL
 
 export function verbLabel(verb: LedgerEntry['verb']): string {
   return VERB_LABEL[verb] ?? verb
+}
+
+/**
+ * 过滤后的流水**总数**（`ledgerViews` 会按 limit 截断，这里是"本来有多少条"）。
+ *
+ * 为什么单列：回包要能说"共 N 条、本次返回 M 条"（其它工具都有 truncated，账本此前没有 ⇒ 静默截断）。
+ * 过滤条件必须与 `ledgerViews` **逐字一致**，否则"总数"与"返回数"会互相矛盾。
+ */
+export function ledgerTotal(
+  entries: readonly LedgerEntry[],
+  opts: { groupId?: string; posId?: string } = {},
+): number {
+  return entries.filter((e) => (opts.groupId === undefined || e.groupId === opts.groupId) &&
+    (opts.posId === undefined || e.posId === opts.posId)).length
 }
 
 /** Human-readable ledger views, newest first. */

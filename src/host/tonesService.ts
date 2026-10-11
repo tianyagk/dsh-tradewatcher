@@ -11,7 +11,7 @@
 import type { DayBar, MissingField } from '../shared/model.ts'
 import * as em from './em.ts'
 import { dayOf } from './time.ts'
-import { TONE_WINDOWS, toneOfBars, type ToneComputation, type ToneLevel } from './tones.ts'
+import { TONE_BANDS, TONE_WINDOWS, TONES_METHODOLOGY, toneOfBars, type ToneComputation, type ToneLevel } from './tones.ts'
 
 /** 标准化窗口上限（与 `TONE_WINDOWS[0]` 一致）：250 根优先 */
 export const TONE_BARS = 250
@@ -33,6 +33,8 @@ export interface ToneRowOut {
   why: string | null
   window: number
   insufficient: boolean
+  /** 档位对应的分位区间（标签型输出必须给边界） */
+  band: string | null
 }
 
 interface MemoEntry {
@@ -117,6 +119,8 @@ export interface ToneBatchResult {
   day: string
   /** 实际用到的窗口集合（自检/报告用） */
   windows: readonly number[]
+  /** 口径字符串（随结果返回，与算法同源） */
+  methodology: string
 }
 
 /** 批量：4-worker 池（与 anomaly/ytd 同口径） */
@@ -137,6 +141,7 @@ export async function computeTones(
       rows.push({
         secid: it.secid, level: r.level, pct: r.pct, r30: r.r30, momentum: r.momentum,
         samples: r.samples, bars: r.bars, kind: it.kind, why: r.why, window: r.window, insufficient: r.insufficient,
+        band: r.level === null ? null : TONE_BANDS[r.level],
       })
       if (r.level === null) {
         // 失败分档沿用两档口径：取不到 ⇒ transient（等上游）；样本/基准不足 ⇒ no-source（重试无用）
@@ -152,5 +157,5 @@ export async function computeTones(
   // 行序按**请求顺序**（与 ytd.ts 同写法：先建索引 Map，避免 sort 里 findIndex 的 O(n²)）
   const order = new Map(items.map((it, i) => [it.secid, i]))
   rows.sort((a, b) => (order.get(a.secid) ?? 0) - (order.get(b.secid) ?? 0))
-  return { rows, missing, day, windows: TONE_WINDOWS }
+  return { rows, missing, day, windows: TONE_WINDOWS, methodology: TONES_METHODOLOGY }
 }

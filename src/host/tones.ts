@@ -116,6 +116,22 @@ export function percentileOf(sample: readonly number[], current: number): number
 }
 
 /** 分位 → 档位（与设计文档同一套边界） */
+/** 档位对应的**分位区间**（标签型输出必须能给区间边界，P0-9） */
+export const TONE_BANDS: Record<ToneLevel, string> = {
+  过冷: '分位 <10%',
+  偏冷: '分位 10–30%',
+  适中: '分位 30–70%',
+  偏热: '分位 70–90%',
+  过热: '分位 >90%',
+}
+
+/** 口径字符串随结果返回（与算法同源：改算法就必须改这里，P0-10） */
+export const TONES_METHODOLOGY =
+  'score = 0.6·z(近30日涨跌幅) + 0.4·z(近5日涨跌幅 − 近20日涨跌幅)；' +
+  'z 用该标的自身历史分布标准化（窗口 250 根日线优先，不足降级 120/60）；' +
+  '档位取 score 在该标的自身 score 分布中的分位：<10% 过冷 ｜ 10–30% 偏冷 ｜ 30–70% 适中 ｜ 70–90% 偏热 ｜ >90% 过热；' +
+  '收益率类先对变化量取负（上行＝债券价格走弱）。样本：日线 ≥31 根才可算，score 样本 <30 不发布档位；缺失一律 —，不用「适中」冒充。'
+
 export function toneLevelOfPct(pct: number): ToneLevel {
   if (pct < 10) return '过冷'
   if (pct < 30) return '偏冷'

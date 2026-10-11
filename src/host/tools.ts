@@ -1,11 +1,11 @@
 /**
  */
-import { ACTOR_TOOL, MISSING_TIER_LABEL, TW_ROWS, type CalEvent, type DataProvenance, type MissingField, type QuoteRow } from '../shared/model.ts'
-import { SECID_RE } from '../shared/model.ts'
+import { twAllSecids, twGroupSecids, ACTOR_TOOL, MISSING_TIER_LABEL, type CalEvent, type DataProvenance, type MissingField, type QuoteRow } from '../shared/model.ts'
+import { SECID_RE, lagHumanOf } from '../shared/model.ts'
 import { FQ_LABEL, YTD_CALIBER, type YtdRow } from '../shared/model.ts'
 import * as em from './em.ts'
 import { YTD_MAX_IDS, computeYtds } from './ytd.ts'
-import { assemblePortfolio, ledgerViews, verbLabel } from './portfolio.ts'
+import { ledgerTotal, assemblePortfolio, ledgerViews, verbLabel } from './portfolio.ts'
 import { DataStore, dataHome } from './store.ts'
 import { CalendarStore, calToday, type CalSyncSourceResult } from './calendar.ts'
 import { RescueMonitor } from './rescue.ts'
@@ -13,6 +13,7 @@ import { RESCUE_LEVEL_LABEL, realizedUnknownNote, realizedUnknownQtyOf, realized
 import { CAL_CATEGORY_LABEL } from '../shared/model.ts'
 import type { PluginContext, PluginToolDefinition, PluginToolExec, PluginToolRuntime, PluginSystemPrompt } from './context.ts'
 import { WriteJournal } from './writeLog.ts'
+import { POSITION_WINDOW, positionOfBars } from './position.ts'
 
 const PREFIX = 'tradewatcher_'
 
@@ -41,7 +42,15 @@ function pnlLine(label: string, value: number | null | undefined): string {
 
 /** 纯本地文件的出处：`source='local'`，asOf 取文件最后写入时刻（不许拿响应时刻顶替） */
 function localProvenance(asOf: number | null, missing: MissingField[] = []): DataProvenance {
-  return { asOf, stale: false, source: 'local', missing, cached: undefined }
+  // 本地文件：滞后时长是**文件落盘到现在的间隔**（"这份文件多久没更新了"）；市场状态对本地文件无意义
+  return {
+    asOf,
+    stale: false,
+    source: 'local',
+    missing,
+    cached: undefined,
+    lagHuman: lagHumanOf(asOf, Date.now()) ?? undefined,
+  }
 }
 
 /** 出处的单行文本摘要，附在每个工具的 render 尾部（agent 读到数就看得到口径） */
@@ -87,16 +96,19 @@ function dedupeMissing(list: readonly MissingField[]): MissingField[] {
 
 // ── quote helpers shared by tools ─────────────────────────────────────────
 
-async function resolveQuoteIds(idsRaw: unknown): Promise<string[]> {
+/** 预设/逗号清单 → secid 列表。**导出供断言**：预设必须按组 key 解析（位置索引会随 TW_ROWS 增删组静默错位）。 */
+export async function resolveQuoteIds(idsRaw: unknown): Promise<string[]> {
   const raw = String(idsRaw ?? '').trim()
   if (raw === '') throw new Error('secids 是必填参数（逗号分隔，如 1.000001,114.lhm）')
+  // 按**组 key** 查（不是位置）：位置索引会随 TW_ROWS 增删组静默错位
   const presets: Record<string, string[]> = {
-    cn: TW_ROWS[0].items.map((i) => i.secid),
-    intl: TW_ROWS[1].items.map((i) => i.secid),
-    commodity: TW_ROWS[2].items.map((i) => i.secid),
+    cn: twGroupSecids('cn'),
+    intl: twGroupSecids('intl'),
+    commodity: twGroupSecids('commodity'),
+    bond: twGroupSecids('bond'),
   }
-  if (raw === 'all') return [...presets.cn, ...presets.intl, ...presets.commodity]
-  if (presets[raw] !== undefined) return presets[raw]
+  if (raw === 'all') return twAllSecids()
+  if (presets[raw] !== undefined && presets[raw].length > 0) return presets[raw]
   // 保留原始大小写（113.rbm / 114.lhm 后缀区分大小写）；去重按大小写无关键
   const seen = new Set<string>()
   const ids: string[] = []
@@ -305,7 +317,7 @@ export function makeAgentTools(
     name: `${PREFIX}ledger`,
     description:
       '读取 tradewatcher 的逐笔流水/操作记录（买入、卖出、调整、建仓、移除、分组的创建/改名/归档/还原等），' +
-      '按时间倒序。可指定持仓（posId）或分组（groupId）过滤；limit 默认 100。适合追溯每只持仓的完整交易过程与成本变化。' +
+      '按时间倒序。可指定持仓（posId）或分组（groupId）过滤；limit 默认 500，超过则回包带 truncated 与 total（不静默截断）。适合追溯每只持仓的完整交易过程与成本变化。' +
       'Triggers: 查看交易流水/历史记录/买卖记录, 某只股票的买卖历史, 分组操作记录, 复盘交易.',
     parameters: {
       type: 'object',
@@ -313,7 +325,7 @@ export function makeAgentTools(
       properties: {
         posId: { type: 'string', description: '持仓 id（不传则全部；用 tradewatcher_portfolio 查看 posId）' },
         groupId: { type: 'string', description: '分组 id（不传则全部）' },
-        limit: { type: 'number', description: '返回条数（默认 100，最大 500）' },
+        limit: { type: 'number', description: '返回条数（默认 500，最大 500；超出会如实报 truncated 与 total）' },
       },
     },
     output: {
@@ -355,11 +367,22 @@ export function makeAgentTools(
       try {
         const posId = typeof args.posId === 'string' && args.posId !== '' ? args.posId : undefined
         const groupId = typeof args.groupId === 'string' && args.groupId !== '' ? args.groupId : undefined
-        const limit = typeof args.limit === 'number' ? Math.min(500, Math.max(1, Math.round(args.limit))) : 100
+        // 默认 500（`ledger.json` 实测量级远小于此）；无论显式还是默认，超限都如实报 truncated
+        const limit = typeof args.limit === 'number' ? Math.min(500, Math.max(1, Math.round(args.limit))) : 500
         const port = store.portData()
-        const entries = ledgerViews(store.ledgerEntries(), port.groups, port.items, { posId, groupId, limit })
+        const all = store.ledgerEntries()
+        const matched = ledgerTotal(all, { posId, groupId })
+        const entries = ledgerViews(all, port.groups, port.items, { posId, groupId, limit })
         // 账本是纯本地文件：出处 = 文件落盘时刻（不是"这次读它"的时刻）
-        return { entries, provenance: localProvenance(await store.fileMtime('ledger.json')) }
+        return {
+          entries,
+          // 截断必须说出来：默认 100 时 149 条流水会被静默砍掉一半（与其它工具的 truncated 口径一致）
+          returned: entries.length,
+          total: matched,
+          truncated: matched > entries.length,
+          limit,
+          provenance: localProvenance(await store.fileMtime('ledger.json')),
+        }
       } catch (error) {
         return { error: error instanceof Error ? error.message : String(error) }
       }
@@ -520,8 +543,8 @@ export function makeAgentTools(
         // 现价与界面同源：同一次行情缓存（TTL 内零上游请求）；基准走 host/ytd.ts 的按日 memo
         const q = await em.fetchQuotesWithProvenance(ids)
         const items = ids.map((secid) => ({ secid, name: q.items[secid]?.name ?? secid, price: q.items[secid]?.price ?? null }))
-        const { rows, missing } = await computeYtds(items)
-        return { rows, missing, truncated: wanted.length > ids.length, requested: wanted.length, limit: YTD_MAX_IDS, provenance: q.provenance }
+        const { rows, missing, methodology } = await computeYtds(items)
+        return { rows, missing, methodology, truncated: wanted.length > ids.length, requested: wanted.length, limit: YTD_MAX_IDS, provenance: q.provenance }
       } catch (error) {
         return { error: error instanceof Error ? error.message : String(error) }
       }
@@ -852,6 +875,127 @@ export function makeAgentTools(
           }
         }
         return { ok: undone.every((u) => u.undone), undone, by }
+      } catch (error) {
+        return { error: error instanceof Error ? error.message : String(error) }
+      }
+    },
+  })
+
+  defs.push({
+    name: `${PREFIX}position`,
+    description:
+      '读取【位置类指标】：52 周区间位置%、距 52 周高点/低点%，并给文本标签（极接近低点/接近低点/区间内/接近高点/极接近高点）。' +
+      '**口径**：必须用**前复权**序列（不复权会把除权跳空读成下跌，分位失真）；' +
+      '窗口写死成单一常量并随结果返回（`POSITION_WINDOW`），样本数与前复权口径都在回包里；' +
+      '现价缺失或窗口内样本不足一律 `null` + 原因，**不用 0% 或 50% 冒充**。' +
+      '怎么读：位置越低＝越接近一年低点（只描述"相对自身的位置"，不是"便宜"或"该买"）；' +
+      '不能用来干什么：它不是估值、不含基本面、也不是买卖信号。',
+    parameters: {
+      type: 'object',
+      properties: {
+        secids: { type: 'string', description: '逗号分隔的 secid（如 1.600519,0.300750）；也可用预设 cn/intl/commodity/bond/all' },
+        limit: { type: 'number', description: '最多算多少只（默认 20，最大 60）' },
+      },
+      required: ['secids'],
+      additionalProperties: false,
+    },
+    output: {
+      schema: {
+        type: 'object',
+        additionalProperties: true,
+        properties: {
+          rows: {
+            type: 'array',
+            items: {
+              type: 'object',
+              additionalProperties: true,
+              properties: {
+                secid: { type: 'string' },
+                name: { type: 'string' },
+                price: {},
+                high: {},
+                low: {},
+                posPct: { description: '区间位置%（0＝窗口最低，100＝窗口最高）；不可算时为 null' },
+                fromHighPct: { description: '距窗口高点%（负数为低于高点）' },
+                fromLowPct: { description: '距窗口低点%' },
+                label: { type: 'string', description: '极接近低点/接近低点/区间内/接近高点/极接近高点' },
+                samples: { type: 'number', description: '窗口内交易日样本数' },
+                window: { type: 'string', description: '窗口口径（随结果返回，与常量同源）' },
+                fq: { description: '复权口径（1=前复权，0=原始价格）' },
+                fqSupported: { type: 'boolean' },
+                why: { description: '不可算时的原因；可算时为 null' },
+              },
+            },
+          },
+          methodology: { type: 'string', description: '口径字符串（与算法同源）' },
+          window: { type: 'string' },
+          missing: { type: 'array', items: { type: 'object', additionalProperties: true } },
+          provenance: { type: 'object', additionalProperties: true },
+        },
+      },
+      render: (_args, value) => {
+        const v = value as {
+          rows?: Array<Record<string, unknown>>
+          methodology?: string
+          window?: string
+          truncated?: boolean
+          missing?: Array<{ what: string; note: string }>
+          provenance?: DataProvenance
+          error?: string
+        }
+        if (v.error !== undefined) return textBlock(`错误：${v.error}`)
+        const rows = v.rows ?? []
+        if (rows.length === 0) return textBlock([`没有可计算的位置指标。`, provenanceLine(v.provenance)].filter((x) => x !== '').join('\n'))
+        const lines = rows.map((r) => {
+          const name = String(r.name ?? r.secid ?? '')
+          if (r.posPct === null || r.posPct === undefined) {
+            return `${name}：位置 —（${String(r.why ?? '不可算')}）`
+          }
+          return `${name}：位置 ${fmtNum(Number(r.posPct))}%（${String(r.label ?? '')}）· 距高点 ${fmtNum(Number(r.fromHighPct))}% · 距低点 ${fmtNum(Number(r.fromLowPct))}% · 样本 ${String(r.samples ?? '—')}（${String(r.window ?? '')}）`
+        })
+        const miss = (v.missing ?? []).map((m) => `${m.what}：${m.note}`)
+        return textBlock([
+          ...lines,
+          ...miss,
+          v.truncated === true ? '（已截断：只算了前 N 只，请分批查询）' : '',
+          v.methodology !== undefined ? `口径：${v.methodology}` : '',
+          provenanceLine(v.provenance),
+        ].filter((x) => x !== '').join('\n'))
+      },
+    },
+    async execute(args) {
+      try {
+        const wanted = await resolveQuoteIds(args.secids)
+        const limit = typeof args.limit === 'number' ? Math.min(60, Math.max(1, Math.round(args.limit))) : 20
+        const ids = wanted.slice(0, limit)
+        const q = await em.fetchQuotesWithProvenance(ids)
+        const rows = []
+        const missing: Array<{ what: string; why: string; note: string }> = []
+        for (const secid of ids) {
+          const price = q.items[secid]?.price ?? null
+          const supported = em.fqSupported(secid)
+          // 指数/期货没有复权概念 ⇒ fqt=0；其余按前复权（跨期比较必须同一口径）
+          const fq: 0 | 1 = supported ? 1 : 0
+          const k = await em.fetchKline(secid, 101, POSITION_WINDOW.bars, fq)
+          if (k === null) {
+            rows.push({ secid, name: q.items[secid]?.name ?? secid, price, ...positionOfBars(secid, [], price, { fq, fqSupported: supported }) })
+            missing.push({ what: secid, why: 'transient', note: '日线本次未取到（上游不可达或无该标的），稍后随轮询重试' })
+            continue
+          }
+          const r = positionOfBars(secid, k.days, price, { fq, fqSupported: supported })
+          rows.push({ secid, name: q.items[secid]?.name ?? secid, price, ...r })
+          if (r.posPct === null) missing.push({ what: secid, why: 'no-source', note: r.why ?? '位置指标不可算' })
+        }
+        return {
+          rows,
+          methodology: `位置指标 = (现价 − 窗口最低) ÷ (窗口最高 − 窗口最低) × 100；窗口＝${POSITION_WINDOW.label}；序列用前复权（指数/期货按原始价格）`,
+          window: POSITION_WINDOW.label,
+          truncated: wanted.length > ids.length,
+          requested: wanted.length,
+          limit,
+          missing,
+          provenance: q.provenance,
+        }
       } catch (error) {
         return { error: error instanceof Error ? error.message : String(error) }
       }

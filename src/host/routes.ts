@@ -5,10 +5,10 @@ import type { CorporateAction, MissingField, MutatePortBody, MutateWatchBody, Qu
 import { stripKindOf, RESCUE_LEVEL_LABEL, SECID_RE } from '../shared/model.ts'
 import { isTrustedApiRequest } from './fence.ts'
 import * as em from './em.ts'
-import { assemblePortfolio, ledgerViews } from './portfolio.ts'
+import { ledgerTotal, assemblePortfolio, ledgerViews } from './portfolio.ts'
 import { DataStore, secidKey } from './store.ts'
 import { CalendarStore, calToday, type CalSyncSourceResult } from './calendar.ts'
-import { RescueMonitor } from './rescue.ts'
+import { RESCUE_METHODOLOGY, RescueMonitor } from './rescue.ts'
 import { QUOTE_HOSTS, HISTORY_HOSTS } from './em.ts'
 import { breakerSummary } from './breaker.ts'
 import { HttpError, httpStatusOf, retryAfterSecondsOf } from './http.ts'
@@ -17,7 +17,7 @@ import { detectAnomalies } from './anomaly.ts'
 import { YTD_MAX_IDS, computeYtds } from './ytd.ts'
 import { TONE_MAX_IDS, computeTones } from './tonesService.ts'
 import { BREADTH_MIN_DAYS, BREADTH_WINDOW, BreadthStore, breadthUsable, percentileOf, upRatio } from './breadth.ts'
-import { BREADTH_COUNT_CALIBER, BreadthCountCache, resolveBreadthCount } from './breadthCount.ts'
+import { BREADTH_METHODOLOGY, BREADTH_COUNT_CALIBER, BreadthCountCache, resolveBreadthCount } from './breadthCount.ts'
 import { dayOf } from './time.ts'
 import { log, type PluginWebRoute } from './context.ts'
 
@@ -329,6 +329,7 @@ export function makeTradeRoutes(
           const ratio = current === null ? null : upRatio(current)
           const pct = percentileOf(ratio, breadth.history(BREADTH_WINDOW, today))
           send(res, 200, {
+            methodology: BREADTH_METHODOLOGY,
             current: current === null
               ? null
               : {
@@ -402,12 +403,13 @@ export function makeTradeRoutes(
             return
           }
           const items = ids.map((secid) => ({ secid, kind: stripKindOf(secid) }))
-          const { rows, missing, day } = await computeTones(items)
+          const { rows, missing, day, methodology } = await computeTones(items)
           send(res, 200, {
             asOf: Date.now(),
             stale: false,
             source: 'em-kline',
             day,
+            methodology,
             missing,
             rows,
             requested,
@@ -447,12 +449,13 @@ export function makeTradeRoutes(
             name: q.items[secid]?.name ?? secid,
             price: q.items[secid]?.price ?? null,
           }))
-          const { rows, missing } = await computeYtds(items)
+          const { rows, missing, methodology } = await computeYtds(items)
           send(res, 200, {
             asOf: q.provenance.asOf,
             stale: q.provenance.stale,
             source: q.provenance.source,
             missing,
+            methodology,
             rows,
             requested,
             truncated: truncated || all.length > ids.length,
@@ -774,8 +777,14 @@ export function makeTradeRoutes(
           const posId = p.get('posId') ?? undefined
           const limit = Math.min(1000, Math.max(1, Number(p.get('limit') ?? 200) || 200))
           const port = store.portData()
-          const entries = ledgerViews(store.ledgerEntries(), port.groups, port.items, { groupId, posId, limit })
-          send(res, 200, { entries })
+          const allEntries = store.ledgerEntries()
+          const matched = ledgerTotal(allEntries, { groupId, posId })
+          const entries = ledgerViews(allEntries, port.groups, port.items, { groupId, posId, limit })
+          send(res, 200, {
+            returned: entries.length,
+            total: matched,
+            truncated: matched > entries.length,
+            limit, entries })
         } catch (error) {
           fail(res, error)
         }
@@ -803,6 +812,8 @@ export function makeTradeRoutes(
               send(res, 200, {
                 snapshot,
                 history: rescue.history(30),
+                // 口径字符串随结果返回（与算法同源）
+                methodology: RESCUE_METHODOLOGY,
                 day,
                 dayEvents: rescue.eventsOf(day),
                 dayIntraday: rescue.intradayOf(day),

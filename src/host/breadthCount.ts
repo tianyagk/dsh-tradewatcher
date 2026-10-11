@@ -65,6 +65,15 @@ function pctOf(v: unknown): number | null {
  * 拿未扣除的 total 做等式会让源 B 当日有 1 只停牌就恒失败（实测就踩过这个坑）。
  * 覆盖检查用 `scanned + blank`（扫到的**原始**行数）与 total 比，`fullScan:true` 时才做。
  */
+/**
+ * 口径字符串（随结果返回）：家数的两条链、样本数（当日扫描行数）、分位窗口。
+ * 分位窗口写死在 `host/breadth.ts` 的 `BREADTH_PERCENTILE_DAYS` 常量里，这里只描述。
+ */
+export const BREADTH_METHODOLOGY =
+  '家数＝当日全市场上涨/下跌/平盘只数（源A 指数 f104/f105/f106，缺失时源B 东财 clist 全量分页）；' +
+  '无效行（停牌/无涨跌幅）单独计数、不计入三类；分位＝当前家数在本地归档的最近 N 个交易日快照中的位置（N 见宿主常量），' +
+  '样本不足时不给分位。缺失一律 — 并给逐源原因。'
+
 export function sanityOfCounts(
   counts: Pick<BreadthCounts, 'up' | 'down' | 'even' | 'total' | 'scanned' | 'blank'>,
   opts: {

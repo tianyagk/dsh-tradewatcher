@@ -20,6 +20,14 @@ export const YTD_CONCURRENCY = 4
  */
 export const YTD_MAX_IDS = 60
 
+/**
+ * 口径字符串（随结果返回；与算法同源 —— 窗口就写 `YTD_BARS`，改窗口这里的数字跟着变）。
+ * 样本窗 + 样本数：`(400 根日线窗口 / 年内首个交易日为基准)`。
+ */
+export const YTD_METHODOLOGY =
+  `YTD = (现价 − 本年内第一个交易日收盘价) ÷ 该收盘价 × 100%；前复权序列（指数/期货按原始价格，不适用复权时如实标注）；` +
+  `取数窗口 ${YTD_BARS} 根日线（含基准日与最新一根）；基准必须**已收盘**，当日未收盘不给数；算不出显示 — 并给原因。`
+
 /** 一个标的的基准（年内第一个交易日收盘价 / 上市首日收盘价） */
 export interface YtdBase {
   baseDate: string | null
@@ -174,6 +182,8 @@ export interface YtdItem {
 export interface YtdBatchResult {
   rows: YtdRow[]
   missing: MissingField[]
+  /** 口径字符串（随结果返回，与算法同源） */
+  methodology: string
 }
 
 /**
@@ -245,5 +255,5 @@ export async function computeYtds(items: readonly YtdItem[], deps: YtdDeps = {})
   // 保持入参顺序：界面的默认顺序与"沉底"语义都依赖它
   const order = new Map(items.map((it, i) => [it.secid, i]))
   rows.sort((a, b) => (order.get(a.secid) ?? 0) - (order.get(b.secid) ?? 0))
-  return { rows, missing }
+  return { rows, missing, methodology: YTD_METHODOLOGY }
 }
