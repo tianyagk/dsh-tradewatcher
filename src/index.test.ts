@@ -146,8 +146,8 @@ test('P2：cordis.patch.yml 与代码的行集合一致（防漂移）', async (
   const text = raw.split('\n').filter((l) => !l.trim().startsWith('#')).join('\n')
   const ids = [...text.matchAll(/- id: (tradewatcher-[a-z]+)/g)].map((m) => m[1])
   assert.deepEqual(ids, [
-    'tradewatcher-core', 'tradewatcher-calendar', 'tradewatcher-cloudmap',
-    'tradewatcher-watchlist', 'tradewatcher-portfolio', 'tradewatcher-market',
+    'tradewatcher-core', 'tradewatcher-calendar', 'tradewatcher-cloudmap', 'tradewatcher-market',
+    'tradewatcher-watchlist', 'tradewatcher-portfolio',
   ], '六行齐全且顺序固定')
   // 每行都带 config.row，且与 id 对应
   const blocks = text.split('- id: ').slice(1)
@@ -156,11 +156,40 @@ test('P2：cordis.patch.yml 与代码的行集合一致（防漂移）', async (
     assert.ok(blocks[i].includes(`config: { row: ${row} }`), `${id} 的 config.row 必须是 ${row}`)
   }
   // 已搬迁的三行必须启用；未搬迁的三行必须 disabled（否则会显示成"已启用"却没有门控）
-  const shouldEnable = ['tradewatcher-core', 'tradewatcher-calendar', 'tradewatcher-cloudmap']
-  const shouldDisable = ['tradewatcher-watchlist', 'tradewatcher-portfolio', 'tradewatcher-market']
+  // P3：**六行全部启用**。watchlist/portfolio 的路由前缀在 P1 就进了 ROW_ROUTES ⇒
+  // 留成 disabled 会让 core 已经排除、行又不提供 ⇒ 真把功能弄坏（tab 也会被 gate 隐藏）。
+  const shouldEnable = [
+    'tradewatcher-core', 'tradewatcher-calendar', 'tradewatcher-cloudmap',
+    'tradewatcher-market', 'tradewatcher-watchlist', 'tradewatcher-portfolio',
+  ]
+  const shouldDisable: string[] = []
   for (const [i, id] of ids.entries()) {
     const isDisabled = blocks[i].includes('disabled: true')
     assert.equal(isDisabled, shouldDisable.includes(id), `${id} 的 enabled/disabled 与搬迁进度不符`)
   }
   assert.equal(shouldEnable.length + shouldDisable.length, ids.length)
+})
+
+test('P3：market 行只注册独占前缀；/tradewatcher/industry 留在 core（详情抽屉要用）', () => {
+  setKernel(null)
+  const core = fakeCtx()
+  apply(core.ctx)
+  const market = fakeCtx()
+  apply(market.ctx, { row: 'market' })
+  // market 独占的五个前缀都在该行；core 里一个都不许有
+  const owned = ['/tradewatcher/breadth', '/tradewatcher/board', '/tradewatcher/rescue', '/tradewatcher/anomaly', '/tradewatcher/industries']
+  for (const p of owned) {
+    assert.equal(market.routes.includes(p), true, `market 行应注册 ${p}`)
+    assert.equal(core.routes.includes(p), false, `core 不该再注册 ${p}（否则关不掉大盘）`)
+  }
+  // 跨行共享：/tradewatcher/industry 是详情抽屉（core）用的 ⇒ 必须留 core
+  assert.equal(core.routes.includes('/tradewatcher/industry'), true, '/tradewatcher/industry 必须留 core')
+  assert.equal(market.routes.includes('/tradewatcher/industry'), false, '它不属于 market（抽屉会因此坏掉）')
+  // 工具：rescue 归 market；group_rank 属于自选（P4 再动）⇒ 本轮仍在 core 的兜底里
+  assert.ok(market.tools.includes('tradewatcher_rescue'), 'market 行提供 rescue 工具')
+  assert.equal(core.tools.includes('tradewatcher_rescue'), false, 'core 不再提供 rescue')
+  // group_rank 的数据来源是自选分组 ⇒ 归属 watchlist 行（P1 的表），P3 **不动它**
+  assert.equal(core.tools.includes('tradewatcher_group_rank'), false, '它不属于 core（在 watchlist 行）')
+  assert.equal(market.tools.includes('tradewatcher_group_rank'), false, '也不属于 market')
+  stopMonitor()
 })

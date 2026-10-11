@@ -33,7 +33,16 @@ const ROW_ROUTES: Record<Exclude<RowId, 'core'>, readonly string[]> = {
   calendar: ['/tradewatcher/calendar'],
   watchlist: ['/tradewatcher/watch', '/tradewatcher/ledger', '/tradewatcher/trades'],
   portfolio: ['/tradewatcher/portfolio'],
-  market: ['/tradewatcher/breadth', '/tradewatcher/board', '/tradewatcher/rescue', '/tradewatcher/anomaly', '/tradewatcher/industries', '/tradewatcher/industry'],
+  // market 行**独占**（P3 查证后的准确清单，见 docs/AUDIT-IMPL14.md）：
+  //   /tradewatcher/breadth     涨跌家数（大盘页；顶部行情条**不**用它 —— 已 grep 查证）
+  //   /tradewatcher/board       板块/概念资金流
+  //   /tradewatcher/industries  行业列表
+  //   /tradewatcher/rescue      护盘信号
+  //   /tradewatcher/anomaly     异动
+  // ⚠ `/tradewatcher/industry`（单个 secid 的行业查询）**留 core**：详情抽屉（core）在用它，
+  //   停用大盘不该把抽屉的行业行弄没。它不是 `/tradewatcher/industries` 的前缀（后者更长），
+  //   前缀匹配天然分得开 —— 这条判断连同理由写进了报告。
+  market: ['/tradewatcher/breadth', '/tradewatcher/board', '/tradewatcher/rescue', '/tradewatcher/anomaly', '/tradewatcher/industries'],
   cloudmap: [],
 }
 

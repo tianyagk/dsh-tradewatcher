@@ -4,9 +4,10 @@
 # 靠 `id` + `config.row` 区分；每行的 host 半区是独立 fiber。
 # 关闭某行由 profile 层写 `- id: tradewatcher-calendar` + `disabled: true`。
 #
-# 现状：core + calendar（P1）+ cloudmap（P2）已启用；
-# watchlist/portfolio/market 三行**暂写 disabled: true** ——
-# 它们的功能路由目前仍由 core 兜着（P3–P4 逐个搬迁后再打开）。
+# 现状：**六行全部启用**（P3）。
+# watchlist / portfolio 的路由前缀在 P1 就已进了 `ROW_ROUTES` ⇒ 这两行启用后自己提供那段路由；
+# 如果把它们留成 disabled，客户端 gate 会把「自选」「持仓」两个 tab 一起隐藏（用户会以为功能没了），
+# 而它们的路由又已被 core 排除 —— 那才是真的坏。P4 要做的只是复核与补测试，不再是"打开"。
 #
 # ⚠ 语义（task-53 明确）：**无 config ⇒ 只有 core 自己的部分**（功能行必须由 profile 显式装载）。
 # 也就是说 core 的"排除列表"是**静态**的（不因行是否激活而变）：某行没被装载，它那段路由就 404。
@@ -26,16 +27,14 @@
     - id: tradewatcher-cloudmap
       name: 'dsh-tradewatcher'
       config: { row: cloudmap }
-    # ↓ P3 起逐个打开（打开前它们的功能路由仍由 core 提供）
-    - id: tradewatcher-watchlist
-      name: 'dsh-tradewatcher'
-      config: { row: watchlist }
-      disabled: true
-    - id: tradewatcher-portfolio
-      name: 'dsh-tradewatcher'
-      config: { row: portfolio }
-      disabled: true
+    # market（P3）：独占 /tradewatcher/breadth、/board、/industries、/rescue、/anomaly。
+    # ⚠ /tradewatcher/industry（单 secid 行业查询）**留在 core**：详情抽屉在用它。
     - id: tradewatcher-market
       name: 'dsh-tradewatcher'
       config: { row: market }
-      disabled: true
+    - id: tradewatcher-watchlist
+      name: 'dsh-tradewatcher'
+      config: { row: watchlist }
+    - id: tradewatcher-portfolio
+      name: 'dsh-tradewatcher'
+      config: { row: portfolio }
