@@ -13,7 +13,7 @@ import { dirClass } from './format.ts'
 import { clampIndex } from './chipsView.ts'
 import { countMount } from './mounts.ts'
 import { CHIPS_LINE_TOKENS } from './theme.ts'
-import { axisTicks, caliberDeviates, chipsLinesOf, chipsRowHeight, ratioTicks } from './chipsView.ts'
+import { axisTicks, caliberDeviates, chipAxisOf, chipsLinesOf, chipsRowHeight } from './chipsView.ts'
 import type { ChipsState } from './useChips.ts'
 
 export interface ChipsPanelProps {
@@ -55,19 +55,25 @@ export function ChipsPanel(props: ChipsPanelProps): React.ReactElement | null {
     return React.createElement('div', { className: 'tw-chips tw-chips-off' },
       React.createElement('span', { className: 'tw-muted' }, props.state.loading ? '筹码分布计算中…' : '暂无筹码分布'))
   }
-  const max = Math.max(...day.buckets, 1e-9)
   const price = day.avgCost
   const profitPct = day.profitRatio
-  const hint = `${d.methodology}\n${d.disclaimer}`
+  const hint0 = `${d.methodology}`
   const deviate = caliberDeviates({
     decay: d.decay, decayReason: d.decayReason, fqSupported: props.fqSupported,
     why: d.why, samples: d.samples, window: d.window,
   })
-  const ticks = axisTicks(day.centers.map((c) => c))
-  const rowH = chipsRowHeight(props.maxBottom === undefined ? 140 : props.maxBottom, day.buckets.length)
-  const peakW = Math.max(...day.buckets, 0)
-  const xTicks = ratioTicks(peakW)
+  // 价格轴裁到筹码密集区（覆盖 99% 质量）+ 横轴与条宽**同一来源**（axisOf）
+  const axis = chipAxisOf(day.centers, day.buckets)
+  const win = axis.window
+  const viewCenters = day.centers.slice(win.from, win.to + 1)
+  const viewBuckets = day.buckets.slice(win.from, win.to + 1)
+  const rowH = chipsRowHeight(props.maxBottom === undefined ? 140 : props.maxBottom, Math.max(1, win.rows))
+  const ticks = axisTicks(viewCenters)
+  const xTicks = axis.ticks
   const lines = chipsLinesOf({ avgCost: day.avgCost, support: day.support, resistance: day.resistance })
+  const hint = `${hint0}\n显示区间按筹码质量覆盖裁剪：${(axis.window.covered * 100).toFixed(2)}% 的筹码在轴内，` +
+    `${(axis.window.dropped * 100).toFixed(2)}% 在轴外（未显示，权重未改）\n` +
+    `横轴自适应：轴顶 ${(axis.top * 100).toFixed(2)}%（当前展示日单桶峰值 ${(axis.peak * 100).toFixed(2)}%）\n${d.disclaimer}`
   const colorOf = (k: 'avg' | 'resistance' | 'support'): string =>
     k === 'avg' ? CHIPS_LINE_TOKENS.avg : k === 'resistance' ? CHIPS_LINE_TOKENS.resistance : CHIPS_LINE_TOKENS.support
   const money = (v: number | null): string => (v === null ? '—' : v.toFixed(2))
@@ -118,7 +124,8 @@ export function ChipsPanel(props: ChipsPanelProps): React.ReactElement | null {
             React.createElement('div', { className: 'tw-chips-plot', style: { flex: 1 } },
               // 网格线（层级：网格在下、横条在上；颜色走 token，不写死 hex）
               ...xTicks.map((t, i) => React.createElement('div', {
-                key: `gv${i}`, className: 'tw-chips-grid-v', style: { left: `calc(${t.pct}% - ${(t.pct / 100) * 44}px)` },
+                // 竖网格位置 = 刻度在轴上的**真实比例**（旧实现的 `- pct*44px` 偏移把线拉左 ⇒ 看起来"分布压扁在左侧"）
+                key: `gv${i}`, className: 'tw-chips-grid-v', style: { left: `${t.pct}%` },
               })),
               ...ticks.map((_t, i) => React.createElement('div', {
                 key: `gh${i}`, className: 'tw-chips-grid-h',
@@ -126,11 +133,9 @@ export function ChipsPanel(props: ChipsPanelProps): React.ReactElement | null {
               })),
               // 三条**语义线**（横跨分布区，右端标注数值；不是涨跌 ⇒ 不用红/绿）
               ...lines.map((l) => {
-                const idx = l.kind === 'avg' ? -1 : -1
-                const lo = day.centers[0]
-                const hi = day.centers[day.centers.length - 1]
+                const lo = win.lo
+                const hi = win.hi
                 const topPct = hi > lo ? ((hi - l.price) / (hi - lo)) * 100 : 50
-                void idx
                 return React.createElement('div', {
                   key: `ln-${l.kind}`, className: 'tw-chips-refline',
                   style: { top: `${Math.min(100, Math.max(0, topPct))}%`, color: colorOf(l.kind) },
@@ -139,8 +144,8 @@ export function ChipsPanel(props: ChipsPanelProps): React.ReactElement | null {
                 })
               }),
               ...lines.map((l) => {
-                const lo = day.centers[0]
-                const hi = day.centers[day.centers.length - 1]
+                const lo = win.lo
+                const hi = win.hi
                 const topPct = hi > lo ? ((hi - l.price) / (hi - lo)) * 100 : 50
                 return React.createElement('span', {
                   key: `lb-${l.kind}`, className: 'tw-chips-reflabel',
@@ -149,11 +154,12 @@ export function ChipsPanel(props: ChipsPanelProps): React.ReactElement | null {
                 }, l.label)
               }),
               // 横条（96 桶：每行 ≥1px，低于 1px 也照画 ⇒ 不静默丢桶）
-              ...day.buckets.map((w, i) => React.createElement('div', {
+              // 只画**裁剪窗口内**的行；条宽按轴顶换算（axis.widthOf）⇒ 与刻度同尺度
+              ...viewBuckets.map((w, i) => React.createElement('div', {
                 key: i,
-                className: `tw-chips-bar ${price === null ? 'tw-flat' : dirClass(day.centers[i] - price, props.redUp)}`,
-                style: { height: rowH, width: `${(w / max) * 100}%` },
-                title: `${day.centers[i].toFixed(2)} 元 · 权重 ${(w * 100).toFixed(2)}%`,
+                className: `tw-chips-bar ${price === null ? 'tw-flat' : dirClass(viewCenters[i] - price, props.redUp)}`,
+                style: { height: rowH, width: `${axis.widthOf(w)}%` },
+                title: `${viewCenters[i].toFixed(2)} 元 · 权重 ${(w * 100).toFixed(2)}%（占总筹码）`,
               })),
             ),
           ),

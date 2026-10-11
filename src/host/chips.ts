@@ -389,6 +389,6 @@ export function chipSeriesOf(bars: readonly ChipBar[], opts: ChipOptions = {}): 
       `。新增筹码按${shape === 'triangle' ? '三角形分布（峰在当日均价 (high+low+close)/3）' : '均匀分布'}铺到当日 [low, high]` +
       `（均价均值 ${(peakSum / Math.max(1, win.length)).toFixed(4)}）；` +
       `窗口：用了近 ${samples} 根日线${samples < CHIPS_WINDOW ? `（不足累积窗口 ${CHIPS_WINDOW} 根 ⇒ 历史越短越不准，如实标注）` : ''}（fqt=1 前复权）；` +
-      `桶数 ${buckets}；支撑/压力 = 筹码累积分布的 P5/P95 价位；平均成本 = Σ(桶价×权重)/Σ权重；盈利比例 = Σ(桶价 < 现价 的权重)/Σ权重。`,
+      `桶数 ${buckets}（显示区间裁剪：先按筹码质量 99% 覆盖，再隐去权重低于窗口峰值 20% 的稀疏行；被裁到轴外的权重不显示、也不参与四数统计口径）；支撑/压力 = 筹码累积分布的 P5/P95 价位；平均成本 = Σ(桶价×权重)/Σ权重；盈利比例 = Σ(桶价 < 现价 的权重)/Σ权重。`,
   }
 }

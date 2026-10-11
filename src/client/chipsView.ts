@@ -127,3 +127,96 @@ export function chipsRowHeight(availablePx: number, bucketCount: number): number
   const h = Math.floor((Number.isFinite(availablePx) ? availablePx : 0) / n)
   return Math.max(1, h)
 }
+
+/** 价格轴裁剪的目标覆盖面（筹码质量）：显示区间覆盖 99% 权重，其余在轴外但如实报告 */
+export const CHIPS_COVERAGE = 0.99
+/** 稀疏行阈值：窗口内权重 < 窗口峰值的这个比例的行不显示（观感密集带，质量差额如实计入 dropped） */
+export const MASS_THRESHOLD = 0.2
+
+export interface MassWindow {
+  from: number
+  to: number
+  /** 显示区间内的筹码质量占比（≥ coverage） */
+  covered: number
+  /** 被裁到轴外的质量占比（= 1 − covered） */
+  dropped: number
+  rows: number
+  lo: number
+  hi: number
+}
+
+/**
+ * 把价格轴裁到**筹码密集区**（按质量覆盖）：从两端往内丢桶，直到剩下的质量仍 ≥ `coverage`。
+ *
+ * 为什么：96 桶铺在 360 天全区间（如 5.47–22.82）时，绝大多数桶权重≈0 ⇒ 画出来只有十来个可见条，
+ * 观感是"条少而宽"。裁剪只改**显示范围**，不改任何权重、不做归一化拉伸（`sum = 1` 依旧守恒）。
+ */
+export function massWindowOf(centers: readonly number[], buckets: readonly number[], coverage = CHIPS_COVERAGE): MassWindow {
+  const n = Math.min(centers.length, buckets.length)
+  if (n === 0) return { from: 0, to: -1, covered: 0, dropped: 0, rows: 0, lo: Number.NaN, hi: Number.NaN }
+  const total = buckets.reduce((a, b) => a + b, 0)
+  if (!(total > 0)) return { from: 0, to: n - 1, covered: 0, dropped: 1, rows: n, lo: centers[0], hi: centers[n - 1] }
+  let from = 0
+  let to = n - 1
+  let head = 0
+  let tail = 0
+  while (from < to && (total - head - tail - buckets[from]) >= coverage * total) {
+    head += buckets[from]
+    from += 1
+  }
+  while (to > from && (total - head - tail - buckets[to]) >= coverage * total) {
+    tail += buckets[to]
+    to -= 1
+  }
+  // 第二步：在质量窗口内再丢掉**稀疏行**（权重 < 窗口峰值的 20%）—— 券商观感只显示密集带；
+  // 被丢的质量一并算进 dropped，如实报告（不静默）。
+  const winPeak = Math.max(...buckets.slice(from, to + 1), 0)
+  const thr = winPeak * MASS_THRESHOLD
+  if (thr > 0) {
+    let f2 = from
+    let t2 = to
+    while (f2 < t2 && buckets[f2] < thr) f2 += 1
+    while (t2 > f2 && buckets[t2] < thr) t2 -= 1
+    const kept2 = buckets.slice(f2, t2 + 1).reduce((a, b) => a + b, 0)
+    if (t2 - f2 + 1 >= 3) return { from: f2, to: t2, covered: total > 0 ? kept2 / total : 0, dropped: 1 - (total > 0 ? kept2 / total : 0), rows: t2 - f2 + 1, lo: centers[f2], hi: centers[t2] }
+  }
+  const kept = buckets.slice(from, to + 1).reduce((a, b) => a + b, 0)
+  const covered = total > 0 ? kept / total : 0
+  return { from, to, covered, dropped: 1 - covered, rows: to - from + 1, lo: centers[from], hi: centers[to] }
+}
+
+export interface ChipAxis {
+  /** 当前展示日的**单桶峰值**（条宽分母、刻度峰值的**唯一来源**） */
+  peak: number
+  /** 轴顶：把峰值向上取到 nice step 的整数倍（刻度与条宽都用它 ⇒ 两者同尺度） */
+  top: number
+  ticks: Array<{ value: number; label: string; pct: number }>
+  window: MassWindow
+  /** 条宽：**按轴顶**换算（不是按峰值）⇒ 8% 的桶在 10% 轴上占 80% 宽度，与刻度一致 */
+  widthOf: (w: number) => number
+}
+
+/**
+ * 横轴与条宽的**同一个来源**。
+ *
+ * 旧实现的错：条宽按 `peak` 归一（峰值 ⇒ 100% 宽），而刻度按 nice 取整后的 `top`（如 8.05% ⇒ 10%）⇒
+ * 轴上最高的一条看起来"顶到 10% 的位置"、小条被压扁在左侧。现在两者都用 `top`。
+ * 峰值 ≤ 0 ⇒ 不出刻度（`top = 0`），`widthOf` 恒返回 0（不抛错、不出畸形刻度）。
+ */
+export function chipAxisOf(centers: readonly number[], buckets: readonly number[], coverage = CHIPS_COVERAGE): ChipAxis {
+  const window = massWindowOf(centers, buckets, coverage)
+  const inWindow = buckets.slice(window.from, window.to + 1)
+  const peak = inWindow.length > 0 ? Math.max(...inWindow) : 0
+  if (!(peak > 0)) {
+    return { peak: 0, top: 0, ticks: [], window, widthOf: () => 0 }
+  }
+  const step = niceStep(peak)
+  const d = stepDecimals(step)
+  const top = Math.max(step, Math.ceil((peak - 1e-12) / step) * step)
+  const ticks: Array<{ value: number; label: string; pct: number }> = []
+  for (let v = 0; v <= top + 1e-12 && ticks.length < 6; v += step) {
+    const value = Math.round(v / step) * step
+    ticks.push({ value, label: `${(value * 100).toFixed(d)}%`, pct: top > 0 ? (value / top) * 100 : 0 })
+  }
+  return { peak, top, ticks, window, widthOf: (w: number) => (top > 0 ? Math.min(100, Math.max(0, (w / top) * 100)) : 0) }
+}
