@@ -16,6 +16,7 @@ import { ensureCss } from './styles.ts'
 import { isMoneyMasked, setMoneyMask } from './format.ts'
 import { Toast, useToast } from './ui.tsx'
 import { BADGE_TONE_COLOR } from './theme.ts'
+import { gateTabs } from './tabsGate.ts'
 
 /** 侧栏图标与主面板共用的 id（`sidebar.panellist` 的 id == `main` 的 key）。 */
 const PANEL_ID = 'tradewatcher'
@@ -187,6 +188,8 @@ type PageKey = 'watch' | 'portfolio' | 'market' | 'cloud' | 'calendar'
 function Dashboard(): React.ReactElement {
   const visible = true
   const [page, setPage] = useState<PageKey>('watch')
+  /** 活跃行（null = 端点不可达 ⇒ 失败放行）。core 行永远在，所以老 profile 里是 {'core'}。 */
+  const [rowsEnabled, setRowsEnabled] = useState<Set<string> | null>(null)
   const [prefs, setPrefsState] = useState<PortPrefs | null>(null)
   const [watchIds, setWatchIds] = useState<string[]>([])
   const [posIds, setPosIds] = useState<string[]>([])
@@ -340,13 +343,37 @@ function Dashboard(): React.ReactElement {
     return React.createElement(CloudMap, { redUp: (prefs ?? DEFAULT_PREFS).redUp })
   }
 
-  const tabs: Array<{ key: PageKey; label: string; full: string }> = [
-    { key: 'watch', label: '自选', full: '自选关注（分组管理）' },
-    { key: 'portfolio', label: '持仓', full: '持仓账本（分组/流水/盈亏）' },
-    { key: 'market', label: '大盘', full: 'A股大盘行情' },
-    { key: 'cloud', label: '云图', full: '大盘云图（52etf 热力图）' },
-    { key: 'calendar', label: '日历', full: '财经日历（宏观/IPO/财报/分红）' },
+  // 每个 tab 归属**一行**（`GET /tradewatcher/rows` 的 gate 依据）：行被停用 ⇒ tab 直接不渲染。
+  // `rowsEnabled === null` = 端点不可达 ⇒ **失败放行**（全部照常渲染，别让抖动把界面整块弄没）。
+  const tabs: Array<{ key: PageKey; label: string; full: string; row: string }> = [
+    { key: 'watch', label: '自选', full: '自选关注（分组管理）', row: 'watchlist' },
+    { key: 'portfolio', label: '持仓', full: '持仓账本（分组/流水/盈亏）', row: 'portfolio' },
+    { key: 'market', label: '大盘', full: 'A股大盘行情', row: 'market' },
+    { key: 'cloud', label: '云图', full: '大盘云图（52etf 热力图）', row: 'cloudmap' },
+    { key: 'calendar', label: '日历', full: '财经日历（宏观/IPO/财报/分红）', row: 'calendar' },
   ]
+  useEffect(() => {
+    let alive = true
+    void api
+      .rows()
+      .then((r) => {
+        if (alive) setRowsEnabled(new Set(r.rows))
+      })
+      .catch(() => {
+        // 端点不可达/解析失败 ⇒ **失败放行**：保持 null，全部 tab 照常渲染（照抄参考实现的做法）
+      })
+    return () => {
+      alive = false
+    }
+  }, [])
+
+  // 门控逻辑是纯函数（`tabsGate.ts`，有断言）：缺失/失败放行、回落、整条隐藏都在那边定义一次
+  const tabGate = gateTabs(tabs, rowsEnabled, page)
+  const visibleTabs = tabGate.visible
+  useEffect(() => {
+    if (tabGate.fallback !== null) setPage(tabGate.fallback)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tabGate.fallback])
 
   return React.createElement(
     'div',
@@ -379,8 +406,11 @@ function Dashboard(): React.ReactElement {
     engine.error !== null
       ? React.createElement('div', { className: 'tw-hint', style: { padding: '0 10px 2px' } }, `行情接口暂时不可用：${engine.error}`)
       : null,
-    React.createElement('div', { className: 'tw-tabs' },
-      tabs.map((t) =>
+    // tab 全被关掉时**不渲染整个 tab 条**（不留空壳）
+    visibleTabs.length === 0
+      ? null
+      : React.createElement('div', { className: 'tw-tabs' },
+      visibleTabs.map((t) =>
         React.createElement(
           'button',
           { key: t.key, className: 'tw-tab', title: t.full, 'data-on': page === t.key, onClick: () => setPage(t.key) },

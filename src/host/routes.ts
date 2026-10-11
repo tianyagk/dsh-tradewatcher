@@ -172,6 +172,11 @@ export function makeTradeRoutes(
   breadth: BreadthStore = new BreadthStore(),
   /** 涨跌家数自统计（源 B）的结果缓存：一轮快照内不重复打上游 */
   breadthCountCache: BreadthCountCache = new BreadthCountCache(),
+  /**
+   * 当前活跃行（多行子组件用）。**由 core 行注入 ⇒ 端点永远可用**（不依赖任何功能行），
+   * 客户端据此 gate tab；不传时返回 `['core']`（老 profile 的等价形态）。
+   */
+  activeRows: () => string[] = () => ['core'],
 ): TradeRoutes {
   const gate = (req: IncomingMessage): boolean => isTrustedApiRequest(req, trustedHosts)
   /** 上游主机组：503 时用它给出 retry-after，并聚合展示熔断明细（去重后 3 台） */
@@ -212,6 +217,17 @@ export function makeTradeRoutes(
       handler: (req, res) => {
         if (!needGate(req, res)) return
         send(res, 200, { ok: true, name: 'dsh-tradewatcher', time: Date.now(), breaker: breakerSummary(upstreamHosts) })
+      },
+    },
+    {
+      // 活跃行清单（core 持有，永远可用）：客户端用它 gate tab ——
+      // 被停用的行连 tab 一起消失；**端点不可达时客户端失败放行**（全部照常渲染）。
+      kind: 'exact',
+      path: '/tradewatcher/rows',
+      handler: (req, res) => {
+        if (!needGate(req, res)) return
+        const rows = activeRows()
+        send(res, 200, { rows, asOf: Date.now() })
       },
     },
     {

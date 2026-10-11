@@ -1,15 +1,41 @@
-# dsh-tradewatcher bundle patch: inserts the dual-face plugin row into the
-# web profile roster. Applied as a profile bundle layer (the `dsh.bundle.patch`
-# manifest field) over the profile composition.
+# dsh-tradewatcher bundle patch：把单行拆成「core + 功能行」的多行子组件。
 #
-# The row is a bare plugin by package name: the node half (exports ".") runs in
-# the host process (quote relay + tradewatcher file store + agent tools +
-# /tradewatcher/* routes), and the `dsh.client` declaration in package.json
-# makes the browser half (exports "./client") load in the web GUI.
+# 机制（docs/DESIGN-SUBPLUGINS.md §1）：同一 package 可出现在多条 Loader 行，
+# 靠 `id` + `config.row` 区分；每行的 host 半区是独立 fiber。
+# 关闭某行由 profile 层写 `- id: tradewatcher-calendar` + `disabled: true`。
 #
-# Install from the repo root with either:
-#   dsh plugin --profile web add file:./dsh-tradewatcher      (or a link: path)
-# or the bundled helper:   bash scripts/install.sh
+# 现状：core + calendar（P1）+ cloudmap（P2）已启用；
+# watchlist/portfolio/market 三行**暂写 disabled: true** ——
+# 它们的功能路由目前仍由 core 兜着（P3–P4 逐个搬迁后再打开）。
+#
+# ⚠ 语义（task-53 明确）：**无 config ⇒ 只有 core 自己的部分**（功能行必须由 profile 显式装载）。
+# 也就是说 core 的"排除列表"是**静态**的（不因行是否激活而变）：某行没被装载，它那段路由就 404。
+# 向后兼容靠"本文件把六行都写好"来保证 —— 装 bundle 的 profile 拿到的是完整功能。
+#
+# 安装由 Lead 执行（本文件只写文件，不改 profile、不装 bundle）：
+#   dsh plugin --profile web add file:./dsh-tradewatcher
 - insert:
-    - id: tradewatcher
+    - id: tradewatcher-core
       name: 'dsh-tradewatcher'
+      config: { row: core }
+    - id: tradewatcher-calendar
+      name: 'dsh-tradewatcher'
+      config: { row: calendar }
+    # cloudmap：云图是**纯客户端 iframe**（52etf），它自己没有 host 路由/工具 ⇒
+    # 这一行的作用就是"文件里的 tab 开关"，P2 起启用。
+    - id: tradewatcher-cloudmap
+      name: 'dsh-tradewatcher'
+      config: { row: cloudmap }
+    # ↓ P3 起逐个打开（打开前它们的功能路由仍由 core 提供）
+    - id: tradewatcher-watchlist
+      name: 'dsh-tradewatcher'
+      config: { row: watchlist }
+      disabled: true
+    - id: tradewatcher-portfolio
+      name: 'dsh-tradewatcher'
+      config: { row: portfolio }
+      disabled: true
+    - id: tradewatcher-market
+      name: 'dsh-tradewatcher'
+      config: { row: market }
+      disabled: true

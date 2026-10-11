@@ -286,6 +286,10 @@ export const api = {
   mutateWatch(body: MutateWatchBody): Promise<{ watch: WatchData }> {
     return request('/tradewatcher/watch', { method: 'POST', body: JSON.stringify(body) })
   },
+  /** 活跃行清单（core 提供，永远可用）：tab gate 用；不可达时调用方**失败放行** */
+  rows(): Promise<{ rows: string[]; asOf: number }> {
+    return request('/tradewatcher/rows')
+  },
   portfolio(): Promise<{
     view: PortfolioView
     stale: number

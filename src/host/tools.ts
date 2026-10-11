@@ -154,10 +154,21 @@ export function makeAgentTools(
   rescue?: RescueMonitor,
   /**写操作日志（P0-11）；不传则用默认数据目录 */
   journal: WriteJournal = new WriteJournal(),
+  /**
+   * 行过滤（多行子组件用）：`only` = 只注册这些工具；`exclude` = 注册除这些之外的全部。
+   * 两者都不给 ⇒ 全量注册（老 profile 行为不变）。名字不含 `tradewatcher_` 前缀。
+   */
+  filter: { only?: readonly string[]; exclude?: readonly string[] } = {},
 ): {
   registerTools: (tools: PluginToolRuntime, prompt: PluginSystemPrompt | undefined) => () => void
 } {
   const defs: PluginToolDefinition[] = []
+  const keepDef = (name: string): boolean => {
+    const short = name.replace(/^tradewatcher_/, '')
+    if (filter.only !== undefined) return filter.only.includes(short)
+    if (filter.exclude !== undefined) return !filter.exclude.includes(short)
+    return true
+  }
 
   /**从 exec 里取写入者标识（会话 id）；取不到时如实标 unknown，不编一个假 id */
   const writerOf = (exec?: PluginToolExec): string => {
@@ -1371,7 +1382,7 @@ export function makeAgentTools(
   return {
     registerTools(tools, prompt) {
       const disposers: Array<() => void> = []
-      for (const def of defs) {
+      for (const def of defs.filter((d) => keepDef(d.name))) {
         try {
           // Lossless-JSON guard: tool outputs must round-trip exactly.
           // Optional fields that carry `undefined` (note/fee/price/…) or any

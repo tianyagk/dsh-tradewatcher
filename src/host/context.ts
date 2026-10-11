@@ -67,6 +67,10 @@ export interface PluginContext {
   webRuntime: PluginWebRuntime
   /** Register a lifecycle callback (DSH-vendored cordis). */
   effect(fn: () => void | (() => void), label?: string): void
+  /** Loader 行配置（`config: { row: core }`）。我们未声明 Config schema ⇒ 原样透传，读取要防御性。 */
+  config?: { row?: unknown }
+  /** Cordis service 注册（子组件行之间共享内核用；测试用的假 ctx 可以不实现） */
+  provide?(name: string, value: unknown): void
   /** Optional capabilities — resolved via ctx.get, never injected. */
   get(name: 'tools'): PluginToolRuntime | undefined
   get(name: 'systemPrompt'): PluginSystemPrompt | undefined
