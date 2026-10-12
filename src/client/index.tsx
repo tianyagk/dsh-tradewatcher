@@ -29,11 +29,11 @@ const PANEL_ID = 'tradewatcher'
  * 之间唯一不引入新依赖的通道；而且这样"徽标数据"只有一份，天然满足
  * 「徽标数字与面板顶部数字同源」的要求。
  */
-const badgeState: BadgeState = { text: '', tone: 'flat', detail: '' }
+const badgeState: BadgeState = { text: '', tone: 'flat', detail: '', stamp: '' }
 const badgeListeners = new Set<() => void>()
 
 function setBadge(next: BadgeState): void {
-  if (next.text === badgeState.text && next.tone === badgeState.tone && next.detail === badgeState.detail) return
+  if (next.text === badgeState.text && next.tone === badgeState.tone && next.detail === badgeState.detail && next.stamp === badgeState.stamp) return
   badgeState.text = next.text
   badgeState.tone = next.tone
   badgeState.detail = next.detail
@@ -104,7 +104,7 @@ export function apply(ctx: ClientContext): void {
         id: PANEL_ID,
         order: 60,
         // 展开态侧栏标题 / aria-label：图标放不下的完整语义（包括「已收盘」后缀）在这里
-        label: () => (badgeState.detail === '' ? '盯盘' : `盯盘 · ${badgeState.detail}`),
+        label: () => (badgeState.stamp === '' ? '盯盘' : `盯盘 · ${badgeState.stamp}`),
       },
       PanelIcon,
     ),

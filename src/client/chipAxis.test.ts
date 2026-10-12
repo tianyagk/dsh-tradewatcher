@@ -1,7 +1,9 @@
 /** task-69：价格轴裁剪（质量覆盖）+ 横轴与条宽同源同尺度。 */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { createRequire } from 'node:module'
 import { CHIPS_COVERAGE, axisTicks, bucketCenterTicks, chipAxisOf, massWindowOf } from './chipsView.ts'
+const require = createRequire(import.meta.url)
 
 const centers = (n: number, lo = 5.47, hi = 22.82): number[] => Array.from({ length: n }, (_, i) => lo + ((hi - lo) * i) / (n - 1))
 
@@ -111,4 +113,35 @@ test('task-78 ③：轴顶与条宽同源（同一峰值变量），换一天一
   assert.ok(Math.abs(a1.widthOf(a1.peak) - (a1.peak / a1.top) * 100) < 1e-9, '条宽分母就是轴顶（同源）')
   assert.notEqual(a1.top, a2.top, '换一天（峰值不同）⇒ 轴顶跟着变')
   assert.notDeepEqual(a1.ticks.map((t) => t.pct), a2.ticks.map((t) => t.pct), '刻度位置也一起变')
+})
+
+test('task-79 ②：几何锚定断言（真实量级 fixture）——单位混用必被抓', () => {
+  // 真实量级：展示日峰值 0.0863（分数）、轴顶 0.1（分数）
+  const n = 40
+  const c = centers(n, 15.3, 22.8)
+  const b = new Array(n).fill(0)
+  b[20] = 0.0863
+  const ax = chipAxisOf(c, b)
+  assert.ok(Math.abs(ax.peak - 0.0863) < 1e-12, `peak 是分数（实际 ${ax.peak}）`)
+  assert.ok(Math.abs(ax.top - 0.1) < 1e-12, `top 是分数 0.1（实际 ${ax.top}）`)
+  const w = ax.widthOf(ax.peak)
+  // ① 峰值条宽必须落在 [80%, 90%]（0.0863 / 0.1 = 86.3%）——**混单位时这里会是 0.86%**
+  assert.ok(w >= 80 && w <= 90, `widthOf(峰值) 必须 ≈86%（实际 ${w}%）`)
+  // ② 轴顶对应的桶 ⇒ 正好 100%
+  assert.ok(Math.abs(ax.widthOf(ax.top) - 100) < 1e-9, `轴顶桶宽必须 === 100%（实际 ${ax.widthOf(ax.top)}%）`)
+  // ③ peak === top ⇒ 1.0（100%）
+  const b2 = new Array(n).fill(0)
+  b2[20] = 0.1
+  const ax2 = chipAxisOf(c, b2)
+  assert.equal(ax2.peak, ax2.top, '单桶 10% ⇒ 轴顶就是它自己')
+  assert.ok(Math.abs(ax2.widthOf(ax2.peak) - 100) < 1e-9, 'peak === top ⇒ 条宽 100%')
+  // ④ 单位契约：widthOf 返回**百分数**（0–100），不是分数
+  assert.ok(ax.widthOf(0.05) > 1 && ax.widthOf(0.05) <= 100, `widthOf 必须返回百分数（实际 ${ax.widthOf(0.05)}）`)
+  // ⑤ 渲染层写的也是百分号（静态核对，避免"函数对、渲染又乘一次"）
+  const { readFileSync } = require('node:fs') as { readFileSync: (p: string) => string }
+  const { fileURLToPath } = require('node:url') as { fileURLToPath: (u: string) => string }
+  const { dirname, join } = require('node:path') as { dirname: (p: string) => string; join: (...p: string[]) => string }
+  const panel = readFileSync(join(dirname(fileURLToPath(import.meta.url)), './ChipsPanel.tsx'))
+  assert.ok(panel.includes('width: `${axis.widthOf(w)}%`'), '渲染必须直接用 widthOf 的百分数 + %')
+  assert.equal(/width: `\$\{axis\.widthOf\(w\) \* 100\}%`/.test(panel), false, '渲染层不许再乘一次 100')
 })

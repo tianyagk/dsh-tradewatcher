@@ -193,14 +193,21 @@ export function massWindowOf(centers: readonly number[], buckets: readonly numbe
   return { from, to, covered, dropped: 1 - covered, rows: to - from + 1, lo: centers[from], hi: centers[to] }
 }
 
+/**
+ * 筹码横轴的**单位约定（写死，别再猜）**：
+ * - `peak` / `top` / `step` 一律是**分数**（0–1，即"占总筹码比例"），与 `buckets` 权重同单位；
+ * - `ticks[].pct` 是**百分数**（0–100），只用于 CSS 的 `%` 与文案；
+ * - `widthOf(w)` 入参是**分数**（`buckets` 的权重），返回**百分数**（0–100），直接写进 CSS 宽度。
+ * 任何一处跨单位都要在这里显式 `× 100`，并且**只允许在边界处乘一次**。
+ */
 export interface ChipAxis {
-  /** 当前展示日的**单桶峰值**（条宽分母、刻度峰值的**唯一来源**） */
+  /** 当前展示日的**单桶峰值**（分数；条宽分母、刻度峰值的**唯一来源**） */
   peak: number
-  /** 轴顶：把峰值向上取到 nice step 的整数倍（刻度与条宽都用它 ⇒ 两者同尺度） */
+  /** 轴顶（**分数**）：把峰值向上取到 nice step 的整数倍（刻度与条宽都用它 ⇒ 两者同尺度） */
   top: number
   ticks: Array<{ value: number; label: string; pct: number }>
   window: MassWindow
-  /** 条宽：**按轴顶**换算（不是按峰值）⇒ 8% 的桶在 10% 轴上占 80% 宽度，与刻度一致 */
+  /** 条宽（**百分数 0–100**）：入参是分数权重，按**轴顶**换算（不是按峰值）⇒ 8.63% 的桶在 10% 轴上占 86.3% 宽 */
   widthOf: (w: number) => number
 }
 

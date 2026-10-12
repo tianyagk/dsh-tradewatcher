@@ -14,8 +14,10 @@ export interface BadgeState {
   text: string
   /** 徽标颜色键：rescue 等级 / 上涨 / 下跌 / 平静 */
   tone: 'rescue' | 'up' | 'down' | 'flat'
-  /** 悬停提示：**只留一行**，拼在侧栏插件名之后 */
+  /** 悬停提示：**只留一行**（含当日盈亏，供 tooltip 用） */
   detail: string
+  /** 侧栏**标签**用的那一截：只有 `数据 HH:mm:ss[ · 已收盘]` —— 盈亏已在徽标里显示，标签不重复 */
+  stamp: string
 }
 
 /** 徽标取值需要的最小字段集（结构类型，便于测试构造，不依赖 api 模块） */
@@ -38,11 +40,21 @@ function tail(asOfText: string, settled: boolean): string {
   return ` · 数据 ${asOfText}${settled ? ' · 已收盘' : ''}`
 }
 
+/**
+ * 侧栏标签只用**时间戳那一截**：`数据 HH:mm:ss[ · 已收盘]`。
+ *
+ * 为什么：标签与徽标是**同一处**的两种呈现，徽标已经带了带色的盈亏数值 ⇒
+ * 标签再写一遍"当日盈亏 -2.29%"就是同一事实出现两次（用户明确要求过简洁）。
+ */
+function stamp(asOfText: string, settled: boolean): string {
+  return `数据 ${asOfText}${settled ? ' · 已收盘' : ''}`
+}
+
 export function badgeView(b: BadgeInput, masked: boolean): BadgeState {
   const asOfText = b.asOf === null ? '—' : new Date(b.asOf).toLocaleTimeString('zh-CN', { hour12: false })
   // 护盘 ≥ 疑似护盘（level ≥ 2）优先：那是"今天市场有事"的信号，比个人盈亏更该被看到
   if (b.level >= 2) {
-    return { text: '护', tone: 'rescue', detail: `护盘信号：${b.levelLabel ?? '—'}${tail(asOfText, b.settled)}` }
+    return { text: '护', tone: 'rescue', detail: `护盘信号：${b.levelLabel ?? '—'}${tail(asOfText, b.settled)}`, stamp: stamp(asOfText, b.settled) }
   }
   if (masked) {
     const point = b.indexPoint === null ? null : Math.round(b.indexPoint)
@@ -50,21 +62,24 @@ export function badgeView(b: BadgeInput, masked: boolean): BadgeState {
       text: point === null ? '••' : String(point).slice(0, 4),
       tone: 'flat',
       detail: `隐身视图 · 点位 ${point ?? '—'}${tail(asOfText, b.settled)}`,
+      stamp: stamp(asOfText, b.settled),
     }
   }
   if (b.dayPnlPct === null) {
     // 不可算：给短原因，绝不写 0.00%（那是另一条信息）
-    return { text: '', tone: 'flat', detail: '当日盈亏 —（无持仓行情）' }
+    return { text: '', tone: 'flat', detail: '当日盈亏 —（无持仓行情）', stamp: stamp(asOfText, b.settled) }
   }
   if (b.dayPnlPct === 0) {
-    return { text: '0.0', tone: 'flat', detail: `当日盈亏 0.00%${tail(asOfText, b.settled)}` }
+    return { text: '0.0%', tone: 'flat', detail: `当日盈亏 0.0%${tail(asOfText, b.settled)}`, stamp: stamp(asOfText, b.settled) }
   }
   const pct = b.dayPnlPct
   const sign = pct > 0 ? '+' : '-'
   const mag = Math.abs(pct)
   return {
-    text: `${sign}${mag >= 10 ? '10+' : mag.toFixed(1)}`,
+    // 徽标与 tooltip **同口径同舍入**（一位小数 + %）：徽标 `-2.3%`、tooltip 也 `-2.3%`
+    text: `${sign}${mag >= 10 ? '10+' : mag.toFixed(1)}%`,
     tone: pct > 0 ? 'up' : 'down',
-    detail: `当日盈亏 ${sign}${mag.toFixed(2)}%${tail(asOfText, b.settled)}`,
+    detail: `当日盈亏 ${sign}${mag >= 10 ? '10+' : mag.toFixed(1)}%${tail(asOfText, b.settled)}`,
+    stamp: stamp(asOfText, b.settled),
   }
 }
