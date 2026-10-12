@@ -1613,7 +1613,8 @@ export function klineStaleNoteOf(input: {
   usableBars: number
 }): string | null {
   if (input.settled || !input.stale || input.degradedReason === null) return null
-  const dropped = input.droppedLast ? '；不可信的最后一根已丢弃' : ''
+  // v0.64.1（lead 决定）：可见句是被截断的**首段**，「未完成」比「不可信」点得更明（这是盘中未完成 bar）
+  const dropped = input.droppedLast ? '；未完成的最后一根已丢弃' : ''
   return `回源未取到新数据 ⇒ 改用本地缓存的 ${input.usableBars} 根已完成 bar${dropped}（原因：${input.degradedReason}）`
 }
 
