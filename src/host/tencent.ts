@@ -4,8 +4,9 @@ const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
 
 /**
  * 东财 secid → 腾讯代码。
- * 覆盖：沪市(1.)、深市(0.)、港股(116.)。美股(105/106/107)、国际指数(100.)、
- * 商品/期货(101/113/114) 无法稳定映射，返回 null（这些标的仍只有东财源）。
+ * 覆盖：沪市(1.)、深市(0.)、港股(116.)。美股(105/106/107)、商品/期货(101/113/114) 无法稳定映射，
+ * 返回 null（这些标的仍只有东财源）。**国际指数(100.) 见下面的 `tencentIndexCode`**——
+ * 它们用的是另一种写法（`us.INX`，带点），而且 `qt.gtimg.cn` 覆盖的只有其中几个。
  */
 export function tencentCode(secid: string): string | null {
   const [market, code] = secid.split('.')
@@ -14,6 +15,39 @@ export function tencentCode(secid: string): string | null {
   if (market === '0') return `sz${code}`
   if (market === '116') return `hk${code.padStart(5, '0')}`
   return null
+}
+
+/**
+ * 国际指数（EM `100.*`）→ 腾讯代码。
+ *
+ * **实测（2026-10-12）**：
+ *   - `us.INX` = 7811.54（标普 500）／`us.DJI` = 51654.95（道指）／`us.NDX` = 30883.15（纳指 100）；
+ *     三者都带行情时间戳（`f[30]`），可判新鲜度。
+ *   - ⚠ **`usSPX` / `us.SPX` 不存在**（返回 `pv_none_match`）—— 标普 500 的唯一正确腾讯代码是 `us.INX`。
+ *   - `hkHSI` = 24271.200 可用来兜底恒生指数（EM `100.HSI`）。
+ *   - 日经/富时/德国 DAX/韩国/斯托克 50：腾讯**没有**（逐个试过 `us.NIKKEI`/`jp.NI225`/`uk.FTSE100`/
+ *     `de.DAX`/`us.SX5E`/`us.KOSPI` 全是 `pv_none_match`）⇒ 这些标的没有腾讯兜底，
+ *     新浪 `int_*` 又因"陈旧快照 + 无时间戳"被整体停用（见 sina.ts 文件头）⇒ 如实标"无兜底源"。
+ *
+ * 为什么单列一张表、不并进 `tencentCode`：`tencentCode` 还被**五日分时**（`mkline`）与
+ * 逐笔/板块等路径复用，而 `mkline` 对 `us.INX` 返回 `param error`（实测）——
+ * 并进通用映射会给这些路径凭空加一条注定失败的请求。
+ */
+const TENCENT_INDEX_CODE: Record<string, string> = {
+  '100.SPX': 'us.INX',
+  '100.DJI': 'us.DJI',
+  '100.NDX': 'us.NDX',
+  '100.HSI': 'hkHSI',
+}
+
+/** 国际指数的腾讯代码（查不到返回 null；大小写无关） */
+export function tencentIndexCode(secid: string): string | null {
+  return TENCENT_INDEX_CODE[secid.trim().toUpperCase()] ?? null
+}
+
+/** 「快照」可用的腾讯代码：沪深/港股 + 国际指数（**不含**五日分时的 mkline 那条链，理由见上） */
+export function tencentQuoteCode(secid: string): string | null {
+  return tencentCode(secid) ?? tencentIndexCode(secid)
 }
 
 export interface TencentQuote {
@@ -65,7 +99,9 @@ export interface TencentQuoteFull extends TencentQuote {
 export async function fetchTencentQuoteRows(secids: string[]): Promise<Record<string, TencentQuoteFull>> {
   const map = new Map<string, string>()
   for (const secid of secids) {
-    const code = tencentCode(secid)
+    // 用 tencentQuoteCode：国际指数（us.INX/us.DJI/us.NDX/hkHSI）也在此列 ——
+    // 它们原先由新浪 int_* 兜底，实测是陈旧快照，已整族停用（见 sina.ts 文件头）
+    const code = tencentQuoteCode(secid)
     if (code !== null) map.set(code, secid)
   }
   if (map.size === 0) return {}
@@ -128,7 +164,8 @@ export function suggestKindFromTencent(marketKey: string, rawKind: string): stri
 
 /** 日线（腾讯 fqkline，前复权）；用于位置与底部概率回算 */
 export async function fetchTencentDaily(secid: string, count = 320): Promise<Array<{ date: string; open: number; close: number; high: number; low: number; vol: number }>> {
-  const code = tencentCode(secid)
+  // 国际指数也走这里（实测 `fqkline?param=us.INX,day,,,10,qfq` 返回 `day` 数组，下面已有 `day` 兜底）
+  const code = tencentQuoteCode(secid)
   if (code === null) return []
   const res = await fetch(`https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param=${code},day,,,${count},qfq`, {
     headers: { 'user-agent': UA, referer: 'https://gu.qq.com/' },

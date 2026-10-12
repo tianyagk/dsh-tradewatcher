@@ -24,12 +24,19 @@ const num = (v: unknown): number | null => {
 /**
  * 国际指数 / 国内期货 / 外盘商品 的 EM secid → 新浪代码映射。
  *
- * 实测（2026-09-29）：腾讯 `qt.gtimg.cn` 只覆盖 sh/sz/hk 与美股三大指数；日经、德法、
- * 韩国指数与全部大宗商品都取不到。新浪 `hq.sinajs.cn` 补上：
- *   - 国际指数：int_dji / int_nasdaq / int_sp500 / int_hangseng / int_ftse / int_nikkei / int_dax30
+ * ⚠ **国际指数（`100.*`）已从本表整体移除**（2026-10-12 实测，见 docs/AUDIT-IMPL44.md）：
+ * 新浪 `int_*` 族是**陈旧快照且不带时间戳**，没法判定新鲜度，实测与腾讯同刻值差到两位数：
+ *   `int_sp500` = 6643.70 vs 腾讯 `us.INX` = **7811.54**（旧值低 15.0%）
+ *   `int_dji`   = 46247.29 vs 腾讯 `us.DJI` = **51654.95**（旧值低 10.5%）
+ *   `int_nasdaq`= 22484.07 vs 腾讯 `us.NDX` = **30883.15**（旧值低 27.2%）
+ * 现网 `quotes-lkg.json` 里 `100.SPX = 6643.7` 就是这条链路落进去的**错值**。
+ * 国际指数改由腾讯 `us.INX` / `us.DJI` / `us.NDX` / `hkHSI` 兜底（见 tencent.ts 的 `tencentIndexCode`）；
+ * 腾讯也没覆盖的（日经/富时/德国/韩国/斯托克50）**如实标为"无兜底源"** —— 宁可 `—`，不给错值。
+ *
+ * 仍保留（有真时间戳，可判新鲜度）：
  *   - 国内期货：nf_RB0 螺纹 / nf_JM0 焦煤 / nf_M0 豆粕 / nf_LH0 生猪
  *   - 外盘商品：hf_XAU 伦敦金 / hf_HG 铜 / hf_SI 银 / hf_OIL 布伦特原油
- * 仍未覆盖（如实返回 null）：韩国 KOSPI200、法国 CAC40、欧洲斯托克50。
+ * 仍未覆盖（如实返回 null）：韩国 KOSPI200、法国 CAC40、欧洲斯托克50、日经、富时、德国 DAX。
  */
 /**
  * 大小写无关的查表：键统一为大写。
@@ -43,13 +50,7 @@ function sinaSymbolOf(secid: string): string | null {
 }
 
 const SINA_SYMBOL: Record<string, string> = {
-  '100.DJI': 'int_dji',
-  '100.SPX': 'int_sp500',
-  '100.NDX': 'int_nasdaq',
-  '100.HSI': 'int_hangseng',
-  '100.FTSE': 'int_ftse',
-  '100.N225': 'int_nikkei',
-  '100.GDAXI': 'int_dax30',
+  // 注：`100.*`（国际指数）**故意不在本表**—— 见文件头的实测证据（int_* 是陈旧快照且无时间戳）
   '113.rbm': 'nf_RB0',
   '114.jmm': 'nf_JM0',
   '114.mm': 'nf_M0',
@@ -84,10 +85,13 @@ export interface SinaHqQuote {
 }
 
 /**
- * 解析 `hq.sinajs.cn` 响应。三种布局（实测字段下标）：
- *   int_*（4 字段）：名称, 最新, 涨跌额, 涨跌幅
+ * 解析 `hq.sinajs.cn` 响应。两种受支持布局（实测字段下标）：
  *   nf_* （44 字段）：名称, 时间, 开, 高, 低, 昨收, 买, 卖, **最新**, 结算, …
  *   hf_* （14 字段）：**最新**, 昨收?, …, 开, 高, 低, 时间, **昨收**, …
+ *
+ * ⚠ `int_*`（国际指数，4 字段：名称/最新/涨跌额/涨跌幅）**不再解析**：它没有时间戳，
+ * 无法判定新鲜度，且实测是陈旧快照（见文件头）。整族停用 ⇒ 任何调用方都不可能再拿到它
+ * （比"映射表里不列"更硬：连手工构造的 payload 也解析不出来）。
  */
 export function parseSinaHq(payload: string): Record<string, SinaHqQuote> {
   const out: Record<string, SinaHqQuote> = {}
@@ -98,11 +102,7 @@ export function parseSinaHq(payload: string): Record<string, SinaHqQuote> {
     const parts = m[2].split(',')
     if (parts.length < 2) continue
     let q: SinaHqQuote | null = null
-    if (symbol.startsWith('int_')) {
-      const price = num(parts[1])
-      if (price === null) continue
-      q = { name: parts[0] ?? symbol, price, prev: null, open: null, high: null, low: null, pct: num(parts[3]) }
-    } else if (symbol.startsWith('nf_')) {
+    if (symbol.startsWith('nf_')) {
       const price = num(parts[8])
       const prev = num(parts[5])
       if (price === null) continue

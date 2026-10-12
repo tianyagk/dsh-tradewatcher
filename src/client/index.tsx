@@ -1,6 +1,6 @@
 /**
  */
-import React, { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react'
+import React, { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { DEFAULT_PREFS, TW_ROWS, VIEW_MODES, normalizePanelOpacity, type PortPrefs, type QuoteRow, type ViewMode } from '../shared/model.ts'
 import { api } from './api.ts'
 import { badgeView, type BadgeState } from './badgeView.ts'
@@ -12,12 +12,14 @@ import { PortfolioPage } from './PortfolioPage.tsx'
 import { MarketPage } from './MarketPage.tsx'
 import { CloudMap } from './CloudMap.tsx'
 import { CalendarPage } from './CalendarPage.tsx'
+import { ToolsPage } from './ToolsPage.tsx'
 import { QuoteDrawer } from './QuoteDrawer.tsx'
 import { ensureCss } from './styles.ts'
 import { isMoneyMasked, setMoneyMask } from './format.ts'
 import { Toast, useToast } from './ui.tsx'
 import { BADGE_TONE_COLOR } from './theme.ts'
 import { gateTabs } from './tabsGate.ts'
+import { backTarget, rememberPage } from './toolsNav.ts'
 
 /** 侧栏图标与主面板共用的 id（`sidebar.panellist` 的 id == `main` 的 key）。 */
 const PANEL_ID = 'tradewatcher'
@@ -184,11 +186,26 @@ function PanelIcon(props: { size?: number; active?: boolean }): React.ReactEleme
 
 /** 徽标底色：护盘用等级色系，盈亏用涨跌语义色（隐身视图下 tone 恒为 flat） */
 
-type PageKey = 'watch' | 'portfolio' | 'market' | 'cloud' | 'calendar'
+type PageKey = 'watch' | 'portfolio' | 'market' | 'cloud' | 'calendar' | 'tools'
+
+/** 工具箱页的页键（返回按钮的"非 tools 页"判据在 `toolsNav.ts`，那是唯一实现） */
+const TOOLS_PAGE: PageKey = 'tools'
 
 function Dashboard(): React.ReactElement {
   const visible = true
   const [page, setPage] = useState<PageKey>('watch')
+  /**
+   * 上一个**非 tools** 页签（工具箱左上角返回按钮的目标）。
+   *
+   * 规则与边界都在 `toolsNav.ts`（纯函数、有断言）：只有非 tools 页会被记住；返回目标必须
+   * 当下仍可见（那一行没被停用），否则回落到首个可见的非 tools 页，都没有 ⇒ 不渲染返回按钮。
+   */
+  const lastNonTools = useRef<PageKey | null>(null)
+  /** 页签切换的**唯一入口**：换页的同时记录返回目标（否则在工具页里换页会把返回目标弄丢/弄错） */
+  const goPage = useCallback((next: PageKey): void => {
+    lastNonTools.current = rememberPage(lastNonTools.current, next, TOOLS_PAGE)
+    setPage(next)
+  }, [])
   /** 活跃行（null = 端点不可达 ⇒ 失败放行）。core 行永远在，所以老 profile 里是 {'core'}。 */
   const [rowsEnabled, setRowsEnabled] = useState<Set<string> | null>(null)
   const [prefs, setPrefsState] = useState<PortPrefs | null>(null)
@@ -349,6 +366,11 @@ function Dashboard(): React.ReactElement {
     if (page === 'calendar') {
       return React.createElement(CalendarPage, { prefs: prefs ?? DEFAULT_PREFS })
     }
+    if (page === 'tools') {
+      // 工具箱：目录页 + 工具详情页都在 ToolsPage 里；返回按钮回到上一个非 tools 页签
+      //（`backPage === null` = 没有可返回的页 ⇒ 不渲染按钮，而不是退回一个不存在的页）
+      return React.createElement(ToolsPage, { onBack: backPage === null ? null : () => goPage(backPage) })
+    }
     // 云图页仍要 redUp：只用来判断第三方站点的色义是否与本插件**相反**（相反才出那个徽标）
     return React.createElement(CloudMap, { redUp: (prefs ?? DEFAULT_PREFS).redUp })
   }
@@ -361,6 +383,8 @@ function Dashboard(): React.ReactElement {
     { key: 'market', label: '大盘', full: 'A股大盘行情', row: 'market' },
     { key: 'cloud', label: '云图', full: '大盘云图（52etf 热力图）', row: 'cloudmap' },
     { key: 'calendar', label: '日历', full: '财经日历（宏观/IPO/财报/分红）', row: 'calendar' },
+    // 工具箱（第 7 行）：工具目录 + 工具详情；行被停用 ⇒ 这个页签不渲染（门控与其余页签同一套）
+    { key: 'tools', label: '工具', full: '工具箱（工具目录与工具详情）', row: 'tools' },
   ]
   useEffect(() => {
     let alive = true
@@ -380,8 +404,13 @@ function Dashboard(): React.ReactElement {
   // 门控逻辑是纯函数（`tabsGate.ts`，有断言）：缺失/失败放行、回落、整条隐藏都在那边定义一次
   const tabGate = gateTabs(tabs, rowsEnabled, page)
   const visibleTabs = tabGate.visible
+  /**
+   * 工具箱返回按钮的目标：**上一页优先，且必须当下仍可见**（行被停用 ⇒ 那个页签已经不在条上）。
+   * 规则在 `toolsNav.ts`（纯函数、有断言）；这里只负责把当前可见页签喂进去。
+   */
+  const backPage = backTarget(lastNonTools.current, visibleTabs.map((t) => t.key), TOOLS_PAGE)
   useEffect(() => {
-    if (tabGate.fallback !== null) setPage(tabGate.fallback)
+    if (tabGate.fallback !== null) goPage(tabGate.fallback)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tabGate.fallback])
 
@@ -423,7 +452,7 @@ function Dashboard(): React.ReactElement {
       visibleTabs.map((t) =>
         React.createElement(
           'button',
-          { key: t.key, className: 'tw-tab', title: t.full, 'data-on': page === t.key, onClick: () => setPage(t.key) },
+          { key: t.key, className: 'tw-tab', title: t.full, 'data-on': page === t.key, onClick: () => goPage(t.key) },
           t.label,
         ),
       ),

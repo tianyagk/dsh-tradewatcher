@@ -22,7 +22,7 @@ import { writeFileAtomic } from './atomic.ts'
 import { updateJsonLocked, withFileLock } from './lock.ts'
 import { breakerFor, hostsAllowed, minutesToRecover } from './breaker.ts'
 import { fetchSinaEtfRanking, fetchSinaQuotes, sinaSymbol as sinaQuoteSymbol } from './sina.ts'
-import { fetchTencentBoards, fetchTencentMinutes, fetchTencentQuoteRows, fetchTencentSuggest, minuteTrendPointsOf, tencentCode, type TencentQuoteFull } from './tencent.ts'
+import { fetchTencentBoards, fetchTencentMinutes, fetchTencentQuoteRows, fetchTencentSuggest, minuteTrendPointsOf, tencentCode, tencentIndexCode, tencentQuoteCode, type TencentQuoteFull } from './tencent.ts'
 import { join } from 'node:path'
 import { dataHome } from './store.ts'
 import { hhmmOf, dayOf, inSession, isSettledOffline, shanghaiParts } from './time.ts'
@@ -220,6 +220,31 @@ const QUOTE_FIELDS =
 const LKG_MAX = 1500
 const LKG_PERSIST_MS = 45_000
 
+/**
+ * **已退役兜底来源**的标的集合（AUDIT-IMPL44）：这七个国际指数的兜底曾是新浪 `int_*`，
+ * 实测那是**陈旧快照且没有时间戳**（`100.SPX` 曾落盘 6643.70，同刻腾讯 `us.INX` = 7811.54；
+ * `100.NDX` 22484.07 vs `us.NDX` = 30883.15 —— 偏差 10–27%）。
+ * 对它们，last-known-good 里**只信东财/腾讯的观测**；其余来源（sina / 无来源）一律作废。
+ * 其余 `100.*`（法国/韩国/斯托克 50）历史上只有东财一个源，不在此列，保持原样。
+ */
+const RETIRED_INDEX_FALLBACK = new Set(['100.SPX', '100.DJI', '100.NDX', '100.HSI', '100.FTSE', '100.N225', '100.GDAXI'])
+/** 作废留痕（进程内 + 落盘 `purged` 字段）：供 /quotes 排查与断言观察 */
+const lkgPurged: Array<{ secid: string; price: number | null; at: number | null; reason: string }> = []
+
+/** 该行是否是"已退役兜底来源"的旧值（是 ⇒ 返回作废原因；否 ⇒ null） */
+function retiredIndexRowReason(row: QuoteRow): string | null {
+  const key = row.secid.toUpperCase()
+  if (!RETIRED_INDEX_FALLBACK.has(key)) return null
+  const src = typeof row.source === 'string' ? row.source : '(无来源)'
+  if (src === 'em' || src === 'tencent') return null
+  return `新浪 int_* 陈旧快照（无时间戳；实测偏差 10–27%）已整体停用 ⇒ 来源 ${src} 的行作废`
+}
+
+/** 本次进程作废掉的 last-known-good 行（含原因）；供断言与排查 */
+export function lastGoodPurged(): ReadonlyArray<{ secid: string; price: number | null; at: number | null; reason: string }> {
+  return lkgPurged
+}
+
 /** Per-secid most recent quote that actually carried a price. Persisted to
  *  <dataHome>/quotes-lkg.json so a feed drop-window right after a host
  *  restart can never blank the UI (values survive the process). */
@@ -243,9 +268,26 @@ async function loadLastGood(): Promise<void> {
         const row = r as QuoteRow
         if (typeof row.secid !== 'string' || !SECID_RE.test(row.secid)) continue
         if (typeof row.price !== 'number' || !Number.isFinite(row.price)) continue
+        // 已退役兜底来源的旧值：**作废 + 留痕**，绝不当"最后成功值"端上界面（AUDIT-IMPL44）
+        const retired = retiredIndexRowReason(row)
+        if (retired !== null) {
+          lkgPurged.push({ secid: row.secid, price: row.price, at: typeof row.at === 'number' ? row.at : null, reason: retired })
+          continue
+        }
         // 键用大小写无关形式：库里可能存着历史写入的大写 secid（如 114.LHM），
         // 而新请求是小写（114.lhm）—— 按原样做键会让这些标的丢掉兜底价
         lastGood.set(row.secid.toUpperCase(), typeof row.at === 'number' ? row : { ...row, at: fileTs })
+      }
+      if (lkgPurged.length > 0) {
+        console.warn(
+          '[tradewatcher] 作废 last-known-good 里的国际指数旧值：',
+          lkgPurged.map((p) => `${p.secid}=${p.price}`).join(' / '),
+          '— 新浪 int_* 是陈旧快照且无时间戳，已整体停用（下一次取数会用腾讯 us.INX/us.DJI/us.NDX/hkHSI 重建）',
+        )
+        // 立刻把作废结果写回文件（不留着错值等下一个人继承）；`purged` 是留痕
+        lkgDirty = true
+        lkgLastWrite = 0
+        persistLastGood()
       }
     } catch {
       /* no persisted file yet — first boot */
@@ -269,12 +311,15 @@ function persistLastGood(): void {
     }
   }
   const rows = [...lastGood.values()]
+  // `v`: 落盘 schema 版本（v2 = 国际指数不再接受新浪 int_* 兜底值，见 RETIRED_INDEX_FALLBACK）；
+  // `purged`: 本次进程作废掉的旧值留痕（有才写，避免给文件加无意义的字段）
+  const purged = lkgPurged.length > 0 ? lkgPurged.slice(-20) : undefined
   void (async () => {
     try {
       // ⚠ 原子写（tmp + rename）：这份文件会被下一次读取与另一个写者同时看到，
       // 直接 writeFile 会让读者读到半截 JSON（解析失败 ⇒ 被当成"没有缓存" ⇒ 白拉一遍上游）。
       // 序列化保持**逐字节不变**（compact，不换缩进）—— 4MB 级的 trends-lkg 不值得为好看翻倍。
-      await writeFileAtomic(join(dataHome(), 'quotes-lkg.json'), JSON.stringify({ ts: Date.now(), rows }))
+      await writeFileAtomic(join(dataHome(), 'quotes-lkg.json'), JSON.stringify(purged === undefined ? { v: 2, ts: Date.now(), rows } : { v: 2, ts: Date.now(), rows, purged }))
     } catch (error) {
       console.warn('[tradewatcher] persist quotes-lkg failed:', String(error))
     }
@@ -618,7 +663,9 @@ export function quoteFromTencent(secid: string, q: TencentQuoteFull): QuoteRow |
 
 async function tencentQuoteRows(list: readonly string[]): Promise<Map<string, QuoteRow>> {
   const out = new Map<string, QuoteRow>()
-  const usable = list.filter((secid) => tencentCode(secid) !== null)
+  // ⚠ 必须用 `tencentQuoteCode`（沪深/港股 **+ 国际指数**）：用只认沪深港的 `tencentCode`
+  // 会在请求之前就把 `100.SPX`/`100.DJI`/`100.NDX`/`100.HSI` 过滤掉 —— 表现为"映射改了但兜底仍拿不到值"
+  const usable = list.filter((secid) => tencentQuoteCode(secid) !== null)
   if (usable.length === 0) return out
   const rows = await fetchTencentQuoteRows([...usable])
   for (const [secid, q] of Object.entries(rows)) {
@@ -634,7 +681,8 @@ async function tencentQuoteRows(list: readonly string[]): Promise<Map<string, Qu
  *
  * 此前只有腾讯，于是「国际市场 + 大宗商品」共 17 只标的在东财不可用时**代码层就没有任何兜底**
  * （客户端只能吃 LKG 旧值）—— 实测 23 只预设里只有 6 只可解析。现补新浪一档：
- * 国际指数 int_*（含日经/德国/富时，腾讯没有）、国内期货 nf_*、外盘商品 hf_*。
+ * 国内期货 nf_*、外盘商品 hf_*（国际指数**不再**走新浪 —— `int_*` 是陈旧快照且无时间戳，
+ * 已整族停用，改由腾讯 `us.INX`/`us.DJI`/`us.NDX`/`hkHSI` 兜底，见 sina.ts/tencent.ts 的实测注释）。
  */
 async function fillFromFallbacks(list: readonly string[], rows: Map<string, QuoteRow>): Promise<void> {
   const need = (): string[] => list.filter((secid) => {
@@ -1320,7 +1368,9 @@ async function fetchTrendSingleDay(secid: string, opts: TrendOptions = {}): Prom
 
 /** 该标的是否有备用源（腾讯或新浪报价映射）；用于搜索结果与工具输出如实标注"仅东财源"。 */
 export function hasQuoteFallback(secid: string): boolean {
-  return tencentCode(secid) !== null || sinaQuoteSymbol(secid) !== null
+  // 用 tencentQuoteCode（沪深/港股 + 国际指数）：国际指数已改由腾讯兜底，
+  // 新浪 int_* 整族停用（陈旧快照 + 无时间戳，见 sina.ts 文件头）
+  return tencentQuoteCode(secid) !== null || sinaQuoteSymbol(secid) !== null
 }
 
 /** 东财 secid → 新浪代码（仅 A股/深沪 ETF；港股/美股接口不适用）。 */
@@ -1893,7 +1943,8 @@ function tencentSymbol(secid: string): string | null {
   if (mkt === '0') return `sz${code}`
   if (mkt === '116') return `hk${code}`
   if (mkt === '105' || mkt === '106' || mkt === '107') return `us${code.toUpperCase()}`
-  return null
+  // 国际指数（100.*）：腾讯用 `us.INX` 这种**带点**的写法（美股个股是 `usAAPL`，不带点）
+  return tencentIndexCode(secid)
 }
 
 /**
@@ -1914,8 +1965,11 @@ async function requestKlineFromTencent(secid: string, klt: number, lmt: number, 
     const node = json?.data?.[sym]
     if (node === undefined) return null
     // 严格按请求的口径取键：要前复权却只拿到不复权序列时宁可失败，
-    // 也不能把不复权价格当前复权画出去（旧实现优先取 `${period}`，就是这种混口径）
-    const rows = node[fq === '' ? period : `${fq}${period}`] as unknown
+    // 也不能把不复权价格当前复权画出去（旧实现优先取 `${period}`，就是这种混口径）。
+    // 例外：**国际指数**（`100.*`）实测只回 `${period}`（如 `us.INX` 的 `day`），
+    // 且指数没有除权除息 ⇒ `day` 与 `qfqday` 是同一份序列，取它不构成混口径。
+    const key = fq === '' ? period : `${fq}${period}`
+    const rows = (node[key] ?? (/^100\./.test(secid) ? node[period] : undefined)) as unknown
     if (!Array.isArray(rows)) return null
     const bars: DayBar[] = []
     for (const r of rows) {

@@ -9,7 +9,7 @@ import { DataStore, normalizeRescuePrefs, replayPosition, secidKey, sortLedger, 
 import { assemblePortfolio, derivePosition, ledgerViews, shanghaiDayStart, verbLabel } from './portfolio.ts'
 import * as em from './em.ts'
 import { fillLastGood, fqSupported, hasQuoteFallback, mergeBars, normalizeFq, quoteFreshnessMs, quoteFromTencent, resampleYearly, setQuoteFreshnessMs, summarizeQuoteProvenance } from './em.ts'
-import { parseTencentStamp, parseTencentSuggest, suggestKindFromTencent, tencentCode, unescapeUnicode } from './tencent.ts'
+import { parseTencentStamp, parseTencentSuggest, suggestKindFromTencent, tencentCode, tencentIndexCode, tencentQuoteCode, unescapeUnicode } from './tencent.ts'
 import { parseSinaEtfRanking, parseSinaHq, sinaCovered, sinaSymbol } from './sina.ts'
 import { breakerFor, breakerSummary, hostsAllowed, minutesToFullyRecover, minutesToRecover } from './breaker.ts'
 import { HttpError, httpStatusOf, retryAfterSecondsOf } from './http.ts'
@@ -504,14 +504,21 @@ async function main(): Promise<void> {
     // 备用源覆盖：国际指数与大宗商品必须有兜底（此前 17 只无任何兜底）
     {
       const presets = TW_ALL_SECIDS
-      const covered = presets.filter((s) => sinaSymbol(s) !== null || tencentCode(s) !== null)
+      // 2026-10-12（AUDIT-IMPL44）：国际指数**不再**走新浪 `int_*`（陈旧快照 + 无时间戳，实测偏差 10–27%），
+      // 改由腾讯 `us.INX`/`us.DJI`/`us.NDX`/`hkHSI` 兜底；腾讯也没覆盖的（日经/富时/德国/韩国/斯托克50）
+      // **如实无兜底** ⇒ 可用兜底数从 22 降到 18、新浪专供从 15 降到 8。这是**有意的降级**（宁缺错值）。
+      const covered = presets.filter((s) => sinaSymbol(s) !== null || tencentQuoteCode(s) !== null)
       // 28 = 6 A股指数 + 9 国际市场 + 8 大宗商品 + 5 国债（v0.39.0 加国债组）
       // 国债那 5 张里，`1.000012` 有腾讯兜底；四个 `171.*` **故意**只有东财一路
       //（调研实测：171.* 无腾讯/新浪映射 ⇒ 东财不可达时如实 `—` + 原因，绝不代理）
       ok(presets.length === 28, `预设标的数 ${presets.length}`)
-      ok(covered.length >= 20, `可用兜底的预设数 ${covered.length}/28（要求 ≥20）`)
-      ok(sinaCovered(presets) >= 13, `新浪专供（国际指数 + 期货/外盘商品）${sinaCovered(presets)} 只`)
-      ok(sinaSymbol('113.rbm') === 'nf_RB0' && sinaSymbol('122.XAU') === 'hf_XAU' && sinaSymbol('100.N225') === 'int_nikkei', '商品/国际指数映射正确')
+      ok(covered.length >= 18, `可用兜底的预设数 ${covered.length}/28（要求 ≥18）`)
+      ok(sinaCovered(presets) >= 8, `新浪专供（期货/外盘商品）${sinaCovered(presets)} 只（要求 ≥8）`)
+      ok(sinaSymbol('113.rbm') === 'nf_RB0' && sinaSymbol('122.XAU') === 'hf_XAU', '商品/期货映射正确')
+      ok(sinaSymbol('100.SPX') === null && sinaSymbol('100.N225') === null && sinaSymbol('100.HSI') === null,
+        '国际指数不得再落到新浪（int_* 族整体停用：陈旧快照 + 无时间戳）')
+      ok(tencentIndexCode('100.SPX') === 'us.INX' && tencentIndexCode('100.DJI') === 'us.DJI' && tencentIndexCode('100.NDX') === 'us.NDX' && tencentIndexCode('100.HSI') === 'hkHSI',
+        '标普/道指/纳指/恒生的腾讯代码正确（⚠ usSPX 不存在，标普必须 us.INX）')
       ok(sinaSymbol('100.KOSPI200') === null, '韩国 KOSPI200 无兜底 → 如实返回 null（不编代码）')
       // 解析：int_ / nf_ / hf_ 三种布局（字段下标按实测）
       const payload = [
@@ -520,7 +527,7 @@ async function main(): Promise<void> {
         'var hq_str_hf_XAU="4157.83,4114.930,4157.83,4158.18,4161.20,4113.30,19:36:00,4114.93";',
       ].join('\n')
       const parsed = parseSinaHq(payload)
-      ok(parsed.int_nikkei?.price === 44946.64 && parsed.int_nikkei?.pct === -0.9, 'int_* 布局：最新与涨跌幅')
+      ok(parsed.int_nikkei === undefined, 'int_* 行必须被忽略（陈旧快照族停用；连手工构造的 payload 也解析不出来）')
       ok(parsed.nf_RB0?.price === 3108 && parsed.nf_RB0?.prev === 3105, 'nf_* 布局：最新取 [8]、昨收取 [5]')
       ok(parsed.hf_XAU?.price === 4157.83 && parsed.hf_XAU?.prev === 4114.93, 'hf_* 布局：最新取 [0]、昨收取 [7]')
       ok(parseSinaHq('var hq_str_hf_XAU="4157.83,4114.930,4157.83,4158.18,4161.20,4113.30,19:36:00,999999.0";').hf_XAU?.pct === null, '昨收异常（涨跌幅 >25%）→ 不给结论')
@@ -589,7 +596,8 @@ async function main(): Promise<void> {
     {
       ok(tencentCode('1.510300') === 'sh510300' && tencentCode('0.159915') === 'sz159915', '沪/深 secid → 腾讯代码')
       ok(tencentCode('116.00148') === 'hk00148' && tencentCode('116.00100') === 'hk00100', '港股 secid → 腾讯代码（补零到 5 位）')
-      ok(tencentCode('100.SX5E') === null && tencentCode('105.AAPL') === null, '国际指数/美股无腾讯映射（诚实返回 null）')
+      ok(tencentCode('100.SX5E') === null && tencentCode('105.AAPL') === null, '`tencentCode`（mkline/五日分时用）不含国际指数/美股：诚实返回 null')
+      ok(tencentIndexCode('100.SX5E') === null && tencentIndexCode('100.FCHI') === null, '腾讯也没覆盖的国际指数（斯托克50/CAC40）在指数表里同样如实返回 null')
       const a = parseTencentStamp('20260924093817')
       const b = parseTencentStamp('2026/09/24 09:38:17')
       ok(a !== null && b !== null && Math.abs(a - b) < 1000, '两种时间戳格式解析一致（A股 14 位 / 港股带斜杠）')

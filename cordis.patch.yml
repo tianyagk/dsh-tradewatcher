@@ -1,29 +1,33 @@
-# dsh-tradewatcher bundle patch —— **六行形态**：聚合包 + 可单独开关的子组件。
+# dsh-tradewatcher bundle patch —— **七行形态**：聚合包 + 可单独开关的子组件。
 #
-# 六行 = 一个内核行 + 五个功能行，全部 `name: 'dsh-tradewatcher'`（**同一个包、同一个加载源**），
-# 靠 **`id` 前缀**区分、由 `config.row` 决定这一行注册哪一段（代码见 src/index.ts:32-60、:253-269）：
+# 七行 = 一个内核行 + 六个功能行，全部 `name: 'dsh-tradewatcher'`（**同一个包、同一个加载源**），
+# 靠 **`id` 前缀**区分、由 `config.row` 决定这一行注册哪一段（代码见 src/index.ts:32-64、:219-266）：
 #   tradewatcher-core      → row: core       内核：store/rescue 采样、共享路由（行情/详情图/云图/备份…）、
 #                                            `GET /tradewatcher/rows`、核心 agent 工具
 #   tradewatcher-calendar  → row: calendar   `/tradewatcher/calendar` + `tradewatcher_calendar`/`_calendar_add`
 #   tradewatcher-watchlist → row: watchlist  `/tradewatcher/watch|industries|anomaly` + `_watchlist`/`_group_rank`
 #   tradewatcher-portfolio → row: portfolio  `/tradewatcher/portfolio|ledger` + `_portfolio`/`_ledger`
-#   tradewatcher-market    → row: market     `/tradewatcher/breadth|rescue` + `_rescue`
+#   tradewatcher-market    → row: market     `/tradewatcher/breadth|rescue|board` + `_rescue`
 #   tradewatcher-cloudmap  → row: cloudmap   纯客户端 iframe（host 侧无独占路由/工具，只贡献 activeRows）
+#   tradewatcher-tools     → row: tools      **工具箱**（工具目录页 + 工具详情页）。本轮**没有**独占 host 路由/
+#                                            工具（数组为空，与 cloudmap 同款）：它只消费 core/portfolio 已有的
+#                                            接口，因此按 §2.2 判据（单一消费方才归该行）一条都拿不走；
+#                                            与 cloudmap 一样只贡献 activeRows ⇒ 页签门控照常工作。
 #
-# ⚠ **历史归因纠正（这一条要读，前一轮的结论是错的）**
-# v0.50.0 曾把"六行装载失败"归因成"同一 package 多个活跃 Loader 源 = composition error"，
+# ⚠ **历史归因纠正（这一条要读，前一轮的结论是错的）** —— 这段说的是当时的**六行**形态，七行是同机制加一行。
+# v0.50.0 曾把"（六行）装载失败"归因成"同一 package 多个活跃 Loader 源 = composition error"，
 # **该归因不成立**：
 #   ① DSH 原文是 "distinct active Loader **sources** for that package are a composition error"
 #      （@deepseek-ai/dsh-client-modules/lib/index.js:122-123）。这里的 source 指**解析源**
 #      （`sourceKey = baseUrl + "\0" + loaderName`，:791-792）：:833-840 把同名行按 sourceKey
-#      收进 `Map` ⇒ **六行同名 + 同 baseUrl ⇒ 只有一个 sourceKey ⇒ 永远走不到 :873 的报错**。
+#      收进 `Map` ⇒ **多行同名 + 同 baseUrl ⇒ 只有一个 sourceKey ⇒ 永远走不到 :873 的报错**。
 #   ② 真正打死它的是 `apply` 里读了 `ctx.config`：真宿主的 ctx 是 Cordis Proxy，**访问未 inject
 #      的属性直接抛**（@deepseek-ai/cordis/lib/index.js:676 `cannot get property "config" without inject`）
-#      ⇒ 那一行 fiber failed，用户端表现为"插件服务异常"。**这个 bug 与行数无关：1 行和 6 行同样被打死。**
-#      v0.45.3 已修（只读第二参数 `config` + `ctxSafe` 包住 `ctx.config`，src/index.ts:85-91、:253-255）。
-#   ⇒ 结论：**六行方案此前从未被真正验证过**，本轮重做。（完整证据链见 docs/AUDIT-IMPL35.md）
+#      ⇒ 那一行 fiber failed，用户端表现为"插件服务异常"。**这个 bug 与行数无关：1 行和 N 行同样被打死。**
+#      v0.45.3 已修（只读第二参数 `config` + `ctxSafe` 包住 `ctx.config`，src/index.ts:85-91、:268-270）。
+#   ⇒ 结论：**多行方案在那之前从未被真正验证过**，v0.59.0 起重做（完整证据链见 docs/AUDIT-IMPL35.md）。
 #
-# 行语义（`rowOf`，src/index.ts:104-111）：
+# 行语义（`rowOf`，src/index.ts:118-125）：
 #   · 不带 config        ⇒ `all`：全量注册（**与拆分前逐字一致**；老 profile 的单行靠这条）
 #   · `config: { row: <行名> }` ⇒ 只注册该行那一段（行未激活 ⇒ 路由/工具都不注册，天然 404）
 #   · 认不出的 row 值    ⇒ 回退 `all`（宁可多给，不可少给）
@@ -32,6 +36,8 @@
 # (`~/.dsh/profiles/<profile>/cordis.patch.yml`) 按 id 覆盖即可，例如只关日历：
 #   - id: tradewatcher-calendar
 #     disabled: true
+# 关掉工具箱同理：`- id: tradewatcher-tools` + `disabled: true` ⇒ `GET /tradewatcher/rows` 不含 `tools`
+# ⇒ 客户端 `gateTabs` 直接不渲染「工具」页签（门控是既有逻辑，见 src/client/tabsGate.ts）。
 # ⚠ 改完 **必须重启 `dsh web`** —— 宿主行只在启动时装载，**刷新页面不够**。
 #
 # 回退成单行（用户端若再次异常）：见 docs/AUDIT-IMPL35.md 的「回滚」一节（一条命令）。
@@ -41,9 +47,9 @@
 #   · ⚠ 硬约束：`dsh-client-modules` 只把**裸包名**当成「客户端半区加载源」——`exactPackageSpecifier()` 对含 `/` 的
 #     **非 scoped** specifier 返回 undefined（`lib/index.js:82-88`，配合 `:746-747` 的 `return void 0`）⇒ 子路径行**不是** client source。
 #     所以**必须有且只有一行保持裸包名**（本文件的 `tradewatcher-core`），否则浏览器半区**整体不注册**：
-#     TCP 路由照样 200、`/rows` 照样六项，**但界面直接没了**（实测：六行全用子路径时，`window.__DSH_BOOT__` 里 `dsh-tradewatcher` 出现 0 次）。
-#   · 其余五行用 `dsh-tradewatcher/rows/<row>`：正好不参与 client 注册（也就不会触发「多个 source」），但各自能解析自己的 locale ⇒ 标题可区分。
-#   · 一句话：**六行不能都给子路径；core 必须留在裸包名 `dsh-tradewatcher` 上。**
+#     TCP 路由照样 200、`/rows` 照样有行数，**但界面直接没了**（实测：全用子路径时，`window.__DSH_BOOT__` 里 `dsh-tradewatcher` 出现 0 次）。
+#   · 其余六行用 `dsh-tradewatcher/rows/<row>`：正好不参与 client 注册（也就不会触发「多个 source」），但各自能解析自己的 locale ⇒ 标题可区分。
+#   · 一句话：**七行不能都给子路径；core 必须留在裸包名 `dsh-tradewatcher` 上。**
 - insert:
     - id: tradewatcher-core
       name: 'dsh-tradewatcher'
@@ -63,3 +69,7 @@
     - id: tradewatcher-cloudmap
       name: 'dsh-tradewatcher/rows/cloudmap'
       config: { row: cloudmap }
+    # 工具箱：工具目录页 + 工具详情页（客户端半区）；host 侧本轮无独占路由/工具
+    - id: tradewatcher-tools
+      name: 'dsh-tradewatcher/rows/tools'
+      config: { row: tools }

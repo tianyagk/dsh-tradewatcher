@@ -5,7 +5,7 @@
  * 靠 `id` + `config.row` 区分；**每行的 host 半区是独立 fiber ⇒ `apply` 会被调用 N 次**
  * （N = 行数）。因此：
  *  ① 一次性副作用（`store.init()`、`rescue.start()`、采样循环、watch）必须**只跑一次** ——
- *     否则 6 行就是 6 个采样器并发写同一个 `rescue-log.json`；
+ *     否则 7 行就是 7 个采样器并发写同一个 `rescue-log.json`；
  *  ② 内核实例走**模块级单例**并按 `provide('tradewatcher.core')` 暴露 ⇒ **功能行不许自己 new DataStore()**；
  *  ③ 功能行只注册自己那一段路由/工具（行未激活 ⇒ 三者都不注册，路由天然 404）。
  *
@@ -26,7 +26,7 @@ export const name = 'dsh-tradewatcher'
 export const inject = ['webServer', 'webRuntime']
 
 /** 行标识（配置里写 `config: { row: watchlist }`） */
-export type RowId = 'core' | 'calendar' | 'watchlist' | 'portfolio' | 'market' | 'cloudmap'
+export type RowId = 'core' | 'calendar' | 'watchlist' | 'portfolio' | 'market' | 'cloudmap' | 'tools'
 
 /** 行 → 该行独占的路由前缀（core 注册**其余全部**；P2–P4 再把别的行兑现） */
 const ROW_ROUTES: Record<Exclude<RowId, 'core'>, readonly string[]> = {
@@ -49,6 +49,17 @@ const ROW_ROUTES: Record<Exclude<RowId, 'core'>, readonly string[]> = {
   //   · /tradewatcher/industry   （单 secid 行业查询）详情抽屉（core）在用 ⇒ 留 core
   market: ['/tradewatcher/breadth', '/tradewatcher/rescue', '/tradewatcher/board'],
   cloudmap: [],
+  /**
+   * tools 行（工具箱：工具目录 + 工具详情）—— **本轮不独占任何 host 路由** ⇒ 空数组。
+   *
+   * 归属判据（`docs/DESIGN-SUBPLUGINS.md` §2.2）：**被 ≥2 个行消费 ⇒ core；单一消费方 ⇒ 该行**。
+   * 工具箱本身只**消费**已有的接口（工具详情第一批要的持仓/行情数据全部由 core 与 portfolio 行提供，
+   * 那两个消费方之外还有别的调用方 ⇒ 留在原行），因此它没有"只被它一个人用"的路由可以拿走：
+   *   · 若下一批新增了**只被工具箱用**的路由（例如工具的专用聚合接口）⇒ 按同一判据写进本数组；
+   *   · 若某个新接口同时被别的页用（≥2 个行消费）⇒ 它必须留 core，不许塞进这里。
+   * 「本行可以没有 host 路由」与 cloudmap 行同款：客户端半区照常贡献 activeRows ⇒ 页签门控照常工作。
+   */
+  tools: [],
 }
 
 /** 行 → 该行独占的 agent 工具名（不含前缀） */
@@ -58,6 +69,8 @@ const ROW_TOOLS: Record<Exclude<RowId, 'core'>, readonly string[]> = {
   portfolio: ['portfolio', 'ledger'],
   market: ['rescue'],
   cloudmap: [],
+  // tools 行：本批不带 agent 工具（工具目录/详情是纯 UI）。下一批若加"工具"类 agent 工具 ⇒ 写进本数组
+  tools: [],
 }
 
 /**
@@ -106,7 +119,7 @@ export function rowOf(config: unknown, ctxConfig?: unknown): RowId | 'all' {
   const pick = (src: unknown): unknown => (typeof src === 'object' && src !== null ? (src as { row?: unknown }).row : undefined)
   const raw = pick(config) ?? pick(ctxConfig) ?? 'all'
   const row = typeof raw === 'string' ? raw.trim() : 'all'
-  return (['core', 'calendar', 'watchlist', 'portfolio', 'market', 'cloudmap'] as const).includes(row as RowId)
+  return (['core', 'calendar', 'watchlist', 'portfolio', 'market', 'cloudmap', 'tools'] as const).includes(row as RowId)
     ? (row as RowId)
     : 'all'
 }
@@ -261,10 +274,10 @@ export function apply(ctx: PluginContext, config?: unknown): void {
     return () => log(`row「${row}」unmounted`)
   }, `dsh-tradewatcher: row ${row}`)
   if (row === 'all') {
-    // 老单行装载：全量注册（与拆分前逐字一致），并把五行都标为活跃 ⇒ 客户端 gate 显示全部 tab
+    // 老单行装载：全量注册（与拆分前逐字一致），并把六个功能行都标为活跃 ⇒ 客户端 gate 显示全部 tab
     applyCore(ctx, true)
     const k = kernel as CoreKernel | null
-    if (k !== null) for (const r of ['calendar', 'watchlist', 'portfolio', 'market', 'cloudmap'] as const) k.activeRows.add(r)
+    if (k !== null) for (const r of ['calendar', 'watchlist', 'portfolio', 'market', 'cloudmap', 'tools'] as const) k.activeRows.add(r)
   } else if (row === 'core') applyCore(ctx)
   else applyFeatureRow(ctx, row)
 }
