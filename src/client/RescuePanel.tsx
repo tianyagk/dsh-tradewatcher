@@ -1,6 +1,7 @@
 /**
  */
 import * as React from 'react'
+import { breakerBadgeOf } from './rescueView.ts'
 import type {
   PortPrefs, RescueConfig, RescueDaySummary, RescueEtfMeta, RescueEtfView, RescueFactor,
   RescueIntradayPoint, RescueLevel, RescueSignalEvent, RescueSnapshot, TrendData,
@@ -258,6 +259,7 @@ function FactorTable(props: {
   )
 }
 
+
 export function RescuePanel(props: {
   prefs: PortPrefs
   redUp: boolean
@@ -457,32 +459,36 @@ export function RescuePanel(props: {
       //    在备用源兜底成功的场景下与事实不符）；
       //  - 收盘后不再承诺"最早 N 分钟可重试"（那时没有采样需求），改为"下次开盘自动重试"；
       //  - "期间不发起请求"只对熔断中的东财主机成立，备用源照常请求（「立即采样」仍可用）。
-      const closed = snapshot.trading !== true
-      const fromAlt = snapshot.flowSource === 'tencent'
-      const head = closed
-        ? `东财行情主机 ${b.openHosts}/${b.hosts} 台熔断${b.allOpen ? '（全部）' : ''} · 下次开盘自动重试`
-        : `东财行情主机 ${b.openHosts}/${b.hosts} 台熔断 · 最早约 ${b.minutesLeft} 分钟可重试${
-            b.allMinutesLeft > b.minutesLeft ? `（全部恢复 ${b.allMinutesLeft} 分钟）` : ''
-          }`
-      const impact = fromAlt
-        ? '当前快照已由腾讯备用源兜底：价格、量能、脉冲、背离可用；超大单强度与持续性无法计算（该源无分单资金流）'
-        : snapshot.stale === true || snapshot.fallback !== undefined
-          ? '当前显示上次成功采样/当日复盘数据'
-          // 来源未知时（例如客户端已刷新、宿主未重启）不猜测取自哪个源，只陈述可核对的事实
-          : '当前快照取自最近一次成功采样（数据时刻见上方「数据」）'
+      // 紧凑形式（task-14 ③）：常驻只留标记（≤6 字），完整原因在 title/aria —— 用户要"少提示"，
+      // 但降级事实不许丢（那条长句仍在，只是不再常驻占位）。
+      const badge = breakerBadgeOf({
+        openHosts: b.openHosts,
+        hosts: b.hosts,
+        allOpen: b.allOpen,
+        minutesLeft: b.minutesLeft,
+        allMinutesLeft: b.allMinutesLeft,
+        closed: snapshot.trading !== true,
+        flowSource: snapshot.flowSource,
+        stale: snapshot.stale === true,
+        fallback: snapshot.fallback,
+      })
       return React.createElement(
         'div',
         {
-          className: 'tw-hint',
-          style: { color: LEVEL_COLOR[2], padding: '2px 2px 4px' },
+          className: 'tw-badge',
+          style: { color: LEVEL_COLOR[2], borderColor: LEVEL_COLOR[2], cursor: 'help' },
+          tabIndex: 0,
+          role: 'note',
+          'aria-label': badge.reason,
           title: [
+            badge.reason,
             `熔断明细（按主机独立计数）：${b.detail.filter((h) => h.open).map((h) => `${h.host} 剩余 ${h.minutesLeft} 分钟（连续熔断 ${h.trips} 次）`).join('；')}`,
             `最后错误：${b.lastError ?? '—'}`,
             '熔断期间不再请求「熔断中的东财主机」（避免把限流推成封锁）；腾讯/新浪备用源不受影响，「立即采样」照常可用。',
             '熔断是进程级状态，不随面板开关变化。',
           ].join('\n'),
         },
-        `${head} —— ${impact}`,
+        badge.marker,
       )
     })(),
     loading && data === null ? React.createElement(Skeleton, { lines: 3, height: 20 }) : null,

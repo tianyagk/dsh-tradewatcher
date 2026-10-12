@@ -207,6 +207,24 @@ color-scheme:dark}
 .tw-panel-h{display:flex;align-items:center;gap:8px;padding-bottom:7px;min-height:24px}
 .tw-panel-h .t{font-weight:600;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;letter-spacing:-0.2px}
 .tw-statrow{display:flex;gap:8px;flex-wrap:wrap;padding:2px 0 8px}
+/* 【涨跌分布】两列布局（task-14 ②）：左列三块（趋势/成交量/两融）、右列两块（分布/日内） */
+.tw-dist-cols{display:flex;gap:14px;flex-wrap:wrap;align-items:flex-start}
+.tw-dist-col{flex:1 1 260px;min-width:240px;display:flex;flex-direction:column;gap:10px}
+.tw-dist-block{display:flex;flex-direction:column;gap:4px;min-width:0}
+.tw-dist-h{font-size:11px;font-weight:600;color:var(--tw-dim);letter-spacing:.02em}
+.tw-dist-kv{display:flex;justify-content:space-between;gap:10px;font-size:11px;padding:2px 0;border-bottom:1px solid var(--tw-border)}
+.tw-dist-kv .k{color:var(--tw-dim);white-space:nowrap}
+.tw-dist-kv .v{font-family:var(--tw-mono);text-align:right;min-width:0}
+/* 直方图：柱用百分比宽度（窄面板也不会把某档挤成 0 宽） */
+.tw-dist-hist{display:flex;align-items:flex-end;gap:2px;height:96px;padding-top:2px}
+.tw-dist-bar-wrap{flex:1 1 0;min-width:0;display:flex;flex-direction:column;justify-content:flex-end;height:100%}
+.tw-dist-count{font-size:9px;font-family:var(--tw-mono);color:var(--tw-dim);text-align:center;line-height:1.1;overflow:hidden}
+.tw-dist-bar{display:flex;align-items:flex-end;height:64px;background:var(--tw-border);border-radius:2px 2px 0 0;overflow:hidden}
+.tw-dist-bar.up .tw-dist-bar-fill{background:var(--tw-up)}
+.tw-dist-bar.down .tw-dist-bar-fill{background:var(--tw-down)}
+.tw-dist-bar.flat .tw-dist-bar-fill{background:var(--tw-muted)}
+.tw-dist-bar-fill{width:100%;min-height:1px}
+.tw-dist-label{font-size:9px;color:var(--tw-dim);text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .tw-stat{flex:1 1 118px;min-width:96px;border-radius:10px;padding:6px 10px 7px;background:var(--tw-bg2);border:1px solid var(--tw-border);transition:background .12s,border-color .12s}
 .tw-stat:hover{background:var(--tw-hover);border-color:var(--tw-border-strong)}
 .tw-stat .k{font-size:11px;color:var(--tw-muted)}

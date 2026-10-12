@@ -143,7 +143,13 @@ export const api = {
     return request('/tradewatcher/backup', { method: 'POST', body: JSON.stringify({ mode, bundle }) })
   },
   /** 涨跌家数 + 历史分位（P1-8） */
-  breadth(): Promise<{
+  /**
+   * 涨跌家数 + 历史分位（P1-8）。
+   *
+   * `dist: true` 会额外要一份【涨跌分布】直方图：那要多扫 ~56 页全市场涨跌幅，
+   * 所以**默认不要**（其它调用方/工具保持原样、不付这个成本）。
+   */
+  breadth(opts: { dist?: boolean } = {}): Promise<{
     current: {
       up: number
       down: number
@@ -164,9 +170,24 @@ export const api = {
     minDays: number
     storedDays: number
     storedThisCall: boolean
+    /**
+     * 昨日两市成交额（本地 `breadth.json` 的上一交易日快照）。没有那份快照 ⇒ `null`
+     * —— 界面按"未取到 + 原因"显示，**不许**用今天的数顶替。
+     */
+    prevAmount: { day: string; amount: number; final: boolean } | null
+    /** 只有 `dist: true` 时才出现；`counts: null` = 没扫全（原因在同项/`missing` 里），不给部分分布 */
+    distribution?: {
+      labels: string[]
+      counts: number[] | null
+      blank: number
+      scanned: number
+      total: number | null
+      asOf: number
+      reason: string | null
+    }
     missing: Array<{ what: string; why: string; note: string }>
   }> {
-    return request('/tradewatcher/breadth')
+    return request(opts.dist === true ? '/tradewatcher/breadth?dist=1' : '/tradewatcher/breadth')
   },
   /**
    * 年初至今（YTD）。口径写死在 `shared/model.ts` 的 `YTD_CALIBER`：

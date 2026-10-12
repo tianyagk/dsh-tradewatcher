@@ -102,3 +102,48 @@ export function pickBreadthCounts(
   }
   return { up: null, down: null, even: null, from: 'none' }
 }
+
+/**
+ * 【涨跌分布】的分档（v0.65.0，task-14 ②）：按个股涨跌幅分档计数。
+ *
+ * 分档是**对称的 9 档**（正负共用同一组幅度阈值），平盘单独一档 —— 与东财自己的分布图同形。
+ * 阈值写在 `DIST_EDGES`：`≥7 / 5~7 / 3~5 / 0~3 / 平盘 / -3~0 / -5~-3 / -7~-5 / ≤-7`（单位 %）。
+ *
+ * ⚠ 两件事不许做：
+ *   ① 无涨跌幅的行（停牌/上游给 `-`）**不计入任何档**，单独记 `blank` —— 不许当 0（那会凭空加一只平盘）；
+ *   ② 不声称"涨停/跌停家数"：那需要按板块（10%/20%/30%）与 ST（5%）规则判定，本插件没取这些字段
+ *      ⇒ 本函数只按**涨跌幅**分档，档名也不叫涨停/跌停。
+ */
+export const DIST_EDGES = [7, 5, 3, 0, -3, -5, -7] as const
+
+/** 分档名（与 `counts` 同序：从高到低） */
+export const DIST_LABELS = ['≥7%', '5~7%', '3~5%', '0~3%', '平盘', '-3~0%', '-5~-3%', '-7~-5%', '≤-7%'] as const
+
+/** 平盘那一档的下标 */
+const DIST_ZERO_INDEX = 4
+
+export function distributionBinsOf(pcts: ReadonlyArray<number | null>): {
+  labels: readonly string[]
+  counts: number[]
+  blank: number
+  total: number
+} {
+  const counts = new Array<number>(DIST_LABELS.length).fill(0)
+  let blank = 0
+  for (const p of pcts) {
+    if (p === null || p === undefined || !Number.isFinite(p)) {
+      blank += 1
+      continue
+    }
+    if (p === 0) {
+      counts[DIST_ZERO_INDEX] += 1
+      continue
+    }
+    const mag = Math.abs(p)
+    // 幅度档：0~3 / 3~5 / 5~7 / ≥7（正负共用）
+    const step = mag >= 7 ? 0 : mag >= 5 ? 1 : mag >= 3 ? 2 : 3
+    const i = p > 0 ? step : counts.length - 1 - step
+    counts[i] += 1
+  }
+  return { labels: DIST_LABELS, counts, blank, total: pcts.length }
+}

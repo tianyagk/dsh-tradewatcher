@@ -8,7 +8,7 @@ import { UPDOWN_MISSING_NOTE, breadthCells, pickBreadthCounts, upDownPair } from
 import { dirClass, fmtAmt, fmtBig, fmtPct, fmtPrice, fmtSigned } from './format.ts'
 import { CN_PHASE_LABEL, cnSessionState } from './marketTime.ts'
 import { useNow } from './useNow.ts'
-import { Btn, ErrorNote, Modal, SuggestInput } from './ui.tsx'
+import { Btn, ErrorNote, Modal } from './ui.tsx'
 import { Sparkline } from './charts.tsx'
 import { RescuePanel } from './RescuePanel.tsx'
 import type { PortPrefs, QuoteSource } from '../shared/model.ts'
@@ -75,8 +75,6 @@ export function MarketPage(props: {
   const [pick, setPick] = useState<{ secid: string } | null>(null)
   const [detail, setDetail] = useState<StockDetail | null>(null)
   const [trend, setTrend] = useState<TrendData | null>(null)
-  const [detailLoading, setDetailLoading] = useState(false)
-  const [detailError, setDetailError] = useState<string | null>(null)
 
   const loadBoard = useCallback((s: Scope, sortBy: Sort, pn: number, append: boolean) => {
     setBoardLoading(true)
@@ -106,7 +104,8 @@ export function MarketPage(props: {
   useEffect(() => {
     let alive = true
     api
-      .breadth()
+      // dist=1：额外要一份【涨跌分布】直方图（多扫 ~56 页，宿主侧 60s 缓存）——只有这一页要
+      .breadth({ dist: true })
       .then((b) => {
         if (alive) {
           setBreadth(b)
@@ -144,6 +143,9 @@ export function MarketPage(props: {
         selfCount.asOf === null ? '未知' : hhmmssOf(selfCount.asOf)
       }（不是行情条那一刻）`
   const countsReason = breadth?.missing[0]?.note ?? cells.reason ?? null
+  // 昨日成交（本地上一交易日快照）：取不到就是 null ⇒ 显示「未取到」，**不拿今天的数顶替**
+  const prevAmt = breadth?.prevAmount ?? null
+  const delta = prevAmt === null || !cells.amountOk ? null : cells.amount - prevAmt.amount
 
   const cnIndices: Array<{ secid: string; name: string }> = [
     { secid: '1.000001', name: '上证指数' },
@@ -158,18 +160,65 @@ export function MarketPage(props: {
     setPick({ secid })
     setDetail(null)
     setTrend(null)
-    setDetailLoading(true)
-    setDetailError(null)
     api
       .detail(secid)
       .then((r) => setDetail(r.detail))
-      .catch((e: Error) => setDetailError(e.message))
+      .catch(() => setDetail(null))
     api
       .trend(secid)
       .then((r) => setTrend(r.trend))
       .catch(() => undefined)
-      .finally(() => setDetailLoading(false))
   }
+
+  /**
+   * 未取到的三处原因（task-14 ② 的"可得性表"结论，写在代码里当唯一来源）。
+   *
+   * 红线：**不许编数、不许用 0 顶替** —— 取不到就写「未取到」，原因进 `title`/`aria-label`。
+   */
+  const LIMIT_REASON = '涨停/跌停家数：指数行情只给涨/跌/平家数（f104/f105/f106），没有涨停/跌停字段；按板块（10%/20%/30%）与 ST（5%）规则自行判定需要本插件没取的名字/板块字段 ⇒ 本轮不做（不是 0）'
+  const FORECAST_REASON = '预测全天成交额：本插件没有日内成交额采样，也没有任何校准基准 ⇒ 任何"预测"都是编的，故不给'
+  const MARGIN_REASON = '两融（融资余额/融资净买）：本插件未集成两融数据源，现有路由里没有任何 margin 字段 ⇒ 未取到（需新路由 + 新缓存 + 归属，另开）'
+  const INTRADAY_REASON = '日内上涨/下跌家数折线：宿主只按**交易日**存快照（breadth.json 每天一条），没有日内采样序列 ⇒ 画不出来（需新增日内采样与存储，另开）'
+
+  /** 一**格**"未取到"（与 `statCell` 同形，用于涨跌趋势那一排）：常驻三字，原因进 title/aria */
+  const statMiss = (label: string, reason: string): React.ReactElement =>
+    React.createElement('div', { className: 'tw-stat' },
+      React.createElement('div', { className: 'k' }, label),
+      React.createElement('div', {
+        className: 'v tw-dim',
+        title: reason,
+        'aria-label': `${label} 未取到 —— ${reason}`,
+        tabIndex: 0,
+        role: 'note',
+      }, '未取到'),
+    )
+
+  /** 一行"未取到"（键值形，用于成交量/两融/日内）：常驻三字，原因进 title/aria */
+  const missRow = (label: string, reason: string): React.ReactElement =>
+    React.createElement('div', { className: 'tw-dist-kv' },
+      React.createElement('span', { className: 'k' }, label),
+      React.createElement('span', {
+        className: 'v tw-dim',
+        title: reason,
+        'aria-label': `${label} 未取到 —— ${reason}`,
+        tabIndex: 0,
+        role: 'note',
+      }, '未取到'),
+    )
+
+  /** 成交量那一列的一行：值 + 口径/原因进 title */
+  const kvRow = (label: string, value: React.ReactNode, title: string, cls?: string): React.ReactElement =>
+    React.createElement('div', { className: 'tw-dist-kv' },
+      React.createElement('span', { className: 'k' }, label),
+      React.createElement('span', { className: `v ${cls ?? ''}`, title, 'aria-label': `${label}：${typeof value === 'string' ? value : ''} —— ${title}`, tabIndex: 0 }, value),
+    )
+
+  /** 一个小节（左列三块 / 右列两块，同形）；正文可变长（多行一起给） */
+  const distBlock = (title: string, ...body: React.ReactNode[]): React.ReactElement =>
+    React.createElement('div', { className: 'tw-dist-block' },
+      React.createElement('div', { className: 'tw-dist-h' }, title),
+      ...body,
+    )
 
   const statCell = (label: string, v: React.ReactNode, cls?: string, title?: string): React.ReactElement =>
     React.createElement('div', { className: 'tw-stat', ...(title === undefined ? {} : { title }) },
@@ -182,15 +231,46 @@ export function MarketPage(props: {
     { className: 'tw-body' },
     React.createElement('div', { className: 'tw-panel' },
       React.createElement('div', { className: 'tw-panel-h' },
-        React.createElement('span', { className: 't' }, 'A股全景'),
+        React.createElement('span', { className: 't' }, '涨跌分布'),
         React.createElement('span', { className: 'tw-muted' }, '沪深两市'),
       ),
-      React.createElement('div', { className: 'tw-statrow' },
-        statCell('上涨', up === null ? '—' : String(up), breadthOk ? (redUp ? 'tw-up' : 'tw-down') : '', countsTitle),
-        statCell('下跌', down === null ? '—' : String(down), breadthOk ? (redUp ? 'tw-down' : 'tw-up') : '', countsTitle),
-        statCell('平盘', even === null ? '—' : String(even), undefined, countsTitle),
-        React.createElement('div', { className: 'tw-stat-sep' }),
-        statCell('两市成交额', cells.amountOk ? `${fmtAmt(cells.amount)}` : '—'),
+      // ── 【涨跌分布】两列（task-14 ②）：左 = 涨跌趋势 / 成交量 / 两融走势；右 = 分布直方图 / 日内家数 ──
+      React.createElement('div', { className: 'tw-dist-cols' },
+        React.createElement('div', { className: 'tw-dist-col' },
+          distBlock('涨跌趋势',
+            React.createElement('div', { className: 'tw-statrow', style: { padding: '0 0 4px' } },
+              statCell('上涨', up === null ? '—' : String(up), breadthOk ? (redUp ? 'tw-up' : 'tw-down') : '', countsTitle),
+              statCell('平盘', even === null ? '—' : String(even), undefined, countsTitle),
+              statCell('下跌', down === null ? '—' : String(down), breadthOk ? (redUp ? 'tw-down' : 'tw-up') : '', countsTitle),
+              statMiss('涨停', LIMIT_REASON),
+              statMiss('跌停', LIMIT_REASON),
+            )),
+          distBlock('成交量',
+            kvRow('当日成交额', cells.amountOk ? fmtAmt(cells.amount) : '未取到',
+              cells.amountOk ? '沪深两市成交额（指数行情 f6 之和）' : cells.reason ?? '指数行情本轮没给成交额'),
+            kvRow('昨日成交', prevAmt === null ? '未取到' : fmtAmt(prevAmt.amount),
+              prevAmt === null
+                ? '本地没有上一交易日的收盘快照（breadth.json 里没有那一天）——不用今天的数顶替'
+                : `上一交易日 ${prevAmt.day} 的收盘快照${prevAmt.final ? '（已定稿）' : '（尚未定稿）'}`),
+            kvRow('较昨日变动', delta === null ? '未取到' : `${delta >= 0 ? '+' : ''}${fmtAmt(delta)}`,
+              delta === null ? '取不到昨日成交就无法算变动（不是 0）' : '当日成交额 − 上一交易日收盘快照'),
+            kvRow('预测全天', '未取到', FORECAST_REASON),
+          ),
+          distBlock('两融走势',
+            missRow('两融余额', MARGIN_REASON),
+            missRow('融资净买', MARGIN_REASON),
+          ),
+        ),
+        React.createElement('div', { className: 'tw-dist-col' },
+          distBlock('涨跌分布',
+            React.createElement(DistHistogram, { distribution: breadth?.distribution ?? null, distErr: breadthErr }),
+          ),
+          distBlock('日内家数',
+            missRow('上涨家数 / 下跌家数', INTRADAY_REASON),
+          ),
+        ),
+      ),
+      React.createElement('div', { className: 'tw-statrow', style: { paddingTop: 2 } },
         statCell('上证', sh?.price !== undefined && sh?.price !== null ? fmtPrice(sh.price) : '—', dirClass(sh?.chg ?? null, redUp)),
         statCell('深成', sz?.price !== undefined && sz?.price !== null ? fmtPrice(sz.price) : '—', dirClass(sz?.chg ?? null, redUp)),
       ),
@@ -459,25 +539,44 @@ export function MarketPage(props: {
           : null,
       ),
     ),
-    React.createElement('div', { className: 'tw-panel' },
-      React.createElement('div', { className: 'tw-panel-h' },
-        React.createElement('span', { className: 't' }, '个股 / 基金查询'),
-      ),
-      React.createElement(SuggestInput, {
-        onPick: (item) => openDetail(item.secid),
-        placeholder: '搜索 A股/港股/ETF/基金/指数',
-      }),
-      detailLoading && pick !== null
-        ? React.createElement('div', { className: 'tw-loading' }, '加载行情详情…')
-        : detailError !== null
-          ? React.createElement('div', { className: 'tw-error' }, detailError)
-          : detail !== null
-            ? React.createElement(DetailCard, { detail, trend, redUp })
-            : React.createElement('div', { className: 'tw-hint', style: { marginTop: 6 } }, '点击指数、ETF 行或搜索后显示详情（价格/分时/基础数据）。'),
-    ),
+    // 【个股 / 基金查询】整块已删（task-14 ①）：搜索框 + 下方说明 + 内联详情卡
+    // 详情仍可达：点指数/ETF 行 ⇒ DetailModal（下面那块，未动）
     pick !== null && detail !== null
       ? React.createElement(DetailModal, { detail, trend, redUp, onClose: () => { setPick(null); setDetail(null); setTrend(null) } })
       : null,
+  )
+}
+
+/**
+ * 【涨跌分布】直方图（task-14 ②）：宿主给的**分档计数**，柱高按最大档归一，柱上标数。
+ *
+ * 红线：`counts === null`（没扫全）⇒ 只说「未取到」+ 原因，**不画部分数据**（那会被读成全市场分布）。
+ * 柱宽用百分比、不用固定 px：面板窄了也不会把某个档挤成 0 宽（同 v0.54.0 的宽度契约）。
+ */
+function DistHistogram(props: {
+  distribution: { labels: string[]; counts: number[] | null; blank: number; scanned: number; total: number | null; reason: string | null } | null
+  distErr: string | null
+}): React.ReactElement {
+  const d = props.distribution
+  if (d === null || d.counts === null) {
+    const reason = props.distErr ?? d?.reason ?? '本轮没取到分档计数（稍后自动重试）'
+    return React.createElement('div', {
+      className: 'tw-hint tw-dim',
+      title: reason,
+      'aria-label': `涨跌分布未取到 —— ${reason}`,
+      tabIndex: 0,
+      role: 'note',
+    }, '未取到')
+  }
+  const max = Math.max(1, ...d.counts)
+  return React.createElement('div', { className: 'tw-dist-hist', title: `覆盖 ${d.scanned} 只 / 全市场 ${d.total ?? '未知'} 只；无涨跌幅（停牌等）${d.blank} 只未计入任何档` },
+    ...d.labels.map((label, i) => React.createElement('div', { key: label, className: 'tw-dist-bar-wrap' },
+      React.createElement('div', { className: 'tw-dist-count' }, String(d.counts?.[i] ?? 0)),
+      React.createElement('div', { className: `tw-dist-bar ${i < 4 ? 'up' : i === 4 ? 'flat' : 'down'}` },
+        React.createElement('div', { className: 'tw-dist-bar-fill', style: { height: `${Math.max(1, Math.round(((d.counts?.[i] ?? 0) / max) * 100))}%` } }),
+      ),
+      React.createElement('div', { className: 'tw-dist-label' }, label),
+    )),
   )
 }
 

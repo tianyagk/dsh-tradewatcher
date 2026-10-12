@@ -17,11 +17,69 @@ import { detectAnomalies } from './anomaly.ts'
 import { YTD_MAX_IDS, computeYtds } from './ytd.ts'
 import { TONE_MAX_IDS, computeTones } from './tonesService.ts'
 import { BREADTH_MIN_DAYS, BREADTH_WINDOW, BreadthStore, breadthUsable, percentileOf, upRatio } from './breadth.ts'
-import { BREADTH_METHODOLOGY, BREADTH_COUNT_CALIBER, BreadthCountCache, resolveBreadthCount } from './breadthCount.ts'
+import { BREADTH_METHODOLOGY, BREADTH_COUNT_CALIBER, BREADTH_PAGE_SIZE, BreadthCountCache, resolveBreadthCount } from './breadthCount.ts'
 import { dayOf } from './time.ts'
+import { distributionBinsOf } from '../client/breadthView.ts'
 import { log, type PluginWebRoute } from './context.ts'
 import { dayTradesOf } from './dayTrade.ts'
 import { CHIPS_DISPLAY, CHIPS_DISPLAY_MAX, CHIPS_MIN_SAMPLES, CHIPS_WINDOW, CHIPS_WINDOW_MAX, chipSeriesOf } from './chips.ts'
+
+/**
+ * 【涨跌分布】全市场扫描（task-14 ②）：东财 clist 逐页取 `f3`（涨跌幅），按分档计数。
+ *
+ * 成本与边界（写死在注释里，免得后人以为它免费）：
+ *   - 每页 100 只（`BREADTH_PAGE_SIZE`，上游上限），A 股约 5500 只 ⇒ **~56 页**；
+ *   - 页数上限 `BREADTH_PAGES_MAX`，超了或中途失败 ⇒ 返回 `counts: null` + 原因，
+ *     **绝不**用"扫到的那部分"冒充全市场；
+ *   - 结果按 `DIST_TTL_MS` 缓存（默认 60s），重复打开大盘页不再重复扫描。
+ * 口径：只按**涨跌幅**分档；`null`（停牌/上游给 `-`）单独计入 `blank`，不当 0（不许凭空加一只平盘）。
+ */
+const DIST_TTL_MS = 60_000
+const BREADTH_PAGES_MAX = 60
+interface DistSnapshot {
+  labels: readonly string[]
+  counts: number[] | null
+  blank: number
+  scanned: number
+  total: number | null
+  asOf: number
+  reason: string | null
+}
+let distCache: DistSnapshot | null = null
+
+async function distributionSnapshot(now = Date.now()): Promise<DistSnapshot> {
+  if (distCache !== null && now - distCache.asOf < DIST_TTL_MS) return distCache
+  const pcts: Array<number | null> = []
+  let total: number | null = null
+  let reason: string | null = null
+  for (let pn = 1; pn <= BREADTH_PAGES_MAX; pn += 1) {
+    try {
+      const page = await em.fetchClistPctPage(pn, BREADTH_PAGE_SIZE)
+      if (total === null) total = page.total
+      if (page.rows.length === 0) break
+      pcts.push(...page.rows)
+      if (total !== null && pcts.length >= total) break
+    } catch (error) {
+      reason = `第 ${pn} 页取数失败（${String(error).slice(0, 80)}）⇒ 没有扫全，不给部分分布冒充全市场`
+      break
+    }
+  }
+  const bins = distributionBinsOf(pcts)
+  const full = reason === null && total !== null && pcts.length >= total
+  const snap: DistSnapshot = {
+    labels: bins.labels,
+    counts: full ? bins.counts : null,
+    blank: bins.blank,
+    scanned: pcts.length,
+    total,
+    asOf: now,
+    reason: full
+      ? null
+      : reason ?? `只扫到 ${pcts.length} 只 / 全市场 ${total ?? '未知'} 只（页数上限 ${BREADTH_PAGES_MAX}）⇒ 不给部分分布冒充全市场`,
+  }
+  distCache = snap
+  return snap
+}
 
 const MAX_BODY = 256 * 1024
 const MAX_QUOTE_IDS = 160
@@ -380,6 +438,7 @@ export function makeTradeRoutes(
         if (!needGate(req, res)) return
         try {
           await breadth.init()
+          const wantDist = queryOf(req).get('dist') === '1'
           const ids = ['1.000001', '0.399001']
           const q = await em.fetchQuotesWithProvenance(ids)
           const sh = q.items['1.000001']
@@ -414,6 +473,12 @@ export function makeTradeRoutes(
           const stored = current === null || amount === null ? false : await breadth.record(Date.now(), current)
           const ratio = current === null ? null : upRatio(current)
           const pct = percentileOf(ratio, breadth.history(BREADTH_WINDOW, today))
+          // 【涨跌分布】直方图（可选）：与涨跌家数**同一处上游**（东财 clist 的 f3 涨跌幅），
+          // 只是要多扫几页（每页 100 只、上限 BREADTH_PAGES）。扫不动/覆盖不足 ⇒ null + 原因，
+          // **绝不**用已扫到的那部分冒充全市场（那是编数）。
+          const dist = wantDist ? await distributionSnapshot() : null
+          // 昨日两市成交额：本地 breadth.json 的**前一交易日快照**（没有那份快照 ⇒ null，不猜）
+          const prev = breadth.history(BREADTH_WINDOW, today).slice(-1)[0] ?? null
           send(res, 200, {
             methodology: BREADTH_METHODOLOGY,
             current: current === null
@@ -431,14 +496,25 @@ export function makeTradeRoutes(
             minDays: BREADTH_MIN_DAYS,
             storedDays: breadth.days,
             storedThisCall: stored,
+            // 昨日成交（本地快照；口径：上一交易日收盘定稿那次记录，见 `breadth.json`）
+            prevAmount: prev === null ? null : { day: prev.day, amount: prev.amount, final: prev.final },
+            ...(wantDist ? { distribution: dist } : {}),
             // 数据不可用时如实说明：涨跌家数在部分行情源下没有（备用源不含 f104/f105/f106）
-            missing: current !== null
-              ? q.provenance.missing
-              : [{
+            missing: [
+              ...(current !== null ? q.provenance.missing : []),
+              ...(wantDist && (dist === null || dist.counts === null)
+                ? [{
+                    what: '涨跌分布',
+                    why: 'transient' as const,
+                    note: dist?.reason ?? '本轮没有扫描到全市场的涨跌幅分页（60 页上限），不给部分分布冒充全市场',
+                  }]
+                : []),
+              ...(current !== null ? [] : [{
                   what: '沪深涨跌家数',
                   why: 'transient' as const,
                   note: resolved.reason ?? '本轮既没有拿到指数行情的涨/跌/平家数，自统计也没成功',
-                }],
+                }]),
+            ],
           })
         } catch (error) {
           fail(res, error)
