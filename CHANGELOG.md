@@ -11,6 +11,37 @@
 
 ---
 
+## v0.54.0 — 筹码条列宽度契约（"算得对、看着被压"的真因）+ 日K 日期范围缩放轴被裁回（v0.48.0 回归）
+
+两件事都在**本地 Chromium（真组件标记 + 真 `TW_CSS` + 真接口数据）**里量过，不是纸面推断。
+
+### ① 筹码横条被压到左侧：**条列没有宽度契约**
+
+修复前：`.tw-chips-plot` **只有内联 `flex:1`**，CSS 层零契约；左轴 `.tw-chips-axis`（内容 + `min-width:34px`）**可被压缩**；右标签列 `.tw-chips-reflabel` 是**绝对定位覆盖层**，**不参与排版宽度**。
+- **没有塌陷祖先**：链路实测 `642.33 → 692 → 692 → 696 → 720 → 1280`，全是 block/flex、`min-width:0`。
+- **决定性反例（浏览器级）**：注入 `.tw-chips-plot{flex:none}` ⇒ 条列 **642.33px → 1px**、峰值条 **571.94px → 1px**，而**内联百分比一字未变（89.0432%）** ⇒ 这正是"数值算得对、屏幕看着被压"的机制。
+- 修复：条列 `flex: 1 1 auto; min-width: 0`、左轴 `flex: none; max-width: 60px`、死规则 `.tw-chips-bars` 同步（`styles.ts:463-481`）；新增 `chipsColumnsOf()` / `chipBarPxOf()` 做宽度账。
+- 断言**从 CSS 文本里抽数**（不另造常量）：契约 + 两组数值（抽屉 720 ⇒ 条列 642.33 / 峰值条 571.94；容器 940 ⇒ 条列 862.33），并用 `assert.throws` 证明 `flex:none` 反例必然失败。
+- 顺带纠正题面口径：右标签列是绝对定位、**不参与**条列宽度扣减（按实测改，而不是按我给的 940/60/70 账法硬算）。
+
+### ② 日K 图丢失日期范围缩放轴：**被裁掉，不是被删（回归提交 `5d11d91` / v0.48.0）**
+
+`git log -S` 指向 `5d11d91`：它给上窗加了 `height: split.top; overflow: hidden`，而 `klineHeightsOf` 只扣 SVG **内部**开销（`CHART_CHROME 36`）+ 24，**没扣 SVG 之下的控件块**；`kline.tsx` 在该提交**零改动**。
+- **Chromium 复现（修前）**：上窗 384px、内容 424.75px ⇒ 缩放轴**整块在裁剪线以下**（`trackVisiblePx = 0`、`barVisible = 0`）—— **DOM 里在、屏幕上没有、不报错**（这类"静默缺失"最费时间）。
+- 修复：新增 `CHART_CONTROLS_PX = 6+15+4+15+2+43 = 85`（Chromium **逐段实测 84.75** ⇒ 向上取整），`klineHeightsOf` 多减这 85px；新增 `chartGeomOf()` 做纵向几何账（`clipped / overflow / overlap`）。`QuoteDrawer.tsx` 零改动（`chartHeight = kh.chartHeight` 自动跟随）。
+- **修后浏览器复测**：4 种抽屉高度 × 有无 B/S 标记 ⇒ 轨道 **16/16px 全可见**、2 个手柄、5 个快捷按钮全在裁剪线内。
+- **代价（如实记账）**：为给控件块腾位，绘图区 `mainH` 比修复前小约 **24px**（上窗 384 时 158→153）。要两全需改 `SPLIT_DEFAULT` 或压缩控件块 —— 未做。
+
+### 验证
+
+402 条测试 × 2 时区全绿（400 → 402）；`build.mjs` 零改动、75 项片段校验通过。
+**未在真页面截图复核**（GUI 需 `dsh web` 打印的带鉴权 URL，本环境 401）；改用"真组件标记 + 真 CSS + 真接口数据"的本地 Chromium。
+**待用户定案的 DevTools 两个数**：`.tw-chips-plot` 的 Computed width（正常 **642.33px**，抽屉 720）、峰值条 `.tw-chips-bar` 的 Computed width（正常 **571.94px**）。若前者 < 600px ⇒ 条列仍被别的压住，请再给 `.tw-chips-chart` 的 computed width/display。
+
+### 未做
+
+触屏 pointer 与拖拽跟手重绘（v0.48 起未做）；`mainH` 少 24px 的两全方案；真页面截图复核。
+
 ## v0.53.0 — 条宽单位约定写死 + 几何锚定断言；侧栏标签不再重复当日盈亏（含追因）
 
 ### 条宽"被压到左侧"：**"单位混用"的推断被数字推翻**

@@ -146,6 +146,62 @@ export function chipsRowHeight(availablePx: number, bucketCount: number): number
   return Math.max(1, h)
 }
 
+/**
+ * 横向三段的宽度**契约**（唯一来源：`styles.ts` 的 CSS 必须与这三个数一致，断言直接读 CSS 文本比对）。
+ *
+ * 为什么要有这一组数：条宽是按百分比写的（`width: 86%`），百分比只在**条列自己的内容盒**里才有意义。
+ * 条列一旦不是"确定性地等于 可用宽度 − 左轴 − 语义线标签列"，同样的 86% 就会渲染成完全不同的像素数
+ * —— 用户两次报"条被压到左侧"，而函数返回值（86%）一直是对的 ⇒ 病根在**宽度从哪来**，不在宽度算多少。
+ */
+
+/** 左轴价格列的**最小**宽度（px）：与 `.tw-chips-axis{min-width:34px}` 同源 */
+export const CHIPS_AXIS_MIN_PX = 34
+/** 轴与条列之间的间隙（px）：与 `.tw-chips-chart{gap:4px}` 同源 */
+export const CHIPS_CHART_GAP_PX = 4
+/** 语义线右侧标签列占位（px）：与 `.tw-chips-refline{right:44px}` 同源（标签绝对定位在它内侧，不参与排版） */
+export const CHIPS_LABEL_RESERVE_PX = 44
+
+/** 横轴三段的宽度账（**纯算术**：不含 DOM 猜测，可被断言锚住） */
+export interface ChipsColumns {
+  /** 容器内容宽（px） */
+  container: number
+  /** 左轴价格列（px，≥ 最小值） */
+  axis: number
+  /** 轴与条列之间的间隙（px） */
+  gap: number
+  /** 语义线标签列占位（px） */
+  label: number
+  /** 条列（= 容器 − 左轴 − 间隙）—— 条宽百分比的**分母** */
+  bars: number
+}
+
+/**
+ * 由容器宽度算出三段的像素账。
+ *
+ * 关键结论（断言锚的就是它）：`bars = container − axis − gap`。
+ * 左轴与间隙是**确定量**，标签列是**绝对定位的覆盖层**（`right:44px` 只是画线让位，不吃排版宽度）。
+ *
+ * ⚠ 口径：`axis` 取**左轴最小宽度**（`.tw-chips-axis{min-width}`）⇒ `bars` 是**条列的上界**。
+ * 实际轴宽在 `[min-width, max-width]` 内由价格标签位数决定（如 `5.47` 比 `1553.40` 窄），
+ * 所以真实条宽会略小于这里的上界（浏览器实测 940px 容器下轴 45.67px ⇒ 条列 902px 是上界）。
+ * 界面**不依赖**这个差：条宽是条列内容盒的百分比 ⇒ 无论轴多宽，条都占条列的同比例。
+ * 容器宽度不可用（0/NaN/负数）⇒ 全 0（不抛错、不给负数几何）。
+ */
+export function chipsColumnsOf(containerPx: number): ChipsColumns {
+  const container = Number.isFinite(containerPx) && containerPx > 0 ? containerPx : 0
+  if (container === 0) return { container: 0, axis: 0, gap: 0, label: CHIPS_LABEL_RESERVE_PX, bars: 0 }
+  const gap = CHIPS_CHART_GAP_PX
+  const axis = Math.max(CHIPS_AXIS_MIN_PX, 0) // 左轴是内容决定宽度、但**不许被压缩**（flex:none + min-width）
+  const bars = Math.max(0, container - axis - gap)
+  return { container, axis, gap, label: CHIPS_LABEL_RESERVE_PX, bars }
+}
+
+/** 单条在**像素**上的宽度（条宽的 `%` 是条列的分母 ⇒ 这里显式乘一次，避免"百分比写在错的容器里"） */
+export function chipBarPxOf(widthPct: number, barsPx: number): number {
+  if (!Number.isFinite(widthPct) || !Number.isFinite(barsPx) || barsPx <= 0) return 0
+  return (Math.min(100, Math.max(0, widthPct)) / 100) * barsPx
+}
+
 /** 价格轴裁剪的目标覆盖面（筹码质量）：显示区间覆盖 99% 权重，其余在轴外但如实报告 */
 export const CHIPS_COVERAGE = 0.99
 /** 稀疏行阈值：窗口内权重 < 窗口峰值的这个比例的行不显示（观感密集带，质量差额如实计入 dropped） */

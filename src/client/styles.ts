@@ -461,11 +461,19 @@ color-scheme:dark}
 .tw-chips-slider{width:100%;margin:2px 0}
 .tw-chips-date{font-size:11px;font-family:var(--tw-mono)}
 .tw-chips-chart{display:flex;gap:4px;align-items:stretch;max-height:140px;overflow:hidden}
+/* 左轴：价格列**固定不伸缩**（flex:none）—— 否则空间不足时它会被压缩，条列的宽度就不确定了。
+   max-width 把"价格位数决定轴宽"这一步也钉住：轴宽在 [34, 60] 内由内容决定，超过就换行，
+   于是条列宽度不会随价格位数（如 5.47 vs 1553.40）抖动。 */
 .tw-chips-axis{display:flex;flex-direction:column;justify-content:space-between;font-size:11px;color:var(--tw-muted);
-  font-family:var(--tw-mono);min-width:34px;text-align:right;line-height:1}
-.tw-chips-bars{display:flex;flex-direction:column;gap:1px;overflow:hidden;flex:1}
+  font-family:var(--tw-mono);min-width:34px;max-width:60px;flex:none;text-align:right;line-height:1;overflow-wrap:anywhere}
+/* 条列（旧名 .tw-chips-bars，已无节点使用）：条宽的 % 分母必须是"确定性的可用宽度" */
+.tw-chips-bars{display:flex;flex-direction:column;gap:1px;overflow:hidden;flex:1 1 auto;min-width:0}
 .tw-chips-xaxis{display:flex;justify-content:space-between;font-size:11px;color:var(--tw-muted);font-family:var(--tw-mono);padding-left:38px}
-.tw-chips-plot{position:relative}
+/* 条列：**唯一的伸缩项**（flex:1）+ min-width:0（内容不许参与最小宽度计算）。
+   这两条合起来保证：条列宽度 = 容器 − 左轴 − 间隙，与条宽写成多少 % 无关。
+   反例：写成 flex:none（或忘了 min-width:0 又被内容顶住）⇒ 条列宽度归零/塌陷，
+   同样 86% 的条会渲染成很小的像素数 —— 用户看到的"条被压到左侧"就是这个几何。 */
+.tw-chips-plot{position:relative;flex:1 1 auto;min-width:0;overflow-x:hidden}
 .tw-chips-grid-v{position:absolute;top:0;bottom:0;width:1px;background:var(--tw-chips-grid);pointer-events:none}
 .tw-chips-grid-h{position:absolute;left:0;right:0;height:1px;background:var(--tw-chips-grid);pointer-events:none}
 .tw-chips-refline{position:absolute;left:0;right:44px;height:0;border-top:1px dashed currentColor;pointer-events:none;opacity:.9}

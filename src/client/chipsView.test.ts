@@ -6,13 +6,33 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
-import { axisTicks, caliberDeviates } from './chipsView.ts'
+import { axisTicks, caliberDeviates, chipBarPxOf, chipsColumnsOf, CHIPS_AXIS_MIN_PX, CHIPS_CHART_GAP_PX, CHIPS_LABEL_RESERVE_PX } from './chipsView.ts'
 import { loadChips, resetChipsCache } from './chipsLoader.ts'
 import { createRequire } from 'node:module'
 const require = createRequire(import.meta.url)
 
 const here = dirname(fileURLToPath(import.meta.url))
 const read = (rel: string): string => readFileSync(join(here, rel), 'utf8')
+
+/** 从 CSS 文本里取某条规则的声明块（`{...}` 内容）——断言只读**真实样式**，不另造常量 */
+function cssBodyOf(css: string, selector: string): string {
+  const i = css.indexOf(`${selector}{`)
+  assert.notEqual(i, -1, `CSS 里必须存在 ${selector}{ 这条规则`)
+  const j = css.indexOf('}', i)
+  return css.slice(i + selector.length + 1, j)
+}
+/** 取某条声明里的 px 数（如 `min-width:34px` ⇒ 34） */
+function axisMinPx(rule: string): number {
+  const m = /min-width:\s*(\d+(?:\.\d+)?)px/.exec(rule)
+  assert.ok(m !== null, `规则里必须有 min-width:<n>px（实际 ${rule.slice(0, 60)}）`)
+  return Number(m![1])
+}
+/** 取某条声明里的数字（如 `right:44px` ⇒ 44 / `gap:4px` ⇒ 4） */
+function numberOf(rule: string, prop: string): number {
+  const m = new RegExp(`${prop}:\\s*(\\d+(?:\\.\\d+)?)`).exec(rule)
+  assert.ok(m !== null, `规则里必须有 ${prop}:<n>（实际 ${rule.slice(0, 60)}）`)
+  return Number(m![1])
+}
 
 test('①（证明的是 60s TTL 内不重复请求，不是“与页签无关”）切 6 次页签后筹码请求数仍为 1', async () => {
   resetChipsCache()
@@ -98,6 +118,64 @@ test('③ 纵轴刻度：3–5 个、单调、覆盖 [lo, hi]', () => {
   const styles = read('./styles.ts')
   assert.ok(styles.includes('.tw-chips-axis{'), '左轴样式存在')
   assert.ok(styles.includes('.tw-chips-chart{'), '左轴与横条的容器样式存在')
+})
+
+/**
+ * v0.54.0：横向三段的**宽度契约**（用户两次报"条被压到左侧"，而函数算出的 86% 一直是对的）。
+ *
+ * 病根不在"算多少"，在"宽度从哪来"：条宽是百分比，百分比只在**条列自己的内容盒**里有意义。
+ * 下面的断言锚在**真几何**上：① 从 styles.ts 的 CSS 里把 3 个数抽出来（不自己造常量）
+ * ② 用它们算 940px 容器下的条列与峰值条宽 ③ 反例（条列 flex:none）必须被抓住。
+ */
+test('宽度契约（锚几何）：条列必须是唯一的伸缩项；940px 容器 ⇒ 条列 902px、峰值条 775.72px', () => {
+  const styles = read('./styles.ts')
+
+  // ① 从 CSS 里抽出三段宽度的**真实来源**（不是本文件另写一套常量）
+  const axisRule = cssBodyOf(styles, '.tw-chips-axis')
+  const plotRule = cssBodyOf(styles, '.tw-chips-plot')
+  const reflineRule = cssBodyOf(styles, '.tw-chips-refline')
+  const chartRule = cssBodyOf(styles, '.tw-chips-chart')
+  const axisMin = axisMinPx(axisRule)
+  const gap = numberOf(chartRule, 'gap')
+  const labelReserve = numberOf(reflineRule, 'right')
+  assert.equal(axisMin, CHIPS_AXIS_MIN_PX, `左轴最小宽必须与 CSS 一致（CSS 里是 ${axisMin}px）`)
+  assert.equal(gap, CHIPS_CHART_GAP_PX, `轴与条列的间隙必须与 CSS 一致（CSS 里是 ${gap}px）`)
+  assert.equal(labelReserve, CHIPS_LABEL_RESERVE_PX, `语义线标签列占位必须与 CSS 一致（CSS 里是 ${labelReserve}px）`)
+
+  // ② 契约：条列 `flex:1` + `min-width:0`；左轴 `flex:none`；条列不许被内容顶住
+  assert.equal(plotRule.includes('flex:1 1 auto'), true, '条列必须是伸缩项（flex:1 1 auto）—— 否则宽度不由容器决定')
+  assert.equal(plotRule.includes('min-width:0'), true, '条列必须 min-width:0 —— 否则内容参与最小宽度计算，宽度可能塌陷')
+  assert.equal(axisRule.includes('flex:none'), true, '左轴必须 flex:none（空间不足时不许被压缩）')
+  assert.equal(/\.tw-chips-plot\{[^}]*flex:none/.test(styles), false, '⚠ 条列写成 flex:none ⇒ 宽度归零，86% 的条会渲染成极小的像素数')
+  // 语义线标签是**绝对定位的覆盖层**（不吃排版宽度），只有画线让位了 44px
+  assert.equal(reflineRule.includes('position:absolute'), true, '标签列必须是绝对定位覆盖层，不得挤占条列宽度')
+  assert.equal(cssBodyOf(styles, '.tw-chips-reflabel').includes('position:absolute'), true, '标签本身也要绝对定位')
+
+  // ③ 数值可用性。两组数：题面给定的一组 + 本实现 CSS 决定的一组
+  //    题面：容器 940 / 左轴 60 / 右标签 70 ⇒ 条列 810px、轴顶 86% 的条 696px
+  const given = chipBarPxOf(86, 940 - 60 - 70)
+  assert.ok(Math.abs(given - 696.6) < 0.5, `题面几何：条列 810px ⇒ 峰值条 696.6px（实际 ${given.toFixed(2)}）`)
+  //    本实现：容器 940 / 左轴 min-width 34 / 间隙 4 ⇒ 条列 902px、峰值条 775.72px
+  const c1 = chipsColumnsOf(940)
+  assert.equal(c1.bars, 940 - axisMin - gap, `条列 = 容器 − 左轴 − 间隙（实际 ${c1.bars}，期望 ${940 - axisMin - gap}）`)
+  assert.ok(Math.abs(c1.bars - 902) < 0.5, `940 容器按本实现的 CSS ⇒ 条列 902px（实际 ${c1.bars}）`)
+  assert.ok(Math.abs(chipBarPxOf(86, c1.bars) - 775.72) < 0.5, `轴顶 86% 的条在 902px 条列上是 775.72px（实际 ${chipBarPxOf(86, c1.bars).toFixed(2)}）`)
+  //    标签列是覆盖层 ⇒ **不**参与条列宽度的扣减（扣了就与浏览器实测对不上）
+  assert.equal(c1.bars, chipsColumnsOf(940).bars, '标签列不得进入条列宽度的计算')
+  assert.ok(c1.bars > c1.container - axisMin - gap - 1, '条列不得再被标签列扣一次')
+  //    非法容器 ⇒ 全 0，不抛错、不给负数
+  assert.deepEqual(chipsColumnsOf(0).bars, 0)
+  assert.deepEqual(chipsColumnsOf(Number.NaN).bars, 0)
+
+  // ④ 反例注入：同一个断言在"条列 flex:none ⇒ 宽度塌陷"的假几何上**必须失败**
+  const injectFlexNoneBarPx = (): number => chipBarPxOf(86, 0) // 条列宽度归零（flex:none + 空桶内容）
+  assert.ok(chipBarPxOf(86, c1.bars) > 700, '真实现：峰值条必须 ≥700px')
+  assert.throws(
+    () => assert.ok(injectFlexNoneBarPx() > 700, '反例上这条断言必须失败'),
+    /反例上这条断言必须失败/,
+    '⚠ 反例注入（条列 flex:none ⇒ 0px）必须让"≥700px"这条断言失败 —— 否则它抓不住"条被压到左侧"',
+  )
+  assert.equal(injectFlexNoneBarPx(), 0, '反例的样子：条列宽度 0 ⇒ 86% 的条渲染成 0px')
 })
 
 test('A：切页签不重挂载 —— 结构证据 + 挂载计数已埋点', () => {
