@@ -303,3 +303,95 @@ test('端到端同源：宿主 days[].price → 客户端 chipProfitDirOf，翻�
   // 逐日价不全相同 ⇒ "统一用顶层现价"一定会在某些天出错
   assert.ok(new Set(r.days.map((d) => d.price)).size > 1, '逐日价必须真的逐日不同（否则这条断言证明不了什么）')
 })
+
+/**
+ * v0.63.0（task-11）端到端：**盘上有历史、上游挂了 ⇒ 不许报"样本不足"**。
+ *
+ * 走真的 `fetchKline`（真磁盘缓存 + 真回源失败路径），再把拿到的 bar 喂给真的 `chipSeriesOf`
+ * —— 这正是用户看到的那条链路（`/chips` → `fetchKline` → `chipSeriesOf`）。
+ * 上游用桩挡住：`globalThis.fetch` 一律 reject ⇒ 不碰网络、结果确定。
+ */
+test('端到端：缓存 40 根 + 最后一根未完成超 TTL + 回源失败 ⇒ samples ≥ 10（不是"样本不足"）', async () => {
+  const { mkdtempSync, mkdirSync, writeFileSync, rmSync } = await import('node:fs')
+  const { tmpdir } = await import('node:os')
+  const { join } = await import('node:path')
+  const { fetchKline, klineCacheStatusOf } = await import('./em.ts')
+  const home = mkdtempSync(join(tmpdir(), 'tw-chips-degrade-'))
+  const prevHome = process.env.DSH_HOME
+  const prevFetch = globalThis.fetch
+  process.env.DSH_HOME = home
+  // 上游一律失败（不碰网络）
+  globalThis.fetch = (() => Promise.reject(new Error('offline (test)'))) as typeof fetch
+  try {
+    const secid = '1.600519'
+    const dir = join(home, 'dsh-tradewatcher', 'klines')
+    mkdirSync(dir, { recursive: true })
+    const bars = Array.from({ length: 40 }, (_, i) => ({
+      date: `2026-0${Math.floor(i / 28) + 1}-${String((i % 28) + 1).padStart(2, '0')}`,
+      open: 10 + i * 0.1, close: 10.1 + i * 0.1, high: 10.2 + i * 0.1, low: 9.9 + i * 0.1, vol: 1000 + i, pct: 0.5,
+    }))
+    // 最后一根是盘中未完成 bar，且落盘时间已超过 60s TTL（用户遇到的那种缓存）
+    writeFileSync(join(dir, `${secid}_101_1.json`), JSON.stringify({
+      v: 3, secid, klt: 101, fqt: 1, updatedAt: Date.now() - 10 * 60_000, partial: true, bars,
+    }))
+
+    const k = await fetchKline(secid, 101, 360, 1)
+    assert.ok(k !== null, '⚠ 有 40 根历史时**不许**返回 null（老实现这里就是 null ⇒ 样本不足）')
+    const kk = k as NonNullable<typeof k>
+    assert.equal(kk.stale, true, '回源失败 + 用缓存 ⇒ stale 必须为 true')
+    assert.equal(kk.days.length, 39, '40 根里丢掉不可信的最后一根 ⇒ 39 根')
+    assert.ok(typeof kk.staleReason === 'string' && kk.staleReason.includes('未完成'), `说明要点明最后一根未完成（实际 ${kk.staleReason}）`)
+    assert.ok((kk.staleReason ?? '').includes('已完成 bar'), '说明还要点明用的是"已完成 bar"')
+    const st = klineCacheStatusOf(secid, 101, 1)
+    assert.equal(st?.degraded, true, '状态里要如实标"降级采用"')
+    assert.equal(st?.exists, true, '缓存存在（不是"没有缓存"）')
+    // ② 喂给真的筹码模块 ⇒ 样本数必须够（用户报的"样本不足"就此消失）
+    const series = chipSeriesOf(kk.days.map((d) => ({ date: d.date, close: d.close, vol: d.vol })), {
+      fqSupported: true, floatMv: null, decay: 1.5, spread: 'triangle', buckets: 16, minSamples: 1, price: kk.days[kk.days.length - 1].close,
+    })
+    assert.ok(series.latest !== null, '筹码序列必须算得出来')
+    assert.ok(series.latest.samples >= 10, `样本数必须 ≥ 10（实际 ${series.latest.samples}）—— 这就是用户报的"样本不足"被修好`)
+  } finally {
+    globalThis.fetch = prevFetch
+    if (prevHome === undefined) delete process.env.DSH_HOME
+    else process.env.DSH_HOME = prevHome
+    rmSync(home, { recursive: true, force: true })
+  }
+})
+
+test('端到端：缓存只有 5 根（丢最后一根后不足下限）⇒ 如实不采用（不硬凑样本）', async () => {
+  const { mkdtempSync, mkdirSync, writeFileSync, rmSync } = await import('node:fs')
+  const { tmpdir } = await import('node:os')
+  const { join } = await import('node:path')
+  const { fetchKline, klineCacheStatusOf, klineMissingReason } = await import('./em.ts')
+  const home = mkdtempSync(join(tmpdir(), 'tw-chips-toofew-'))
+  const prevHome = process.env.DSH_HOME
+  const prevFetch = globalThis.fetch
+  process.env.DSH_HOME = home
+  globalThis.fetch = (() => Promise.reject(new Error('offline (test)'))) as typeof fetch
+  try {
+    const secid = '0.300750'
+    const dir = join(home, 'dsh-tradewatcher', 'klines')
+    mkdirSync(dir, { recursive: true })
+    const bars = Array.from({ length: 5 }, (_, i) => ({
+      date: `2026-09-2${i + 1}`, open: 100, close: 100 + i, high: 101, low: 99, vol: 1000, pct: 0.5,
+    }))
+    writeFileSync(join(dir, `${secid}_101_1.json`), JSON.stringify({
+      v: 3, secid, klt: 101, fqt: 1, updatedAt: Date.now() - 10 * 60_000, partial: true, bars,
+    }))
+    const k = await fetchKline(secid, 101, 360, 1)
+    assert.equal(k, null, '4 根 < 10 ⇒ 不采用（返回 null，如实走"样本不足"）')
+    const st = klineCacheStatusOf(secid, 101, 1)
+    assert.equal(st?.exists, true, '但状态里必须承认"缓存是存在的"（note 才能说实话）')
+    assert.equal(st?.degraded, false, '没有被降级采用')
+    const reason = klineMissingReason(secid, 101, { emDown: true, cache: st })
+    assert.ok(reason.note.includes('本地有该周期的缓存') && reason.note.includes('被判不可用'),
+      `note 必须说"有缓存但不可用"，不许说"本地没有该周期的缓存"（实际 ${reason.note}）`)
+    assert.equal(reason.note.includes('本地没有该周期的缓存'), false, '⚠ 那句与事实不符的话不许再出现')
+  } finally {
+    globalThis.fetch = prevFetch
+    if (prevHome === undefined) delete process.env.DSH_HOME
+    else process.env.DSH_HOME = prevHome
+    rmSync(home, { recursive: true, force: true })
+  }
+})

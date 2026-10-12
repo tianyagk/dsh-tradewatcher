@@ -670,7 +670,10 @@ export function makeTradeRoutes(
           const rawFqt = Number(queryOf(req).get('fqt') ?? 1)
           const fqt = rawFqt === 0 || rawFqt === 2 ? rawFqt : 1
           const kline = await em.fetchKline(secid, klt, lmt, fqt)
-          send(res, 200, { kline, ...(kline === null ? { missing: [em.klineMissingReason(secid, klt)] } : {}) })
+          // 缓存状态要在 fetchKline 之后读（它才填过内存）—— note 必须能说清"是没缓存还是缓存被判不可用"。
+          // 键必须与 fetchKline 内部一致：年K 用 103 的缓存，复权口径过 normalizeFq（指数/期货会被归为 0）
+          const cache = em.klineCacheStatusOf(secid, klt === 104 ? 103 : klt, em.normalizeFq(secid, fqt))
+          send(res, 200, { kline, ...(kline === null ? { missing: [em.klineMissingReason(secid, klt, { cache })] } : {}) })
         } catch (error) {
           fail(res, error)
         }

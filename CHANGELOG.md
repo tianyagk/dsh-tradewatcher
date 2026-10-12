@@ -11,6 +11,49 @@
 
 ---
 
+## v0.63.0 — 修「丢数据」：缓存被判不可用时不得整段丢弃
+
+用户报「筹码分布突然样本不足」并问「历史数据是不是没落库」。**落库了**（盘上 v3、801 根），是我们的读侧把整段缓存判废后返回 0 根。
+
+### 事实（修前）
+`klines/1.560010_101_1.json` = v3 / `partial: true` / **801 根**（2023-06-19 ~ 2026-10-12）/ updatedAt 距今 41.6 分钟 ⇒ 被"partial 超 60s TTL"**整段判废** ⇒ `/kline` 回 0 根 ⇒ `/chips` `samples = 0` ⇒ 显示「样本不足」。
+**手里有 800 根已完成历史却报"样本不足" —— 这是丢数据，不是缺数据。**
+
+### 修法
+- `em.ts`：新增 `KLINE_MIN_USABLE_BARS = 10`（注释写明与 `CHIPS_MIN_SAMPLES` 同值，两层阈值不许打架）+ 纯函数 **`klineCacheAdoptionOf()`**：过闸门 ⇒ 原样用；被拒 ⇒ **丢弃最后一根**，剩 ≥10 根就照用并给降级说明；不足 10 根 ⇒ 不采用（**不硬凑**）。`KlineEntry` 增 `fileBars/refusedReason/degradedReason/droppedLast` 记账；`loadKlineCache` 由"被拒就 continue"改为走该判定（丢掉未完成那根后 `partial` 跟着置 false）。
+- `routes.ts`：`/kline` 注入 `klineCacheStatusOf(secid, klt===104?103:klt, em.normalizeFq(secid, fqt))`（键与内部一致：年K 走 103、复权过 `normalizeFq`）。
+- `chips.ts` **未改** —— 它本来就"喂什么算什么"；症状在筹码，**病灶在取数层**。
+- **契约不变**：`missing`/`why`/`stale`/`asOf` 名字与含义都没动；只**增加**一个可选字段 `staleReason`（写在 `em.ts` 的交叉类型里，**未改 `src/shared/model.ts`**）。
+
+### 修后实测（真缓存文件 + 把上游整段挡掉）
+```
+/kline days = 360   stale = true
+staleReason = 回源未取到新数据 ⇒ 改用本地缓存的 800 根已完成 bar；不可信的最后一根已丢弃（原因：未完成 bar 已超过 60s TTL ⇒ 回源重取；文件里 801 根，丢掉最后一根后仍有 800 根 ≥ 10）
+末两根 = 2026-10-08@2.975 , 2026-10-09@2.982   ← 10-12 那根盘中未完成 bar 已丢弃
+/chips 样本数 = 360（原 0）；平均成本 3.0944，支撑/压力 2.9702/3.2231
+```
+
+### note 三情形（不再用一句话概括）
+| 情形 | 修后 |
+| --- | --- |
+| ① 从未有缓存 | 「本地**确实**没有该周期的缓存数据；…」 |
+| ② **有缓存但被判不可用** | 「本地**有**该周期的缓存，**但被判不可用**（未完成 bar 已超过 60s TTL ⇒ 回源重取；文件里 801 根）；…」 |
+| ③ 回源失败 | ②是事实半句、③是原因半句，可分辨；归因仍 `transient` |
+
+### 一处经 Lead 确认的扩展
+被拒的两类原因**都**走"降级采用（丢最后一根）"：**(a) partial 超 TTL**（任务明说）与 **(b) 旧 schema `v≠3`**（实现者主动扩展）。理由：老规则"v2 一律不采用"会造成**同一类丢数据**（盘上 900 根、界面报样本不足）。**红线保留**：绝不与可能冻住的最后一根混用 ⇒ 丢最后一根、用其余，而不是整段放弃。
+
+### 验证
+421 条测试 × 2 时区全绿（414 → 421，+7）。反例注入：把判定改回"老行为 `adopt:false`" ⇒ `assert.throws` 证明"必须采用"必然失败；5 根 ⇒ 如实不采用；TTL 内 ⇒ 一根不丢；`partial=false` 旧缓存不受 TTL 影响；降级说明只在"降级 + 回源失败"时给。端到端：临时 `DSH_HOME` + 真写 v3 缓存 + **`globalThis.fetch` 一律 reject**（不碰网络）⇒ 真 `fetchKline` 不再 null、`stale === true`、`days.length === 39`、喂真 `chipSeriesOf` ⇒ `samples ≥ 10`。
+`build.mjs` 零改动（73 项）。
+
+### 未做（待派）
+- **客户端不读 `staleReason`**（`chartNote.ts` 对 `stale` 只给「· 上次成功数据（MM-DD HH:mm）」）⇒ 要让用户看到具体原因需客户端一行改动。host 侧字段与文案已就绪。
+- `/chips` 自己的 `why` 未加"数据来自降级缓存"的说明（修后它不再出现"样本不足"）；要加需在 `chipSeriesOf` 透传 `staleReason`。
+
+### 复核命令
+`curl '127.0.0.1:3080/tradewatcher/kline?secid=1.560010&klt=101&lmt=360' | jq '.kline.staleReason, (.kline.days|length)'`
+
 ## v0.62.0 — 云图只留第三方站点（删自绘）+ `/board` 归属随之改到 market 行 + 修一个先于本轮的测试竞态
 
 ### 删除（用户要求：云图去掉自绘，只保留第三方云图）

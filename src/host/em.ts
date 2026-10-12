@@ -1433,6 +1433,14 @@ interface KlineEntry {
   updatedAt: number
   /** 内存里这根是不是未完成 bar（盘中抓的）；供上层暴露 lastBar.partial */
   partial: boolean
+  /** 磁盘缓存**文件里**原本有多少根（降级采纳时用来写"文件里 N 根、采用 M 根"） */
+  fileBars: number
+  /** 被判"需要回源"的原因（null = 没被拒）；被拒**但仍采纳**时见 degradedReason */
+  refusedReason: string | null
+  /** 降级采纳的原因说明（"被拒但手里有 ≥N 根可用 bar ⇒ 照用"）；仅降级时有值 */
+  degradedReason: string | null
+  /** 采纳时是否丢掉了最后一根（未完成 bar / 旧 schema 下无法验证的那一根） */
+  droppedLast: boolean
 }
 
 const klineMem = new Map<string, KlineEntry>()
@@ -1459,7 +1467,78 @@ export function isPartialBar(date: string, ts: number, closeMinute = 15 * 60): b
 }
 
 /**
+ * "够不够构成可用历史"的下限（与筹码模块的样本阈值 `CHIPS_MIN_SAMPLES = 10` **同值**）。
+ *
+ * 为什么放在这一层：判"手里的缓存能不能当历史用"是取数层的责任，筹码只是最明显的消费者。
+ * 两层阈值必须一致，否则会出现"取数层给了 6 根、筹码层说样本不足"这种互相甩锅的状态。
+ */
+export const KLINE_MIN_USABLE_BARS = 10
+
+/** 磁盘缓存的采纳判定结果（纯函数输出，便于直接断言） */
+export interface KlineCacheAdoption {
+  /** 是否采用它（true = 用这些 bar） */
+  adopt: boolean
+  /** 采用前是否丢掉最后一根（未完成 bar / 旧 schema 下无法验证的那一根） */
+  dropLast: boolean
+  /** 采用后实际能用的 bar 数 */
+  usableBars: number
+  /** 文件里原本有多少根（含被丢的那根） */
+  fileBars: number
+  /** 被判"需要回源"的原因（null = 没被拒） */
+  refusedReason: string | null
+  /** 降级采纳的说明（仅"被拒但仍采用"时有值） */
+  degradedReason: string | null
+  /** 本次用的下限 */
+  minBars: number
+}
+
+/**
+ * 该不该**采用**这份磁盘缓存（纯函数）。
+ *
+ * 缺陷背景（v0.63.0 修）：缓存里绝大多数 bar 是**已完成的历史 bar**，只有最后一根可能是盘中未完成 bar。
+ * 老实现把"最后一根不可信"扩大成"整段不可用" ⇒ 回源又失败时返回 0 根 ⇒ 筹码模块报"样本不足"。
+ * 手里有 900+ 根历史却报缺数据，**这是丢数据**。
+ *
+ * 现行规则：
+ *   - 通过可用性闸门 ⇒ 原样采用（最后一根也不丢）；
+ *   - 被拒（未完成 bar 超 TTL / schema 过期）⇒ **丢掉最后一根**（那根不可信），
+ *     剩下的 ≥ `minBars` 根就**照用**，并把拒绝原因与"降级采纳"写进返回；
+ *   - 丢掉后仍不足 `minBars` 根 ⇒ 不采用（如实报样本不足，**不硬凑**）。
+ */
+export function klineCacheAdoptionOf(input: {
+  meta: { v?: unknown; partial?: unknown; updatedAt?: unknown }
+  bars: readonly DayBar[]
+  now: number
+  minBars?: number
+}): KlineCacheAdoption {
+  const minBars = input.minBars ?? KLINE_MIN_USABLE_BARS
+  const ok = klineCacheUsable(input.meta, input.now)
+  const fileBars = input.bars.length
+  if (ok.usable) {
+    return { adopt: fileBars > 0, dropLast: false, usableBars: fileBars, fileBars, refusedReason: null, degradedReason: null, minBars }
+  }
+  // 被拒时最后一根为何不可信：① 未完成 bar 超 TTL；② 旧 schema（可能冻着未完成 bar，见 KLINE_CACHE_V 注释）
+  const v = typeof input.meta.v === 'number' ? input.meta.v : 0
+  const dropLast = fileBars > 0 && (ok.partial || v !== KLINE_CACHE_V)
+  const usableBars = Math.max(0, fileBars - (dropLast ? 1 : 0))
+  if (usableBars >= minBars) {
+    return {
+      adopt: true,
+      dropLast,
+      usableBars,
+      fileBars,
+      refusedReason: ok.reason,
+      degradedReason: `${ok.reason}；但文件里有 ${fileBars} 根，丢掉不可信的最后一根后仍有 ${usableBars} 根 ≥ ${minBars} ⇒ 降级采用（不回源成功也照用）`,
+      minBars,
+    }
+  }
+  return { adopt: false, dropLast, usableBars, fileBars, refusedReason: ok.reason, degradedReason: null, minBars }
+}
+
+/**
  * 缓存条目是否可用（纯函数）：版本不符 ⇒ 不可用；`partial` 且超过 TTL ⇒ 不可用（须回源）。
+ *
+ * ⚠ 这里只回答"要不要回源"；**要不要放弃整段缓存**由 `klineCacheAdoptionOf` 决定（它会在被拒时降级采用）。
  */
 export function klineCacheUsable(meta: { v?: unknown; partial?: unknown; updatedAt?: unknown }, now: number): { usable: boolean; partial: boolean; reason: string | null } {
   const v = typeof meta.v === 'number' ? meta.v : 0
@@ -1492,6 +1571,52 @@ export function lastBarOfKline(secid: string, klt: number, fqt: FqMode): { date:
   return { date: last.date, close: last.close, vol: last.vol, partial: hit.partial === true }
 }
 
+/** 磁盘缓存当前状态（供路由层写原因文案；在 fetchKline 之后调用即为本次实际用的那份） */
+export interface KlineCacheStatus {
+  /** 盘上是否有这个 (secid, klt, fqt) 的缓存文件（哪怕是"被判不可用"的那份） */
+  exists: boolean
+  fileBars: number
+  usableBars: number
+  /** 被判"需要回源"的原因（null = 没被拒） */
+  refusedReason: string | null
+  /** 是否降级采用（被拒但仍用了它的 bar） */
+  degraded: boolean
+  minBars: number
+}
+
+/** 读本次 (secid, klt, fqt) 的缓存状态（需先经过 `fetchKline`/`loadKlineCache` 填充内存） */
+export function klineCacheStatusOf(secid: string, klt: number, fqt: FqMode): KlineCacheStatus | null {
+  const hit = klineMem.get(`${secid}|${klt}|${fqt}`)
+  if (hit === undefined) return null
+  const fileBars = hit.fileBars
+  return {
+    exists: fileBars > 0 || hit.refusedReason !== null,
+    fileBars,
+    usableBars: hit.bars.length,
+    refusedReason: hit.refusedReason,
+    degraded: hit.degradedReason !== null,
+    minBars: KLINE_MIN_USABLE_BARS,
+  }
+}
+
+/**
+ * 降级复用时给客户端的那句说明（纯函数）。
+ *
+ * 只在"**用了被判需要回源的缓存** 且 回源这轮没拿到新数据"时给；定稿免回源（settled）与正常回源都不给
+ * —— 那两种情况下数据是正常的，多说一句就是噪音（用户明确要求少提示）。
+ */
+export function klineStaleNoteOf(input: {
+  settled: boolean
+  stale: boolean
+  degradedReason: string | null
+  droppedLast: boolean
+  usableBars: number
+}): string | null {
+  if (input.settled || !input.stale || input.degradedReason === null) return null
+  const dropped = input.droppedLast ? '；不可信的最后一根已丢弃' : ''
+  return `回源未取到新数据 ⇒ 改用本地缓存的 ${input.usableBars} 根已完成 bar${dropped}（原因：${input.degradedReason}）`
+}
+
 export function klineCacheFileNames(secid: string, klt: number, fqt: FqMode): string[] {
   const names = [`${secid}_${klt}_${fqt}.json`]
   if (fqt === 0) names.push(`${secid}_${klt}.json`)
@@ -1506,24 +1631,37 @@ async function loadKlineCache(secid: string, klt: number, fqt: FqMode): Promise<
   const key = `${secid}|${klt}|${fqt}`
   const hit = klineMem.get(key)
   if (hit !== undefined && hit.loaded) return hit
-  const entry: KlineEntry = hit ?? { bars: [], loaded: false, updatedAt: 0, partial: false }
+  const entry: KlineEntry = hit ?? {
+    bars: [], loaded: false, updatedAt: 0, partial: false,
+    fileBars: 0, refusedReason: null, degradedReason: null, droppedLast: false,
+  }
   const paths = klineCacheFileNames(secid, klt, fqt).map((name) => join(dataHome(), 'klines', name))
   for (const path of paths) {
     try {
       const raw = await readFile(path, 'utf8')
       const parsed = JSON.parse(raw) as { bars?: DayBar[]; updatedAt?: number; v?: number; partial?: boolean }
-      // 版本不符 或 未完成 bar 超 TTL ⇒ **不采用**（旧文件"看着正常但是错的"是我们的红线）
-      const ok = klineCacheUsable(parsed, Date.now())
-      if (!ok.usable) {
-        console.warn('[tradewatcher] 跳过 K 线缓存:', path, ok.reason)
+      const bars = Array.isArray(parsed.bars)
+        ? parsed.bars.filter((b) => b !== null && typeof b.date === 'string' && Number.isFinite(b.close))
+        : []
+      // ⚠ v0.63.0：不再"被拒就整段丢弃" —— 由 klineCacheAdoptionOf 决定（≥N 根可用时降级采用）
+      const decision = klineCacheAdoptionOf({ meta: parsed, bars, now: Date.now() })
+      entry.fileBars = decision.fileBars
+      entry.refusedReason = decision.refusedReason
+      entry.degradedReason = decision.degradedReason
+      entry.droppedLast = decision.adopt && decision.dropLast
+      if (!decision.adopt) {
+        console.warn('[tradewatcher] 跳过 K 线缓存:', path, decision.refusedReason,
+          `文件里 ${decision.fileBars} 根、可用 ${decision.usableBars} 根 < ${decision.minBars}`)
         continue
       }
-      if (Array.isArray(parsed.bars) && parsed.bars.length > 0) {
-        entry.bars = parsed.bars.filter((b) => b !== null && typeof b.date === 'string' && Number.isFinite(b.close))
-        entry.updatedAt = typeof parsed.updatedAt === 'number' ? parsed.updatedAt : 0
-        entry.partial = parsed.partial === true
-        break
+      if (decision.refusedReason !== null) {
+        console.warn('[tradewatcher] 降级采用 K 线缓存:', path, decision.degradedReason)
       }
+      entry.bars = decision.dropLast ? bars.slice(0, -1) : bars
+      entry.updatedAt = typeof parsed.updatedAt === 'number' ? parsed.updatedAt : 0
+      // 丢掉那根未完成 bar 之后，最后一根就是**已完成**的 ⇒ partial 必须跟着变成 false
+      entry.partial = decision.dropLast ? false : parsed.partial === true
+      break
     } catch {
       /* 该口径还没有缓存文件 */
     }
@@ -1736,7 +1874,7 @@ export async function fetchKline(
   klt: 101 | 102 | 103 | 104 = 101,
   lmt = 6,
   fqt: FqMode = 1,
-): Promise<KlineData | null> {
+): Promise<(KlineData & { staleReason?: string }) | null> {
   if (!SECID_RE.test(secid)) return null
   const baseKlt = klt === 104 ? 103 : klt
   const supported = fqSupported(secid)
@@ -1753,10 +1891,19 @@ export async function fetchKline(
   // 周/月/年 K 的"今天"同理存在，但判断口径一致（date 相等 + inSession）。
   const lastDate = days[days.length - 1]?.date ?? ''
   const barOpen = !settled && lastDate !== '' && lastDate === dayOf(Date.now()) && inSession()
+  // 降级复用的说明（只在"用了被判需要回源的缓存 且 回源没拿到新数据"时给；正常/定稿都不给）
+  const staleReason = klineStaleNoteOf({
+    settled,
+    stale,
+    degradedReason: entry.degradedReason,
+    droppedLast: entry.droppedLast,
+    usableBars: entry.bars.length,
+  })
   return {
     secid,
     days,
     stale,
+    ...(staleReason === null ? {} : { staleReason }),
     fqt: mode,
     fqSupported: supported,
     // 口径条的"数据截至"= 本地最近一次成功取数时刻（定稿时就是收盘那一次）
@@ -1804,23 +1951,39 @@ export function trendMissingReason(secid: string, opts: { emDown?: boolean } = {
  * 日K/周K/月K 拿不到时的原因。
  * K 线的上游：腾讯 fqkline（**只覆盖沪/深/港股/美股**，见 `tencentSymbol`）→ 东财 push2his → 本地增量缓存。
  */
-export function klineMissingReason(secid: string, klt: number, opts: { emDown?: boolean } = {}): UpstreamReason {
+export function klineMissingReason(
+  secid: string,
+  klt: number,
+  opts: { emDown?: boolean; cache?: KlineCacheStatus | null } = {},
+): UpstreamReason {
   const label = klt === 101 ? '日K' : klt === 102 ? '周K' : klt === 103 ? '月K' : '年K'
   const tencentKline = tencentSymbol(secid) !== null
   const down = opts.emDown ?? (upstreamFailedRecently('kline') || hostsUnavailable(HISTORY_HOSTS) || emUnavailableNow())
+  /**
+   * **缓存那半句**必须区分三情形（v0.63.0 修）：老实现无论哪种都写"本地没有该周期的缓存"，
+   * 而用户遇到的恰恰是"缓存明明在、只是被判不可用" —— 那句话与事实不符，会把人引到错的方向。
+   */
+  const cacheClause = ((): string => {
+    const c = opts.cache ?? null
+    if (c === null || !c.exists) return '本地确实没有该周期的缓存数据'
+    if (c.refusedReason !== null) {
+      return `本地有该周期的缓存，但被判不可用（${c.refusedReason}${c.fileBars > 0 ? `；文件里 ${c.fileBars} 根` : ''}${c.fileBars > 0 && c.fileBars < c.minBars ? `，不足 ${c.minBars} 根的样本下限` : ''}）`
+    }
+    return `本地有该周期的缓存（${c.fileBars} 根），但可用部分不足 ${c.minBars} 根的样本下限`
+  })()
   if (down) {
     return {
       what: label,
       why: 'transient',
       note: tencentKline
-        ? `本地没有该周期的缓存，东财行情主机当前不可达（熔断/限流），腾讯这次也没取到 —— ${MISSING_TIER_ADVICE.transient}`
-        : `本地没有该周期的缓存，该标的也不在腾讯的 K 线覆盖内（腾讯只覆盖沪/深/港股/美股），而东财行情主机当前不可达（熔断/限流）—— ${MISSING_TIER_ADVICE.transient}`,
+        ? `${cacheClause}；东财行情主机当前不可达（熔断/限流），腾讯这次也没取到 —— ${MISSING_TIER_ADVICE.transient}`
+        : `${cacheClause}；该标的也不在腾讯的 K 线覆盖内（腾讯只覆盖沪/深/港股/美股），而东财行情主机当前不可达（熔断/限流）—— ${MISSING_TIER_ADVICE.transient}`,
     }
   }
   return {
     what: label,
     why: 'no-source',
-    note: `腾讯与东财当前都可达但没有返回该标的的 K 线，本地也没有缓存 —— ${MISSING_TIER_ADVICE['no-source']}`,
+    note: `${cacheClause}；腾讯与东财当前都可达但没有返回该标的的 K 线 —— ${MISSING_TIER_ADVICE['no-source']}`,
   }
 }
 
