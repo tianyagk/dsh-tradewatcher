@@ -23,6 +23,7 @@ import { distributionBinsOf } from '../client/breadthView.ts'
 import { log, type PluginWebRoute } from './context.ts'
 import { dayTradesOf } from './dayTrade.ts'
 import { CHIPS_DISPLAY, CHIPS_DISPLAY_MAX, CHIPS_MIN_SAMPLES, CHIPS_WINDOW, CHIPS_WINDOW_MAX, chipSeriesOf } from './chips.ts'
+import { globalFlowPayload } from './globalFlow.ts'
 
 /**
  * 【涨跌分布】全市场扫描（task-14 ②）：东财 clist 逐页取 `f3`（涨跌幅），按分档计数。
@@ -391,6 +392,34 @@ export function makeTradeRoutes(
         if (!needGate(req, res)) return
         const rows = activeRows()
         send(res, 200, { rows, asOf: Date.now() })
+      },
+    },
+    {
+      /**
+       * 工具箱 → 工具①「五市场蛋糕」的数据（全球五市场宽基 ETF 规模权重）。
+       *
+       * 归属：**只被工具箱页消费** ⇒ 按 §2.2 的判据（单一消费方 ⇒ 该行）归 `tools` 行
+       * （`src/index.ts` 的 `ROW_ROUTES.tools`），关掉工具箱行时这条路由随之 404。
+       *
+       * `?source=snapshot` = **只读本地快照、不发任何上游请求**（30 日手动回放走它；
+       * 断言"回放零上游"也用它）。默认 `auto` = 三层 TTL + 在飞合并的现取模式。
+       * 口径与来源全部写在 `globalFlow.ts` 文件头（份额/动量/汇率/重建/快照）。
+       */
+      kind: 'exact',
+      path: '/tradewatcher/tools/global-flow',
+      handler: async (req, res) => {
+        if (!needGate(req, res)) return
+        try {
+          const q = queryOf(req)
+          const raw = String(q.get('source') ?? 'auto').trim().toLowerCase()
+          if (raw !== 'auto' && raw !== 'snapshot') {
+            send(res, 400, { error: 'source 只接受 auto（默认，现取）或 snapshot（只读本地快照，零上游请求）' })
+            return
+          }
+          send(res, 200, await globalFlowPayload({ source: raw === 'snapshot' ? 'snapshot' : 'auto' }))
+        } catch (error) {
+          fail(res, error)
+        }
       },
     },
     {

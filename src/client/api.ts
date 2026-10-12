@@ -67,6 +67,53 @@ export interface DayTradeView {
   methodology: string
 }
 
+// 全球五市场（工具箱 → 工具①「五市场蛋糕」）：与宿主 `globalFlow.ts` 同形（客户端只消费，不重算份额）
+export interface GlobalFlowMarketDto {
+  key: 'us' | 'eu' | 'jp' | 'cn' | 'em'
+  name: string
+  etf: string
+  aumSource: string
+  currency: 'USD' | 'CNY'
+  benchmark: string
+  benchmarkSource: string
+  aumNative: number | null
+  aumUsd: number | null
+  sharePct: number | null
+  delta1Pp: number | null
+  delta5Pp: number | null
+  momentum: { d20: number | null; d60: number | null; d120: number | null } | null
+  rank: number | null
+  /** 该行缺什么 + 原因（null = 全齐）；页面必须原样显示，不许用 0 顶替 */
+  missing: string | null
+}
+
+export interface GlobalFlowPointDto {
+  day: string
+  origin: 'observed' | 'rebuilt'
+  aumUsd: Array<number | null>
+  share: Array<number | null>
+  partial: boolean
+}
+
+export interface GlobalFlowPayloadDto {
+  asOf: number
+  day: string
+  source: 'live' | 'snapshot'
+  fallbackDay: string | null
+  fx: { usdCny: number | null; at: number | null; source: string; note: string | null }
+  markets: GlobalFlowMarketDto[]
+  totalUsd: number | null
+  totalNote: string | null
+  rotation: { kind: 'rotation' | 'flat' | 'unknown'; fromKey: string | null; toKey: string | null; maxAbsPp: number | null; comparable: number; window: number; text: string }
+  curve: { points: GlobalFlowPointDto[]; window: number; observedDays: number; rebuiltDays: number; note: string }
+  replay: { days: string[]; max: number; note: string }
+  netFlow: { code: string; label: string; days: number; sumCny: number | null; asOf: number | null; series: Array<{ day: string; netCny: number }>; basis: string; miss: string | null }
+  snapshot: { path: string; days: number; bytes: number | null; firstDay: string | null; lastDay: string | null }
+  notes: { kpi: string; curve: string; pie: string; market: string; boundary: string }
+  boundary: string[]
+  missing: Array<{ what: string; why: 'no-source' | 'transient'; note: string }>
+}
+
 import type { ToneRow as ToneRowDto } from './stripTone.ts'
 /** Same-origin JSON calls to the /tradewatcher/* host routes. */
 import type {
@@ -127,6 +174,14 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export const api = {
+  /**
+   * 全球五市场（工具箱 → 五市场蛋糕）。
+   * `source='snapshot'` = 只读宿主本地快照（一天一条、保留 90 天），**宿主不会发上游请求**
+   * —— 30 日手动回放走这条；默认 `auto` 走宿主的现取模式（三层 TTL + 在飞合并）。
+   */
+  globalFlow(source: 'auto' | 'snapshot' = 'auto'): Promise<GlobalFlowPayloadDto> {
+    return request(`/tradewatcher/tools/global-flow${source === 'snapshot' ? '?source=snapshot' : ''}`)
+  },
   /** 导出备份（P0-9）：GET /tradewatcher/backup */
   exportBackup(): Promise<{ ok: boolean; bundle: unknown; unreadable: string[] }> {
     return request('/tradewatcher/backup')

@@ -46,25 +46,97 @@ export interface ToolEntry {
   category: string
   /** 详情页各区（顺序即渲染顺序） */
   sections: readonly ToolSectionSpec[]
-  /** 边界声明（详情页最后一区的正文，逐条） */
+  /** 边界声明（详情页最后一区的正文，逐条）。**不许含阿拉伯数字**（红线：无数据时整份模型零数字） */
   boundary: readonly string[]
+  /**
+   * 数据加载器（可选）：**只有需要数据的工具才写**。
+   *
+   * 为什么是"两步"（先 load，再 `at(回放步)`）：详情页的回放滑块要在**同一个载荷**上换视图，
+   * 换一帧就发一次请求是不可接受的。因此 `load()` 负责取数一次，`at()` 只做本地视图映射
+   * （纯函数 ⇒ 可直接断言"回放零上游请求"）。
+   */
+  load?: () => Promise<ToolPayload>
 }
 
-/** 目录页固定文案（唯一来源：页面与断言都读这里，别处不许再抄一份） */
-export const CATALOG_TITLE = '工具目录'
-export const SEARCH_PLACEHOLDER = '搜索工具、市场或指标'
-/** 卡片页脚入口文案 */
-export const CARD_ACTION = '打开工具 →'
-/** 详情页"回到目录"的入口文案 */
-export const DETAIL_BACK_ACTION = '← 工具目录'
-/** 页级返回按钮文案（回上一个非 tools 页签） */
-export const PAGE_BACK_ACTION = '← 返回'
-/** 无数据占位（**唯一来源**：不许用 `0` / `—` / `暂无` 冒充） */
-export const NOT_FETCHED = '未取到'
-/** 占位的原因（缺数据必须给原因） */
-export const PENDING_WHY = '数据源下一批接入（本轮只搭结构骨架）'
-/** 搜索无结果的空态 */
-export const NO_MATCH = '没有匹配的工具'
+/** 工具的载荷句柄：一次取数 + 本地回放 */
+export interface ToolPayload {
+  /** 回放最大步数（0 = 最新一日；越大越早） */
+  replayMax: number
+  /** 取某一回放步的详情视图模型（本地计算，不发请求） */
+  at(replayIndex: number): ToolData
+}
+
+/** KPI 格子：`text` 是显示文本（缺数据时必须走 `NOT_FETCHED`），`delta` 是右侧的对比值 */
+export interface ToolKpiDatum {
+  text: string
+  value: number | null
+  delta: string | null
+}
+
+/** 曲线的一条序列（**数值是真的**；缺的点用 null，画断，不连成假线） */
+export interface ToolCurveSeries {
+  name: string
+  points: Array<number | null>
+}
+
+/** 饼图一块：`value` 用于算弧长（null ⇒ 这一块不进饼图，必须在 `missing` 里给原因） */
+export interface ToolPieSlice {
+  label: string
+  text: string
+  value: number | null
+  /** 该块在数据源里的序号（页面配色按它取，保证与曲线同色） */
+  index?: number
+}
+
+/** 工具的真实数据（缺什么就缺什么：`未取到` 由 detailModel 统一补，页面不许再写一份） */
+export interface ToolData {
+  /** 页头状态行（数据时刻/来源/口径） */
+  status: string
+  /** 整份数据缺失时的原因（分区里单点缺失各自写在 notes/missing 里） */
+  why?: string | null
+  /** 各区可覆写的口径行（缺省 = 结构声明里的文案） */
+  notes?: Partial<Record<ToolSectionKey, string>>
+  /** KPI：按**格子标签**取值（标签是工具文件的契约；取不到就显示未取到 + 原因） */
+  kpi?: Record<string, ToolKpiDatum>
+  curve?: { days: string[]; series: ToolCurveSeries[]; marks?: Array<{ index: number; label: string }> }
+  pie?: { slices: ToolPieSlice[]; center?: string | null; note?: string | null }
+  market?: { rows: string[][]; rowNotes?: Array<string | null>; footnotes?: string[] }
+  /** 附加块（例如"单列、不参与份额计算"的 A股净流入） */
+  extras?: Array<{ title: string; text: string }>
+  /** 回放（最近 N 个交易日的本地回放） */
+  replay?: { days: string[]; selected: number; note: string }
+  /** 来自数据源的附加边界声明（可能含数字口径） */
+  boundary?: readonly string[]
+}
+
+/**
+ * 固定文案（唯一来源）：实体定义在叶子模块 `toolText.ts`（那里解释了为什么必须单独一个文件
+ * —— 工具文件里的运行时 import 会让常量留在这里形成"注册表 → 工具 → 视图 → 注册表"的环），
+ * 这里**原样再导出**，调用方与断言仍然只从 `toolRegistry` 拿。
+ */
+export {
+  CARD_ACTION,
+  CATALOG_TITLE,
+  DETAIL_BACK_ACTION,
+  NO_DATA_WHY,
+  NO_MATCH,
+  NOT_FETCHED,
+  PAGE_BACK_ACTION,
+  PENDING_WHY,
+  SEARCH_PLACEHOLDER,
+  SECTION_EMPTY_WHY,
+} from './toolText.ts'
+import {
+  CARD_ACTION,
+  CATALOG_TITLE,
+  DETAIL_BACK_ACTION,
+  NO_DATA_WHY,
+  NO_MATCH,
+  NOT_FETCHED,
+  PENDING_WHY,
+  SEARCH_PLACEHOLDER,
+  SECTION_EMPTY_WHY,
+} from './toolText.ts'
 
 /** 分类标签行（本轮只有「全部」一个；工具条目自己的分类字段先落库，标签行下一批再加） */
 export const CATEGORY_TABS: ReadonlyArray<{ key: string; label: string }> = [{ key: 'all', label: '全部' }]
@@ -139,17 +211,27 @@ export function catalogModel(
   }
 }
 
-/** 详情页模型：**结构是真的，数据一律 null**（本批不接数据源） */
+/**
+ * 详情页模型：**结构是真的**，数据来自 `ToolData`（没给数据 ⇒ 一律 `未取到` + 原因）。
+ *
+ * ⚠ 红线（`toolRegistry.test.ts` 扫这条）：**没有数据时**（`detailModel(entry)`）整份模型里
+ * 一个阿拉伯数字都不许有 —— 那意味着有人写了一个"看起来像数"的默认值。有数据时数字只能来自
+ * `ToolData`（页面不许自己造数）。
+ */
 export interface DetailModel {
   id: string
   title: string
   chip: string
   backAction: string
-  kpi: { title: string; note: string; cells: Array<{ label: string; text: string; value: null }> }
-  curve: { title: string; note: string; points: number[]; empty: string }
-  pie: { title: string; note: string; slices: Array<{ label: string; text: string; value: null }>; empty: string }
-  market: { title: string; note: string; columns: string[]; rows: string[][]; empty: string }
+  /** 页头状态行：有数据 = 数据时刻/来源；无数据 = 缺失原因 */
+  status: string
+  kpi: { title: string; note: string; cells: Array<{ label: string; text: string; value: number | null; delta: string | null }> }
+  curve: { title: string; note: string; days: string[]; series: ToolCurveSeries[]; marks: Array<{ index: number; label: string }>; empty: string }
+  pie: { title: string; note: string; slices: ToolPieSlice[]; center: string | null; empty: string }
+  market: { title: string; note: string; columns: string[]; rows: string[][]; rowNotes: Array<string | null>; footnotes: string[]; empty: string }
   boundary: { title: string; note: string; lines: string[] }
+  extras: Array<{ title: string; text: string }>
+  replay: { days: string[]; selected: number; note: string } | null
 }
 
 /** 取一个工具（详情页路由用）；认不出 ⇒ null（调用方回目录） */
@@ -161,49 +243,67 @@ function sectionOf(entry: ToolEntry, key: ToolSectionKey): ToolSectionSpec | nul
   return entry.sections.find((s) => s.key === key) ?? null
 }
 
-/** 区的口径行：工具没写 ⇒ 统一的占位原因（唯一来源在注册表这一侧） */
-function noteOf(spec: ToolSectionSpec): string {
-  return spec.note ?? PENDING_WHY
+/** 区的口径行：数据源给了就用它（带真实口径），否则用工具文件里的，再否则统一的占位原因（唯一来源在注册表这一侧） */
+function noteOf(spec: ToolSectionSpec, data: ToolData | null, key: ToolSectionKey, fallback: string): string {
+  const fromData = data?.notes?.[key]
+  if (fromData !== undefined && fromData.trim() !== '') return fromData
+  return spec.note ?? fallback
 }
 
 /**
- * 详情页模型。
- *
- * ⚠ 除区标题/口径行/格子标签/列头/边界声明以外，**不允许出现任何数值或数字文本** ——
- * 本批没有数据源，凡是"数"都必须走 `NOT_FETCHED` 占位（`toolRegistry.test.ts` 扫这条）。
+ * 详情页模型。`data` 省略 ⇒ 保持"结构骨架 + 未取到占位"（本批之前的行为，红线断言照旧）。
  */
-export function detailModel(entry: ToolEntry): DetailModel {
+export function detailModel(entry: ToolEntry, data: ToolData | null = null): DetailModel {
   const sec = (key: ToolSectionKey, title: string): ToolSectionSpec => sectionOf(entry, key) ?? { key, title, note: PENDING_WHY }
   const kpi = sec('kpi', 'KPI 行')
   const curve = sec('curve', '曲线区')
   const pie = sec('pie', '饼图区')
   const market = sec('market', '市场表')
   const boundary = sec('boundary', '边界声明')
+  // "没有数据"的原因分三种（不许含糊）：工具无数据源 / 这一屏没取到 / 这一区没有
+  const fallback = data === null ? (entry.load === undefined ? PENDING_WHY : NO_DATA_WHY) : SECTION_EMPTY_WHY
+  const why = data === null ? fallback : (data.why ?? fallback)
+  const emptyOf = (): string => `${NOT_FETCHED}：${why}`
+  // KPI：标签来自工具文件（契约），值来自数据（取不到 ⇒ 未取到 + value null）
+  const kpiCells = (kpi.cells ?? []).map((label) => {
+    const datum = data?.kpi?.[label]
+    if (datum === undefined) return { label, text: NOT_FETCHED, value: null, delta: null }
+    return { label, text: datum.text, value: datum.value, delta: datum.delta }
+  })
+  const boundaryLines = data?.boundary === undefined ? [...entry.boundary] : [...entry.boundary, ...data.boundary]
   return {
     id: entry.id,
     title: entry.name,
     chip: entry.chip,
     backAction: DETAIL_BACK_ACTION,
-    kpi: {
-      title: kpi.title,
-      note: noteOf(kpi),
-      cells: (kpi.cells ?? []).map((label) => ({ label, text: NOT_FETCHED, value: null })),
+    status: data?.status ?? `${NOT_FETCHED}：${why}`,
+    kpi: { title: kpi.title, note: noteOf(kpi, data, 'kpi', fallback), cells: kpiCells },
+    curve: {
+      title: curve.title,
+      note: noteOf(curve, data, 'curve', fallback),
+      days: data?.curve?.days ?? [],
+      series: data?.curve?.series ?? [],
+      marks: data?.curve?.marks ?? [],
+      empty: emptyOf(),
     },
-    curve: { title: curve.title, note: noteOf(curve), points: [], empty: `${NOT_FETCHED}：${PENDING_WHY}` },
     pie: {
       title: pie.title,
-      note: noteOf(pie),
-      // 饼图的层由数据源决定 ⇒ 本批连层名都不编（空数组 + 空态说明）
-      slices: [],
-      empty: `${NOT_FETCHED}：${PENDING_WHY}`,
+      note: noteOf(pie, data, 'pie', fallback),
+      slices: data?.pie?.slices ?? [],
+      center: data?.pie?.center ?? null,
+      empty: data?.pie?.note ?? emptyOf(),
     },
     market: {
       title: market.title,
-      note: noteOf(market),
+      note: noteOf(market, data, 'market', fallback),
       columns: [...(market.columns ?? [])],
-      rows: [],
-      empty: `${NOT_FETCHED}：${PENDING_WHY}`,
+      rows: data?.market?.rows ?? [],
+      rowNotes: data?.market?.rowNotes ?? [],
+      footnotes: data?.market?.footnotes ?? [],
+      empty: emptyOf(),
     },
-    boundary: { title: boundary.title, note: noteOf(boundary), lines: [...entry.boundary] },
+    boundary: { title: boundary.title, note: noteOf(boundary, data, 'boundary', fallback), lines: boundaryLines },
+    extras: data?.extras ?? [],
+    replay: data?.replay ?? null,
   }
 }

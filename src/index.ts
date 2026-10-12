@@ -50,16 +50,17 @@ const ROW_ROUTES: Record<Exclude<RowId, 'core'>, readonly string[]> = {
   market: ['/tradewatcher/breadth', '/tradewatcher/rescue', '/tradewatcher/board'],
   cloudmap: [],
   /**
-   * tools 行（工具箱：工具目录 + 工具详情）—— **本轮不独占任何 host 路由** ⇒ 空数组。
+   * tools 行（工具箱：工具目录 + 工具详情）。
    *
    * 归属判据（`docs/DESIGN-SUBPLUGINS.md` §2.2）：**被 ≥2 个行消费 ⇒ core；单一消费方 ⇒ 该行**。
-   * 工具箱本身只**消费**已有的接口（工具详情第一批要的持仓/行情数据全部由 core 与 portfolio 行提供，
-   * 那两个消费方之外还有别的调用方 ⇒ 留在原行），因此它没有"只被它一个人用"的路由可以拿走：
-   *   · 若下一批新增了**只被工具箱用**的路由（例如工具的专用聚合接口）⇒ 按同一判据写进本数组；
-   *   · 若某个新接口同时被别的页用（≥2 个行消费）⇒ 它必须留 core，不许塞进这里。
-   * 「本行可以没有 host 路由」与 cloudmap 行同款：客户端半区照常贡献 activeRows ⇒ 页签门控照常工作。
+   *   · `/tradewatcher/tools/global-flow`（五市场蛋糕的数据）**只被工具箱页消费**
+   *     （`src/client/ToolsPage.tsx` → `tools/cake.ts` 的 loader）⇒ 按判据归本行。
+   *     关掉工具箱行时这条路由随之 404（页面本来就不在），符合"行未激活 ⇒ 路由天然 404"。
+   *   · 其余工具详情要用的持仓/行情数据仍由 core 与功能行提供（那些接口还有别的消费方 ⇒ 留在原行）。
+   *   · 以后新增只被工具箱用的路由 ⇒ **逐条**写进本数组（与其它行同款：这里列的是精确路径，
+   *     不是目录前缀）；被 ≥2 个行消费的 ⇒ 必须留 core。
    */
-  tools: [],
+  tools: ['/tradewatcher/tools/global-flow'],
 }
 
 /** 行 → 该行独占的 agent 工具名（不含前缀） */

@@ -210,11 +210,11 @@ test('第 7 行 tools（工具箱）：只贡献 activeRows，无独占路由/�
   assert.equal(coreKernel()?.activeRows.has('tools'), true, '开启后 rows 应含 tools（这是页签门控的唯一依据）')
   const on = gateTabs(TABS, new Set([...coreKernel()!.activeRows, 'calendar']), 'calendar')
   assert.deepEqual(on.visible.map((t) => t.key), ['calendar', 'tools'], '开启后工具页签出现')
-  // 本行**不独占**任何 host 路由/工具：空数组是刻意的（判据见 src/index.ts 的 ROW_ROUTES 注释）
-  assert.deepEqual(tools.routes, [], 'tools 行本轮不注册 host 路由（与 cloudmap 同款：只贡献 activeRows）')
-  assert.deepEqual(tools.tools, [], 'tools 行本轮不带 agent 工具')
-  assert.deepEqual(ROW_ROUTES_FOR_TEST.tools, [], '前缀表里它必须是空数组（一旦有独占路由就要按 §2.2 重新判归属）')
-  assert.equal(tools.routes.some((p) => p.includes('tools')), false, '不许悄悄注册一个"工具箱专用"路由')
+  // v0.72.0：工具箱有了**只被它消费**的数据路由 ⇒ 按 §2.2 判据归本行（上一轮是空数组，注释里已预告）
+  assert.deepEqual(tools.routes, ['/tradewatcher/tools/global-flow'], '五市场数据路由只被工具箱页消费 ⇒ 归 tools 行')
+  assert.deepEqual(tools.tools, [], 'tools 行不带 agent 工具（工具目录/详情是纯 UI）')
+  assert.deepEqual(ROW_ROUTES_FOR_TEST.tools, ['/tradewatcher/tools/global-flow'], '独占表：工具箱独有的那条数据路由（精确路径，与其它行同款）')
+  assert.deepEqual(tools.routes.filter((p) => !p.startsWith('/tradewatcher/tools/')), [], '工具箱行不许顺带拿走别人的路由（只准注册自己的前缀）')
   // rowOf 必须认这个行名（认不出会静默回退 all ⇒ 该行关不掉还多注册一遍）
   assert.equal(rowOf({ row: 'tools' }), 'tools', 'rowOf 必须认识 tools（否则该行回退成 all）')
   stopMonitor()
@@ -318,8 +318,8 @@ const ROW_ROUTES_FOR_TEST: Record<string, readonly string[]> = {
   market: ['/tradewatcher/breadth', '/tradewatcher/rescue', '/tradewatcher/board'],
   watchlist: ['/tradewatcher/watch', '/tradewatcher/industries', '/tradewatcher/anomaly'],
   portfolio: ['/tradewatcher/portfolio', '/tradewatcher/ledger'],
-  // 第 7 行（工具箱）：本轮不独占任何 host 路由（与 cloudmap 同款）
-  tools: [],
+  // 第 7 行（工具箱）：独占五市场蛋糕的数据路由（单一消费方 ⇒ 该行）
+  tools: ['/tradewatcher/tools/global-flow'],
 }
 const ROW_TOOLS_FOR_TEST: Record<string, readonly string[]> = {
   calendar: ['calendar', 'calendar_add'],

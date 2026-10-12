@@ -9,10 +9,10 @@
 #   tradewatcher-portfolio → row: portfolio  `/tradewatcher/portfolio|ledger` + `_portfolio`/`_ledger`
 #   tradewatcher-market    → row: market     `/tradewatcher/breadth|rescue|board` + `_rescue`
 #   tradewatcher-cloudmap  → row: cloudmap   纯客户端 iframe（host 侧无独占路由/工具，只贡献 activeRows）
-#   tradewatcher-tools     → row: tools      **工具箱**（工具目录页 + 工具详情页）。本轮**没有**独占 host 路由/
-#                                            工具（数组为空，与 cloudmap 同款）：它只消费 core/portfolio 已有的
-#                                            接口，因此按 §2.2 判据（单一消费方才归该行）一条都拿不走；
-#                                            与 cloudmap 一样只贡献 activeRows ⇒ 页签门控照常工作。
+#   tradewatcher-tools     → row: tools      **工具箱**（工具目录页 + 工具详情页）+
+#                                            `/tradewatcher/tools/global-flow`（五市场蛋糕的数据；**只被工具箱页消费**
+#                                            ⇒ 按 §2.2 判据归本行，v0.72.0 起它确实独占了一条路由）。
+#                                            本行不带 agent 工具；与 cloudmap 一样贡献 activeRows ⇒ 页签门控照常工作。
 #
 # ⚠ **历史归因纠正（这一条要读，前一轮的结论是错的）** —— 这段说的是当时的**六行**形态，七行是同机制加一行。
 # v0.50.0 曾把"（六行）装载失败"归因成"同一 package 多个活跃 Loader 源 = composition error"，

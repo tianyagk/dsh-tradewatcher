@@ -138,7 +138,10 @@ export function renderWiringProblems(src: string): string[] {
     if (!cond) bad.push(msg)
   }
   need(/catalogModel\(TOOL_ENTRIES, query, category, CATEGORY_TABS\)/.test(src), '目录页必须由 catalogModel 生成（页面不许自己拼卡片）')
-  need(/detailModel\(entry\)/.test(src), '详情页必须由 detailModel 生成（占位/原因只有一份来源）')
+  // v0.72.0 接数据后：详情页 = detailModel(entry, data)，数据由工具自己的 load() 取一次、本地回放
+  need(/detailModel\(entry, data\)/.test(src), '详情页必须由 detailModel(entry, data) 生成（占位/原因只有一份来源）')
+  need(/payload\.at\(step\)/.test(src), '回放必须走载荷句柄的 at(step)（本地换帧，不许每帧发请求）')
+  need(/entry\?\.load/.test(src), '数据必须来自工具自己的 load()（页面不许另写一份取数）')
   // 目录页四个要素
   need(/model\.title/.test(src), '目录页标题未渲染')
   need(/model\.subtitle/.test(src), '目录页副标题未渲染')
@@ -153,12 +156,19 @@ export function renderWiringProblems(src: string): string[] {
     need(src.includes(field), `详情页骨架未渲染：${field}`)
   }
   need(/model\.market\.columns\.length/.test(src), '市场表空态必须跨全部列（colSpan 来自列数）')
+  // 接数据后的四个新接线点（缺一个都会造成"模型有数、页面不显示"）
+  need(/cell\.delta === null \? null : React\.createElement/.test(src), 'KPI 的 delta（变化）必须渲染（用户口径要求 KPI 行含 delta）')
+  need(/type: 'range'/.test(src) && /io\.onStep/.test(src), '回放滑块必须渲染（最近 30 个交易日手动回放）')
+  need(/cell\.text/.test(src), 'KPI 的文本必须渲染')
+  need(/model\.market\.rowNotes\[i\]/.test(src), '市场表的逐行原因必须渲染（缺数据行要显示「未取到 + 原因」）')
+  need(/model\.extras\.map\(/.test(src), '附加块（A股净流入单列）必须渲染')
+  need(/model\.status/.test(src), '状态行（数据时刻/来源/原因）必须渲染')
   // 返回按钮：只有拿到 onBack 才渲染（null ⇒ 不渲染）
   need(/props\.onBack === null\s*\?\s*null/.test(src), '没有可返回的页时不许渲染返回按钮')
   return bad
 }
 
-test('目录页/详情页渲染接线齐全；四种"关掉渲染"的注入各让检查非空', () => {
+test('目录页/详情页渲染接线齐全；六种"关掉渲染"的注入各让检查非空', () => {
   const src = readSrc('src/client/ToolsPage.tsx')
   const bad = renderWiringProblems(src)
   assert.deepEqual(bad, [], `渲染接线检查未通过：${bad.join(' ／ ')}`)
@@ -167,6 +177,9 @@ test('目录页/详情页渲染接线齐全；四种"关掉渲染"的注入各�
     { name: '页脚入口文案不再渲染', mutate: (s) => s.replace('}, card.action),', '}, card.title),'), hit: /card\.action/ },
     { name: '搜索框占位改写字面量（绕过唯一来源）', mutate: (s) => s.replace('placeholder: model.searchPlaceholder', "placeholder: '搜索'"), hit: /搜索框占位/ },
     { name: '空数据时不再渲染占位文案', mutate: (s) => s.replace('model.pie.empty', "''"), hit: /model\.pie\.empty/ },
+    // v0.72.0：接数据后的四个接线点，各自配一条注入
+    { name: 'KPI 的 delta 不渲染', mutate: (s) => s.replace('cell.delta === null ? null :', 'null ? null :'), hit: /delta/ },
+    { name: '回放滑块改成固定文本', mutate: (s) => s.replace("type: 'range',", "type: 'hidden',"), hit: /回放滑块/ },
   ]
   for (const { name, mutate, hit } of injections) {
     const mutated = mutate(src)

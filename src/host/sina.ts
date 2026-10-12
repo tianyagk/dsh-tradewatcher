@@ -199,6 +199,247 @@ export function parseSinaEtfRanking(payload: string, limit = 40): SinaEtfRow[] {
   return out
 }
 
+/**
+ * ── 全球五市场（宽基 ETF 规模权重）用的新浪取数原语 ──────────────────────────
+ *
+ * 全部是 2026-10-12 本机实测的形状（原始回包见 docs/AUDIT-IMPL45.md §2）：
+ *   · 规模：`hq.sinajs.cn/list=gb_spy` 的**第 13 个字段（1 起数）= 下标 12 =「总市值」**（美元）。
+ *     ⚠ 用户口径里写的"字段 13"是**1 起数**：下标 13 是市盈率（实测恒 0.00）——
+ *     这里按 `price × 股本(下标 19)` 交叉校验总市值，两者必须一致（实测 822272781554 = 778.57 × 1056132116）。
+ *   · A股规模：ETF 节点的 `nmc`（万元）—— **不是 `mktcap`**（实测 510300：nmc 10635037.4372 万元
+ *     = 1063.50 亿元，与腾讯 f45「总市值」1063.50 亿元一致；同一个 ETF 的 `mktcap` 只有 824.69 亿元）。
+ *   · 日线：`stock.finance.sina.com.cn/usstock/api/jsonp_v2.php/x/US_MinKService.getDailyK?symbol=vgk`
+ *     （jsonp 形态，含全历史；腾讯 `usVGK` 实测只回 1 根 ⇒ 美股 ETF 日线只能走这条）。
+ *   · 资金流：`MoneyFlow.ssl_qsfx_zjlrqs?daima=sh510300`（逐日 `netamount`，元）。
+ *   · 汇率：`hq.sinajs.cn/list=fx_susdcny`（下标 8 = 最新，下标 3 = 昨收）。
+ */
+
+/** 抓一段新浪文本（GBK 或 UTF-8），统一带 Referer（实测不带会被拒） */
+async function sinaText(url: string, opts: { gbk?: boolean; timeoutMs?: number } = {}): Promise<string> {
+  const res = await fetch(url, {
+    headers: { 'user-agent': UA, referer: 'https://finance.sina.com.cn/' },
+    signal: AbortSignal.timeout(opts.timeoutMs ?? 15000),
+  })
+  if (!res.ok) throw new Error(`HTTP ${res.status} from ${new URL(url).host}`)
+  const buf = await res.arrayBuffer()
+  try {
+    return new TextDecoder(opts.gbk === false ? 'utf-8' : 'gbk').decode(buf)
+  } catch {
+    return new TextDecoder('latin1').decode(buf)
+  }
+}
+
+export interface SinaBar {
+  date: string
+  open: number
+  close: number
+  high: number
+  low: number
+  vol: number
+}
+
+/** 解析新浪美股日线（jsonp：`/*<script>…*\/x([{d,o,h,l,c,v,a},…]);`） */
+export function parseSinaUsDaily(payload: string): SinaBar[] {
+  const from = payload.indexOf('[')
+  const to = payload.lastIndexOf(']')
+  if (from < 0 || to <= from) return []
+  let rows: unknown
+  try {
+    rows = JSON.parse(payload.slice(from, to + 1))
+  } catch {
+    return []
+  }
+  if (!Array.isArray(rows)) return []
+  const out: SinaBar[] = []
+  for (const raw of rows) {
+    const it = raw as Record<string, unknown>
+    const date = String(it.d ?? '').trim()
+    const close = num(it.c)
+    // 除权/停牌的行会给 0 或空 ⇒ 直接丢掉（不许把 0 当成一根 bar 混进收益率）
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || close === null || !(close > 0)) continue
+    out.push({ date, open: num(it.o) ?? close, close, high: num(it.h) ?? close, low: num(it.l) ?? close, vol: num(it.v) ?? 0 })
+  }
+  return out
+}
+
+/** 拉新浪美股（`us<ETF>`）全历史日线；调用方自己截尾（本接口不接受条数参数，实测） */
+export async function fetchSinaUsDaily(symbol: string): Promise<SinaBar[]> {
+  const sym = symbol.trim().toLowerCase()
+  if (!/^[a-z.]{1,8}$/.test(sym)) throw new Error(`美股代码不合法：${symbol}`)
+  const url = `https://stock.finance.sina.com.cn/usstock/api/jsonp_v2.php/x/US_MinKService.getDailyK?symbol=${sym}`
+  return parseSinaUsDaily(await sinaText(url, { gbk: false, timeoutMs: 20000 }))
+}
+
+export interface SinaGbQuote {
+  name: string
+  price: number | null
+  pct: number | null
+  /** 总市值（美元，下标 12）—— 用户口径里的"字段 13"（1 起数） */
+  totalMv: number | null
+  /** 股本（下标 19），用于与总市值交叉校验 */
+  shares: number | null
+  /** 行情时间文本（下标 3） */
+  time: string | null
+}
+
+/** 解析 `gb_*`（美股/美股 ETF）行情行 */
+export function parseSinaGb(payload: string): Record<string, SinaGbQuote> {
+  const out: Record<string, SinaGbQuote> = {}
+  for (const line of payload.split('\n')) {
+    const m = /^var hq_str_(gb_[A-Za-z0-9._]+)="([^"]*)"/.exec(line.trim())
+    if (m === null) continue
+    const parts = m[2].split(',')
+    if (parts.length < 20) continue
+    out[m[1]] = {
+      name: String(parts[0] ?? '').trim(),
+      price: num(parts[1]),
+      pct: num(parts[2]),
+      time: parts[3] === undefined ? null : String(parts[3]).trim(),
+      totalMv: num(parts[12]),
+      shares: num(parts[19]),
+    }
+  }
+  return out
+}
+
+/** 拉 `gb_*` 行情（`spy` → `gb_spy`） */
+export async function fetchSinaGb(symbols: readonly string[]): Promise<Record<string, SinaGbQuote>> {
+  const list = symbols.map((s) => `gb_${s.trim().toLowerCase()}`)
+  if (list.length === 0) return {}
+  return parseSinaGb(await sinaText(`https://hq.sinajs.cn/list=${list.join(',')}`))
+}
+
+export interface SinaEtfNodeRow {
+  symbol: string
+  name: string
+  price: number | null
+  pct: number | null
+  /** 流通市值（**万元**）：ETF 的"规模"字段，实测与腾讯 f45 一致 */
+  nmcWan: number | null
+  /** 总市值（万元）：对 ETF 与 nmc 不同义（实测 510300 差 29%）⇒ 只作对照，不当规模用 */
+  mktcapWan: number | null
+}
+
+/** 解析新浪 ETF 节点（`Market_Center.getHQNodeData`）的一页 */
+export function parseSinaEtfNode(payload: string): SinaEtfNodeRow[] {
+  let rows: unknown
+  try {
+    rows = JSON.parse(payload)
+  } catch {
+    return []
+  }
+  if (!Array.isArray(rows)) return []
+  const out: SinaEtfNodeRow[] = []
+  for (const raw of rows) {
+    const it = raw as Record<string, unknown>
+    const symbol = String(it.symbol ?? '').trim().toLowerCase()
+    if (!/^(sh|sz)\d{6}$/.test(symbol)) continue
+    out.push({
+      symbol,
+      name: String(it.name ?? '').trim(),
+      price: num(it.trade),
+      pct: num(it.changepercent),
+      nmcWan: num(it.nmc),
+      mktcapWan: num(it.mktcap),
+    })
+  }
+  return out
+}
+
+/**
+ * 定位一只 ETF 的规模（万元）。
+ *
+ * 实测：`symbol=` 参数**不生效**（仍回第 1 页），`num` 上限 100 ⇒ 只能按 `symbol` 升序翻页找。
+ * 因此这里翻到找到为止（上限 `maxPages`，默认 6 页；实测 `sh510300` 在第 1 页），
+ * 每页约 37KB —— 调用方必须带长 TTL（日级数据，见 globalFlow.ts）。
+ */
+export async function fetchSinaEtfNodeSize(symbol: string, maxPages = 6): Promise<SinaEtfNodeRow> {
+  const want = symbol.trim().toLowerCase()
+  if (!/^(sh|sz)\d{6}$/.test(want)) throw new Error(`ETF 代码不合法：${symbol}`)
+  let seen = 0
+  for (let page = 1; page <= maxPages; page += 1) {
+    const url =
+      'https://vip.stock.finance.sina.com.cn/quotes_service/api/json_v2.php/Market_Center.getHQNodeData' +
+      `?page=${page}&num=100&sort=symbol&asc=1&node=etf_hq_fund`
+    const rows = parseSinaEtfNode(await sinaText(url, { gbk: false }))
+    seen += rows.length
+    const hit = rows.find((r) => r.symbol === want)
+    if (hit !== undefined) return hit
+    if (rows.length === 0) break
+  }
+  throw new Error(`ETF 节点里没找到 ${want}（已翻 ${maxPages} 页 / ${seen} 行）`)
+}
+
+export interface SinaMoneyFlowDay {
+  day: string
+  /** 当日净流入（元）；上游给 `--`/空 ⇒ 跳过该日（不当 0） */
+  netCny: number
+}
+
+/** 解析资金流序列（`MoneyFlow.ssl_qsfx_zjlrqs`） */
+export function parseSinaMoneyFlow(payload: string): SinaMoneyFlowDay[] {
+  const from = payload.indexOf('[')
+  const to = payload.lastIndexOf(']')
+  if (from < 0 || to <= from) return []
+  let rows: unknown
+  try {
+    rows = JSON.parse(payload.slice(from, to + 1))
+  } catch {
+    return []
+  }
+  if (!Array.isArray(rows)) return []
+  const out: SinaMoneyFlowDay[] = []
+  for (const raw of rows) {
+    const it = raw as Record<string, unknown>
+    const day = String(it.opendate ?? '').trim()
+    const net = num(it.netamount)
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(day) || net === null) continue
+    out.push({ day, netCny: net })
+  }
+  return out
+}
+
+/** 拉某标的最近 `days` 个交易日的逐日净流入（元） */
+export async function fetchSinaMoneyFlow(symbol: string, days = 20): Promise<SinaMoneyFlowDay[]> {
+  const want = symbol.trim().toLowerCase()
+  if (!/^(sh|sz)\d{6}$/.test(want)) throw new Error(`资金流代码不合法：${symbol}`)
+  const url =
+    'https://vip.stock.finance.sina.com.cn/quotes_service/api/json_v2.php/MoneyFlow.ssl_qsfx_zjlrqs' +
+    `?page=1&num=${Math.max(1, Math.round(days))}&sort=opendate&asc=0&daima=${want}`
+  return parseSinaMoneyFlow(await sinaText(url, { gbk: false }))
+}
+
+export interface SinaFxQuote {
+  /** 最新价（下标 8） */
+  rate: number | null
+  /** 昨收（下标 3）—— 用于剔除明显错值（|涨跌| < 5%） */
+  prev: number | null
+  /** 上游时刻文本（下标 0，只有 HH:mm:ss） */
+  time: string | null
+  name: string | null
+}
+
+/**
+ * 解析新浪外汇行。实测 `fx_susdcny` 的下标：
+ *   [0] 时间 [1] 买价 [2] 卖价 [3] 昨收 [4] 成交量 [5] 开 [6] 高 [7] 低 [8] **最新** [9] 名称 [10] 涨跌幅%
+ * 交叉校验：(最新 − 昨收) / 昨收 × 100 ≈ 下标 10（实测 (6.6937−6.6929)/6.6929 = 0.012%）。
+ */
+export function parseSinaFx(payload: string, symbol: string): SinaFxQuote {
+  const m = new RegExp(`^var hq_str_${symbol.replace(/\./g, '\\.')}="([^"]*)"`, 'm').exec(payload)
+  if (m === null) return { rate: null, prev: null, time: null, name: null }
+  const parts = m[1].split(',')
+  if (parts.length < 10) return { rate: null, prev: null, time: null, name: null }
+  const rate = num(parts[8])
+  const prev = num(parts[3])
+  const sane = rate !== null && rate > 0 && (prev === null || prev <= 0 || Math.abs(rate / prev - 1) < 0.05)
+  return { rate: sane ? rate : null, prev, time: parts[0] === undefined ? null : String(parts[0]).trim(), name: parts[9] === undefined ? null : String(parts[9]).trim() }
+}
+
+/** 拉美元兑人民币在岸价（新浪 `fx_susdcny`） */
+export async function fetchSinaFxUsdCny(): Promise<SinaFxQuote> {
+  return parseSinaFx(await sinaText('https://hq.sinajs.cn/list=fx_susdcny'), 'fx_susdcny')
+}
+
 /** 拉取新浪 ETF 排行（成交额或涨跌幅降序） */
 export async function fetchSinaEtfRanking(sort: 'pct' | 'amount' = 'amount', limit = 40): Promise<SinaEtfRow[]> {
   const field = sort === 'amount' ? 'amount' : 'changepercent'
