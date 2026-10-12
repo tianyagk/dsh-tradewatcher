@@ -343,7 +343,18 @@ bash scripts/install.sh
 
 本插件在一个 bundle 内拆成**六行**（core / calendar / cloudmap / market / watchlist / portfolio），**各自可独立开关**：
 停用某一行 = 该行的**路由 404** + **工具从列表消失** + **侧栏 tab 消失**（不灰显、不留空壳）。
-行清单与归属见 `docs/DESIGN-SUBPLUGINS.md`，落地记录见 `docs/AUDIT-IMPL12.md`–`AUDIT-IMPL15.md`。
+**行清单的唯一权威处是本包的 `cordis.patch.yml`**（`cordis.patch.yml:38-56`，v0.59.0 起为六行：`tradewatcher-core`/`-calendar`/`-watchlist`/`-portfolio`/`-market`/`-cloudmap`，全部启用、每行 `config: { row: … }`）；
+行归属与设计见 `docs/DESIGN-SUBPLUGINS.md`，落地与验证记录见 `docs/AUDIT-IMPL35.md`。
+
+关闭某一行：**不改本包**，在 profile 层（`~/.dsh/profiles/<profile>/cordis.patch.yml`）按 id 覆盖即可 —— 只关日历就写：
+
+```yaml
+- id: tradewatcher-calendar
+  disabled: true
+```
+
+改完 `cordis.patch.yml`（或 profile 层行开关）**必须重启 `dsh web`**：宿主行只在启动时装载，**刷新页面不够**。
+`core` 行不要关 —— 行情条/详情图/`/tradewatcher/rows` 等共享路由都挂在它上面。
 
 ## agent 工具索引
 

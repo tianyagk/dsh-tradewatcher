@@ -1,8 +1,11 @@
 # 设计：一个 bundle 内的多行子组件（可独立开关）+ 迁移路径
 
-**状态：未落地（方案记录）**。六行形态在本机**装载失败**：同一 package 多个活跃 Loader 源 + 本包带客户端半区 ⇒ `dsh-client-modules` 判为 composition error；当前 manifest **只装一行**（`cordis.patch.yml:3-9` 已回退为单行），客户端 tab 门控代码保留但不生效（`src/index.test.ts:149` 锁定单行）。
-**目标（方案）**：把 `dsh-tradewatcher` 从单行插件改成「core + 功能行」的多行 bundle，使【实时行情条】【自选】【持仓】【大盘】【云图】【日历】各自可开关。**只读设计**，不改代码、不改 profile、未安装任何 bundle。
-**现状**：单行 bundle；行映射（`ROW_ROUTES`/`ROW_TOOLS`）与 `/tradewatcher/rows` 仍在，作为将来重试的基础。
+**状态：已落地（v0.59.0 / `a2066e1`）**。`cordis.patch.yml:38-56` 是**六行**（`tradewatcher-core`/`-calendar`/`-watchlist`/`-portfolio`/`-market`/`-cloudmap`，全部启用、每行 `config: { row: … }`、`name` 全为 `dsh-tradewatcher`；无 config 的 `all` 语义保留给老 profile）；`src/index.test.ts` 的清单断言已从"锁单行"改为"锁六行"。
+静态验证（锚真实产物 `lib/index.js`）见 `docs/AUDIT-IMPL35.md`：`inits/starts` 各 1、跨行零重复、路由账 24 = core 16 + calendar 1 + watchlist 3 + portfolio 2 + market 2 + cloudmap 0、六行并集 == 单行全量。
+**最后一公里**（重启 `dsh web` 后的真实装载：插件列表六行 `fiberPhase=active`、`/tradewatcher/rows` 六项、关一行后 404）**待装机验证**。
+> ⚠ **归因纠正（重要）**：本文件此前写着"六行装载失败：同一 package 多个活跃 Loader 源 + 带客户端半区 ⇒ `dsh-client-modules` 判为 composition error"——**这个归因是错的**（2026-10 纠正）。真原文是 *"distinct active Loader **sources** for that package are a composition error"*，指的是**不同的加载源**（`sourceKey = baseUrl + "\0" + loaderName`），**不是"同一个源的多个 row"**；而当年真正的失败原因是 `apply` 读了未 inject 的 `ctx.config`（Cordis Proxy 直接抛），**该 bug 与行数无关：1 行和 6 行同样被打死**。完整证据与纠正后的记录见文末「归因纠正与恢复记录」。
+**目标（方案）**：把 `dsh-tradewatcher` 从单行插件改成「core + 功能行」的多行 bundle，使【实时行情条】【自选】【持仓】【大盘】【云图】【日历】各自可开关。**只读设计**（设计轮次当时的约束：不改代码、不改 profile、未安装任何 bundle）。
+**现状（v0.59.0 起）**：六行 bundle 已生效；行映射（`ROW_ROUTES`/`ROW_TOOLS`）与 `/tradewatcher/rows` 端点**已在用**（前端 tab 按活跃行过滤）。
 **结论**：DSH 支持**同一 package 出现在多条 Loader 行**（靠 `id` + `config` 区分），我们**不需要**照抄参考包的"子路径壳"；但**每行的 host 半区是独立 fiber（apply 会被调用多次）**，共享内核必须靠 core 行 + service 注入。下面每条都有 file:line 或命令输出。
 
 ## 1. 机制实证
@@ -35,9 +38,12 @@
 - **谁决定浏览器加载哪些 client 半区**：`…/dsh-client-modules/lib/index.js:121-122` 的模块注释："The manifest package name identifies the browser module; **distinct active Loader sources for that package are a composition error**"；入口解析规则是 `exports["./client"]`（`lib/index.js:170-180`），同一个包只注册一个浏览器模块（`README.md:38` "a replay would stop at the first duplicate registration"）⇒ **client 半区是"包级、单实例"，不能按行拆**。
 
 ### 1.3 我们现在的装配与要改的点
+
+> **快照说明**：下表是 **v0.44.0 迁移前**的现场（行号亦为当时值）；**迁移后的结果**见文末「归因纠正与恢复记录」（六行已落地、`cordis.patch.yml:38-56`）。
+
 | 事项 | 位置 | 现状 |
 |---|---|---|
-| bundle 行 | `cordis.patch.yml:13-15` | 单行 `id: tradewatcher` / `name: dsh-tradewatcher`（无 config） |
+| bundle 行 | `cordis.patch.yml:13-15`（当时） | 单行 `id: tradewatcher` / `name: dsh-tradewatcher`（无 config） |
 | manifest | `package.json:10-16`（exports 仅 `.` / `./client` / `./package.json`）、`:17-24`（`dsh.bundle.patch`、`dsh.client.platform`） | 单入口双面 |
 | 构建 | `build.mjs:61-85`（host→`lib/index.js`、client→`lib/client.js`）、`:192-210`（构建期硬校验 75 项 UI 片段，只查 `lib/client.js`） | 两产物 |
 | host 装配 | `src/index.ts:17`（apply）、`:48`（`makeTradeRoutes`）、`:76`（`makeAgentTools`）；路由 `src/host/routes.ts:167`（22 条 `/tradewatcher/*`，如 `:211 health`、`:845 calendar`）；工具 `src/host/tools.ts:151`（12 个 `tradewatcher_*`，如 `:169 portfolio`、`:622 calendar`） | 全量一次性注册 |
@@ -102,17 +108,18 @@
 
 ## 5. 迁移路径（每阶段可独立验证、可随时停）
 
-- **P0 骨架（不改行为）**：`src/index.ts` 的 apply 改为读 `config.row`（缺省 `core`，且**缺省时保持现状=全部启用**，向后兼容老 profile 的无 config 行）；6 条行先全部插在 `cordis.patch.yml`，但 `config.row` 只解析 core，功能行是空操作。验收：`npm test` 全绿；`plugin_manager list_plugins` 出现 6 条 `enabled:true, fiberPhase:"active"`；界面与现在**完全一致**。
+- **P0 骨架（不改行为）**：`src/index.ts` 的 apply 改为读 `config.row`（**无 config 的缺省是 `all`（全量）**，向后兼容老 profile 的无 config 行；显式 `row: core` 才是"只要内核那一段"）；6 条行先全部插在 `cordis.patch.yml`，但 `config.row` 只解析 core，功能行是空操作。验收：`npm test` 全绿；`plugin_manager list_plugins` 出现 6 条 `enabled:true, fiberPhase:"active"`；界面与现在**完全一致**。
 - **P1 最小切片（证明整条链路）**：切 **【日历】**（它同时有 host 路由、工具、tab —— 三处 gate 都能验证；云图虽更小但只有 client 一处，证明力弱）。
-  验收判据（**未执行**：六行装载失败，见本文件「回退记录」一节）：① 插件列表出现 `tradewatcher-core` 与 `tradewatcher-calendar` 两行，可独立开关；② 关掉 calendar 后 `curl /tradewatcher/calendar` → 404（或未注册）、`Tool.listTools` 里 `tradewatcher_calendar`/`calendar_add` 消失、面板不再有"日历"tab **且不出现空壳**、`GET /tradewatcher/rows` 的 `rows[]` 里没有 calendar；③ core 的行情条/自选/持仓/大盘照常，无 unhandled rejection；④ 重开行后恢复；⑤ 重启 `dsh web` 后开关状态保持（在 profile patch 里）；⑥ 老 profile（无 config 的单行）启动后行为不变。
+  验收判据（**静态口径已验证**：六行的行级分工 / 幂等 / 跨行零重复见 `docs/AUDIT-IMPL35.md`；**重启后的真实装载待装机验证**）：① 插件列表出现 `tradewatcher-core` 与 `tradewatcher-calendar` 两行，可独立开关；② 关掉 calendar 后 `curl /tradewatcher/calendar` → 404（或未注册）、`Tool.listTools` 里 `tradewatcher_calendar`/`calendar_add` 消失、面板不再有"日历"tab **且不出现空壳**、`GET /tradewatcher/rows` 的 `rows[]` 里没有 calendar；③ core 的行情条/自选/持仓/大盘照常，无 unhandled rejection；④ 重开行后恢复；⑤ 重启 `dsh web` 后开关状态保持（在 profile patch 里）；⑥ 老 profile（无 config 的单行）启动后行为不变。
 - **P2**：依 §2 顺序切 `cloudmap`（最快）→ `watchlist` → `portfolio` → `market`（含护盘采样，风险最高，放最后；`RescueMonitor` 必须留在 core 或改成 core 代管）。
 - **P3 收尾**：README/CHANGELOG 行清单与开关说明；`build.mjs` 的 75 项片段校验**无需改**（client 产物仍是单文件）；补一条断言：`cordis.patch.yml` 里每条功能行的 `config.row` 都在代码的行表里（防拼错 row 名导致静默不挂载）。
 
 ### 5.1 P1 的改动清单（文件级，供实现者直接落地）
+> 本节是**设计轮次的计划书**（行号均为当时的值）；**落地结果**见文末「归因纠正与恢复记录」与 `docs/AUDIT-IMPL35.md`。
 | 文件 | 改动 |
 |---|---|
-| `cordis.patch.yml:13-15` | 单行 → 6 行 insert（§1.2 骨架）；**用 id 前缀 `tradewatcher-*` 而不是 `group: true`**——平铺的行在插件列表里各自可开关，分组行自身也会占一行 |
-| `src/index.ts:17` | `apply(ctx, config)` 读 `config.row`（缺省 `core` ⇒ 老 profile 行为不变；现行签名无 `config` 参数，需补上）；`:31` 的 `store.init()` 与 `:41` 的 `rescue.start()` 收进 core 分支 + 模块级幂等 |
+| `cordis.patch.yml`（当时 `:13-15`，现行：插入块在 `:38-56`） | 单行 → 6 行 insert（§1.2 骨架）；**用 id 前缀 `tradewatcher-*` 而不是 `group: true`**——平铺的行在插件列表里各自可开关，分组行自身也会占一行 |
+| `src/index.ts:17` | `apply(ctx, config)` 读 `config.row`（**无 config 的缺省 = `all`（全量）** ⇒ 老 profile 行为不变；现行签名无 `config` 参数，需补上）；`:31` 的 `store.init()` 与 `:41` 的 `rescue.start()` 收进 core 分支 + 模块级幂等 |
 | `src/host/routes.ts:167` | 增加 `row` 参数：每个功能行只注册自己那段 `/tradewatcher/*`（§2 映射）；core 额外注册 `GET /tradewatcher/rows` |
 | `src/host/tools.ts:151` | 按 `row` 过滤 `tradewatcher_*` 工具；`:1365` 的 systemPrompt 段同步过滤 |
 | `src/client/api.ts` | 加 `rows()`（拉 `{rows:[…]}`，失败返回 null） |
@@ -134,14 +141,38 @@
 | 客户端 fail-open | 端点不可达 ⇒ 全部渲染（照抄参考实现） | 临时把 core 的 rows 路由改成 500，界面仍完整（不消失） |
 | 开关写回与覆盖层冲突 | 用户 patch 按 id 覆盖；**同一 id 在更高优先级层再次覆盖会 `overridden`**（技能文档） | `plugin_manager set_bundle/set_plugin` 的结果字段；profile patch 只保留一份该 id |
 
-## 7. 明确不做 / 未验证
+## 7. 明确不做
 
 - **不做**：拆多个 npm 包；为每行产出独立 client bundle；重写数据层；把 `RescueMonitor` 采样循环挪进可关闭的功能行（采样必须随 core 常驻，否则大盘行的历史信号会断档）。
-## 回退记录（v0.50.0）
 
-- 六行形态装载失败：`dsh-client-modules` 把"同一 package 多个活跃 Loader 源"判为 composition error（本包带客户端半区）。
-- 处置：`cordis.patch.yml` 回退为**单行**；`src/index.ts` 的行映射、幂等守卫与 `/tradewatcher/rows` 端点保留（有测试锁定），将来若客户端支持按行装载可直接复用。
-- 唯一权威记录在 `cordis.patch.yml:3-9`；本文件与 `README.md` 只保留指向。
+> 原先挂在本书的「未验证」项已随六行落地更新，见文末「归因纠正与恢复记录」的「仍然成立 / 仍然未验证的」。
 
-- **未验证**（本轮约束：只读、不安装、不改 profile）：① 同一包多行时**浏览器侧** `apply` 被调用几次（server 侧必然多次）——设计上不依赖它：gate 全在 core 的 `rows` 端点 + 模块级幂等；② `dsh.client` 是否支持按行区分（`dsh-client-modules/lib/client.js:63-68` 的解析按"包名"进行，判为不支持，未做实验）；③ 我们自己的 6 行形态**未在本机装载实测**（需 P0 阶段验证）。
+## 归因纠正与恢复记录（v0.50.0 回退 → v0.59.0 恢复）
+
+### 三段结论
+
+1. **v0.50.0**：六行形态在用户端表现异常（所有 `/tradewatcher/*` 404、面板"插件服务异常"），处置是 `cordis.patch.yml` 回退为**单行** `- id: tradewatcher`（不带 config ⇒ `all`）。
+2. **当时的归因（"同一 package 多个活跃 Loader 源 ⇒ `dsh-client-modules` 判为 composition error ⇒ 同包六行会被整体拒绝"）是错的**，v0.59.0 纠正。当年那条结论来自源码注释的一句话，且**从未实测**。
+3. **v0.59.0 恢复六行**：`cordis.patch.yml:38-56`（六个 `tradewatcher-*` id，全部启用，每行 `config: { row: … }`）。静态验证（锚真实产物 `lib/index.js`）见 `docs/AUDIT-IMPL35.md`：`inits`/`starts` 各 1、**跨行零重复**、路由账 24 = core 16 + calendar 1 + watchlist 3 + portfolio 2 + market 2 + cloudmap 0、**六行并集 == 单行全量**。最后一公里（重启 `dsh web` 的真实装载）待装机验证。
+
+### 为什么"同包多行"本来就合法（代码级证据）
+
+| 锚点（`@deepseek-ai/dsh-client-modules/lib/index.js`） | 代码 | 含义 |
+|---|---|---|
+| `:121-123`（模块注释） | *"distinct active Loader **sources** for that package are a composition error"* | 报错对象是 **source（加载源）**，不是 row |
+| `:791-792` | `sourceKey(loaderName, baseUrl) { return \`${baseUrl}\0${loaderName}\` }` | 源的身份 = **解析基准 URL + 模块 specifier** |
+| `:858-869` | `loaderName = entry.options.name`；`baseUrl = entry.parent.tree.ctx.baseUrl` | 行的 `name` 与所属树的 baseUrl |
+| `:833-840` | `nextSources.set(source.sourceKey, source)` | **按 sourceKey 收进 Map ⇒ 同名同基准的多行被归并成一条** |
+| `:871-876` | `if (sources.length > 1) throw … multiple active Loader sources …` | 只有 **≥2 个不同 sourceKey** 才报错 |
+
+⇒ 我们六行的 `name` 都是 `dsh-tradewatcher`、都在 profile 树的同一次 `insert` 里（同一个 `baseUrl`）⇒ `sourceKey` 完全相同 ⇒ 归并后只剩 1 条 ⇒ **走不到 `:874` 的报错**。"多个 row" 与 "多个 source" 是两件事。
+
+### 当年真正打死它的是什么（与行数无关）
+
+`apply` 里读了 `ctx.config`，而真宿主的 ctx 是 Cordis Proxy：`@deepseek-ai/cordis/lib/index.js:672` 的 get trap、`:676` 的 `cannot get property "…" without inject`（`:736`/`:743` 的 `mixin` accessor 注册解释了为什么 `effect`/`get` 能用而 `config` 抛）⇒ **那一行 fiber failed**。**这个 bug 会同等打死 1 行或 6 行**，所以它才是"插件服务异常"的真凶；修复方式是用 `ctxSafe()` 包住 + 只读 `apply` 的第二参数 `config`（v0.45.3）。
+
+### 仍然成立 / 仍然未验证的
+
+- **仍然成立**：`client` 半区是**包级单实例**（`dsh.client` 的浏览器模块按**包名**注册一次，不随行数变化）⇒ 停用门控只能走 core 的 `/tradewatcher/rows` 端点，**不能按行拆 client bundle**。
+- **未在本机实测（待装机）**：① 同一包多行时**浏览器侧** `apply` 被调用几次（server 侧必然多次；设计不依赖它：gate 在 core 的 `rows` 端点 + 模块级幂等）；② 六行在真宿主重启后的行状态与开关效果（见 §5 的六条验收判据）。
 - **参考实现的两个坑要记住**：其 `README.zh.md:69` 记录过"keyed slot 用 `id` 而非必填 `key`"导致 GUI 启动失败 ⇒ 我们注册 keyed 槽（`main`）时必须给 `key`（我们已经在用 `key: PANEL_ID`，`src/client/index.tsx:114`）；其外部行标记 `"inactive": true` 时会在产物后追加 `disabled: true` 覆盖行（`README.zh.md:27`）——这正是"出厂默认关闭"的实现方式，我们照抄即可。

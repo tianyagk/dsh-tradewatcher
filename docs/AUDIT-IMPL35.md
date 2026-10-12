@@ -377,3 +377,64 @@ built lib/index.js + lib/client.js （v0.58.0，客户端片段校验通过：75
 | 两次改 `src/index.ts` 做注入 | 每次 `git checkout -- src/index.ts` 还原；`cmp` 与注入前逐字一致 |
 | 一次演练回滚命令（写单行清单） | 用 `/tmp/keep-six.yml` 还原；`sha256sum -c` 通过（`ad6c93d7…`） |
 | 收尾工作区状态 | `git status --short` = `M cordis.patch.yml`、`M src/index.test.ts`（+ 本文件未跟踪）；`git diff --stat` 里**没有 `build.mjs`** |
+
+---
+
+## 10. task-7 追加：三处旧文本的错误归因已修正（**只改文字与注释**）
+
+> 本节由 task-7 追加（v0.59.0 已把六行 manifest 落地，§1–§9 是那一轮的记录）。
+> 目标：把**还写着旧归因**的文本改成事实 —— 报错对象是**不同的加载源**（`sourceKey`），不是"同一个源的多个 row"；
+> 当年真凶是 `apply` 读 `ctx.config`（Proxy 未 inject 即抛），**1 行 6 行同样打死**；六行已于 v0.59.0 恢复。
+
+### 10.1 改动清单
+
+| # | 文件 | 改动 |
+|---|---|---|
+| ① | `docs/DESIGN-SUBPLUGINS.md` | 抬头（`:3`）状态改为「**已落地（v0.59.0 / `a2066e1`）**」+ 一行归因纠正块（引文 `sourceKey` 机制 + `ctx.config` 真凶）；「回退记录（v0.50.0）」**整节改写**为「**归因纠正与恢复记录**」（三段结论 + 代码级证据表 + 真凶一节 + 仍然成立/仍然未验证）；§5 的「验收判据（**未执行**）」改为「静态口径已验证、真实装载待装机」；§P0 与 §5.1 里的"缺省 `core`"改为 **`all`**；§5.1 的 `cordis.patch.yml:13-15` 指针改为现行 **`:38-56`**，并给 §5.1 加一行"这是设计轮次的计划书、行号为当时值"的前置说明。**同类的过时"现状"陈述一并修正（三处，改的是同一类事实）**：`:8`（"现状：单行 bundle…将来重试"→"现状（v0.59.0 起）：六行 bundle 已生效"）、§1.3 抬头加"**快照说明**：下表是 v0.44.0 迁移前的现场"、§7 标题由「明确不做 / 未验证」改为「明确不做」并把未验证项指向文末新节 |
+| ② | `README.md`「子组件与开关」 | 行清单的权威处改指**本包 `cordis.patch.yml:38-56`**（并列出六个 id）；落地记录由 `AUDIT-IMPL12–15` 改为 `docs/AUDIT-IMPL35.md`；**新增**"怎么关一行"（profile 层 `- id: tradewatcher-<row>` + `disabled: true`）与"**必须重启 `dsh web`**"、"`core` 行别关" |
+| ② | `CHANGELOG.md` | 三处历史陈述加**相邻纠正标记**（保留原文以存史，不篡改历史记录；原文行号是改动前的值，标记现在落在 `:316`/`:562`/`:571`）：`:315`（v0.32 时代的「未落地 / 未执行 / 回退记录」doc 整理）、`:560`（v0.45.3「上一轮回退仍然有效且必要」）、`:569`（v0.45.2 第 3 条「同包六行会被整体拒绝 ⇒ 得走每个子组件各自一个包」）；另把 v0.44.0 那句"同包多 resolve 属 composition error"**改写为**"同一个包被**多个解析源** resolve 才属；**同一源的多个 row 不算**"——那句歧义正是当初误读的来源 |
+| ③ | `src/index.ts:12` | 注释"缺省 row = `core`"改为 **`all`（全量；不是 `core`）**，并写明"给 `core` 会把自选/持仓/大盘/日历的路由一起 404（v0.45.1 实测踩到）"、口径见 `rowOf`（`:104-111`） |
+
+**README / CHANGELOG 里其实已经没有 `cordis.patch.yml:3-9` 这个指针**了（R21 那轮评审已收敛掉了）——
+残留的是同类的**过时落点**（`AUDIT-IMPL12–15`、「未落地」抬头），本轮按同一意图修正；这一点如实记下，避免任务描述与文件状态对不上。
+
+### 10.2 纪律自查
+
+- **零行为改动（有哈希证据）**：改注释前后各构建一次 ⇒
+  `lib/index.js` = `25bb8cbaa5035e67be5ec3d8b1814b32d8ff0aab0a99a2cae05a2f8d913de62e`、
+  `lib/client.js` = `8fa44f3292006e532bd12c76ef379092dad5c951c9dc68689234f0238902c914`，**逐字一致**
+  （esbuild 不把普通注释带进产物）。
+- **行数中性**：`src/index.ts` 仍是 **269** 行 —— 注释**压成一行**（而不是拆三行），
+  这样本文件 §1–§9 里所有 `src/index.ts:NNN` 锚点（`:85`/`:104`/`:127`/`:205`/`:253`…）**全部继续有效**。
+  （第一版把它拆成了三行、行数 271 ⇒ 会让本文件十几处锚点集体漂移 +2，已改回。）
+- **全仓 grep 自查**（`composition error` / `多个活跃 Loader 源` / `多行会被整体拒绝` / `只装一行` / `未落地`）逐条结论：
+  - **保留且本来就正确**：本文件 §1、`cordis.patch.yml:14-16`（纠正注释本身）、`CHANGELOG.md:18-19`（v0.59.0 条目）、
+    `docs/DESIGN-SUBPLUGINS.md:38`（英文原句引用；其结论"client 半区是包级单实例、不能按行拆"**仍然成立**）、
+    `src/index.ts:99`（`rowOf` 的 `all` 缺省说明）。
+  - **已加纠正标记的历史段落**：`CHANGELOG.md:315`、`:560`、`:569`。
+  - **不在本轮 write scope、未改的两处遗留**（交给 Lead 决定）：
+    ① `docs/STE-REVIEW-DOCS.md:15`（一条评审建议表，建议把 `DESIGN-SUBPLUGINS.md` 抬头写成"未落地 + `cordis.patch.yml:3-9`"，现已过时）；
+    ② `docs/AUDIT-IMPL23.md:13`/`:20`（上一轮的自述报告，按"一次性报告 = 时间点记录"的惯例保留原文）。
+- `build.mjs` **零改动**；未装 bundle、**未动 profile**（`- id: tradewatcher` 那条按 Lead 决定保留，重启后只多一条 warning）、未 commit、未重启。
+
+### 10.3 验收（`npm run check`）
+
+```
+ℹ tests 412 / pass 412 / fail 0        （本地时区）
+ℹ tests 412 / pass 412 / fail 0        （TZ=UTC）
+ALL HOST CHECKS PASSED (live probes soft)
+```
+
+末尾四行（倒数第三行是构建分段器的空行）：
+
+```
+> dsh-tradewatcher@0.59.0 build
+> node build.mjs
+
+built lib/index.js + lib/client.js （v0.59.0，客户端片段校验通过：75 项）
+```
+
+### 10.4 本轮工作区状态
+
+`git status --short`：`M README.md`、`M CHANGELOG.md`、`M docs/DESIGN-SUBPLUGINS.md`、`M src/index.ts`、`M docs/AUDIT-IMPL35.md`
+（全部为文字/注释；`git diff` 里**没有 `build.mjs`**、没有 `cordis.patch.yml`、没有 `src/index.test.ts`）。

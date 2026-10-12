@@ -11,6 +11,28 @@
 
 ---
 
+## v0.59.1 — 修正三处旧文本的错误归因（纯文字与注释，产物逐字不变）
+
+六行方案已恢复（v0.59.0），但三处旧文本仍写着**错误归因**（"同包多行会被整体拒绝"）。
+
+### 改动
+
+- `docs/DESIGN-SUBPLUGINS.md`：抬头改为「**已落地（v0.59.0 / a2066e1）**」；「回退记录（v0.50.0）」整节改写为「**归因纠正与恢复记录**」—— 三段结论 + `sourceKey` 归并的代码级证据表 + `ctx.config` 真凶一节 + 仍然成立/仍然未验证；§5 验收判据「未执行」→「静态已验、待装机」；§P0/§5.1 的"缺省 `core`" → **`all`**；指针 `:13-15` → 现行 `:38-56`。另顺手修三处同类过时"现状"（`:8`、§1.3 加快照说明、§7 标题）—— 不修则抬头说"已落地"、下面写"现状：单行"，同屏自相矛盾。
+- `README.md`「子组件与开关」：权威指针改指**本包 `cordis.patch.yml:38-56`**（列出六个 id）；落地记录改指 `docs/AUDIT-IMPL35.md`；**新增**「怎么关一行」（profile 层 `- id: tradewatcher-<row>` + `disabled: true` 片段）+「**必须重启 `dsh web`**」+「core 行别关」。
+- `CHANGELOG.md`：三处历史陈述加**相邻纠正标记**（原文保留以存史，标记落在相邻行）；并把 v0.44.0 那句歧义表述改写为"同一个包被**多个解析源** resolve 才属 composition error；**同一源的多个 row 不算**"。
+- `src/index.ts:12` 注释：缺省 row 由 `core` 改为 **`all`（全量；不是 `core`）**，并写明"给 `core` 会把自选/持仓/大盘/日历的路由一起 404（v0.45.1 实测）"。
+
+### 验证
+
+**零行为改动，有哈希证据**：改注释前后各 `npm run build` ⇒ `lib/index.js = 25bb8cba…`、`lib/client.js = 8fa44f32…`，**逐字一致**（esbuild 不带普通注释进产物）。
+**行数中性（差点踩的坑）**：注释第一版拆成 3 行会让 `src/index.ts` 由 269 变 271，使 `AUDIT-IMPL35.md` 十几处行号锚点**集体漂移 +2**；已压成一行，锚点全部继续有效。
+`npm run check` = **412 / 412** × 2 时区 + `ALL HOST CHECKS PASSED`；`build.mjs` 零改动。
+全仓 grep 自查逐条结论记入 `docs/AUDIT-IMPL35.md` §10.2：保留且正确的 = 该文档 §1、`cordis.patch.yml:14-16`、`CHANGELOG.md:18-19`、`DESIGN-SUBPLUGINS.md:38`（英文原句引用，其"client 包级单实例"结论仍成立）、`src/index.ts:99`；加标记的历史段落 = `CHANGELOG.md:315/560/569`。
+
+### 未做（有意）
+
+`docs/STE-REVIEW-DOCS.md:15`（过时评审建议表）与 `docs/AUDIT-IMPL23.md:13/:20`（上一轮自述报告）**不改** —— 它们是**时间点记录**，按本项目惯例保留原样；权威表述以 `DESIGN-SUBPLUGINS.md` 与 `README.md` 为准。
+
 ## v0.59.0 — 恢复组件分离：六行 manifest（含归因纠正，附代码级证据）
 
 ### 纠正我此前的一个错误结论
@@ -313,6 +335,7 @@ YAML 用 **DSH 自带解析器**验过：`errors = 0 / warnings = 0`，结构 `[
 ### 文档收口（`task-73`）
 
 - **9 条与代码不符全部改完**：`DESIGN-CHIPS.md` 的窗口/桶数改为 **360 天累积 / 展示 45 天 / 96 桶**、筹码改为**六个页签都显示**、半衰期写死不可配、计算量改写（96×360≈10.4 万次，实测 ~19ms）；`DESIGN-SUBPLUGINS.md` 抬头改为「**状态：未落地（方案记录）**」并把方案与现状分开、验收判据标「未执行」、**新增「回退记录」节**；三处重复事实收敛到 `cordis.patch.yml`。
+  - ⚠ **这一处「未落地 / 未执行 / 回退记录」已被 v0.59.0 取代**（此处保留原文以存史）：`DESIGN-SUBPLUGINS.md` 现为「**已落地（v0.59.0）**」，验收判据按静态口径已验、回退记录已改写为「归因纠正与恢复记录」；六行的唯一权威处仍是 `cordis.patch.yml`（现行 `:38-56`）。
 - **术语统一**：「顶栏」→「**行情条**」；「关注标的」→「**自选 + 持仓标的**」。
 - **归档**：28 份一次性报告 `git mv` 进 `docs/archive/`（内容不改、历史保留），`docs/*.md` 由 41 份降到 13 份；`DECISIONS.md` 顶部加「历史记录，不适用 STE 规范」。
 - **判定一处审计误报**：`README.md:97` 是 `rescue-log.json` 的数据字段说明段（无 `⚠`、无后果句），机械套 R16 属类型套错 ⇒ 不改，记入报告。
@@ -558,6 +581,7 @@ tradewatcher (dsh-tradewatcher): Error: cannot get property "config" without inj
 
 - "代码 + 断言全绿"**不等于**"能在真宿主装载"：假 ctx 的形状与真宿主不一致时，测试给的信心是假的。已用 Proxy 断言把这个缺口补上。
 - 上一轮六行方案的回退（v0.45.2）仍然有效且必要：同包多活跃 Loader 源 + 带客户端半区会被 `dsh-client-modules` 判为 composition error。
+  - ⚠ **本条的归因已被 v0.59.0 推翻**（此处保留原文以存史）：报错对象是**不同的加载源**（`sourceKey = baseUrl + "\0" + loaderName`），**不是同一加载源的多个 row**；同包六行并不触发它，已于 v0.59.0 恢复。正确表述见本文件 v0.59.0 条目与 `docs/DESIGN-SUBPLUGINS.md`「归因纠正与恢复记录」。
 
 ## v0.45.2 — 紧急修复：v0.44/v0.45 的六行装载会让插件整体不工作（回退为单行 + 缺省全量）
 
@@ -566,6 +590,7 @@ tradewatcher (dsh-tradewatcher): Error: cannot get property "config" without inj
 1. **我漏了安装步骤**：六行只写在**bundle 清单**（`cordis.patch.yml`）里，而 profile 的 patch（真正的组合真源）仍是当初单行安装时留下的那条 `- id: tradewatcher`（不带 `config.row`）。
 2. **我改错了缺省语义**：P2 把"无 config"的缺省行从 `core` 改成了"只有 core 自己的部分"（当时以为这样才对），于是那条 legacy 行只注册内核那一段 —— **各功能行的前缀被 core 静态排除**，`/watch`、`/portfolio`、`/ledger`、`/calendar`、`/breadth` 等几乎全部 404。
 3. 更正一处**设计假设错误**：DSH 的 `dsh-client-modules` 把"同一 package 出现多个**活跃 Loader 源**"视为 **composition error**，而本包**同时带客户端半区**（`dsh.client` + `exports['./client']`）⇒ 同包六行会被整体拒绝。要真做成可独立开关的子组件，得走"**每个子组件各自一个包**"（参考 `@linxin666/dsh-web-all` 的 `/market`、`/settings` 那样），不是同一个包开六行。
+   - ⚠ **本条（含"同包六行会被整体拒绝"与"得走每个子组件各自一个包"两个结论）已被 v0.59.0 推翻**（此处保留原文以存史）：那句话里的 source 指**不同的加载源**，同包同基准的六行会被归并成一个 sourceKey，不会报错；当年真正的失败原因是 `apply` 读 `ctx.config`（Proxy 未 inject 即抛），**与行数无关**。六行已于 v0.59.0 恢复，**不需要拆成六个 npm 包**。
 
 ### 修复
 
@@ -647,7 +672,7 @@ tradewatcher (dsh-tradewatcher): Error: cannot get property "config" without inj
 
 ### 机制：不需要拆包，而是**同一个 package 出现在多条 Loader 行**
 
-DSH 原生支持同包多行（官方 `dsh-base/cordis.patch.yml` 即如此），靠 `id` + `config.row` 区分，**行的 `disabled` 就是插件列表那个开关**；参考包的"子路径壳"是因为它的子组件是独立 npm 包，我们不需要。**客户端是包级单实例**（同包多 resolve 属 composition error）⇒ 停用门控走 core 的活跃行端点，而不是按行拆 client bundle。
+DSH 原生支持同包多行（官方 `dsh-base/cordis.patch.yml` 即如此），靠 `id` + `config.row` 区分，**行的 `disabled` 就是插件列表那个开关**；参考包的"子路径壳"是因为它的子组件是独立 npm 包，我们不需要。**客户端是包级单实例**（同一个包被**多个解析源** resolve 才属 composition error；**同一源的多个 row 不算**）⇒ 停用门控走 core 的活跃行端点，而不是按行拆 client bundle。
 
 ### 六个行
 

@@ -9,7 +9,7 @@
  *  ② 内核实例走**模块级单例**并按 `provide('tradewatcher.core')` 暴露 ⇒ **功能行不许自己 new DataStore()**；
  *  ③ 功能行只注册自己那一段路由/工具（行未激活 ⇒ 三者都不注册，路由天然 404）。
  *
- * 老 profile（没有 `config.row`）⇒ row = `core` ⇒ 行为与拆分前**逐字一致**（core 兜住除日历外的一切）。
+ * 老 profile（无 `config.row`）⇒ row = **`all`（全量；不是 `core`）** ⇒ 与拆分前逐字一致（**全部**路由/工具都注册）；显式 `row: core` 才是"只要内核那一段" —— 缺省给 `core` 会把自选/持仓/大盘/日历的路由一起 404（v0.45.1 实测踩到）。口径见 `rowOf`（本文件 :104-111）。
  */
 import { makeTradeRoutes } from './host/routes.ts'
 import { makeAgentTools, servicesOf } from './host/tools.ts'
