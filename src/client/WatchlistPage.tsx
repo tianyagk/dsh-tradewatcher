@@ -1,5 +1,6 @@
 /** 自选 page: grouped watchlist with live quotes from the shared engine. */
 import React, { useCallback, useEffect, useRef, useState } from 'react'
+import { indReasonOf } from './watchlistView.ts'
 import { DEFAULT_PREFS, type PortPrefs, type QuoteRow, type SuggestItem, type WatchData } from '../shared/model.ts'
 import { api } from './api.ts'
 import { dirClass, fmtAmt, fmtPct, fmtPrice, fmtSigned, pctArrow } from './format.ts'
@@ -11,7 +12,7 @@ import { SILENCE_MS, useWatchAlerts, type AlertRow } from './alerts.ts'
 import { SortBar } from './SortBar.tsx'
 import { WATCH_SORT_HINT, WATCH_SORT_KEYS, WATCH_SORT_LABEL, normalizeSortState, sortWatch, type WatchSortKey } from './sort.ts'
 import { useYtd } from './useYtd.ts'
-import { ytdMissingSummary, ytdText, ytdTooltip } from './ytdView.ts'
+import { ytdText, ytdTooltip } from './ytdView.ts'
 
 type ModalState =
   | { kind: 'addGroup' }
@@ -20,6 +21,7 @@ type ModalState =
   | { kind: 'addItem'; groupId: string; groupName: string }
   | { kind: 'moveItem'; groupId: string; groupName: string; itemId: string; itemName: string; secid: string }
   | null
+
 
 export function WatchlistPage(props: {
   quotes: Record<string, QuoteRow>
@@ -115,11 +117,6 @@ export function WatchlistPage(props: {
     const alpha = stockPct !== null && boardPct !== null ? Math.round((stockPct - boardPct) * 100) / 100 : null
     return { stockPct, boardPct, alpha }
   }
-
-  // 页面级 YTD 缺失摘要：逐行给 tooltip，整体只说"有几项算不出 + 第一条原因"
-  const ytdRows = ytd.loaded ? Object.values(ytd.map) : []
-  const ytdMissingCount = ytdRows.filter((r) => r.ytd === null).length
-  const ytdSummary = ytdMissingCount > 0 ? ytdMissingSummary(ytdRows) : null
 
   const reload = useCallback(() => {
     api
@@ -239,24 +236,9 @@ export function WatchlistPage(props: {
             : null,
         )
       : null,
-    // 行业/板块请求失败必须说出来（否则每一行都"看起来本来就没有行业"）。
-    // 正文只留一行：原因与时刻可见，长解释进 tooltip —— 这类横幅每轮刷新都在，写成三行会把面板挤满。
-    indState.status === 'error'
-      ? React.createElement('div', {
-          className: 'tw-hint',
-          style: { color: 'var(--tw-up)' },
-          tabIndex: 0,
-          role: 'note',
-          'aria-label':
-            `板块涨跌与 α 本次未取到（${indState.error ?? '上游不可用'}）。` +
-            '板块涨幅与 α 本次未取到：下一次行情轮询会自动重试。',
-          title:
-            '板块涨幅与 α 本次未取到。' +
-            '行业归属与板块行情未取到时，下一次行情轮询会自动重试。',
-        },
-          `板块涨跌与 α 本次未取到 · ${indState.at === null ? '时刻未知' : new Date(indState.at).toLocaleTimeString('zh-CN', { hour12: false })} · ${indState.error ?? '上游不可用'}`,
-        )
-      : null,
+    // v0.69.1（用户要求减少常驻提示）：面板级「板块涨跌与 α 本次未取到 · 时刻 · 原因」那一行**已删**。
+    // 事实没丢：受影响的行级控件（「板块 —」「α —」）的 `title` 与 `aria-label` 里带着同样的
+    // 上游状态、失败时刻与"会不会自动重试"（见 `indReasonOf`）——常驻不再出现，悬停/读屏仍然拿得到。
     // 年初至今（YTD）的失败与上限必须说出来：数字静静变 — 会被读成"这只票今年没动"
     ytd.error !== null
       ? React.createElement('div', { className: 'tw-hint', style: { color: 'var(--tw-up)' } },
@@ -268,15 +250,8 @@ export function WatchlistPage(props: {
           title: `YTD 单次上限 ${ytd.limit} 项；超出部分不静默截断，而是显示 — 并在此说明。`,
         }, `YTD 单次上限 ${ytd.limit} 项，超出部分显示 —`)
       : null,
-    ytdSummary !== null
-      ? React.createElement('div', {
-          className: 'tw-hint',
-          tabIndex: 0,
-          role: 'note',
-          'aria-label': `YTD 缺 ${ytdMissingCount} 项：逐行原因见各行悬停`,
-          title: `${ytdSummary}\n逐行原因见各行悬停提示。`,
-        }, `YTD 缺 ${ytdMissingCount} 项`)
-      : null,
+    // v0.69.1：「YTD 缺 N 项」整块**已删** —— 行内已经显示 `YTD —`（`ytdText()` 的缺失态），
+    // 事实在受影响的那一格上直接可见，不需要再来一行汇总（用户要求减少常驻提示）。
     active.length === 0
       ? React.createElement(EmptyHint, { action: React.createElement(Btn, { primary: true, onClick: () => setModal({ kind: 'addGroup' }) }, '+ 新建分组') }, '暂无自选分组：新建分组后，往组里添加证券（支持搜索代码/名称）。')
       : null,
@@ -400,11 +375,11 @@ export function WatchlistPage(props: {
                                 // 那是错的信息，而"取不到"是另一件事
                                 // 原因不能只挂在 title 上：title 是鼠标专属（键盘/触屏拿不到），
                                 // 因此缺失态补 tabIndex + aria-label（P1-5）
-                                // S4：原因由面板级「板块涨跌与 α」那一行承担，行级只留通用词 + 指路
-                                title: '板块当日涨幅未取到（原因见上方「板块涨跌与 α」一行）',
+                                // v0.69.1：面板级那行已删 ⇒ 原因（含上游状态与重试说明）直接挂在这一格上
+                                title: `板块当日涨幅未取到 —— ${indReasonOf(indState)}`,
                                 tabIndex: 0,
                                 role: 'note',
-                                'aria-label': '板块当日涨幅未取到（原因见上方「板块涨跌与 α」一行）',
+                                'aria-label': `板块当日涨幅未取到 —— ${indReasonOf(indState)}`,
                               }, '板块 —'),
                           React.createElement('span', {
                             className: 'tw-num ' + dirClass(alpha, prefs.redUp),
@@ -412,7 +387,7 @@ export function WatchlistPage(props: {
                               ? `α = 个股涨跌幅 ${stockPct?.toFixed(2)}% − 板块涨跌幅 ${boardPct?.toFixed(2)}%`
                               : stockPct === null
                                 ? 'α 不可算：该标的本次没有可用行情（个股涨跌幅未取到）'
-                                : 'α 不可算：板块涨跌幅未取到（见左侧「板块 —」的说明）',
+                                : `α 不可算：板块涨跌幅未取到 —— ${indReasonOf(indState)}`,
                             // 不可算时给键盘/触屏一条可读的原因（可计算时不需要）
                             ...(alpha === null
                               ? {
@@ -420,7 +395,7 @@ export function WatchlistPage(props: {
                                   role: 'note',
                                   'aria-label': stockPct === null
                                     ? 'α 不可算：该标的本次没有可用行情（个股涨跌幅未取到）'
-                                    : 'α 不可算：板块涨跌幅未取到（见左侧「板块 —」的说明）',
+                                    : `α 不可算：板块涨跌幅未取到 —— ${indReasonOf(indState)}`,
                                 }
                               : {}),
                           }, `α ${alpha === null ? '—' : `${pctArrow(alpha)}${Math.abs(alpha).toFixed(2)}%`}`),

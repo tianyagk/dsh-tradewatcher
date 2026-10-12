@@ -479,23 +479,23 @@ round1 samples: 372     round2 samples: 372        ⇒ 丢了一次更新
 
 ## 7. 门禁（`npm run check` 实跑）
 
-最近一次（本人改动的最终态 + 队友已落的 `rescue.ts` / `em.ts` 补丁都在工作区）：
+最近一次（本人改动的最终态 + 队友已落的 `rescue.ts` / `em.ts` / `klineLock.test.ts` 补丁都在工作区）：
 
 ```
-ℹ tests 474
-ℹ pass 474
+ℹ tests 476
+ℹ pass 476
 ℹ fail 0
-（默认时区；随后 TZ=UTC 再跑一遍：同为 474/474/0）
+（默认时区；随后 TZ=UTC 再跑一遍：同为 476/476/0）
 
-> dsh-tradewatcher@0.67.0 build
+> dsh-tradewatcher@0.69.0 build
 > node build.mjs
 
-built lib/index.js + lib/client.js （v0.67.0，客户端片段校验通过：73 项）
+built lib/index.js + lib/client.js （v0.69.0，客户端片段校验通过：73 项）
 （退出码 0）
 ```
 
-- 本轮开头基线 `24936cd` 记的是 435 条 × 2；现在 474 条 × 2（本人 +18：`lock.test.ts` 12、`engineIds.test.ts` 6；
-  其余为队友的取数层用例）。
+- 本轮开头基线 `24936cd` 记的是 435 条 × 2；现在 476 条 × 2（本人 +18：`lock.test.ts` 12、`engineIds.test.ts` 6；
+  其余为队友的取数层与 klines 并发用例）。
 - `npm run check` = `typecheck`（tsc 0 error）→ `test`（双时区）→ `selftest`（`ALL HOST CHECKS PASSED (live probes soft)`）→ `build`（0）。
 - 复核纪律：本人在**整套并行**（61+ 测试文件）的上下文里跑过 `npm test` 至少 3 次，`lock.test.ts` 的 12 条无抖动。
 
