@@ -61,7 +61,7 @@
 | **core** | 除下表之外的全部（quotes/trend/kline/detail/suggest/prefs/backup/health/undo/rows/tones/badge/ytd…） | `quotes` `search` `position` `ytd` `undo` | 跨行共用：`/trades`（详情抽屉）、`/industry`（详情抽屉）**留 core**；`undo` 是通用写入撤销（判不准 ⇒ core） |
 | `calendar` | `/tradewatcher/calendar*` | `calendar` `calendar_add` | 三者同生共死 |
 | `cloudmap` | **无**（纯前端 iframe，不调任何 `/tradewatcher/*`） | **无** | 云图的数据在 52etf 页面里，本插件只是 iframe 宿主 |
-| `market` | `/breadth` `/board` `/industries` `/rescue` `/anomaly` | `rescue` | `/breadth` 只有大盘页用（顶部行情条不用）⇒ 可独占 |
+| `market` | `/breadth` `/board` `/rescue` | `rescue` | `/breadth` 只有大盘页用（顶部行情条不用）；**v0.62.0**：云图页内建热力视图下线后 `/board` 只剩 `MarketPage.tsx:84` 一个调用方 ⇒ 也从 core 收进本行 |
 | `watchlist` | `/watch` | `watchlist` `group_rank` | `group_rank` 的数据来源是自选分组 ⇒ 归此行；`/trades` 因被抽屉共用而移回 core |
 | `portfolio` | `/portfolio` `/ledger` | `portfolio` `ledger` | `/ledger` 只有持仓页的流水弹窗用；`dayTrades` 随 `portfolio` 工具 |
 
@@ -71,7 +71,7 @@
 
 | 路由 | 调用方（file:line，实测） | 消费行数 | 归属 |
 | --- | --- | --- | --- |
-| `/tradewatcher/board` | `MarketPage.tsx:84` ＋ `IndustryHeatmap.tsx:30`（该组件只被 `CloudMap.tsx:125` 渲染） | **2**（market + cloudmap） | **core**（task-60 从 market 移回） |
+| `/tradewatcher/board` | **只有** `MarketPage.tsx:84`（云图页那个调用方已随内建热力视图删除，v0.62.0） | 1 | **market**（v0.62.0 从 core 收进；task-60 曾因『两行消费』留在 core） |
 | `/tradewatcher/industries` | 只有 `WatchlistPage.tsx:89` | 1 | **watchlist**（task-60 从 market 改归） |
 | `/tradewatcher/anomaly` | `alerts.ts:69` ← 只被 `WatchlistPage` 引用 | 1 | **watchlist**（task-60 从 market 改归） |
 | `/tradewatcher/breadth` | 只有 `MarketPage.tsx:104` | 1 | market |
@@ -79,8 +79,14 @@
 | `/tradewatcher/trades` | `QuoteDrawer.tsx:79`（core 的抽屉） | 1（core） | core |
 | `/tradewatcher/industry` | `QuoteDrawer.tsx:78`（core 的抽屉） | 1（core） | core |
 
-**修正的动机（验证员原话的后果）**：`/board` 若留在 market，用户关掉「大盘」行 ⇒ **云图页热力图 404**；
-`/industries`/`/anomaly` 若留在 market ⇒ 关掉大盘 ⇒ **自选页行业列与告警扫描 404**。都是诚实失败，但不是我们要的。
+**修正的动机（验证员原话的后果）**：`/industries`/`/anomaly` 若留在 market ⇒ 关掉大盘 ⇒ **自选页行业列与告警扫描 404**。
+都是诚实失败，但不是我们要的。
+
+> **历史说明（v0.62.0 作废的那半条动机）**：task-60 当时把 `/board` 移回 core 的理由是
+> 『留在 market ⇒ 关掉「大盘」行 ⇒ **云图页热力图 404**』。**该理由已随云图页内建热力视图下线而作废** ——
+> 云图页现在只有一个第三方 iframe（**不调任何 `/tradewatcher/*`**，与本插件的行开关无关），所以
+> 关掉「大盘」行时 `/board` 返回 404 不再影响任何其它页面，`/board` 因此按同一判据（单一消费方）
+> 收进 `market` 行。判据没变，变的是调用方集合。
 
 **共享面一律留 core**（判断依据：被 ≥2 个行/组件调用，或 core 自己的组件在用）：
 `/tradewatcher/trades`（详情抽屉）、`/tradewatcher/industry`（详情抽屉的行业行）、行情/趋势/K线/详情/搜索类全部接口。

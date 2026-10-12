@@ -339,7 +339,7 @@ function Dashboard(): React.ReactElement {
     if (page === 'calendar') {
       return React.createElement(CalendarPage, { prefs: prefs ?? DEFAULT_PREFS })
     }
-    // 云图页的自绘热力图跟随全局涨跌配色（此前写死红涨绿跌，与大盘页/列表相反）
+    // 云图页仍要 redUp：只用来判断第三方站点的色义是否与本插件**相反**（相反才出那个徽标）
     return React.createElement(CloudMap, { redUp: (prefs ?? DEFAULT_PREFS).redUp })
   }
 

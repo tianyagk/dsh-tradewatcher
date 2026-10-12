@@ -1,8 +1,15 @@
 /**
+ * 大盘云图：**只保留第三方站点**（用户要求下线内建热力视图，v0.62.0）。
+ *
+ * 为什么不再有两视图段控：段控只剩一个选项就是纯噪音 —— 内建那一套已整块删除
+ * （其渲染组件、取数、派生与口径段落一并下线），本组件只剩第三方 iframe 与其三态
+ * （loading / loaded / timeout）。
+ *
+ * 口径边界（保留）：第三方站点的涨跌色义由它自己决定、本插件不抓取它的内容 ⇒ 色义与本插件**相反**时
+ * 出一个徽标说明（`redUp` 仍是它的输入）；色义一致时不出（零信息）。
  */
 import React, { useEffect, useRef, useState } from 'react'
 import { Btn } from './ui.tsx'
-import { IndustryHeatmap } from './IndustryHeatmap.tsx'
 import { fmtStamp } from './format.ts'
 
 /** 第三方源站（展示用；实现里只引用这一处，域名不散落） */
@@ -32,40 +39,16 @@ function readLastOk(): number | null {
   }
 }
 
-/** 用容器宽度作热力图宽度（SVG 需要数值；不引 ResizeObserver 之外的依赖） */
-function useWidth(ref: React.RefObject<HTMLDivElement>, fallback = 700): number {
-  const [w, setW] = useState(fallback)
-  useEffect(() => {
-    const el = ref.current
-    if (el === null || typeof ResizeObserver === 'undefined') return
-    const ro = new ResizeObserver(() => {
-      const next = Math.max(320, el.clientWidth)
-      setW(next)
-    })
-    ro.observe(el)
-    return () => ro.disconnect()
-  }, [ref])
-  return w
-}
-
 export function CloudMap(props: {
   /**
    * 涨跌配色（`prefs.redUp`）。
    *
-   * 自绘热力图**必须**跟随它：此前这里写死 `redUp: true`，于是设成"绿涨红跌"的用户
-   * 在大盘页看到绿=涨、切到云图页看到红=涨 —— 同一个面板里两套相反的色义
-   * （第三方站点是第三套，且不由本插件决定，只能把它的口径写在界面上）。
+   * 仅用于**色义相反时的徽标**：第三方站点是第三套色义（红=跌、绿=涨），不由本插件决定；
+   * 与本插件的 `redUp` 相反时必须写出来，一致时是零信息、不出徽标。
    */
   redUp: boolean
 }): React.ReactElement {
   const redUp = props.redUp
-  /**
-   * 默认「自绘」（P2-5）：只有自绘才标得了口径（面积=成交额、色深=涨跌幅、数据几点）。
-   * 第三方站点仍然保留 —— 它的钻取与信息量确实更强，但口径与本插件无关，必须分清。
-   */
-  const [source, setSource] = useState<'self' | 'third'>('self')
-  const hostRef = useRef<HTMLDivElement>(null)
-  const width = useWidth(hostRef)
   const [state, setState] = useState<LoadState>('loading')
   const [reloadKey, setReloadKey] = useState(0)
   const [lastOk, setLastOk] = useState<number | null>(() => readLastOk())
@@ -108,36 +91,13 @@ export function CloudMap(props: {
     ? '尚无成功记录'
     : fmtStamp(lastOk)
 
-  if (source === 'self') {
-    return React.createElement(
-      'div',
-      { className: 'tw-body', style: { padding: 0, gap: 0 } },
-      React.createElement('div', { className: 'tw-panel-h', style: { padding: '8px 10px' } },
-        React.createElement('span', { className: 't' }, '大盘云图'),
-        React.createElement('div', { className: 'tw-seg' },
-          React.createElement('button', { 'data-on': true, onClick: () => setSource('self') }, '自绘'),
-          React.createElement('button', { 'data-on': false, onClick: () => setSource('third') }, '第三方站点'),
-        ),
-        React.createElement('span', { className: 'tw-hint', style: { margin: 0 } }, '自绘可标口径；第三方站点信息更全但口径由它决定'),
-      ),
-      React.createElement('div', { ref: hostRef, style: { padding: '0 10px 10px' } },
-        // 配色跟随全局开关（与大盘页/列表同一套色义）
-        React.createElement(IndustryHeatmap, { redUp, width: width - 20, height: Math.max(320, Math.round((width - 20) * 0.62)) }),
-      ),
-    )
-  }
-
   return React.createElement(
     'div',
     { className: 'tw-body', style: { padding: 0, gap: 0 } },
     React.createElement('div', { className: 'tw-panel-h', style: { padding: '8px 10px' } },
       React.createElement('span', { className: 't' }, `大盘云图 · A股热力图（${CLOUD_MAP_HOST}）`),
-      React.createElement('div', { className: 'tw-seg' },
-        React.createElement('button', { 'data-on': false, onClick: () => setSource('self') }, '自绘'),
-        React.createElement('button', { 'data-on': true, onClick: () => setSource('third') }, '第三方站点'),
-      ),
       React.createElement('span', { className: 'tw-hint', style: { margin: 0 } }, '面积=流通市值 · 双击看K线'),
- // 该站点的色义与本插件**相反**且改不了 —— 只有相反时才出徽标（一致时是零信息，R4）；
+  // 该站点的色义与本插件**相反**且改不了 —— 只有相反时才出徽标（一致时是零信息，R4）；
       // 文案压成 12 字，完整口径进 title（K7：同屏两套色义，相反时必须写出来）
       redUp
         ? React.createElement('span', {

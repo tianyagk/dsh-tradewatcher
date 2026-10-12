@@ -59,6 +59,8 @@ const FUNCTION_OWNED_PATHS = [
   '/tradewatcher/ledger',
   '/tradewatcher/breadth',
   '/tradewatcher/rescue',
+  // v0.62.0：云图页不再消费 /board ⇒ 它现在是 market 行独占（core 必须交出去）
+  '/tradewatcher/board',
 ] as const
 
 // 隔离数据目录：**绝不能在测试里碰用户的 ~/.dsh**（store.init 会读写真实文件）
@@ -223,17 +225,18 @@ test('P3：market 行只注册独占前缀；/tradewatcher/industry 留在 core�
   apply(core.ctx, { row: 'core' })
   const market = fakeCtx()
   apply(market.ctx, { row: 'market' })
-  // market 独占的五个前缀都在该行；core 里一个都不许有
-  // task-60 重定后 market 只剩两条（/board 移回 core、/industries 与 /anomaly 改归 watchlist）
-  const owned = ['/tradewatcher/breadth', '/tradewatcher/rescue']
+  // market 独占的前缀都在该行；core 里一个都不许有
+  // task-60 重定：/industries 与 /anomaly 改归 watchlist；**v0.62.0**：内建热力视图下线后 /board 移回 market
+  const owned = ['/tradewatcher/breadth', '/tradewatcher/rescue', '/tradewatcher/board']
   for (const p of owned) {
     assert.equal(market.routes.includes(p), true, `market 行应注册 ${p}`)
     assert.equal(core.routes.includes(p), false, `core 不该再注册 ${p}（否则关不掉大盘）`)
   }
   // 跨行共享：/tradewatcher/industry 是详情抽屉（core）用的 ⇒ 必须留 core
   assert.equal(core.routes.includes('/tradewatcher/industry'), true, '/tradewatcher/industry 必须留 core')
-  // task-60：/board 被大盘+云图两行消费 ⇒ core；/industries 与 /anomaly 只有自选页用 ⇒ watchlist 行
-  assert.equal(core.routes.includes('/tradewatcher/board'), true, '/tradewatcher/board 归 core（两行消费）')
+  // v0.62.0：/board 现在只有市场页用 ⇒ 归 market 行（此前是"大盘+云图两行消费"才留 core）
+  assert.equal(core.routes.includes('/tradewatcher/board'), false, '/tradewatcher/board 不该留在 core（云图不再用它）')
+  assert.equal(market.routes.includes('/tradewatcher/board'), true, '/tradewatcher/board 必须由 market 行注册')
   assert.equal(market.routes.includes('/tradewatcher/industry'), false, '它不属于 market（抽屉会因此坏掉）')
   // 工具：rescue 归 market；group_rank 属于自选（P4 再动）⇒ 本轮仍在 core 的兜底里
   assert.ok(market.tools.includes('tradewatcher_rescue'), 'market 行提供 rescue 工具')
@@ -281,7 +284,7 @@ test('P4：五行（calendar/cloudmap/market/watchlist/portfolio）关闭时三�
 const ROW_ROUTES_FOR_TEST: Record<string, readonly string[]> = {
   calendar: ['/tradewatcher/calendar'],
   cloudmap: [],
-  market: ['/tradewatcher/breadth', '/tradewatcher/rescue'],
+  market: ['/tradewatcher/breadth', '/tradewatcher/rescue', '/tradewatcher/board'],
   watchlist: ['/tradewatcher/watch', '/tradewatcher/industries', '/tradewatcher/anomaly'],
   portfolio: ['/tradewatcher/portfolio', '/tradewatcher/ledger'],
 }
@@ -293,13 +296,14 @@ const ROW_TOOLS_FOR_TEST: Record<string, readonly string[]> = {
   portfolio: ['portfolio', 'ledger'],
 }
 
-test('task-60：归属按**实测调用方所在行**（board=core / industries=watchlist / anomaly=watchlist）', () => {
+test('归属按**实测调用方所在行**（board=market / industries=watchlist / anomaly=watchlist）', () => {
   // 判据：被 ≥2 个行消费 ⇒ core；单一消费方 ⇒ 该行。调用方映射（self-verified）：
-  //   /tradewatcher/board      MarketPage.tsx:84（market 行）+ IndustryHeatmap.tsx:30（只被 CloudMap.tsx:125 渲染 = cloudmap 行）
+  //   /tradewatcher/board      **只有** MarketPage.tsx:84（market 行）—— v0.62.0 内建热力视图下线后，
+  //                            云图页那个调用方（已随视图一并删除）不再存在 ⇒ 单一消费方 ⇒ market
   //   /tradewatcher/industries 只有 WatchlistPage.tsx:89（watchlist 行）
   //   /tradewatcher/anomaly    alerts.ts:69 ← 只被 WatchlistPage 引用（watchlist 行）
   const OWNER_BY_CALLERS: Record<string, string> = {
-    '/tradewatcher/board': 'core',
+    '/tradewatcher/board': 'market',
     '/tradewatcher/industries': 'watchlist',
     '/tradewatcher/anomaly': 'watchlist',
   }
@@ -418,6 +422,18 @@ async function drainForeignStarts(): Promise<void> {
 
 test('task-6：六行装载（manifest 驱动）—— 幂等各 1 次、每行只注册自己那段、跨行零重复、并集 == 老单行', async () => {
   const tick = (): Promise<void> => new Promise((r) => setTimeout(r, 50))
+  /**
+   * 等到条件成立（有界）。
+   *
+   * ⚠ 为什么需要它：`store.init()` 是**真异步**（在临时 DSH_HOME 上做文件 IO），它落定要多久
+   * 取决于机器负载 —— 原来用"固定睡 50ms 就当 init 落定"，在慢机器/满负载下会**假失败**
+   * （`starts` 还是 0 就断言 == 1）。本仓库自己的原则是"别把不稳定当通过"，故改成等条件；
+   * 有界（超时即退出）⇒ 真的没落定时断言照样失败，不会把失败等成通过。
+   */
+  const waitFor = async (cond: () => boolean, ms = 5000): Promise<void> => {
+    const t0 = Date.now()
+    while (!cond() && Date.now() - t0 < ms) await new Promise((r) => setTimeout(r, 20))
+  }
   await drainForeignStarts()
   setKernel(null)
   __kernelStats.inits = 0
@@ -434,7 +450,8 @@ test('task-6：六行装载（manifest 驱动）—— 幂等各 1 次、每行�
     const c = fakeCtx()
     apply(c.ctx, { row })
   }
-  await tick()
+  // 等 init 真的落定（不是"睡够 50ms 就算落定"）
+  await waitFor(() => __kernelStats.starts === 1)
   assert.equal(__kernelStats.applies, 7, 'apply 共七次（core 两次 + 五个功能行各一次）')
   assert.equal(__kernelStats.inits, 1, 'store.init() 只跑一次（六个 fiber 共用一个内核）')
   assert.equal(__kernelStats.starts, 1, 'rescue.start() 只跑一次（采样器只能有一个）')
@@ -452,6 +469,7 @@ test('task-6：六行装载（manifest 驱动）—— 幂等各 1 次、每行�
   await tick()
   assert.equal(__kernelStats.inits, 1, '再注册一轮也不许重跑 store.init()')
   assert.equal(__kernelStats.starts, 1, '再注册一轮也不许再起采样器')
+  // 这一处是"不许再涨"，睡一小会儿即足够（涨了就是 bug，不该靠等待掩盖）
 
   const byRow = new Map(perRow)
   // —— ② 跨行零重复（**先查这个**：它是最根本的不变量，隔离性由它 + 每行前缀表共同保证）——
@@ -500,9 +518,12 @@ test('task-6：六行装载（manifest 驱动）—— 幂等各 1 次、每行�
     assert.equal(coreCtx.tools.includes(t), false, `core 不许提供 ${t}（归功能行）`)
   }
   // core 必须保住的东西（被 ≥2 行消费 / 内核自己持有）
-  for (const p of ['/tradewatcher/health', '/tradewatcher/rows', '/tradewatcher/board', '/tradewatcher/industry', '/tradewatcher/trades', '/tradewatcher/chips']) {
+  // ⚠ v0.62.0：`/tradewatcher/board` 已从本清单移除 —— 它不再被跨行消费，改由 market 行注册
+  // （若还留在这里，就会与 ROW_ROUTES 的 market 归属**同时成立**，等于两个地方都兜着它）
+  for (const p of ['/tradewatcher/health', '/tradewatcher/rows', '/tradewatcher/industry', '/tradewatcher/trades', '/tradewatcher/chips']) {
     assert.equal(coreCtx.routes.includes(p), true, `${p} 必须留在 core（共享消费者 / 内核持有）`)
   }
+  assert.equal(coreCtx.routes.includes('/tradewatcher/board'), false, '/tradewatcher/board 不再由 core 兜底')
 
   // —— ④ 六行的并集必须与老的单行全量**逐字一致**（不多、不少）——
   // 这是"用户重启 dsh web 后不掉功能"的判据，也是回退成单行不会丢东西的判据。
@@ -635,4 +656,70 @@ test('task-9：三种注入各让 locale 检查非空（title 写回中文 / zh 
     assert.ok(fail.length > 0, `注入「${name}」必须被抓到（实际一条都没报 ⇒ 断言恒真）`)
     assert.match(fail.join(' ／ '), hit, `注入「${name}」报的原因应是预期的：${JSON.stringify(fail)}`)
   }
+})
+
+/**
+ * v0.62.0（task-10）：`/board` 的归属 —— **锚真实源码**，并对注入的反例必须**非空**。
+ *
+ * 判据（设计文档 §2.2）：被 ≥2 个行消费 ⇒ core；单一消费方 ⇒ 该行。
+ * `cloudmap` 行的内建热力视图下线后，`/board` 只剩 `MarketPage.tsx:84` 一个调用方 ⇒ 归 `market`。
+ * 本函数从 `src/index.ts` 源码里**取出**各行的路由清单（不另抄一份），因此"改回去"必被抓。
+ */
+function boardOwnershipProblems(src: string): string[] {
+  const bad: string[] = []
+  const routesOf = (row: string): string[] | null => {
+    const m = new RegExp(`\\n  ${row}: \\[([^\\]]*)\\]`).exec(src)
+    if (m === null) return null
+    return [...m[1].matchAll(/'([^']+)'/g)].map((x) => x[1])
+  }
+  const market = routesOf('market')
+  const cloudmap = routesOf('cloudmap')
+  const watchlist = routesOf('watchlist')
+  const portfolio = routesOf('portfolio')
+  if (market === null || cloudmap === null || watchlist === null || portfolio === null) {
+    return ['未能从 src/index.ts 抽出各行路由清单（锚点变了？）']
+  }
+  if (!market.includes('/tradewatcher/board')) bad.push('/tradewatcher/board 必须由 market 行独占（单一消费方）')
+  for (const [row, list] of [['cloudmap', cloudmap], ['watchlist', watchlist], ['portfolio', portfolio]] as Array<[string, string[]]>) {
+    if (list.includes('/tradewatcher/board')) bad.push(`/tradewatcher/board 不该出现在 ${row} 行`)
+  }
+  return bad
+}
+
+test('v0.62.0：/board 归 market 行（不在 core、也不在别的行）；反例注入必须失败', () => {
+  const src = readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'index.ts'), 'utf8')
+  assert.deepEqual(boardOwnershipProblems(src), [], '真实源码：/board 必须只由 market 行持有')
+  // 反例 ①：把 /board 从 market 撤掉 ⇒ 等于"回 core"（core 是"没人认领才兜底"的那一行）⇒ 必须非空
+  const backToCore = src.replace(
+    "market: ['/tradewatcher/breadth', '/tradewatcher/rescue', '/tradewatcher/board']",
+    "market: ['/tradewatcher/breadth', '/tradewatcher/rescue']",
+  )
+  const p1 = boardOwnershipProblems(backToCore)
+  assert.notDeepEqual(p1, [], '⚠ 反例（/board 改回 core 的形态）必须被判据抓住')
+  assert.throws(() => assert.deepEqual(p1, [], '反例上"必须只由 market 持有"必须失败'), /反例上/,
+    '⚠ 反例注入（改回 core）必须让断言失败')
+  // 反例 ②：把 /board 塞回 cloudmap 行（旧归属的形态）⇒ 必须非空
+  const backToCloudmap = src.replace("cloudmap: [],", "cloudmap: ['/tradewatcher/board'],")
+  assert.notDeepEqual(boardOwnershipProblems(backToCloudmap), [], '⚠ 反例（塞回云图行）必须被判据抓住')
+})
+
+test('v0.62.0：关闭 market 行 ⇒ /board 走 404（core 不再兜底），云图页不受影响', () => {
+  setKernel(null)
+  // 只 apply core（= 用户的"只开 core"配置）⇒ /board 没有归属行 ⇒ 不注册 ⇒ 404
+  const onlyCore = fakeCtx()
+  apply(onlyCore.ctx, { row: 'core' })
+  assert.equal(onlyCore.routes.includes('/tradewatcher/board'), false, '只开 core 时 /board 不注册 ⇒ 404')
+  // 开 market（云图行仍关着）⇒ /board 由 market 提供；云图没有 host 路由，故与它无关
+  const withMarket = fakeCtx()
+  apply(withMarket.ctx, { row: 'core' })
+  apply(withMarket.ctx, { row: 'market' })
+  assert.equal(withMarket.routes.includes('/tradewatcher/board'), true, '开 market ⇒ /board 可用')
+  const withCloudmapOnly = fakeCtx()
+  apply(withCloudmapOnly.ctx, { row: 'core' })
+  apply(withCloudmapOnly.ctx, { row: 'cloudmap' })
+  assert.equal(withCloudmapOnly.routes.includes('/tradewatcher/board'), false,
+    '只开云图行 ⇒ /board 仍不注册（云图页不再消费它）')
+  // 云图行的路由前缀表本来就是空数组 ⇒ 关/开它都不影响第三方 iframe（纯客户端）
+  assert.deepEqual(ROW_ROUTES_FOR_TEST.cloudmap, [], '云图行没有 host 路由（第三方 iframe 是纯客户端）')
+  stopMonitor()
 })
