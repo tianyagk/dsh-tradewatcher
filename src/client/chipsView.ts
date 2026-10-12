@@ -1,6 +1,7 @@
 /**
  * 筹码区块的**纯**视图逻辑（不 import react ⇒ 能在 node 里断言）。
  */
+import { dirClass } from './format.ts'
 export interface ChipsViewState {
   data: unknown
   error: string | null
@@ -226,6 +227,31 @@ export function chipsRowsLayoutOf(availablePx: number, rows: number, wantGap = C
     return { rowH, gap: 0, total: n * rowH, fits: true }
   }
   return { rowH: 1, gap: 0, total: n, fits: false }
+}
+
+/**
+ * 单个桶的**盈亏方向**类（`tw-up`/`tw-down`/`tw-flat`）—— 筹码柱的唯一着色入口。
+ *
+ * | 桶中心 vs **现价** | 语义 | `redUp=true` | `redUp=false` |
+ * |---|---|---|---|
+ * | 中心 **高于**现价 | 成本高于现价 ⇒ **套牢** | `tw-down`（绿） | `tw-up`（红） |
+ * | 中心 **低于**现价 | 成本低于现价 ⇒ **获利** | `tw-up`（红） | `tw-down`（绿） |
+ *
+ * ⚠ **边界必须是现价（`priceUsed`），不是平均成本**：
+ *   - 套牢/获利的判据是"**成本** vs **现价**"；平均成本是**另一条语义线**（橙色虚线），它描述
+ *     "所有筹码的加权平均成本在哪"，不构成盈亏边界。用平均成本当边界会让柱色与旁边的
+ *     `盈利比例`（宿主按**现价**算：`Σ(桶价 < 现价)/Σ权重`，见 `host/chips.ts`）**互相矛盾**。
+ *   - 外部举证：参考实现的红绿分界落在现价（≈22.1 ≈ 其现价 22.07），而不是它的平均成本 18.57。
+ *
+ * ⚠ **方向**：传进 `dirClass` 的是 `priceUsed − center`（"离现价多远、在现价哪一侧"），
+ * 于是"中心高于现价"得到**负**号 ⇒ `tw-down`（`redUp=true` 时绿 = 套牢）。
+ * 早期实现写成 `center − priceUsed` ⇒ 整幅分布的红绿**上下倒置**（用户报的 bug）。
+ * 不许在这里写死 `tw-up`/`tw-down`：涨跌色偏好（`redUp`）必须继续由 `dirClass` 统一决定。
+ */
+export function chipProfitDirOf(input: { center: number; priceUsed: number | null; redUp: boolean }): string {
+  const { center, priceUsed, redUp } = input
+  if (priceUsed === null || !Number.isFinite(priceUsed) || !Number.isFinite(center)) return 'tw-flat'
+  return dirClass(priceUsed - center, redUp)
 }
 
 /**

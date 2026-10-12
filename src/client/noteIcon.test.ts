@@ -47,7 +47,11 @@ test('筹码区块：默认展开、与页签无关、fqSupported=false 与样�
   assert.equal(panel.includes('isFiveDay'), false, '不许再有页签门控')
   assert.equal(panel.includes('五日档'), false, '那行说明文案已删除')
   assert.ok(panel.includes('d?.why'), '宿主给 why 时直接展示原因（指数/期货/样本不足）')
-  assert.ok(panel.includes('dirClass('), '获利/套牢着色走 dirClass（跟随 redUp，不写死红绿）')
+  // v0.56.0：着色多了一层语义入口（chipProfitDirOf：边界=现价、方向=中心 vs 现价）——
+  // 但**最终仍由 dirClass 决定红绿**（跟随 redUp），这里断言整条链，别只认一个函数名
+  assert.ok(panel.includes('chipProfitDirOf('), '获利/套牢着色走 chipProfitDirOf（跟随 redUp，不写死红绿）')
+  assert.equal(/className: `tw-chips-bar tw-(up|down)/.test(panel), false, '筹码柱不许写死 tw-up/tw-down')
+  assert.ok(read('./chipsView.ts').includes('return dirClass(priceUsed - center, redUp)'), '着色最终仍由 dirClass 决定（跟随 redUp）')
   assert.ok(panel.includes('disclaimer'), 'tooltip 必须带"不是预测/不是买卖建议"')
 })
 

@@ -2,20 +2,20 @@
  * 筹码分布区块（抽屉内、`chartBody()` 之后）：可折叠、默认展开 ~160px；**与页签无关**。
  *
  * 合规要点：
- *  - 获利/套牢是**盈亏语义** ⇒ 着色走 `dirClass`（跟随 `prefs.redUp`），不写死红绿；
+ *  - 获利/套牢是**盈亏语义** ⇒ 着色走 `chipProfitDirOf`（内部走 `dirClass`，跟随 `prefs.redUp`，不写死红绿）；
+ *    **边界是现价**（`priceUsed`）而不是平均成本 —— 理由与方向对照表见 `chipsView.ts` 的 `chipProfitDirOf`；
  *  - 支撑/压力是**分布统计量**（P5/P95），tooltip 明写"不是预测、不是买卖建议"；
  *  - 容器与数字登记进 `styles.ts` 的两条 `data-blur=1` 清单（隐身档下与其它数字一起糊）；
  *  - **与页签无关**：筹码是**标的的属性**（由日线筹码成本推出），六个页签都显示、DOM 与状态逐字不变；
  *    只有**标的/数据**的原因才给一行说明（不复权标的、样本不足、口径偏离默认）。
  */
 import React, { useEffect, useState } from 'react'
-import { dirClass } from './format.ts'
 import { clampIndex } from './chipsView.ts'
 import { countMount } from './mounts.ts'
 import { CHIPS_LINE_TOKENS } from './theme.ts'
 import {
   bucketCenterTicks, caliberDeviates, chipAxisOf, chipsLinesOf, chipsPlotHeightOf, chipsProfileOf,
-  chipsRowsLayoutOf, chipsRowsOf, CHIPS_ROW_GAP_PX,
+  chipProfitDirOf, chipsRowsLayoutOf, chipsRowsOf, CHIPS_ROW_GAP_PX,
 } from './chipsView.ts'
 import type { ChipsState } from './useChips.ts'
 
@@ -58,7 +58,6 @@ export function ChipsPanel(props: ChipsPanelProps): React.ReactElement | null {
     return React.createElement('div', { className: 'tw-chips tw-chips-off' },
       React.createElement('span', { className: 'tw-muted' }, props.state.loading ? '筹码分布计算中…' : '未取到'))
   }
-  const price = day.avgCost
   const profitPct = day.profitRatio
   const hint0 = `${d.methodology}`
   const deviate = caliberDeviates({
@@ -185,7 +184,8 @@ export function ChipsPanel(props: ChipsPanelProps): React.ReactElement | null {
               // 只画**裁剪窗口内**的行；条宽按轴顶换算（axis.widthOf）⇒ 与刻度同尺度
               ...rowsDesc.map((r, i) => React.createElement('div', {
                 key: i,
-                className: `tw-chips-bar ${price === null ? 'tw-flat' : dirClass(r.center - price, props.redUp)}`,
+                // 盈亏方向：边界是**现价**（不是平均成本），且方向为"中心 vs 现价"（见 chipProfitDirOf）
+                className: `tw-chips-bar ${chipProfitDirOf({ center: r.center, priceUsed: d.priceUsed, redUp: props.redUp })}`,
                 style: { height: rowH, width: `${axis.widthOf(r.weight)}%` },
                 title: `${r.center.toFixed(2)} 元 · 权重 ${(r.weight * 100).toFixed(2)}%（占总筹码）`,
               })),

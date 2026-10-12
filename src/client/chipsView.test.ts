@@ -7,8 +7,8 @@ import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 import {
-  axisTicks, bucketCenterTicks, caliberDeviates, chipAxisOf, chipBarPxOf, chipsColumnsOf, chipsProfileOf,
-  chipsRowsLayoutOf, chipsRowsOf, drawerFillOf,
+  axisTicks, bucketCenterTicks, caliberDeviates, chipAxisOf, chipBarPxOf, chipProfitDirOf, chipsColumnsOf,
+  chipsProfileOf, chipsRowsLayoutOf, chipsRowsOf, drawerFillOf,
   CHIPS_AXIS_MIN_PX, CHIPS_CHART_GAP_PX, CHIPS_LABEL_RESERVE_PX,
 } from './chipsView.ts'
 import { loadChips, resetChipsCache } from './chipsLoader.ts'
@@ -458,4 +458,80 @@ test('② 行序：顶行必须是**最高价**（与左轴刻度、三条语义
   // 反例：升序渲染（旧实现）
   const asc = centers.map((c, i) => ({ center: c, weight: weights[i] }))
   assert.notEqual(asc[0].center, ticksDesc[0], '⚠ 反例（升序）顶行是最低价 ⇒ 与左轴刻度矛盾（镜像 bug）')
+})
+
+/**
+ * v0.56.0（task-4）：筹码柱**红绿倒置**修复 + 盈亏边界必须是**现价**。
+ *
+ * 语义（`redUp=true`，本插件的默认）：成本高于现价 = **套牢 = 绿**；成本低于现价 = **获利 = 红**。
+ * 事实（lead 取自真接口）：`priceUsed = 19.98`（现价，quote）、`avgCost = 19.072`；
+ * 旧实现 `dirClass(center − priceUsed)` ⇒ **高于现价被判成红**（方向反了），且边界还误用了 `avgCost`。
+ */
+test('④ 盈亏着色：高于现价=套牢(绿)、低于现价=获利(红)；边界是现价，不随 avgCost 移动', () => {
+  const panel = read('./ChipsPanel.tsx')
+  const view = read('./chipsView.ts')
+
+  // ── 方向对照表（redUp 两态互换）──
+  const hi = chipProfitDirOf({ center: 20, priceUsed: 19, redUp: true }) // 成本高于现价 ⇒ 套牢
+  const lo = chipProfitDirOf({ center: 18, priceUsed: 19, redUp: true }) // 成本低于现价 ⇒ 获利
+  assert.equal(hi, 'tw-down', `桶中心高于现价（redUp=true）必须是"套牢/绿"那一类（实际 ${hi}）`)
+  assert.equal(lo, 'tw-up', `桶中心低于现价（redUp=true）必须是"获利/红"那一类（实际 ${lo}）`)
+  // 与主题语义对齐：本插件里 tw-up=红、tw-down=绿（见 styles.ts 的 --tw-up/--tw-down）
+  const styles = read('./styles.ts')
+  assert.ok(/--tw-up:#e5484d/.test(styles) && /--tw-down:#0e8f5c/.test(styles), 'tw-up 是红、tw-down 是绿（浅色主题）')
+  // redUp=false ⇒ 整体互换（但仍走 dirClass，不写死）
+  const hi2 = chipProfitDirOf({ center: 20, priceUsed: 19, redUp: false })
+  const lo2 = chipProfitDirOf({ center: 18, priceUsed: 19, redUp: false })
+  assert.equal(hi2, 'tw-up', `redUp=false 时"套牢"必须换成另一类（实际 ${hi2}）`)
+  assert.equal(lo2, 'tw-down', `redUp=false 时"获利"必须换成另一类（实际 ${lo2}）`)
+  assert.notEqual(hi, hi2); assert.notEqual(lo, lo2)
+
+  // ── 边界断言：翻转发生在跨过 **priceUsed** 处，且与 avgCost 无关 ──
+  // fixture：现价 19、平均成本刻意取 25（高于所有桶）⇒ 若误用 avgCost 当边界，翻转会跑到 25
+  const flipAt = (priceUsed: number): number => {
+    // 二分找出"最近的一次翻转"所在的桶中心（0.001 精度足够表达结论）
+    let loP = priceUsed - 3
+    let hiP = priceUsed + 3
+    for (let i = 0; i < 40; i += 1) {
+      const mid = (loP + hiP) / 2
+      const cls = chipProfitDirOf({ center: mid, priceUsed, redUp: true })
+      if (cls === 'tw-down') hiP = mid // mid 在现价上方 ⇒ 套牢
+      else loP = mid
+    }
+    return (loP + hiP) / 2
+  }
+  const f19 = flipAt(19)
+  assert.ok(Math.abs(f19 - 19) < 0.001, `翻转点必须落在现价 19 上（实际 ${f19}）`)
+  const f225 = flipAt(22.5)
+  assert.ok(Math.abs(f225 - 22.5) < 0.001, `换一个现价 ⇒ 翻转点跟着走（实际 ${f225}）`)
+  // 关键：**avgCost 不参与**（函数签名里根本没有它）
+  assert.equal(/chipProfitDirOf\(\{[^}]*avgCost/.test(panel), false, '⚠ 着色入口不许把 avgCost 传进去（边界只能是现价）')
+  assert.equal(/chipProfitDirOf\([^)]*avgCost/.test(view), false, '⚠ chipsView 的着色函数不许引用 avgCost')
+  assert.equal(/avgCost/.test(String(chipProfitDirOf)), false, '⚠ chipProfitDirOf 的实现里不许出现 avgCost')
+  // 面板必须把**现价**传进去
+  assert.ok(panel.includes('chipProfitDirOf({ center: r.center, priceUsed: d.priceUsed, redUp: props.redUp })'),
+    '面板必须用 d.priceUsed 作为盈亏边界')
+  assert.equal(/dirClass\(r\.center - /.test(panel), false, '⚠ 旧方向（center − 现价）必须已被移除')
+  // 平均成本仍然合法地用在别处（头部的数值 + 橙色语义线），但**不许**当盈亏边界：
+  // 只看筹码柱那一行的 className 表达式
+  const barLine = panel.split('\n').find((l) => l.includes('tw-chips-bar')) ?? ''
+  assert.ok(barLine.includes('priceUsed'), '筹码柱的 className 必须用现价')
+  assert.ok(barLine.includes('chipProfitDirOf'), '筹码柱的 className 必须走 chipProfitDirOf')
+  assert.equal(barLine.includes('avgCost'), false, `⚠ 筹码柱的盈亏边界不许用平均成本（实际：${barLine.trim()}）`)
+  // 不许写死红绿（色偏好必须继续由 dirClass 决定）
+  assert.equal(/className: `tw-chips-bar tw-(up|down)/.test(panel), false, '筹码柱不许写死 tw-up/tw-down')
+
+  // ── 反例注入：方向改回 center − priceUsed ⇒ 第一条断言必须失败 ──
+  const brokenDir = (center: number, priceUsed: number, redUp: boolean): string => {
+    // 旧实现（方向反了）
+    const up = center - priceUsed > 0
+    return up === redUp ? 'tw-up' : 'tw-down'
+  }
+  assert.equal(brokenDir(20, 19, true), 'tw-up', '反例的样子：高于现价被判成红')
+  assert.notEqual(brokenDir(20, 19, true), hi, '⚠ 反例与真实现必须不同 ⇒ 第一条断言必然抓住它')
+  assert.throws(
+    () => assert.equal(brokenDir(20, 19, true), 'tw-down', '反例上"高于现价=套牢/绿"必须失败'),
+    /反例上/,
+    '⚠ 反例注入（方向改回 center − price）必须让"高于现价=套牢"这条断言失败',
+  )
 })
