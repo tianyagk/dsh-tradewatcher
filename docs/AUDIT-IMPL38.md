@@ -152,3 +152,89 @@ $ DSH_HOME=/tmp/twreal node --experimental-strip-types -e "…fetchKline('1.5600
    这样 `task-77` 的三闸断言（版本/partial TTL）保持原样。
 4. 未做真页面复核（GUI 需带鉴权 URL；且线上进程仍是旧版）。等发布后可用
    `curl '127.0.0.1:3080/tradewatcher/kline?secid=1.560010&klt=101&lmt=360' | jq '.kline.staleReason, (.kline.days|length)'` 复核。
+
+---
+
+# 追加（task-13）：客户端显示 `staleReason` —— 替换「上次成功数据」，不新增第二处文案
+
+- 基线：`main` @ `46501b2`（v0.63.0），`npm run check` = 421 × 2 全绿
+- 本轮结果：**423 × 2 全绿**（+2 条断言，`src/client/chartNote.test.ts`）
+- ⚠ 时段说明：收尾这次 `npm run check` 时 HEAD 已前进到 `88e5bd3`（v0.63.1，另一批的"插件命名"改动，与本轮无关）；
+  当时工作区**只剩我这 3 个文件**（`chartNote.ts` / `chartNote.test.ts` / 本文件）⇒ 我的 diff 是隔离的，检查全绿。
+- `build.mjs` 零改动（73 项）；未 commit / 未装 bundle / 未动 profile / 未重启；**未改 `src/shared/model.ts`**（见 §T2）
+
+## T1. 改动点
+
+| 文件 | 改动 |
+|---|---|
+| `src/client/chartNote.ts` | ① `NoteKlineLike` 增 `staleReason?: string`；② 新增 `staleReasonOf(payload)`（只有 K 线档取这个字段，空串/空白不算）；③ 新增 `staleVisibleOf(reason)`（取宿主那句的**首段** = 第一个全角括号之前）；④ `lastSuccessNote()`：有 `staleReason` ⇒ ` · <首段>`，没有 ⇒ **原样不动**（含日期/短形两条老路径） |
+| `src/client/chartCache.ts` | **未改** —— payload 本来就是 `{ kind:'kline', tab, kline }`（`chartCache.ts:82`）直接把宿主回包塞进去，`staleReason` 天然透传（`api.kline()` 也是 `return request(...)` 原样返回） |
+
+**为什么可见句取"首段"而不是整句**：宿主那句完整长 **128 字**（内含二级细节：TTL 数值、文件根数、采纳下限），
+常驻脚注一行放不下、也违背"减少常驻提示"。括号里的细节**没有丢**：完整原文仍在 payload
+（`kline.staleReason`）里，agent/接口照样读得到。若你要整句显示，把 `staleVisibleOf` 改成 `return reason` 即可（一行）。
+
+## T2. 类型没有动 `shared/model.ts`
+
+`KlineData`（`src/shared/model.ts`）仍未声明 `staleReason` —— 本轮只把可选字段声明在
+`chartNote.ts` 的 `NoteKlineLike`（客户端消费侧的视图类型）上。理由：`NoteKlineLike` 只要求自身字段，
+宿主回包多一个字段在运行时可见、在 TS 里因结构兼容而可读 ⇒ **不必为此改契约文件**。
+（若你希望把它提升为正式契约字段，那是 `shared/model.ts` 一行 —— 但会牵动 8 个消费者，建议单开。）
+
+## T3. 断言与反例（`src/client/chartNote.test.ts` +2）
+
+1. **有 `staleReason` ⇒ 用它**：断言 `lastSuccessNote()` 等于 ` · ` + `staleVisibleOf(真实原因)`；
+   **不再含**「上次成功数据」；含"回源未取到新数据 / 已完成 bar / 最后一根"三个要点；
+   **常驻一行**（派生句 ≤ 80 字）；payload 里的**完整原文保持原样**（长解释不丢）；
+   **不出现**「降级缓存」这类客户端新增解释词。无 `staleReason` ⇒ 与以前逐字一致（` · 上次成功数据（10-09）` / ` · 上次成功数据`）。
+   分时档不取该字段（本轮不动分时）。
+2. **反例注入**：本地写一个"忽略 `staleReason`、永远给通用句"的假实现 ⇒ 它与真实现**不同** ⇒
+   `assert.throws` 证明"必须用具体原因"这条断言在反例上**必然失败**；并补一条兜底断言，确认真实现读的**就是** payload 里那个字段
+   （`staleReason: '甲（乙）'` ⇒ ` · 甲`，即按第一个全角括号截断）。
+3. 一处**故意放宽**的断言（避免锁死宿主措辞）：只断言"提到了最后一根的处理"（`/最后一根/`），不锁
+   `不可信的最后一根已丢弃` 这句原文 —— 那句话属于宿主，措辞微调不该让客户端测试变红。
+
+## T4. 两种情形各一句实际文案（**用真实缓存 + 挡掉上游**跑出来的）
+
+```
+宿主给的完整 staleReason（128 字，留在 payload 里）：
+  回源未取到新数据 ⇒ 改用本地缓存的 800 根已完成 bar；不可信的最后一根已丢弃（原因：未完成 bar 已超过 60s TTL ⇒ 回源重取；但文件里有 801 根，丢掉不可信的最后一根后仍有 800 根 ≥ 10 ⇒ 降级采用（不回源成功也照用））
+
+① 有 staleReason ⇒ 客户端**实际渲染**（46 字，一行）：
+  · 回源未取到新数据 ⇒ 改用本地缓存的 800 根已完成 bar；不可信的最后一根已丢弃
+  （`visibleProvenanceOf` 判定为"要显示"⇒ 不会被过滤掉）
+
+② 没有 staleReason（同一份数据）⇒ 与改动前逐字一致：
+  · 上次成功数据（10-09）
+```
+
+**建议（要你拍板的一句话）**：可见句里现在写的是"**不可信的**最后一根已丢弃"，而"**未完成**"这个词只出现在被截断的括号里
+（任务是"note 指明…最后一根为未完成 bar"）。要不要在 host 那句里把它说成"**未完成的**最后一根已丢弃"（`em.ts` 一处词），
+本轮没动 —— 那属于 v0.63.0 已发布的宿主文案/或另开。
+
+## T5. 测试条数变化（含追加）
+
+| | 条数（每时区） |
+|---|---|
+| task-11 之后（v0.63.0） | 421 |
+| `chartNote.test.ts` +2 | |
+| **本轮之后** | **423** |
+
+```
+ℹ tests 423
+ℹ pass 423
+ℹ fail 0
+```
+
+（两次各 423；随后 `ALL HOST CHECKS PASSED (live probes soft)` 与
+`built lib/index.js + lib/client.js （v0.63.1，客户端片段校验通过：73 项）`。）
+本轮改动文件：`src/client/chartNote.ts`、`src/client/chartNote.test.ts` + 本文件。
+
+## T6. 未做项（与 task 要求一致）
+
+1. **筹码侧透传本轮不做**（`chipSeriesOf` / `ChipsPanel` 的降级说明）：按任务要求"等另开"；`/chips` 现在修好后不再出现"样本不足"，
+   但它**不说**"数据来自降级缓存"—— 要说得在 `chipSeriesOf` 入参加一个透传字段。
+2. **不做第二处文案**：`title`/`aria-label` 也没新增（这一句本身就是可见脚注；长解释留在 payload，未上界面）。
+3. 未做真页面复核：线上进程仍是旧版；发布后可用
+   `curl '…/tradewatcher/kline?secid=1.560010&klt=101&lmt=360' | jq '.kline.staleReason'` 看宿主那句，
+   页面上应显示它的首段。

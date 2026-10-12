@@ -14,6 +14,12 @@ export interface NoteKlineLike {
   cached?: boolean
   /** 宿主给的 K 线是降级复用（上游本次不可用）——与 `fallback` 同一个事实，措辞必须同一句 */
   stale?: boolean
+  /**
+   * 宿主（v0.63.0 起）在"缓存被判需要回源、但手里有 ≥10 根可用历史"时给的**具体原因**
+   * （例：`回源未取到新数据 ⇒ 改用本地缓存的 800 根已完成 bar；不可信的最后一根已丢弃（原因：…）`）。
+   * 有它就用它**替换**那句通用的「上次成功数据」——不新增第二处文案（用户要求减少常驻提示）。
+   */
+  staleReason?: string
   /** 分钟级/多周期 K 线的时间戳（有它就给 HH:mm） */
   bars?: ReadonlyArray<{ t: number }>
   /** 日线档给的是日期（只有到"天"，就给 MM-DD） */
@@ -57,8 +63,33 @@ function ownStamp(payload: NotePayloadLike): string | null {
   return lastDay === undefined ? null : lastDay.date.slice(5)
 }
 
-/** `· 上次成功数据（MM-DD HH:mm）`；日期不可知时给短形（**必须能区分**） */
+/**
+ * 降级复用的**可见那一句**：取宿主那句话的**首段**（第一个全角括号之前）。
+ *
+ * 为什么截断：常驻只留一行（用户反复要求减少提示）。括号里是二级细节（TTL 数值、文件根数、
+ * 采纳下限），完整原文仍在 payload（`kline.staleReason`）里，agent/接口照样读得到。
+ */
+export function staleVisibleOf(reason: string): string {
+  const head = reason.split('（')[0].trim().replace(/[；;]$/, '')
+  return head === '' ? reason.trim() : head
+}
+
+/** 这份 payload 有没有"降级复用的原因"（只有 K 线档才有；分时档没有这个字段） */
+export function staleReasonOf(payload: NotePayloadLike): string | null {
+  if (payload.kind !== 'kline') return null
+  const r = payload.kline?.staleReason
+  return typeof r === 'string' && r.trim() !== '' ? r : null
+}
+
+/**
+ * `· 上次成功数据（MM-DD HH:mm）`；日期不可知时给短形（**必须能区分**）。
+ *
+ * v0.63.0 起：宿主给了 `staleReason`（降级复用的具体原因）⇒ **用它替换**这句通用说明。
+ * 这是**同一处**文案的替换，不是新增第二行；没有原因时行为与以前完全相同。
+ */
 export function lastSuccessNote(payload: NotePayloadLike): string {
+  const reason = staleReasonOf(payload)
+  if (reason !== null) return ` · ${staleVisibleOf(reason)}`
   const own = ownStamp(payload)
   return own === null ? ' · 上次成功数据' : ` · 上次成功数据（${own}）`
 }
