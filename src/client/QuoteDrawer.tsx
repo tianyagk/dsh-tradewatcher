@@ -36,6 +36,8 @@ import { ChipsPanel } from './ChipsPanel.tsx'
 import { countMount } from './mounts.ts'
 import { chartFrameOf } from './chartFrame.ts'
 import { SPLIT_DEFAULT, klineHeightsOf, normalizeSplitRatio, splitDragRatio, splitHeights, splitKeyStep } from './splitDrag.ts'
+// 分割线命中区高（styles.ts 的 .tw-split{height:9px}）与筹码块上距（.tw-chips{margin-top:6px}）——同一份数字来源
+import { SPLIT_HIT_PX, CHIPS_MARGIN_TOP_PX } from './chipsView.ts'
 import { NoteIcon } from './NoteIcon.tsx'
 import { useChips } from './useChips.ts'
 
@@ -105,9 +107,17 @@ export function QuoteDrawer(props: {
   const [avail, setAvail] = useState(0)
   const dragStart = useRef<{ ratio: number; y: number } | null>(null)
   const [chipsOpen, setChipsOpen] = useState(true)
+  /**
+   * 两窗格（上窗 + 分割线 + 筹码块）的容器。
+   *
+   * ⚠ 量**它**而不是 `.tw-drawer-body`：body 里还有口径行/底栏说明/外边距（实测 65.25px），
+   * 按 body 高度算分割比会让两窗格之和比可用空间多出这 65px ⇒ 要么下方留死空白（用户报的现象），
+   * 要么筹码块被压缩、把图表挤成 0 高。两窗格只共用这个容器的空间 ⇒ top + bottom === 容器高。
+   */
+  const panesRef = useRef<HTMLDivElement | null>(null)
   // 可用高度：量容器（拿不到时用 520 兜底，保证首帧也有合理高度）
   useEffect(() => {
-    const el = containerRef.current
+    const el = panesRef.current
     if (el === null) return
     const read = (): void => setAvail(el.clientHeight)
     read()
@@ -118,6 +128,13 @@ export function QuoteDrawer(props: {
   }, [])
   const shownRatio = dragRatio ?? ratio
   const split = splitHeights(avail > 0 ? avail : 520, shownRatio)
+  /**
+   * 筹码块的**真实高度** = 两窗格可用高度 − 上窗 − 分割线 − 筹码块上距（6px）。
+   *
+   * 为什么不再直接把 `split.bottom` 递下去：`split.bottom` 是"意图高度"，而筹码块是 flex 剩余项，
+   * 它的真实高度还要扣掉分割线与外边距（实测差 15px）—— 差这点会让行高算多、末行被裁。
+   */
+  const chipsBlockH = Math.max(0, (avail > 0 ? avail : 520) - split.top - SPLIT_HIT_PX - CHIPS_MARGIN_TOP_PX)
   // 图表几何：由上窗高度**重算**（固定开销不变 ⇒ 不是等比缩放）；高度不足时按最小值夹住、不重绘空图
   const kh = klineHeightsOf(split.top)
   const commitRatio = (next: number): void => {
@@ -603,8 +620,15 @@ export function QuoteDrawer(props: {
               ...(caliberExplain !== null ? { tabIndex: 0, role: 'note', 'aria-label': `${caliber}。${caliberExplain}` } : {}),
             }, caliber)
           : null,
-        // 上窗：固定高度（由分割线算出）——用**真实高度重绘**而不是拉伸
-        React.createElement('div', { className: 'tw-chart-pane', style: { height: split.top, overflow: 'hidden' } },
+        // 两窗格共用空间：上窗 = split.top、分割线、筹码块 = 剩余（flex 吸收）⇒ 空白恒 0
+        React.createElement('div', { ref: panesRef, className: 'tw-panes' },
+        // 上窗：固定高度（由分割线算出）——用**真实高度重绘**而不是拉伸。
+        // v0.55.0：筹码块折叠时，剩余高度归**上窗**（否则收起来还留一块死空白）——
+        // 两条分支互斥且都能铺满：展开 ⇒ 上窗=split.top、筹码块伸缩；折叠 ⇒ 上窗伸缩、筹码块不伸缩。
+        React.createElement('div', {
+          className: 'tw-chart-pane',
+          style: chipsOpen ? { height: split.top, overflow: 'hidden' } : { flex: '1 1 auto', minHeight: split.top, overflow: 'hidden' },
+        },
           React.createElement('div', { className: 'tw-chart-wrap' },
             chartBody(),
           // 切页签时：旧图仍在渲染，上面叠半透明加载态（细进度条 + 淡遮罩，不盖住旧图内容）
@@ -667,9 +691,10 @@ export function QuoteDrawer(props: {
           // 筹码的重试是**它自己的**计数器（与图表 retry 无关 ⇒ 切页签/重试图表都不会连带刷新筹码）
           onRetry: () => setChipsRefresh((x) => x + 1),
           // 高度上限由分割线决定（不再写死 160px）；折叠状态上报给抽屉 ⇒ 折叠时不渲染分割线
-          maxBottom: split.bottom,
+          maxBottom: chipsBlockH,
           onOpenChange: setChipsOpen,
         }),
+        ),
         note !== '' || legend !== ''
           ? React.createElement('div', { className: 'tw-chartnote' }, `${note}${legend}`)
           : null,

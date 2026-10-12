@@ -13,7 +13,10 @@ import { dirClass } from './format.ts'
 import { clampIndex } from './chipsView.ts'
 import { countMount } from './mounts.ts'
 import { CHIPS_LINE_TOKENS } from './theme.ts'
-import { bucketCenterTicks, caliberDeviates, chipAxisOf, chipsLinesOf, chipsRowHeight } from './chipsView.ts'
+import {
+  bucketCenterTicks, caliberDeviates, chipAxisOf, chipsLinesOf, chipsPlotHeightOf, chipsProfileOf,
+  chipsRowsLayoutOf, chipsRowsOf, CHIPS_ROW_GAP_PX,
+} from './chipsView.ts'
 import type { ChipsState } from './useChips.ts'
 
 export interface ChipsPanelProps {
@@ -67,10 +70,29 @@ export function ChipsPanel(props: ChipsPanelProps): React.ReactElement | null {
   const win = axis.window
   const viewCenters = day.centers.slice(win.from, win.to + 1)
   const viewBuckets = day.buckets.slice(win.from, win.to + 1)
-  const rowH = chipsRowHeight(props.maxBottom === undefined ? 140 : props.maxBottom, Math.max(1, win.rows))
+  // 行布局：由**实际会渲染**的固定项反推绘图区高度 ⇒ 所有行都装得下（不再按 split.bottom 估行高被裁）
+  const optionalLines = (deviate !== null ? 1 : 0) + (d.narrow ? 1 : 0)
+  // 绘图区高度 = 筹码块真实高度 − 固定项（按**实际会渲染**的可选行计）
+  // ⚠ 不设下限：设了就会"按 48px 排行高、实际只有 6px"⇒ 末行再次被静默裁掉。
+  //   空间真不够时 `rowsLayout.fits === false` 如实报出去（不假装装得下）。
+  const plotH = chipsPlotHeightOf({
+    blockPx: props.maxBottom === undefined ? 220 : props.maxBottom,
+    hasSlider: open && days.length > 1,
+    extraLines: optionalLines,
+  })
+  const maxRows = Math.max(1, win.rows)
+  const rowsLayout = chipsRowsLayoutOf(plotH, maxRows, CHIPS_ROW_GAP_PX)
+  const rowH = rowsLayout.rowH
   // task-78：刻度取**真实的桶中心价**（与行一一对应），不再按两端线性等分
   const ticks = bucketCenterTicks(viewCenters)
   const xTicks = axis.ticks
+  // 行序：**价格降序**（顶行 = 最高价）—— 与左轴刻度、三条语义线同向（见 chipsRowsOf 的说明）
+  const rowsDesc = chipsRowsOf(viewCenters, viewBuckets)
+  // 分布轮廓：与柱**同源**（同一个 axis.widthOf、同一个 rowH/gap）⇒ 不可能对不上
+  const profile = chipsProfileOf({
+    widths: rowsDesc.map((r) => axis.widthOf(r.weight)),
+    rowH, gap: rowsLayout.gap, plotH,
+  })
   const lines = chipsLinesOf({ avgCost: day.avgCost, support: day.support, resistance: day.resistance })
   const hint = `${hint0}\n显示区间按筹码质量覆盖裁剪：${(axis.window.covered * 100).toFixed(2)}% 的筹码在轴内，` +
     `${(axis.window.dropped * 100).toFixed(2)}% 在轴外（未显示，权重未改）\n` +
@@ -81,7 +103,8 @@ export function ChipsPanel(props: ChipsPanelProps): React.ReactElement | null {
   // 现价不可得 ⇒ 「未取到」（不是 0，也不是 —）
   const pct = (v: number | null): string => (v === null ? '未取到' : `${v.toFixed(2)}%`)
 
-  return React.createElement('div', { className: 'tw-chips' },
+  // 折叠态不伸缩（剩余高度交给上窗）；展开态铺满剩余高度
+  return React.createElement('div', { className: open ? 'tw-chips' : 'tw-chips tw-chips-collapsed' },
     React.createElement('div', { className: 'tw-chips-head' },
       React.createElement('button', {
         type: 'button', className: 'tw-chips-toggle', 'aria-expanded': open,
@@ -160,12 +183,30 @@ export function ChipsPanel(props: ChipsPanelProps): React.ReactElement | null {
               }),
               // 横条（96 桶：每行 ≥1px，低于 1px 也照画 ⇒ 不静默丢桶）
               // 只画**裁剪窗口内**的行；条宽按轴顶换算（axis.widthOf）⇒ 与刻度同尺度
-              ...viewBuckets.map((w, i) => React.createElement('div', {
+              ...rowsDesc.map((r, i) => React.createElement('div', {
                 key: i,
-                className: `tw-chips-bar ${price === null ? 'tw-flat' : dirClass(viewCenters[i] - price, props.redUp)}`,
-                style: { height: rowH, width: `${axis.widthOf(w)}%` },
-                title: `${viewCenters[i].toFixed(2)} 元 · 权重 ${(w * 100).toFixed(2)}%（占总筹码）`,
+                className: `tw-chips-bar ${price === null ? 'tw-flat' : dirClass(r.center - price, props.redUp)}`,
+                style: { height: rowH, width: `${axis.widthOf(r.weight)}%` },
+                title: `${r.center.toFixed(2)} 元 · 权重 ${(r.weight * 100).toFixed(2)}%（占总筹码）`,
               })),
+              // 分布轮廓（乙方案）：把各桶**柱端**连成折线 —— 视觉引导，**不是新数据**
+              // （顶点与柱同源：同一个 axis.widthOf；空桶的顶点在 x=0，照实经过 0，**不跨过空桶拉直**）
+              profile.count > 1
+                ? React.createElement('svg', {
+                    // 轮廓**不带任何 UI 文案**（无 title / 无 aria-label / 无图例）——用户要求减少界面提示；
+                    // 语义只写在这里：它是"把各桶柱端按桶顺序连起来"的**视觉引导**，不是新数据；
+                    // 空桶的顶点在 x=0，照实经过 0（不跨过空桶拉直）；每个桶的权重仍是原始值。
+                    className: 'tw-chips-profile',
+                    viewBox: `0 0 100 ${Math.max(1, plotH).toFixed(2)}`,
+                    preserveAspectRatio: 'none',
+                    'aria-hidden': true, focusable: false,
+                  },
+                    React.createElement('polyline', {
+                      className: 'tw-chips-profile-line', points: profile.points,
+                      vectorEffect: 'non-scaling-stroke',
+                    }),
+                  )
+                : null,
             ),
           ),
           // 横坐标刻度：该价位筹码占总筹码的比例（nice step，小数位与步长匹配）

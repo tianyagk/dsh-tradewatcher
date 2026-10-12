@@ -139,11 +139,181 @@ export function chipsLinesOf(day: {
 
 /**
  * 分布图的行高：**96 桶在可用高度里每行 ≥1px**（低于 1px 就按 1px 画，**不许静默丢桶**）。
+ *
+ * ⚠ 保留此函数是为了兼容宿主侧既有的桶数断言（`src/host/chips.buckets.test.ts`）。
+ * 客户端**不再用它**：它忽略了行间隙（`rows*rowH + (rows-1)*gap` 会超出可用高度 ⇒ 末行被裁），
+ * 而且它的入参（旧的 `maxBottom`）与实际绘图区高度不是同一个数。客户端一律走 `chipsRowsLayoutOf`。
  */
 export function chipsRowHeight(availablePx: number, bucketCount: number): number {
   const n = Math.max(1, Math.round(bucketCount))
   const h = Math.floor((Number.isFinite(availablePx) ? availablePx : 0) / n)
   return Math.max(1, h)
+}
+
+/** 行间隙（px）：与 `styles.ts` 的 `.tw-chips-plot{gap:1px}` 同源 */
+export const CHIPS_ROW_GAP_PX = 1
+/** 分割线命中区高（px）：与 `.tw-split{height:9px}` 同源（抽屉算筹码块高度时要用） */
+export const SPLIT_HIT_PX = 9
+/** 筹码块上距（px）：与 `.tw-chips{margin-top:6px}` 同源 */
+export const CHIPS_MARGIN_TOP_PX = 6
+
+/**
+ * 筹码块里**除绘图区以外**的固定高度（px，向上取整记账）。Chrome 量真组件标记 + 真 CSS 得：
+ *
+ * | 项 | 来源 | px |
+ * |---|---|---|
+ * | 上边框 + 上下内边距 | `.tw-chips{border-top:1px;padding:4px 2px 2px}` | 1+4+2 |
+ * | 标题行 | `.tw-chips-head`（实测 17.25） | 18 |
+ * | body 的 3 段间隙 | `.tw-chips-body{gap:3px}`（滑杆/日期/绘图区/横轴刻度之间） | 9 |
+ * | 日期行 | `.tw-chips-date`（实测 16.5） | 17 |
+ * | 横轴刻度行 | `.tw-chips-xaxis`（实测 16.5） | 17 |
+ * | | **合计** | **68** |
+ */
+export const CHIPS_CHROME_PX = (1 + 4 + 2) + 18 + 9 + 17 + 17
+/** 日期滑杆那一行（`.tw-chips-slider`：28 高 + 上下各 2px 外边距，实测）—— 只有多天数据才渲染 */
+export const CHIPS_SLIDER_PX = 32
+/** 「区间过窄」/「口径偏离」提示行（`.tw-chips-narrow`：11px 行高 + 上下 2px 内边距，实测 19） */
+export const CHIPS_NARROW_PX = 19
+
+/**
+ * 绘图区**可用高度** = 筹码块高度 − 固定项（按**实际会渲染**的可选行计）。
+ *
+ * 为什么必须这样算：旧实现把行高按 `split.bottom`（意图高度）算，而绘图区实际高度被
+ * `.tw-chips-chart{max-height:140px}` 钉到 86px（体积差 96px）⇒ 21 行占 168px、末 12 行被静默裁掉。
+ */
+export function chipsPlotHeightOf(input: {
+  /** 筹码块的可用高度（= 抽屉下窗高度 `split.bottom`） */
+  blockPx: number
+  /** 是否渲染日期滑杆（`days.length > 1`） */
+  hasSlider: boolean
+  /** 额外提示行数（口径偏离 / 区间过窄，各占一行） */
+  extraLines?: number
+}): number {
+  const block = Number.isFinite(input.blockPx) && input.blockPx > 0 ? input.blockPx : 0
+  const extra = Math.max(0, Math.floor(Number.isFinite(input.extraLines ?? 0) ? (input.extraLines as number) : 0))
+  const chrome = CHIPS_CHROME_PX + (input.hasSlider ? CHIPS_SLIDER_PX : 0) + extra * CHIPS_NARROW_PX
+  return Math.max(0, block - chrome)
+}
+
+/** 分布图的行布局（**由真实绘图区高度**算出，保证所有行都装得下） */
+export interface ChipsRowsLayout {
+  /** 每行高度（px，可为小数：把余量均摊，行与轴刻度严格对齐） */
+  rowH: number
+  /** 行间隙（px） */
+  gap: number
+  /** 行占用的总高（= rows*rowH + (rows-1)*gap） */
+  total: number
+  /** 是否真的装得下（`rows` 行 × 至少 1px + 间隙 ≤ 可用高度）。false ⇒ 会把 `fits` 如实报出去 */
+  fits: boolean
+}
+
+/**
+ * 按**可用高度**算行布局：先留 1px 间隙，装不下就把间隙降到 0，再装不下就按 1px 画（如实报 `fits:false`）。
+ *
+ * 为什么必须由这个函数算（不再用 `chipsRowHeight`）：旧实现把行高按 `split.bottom` 算，而绘图区
+ * 实际只有 86px（被 `max-height` 钉住）⇒ 21 行占了 168px，**末 12 行静默被裁**（用户报"可见柱只有 3-4 根"）。
+ */
+export function chipsRowsLayoutOf(availablePx: number, rows: number, wantGap = CHIPS_ROW_GAP_PX): ChipsRowsLayout {
+  const n = Math.max(1, Math.round(rows))
+  const avail = Number.isFinite(availablePx) && availablePx > 0 ? availablePx : 0
+  const fitsWith = (gap: number): boolean => (avail - (n - 1) * gap) / n >= 1
+  if (fitsWith(wantGap)) {
+    const rowH = (avail - (n - 1) * wantGap) / n
+    return { rowH, gap: wantGap, total: n * rowH + (n - 1) * wantGap, fits: true }
+  }
+  if (fitsWith(0)) {
+    const rowH = avail / n
+    return { rowH, gap: 0, total: n * rowH, fits: true }
+  }
+  return { rowH: 1, gap: 0, total: n, fits: false }
+}
+
+/**
+ * 分布行序：**价格降序**（顶行 = 最高价）。
+ *
+ * 为什么要它：左轴刻度是 `bucketCenterTicks(...).reverse()`（顶=最高价）、三条语义线按
+ * `(hi−price)/(hi−lo)` 定位，两者都"价高在上"；柱若按升序渲染，整幅分布就是**上下镜像**，
+ * 与左轴刻度、与平均成本/支撑/压力线互相矛盾（用户报"横向柱连续性差"时看到的正是这个）。
+ * 权重与中心价**成对**倒序 ⇒ 不会把 A 的价格配到 B 的权重上。
+ */
+export function chipsRowsOf(centers: readonly number[], buckets: readonly number[]): Array<{ center: number; weight: number }> {
+  const n = Math.min(centers.length, buckets.length)
+  const out: Array<{ center: number; weight: number }> = []
+  for (let i = n - 1; i >= 0; i -= 1) out.push({ center: centers[i], weight: buckets[i] })
+  return out
+}
+
+/** 分布**轮廓**（柱端折线）：视觉引导，**不是新数据** —— 每个顶点都是同一个桶、经同一个 `widthOf` */
+export interface ChipsProfile {
+  /** SVG polyline 的 `points`（x = 占条列宽度的百分数，y = 像素） */
+  points: string
+  /** 顶点数（必须 == 行数：空桶也算一个顶点，**不许跳过**） */
+  count: number
+  /** 权重为 0 的行的顶点下标（这些顶点必须**在 x=0 上**，不许被跳过或拉直） */
+  zeroAt: number[]
+}
+
+/**
+ * 把各桶柱端连成折线。
+ *
+ * `widths` 必须与柱宽**同源**（同一个 `axis.widthOf`），`rowH`/`gap` 与柱高同源 ⇒ 轮廓与柱不可能对不上。
+ * 顶点都保留（含空桶）：空桶的 `widthOf(0) === 0` ⇒ 折线照实经过 0，**不跨过空桶拉直**。
+ */
+export function chipsProfileOf(input: {
+  widths: readonly number[]
+  rowH: number
+  gap: number
+  plotH: number
+}): ChipsProfile {
+  const { widths } = input
+  const rowH = Number.isFinite(input.rowH) && input.rowH > 0 ? input.rowH : 1
+  const gap = Number.isFinite(input.gap) && input.gap >= 0 ? input.gap : 0
+  const pts: string[] = []
+  const zeroAt: number[] = []
+  for (let i = 0; i < widths.length; i += 1) {
+    const w = Number.isFinite(widths[i]) ? widths[i] : 0
+    if (w <= 0) zeroAt.push(i)
+    const y = i * (rowH + gap) + rowH / 2
+    pts.push(`${w.toFixed(4)},${y.toFixed(2)}`)
+  }
+  return { points: pts.join(' '), count: widths.length, zeroAt }
+}
+
+/** ① 的填充账：上窗 + 分割线 + 筹码块 + 其余固定项 == body 内容高（空白恒 0） */
+export interface DrawerFill {
+  /** body 内容高（clientHeight − 上下 padding） */
+  body: number
+  /** 上窗（K线）高度 */
+  top: number
+  /** 分割线高度 */
+  split: number
+  /** 筹码块高度（= 剩余，被 minChips 兜底） */
+  chips: number
+  /** 空白（= body − 各项之和；正常为 0） */
+  blank: number
+}
+
+/**
+ * 两窗格**确定性铺满** body：上窗 = `split.top`，筹码块 = 剩余高度（多显行），**不留死空白**。
+ * 可用高度不足（剩余 < `minChips`）⇒ 按 `minChips` 给，`blank` 变负（= 内容超出 body，body 自身可滚动），
+ * **不假装装得下**。
+ */
+export function drawerFillOf(input: {
+  bodyContentH: number
+  top: number
+  split: number
+  /** 其余固定项（口径行 / 底栏说明）之和 */
+  others: number
+  minChips?: number
+}): DrawerFill {
+  const body = Number.isFinite(input.bodyContentH) && input.bodyContentH > 0 ? input.bodyContentH : 0
+  const top = Math.max(0, Number.isFinite(input.top) ? input.top : 0)
+  const split = Math.max(0, Number.isFinite(input.split) ? input.split : 0)
+  const others = Math.max(0, Number.isFinite(input.others) ? input.others : 0)
+  const minChipsRaw = input.minChips === undefined ? 0 : input.minChips
+  const minChips = Math.max(0, Number.isFinite(minChipsRaw) ? minChipsRaw : 0)
+  const chips = Math.max(minChips, body - top - split - others)
+  return { body, top, split, chips, blank: body - top - split - others - chips }
 }
 
 /**

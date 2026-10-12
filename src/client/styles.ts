@@ -13,7 +13,7 @@ export const STYLE_ID = 'dsh-tradewatcher-style'
 export const TW_CSS = `
 .tw-root{
 --tw-bg:#f5f6f8;--tw-bg2:#eceef2;--tw-card:#ffffff;--tw-card2:#f2f4f7;--tw-hover:#eef0f5;
---tw-border:#e2e5ea;--tw-border-strong:#cfd3dc;--tw-chip-avg:#c97a1c;--tw-chip-res:#7a5cc4;--tw-chip-sup:#2f74c0;--tw-chips-grid:rgba(0,0,0,.14);
+--tw-border:#e2e5ea;--tw-border-strong:#cfd3dc;--tw-chip-avg:#c97a1c;--tw-chip-res:#7a5cc4;--tw-chip-sup:#2f74c0;--tw-chips-grid:rgba(0,0,0,.14);--tw-chip-profile:#9aa3b4;
 --tw-text:#16181d;--tw-dim:#4c535f;--tw-muted:#6f7787;
 /* 图表辅助线的两个 token：此前只在救援曲线/日历里被 var() 引用、**从未定义** ——
    无 fallback 的地方会因"无效值"退回初始色（浅色主题下出现一条近黑的轴线）。
@@ -31,7 +31,7 @@ font:13px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI","Inter","PingFang SC",
 letter-spacing:-0.006em}
 .tw-root[data-theme=dark]{
 --tw-bg:#010102;--tw-bg2:#0b0c0e;--tw-card:#0f1011;--tw-card2:#16181b;--tw-hover:#1b1d21;
---tw-border:#23252a;--tw-border-strong:#34343a;--tw-chip-avg:#e0913a;--tw-chip-res:#9b7bd6;--tw-chip-sup:#4a90d9;--tw-chips-grid:rgba(255,255,255,.16);
+--tw-border:#23252a;--tw-border-strong:#34343a;--tw-chip-avg:#e0913a;--tw-chip-res:#9b7bd6;--tw-chip-sup:#4a90d9;--tw-chips-grid:rgba(255,255,255,.16);--tw-chip-profile:#8f98a8;
 --tw-text:#f7f8f8;--tw-dim:#c8ced8;--tw-muted:#8a8f98;
 --tw-fg-dim:var(--tw-muted);--tw-line:var(--tw-border);
 --tw-up:#ff5f6d;--tw-down:#27a644;--tw-flat:#8a8f98;
@@ -99,7 +99,7 @@ color-scheme:dark}
 .tw-root[data-view=incognito]{
 --tw-up:#8a8f98;--tw-down:#8a8f98;--tw-up-bg:rgba(138,143,152,.12);--tw-down-bg:rgba(138,143,152,.12)}
 /* 图表口径条（P0-5）：紧贴图上方一行，等宽字体便于对齐数字 */
-.tw-caliber{padding:5px 8px 4px;font-size:10.5px;color:var(--tw-dim);font-family:var(--tw-mono);border-bottom:1px dashed var(--tw-border);background:var(--tw-bg2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tw-caliber{flex:none;padding:5px 8px 4px;font-size:10.5px;color:var(--tw-dim);font-family:var(--tw-mono);border-bottom:1px dashed var(--tw-border);background:var(--tw-bg2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 /* 自选异动（P1-4）：呼吸高亮。用左边的竖条 + 缓慢呼吸的背景，
    而不是整行变红 —— 整行变红与"跌了"的语义冲突（红既是跌也是警示）。 */
 @keyframes tw-breathe{0%,100%{background:transparent}50%{background:color-mix(in srgb, var(--tw-up) 10%, transparent)}}
@@ -366,7 +366,7 @@ color-scheme:dark}
 .tw-cal-more{font-size:9.5px;color:var(--tw-muted);text-align:right;cursor:pointer}
 .tw-cal-card{border-left:3px solid var(--tw-accent);background:var(--tw-card2);border-radius:6px;padding:7px 9px;margin-bottom:8px}
 .tw-zoom-bar{display:flex;align-items:center;gap:6px;font-size:10.5px;font-family:var(--tw-mono)}
-.tw-chartnote{display:flex;gap:12px;flex-wrap:wrap;color:var(--tw-muted);font-size:11px;margin:6px 0 2px;font-family:var(--tw-mono)}
+.tw-chartnote{display:flex;gap:12px;flex-wrap:wrap;color:var(--tw-muted);font-size:11px;margin:6px 0 2px;font-family:var(--tw-mono);flex:none}
 /* 复权口径段控（详情图右上角）：默认前复权；指数/期货禁用并标"不适用" */
 .tw-fq{flex:none;display:inline-flex;align-items:center;gap:3px;padding:2px 4px 2px 6px;border:1px solid var(--tw-border);border-radius:8px;background:var(--tw-bg2)}
 .tw-fq .k{font-size:10px;color:var(--tw-muted);margin-right:2px}
@@ -385,7 +385,8 @@ color-scheme:dark}
 @keyframes twslide{from{transform:translateX(28px);opacity:.3}to{transform:translateX(0);opacity:1}}
 .tw-drawer-head{padding:12px 14px 10px;border-bottom:1px solid var(--tw-border);flex:none}
 .tw-drawer .tw-tabs{padding:6px;background:transparent;border-bottom:1px solid var(--tw-border);border-top:none;flex:none}
-.tw-drawer-body{flex:1;overflow:auto;padding:10px 12px 8px}
+.tw-drawer-body{flex:1;overflow:auto;padding:10px 12px 8px;
+  display:flex;flex-direction:column;min-height:0}
 .tw-drawer-foot{flex:none;display:flex;gap:12px;padding:7px 14px;border-top:1px solid var(--tw-border);font-size:11px}
 .tw-dkv-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(98px,1fr));gap:2px 16px}
 .tw-dkv .k{display:block;font-size:10px;color:var(--tw-muted);white-space:nowrap}
@@ -438,29 +439,38 @@ color-scheme:dark}
 .tw-noteicon:focus-visible{outline:2px solid var(--tw-border-strong);outline-offset:1px}
 .tw-hint-icon{position:relative;padding-right:28px}
 
-/* 筹码分布区块（抽屉内、图表下方）：默认展开 ~160px，可折叠 */
-.tw-chart-pane{display:flex;flex-direction:column}
+/* 筹码分布区块（抽屉内、图表下方）：**铺满剩余高度**（v0.55.0）。
+   为什么：body 里只有它可伸缩 ⇒ 上窗（split.top）+ 分割线 + 筹码块 == body 内容高，空白恒 0。
+   此前 ".tw-chips-body{max-height:160px}" + ".tw-chips-chart{max-height:140px}" 把这块钉死在 ~184px，
+   抽屉越高、下方空白越大（用户报"筹码模块下方大片空白"）。 */
+
+.tw-panes{flex:1 1 auto;min-height:0;display:flex;flex-direction:column}
+.tw-chart-pane{display:flex;flex-direction:column;flex:none;min-height:0}
 .tw-split{position:relative;height:9px;cursor:row-resize;user-select:none;flex:0 0 auto}
 .tw-split-line{position:absolute;left:0;right:0;top:4px;height:1px;background:var(--tw-border-strong)}
 .tw-split:focus-visible .tw-split-line{background:var(--tw-text);height:2px}
-.tw-chart-wrap{position:relative}
+.tw-chart-wrap{position:relative;flex:none}
 .tw-chart-loading{position:absolute;inset:0;pointer-events:none;background:color-mix(in srgb,var(--tw-card) 42%,transparent)}
 .tw-chart-loading-bar{height:2px;width:38%;margin:0 auto;background:var(--tw-muted);opacity:.75;
   animation:tw-indet 1.1s ease-in-out infinite}
 .tw-chart-loading-text{position:absolute;right:6px;bottom:4px;font-size:10.5px;color:var(--tw-muted)}
 @keyframes tw-indet{0%{transform:translateX(-40%)}50%{transform:translateX(120%)}100%{transform:translateX(-40%)}}
-.tw-chips{border-top:1px solid var(--tw-border);margin-top:6px;padding:4px 2px 2px}
+/* 筹码块：**唯一的伸缩项**（"flex:1 1 auto; min-height:0"）⇒ 剩余高度全归它（多显行），不留死空白 */
+.tw-chips{border-top:1px solid var(--tw-border);margin-top:6px;padding:4px 2px 2px;
+  flex:1 1 auto;min-height:0;display:flex;flex-direction:column}
+/* 折叠态：不伸缩（剩余高度交给上窗），否则收起来还占一大块 */
+.tw-chips-collapsed{flex:none}
 .tw-chips-off{color:var(--tw-muted);font-size:11.5px;padding:4px 2px}
-.tw-chips-head{display:flex;align-items:center;gap:8px;font-size:11.5px;flex-wrap:wrap}
+.tw-chips-head{display:flex;align-items:center;gap:8px;font-size:11.5px;flex-wrap:wrap;flex:none}
 .tw-chips-toggle{background:transparent;border:0;color:var(--tw-text);font-size:11.5px;cursor:pointer;padding:0}
 .tw-chips-decay{font-size:11px}
 .tw-chips-nums{display:flex;align-items:center;gap:6px;font-family:var(--tw-mono);font-size:11px;white-space:nowrap}
 .tw-chips-sep{width:1px;height:10px;background:var(--tw-border-strong);display:inline-block}
-.tw-chips-narrow{font-size:11px;color:var(--tw-muted);padding:2px 0}
-.tw-chips-body{max-height:160px;display:flex;flex-direction:column;gap:3px}
-.tw-chips-slider{width:100%;margin:2px 0}
-.tw-chips-date{font-size:11px;font-family:var(--tw-mono)}
-.tw-chips-chart{display:flex;gap:4px;align-items:stretch;max-height:140px;overflow:hidden}
+.tw-chips-narrow{font-size:11px;color:var(--tw-muted);padding:2px 0;flex:none}
+.tw-chips-body{display:flex;flex-direction:column;gap:3px;flex:1 1 auto;min-height:0}
+.tw-chips-slider{width:100%;margin:2px 0;flex:none}
+.tw-chips-date{font-size:11px;font-family:var(--tw-mono);flex:none}
+.tw-chips-chart{display:flex;gap:4px;align-items:stretch;overflow:hidden;flex:1 1 auto;min-height:0}
 /* 左轴：价格列**固定不伸缩**（flex:none）—— 否则空间不足时它会被压缩，条列的宽度就不确定了。
    max-width 把"价格位数决定轴宽"这一步也钉住：轴宽在 [34, 60] 内由内容决定，超过就换行，
    于是条列宽度不会随价格位数（如 5.47 vs 1553.40）抖动。 */
@@ -468,12 +478,18 @@ color-scheme:dark}
   font-family:var(--tw-mono);min-width:34px;max-width:60px;flex:none;text-align:right;line-height:1;overflow-wrap:anywhere}
 /* 条列（旧名 .tw-chips-bars，已无节点使用）：条宽的 % 分母必须是"确定性的可用宽度" */
 .tw-chips-bars{display:flex;flex-direction:column;gap:1px;overflow:hidden;flex:1 1 auto;min-width:0}
-.tw-chips-xaxis{display:flex;justify-content:space-between;font-size:11px;color:var(--tw-muted);font-family:var(--tw-mono);padding-left:38px}
+.tw-chips-xaxis{display:flex;justify-content:space-between;font-size:11px;color:var(--tw-muted);font-family:var(--tw-mono);padding-left:38px;flex:none}
 /* 条列：**唯一的伸缩项**（flex:1）+ min-width:0（内容不许参与最小宽度计算）。
    这两条合起来保证：条列宽度 = 容器 − 左轴 − 间隙，与条宽写成多少 % 无关。
    反例：写成 flex:none（或忘了 min-width:0 又被内容顶住）⇒ 条列宽度归零/塌陷，
    同样 86% 的条会渲染成很小的像素数 —— 用户看到的"条被压到左侧"就是这个几何。 */
-.tw-chips-plot{position:relative;flex:1 1 auto;min-width:0;overflow-x:hidden}
+.tw-chips-plot{position:relative;flex:1 1 auto;min-width:0;overflow-x:hidden;
+  display:flex;flex-direction:column;gap:1px}
+/* 分布轮廓（v0.55.0）：把各桶**柱端**按桶顺序连成折线 —— 视觉引导，**不是新数据**
+   （每个顶点都是同一个 bucket 经同一个 widthOf 换来；空桶照实经过 0）。 */
+.tw-chips-profile{position:absolute;inset:0;width:100%;height:100%;pointer-events:none}
+.tw-chips-profile-line{fill:none;stroke:var(--tw-chip-profile);stroke-width:1;opacity:.72;
+  stroke-linejoin:round}
 .tw-chips-grid-v{position:absolute;top:0;bottom:0;width:1px;background:var(--tw-chips-grid);pointer-events:none}
 .tw-chips-grid-h{position:absolute;left:0;right:0;height:1px;background:var(--tw-chips-grid);pointer-events:none}
 .tw-chips-refline{position:absolute;left:0;right:44px;height:0;border-top:1px dashed currentColor;pointer-events:none;opacity:.9}

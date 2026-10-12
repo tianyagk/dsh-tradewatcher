@@ -6,7 +6,11 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
-import { axisTicks, caliberDeviates, chipBarPxOf, chipsColumnsOf, CHIPS_AXIS_MIN_PX, CHIPS_CHART_GAP_PX, CHIPS_LABEL_RESERVE_PX } from './chipsView.ts'
+import {
+  axisTicks, bucketCenterTicks, caliberDeviates, chipAxisOf, chipBarPxOf, chipsColumnsOf, chipsProfileOf,
+  chipsRowsLayoutOf, chipsRowsOf, drawerFillOf,
+  CHIPS_AXIS_MIN_PX, CHIPS_CHART_GAP_PX, CHIPS_LABEL_RESERVE_PX,
+} from './chipsView.ts'
 import { loadChips, resetChipsCache } from './chipsLoader.ts'
 import { createRequire } from 'node:module'
 const require = createRequire(import.meta.url)
@@ -14,8 +18,15 @@ const require = createRequire(import.meta.url)
 const here = dirname(fileURLToPath(import.meta.url))
 const read = (rel: string): string => readFileSync(join(here, rel), 'utf8')
 
+/** 去掉 CSS 注释（注释里可能**提到**某条规则，例如 "...此前 .tw-chips-chart{max-height:140px} 把..."——
+ *  不去掉就会取到注释里的那段，断言变成对注释做断言）。 */
+function stripCssComments(css: string): string {
+  return css.replace(/\/\*[\s\S]*?\*\//g, '')
+}
+
 /** 从 CSS 文本里取某条规则的声明块（`{...}` 内容）——断言只读**真实样式**，不另造常量 */
-function cssBodyOf(css: string, selector: string): string {
+function cssBodyOf(rawCss: string, selector: string): string {
+  const css = stripCssComments(rawCss)
   const i = css.indexOf(`${selector}{`)
   assert.notEqual(i, -1, `CSS 里必须存在 ${selector}{ 这条规则`)
   const j = css.indexOf('}', i)
@@ -250,4 +261,201 @@ test('task-64 + 保留上一帧：切页签时旧图仍渲染、加载态与旧�
   assert.equal(drawer.includes('if (payload === null) {'), true, '骨架只留给"真的没有 payload"（首帧）')
   assert.equal(drawer.includes('tw-chart-loading'), true, '叠加层已接上')
   assert.equal(/chartBody\(\),[\s\S]{0,240}?frame\.overlay/.test(drawer), true, '叠加层与 chartBody() 在同一个 wrap 内 ⇒ 旧图与加载态共存')
+})
+
+/**
+ * v0.55.0 ①：筹码模块下方死空白 —— 两窗格必须**确定性铺满** body。
+ *
+ * 病根（实测）：body 里只有筹码块可伸缩，而它被 `.tw-chips-body{max-height:160px}` +
+ * `.tw-chips-chart{max-height:140px}` 钉死在 ~184px；且抽屉把 `split` 算在**整个 body** 的高度上
+ * （而 body 里还有口径行/底栏/外边距 65.25px 不归两窗格用）⇒ 抽屉越高、下方空白越大（用户截图 340px）。
+ */
+test('① 铺满：上窗 + 分割线 + 筹码块 == 两窗格容器（空白 0）；反例（筹码块写死 160px）必被抓', () => {
+  const styles = read('./styles.ts')
+  const cssOf = (sel: string): string => cssBodyOf(styles, sel)
+
+  // 契约（读真实 CSS 文本，不另造常量）
+  assert.ok(cssOf('.tw-chips').includes('flex:1 1 auto'), '筹码块必须是伸缩项（剩余高度全归它）')
+  assert.ok(cssOf('.tw-chips').includes('min-height:0'), '筹码块必须 min-height:0（否则内容顶住、缩不下去）')
+  assert.ok(cssOf('.tw-chips-body').includes('flex:1 1 auto'), '筹码 body 必须跟着伸缩')
+  assert.equal(cssOf('.tw-chips-body').includes('max-height'), false, '⚠ 不许再有 max-height（它就是死空白的来源）')
+  assert.equal(cssOf('.tw-chips-chart').includes('max-height'), false, '⚠ 绘图区不许再被 max-height 钉死')
+  assert.ok(cssOf('.tw-panes').includes('flex:1 1 auto'), '两窗格容器必须是 body 的伸缩项')
+  assert.ok(cssOf('.tw-drawer-body').includes('display:flex'), 'body 必须是 flex 列（否则无法确定性铺满）')
+  assert.ok(cssOf('.tw-chart-pane').includes('flex:none'), '上窗固定高（折叠态由内联 flex 覆盖）')
+  assert.ok(cssOf('.tw-chips-collapsed').includes('flex:none'), '折叠态筹码块不伸缩（剩余高度交给上窗）')
+
+  // 抽屉必须量**两窗格容器**而不是 body（否则分割比会把口径行/底栏/外边距算进去）
+  const drawer = read('./QuoteDrawer.tsx')
+  assert.ok(drawer.includes('panesRef'), '抽屉必须有 panesRef（两窗格容器）')
+  assert.ok(/const el = panesRef\.current[\s\S]{0,200}?setAvail\(el\.clientHeight\)/.test(drawer),
+    '可用高度必须量两窗格容器（量 body 会多算 65px ⇒ 空白或挤压）')
+  assert.equal(/const el = containerRef\.current[\s\S]{0,80}?setAvail/.test(drawer), false, '不许再按 body 高度算分割比')
+
+  // 面板必须用传下来的**真实筹码块高度**（不是 split.bottom）
+  const panel = read('./ChipsPanel.tsx')
+  assert.ok(panel.includes('chipsPlotHeightOf({'), '面板必须用 chipsPlotHeightOf 按真实高度算绘图区')
+  assert.equal(panel.includes('CHIPS_MIN_PLOT_PX'), false, '不许再对绘图区高度取下限（会按 48px 排行高、实际只有几 px ⇒ 末行又被裁）')
+  assert.ok(panel.includes('chipsRowsLayoutOf('), '行布局必须走 chipsRowsLayoutOf（含间隙、保证装得下）')
+  assert.ok(drawer.includes('maxBottom: chipsBlockH'), '抽屉要传筹码块的**真实**高度（= 两窗格剩余）')
+  assert.equal(drawer.includes('maxBottom: split.bottom'), false, 'split.bottom 是意图高度，差 15px ⇒ 末行会被裁')
+
+  // 抽屉高度 → 两窗格可用高度（实测：头部 64.5 + 页签 43 + 底部 31.5 = 139；body 内边距 10+8；
+  // 口径行 25.75 + 底栏 16.5 + 底栏外边距 8 + 筹码块上距 6 不归两窗格用）
+  const panesAt = (drawerH: number): number => (drawerH - 139) - 18 - 25.75 - 16.5 - 8
+  const H = [384, 512, 592, 720, 900, 1080]
+  // 真实现：任何抽屉高度下空白都是 0（筹码块吸收全部剩余）
+  for (const h of H) {
+    const panes = panesAt(h)
+    const split = splitHeightsForTest(panes)
+    const fill = drawerFillOf({ bodyContentH: panes, top: split.top, split: 9, others: 6 })
+    assert.equal(fill.blank, 0, `抽屉 ${h}px：两窗格内空白必须为 0（实际 ${fill.blank}）`)
+    assert.equal(fill.chips, panes - split.top - 9 - 6, `抽屉 ${h}px：筹码块必须 = 剩余高度（实际 ${fill.chips}）`)
+    assert.ok(fill.chips > 0, `抽屉 ${h}px：筹码块高度必须为正（实际 ${fill.chips}）`)
+  }
+  // 反例注入：筹码块钉在旧上限 184px ⇒ 抽屉一高就留死空白（这就是用户看到的现象）
+  const injectFixed184 = (drawerH: number): number => {
+    const panes = panesAt(drawerH)
+    const split = splitHeightsForTest(panes)
+    return panes - split.top - 9 - 6 - 184 // 没人吸收的剩余
+  }
+  const blanks = H.map((h) => ({ h, blank: injectFixed184(h) }))
+  const leaky = blanks.filter((b) => b.blank > 0)
+  assert.ok(leaky.length > 0, `⚠ 反例（筹码块钉在 184px）必须在某些高度下留下空白（实际 ${JSON.stringify(blanks)}）`)
+  assert.ok(leaky.every((b) => b.h >= 900), `反例的空洞只在大抽屉出现（实测阈值：900px ⇒ ${leaky[0]?.blank.toFixed(1)}px）`)
+  assert.throws(
+    () => assert.equal(injectFixed184(900), 0, '反例上"空白必须为 0"必须失败'),
+    /反例上/,
+    '⚠ 反例注入（筹码块钉在 184px）必须让"空白 == 0"这条断言失败',
+  )
+})
+
+/** 测试用的分割比（与 splitDrag.ts 的默认值一致；这里只做算术，不重复实现夹取规则） */
+function splitHeightsForTest(panes: number): { top: number; bottom: number } {
+  const top = Math.round(panes * 0.62)
+  return { top, bottom: panes - top }
+}
+
+/** 真实 fixture：中证1000ETF `1.560010` 2026-10-12 的**窗口内**权重（96 桶里被 99% 质量裁出的 21 行） */
+const REAL_WINDOW_560010 = [
+  0.07647952, 0.00001885, 0.44977834, 0, 0.000029, 0.00006232, 0.2184079, 0.06128232,
+  0, 0, 0.00681694, 0.01403938, 0.00388542, 0.00300084, 0.01072462, 0.0520337,
+  0.00000218, 0.0126707, 0.01539187, 0.00214916, 0.07251176,
+]
+/** 稀疏 fixture：21 行里只有 6 行非零、中间有一大段连续空行（比真实数据更极端） */
+const SPARSE_FIXTURE = [0, 0, 0.30, 0, 0, 0, 0, 0, 0, 0.25, 0, 0, 0, 0, 0.20, 0, 0, 0, 0, 0.15, 0]
+/** 均匀 fixture：96 桶全非零（用来核"顶点数 == 桶数 96"） */
+const UNIFORM_96 = Array.from({ length: 96 }, () => 1 / 96)
+
+test('② 轮廓（乙方案）：顶点与柱同源、空桶照实经过 0；用户可见文案里没有"轮廓"字样', () => {
+  const styles = read('./styles.ts')
+  const panel = read('./ChipsPanel.tsx')
+
+  // ── 顶点数与同源：顶点 = 行数；第 i 个顶点的 x 就是同一个 widthOf(buckets[i]) ──
+  for (const [name, weights] of [['真实 21 行', REAL_WINDOW_560010], ['稀疏 fixture', SPARSE_FIXTURE], ['均匀 96 桶', UNIFORM_96]] as Array<[string, number[]]>) {
+    const centers = weights.map((_, i) => 2.9 + i * 0.01)
+    const ax = chipAxisOf(centers, weights)
+    const rows = weights.slice(ax.window.from, ax.window.to + 1)
+    const ordered = chipsRowsOf(weights.map((_, i) => centers[i]).slice(ax.window.from, ax.window.to + 1), rows.map((x) => x))
+    assert.equal(ordered.length, rows.length, `${name}：行数一致`)
+    const widths = ordered.map((r) => ax.widthOf(r.weight))
+    for (const h of [30.75, 79.75, 200, 500]) {
+      const lay = chipsRowsLayoutOf(h, weights.length, 1)
+      const prof = chipsProfileOf({ widths, rowH: lay.rowH, gap: lay.gap, plotH: h })
+      assert.equal(prof.count, widths.length, `${name}@${h}px：轮廓顶点数必须 == 行数（实际 ${prof.count}）`)
+      const pts = prof.points.split(' ')
+      assert.equal(pts.length, widths.length, `${name}@${h}px：points 里的顶点数 == 行数`)
+      // 每个顶点的 x 必须**逐个**等于同一个 widthOf（与柱宽同源，不是另一套数）
+      widths.forEach((w, i) => {
+        assert.equal(Number(pts[i].split(',')[0]), Number(w.toFixed(4)), `${name}@${h}px：第 ${i} 个顶点的 x 必须 === widthOf(该桶)`)
+      })
+      // 行高与柱同源：相邻顶点的 y 间距 === rowH + gap
+      const y0 = Number(pts[0].split(',')[1])
+      const y1 = Number(pts[1].split(',')[1])
+      // points 里的 y 是两位数（渲染用），所以容差取 0.02 = 两个刻度单位的舍入上限
+      assert.ok(Math.abs((y1 - y0) - (lay.rowH + lay.gap)) < 0.02, `${name}@${h}px：顶点 y 间距必须 === rowH + gap（实际 ${(y1 - y0).toFixed(4)} vs ${(lay.rowH + lay.gap).toFixed(4)}）`)
+      // 装得下就必须真装得下（total ≤ 绘图区）；装不下要**如实报** fits:false（不许静默截断）
+      if (lay.fits) {
+        assert.ok(lay.total <= h + 1e-9, `${name}@${h}px：fits=true 时行占用 ${lay.total} 不得超过绘图区 ${h}`)
+        assert.ok(lay.rowH >= 1, `${name}@${h}px：fits=true 时每行 ≥1px`)
+      } else {
+        assert.equal(lay.rowH, 1, `${name}@${h}px：装不下时按 1px 画`)
+        assert.equal(lay.gap, 0, `${name}@${h}px：装不下时不留间隙`)
+        assert.ok(lay.total > h, `${name}@${h}px：fits=false 必须真的装不下（实际 total ${lay.total} vs ${h}）`)
+      }
+      // 空桶：顶点**必须在** x=0 上（照实经过 0、不许跳过）
+      const zeros = widths.map((w, i) => (w <= 0 ? i : -1)).filter((i) => i >= 0)
+      assert.deepEqual(prof.zeroAt, zeros, `${name}@${h}px：零权重的顶点下标必须逐个列出（实际 ${JSON.stringify(prof.zeroAt)}）`)
+      for (const i of prof.zeroAt) assert.equal(Number(pts[i].split(',')[0]), 0, `${name}@${h}px：空桶的顶点 x 必须是 0`)
+    }
+  }
+
+  // 真实 fixture 的连续性指标（会写进审计报告；这里把"数据"与"视觉"分开记）
+  const centersR = REAL_WINDOW_560010.map((_, i) => 2.9 + i * 0.01)
+  const axR = chipAxisOf(centersR, REAL_WINDOW_560010)
+  const rowsR = REAL_WINDOW_560010.slice(axR.window.from, axR.window.to + 1)
+  const nz = rowsR.filter((w) => w > 0).length
+  assert.ok(nz / rowsR.length >= 0.6, `真实数据非零行占比必须 ≥60%（实际 ${(nz / rowsR.length * 100).toFixed(1)}%）`)
+  let longest = 0, cur = 0
+  for (const w of rowsR) { if (w > 0) cur = 0; else { cur += 1; longest = Math.max(longest, cur) } }
+  assert.ok(longest <= 8, `真实数据最长连续空行段必须 ≤8（实际 ${longest}）`)
+  assert.equal(rowsR.filter((w) => w === 0).length, 3, '真实数据里有 3 个**恰好为 0** 的空桶（轮廓必须照实经过 0）')
+
+  // ── 颜色：轮廓 token 既不等于三条语义线，也不等于涨跌红绿 ──
+  const tok = /--tw-chip-profile:([^;]+);/.exec(styles)
+  assert.ok(tok !== null, 'styles.ts 必须定义 --tw-chip-profile')
+  const lines = ['--tw-chip-avg', '--tw-chip-res', '--tw-chip-sup'].map((t) => {
+    const m = new RegExp(`${t}:([^;]+);`).exec(styles)
+    assert.ok(m !== null, `styles.ts 必须有 ${t}`)
+    return m![1]
+  })
+  assert.equal(lines.includes(tok![1]), false, `轮廓色不得等于三条语义线（实际 ${tok![1]} vs ${lines.join('/')}`)
+  assert.ok(styles.includes('.tw-chips-profile-line{fill:none;stroke:var(--tw-chip-profile)'), '轮廓只引用 token（源码里不出现硬编码色值）')
+  const profileRule = cssBodyOf(styles, '.tw-chips-profile-line')
+  for (const bad of ['--tw-up', '--tw-down', '--tw-flat', '--tw-chip-avg', '--tw-chip-res', '--tw-chip-sup']) {
+    assert.equal(profileRule.includes(bad), false, `轮廓色不得用 ${bad}`)
+  }
+
+  // ── 用户可见文案：**不许**出现"轮廓/引导/连接"这类字样（含 title / aria-label）──
+  const strip = (t: string): string => t.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
+  const panelCode = strip(panel)
+  for (const word of ['轮廓', '引导', '连接线', '折线', 'profile 形状', '视觉']) {
+    assert.equal(panelCode.includes(word), false, `用户可见代码里不许出现"${word}"（渲染层不得新增说明文案）`)
+  }
+  assert.ok(/className: 'tw-chips-profile'/.test(panelCode), '轮廓元素存在（class 名不是文案）')
+  const svgStart = panelCode.indexOf("className: 'tw-chips-profile'")
+  const svgBlock = panelCode.slice(svgStart, svgStart + 400)
+  assert.equal(/\btitle:/.test(svgBlock), false, '轮廓 svg 不许带 title')
+  assert.equal(/'aria-label':/.test(svgBlock), false, '轮廓 svg 不许带 aria-label')
+  assert.ok(svgBlock.includes("'aria-hidden': true"), '轮廓对读屏隐藏（纯装饰）')
+
+  // ── 反例注入：轮廓改成"跳过空桶直接连" ⇒ 顶点数与空桶断言必须失败 ──
+  const skipZeros = (widths: number[]): number => widths.filter((w) => w > 0).length
+  const widthsR = REAL_WINDOW_560010.map((w) => axR.widthOf(w))
+  assert.equal(skipZeros(widthsR), nz, '反例的顶点数 = 非零行数')
+  assert.notEqual(skipZeros(widthsR), widthsR.length, '⚠ 反例（跳过空桶）顶点更少 ⇒ 上面"顶点数 == 行数"必然失败')
+  assert.throws(
+    () => assert.equal(skipZeros(widthsR), widthsR.length, '反例上"顶点数必须 == 行数"必须失败'),
+    /反例上/,
+    '⚠ 反例注入（跳过空桶直接连）必须让"顶点数 == 行数"这条断言失败',
+  )
+})
+
+test('② 行序：顶行必须是**最高价**（与左轴刻度、三条语义线同向）；反例（升序渲染）必被抓', () => {
+  const centers = [2.9538, 2.9812, 3.0358, 3.1452, 3.2272]
+  const weights = [0.5, 0.2, 0.1, 0.1, 0.1]
+  const rows = chipsRowsOf(centers, weights)
+  assert.equal(rows.length, centers.length, '行数不变')
+  assert.equal(rows[0].center, centers[centers.length - 1], '顶行必须是最高价')
+  assert.equal(rows[rows.length - 1].center, centers[0], '底行必须是最低价')
+  for (let i = 1; i < rows.length; i += 1) assert.ok(rows[i].center < rows[i - 1].center, '必须严格降序')
+  // 权重与价格**成对**倒序（不许把 A 的价格配到 B 的权重上）
+  rows.forEach((r, i) => assert.equal(r.weight, weights[centers.length - 1 - i], `第 ${i} 行的权重必须与价格配对`))
+  // 左轴刻度（bucketCenterTicks 再 reverse）与行序必须同向：第一个刻度 == 顶行价格
+  const ticksDesc = bucketCenterTicks(centers).slice().reverse()
+  assert.equal(ticksDesc[0], rows[0].center, '左轴顶部刻度必须等于顶行价格')
+  assert.equal(ticksDesc[ticksDesc.length - 1], rows[rows.length - 1].center, '左轴底部刻度必须等于底行价格')
+  // 反例：升序渲染（旧实现）
+  const asc = centers.map((c, i) => ({ center: c, weight: weights[i] }))
+  assert.notEqual(asc[0].center, ticksDesc[0], '⚠ 反例（升序）顶行是最低价 ⇒ 与左轴刻度矛盾（镜像 bug）')
 })

@@ -142,6 +142,8 @@ test('task-79 ②：几何锚定断言（真实量级 fixture）——单位混�
   const { fileURLToPath } = require('node:url') as { fileURLToPath: (u: string) => string }
   const { dirname, join } = require('node:path') as { dirname: (p: string) => string; join: (...p: string[]) => string }
   const panel = readFileSync(join(dirname(fileURLToPath(import.meta.url)), './ChipsPanel.tsx'))
-  assert.ok(panel.includes('width: `${axis.widthOf(w)}%`'), '渲染必须直接用 widthOf 的百分数 + %')
-  assert.equal(/width: `\$\{axis\.widthOf\(w\) \* 100\}%`/.test(panel), false, '渲染层不许再乘一次 100')
+  // v0.55.0：行序修正后变量名从 `w` 变成 `r.weight`（同一个 axis.widthOf、同一个百分数契约）
+  const m = /width: `\$\{axis\.widthOf\(([^)]*)\)\}%`/.exec(panel)
+  assert.ok(m !== null, '渲染必须直接用 widthOf 的百分数 + %（模板形如 width: `${axis.widthOf(x)}%`）')
+  assert.equal(/width: `\$\{axis\.widthOf\([^)]*\) \* 100\}%`/.test(panel), false, '渲染层不许再乘一次 100')
 })
