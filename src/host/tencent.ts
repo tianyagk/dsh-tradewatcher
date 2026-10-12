@@ -249,6 +249,53 @@ export function parseTencentSuggest(payload: string, limit = 10): TencentSuggest
   return out
 }
 
+/**
+ * 腾讯逐分钟点 → `TrendPoint`（**纯函数**，便于直接把"推导值"这件事断言死）。
+ *
+ * 关键映射（与上游实测结构对应）：
+ *   - 上游每行 = `HHMM 价格 累计成交量(手) [累计成交额(元)]` —— **累计**，不是每分钟增量；
+ *   - `TrendPoint.amount` 的口径是**每分钟**成交额（东财 trends2 就是每分钟）⇒ 这里做**差分**；
+ *   - 每个带成交额的点都挂 `amountDerived: true` + `amountNote`：**这是推导值，不是上游直给的分钟额**；
+ *   - 累计值回退/缺失 ⇒ 该点 `amount: null`（不编、不用 0 顶替）；
+ *   - `vol` 同样改成每分钟手数（与东财口径一致）。
+ *
+ * 返回 `points`（可直接进 `TrendData.points`）与 `allDerived`（是否每个成交额点都是推导来的）。
+ */
+export function minuteTrendPointsOf(
+  raw: readonly TencentMinutePoint[],
+  tsLabel: (ts: number) => string,
+): { points: Array<Record<string, unknown>>; allDerived: boolean } {
+  const points: Array<Record<string, unknown>> = []
+  let prevAmount = 0
+  let prevVol = 0
+  let amountPoints = 0
+  let derivedPoints = 0
+  for (const p of raw) {
+    if (typeof p.price !== 'number' || !(p.price > 0)) continue
+    const cumVol = typeof p.cumVol === 'number' && Number.isFinite(p.cumVol) ? p.cumVol : null
+    const cumAmount = typeof p.amount === 'number' && Number.isFinite(p.amount) ? p.amount : null
+    const minuteAmount = cumAmount !== null && cumAmount >= prevAmount
+      ? Math.round((cumAmount - prevAmount) * 100) / 100
+      : null
+    const minuteVol = cumVol !== null && cumVol >= prevVol ? Math.round((cumVol - prevVol) * 100) / 100 : null
+    if (cumAmount !== null && cumAmount >= prevAmount) prevAmount = cumAmount
+    if (cumVol !== null && cumVol >= prevVol) prevVol = cumVol
+    const avg = cumVol !== null && cumVol > 0 && cumAmount !== null ? cumAmount / (cumVol * 100) : null
+    if (minuteAmount !== null) {
+      amountPoints += 1
+      derivedPoints += 1
+      points.push({
+        t: p.ts, label: tsLabel(p.ts), price: p.price, avg, vol: minuteVol, amount: minuteAmount,
+        amountDerived: true,
+        amountNote: '腾讯逐分钟只给累计成交额 ⇒ 每分钟成交额由相邻累计值差分得到（推导值，非上游直给的分钟额）',
+      })
+    } else {
+      points.push({ t: p.ts, label: tsLabel(p.ts), price: p.price, avg, vol: minuteVol, amount: null })
+    }
+  }
+  return { points, allDerived: amountPoints > 0 && amountPoints === derivedPoints }
+}
+
 export interface TencentMinutePoint {
   ts: number
   /** 当日累计成交额（元） */

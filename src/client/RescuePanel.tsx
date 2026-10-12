@@ -108,17 +108,36 @@ function PulseChart(props: {
   base: number | null
   curve: number[] | null
   loading: boolean
+  /** 宿主给的"为什么没有量能"（v0.66.0 起 `/trend` 会给；三情形文案见 host/em.ts） */
+  amountReason?: string | null
 }): React.ReactElement {
   const { trend, base, curve } = props
   if (props.loading) return React.createElement(Skeleton, { lines: 4, height: 20 })
   const pts = (trend?.points ?? []).filter((p) => typeof p.amount === 'number' && (p.amount ?? 0) > 0)
   if (pts.length < 5) {
-    return React.createElement('div', { className: 'tw-hint', style: { padding: '10px 4px' } }, '分钟成交额未取到')
+    // 常驻只有这一句（不给长句）；**原因进 title/aria**（红线：缺失必须给原因，且要能被键盘/触屏读到）
+    const reason = props.amountReason ?? '原因未给出（宿主未回 missing）'
+    return React.createElement('div', {
+      className: 'tw-hint',
+      style: { padding: '10px 4px' },
+      tabIndex: 0,
+      role: 'note',
+      title: reason,
+      'aria-label': `分钟成交额未取到 —— ${reason}`,
+    }, '分钟成交额未取到')
   }
   const W = 620
   const H = 118
   const padL = 4
   const amounts = pts.map((p) => p.amount ?? 0)
+  // 数据里带了"推算"标记（host 对腾讯兜底序列挂的 `amountDerived`）⇒ 常驻出一个 4 字标记，
+  // 说明进 title（不新增常驻长句；不标就等于把推导值当上游直给）
+  const derivedNote = (() => {
+    const flagged = pts.find((p) => (p as { amountDerived?: boolean; amountNote?: string }).amountDerived === true)
+    return flagged === undefined
+      ? null
+      : ((flagged as { amountNote?: string }).amountNote ?? '分钟成交额由上游累计值推导（非上游直给的分钟额）')
+  })()
   const maxAmt = Math.max(...amounts)
   // 同时点基准：base × (曲线[t] − 曲线[t-1])，均匀回退
   const expected: number[] = pts.map((_, i) => {
@@ -151,10 +170,23 @@ function PulseChart(props: {
         fill: 'none', stroke: 'var(--tw-fg-dim, #8b93a7)', strokeWidth: 1, strokeDasharray: '3 3', opacity: 0.8,
       })
     : null
-  return React.createElement('svg', { viewBox: `0 0 ${W} ${H}`, width: '100%', height: H, preserveAspectRatio: 'none', className: 'tw-rescue-svg' },
+  const svg = React.createElement('svg', { viewBox: `0 0 ${W} ${H}`, width: '100%', height: H, preserveAspectRatio: 'none', className: 'tw-rescue-svg' },
     React.createElement('line', { x1: 0, y1: H, x2: W, y2: H, stroke: 'var(--tw-line, #262a33)', strokeWidth: 1 }),
     ...bars,
     baseline,
+  )
+  if (derivedNote === null) return svg
+  // 推导值标记（4 字，常驻）+ 说明进 title/aria（不给常驻长句）
+  return React.createElement('div', null,
+    React.createElement('span', {
+      className: 'tw-badge',
+      style: { marginBottom: 2 },
+      tabIndex: 0,
+      role: 'note',
+      title: derivedNote,
+      'aria-label': derivedNote,
+    }, '量能推算'),
+    svg,
   )
 }
 
@@ -273,6 +305,8 @@ export function RescuePanel(props: {
   const [settings, setSettings] = React.useState(false)
   const [lane, setLane] = React.useState<string>(RESCUE_ETF_CATALOG[0].secid)
   const [trend, setTrend] = React.useState<TrendData | null>(null)
+  /** 宿主给的"为什么量能用不了"（`/trend` 的 missing[0].note）；v0.66.0 起三情形都会给 */
+  const [trendAmountReason, setTrendAmountReason] = React.useState<string | null>(null)
   const [trendLoading, setTrendLoading] = React.useState(false)
   const [openDay, setOpenDay] = React.useState<string | null>(null)
   const [dayDetail, setDayDetail] = React.useState<{ events: RescueSignalEvent[]; intraday: RescueIntradayPoint[] } | null>(null)
@@ -321,7 +355,10 @@ export function RescuePanel(props: {
       setTrendLoading(true)
       api
         .trend(lane, 1)
-        .then((r) => setTrend(r.trend))
+        .then((r) => {
+          setTrend(r.trend)
+          setTrendAmountReason(r.missing?.[0]?.note ?? null)
+        })
         .catch(() => setTrend(null))
         .finally(() => setTrendLoading(false))
     }
@@ -590,6 +627,7 @@ export function RescuePanel(props: {
               ),
               React.createElement(PulseChart, {
                 trend, base: laneBase, curve: data?.calibration?.progressCurve ?? null, loading: trendLoading,
+                amountReason: trendAmountReason,
               }),
               React.createElement('div', { className: 'tw-hint', style: { fontSize: 10.5 } },
                 '柱＝每分钟成交额；虚线＝同时点基准（20日均额 × 标定的日内进度曲线）；红柱＝达同时点 2.5 倍以上的脉冲。',

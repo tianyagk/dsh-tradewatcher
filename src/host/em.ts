@@ -20,10 +20,10 @@ import { TREND_ARCHIVE_KEEP_DAYS, archiveTrendDays, loadTrendArchive, type Trend
 import { mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { breakerFor, hostsAllowed, minutesToRecover } from './breaker.ts'
 import { fetchSinaEtfRanking, fetchSinaQuotes, sinaSymbol as sinaQuoteSymbol } from './sina.ts'
-import { fetchTencentBoards, fetchTencentMinutes, fetchTencentQuoteRows, fetchTencentSuggest, tencentCode, type TencentQuoteFull } from './tencent.ts'
+import { fetchTencentBoards, fetchTencentMinutes, fetchTencentQuoteRows, fetchTencentSuggest, minuteTrendPointsOf, tencentCode, type TencentQuoteFull } from './tencent.ts'
 import { join } from 'node:path'
 import { dataHome } from './store.ts'
-import { dayOf, inSession, isSettledOffline, shanghaiParts } from './time.ts'
+import { hhmmOf, dayOf, inSession, isSettledOffline, shanghaiParts } from './time.ts'
 
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
 const REFERER = 'https://quote.eastmoney.com/'
@@ -1157,20 +1157,26 @@ async function trendWithFallback(
   return archive === undefined ? clean : { ...clean, archive }
 }
 
-/** 腾讯分钟线 → 分时序列（价格 + 当日均价 VWAP），供东财不可用时兜底 */
+/**
+ * 腾讯分钟线 → 分时序列（价格 + 当日均价 VWAP + **每分钟成交额**），供东财不可用时兜底。
+ *
+ * ⚠ 成交额口径（v0.66.0 修）：
+ *   腾讯逐分钟只给**累计**成交额（第 4 段，元）与**累计**成交量（第 3 段，手）——
+ *   而 `TrendPoint.amount` 的口径是**每分钟**成交额（东财 `trends2` 给的就是每分钟值）。
+ *   故这里对累计值做**差分**得每分钟值，并在每个点上挂 `amountDerived: true` + 说明：
+ *   **这是推导值，不是上游直给的分钟额**（不标注就等于伪造上游字段）。
+ *   - 累计值回退（数据抖）⇒ 该点成交额**如实为 null**（不编、不用 0 顶替）；
+ *   - 只有价格/量、没有第 4 段（结构变化）⇒ 用 `价格 × 手数 × 100` 推导，同样标 `amountDerived`；
+ *   - 两者都拿不到 ⇒ 该点 `amount: null`。
+ *   `vol` 同步改成**每分钟**手数（与东财口径一致），不再是累计值（旧实现给的是累计值，会让下游按分钟读错）。
+ */
 async function tencentTrend(secid: string): Promise<TrendData | null> {
-  const points = await fetchTencentMinutes(secid)
+  const raw = await fetchTencentMinutes(secid)
+  if (raw.length < 5) return null
+  // 映射逻辑在 tencent.ts 的**纯函数**里（差分 + 推导标记），这里只做 IO 与收尾
+  const { points } = minuteTrendPointsOf(raw, (ts) => `${dayOf(ts)} ${hhmmOf(ts)}`)
   if (points.length < 5) return null
-  const trendPoints: TrendPoint[] = points
-    .filter((p) => typeof p.price === 'number' && p.price > 0)
-    .map((p) => {
-      const cumVol = p.cumVol ?? null
-      const avg = cumVol !== null && cumVol > 0 ? p.amount / (cumVol * 100) : null
-      const label = new Date(p.ts).toISOString().slice(0, 10) + ' ' + new Date(p.ts).toTimeString().slice(0, 5)
-      return { t: p.ts, label, price: p.price as number, avg, vol: cumVol, amount: null }
-    })
-  if (trendPoints.length < 5) return null
-  const clean = normalizeTrendSeries(trendPoints)
+  const clean = normalizeTrendSeries(points as unknown as TrendPoint[]) as Array<TrendPoint & { amountDerived?: boolean; amountNote?: string }>
   return {
     secid,
     prePrice: null,
@@ -1945,6 +1951,49 @@ export function trendMissingReason(secid: string, opts: { emDown?: boolean } = {
     what: '分时',
     why: 'no-source',
     note: `东财当前可达但没有返回该标的的分时数据，且本插件没有别的分钟源可兜底（腾讯只覆盖沪/深/港股）—— ${MISSING_TIER_ADVICE['no-source']}`,
+  }
+}
+
+/**
+ * 「分时拿到了、但**量能**用不了」的原因（v0.66.0，红线修复）。
+ *
+ * 为什么单独一条：`/trend` 只在 `trend === null` 时给 `missing` ⇒ 出现"有 180 个点、个个 `amount: null`"
+ * 时 `missing` 仍是 `null`，客户端只剩一句「分钟成交额未取到」——**违反"缺失必须给原因"**。
+ *
+ * 三情形分开写（判据互斥，按①②③顺序）：
+ *   ① 上游都不可达（东财熔断/限流 + 腾讯也没给）⇒ `transient`（等恢复）
+ *   ② 可达但结构变了/字段缺失（点位够、带成交额的点不足）⇒ `no-source`（重试无用，要修映射）
+ *   ③ 非采样时段（未开盘/午休/已收盘）⇒ `transient`，但文案说明"不是故障"
+ */
+export function trendAmountMissingReason(
+  trend: TrendData | null,
+  opts: { emDown?: boolean; now?: number } = {},
+): UpstreamReason | null {
+  if (trend === null) return null // 整条都没有 ⇒ 由 trendMissingReason 负责，别重复
+  const usable = trend.points.filter((p) => typeof p.amount === 'number' && p.amount > 0).length
+  if (usable >= 5) return null // 够用就不报
+  const total = trend.points.length
+  const now = opts.now ?? Date.now()
+  const down = opts.emDown ?? (upstreamFailedRecently('trend') || hostsUnavailable(HISTORY_HOSTS) || emUnavailableNow())
+  const session = inSession(now)
+  if (!session) {
+    return {
+      what: '分时量能',
+      why: 'transient',
+      note: `当前非采样时段（未开盘/午休/已收盘）⇒ 分时量能要开盘后才有；本轮 ${total} 个点里有成交额的 ${usable} 个 —— 不是故障，也不是 0`,
+    }
+  }
+  if (down) {
+    return {
+      what: '分时量能',
+      why: 'transient',
+      note: `东财行情主机当前不可达（熔断/限流），腾讯逐分钟源这次也没给出可用成交额 ⇒ 本轮 ${total} 个点里有成交额的只有 ${usable} 个 —— ${MISSING_TIER_ADVICE.transient}`,
+    }
+  }
+  return {
+    what: '分时量能',
+    why: 'no-source',
+    note: `上游可达但成交额字段缺失/结构变化：本轮 ${total} 个点里只有 ${usable} 个带成交额（东财 trends2 的成交额段、腾讯逐分钟第 4 段的累计额都没给到）—— 不用 0 顶替，需核对上游字段`,
   }
 }
 

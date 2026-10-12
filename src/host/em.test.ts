@@ -2,7 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
 /** task-77：盘中未完成 bar 不许被当成最终 bar（缓存版本 / partial / TTL 三重保护） */
-import { isPartialBar, klineCacheAdoptionOf, klineCacheUsable, klineMissingReason, klineStaleNoteOf, KLINE_CACHE_V, PARTIAL_TTL_MS } from './em.ts'
+import { isPartialBar, klineCacheAdoptionOf, klineCacheUsable, klineMissingReason, klineStaleNoteOf, trendAmountMissingReason, KLINE_CACHE_V, PARTIAL_TTL_MS } from './em.ts'
 
 test('task-77：09:33 抓到的当日 bar 判为未完成；收盘后抓到的同日 bar 判为最终', () => {
   const night = Date.parse('2026-10-09T22:30:00+08:00')
@@ -133,4 +133,97 @@ test('note 三情形必须区分：无缓存 / 缓存被判不可用（写具体
   const noSource = klineMissingReason('1.600519', 101, { emDown: false, cache: null })
   assert.ok(noSource.note.includes('都可达但没有返回'), '可达但没数据 ⇒ 另一句（no-source）')
   assert.equal(noSource.why, 'no-source')
+})
+
+/**
+ * v0.66.0（task-15）：分时量能失效的两处修复。
+ *   ① 腾讯逐分钟兜底必须给出**每分钟成交额**（上游只给累计额 ⇒ 差分），并**标注推导值**；
+ *   ② 拿到了但量能用不了时**必须给原因**（`missing[]` 不许留 null）。
+ */
+test('分时兜底①：腾讯逐分钟"累计值"必须差分出**每分钟**额/量，且每个额点都标推导值', async () => {
+  const { minuteTrendPointsOf } = await import('./tencent.ts')
+  // 上游结构（实测）：`HHMM 价格 累计成交量(手) 累计成交额(元)`
+  const raw = [
+    { ts: Date.parse('2026-10-12T09:30:00+08:00'), amount: 33650707, price: 4.384, cumVol: 76758 },
+    { ts: Date.parse('2026-10-12T09:31:00+08:00'), amount: 95963053, price: 4.382, cumVol: 219031 },
+    { ts: Date.parse('2026-10-12T09:32:00+08:00'), amount: 127232773, price: 4.384, cumVol: 290379 },
+  ]
+  const { points, allDerived } = minuteTrendPointsOf(raw, (ts) => String(ts))
+  assert.equal(points.length, 3, '三个点都保留')
+  // 首点 = 累计本身（开盘集合竞价那笔）
+  assert.equal(points[0].amount, 33650707, '首点每分钟额 = 累计额（从 0 起算）')
+  assert.equal(points[0].vol, 76758, '首点每分钟量 = 累计量')
+  // 第 2 点 = 两点累计之差（这正是"每分钟"的含义）
+  assert.equal(points[1].amount, 95963053 - 33650707, '第 2 点每分钟额 = 相邻累计之差')
+  assert.equal(points[1].vol, 219031 - 76758, '第 2 点每分钟量 = 相邻累计之差')
+  assert.equal(points[2].amount, 127232773 - 95963053, '第 3 点同理')
+  // **推导标记**：不许把推导值当上游直给的分钟额
+  assert.equal(points.every((p) => p.amountDerived === true), true, '每个带成交额的点都必须标 amountDerived')
+  assert.ok(String(points[0].amountNote).includes('累计'), '说明要点明"上游只给累计额"')
+  assert.equal(allDerived, true)
+  // 守恒：逐分钟额之和 == 最后一个累计额（差分的正确性不变量）
+  const sum = points.reduce((a, p) => a + (p.amount as number), 0)
+  assert.ok(Math.abs(sum - 127232773) < 0.01, `逐分钟额之和必须等于末点累计额（实际 ${sum}）`)
+  // 累计回退（数据抖）⇒ 该点如实缺失，不编、不用 0
+  const glitch = minuteTrendPointsOf([
+    { ts: 1, amount: 100, price: 10, cumVol: 10 },
+    { ts: 2, amount: 50, price: 10, cumVol: 8 },
+  ], (ts) => String(ts))
+  assert.equal(glitch.points[1].amount, null, '累计额回退 ⇒ 该点 amount = null（不编数）')
+  assert.equal(glitch.points[1].vol, null, '累计量回退 ⇒ 该点 vol = null')
+  // `allDerived` 的语义是"**所有带成交额的点**都是推导来的"：回退点没有额 ⇒ 仍为 true（不是"点数全满"）
+  assert.equal(glitch.allDerived, true, '所有带额的点都是差分得来的 ⇒ allDerived=true')
+  // 一个带额的点都没有（上游第 4 段缺失 ⇒ NaN）⇒ allDerived=false
+  assert.equal(minuteTrendPointsOf([{ ts: 1, amount: Number.NaN, price: 10, cumVol: null }], (t) => String(t)).allDerived, false,
+    '一个带额的点都没有 ⇒ allDerived=false')
+
+  // 反例注入：关掉腾讯兜底（映射里不差分、给 null）⇒ 上面的"必须给出每分钟额"必然失败
+  const broken = raw.map((p) => ({ amount: null, vol: p.cumVol }))
+  assert.equal(broken[1].amount, null, '反例的样子：照搬累计值/给 null')
+  assert.throws(
+    () => assert.equal(broken.every((p) => typeof p.amount === 'number'), true, '反例上"必须有每分钟额"必须失败'),
+    /反例上/,
+    '⚠ 反例注入（关掉腾讯兜底）必须让断言失败',
+  )
+})
+
+test('分时兜底②：量能用不了时**必须给原因**；三情形各一例（都不可达 / 结构变化 / 非采样时段）', () => {
+  const mk = (amounts: Array<number | null>, points = 10): { secid: string; prePrice: null; points: unknown[]; last: null } => ({
+    secid: '1.510300', prePrice: null, last: null,
+    points: Array.from({ length: points }, (_, i) => ({ t: i, label: 'x', price: 1, avg: null, vol: 1, amount: amounts[i] ?? null })),
+  })
+  // 够用（≥5 个带成交额的点）⇒ 不报
+  assert.equal(trendAmountMissingReason(mk([1, 2, 3, 4, 5, 6]) as never), null, '够用就不该报原因')
+  // ① 都不可达（显式注入 emDown）
+  const down = trendAmountMissingReason(mk([1, null, null]) as never, { emDown: true, now: Date.parse('2026-10-12T10:30:00+08:00') })
+  assert.ok(down !== null && down.why === 'transient', '①归 transient')
+  assert.ok(down.note.includes('东财行情主机当前不可达') && down.note.includes('腾讯'), `①要写出两个源（实际 ${down.note}）`)
+  assert.ok(/\d+ 个点/.test(down.note), '①必须给出"几个点里有几个可用"的数字')
+  // ② 可达但结构变了/字段缺失
+  const struct = trendAmountMissingReason(mk([null, null, null]) as never, { emDown: false, now: Date.parse('2026-10-12T10:30:00+08:00') })
+  assert.ok(struct !== null && struct.why === 'no-source', '②归 no-source（重试无用）')
+  assert.ok(struct.note.includes('结构') || struct.note.includes('字段'), `②要说明是字段/结构问题（实际 ${struct.note}）`)
+  assert.ok(struct.note.includes('不用 0 顶替'), '②要说清不许用 0 顶替')
+  // ③ 非采样时段（凌晨）
+  const night = trendAmountMissingReason(mk([null]) as never, { emDown: false, now: Date.parse('2026-10-12T03:00:00+08:00') })
+  assert.ok(night !== null, '③也要给原因')
+  assert.ok(night.note.includes('非采样时段'), `③要说清是时段问题（实际 ${night.note}）`)
+  assert.ok(night.note.includes('不是故障'), '③不许把"休市"说成故障')
+  // 三情形文案必须**互不相同**（否则"分开写"没做到）
+  const notes = [down.note, struct.note, night.note]
+  assert.equal(new Set(notes).size, 3, '三种情形必须各有一句不同的原因')
+  // 整条都没有 ⇒ 不越权（交给 trendMissingReason）
+  assert.equal(trendAmountMissingReason(null), null, 'trend 为 null 时这条不报（避免与整条原因重复）')
+})
+
+test('分时兜底②（反例）：把 missing 写回 null ⇒ "必须给原因"必须失败', () => {
+  const few = { secid: '1.510300', prePrice: null, last: null, points: Array.from({ length: 3 }, (_, i) => ({ t: i, label: 'x', price: 1, avg: null, vol: 1, amount: null })) }
+  const real = trendAmountMissingReason(few as never, { emDown: true, now: Date.parse('2026-10-12T10:30:00+08:00') })
+  const oldWay: unknown = null // 老行为：不给原因
+  assert.notEqual(real, oldWay, '⚠ 反例（null）与真实现不同 ⇒ 断言必然抓住')
+  assert.throws(
+    () => assert.notEqual(oldWay, null, '反例上"必须给原因（非 null）"必须失败'),
+    /反例上/,
+    '⚠ 反例注入（missing 写回 null）必须让断言失败',
+  )
 })

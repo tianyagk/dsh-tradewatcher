@@ -721,8 +721,15 @@ export function makeTradeRoutes(
           // 归档开关来自 prefs（默认开）：关掉后不再写 trends/<secid>/，五日在无真实多日源的市场只能是当日
           const trend = await em.fetchTrend(secid, ndays, { archive: store.getPrefs().trendArchive !== false })
           // C/B：拿不到就带原因 —— no-source（结构性没有）与 transient（东财这会儿不可达）
-          // 与 quoteProvenance 同一口径，客户端据此显示"为什么没有"，而不是一句光秃秃的失败
-          send(res, 200, { trend, ...(trend === null ? { missing: [em.trendMissingReason(secid)] } : {}) })
+          // 与 quoteProvenance 同一口径，客户端据此显示"为什么没有"，而不是一句光秃秃的失败。
+          // ⚠ v0.66.0：**拿到了但量能用不了**（点够、带成交额的点不足）也必须给原因 ——
+          // 否则界面上只剩「分钟成交额未取到」，违反"缺失必须给原因"。
+          const amountReason = em.trendAmountMissingReason(trend)
+          const missing = [
+            ...(trend === null ? [em.trendMissingReason(secid)] : []),
+            ...(amountReason === null ? [] : [amountReason]),
+          ]
+          send(res, 200, { trend, ...(missing.length === 0 ? {} : { missing }) })
         } catch (error) {
           fail(res, error)
         }
