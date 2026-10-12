@@ -110,8 +110,8 @@ export async function readJsonForUpdate(file: string, onCorrupt?: 'throw' | 'nul
 | # | 文件 | 写入者（行号按本人读到的当前工作区） | 改前 | 现在（已落地） |
 |---|---|---|---|---|
 | 6 | `rescue-log.json` | `src/host/rescue.ts` `persist()` | 整份覆写 `this.file`，**无锁** | `updateJsonLocked(path, (disk) => mergeRescueLog(disk, this.file, this.samplesBase))`：`days[day].samples = 磁盘现值 + 本进程自上次成功写盘以来的拍数`；events/intraday/scoreLog 取并集；成功后才重基准（§5.1） |
-| 7 | `klines/<secid>_<klt>_<fqt>.json` | `src/host/em.ts:1785` `saveKlineCache` | 原子写、无锁 | `updateJsonLocked(…, (disk) => { bars: mergeBars(磁盘旧 bars, 新 bars) })`（§5.2 P6） |
-| 8 | `klines/` 的**prune 配额** | `src/host/em.ts:1824` `pruneKlineCache` | 读目录 → 按 mtime 排序 → 删到 300，无锁 | 整段进 `withFileLock(<klines>/.klines)`，且目录清单过滤 `.json`/点文件（**否则会把锁自己删掉**）（§5.2 P7） |
+| 7 | `klines/<secid>_<klt>_<fqt>.json` | `src/host/em.ts:1785` `saveKlineCache` | 原子写、无锁 | `updateJsonLocked(…, (disk) => { bars: mergeBars(磁盘旧 bars, 新 bars, KLINE_CAP[klt]) })`（§5.2 P6）。**并发端到端已验**：两进程同刻写同一文件（A=D0..D399、B=D300..D700）⇒ **701 根**、首末两端都在、无重复；注入整份覆写 ⇒ 断言红（末根变 2025-02-02） |
+| 8 | `klines/` 的**prune 配额** | `src/host/em.ts:1824` `pruneKlineCache` | 读目录 → 按 mtime 排序 → 删到 300，无锁 | 整段进 `withFileLock(<klines>/.klines)`，且目录清单过滤 `.json`/点文件（**否则会把锁自己删掉**）（§5.2 P7）。**并发端到端已验**：320 个缓存 + 2 个哨兵、两进程同刻触发 ⇒ 收敛到 **300**、两哨兵都在、`.tmp`/`.lock` 各 0、两次「清理 N 个」**之和 = 22 = 322 − 300**（证明串行）；注入"去掉过滤" ⇒ 断言红（哨兵被删） |
 | 9 | `quotes-lkg.json` / `trends-lkg.json` / `board-lkg.json` | `em.ts:275` / `1048` / `738` | **裸 `writeFile`**（连原子都不是，可能写出半截文件） | 已改成 `writeFileAtomic`（本人复查确认）。语义是"最新快照胜"、非读-改-写 ⇒ **不需要加锁**（§5.3） |
 | 10 | `trends/<secid>/<day>.json` | `src/host/trendArchive.ts:185` | 原子写、按日单文件 | 同上（按日归档、最新胜）；本轮未纳入 |
 | 11 | `calendar.json` | `src/host/calendar.ts:360` | 原子写 + 6h 同步 TTL | 跨进程会各同步一次（浪费但不丢数据）；本轮未纳入 |
@@ -326,6 +326,12 @@ function mergeRescueLog(disk: unknown, mem: LogFile, base: Map<string, number>):
 > 注意 `mergeBars(oldBars, freshBars, cap)` 的第三个参数是**上限根数**；`KLINE_FULL_LMT` 不在作用域时用
 > `Math.max(old.length, bars.length)` 也可（目的是别把序列越并越长）。若判为不值得，**至少**把现有
 > `writeFileAtomic` 换成 `updateJsonLocked(path, () => payload)`（保住"不与其他写者交错"）。
+>
+> **本人示例的一处订正（已由 `fix-data-fetch` 在落地时改对）**：上限应当用 **`KLINE_CAP`**
+> （101→1200 / 102→800 / 103→600，`em.ts:1529`）—— 它才是这个**文件的缓存上限**，与既有用法
+> `mergeBars(entry.bars, fetched, KLINE_CAP[baseKlt])`（`em.ts:2246`）一致；`KLINE_FULL_LMT`
+> （101→800 / 102→400 / 103→240，`em.ts:1527`）只是"**首次回源要多少根**"。本人 §5.2 原示例把这两个常量
+> 混用了，实际落地用的是 `KLINE_CAP[klt] ?? Math.max(old.length, bars.length)`（`em.ts:1796`）。
 
 **P7. `pruneKlineCache`（`em.ts:1797-1826`）**：目录级互斥 + **目录清单里排除锁文件**
 
@@ -437,7 +443,33 @@ round1 samples: 372     round2 samples: 372        ⇒ 丢了一次更新
 两个进程同时落盘时，一个把 `.tmp` rename 走、另一个的 rename 就以 `ENOENT` 失败（**整次落盘静默丢失**，
 只在控制台留一行 warn）。⇒ 锁 + 锁内合并同时消灭了这两件事。
 
-### 6.4 仓库外的旁证：`chips.test.ts` 的一条失败与本人无关
+### 6.4 交叉验证：`rescue-log` 的计数合并被**两套独立装置**验证
+
+| 装置 | 作者 | 正例（锁内合并） | 反例（退回整份覆写） |
+|---|---|---|---|
+| `RescueMonitor.init()+persist(true)`，两个真进程各一拍（§6.3） | 本人 | 371 → **373**（两轮都是） | 371 → **372**（两轮都是） |
+| `rescuePersist.test.ts` + `rescuePersist.child.ts`（两个真子进程各 `+= 1` → flush） | `fix-data-fetch` | 7 → **9** | 7 → **8**（断言红） |
+
+两套装置独立写成、数字结论一致（+2 / +1），互为旁证。
+
+### 6.5 交叉验证：`klines/` 的两处并发（`fix-data-fetch` 补测，本人复跑）
+
+`src/host/klineLock.test.ts` + `src/host/klineLock.child.ts`（真子进程，走真实 `fetchKline → saveKlineCache`；
+子进程内钉盘中时钟、并**硬断言 `DSH_HOME` 在 `/tmp`**）：
+
+| 用例 | 正例 | 反例注入 |
+|---|---|---|
+| ① 两进程同刻保存**同一个** `1.600519_101_1.json`（A=D0..D399、B=D300..D700，重叠 101） | **701 根**（400+401−101）、首根 D0、末根 D700、无重复日期 | 退回 `writeFileAtomic` 整份覆写 ⇒ 断言红（末根变成 2025-02-02） |
+| ② 320 个缓存文件 + 2 个"非缓存"哨兵（`.keepme` 点文件 / `keepme.txt`，mtime 故意设最旧），两进程同刻触发裁剪 | 文件数 **300**、两哨兵都在、`.tmp` 0 个、`.lock` 0 个、两次「清理 N 个」**之和 = 22 = 322 − 300**（证明两次裁剪串行、第二次看到的是第一次的结果） | 去掉 `*.json`/点文件过滤 ⇒ 断言红（哨兵被删） |
+
+本人复跑该文件：2/2 绿（`node --test --experimental-strip-types src/host/klineLock.test.ts`），断言内容逐条核对与上表一致。
+
+> **一条可复用的测试经验（`fix-data-fetch` 提出，本人认可并采纳）**：
+> **不要拿"活着的锁文件还在"当注入哨兵** —— `.klines.lock` 的 mtime 永远是最新，而裁剪是"最旧先删"，
+> 它永远不会成为删除候选，因此"锁文件没被删"这条断言咬不住"过滤逻辑被去掉"的注入（会假绿）。
+> 正确的哨兵是**同属点文件/非 `.json`、但 mtime 故意设最旧**的文件（如 `.keepme`）。
+
+### 6.6 仓库外的旁证：`chips.test.ts` 的一条失败与本人无关
 
 `npm test` 曾出现 `src/host/chips.test.ts:314` 失败（`回源失败 + 用缓存 ⇒ stale 必须为 true`）。
 用 `git archive HEAD` 在 `/tmp/tw-head-check` 重建**纯 HEAD**（不含本人任何改动）后，**同一条同样失败** ⇒
@@ -474,7 +506,7 @@ built lib/index.js + lib/client.js （v0.67.0，客户端片段校验通过：73
 | # | 未做项 | 原因 | 现状与下一步 |
 |---|---|---|---|
 | 1 | `rescue-log.json` 的锁与计数合并 | 该文件由 `fix-data-fetch` 负责（Lead 决定：只交 patch） | **已按其落地**（工作区 diff 与 §5.1 逐条一致：import / `samplesBase` / `ensureDay` 记基准 / `persist` → `updateJsonLocked` + 成功后才重基准 / `mergeRescueLog`）。本人独立端到端复跑见 §6.3（371→**373**，旧版 372） |
-| 2 | `klines/` 的 save 合并 / prune 目录锁 | 同上（`em.ts`） | **已按其落地**（`em.ts:1785` `updateJsonLocked` + `em.ts:1824` `withFileLock(join(dir,'.klines'))` 且清单过滤 `.json`/点文件）。本人**未**对其做端到端并发复跑（不属本人范围），等 `fix-data-fetch`/Lead 的验证 |
+| 2 | `klines/` 的 save 合并 / prune 目录锁 | 同上（`em.ts`） | **已按其落地并已并发端到端验证**（`em.ts:1785` `updateJsonLocked` + `em.ts:1824` `withFileLock(join(dir,'.klines'))` 且清单过滤 `.json`/点文件）。验证由 `fix-data-fetch` 补测（`src/host/klineLock.test.ts`，两用例各带反例注入），**本人复跑 2/2 绿**并逐条核对断言 ⇒ 本项**已闭环**，见 §6.5 |
 | 3 | LKG 三文件 | 已由队友从裸 `writeFile` 改成原子写 | 本人判定"不需要锁"（§5.3）——**这是一条结论，不是未做项** |
 | 4 | `trends/<secid>/<day>.json`、`calendar.json`、`breadth` 缓存、`write-log.json` | 不在本轮范围（有的是原子单文件"最新胜"，有的属追加式留痕） | 按 §2.3 判据评估：`write-log.json` 是唯一"看起来该并集"的，但写入频率低、且非用户数据，留待后续 |
 | 5 | 读路径的跨进程新鲜度（A 进程改了、B 进程的 GET 仍返回内存旧值，直到 B 自己发生一次写） | 本轮范围是"写不丢" | 下一步可选：给读接口加"mtime 变了就便宜地刷新一次"（`fileMtime` 已现成）。**注意**：这是**既有**行为，不是本轮引入的 |

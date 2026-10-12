@@ -13,7 +13,7 @@
 **七条修法全部落地**（P0-1/P0-2/P1-1/P1-2/P1-3/P2-1/P2-2 ＋ 稳态命中率根因、收盘后时段判断、采样器复用缓存），
 每条的**上游请求数**都有"改前 → 改后"实测：**分时并发 8→1、分布 112→56、行情稳态 6→3、收盘后 6→1、
 熔断全开时 `/kline` 6→0、行业榜 5→1（不退化）、采样器 3→1**，另加分布扫描墙钟 **5855ms → 1246ms**（并发峰值 1 → 6）。
-**`npm run check` 全绿：EXIT=0，474/474 × 2 时区 + selftest + build**（末尾三行见 §4.1；473 是加锁批次接入前的口径，接入后又 +1 条跨进程用例，见 §9）。
+**`npm run check` 全绿：EXIT=0，476/476 × 2 时区 + selftest + build**（末尾三行见 §4.1 与 §10；473 → 474 → 476 是"加锁批次接入 +1、`klines/` 两进程用例 +2"的增量，见 §9/§10）。
 （中途它曾被 `fix-store-lock` 的 `lock.test.ts:101` 抖动挡住，对方 16:16 修好后即全绿；取证见 §7.3。）
 
 ---
@@ -104,7 +104,7 @@
 
 ## 4. `npm run check`
 
-### 4.1 `npm run check` —— **全绿**（EXIT=0，474/474 × 2 时区）
+### 4.1 `npm run check` —— **全绿**（EXIT=0；本节是 474 时的快照，最终 476 见 §10）
 
 ```
 > dsh-tradewatcher@0.66.0 typecheck → 0 error
@@ -125,7 +125,7 @@ built lib/index.js + lib/client.js （v0.66.0，客户端片段校验通过：73
 built lib/index.js + lib/client.js （v0.66.0，客户端片段校验通过：73 项）
 ```
 
-（474 条 = 基线 435 + 我新增 21（`fetchDedupe` 20 + `rescuePersist` 1，后者见 §9）+ 其它批次新增 18。本条 `npm run check` 是在
+（474 条 = 基线 435 + 我新增 21（`fetchDedupe` 20 + `rescuePersist` 1，见 §9）+ 其它批次新增 18；`klines/` 两进程用例再 +2 ⇒ **476**，见 §10。本条 `npm run check` 是在
 `fix-store-lock` 于 16:16 修好它那条抖动用例之后跑的，见 §7.3。）
 
 ### 4.2 中途观测到的一条跨团队抖动（**已由对方修好**）
@@ -194,7 +194,7 @@ built lib/index.js + lib/client.js （v0.66.0，客户端片段校验通过：73
 - **整套跑**：`npm run check` 里两次都挂，`SyntaxError: Unexpected end of JSON input`（`lock.child.ts:99` 的
   `JSON.parse` 读到半截文件）⇒ 该用例在"故意去掉锁"的竞态下断言一个具体结果，**在整套并发（文件级并行）下不稳**。
 - 归 `fix-store-lock`；我未改动 `lock.ts` / `lock.child.ts` / `lock.test.ts` / `store.ts`。
-- **结局**：对方 16:16 更新后，整套全绿（§4.1 的 `npm run check` EXIT=0；接入它的补丁后为 474/474，见 §9）。
+- **结局**：对方 16:16 更新后，整套全绿（§4.1 的 `npm run check` EXIT=0；接入它的补丁后 474/474 见 §9，再补 `klines/` 两进程用例后 476/476 见 §10）。
 
 ### 7.4 其余"时刻敏感用例"清单（本次实测扫描，不只靠读代码）
 
@@ -251,6 +251,62 @@ built lib/index.js + lib/client.js （v0.66.0，客户端片段校验通过：73
 
 （子进程内钉住时钟 `TW_CHILD_NOW`，避免"跨北京自然日边界"时父子落在不同 `day` key 上造成假红。）
 
-**落完后的门禁**：`npm run check` = **EXIT=0，474/474 × 2 时区 + selftest + build**（末尾三行同 §4.1 形态）。
+**落完后的门禁**：`npm run check` = **EXIT=0，474/474 × 2 时区 + selftest + build**（`klines/` 两处的两进程用例另见 §10，合计 476/476）。
 「改前 → 改后」各条请求数**复跑未变**：分时 1 / 分布 56 / 稳态 \[1,0,1,0,1,0] / 收盘后 1 / 熔断全开 `/kline` 0 /
 分布墙钟 1293ms·峰值 6。
+
+---
+
+## 10. `klines/` 两处加锁的**真两进程**端到端（Lead 指定补测，已补 + 已注入）
+
+新增 `src/host/klineLock.test.ts`（2 条，用**真子进程** `src/host/klineLock.child.ts`）。
+子进程走**真实取数路径**（`fetchKline` → `refreshKline` → `saveKlineCache`），
+上游用桩（可指定日期区间的日线），并**钉住时钟**（北京 2026-10-12 10:30 盘中，否则会走"休市定稿"分支不回源）；
+子进程内**硬断言 `DSH_HOME` 前缀为 `/tmp`**（本项目的实验数据隔离纪律），测试侧再核一次。
+
+### ① `saveKlineCache` 锁内合并（两个进程同时保存**同一个** `<secid>_<klt>_<fqt>.json`）
+
+- 装置：两个子进程**同一时刻**（父进程给绝对起跑时刻）写同一份缓存；A 带 D0..D399、B 带 D300..D401
+  （重叠 101 根 ⇒ 并集 701 根）。
+- 实测（`✔` 稳定复跑 3 次）：最终文件 `bars.length = 701`、首根 = D0、末根 = D700、无重复日期。
+- **反例注入**（`saveKlineCache` 退回 `writeFileAtomic` 整份覆写）：
+  ```
+  ✖ ① K 线缓存：两进程同时保存同一文件 ⇒ 互不重复的两组 bar 都在（锁内合并）
+    AssertionError: 末根必须是最晚那组的最后一根（实际 2025-02-02）—— 后写者覆盖前者会丢掉另一端
+  ```
+  日志：`/tmp/impl41/inject/kline-A-save-覆写.log`
+
+### ② `pruneKlineCache` 目录锁 + 清单过滤（两个进程同时裁剪）
+
+- 装置：配额 300，目录里预先塞 **320 个缓存文件** ＋ 两个"非缓存条目"哨兵（`.keepme` 点文件、
+  `keepme.txt`），并把哨兵的 **mtime 设成最旧** —— 不过滤时它们正是最先被删的候选；两个子进程同一时刻各落一次盘并触发裁剪。
+- 实测（`✔` 稳定复跑 3 次）：文件数收敛到 **300**；两个哨兵**都在**；`.tmp` 残留 **0**；`.lock` 残留 **0**；
+  两次裁剪打印的「清理 N 个」**之和 = 22 = 创建数 322 − 配额 300** ⇒ 证明两次裁剪**串行**发生
+  （第二次看到的是第一次的结果），而不是各自按同一份旧清单各删一遍。
+- **反例注入**（去掉 `readdir` 的 `n.endsWith('.json') && !n.startsWith('.')` 过滤）：
+  ```
+  ✖ ② K 线缓存裁剪：两进程同时裁剪 ⇒ 收敛到配额内、非缓存条目不被删、0 个 .tmp、删除数之和正确
+    AssertionError: 点文件（.klines.lock 同属这一类）不得被裁剪删掉
+  ```
+  日志：`/tmp/impl41/inject/kline-B-prune-不过滤.log`
+
+> **为什么断言哨兵而不是直接断言"`.klines.lock` 还在"**：`.klines.lock` 由 `withFileLock` 在**裁剪开始的那一刻**创建，
+  mtime 永远是**最新**的，因此它无论如何都不会落在"按 mtime 从最旧开始删"的候选里 —— 直接断言它"还在"**不会咬住任何注入**。
+> 过滤真正要防的是这一**类**条目：点文件（`.klines.lock` / 原子写的 `.tmp` / 崩溃进程留下的残留）与非 `.json` 文件
+> 被算进配额、并有资格成为删除候选。`.keepme` 与 `.klines.lock` 同属"点文件"，所以用哨兵断言既有咬合力、又覆盖同一风险面
+> （另外还断言了 `.lock` / `.tmp` 无残留）。
+
+### 门禁（含上面两条新用例）
+
+```
+npm run check → EXIT=0
+ℹ tests 476   ℹ suites 0   ℹ pass 476   ℹ fail 0     （TZ=Asia/Shanghai）
+ℹ tests 476   ℹ suites 0   ℹ pass 476   ℹ fail 0     （TZ=UTC）
+ALL HOST CHECKS PASSED (live probes soft)
+```
+**末尾三行**：
+```
+> node build.mjs
+
+built lib/index.js + lib/client.js （v0.68.0，客户端片段校验通过：73 项）
+```
