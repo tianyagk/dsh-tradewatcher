@@ -124,7 +124,7 @@ test('详情页骨架：五个区齐全且顺序固定（KPI 行 / 曲线区 / �
   assert.deepEqual(d.kpi.cells.map((c) => c.label), ['规模榜首', '五市场合计规模', '近五日轮动', '数据时刻'], 'KPI 格子标签是真的（数据源按这些标签填值）')
   assert.deepEqual(
     d.market.columns,
-    ['市场', '宽基标的', '规模（美元）', '份额', '份额变化', '动量（多周期）', '横截面排名'],
+    ['市场', '宽基标的', '规模', '份额', '份额变化', '动量（多周期）', '横截面排名'],
     '市场表列头是真的（份额 + 变化是用户口径的硬要求）',
   )
   assert.equal(d.backAction.trim() === '', false, '详情页必须有回目录的入口文案')
@@ -175,6 +175,18 @@ test('红线（结构先行工具，没有 loader）：占位原因用 PENDING_W
     assert.equal(note.includes(PENDING_WHY), true, `无 loader 的工具：口径行必须是「${PENDING_WHY}」：${note}`)
   }
   assert.equal(/\d/.test(JSON.stringify(d)), false, '骨架工具同样不许出现数字')
+})
+
+test('④ 边界声明（无数据时也在）：含「风险偏好代理 ≠ 真实跨境资金净流入」且条目不重复', () => {
+  const d = detailModel(cakeTool)
+  const lines = d.boundary.lines
+  assert.deepEqual(lines, [...cakeTool.boundary], '无数据时边界声明逐条来自工具文件')
+  assert.equal(new Set(lines).size, lines.length, '边界声明不许有重复条目')
+  const hit = lines.filter((l) => l.includes('跨境资金净流入'))
+  assert.equal(hit.length, 1, `必须恰好一条免责（风险偏好代理 ≠ 真实跨境资金净流入），实际 ${hit.length} 条`)
+  // 需求原文（REQ-tools-component.md T-5）要求的那句话要**逐字**在页面上：
+  assert.equal(lines.some((l) => l.includes('风险偏好代理，不是真实跨境资金净流入')), true, '需求要求的那句话必须逐字可见')
+  assert.equal(lines[0].includes('风险偏好代理，不是真实跨境资金净流入'), true, '免责必须在第一条（最重要的读法提示放最前）')
 })
 
 test('数据路径：给了 ToolData ⇒ 数值只来自数据；缺的格子仍是「未取到」+ value null', () => {

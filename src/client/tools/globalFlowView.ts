@@ -9,7 +9,7 @@
  * 回放：`step = 0` 永远是**最新一日**，`step` 越大越早（滑块左端 = 最新）。
  * 所有回放帧都在**同一份载荷**上本地计算 ⇒ 拖动滑块**不会**产生任何上游请求。
  */
-import type { GlobalFlowPayloadDto } from '../api.ts'
+import type { GlobalFlowMarketDto, GlobalFlowPayloadDto } from '../api.ts'
 // ⚠ 占位文案从**叶子模块**拿，类型从注册表拿（type-only import 会被擦除）——
 // 否则 `toolRegistry → tools/cake → tools/globalFlowView → toolRegistry` 会成环（实测 TDZ 报错）。
 import { NOT_FETCHED } from '../toolText.ts'
@@ -48,8 +48,10 @@ export function fmtSharePct(n: number | null): string {
 /** 份额变化（百分点）：带符号 */
 export function fmtPp(n: number | null): string {
   if (n === null || !Number.isFinite(n)) return NOT_FETCHED
-  const sign = n > 0 ? '+' : n < 0 ? '-' : ''
-  return `${sign}${Math.abs(n).toFixed(2)}pp`
+  // |n| < 0.005 时四舍五入后是 0.00 ⇒ 归零，避免出现 `-0.00pp` 这种看起来像错值的负零（review §9.6）
+  const v = Math.abs(n) < 0.005 ? 0 : n
+  const sign = v > 0 ? '+' : v < 0 ? '-' : ''
+  return `${sign}${Math.abs(v).toFixed(2)}pp`
 }
 
 /** 动量三口径：`+2.0% / +3.7% / +9.9%`；某口径样本不足 ⇒ `—`（不给 0） */
@@ -107,7 +109,7 @@ export function pieSlicesAt(payload: GlobalFlowPayloadDto, step: number): { slic
   const dropped = payload.markets.filter((_, i) => point.share[i] === null).map((m) => m.name)
   const note = dropped.length === 0
     ? null
-    : `${dropped.join('、')} 当日缺规模 ⇒ 不进饼图、也不进份额分母（分母只含有值市场，因此剩余各块合计仍为 100%）`
+    : `${dropped.join('、')} 当日没有美元规模 ⇒ 不进饼图、也不进份额分母（分母只含有值市场，因此剩余各块合计仍为 100%）；逐行原因见市场表下方说明`
   return { slices, center: point.day, note }
 }
 
@@ -124,19 +126,64 @@ export function marketRowsAt(payload: GlobalFlowPayloadDto, step: number, isLate
     const share = point?.share[i] ?? null
     const aumUsd = point?.aumUsd[i] ?? null
     const dPp = share !== null && prev !== null && prev.share[i] !== null ? (share - (prev.share[i] as number)) * 100 : null
+    // 当前显示那一日的**原币**规模（历史日按"该日美元规模 × 汇率折算回去"，只对人民币市场做）
+    const aumNative = nativeAtDay(payload, idx, i, aumUsd)
     rows.push([
       m.name,
       m.etf,
-      fmtUsd(aumUsd),
+      fmtSizeCell(m.currency, aumNative, aumUsd, payload.fx.usdCny),
       fmtSharePct(share === null ? null : share * 100),
       fmtPp(dPp),
       // 动量/排名只反映**最新交易日**：回放到历史日时如实标"不适用"，不重算（上游只留当下的横截面）
       isLatest ? fmtMomentum(m.momentum) : '不适用（回放日）',
       isLatest ? fmtRank(m.rank, rankedTotal === 0 ? payload.markets.length : rankedTotal) : '不适用（回放日）',
     ])
-    rowNotes.push(m.missing)
+    rowNotes.push(rowReasonOf(m, aumNative, aumUsd))
   }
   return { rows, rowNotes }
+}
+
+/**
+ * 当前显示那一日的**原币**规模。
+ *
+ * 默认取载荷里的当期原币值（`markets[].aumNative`，只有最新一日有）；
+ * 回放历史日时，对人民币市场按"该日美元规模 × 当日汇率"折回去 —— 这是**重建值**，
+ * 只用来把"人民币口径"显示出来（错也错在与当日美元规模同源），不参与任何份额计算。
+ */
+export function nativeAtDay(payload: GlobalFlowPayloadDto, idx: number, marketIndex: number, aumUsd: number | null): number | null {
+  const m = payload.markets[marketIndex]
+  const isLatestPoint = idx === payload.curve.points.length - 1
+  if (m === undefined) return null
+  if (isLatestPoint && m.aumNative !== null) return m.aumNative
+  if (aumUsd === null) return null
+  if (m.currency === 'USD') return aumUsd
+  return payload.fx.usdCny === null || payload.fx.usdCny <= 0 ? null : aumUsd * payload.fx.usdCny
+}
+
+/**
+ * 规模单元格：**原币值必须在界面上可见**（A股 是人民币，不许只剩"折美元后的份额"）。
+ *   · 美元市场：`8222.73 亿美元`
+ *   · 人民币市场：`1063.50 亿元 ≈ 158.87 亿美元`；汇率缺 ⇒ `1063.50 亿元（汇率未取到，未折算）`
+ *   · 没有值 ⇒ `未取到`（原因在行下）
+ */
+export function fmtSizeCell(currency: 'USD' | 'CNY', aumNative: number | null, aumUsd: number | null, fx: number | null): string {
+  if (aumNative === null && aumUsd === null) return NOT_FETCHED
+  if (currency === 'USD') return aumNative === null ? fmtUsd(aumUsd) : fmtUsd(aumNative)
+  const native = fmtCnyYi(aumNative)
+  if (aumUsd === null) return fx === null ? `${native}（汇率未取到，未折算）` : `${native}（未折算）`
+  return `${native} ≈ ${fmtUsd(aumUsd)}`
+}
+
+/**
+ * 行级原因（渲染层必须消费：原因只在载荷 missing[] 里等于没给用户）。
+ * 优先级：该市场自己的缺口 > 人民币市场"汇率缺 ⇒ 不折算"这条口径不一致。
+ */
+export function rowReasonOf(m: Pick<GlobalFlowMarketDto, 'currency' | 'name' | 'missing'>, aumNative: number | null, aumUsd: number | null): string | null {
+  if (m.missing !== null && m.missing !== '') return m.missing
+  if (m.currency === 'CNY' && aumNative !== null && aumUsd === null) {
+    return `${m.name} 规模 ${fmtCnyYi(aumNative)}（人民币）已取到，但本次汇率（新浪 fx_susdcny）未取到 ⇒ 不做美元折算、不进美元合计；其余市场照常（口径不一致，不许静默混算）`
+  }
+  return null
 }
 
 /** 前一序列日某市场的份额（百分点）；没有前一天或那天缺值 ⇒ null */
@@ -162,11 +209,14 @@ export function globalFlowToolData(payload: GlobalFlowPayloadDto, step = 0): Too
   const live = payload.markets.filter((_, i) => shownShares[i] !== null)
   const allMissing = live.length === 0
   const why = allMissing ? (payload.missing[0]?.note ?? '本次没有取到任何一个市场的规模') : null
+  // 状态行必须说清"这一屏的数据是怎么来的"（三种来源各自的实话；见 AUDIT-IMPL46 §5）
   const snapshotNote = payload.source === 'snapshot'
     ? `本次只读本地快照（不发上游请求）；快照已累积 ${payload.snapshot.days} 天`
-    : payload.fallbackDay !== null
-      ? `上游本次全部失败 ⇒ 下面是最近一次本地快照（${payload.fallbackDay}）`
-      : `上游现取（宿主三层 TTL：现价类 30 分钟 / 日线 12 小时 / 载荷 10 分钟）`
+    : payload.source === 'fallback'
+      ? `⚠ 本次上游全部失败 ⇒ 下表与曲线来自最近一次本地快照${payload.fallbackDay === null ? '' : `（${payload.fallbackDay}）`}，不是实时值`
+      : allMissing
+        ? '⚠ 上游本次全部失败，且本地还没有任何快照 ⇒ 这一屏没有数据（逐行原因见下方说明）'
+        : `上游现取（宿主三层 TTL：现价类 30 分钟 / 日线 12 小时 / 载荷 10 分钟）`
   const status = [
     `数据时刻 ${fmtBeijing(payload.asOf, payload.day)}（北京时间）`,
     snapshotNote,
@@ -207,10 +257,13 @@ export function globalFlowToolData(payload: GlobalFlowPayloadDto, step = 0): Too
     },
     curve: {
       days: points.map((p) => p.day),
-      series: payload.markets.map((m, i) => ({
-        name: m.name,
-        points: points.map((p) => (p.share[i] === null ? null : (p.share[i] as number) * 100)),
-      })),
+      // 曲线的点为零 ⇒ 序列也为零（"没有点"就是"没有曲线"，不要给出五条空序列让页面自己判空）
+      series: points.length === 0
+        ? []
+        : payload.markets.map((m, i) => ({
+            name: m.name,
+            points: points.map((p) => (p.share[i] === null ? null : (p.share[i] as number) * 100)),
+          })),
       marks: points.map((p, i) => (p.origin === 'observed' ? { index: i, label: `${p.day} 实测` } : null)).filter((x): x is { index: number; label: string } => x !== null),
     },
     pie: { slices: pie.slices, center: pie.center, note: pie.note },
@@ -218,7 +271,11 @@ export function globalFlowToolData(payload: GlobalFlowPayloadDto, step = 0): Too
       rows: market.rows,
       rowNotes: market.rowNotes,
       footnotes: [
-        `份额合计 = ${fmtSharePct(shownShares.reduce((sum: number, v) => sum + (v ?? 0), 0))}（分母只含这一天有值的 ${live.length} 个市场）`,
+        // ⚠ 分母里一个市场都没有值（整轮全缺）时**不许给 0.00%**：那是"把没有值求和成 0"，
+        // 正是红线禁止的 0 顶替（v0.73.0 修，对照见 AUDIT-IMPL46 §1）
+        live.length === 0
+          ? `${NOT_FETCHED}：这一天没有一个市场拿到规模 ⇒ 份额合计无从谈起（分母里没有有值市场）；缺口原因见下面每一行`
+          : `份额合计 = ${fmtSharePct(shownShares.reduce((sum: number, v) => sum + (v ?? 0), 0))}（分母只含这一天有值的 ${live.length} 个市场）`,
         isLatest ? '动量列 = 20 / 60 / 120 日收益率（各市场自己的交易日；样本不足显示 —，不用 0）' : '回放历史日时不给动量与排名（上游只保留当下的横截面）',
       ],
     },

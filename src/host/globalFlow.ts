@@ -596,14 +596,18 @@ async function dailySeries(key: FlowMarketKey, which: 'chart' | 'momentum'): Pro
 
 /** 各市场当期规模（原币）+ 取不到的原因 */
 export async function marketRaws(): Promise<{ markets: MarketRaw[]; fx: { value: number | null; at: number | null; note: string | null } }> {
-  const fxOut = await cached('fx:usdcny', FLOW_QUOTE_TTL_MS, async () => {
-    try {
+  // ⚠ 失败（抛错 / 上游没给可用价）**必须抛出到 cached 外面**：否则会被当成"成功值"写进 30 分钟 TTL，
+  // 一次瞬时抖动会让 A股 在半小时里持续缺席美元分母（review §6 附带缺陷 A；对照 AUDIT-IMPL46 §5）
+  let fxOut: { value: number | null; at: number; note: string | null }
+  try {
+    fxOut = await cached('fx:usdcny', FLOW_QUOTE_TTL_MS, async () => {
       const q = await fetchSinaFxUsdCny()
-      return { value: q.rate, at: Date.now(), note: q.rate === null ? '新浪 fx_susdcny 没给出可用最新价（已按 ±5% 剔除明显错值）' : null }
-    } catch (error) {
-      return { value: null, at: Date.now(), note: `新浪 fx_susdcny 取数失败（${String(error).slice(0, 120)}）` }
-    }
-  })
+      if (q.rate === null || !(q.rate > 0)) throw new Error('新浪 fx_susdcny 没有给出可用最新价（已按 ±5% 剔除明显错值）')
+      return { value: q.rate, at: Date.now(), note: null }
+    })
+  } catch (error) {
+    fxOut = { value: null, at: Date.now(), note: `新浪 fx_susdcny 本次没有可用值（${String(error).slice(0, 120)}）` }
+  }
   const markets: MarketRaw[] = []
   for (const def of FLOW_MARKETS) {
     const missing: MissingField[] = []
@@ -628,6 +632,9 @@ export async function marketRaws(): Promise<{ markets: MarketRaw[]; fx: { value:
         aumNote = aum.note
         aumAsOf = aum.at
         if (aumNative === null) missing.push({ what: `${def.name}规模（${def.etf}）`, why: 'transient', note: `${def.name}规模（${def.etf}）：${aumNote ?? '新浪美股行情没有给出总市值'} ⇒ 这一行显示「未取到」，并且不参与份额分母（不用 0 顶替）` })
+        // 口径自校告警**必须被消费**：有值但"总市值 vs 最新价×股本"对不上时也进 missing，
+        // 否则一旦上游把下标 12 换成别的量，界面会给出一个"看起来合理"的错规模且毫无提示（review §9.1）
+        else if (aumNote !== null) missing.push({ what: `${def.name}规模（${def.etf}）`, why: 'no-source', note: `${def.name}规模（${def.etf}）：${aumNote} ⇒ 该值仍按「总市值」字段使用，但请核对上游字段口径` })
       } catch (error) {
         missing.push({ what: `${def.name}规模（${def.etf}）`, why: 'transient', note: `${def.name}规模（${def.etf}）：新浪 hq.sinajs.cn（gb_${gbSymbol}）本次取数失败（${String(error).slice(0, 120)}）⇒ 稍后重试即可；这一行不参与份额分母` })
       }
@@ -686,8 +693,13 @@ export interface FlowMarketRow {
 export interface GlobalFlowPayload {
   asOf: number
   day: string
-  /** 本次载荷怎么来的：live = 上游现取；snapshot = 只读本地快照（零上游请求） */
-  source: 'live' | 'snapshot'
+  /**
+   * 本次载荷怎么来的（三种，**不许混**）：
+   *   live     = 上游现取（可能仍有个别市场缺值，逐行给原因）
+   *   snapshot = 路由显式要求只读本地快照（零上游请求）
+   *   fallback = 上游这次全部失败 ⇒ 退化到最近一次本地快照（**发过上游、全失败**，不许说成"只读快照"）
+   */
+  source: 'live' | 'snapshot' | 'fallback'
   /** true 表示当期数值来自最近一次快照（上游这次全部失败） */
   fallbackDay: string | null
   fx: { usdCny: number | null; at: number | null; source: string; note: string | null }
@@ -723,13 +735,13 @@ export const FLOW_NOTES = {
 } as const
 
 export const FLOW_BOUNDARY: readonly string[] = [
-  '份额 = 各市场宽基 ETF 规模 ÷ Σ 有值市场规模。某个市场取不到数时，它不做分子也不做分母（该行显示「未取到 + 原因」），因此不会出现"合计不等于 100%"的假象，也不会用 0 顶替。',
-  '五市场用宽基 ETF 代理：美股 SPY / 欧股 VGK / 日股 EWJ / A股 510300 / 新兴市场 EEM。ETF 规模 ≠ 该市场全部市值，只代表"这几只宽基 ETF 的规模权重"。',
-  '币种：A股规模取自新浪 ETF 节点的 nmc（人民币），按新浪在岸汇率 fx_susdcny 折成美元后进分母；汇率取不到时 A股 按人民币单列、不进美元合计，并标注口径不一致（不静默混算）。',
-  'A股净流入（20 日 netamount）单独一栏：它是流量、且只覆盖沪深 300ETF 一只标的，不代表全市场资金流，绝不参与份额计算。',
-  '份额曲线：有实测快照的日期为实测值，其余历史日按「当前实测规模 × 日线收盘价之比」重建（假定 ETF 份额数量不变）⇒ 曲线反映价格驱动的相对规模变化，不反映申赎与份额变动。',
-  '这个口径天然偏美股：SPY 本身就是全世界最大的宽基 ETF，规模远大于其余四家之和 ⇒ 饼图会明显向美股倾斜。这是口径本身的形状（「几只超大宽基 ETF 的规模权重」），不是错数；要"各市场全部 ETF 合计"是另一个口径，本工具不做。',
-  '数据来自公开源（腾讯日线 + 新浪行情/ETF 节点/资金流/汇率），中继在宿主侧；不构成任何买卖建议。',
+  // ⚠ 与工具文件 `tools/cake.ts` 的边界声明**不许重复**（v0.73.0 前是 6+7 拼接，5 组近似重复，review §8 附带缺陷 C）：
+  //   工具文件讲「这个模型是什么 / 不是什么」；这里只讲「具体的数字口径与数据源事实」。
+  '规模字段口径：美股 / 欧股 / 日股 / 新兴取新浪 gb_* 的「总市值」字段（美元），A股 取新浪 ETF 节点的 nmc（万元）；两条都用「最新价 × 股本」或与腾讯 f45 交叉校验，对不上时会在该行的说明里标出。',
+  '汇率来源：新浪 fx_susdcny（在岸人民币）最新价；缺值或明显错值（相对昨收 ≥ 5%）一律视为未取到。',
+  '动量 = 各市场自己的 20 / 60 / 120 个交易日收益率，再做横截面名次（并列取最靠前）；轮动判定线 = 5 日份额变化 0.05 个百分点，低于它算「未见明确轮动」。',
+  '曲线固定 180 个序列日、滑块回放最近 30 个交易日；每日快照一天一条、保留 90 天。回放只读本地快照，不发上游请求。',
+  '这个口径天然偏美股：SPY 本身就是全世界最大的宽基 ETF，规模远大于其余四家之和 ⇒ 饼图会明显向美股倾斜。这是口径本身的形状（「几只超大宽基 ETF 的规模权重」），不是错数；要「各市场全部 ETF 合计」是另一个口径，本工具不做。',
 ]
 
 /** 主入口：装配载荷。`source='snapshot'` ⇒ **只读本地快照，零上游请求** */
@@ -747,6 +759,8 @@ export async function globalFlowPayload(opts: { source?: 'auto' | 'snapshot'; no
 
   // ② 现取模式：整份载荷做 TTL + 在飞合并（并发两次 ⇒ 上游只打一遍）
   const ttl = payloadCache !== null && payloadCache.value.missing.length > 0 ? FLOW_PAYLOAD_TTL_PARTIAL_MS : FLOW_PAYLOAD_TTL_MS
+  // ⚠ 时间基准一律用**本次调用传进来的 now**（不用真实 Date.now()）：注入 now 的调用方
+  // （测试/复盘）才有可预期的 TTL 语义 —— 否则"推进 now 越过 TTL"永远命中缓存。
   if (payloadCache !== null && now - payloadCache.at < ttl) return payloadCache.value
   const flying = flowInflight.get('payload:auto')
   if (flying !== undefined) return (await flying) as GlobalFlowPayload
@@ -754,7 +768,7 @@ export async function globalFlowPayload(opts: { source?: 'auto' | 'snapshot'; no
   flowInflight.set('payload:auto', started as Promise<unknown>)
   try {
     const payload = await started
-    payloadCache = { at: Date.now(), value: payload }
+    payloadCache = { at: now, value: payload }
     return payload
   } finally {
     flowInflight.delete('payload:auto')
@@ -773,7 +787,10 @@ async function buildLivePayload(now: number, day: string): Promise<GlobalFlowPay
   // 因此把今天的观测值一并交给 buildCurve —— 否则第一屏的"最新一天"会被标成"重建"。
   const snap = await readFlowSnapshot()
   const observed = observedMapOf(snap)
-  observed.set(day, { at: now, fx: fx.value, aumNative: raw.map((m) => m.aumNative) })
+  // 只有当**至少一个市场**拿到规模时，今天才算一次"实测"：全缺时若也登记，
+  // 曲线上会出现一个"什么都没测到的实测点"（origin=observed 但每个值都是 null），
+  // 既误导又会把空态顶掉（v0.73.0 修，见 AUDIT-IMPL46 §1/§5）
+  if (raw.some((m) => m.aumNative !== null)) observed.set(day, { at: now, fx: fx.value, aumNative: raw.map((m) => m.aumNative) })
   const curve = buildCurve({
     anchors: aumUsd,
     chartSeries: raw.map((m) => m.chart),
@@ -818,18 +835,23 @@ async function buildLivePayload(now: number, day: string): Promise<GlobalFlowPay
     missing.push({ what: '美元/人民币汇率', why: 'transient', note: `${fx.note ?? '新浪 fx_susdcny 没给出可用值'} ⇒ A股 规模按人民币单列、不进美元合计（口径不一致，不许静默混算）` })
   }
 
-  // A股净流入（单列，**不参与**上面的任何计算）
-  const netFlowRaw = await cached('netflow:sh510300', FLOW_QUOTE_TTL_MS, async (): Promise<SinaMoneyFlowDay[]> => {
-    try {
-      return await fetchSinaMoneyFlow('sh510300', 20)
-    } catch (error) {
-      log('global-flow netflow failed:', String(error))
-      return []
-    }
-  })
+  // A股净流入（单列，**不参与**上面的任何计算）。
+  // ⚠ 同汇率：失败必须抛到 cached 外面，否则一次抖动会被锁进 30 分钟（review §6 附带缺陷 A）
+  let netFlowRaw: SinaMoneyFlowDay[] = []
+  let netFlowWhy: string | null = null
+  try {
+    netFlowRaw = await cached('netflow:sh510300', FLOW_QUOTE_TTL_MS, async (): Promise<SinaMoneyFlowDay[]> => {
+      const rows = await fetchSinaMoneyFlow('sh510300', 20)
+      if (rows.length === 0) throw new Error('上游返回空序列')
+      return rows
+    })
+  } catch (error) {
+    netFlowWhy = `新浪 MoneyFlow 本次没有可用序列（${String(error).slice(0, 120)}）`
+    log('global-flow netflow failed:', String(error))
+  }
   const netSum = netFlowRaw.length > 0 ? netFlowRaw.reduce((s, r) => s + r.netCny, 0) : null
   if (netSum === null) {
-    missing.push({ what: 'A股净流入（510300）', why: 'transient', note: '新浪 MoneyFlow 本次没返回可用净流入序列 ⇒ 单独那一栏显示「未取到」，且它本来就不进份额计算' })
+    missing.push({ what: 'A股净流入（510300）', why: 'transient', note: `${netFlowWhy ?? '新浪 MoneyFlow 本次没返回可用净流入序列'} ⇒ 单独那一栏显示「未取到」，且它本来就不进份额计算（失败不进缓存，下一次调用会重试）` })
   }
 
   const stats = await flowSnapshotStats()
@@ -892,14 +914,23 @@ async function buildLivePayload(now: number, day: string): Promise<GlobalFlowPay
   if (hasAnyAum) await writeFlowSnapshot(day, record)
   payload.snapshot = await flowSnapshotStats()
 
-  // 全部市场都没有值 ⇒ 退回最近一次快照（如实标注，不用 0/空表）
+  // 全部市场都没有值 ⇒ 分两种情形（都不许用 0/空表冒充）
   if (!hasAnyAum) {
-    const fallback = await payloadFromSnapshot(snap, payload.snapshot, now, day)
+    const snapDays = Object.keys(snap.days).sort()
+    if (snapDays.length === 0) {
+      // 连快照都没有：**不能**说"来自最近一次快照"（那会误导成有兜底）
+      payload.missing = [
+        { what: '实时取数', why: 'transient', note: '五个市场的上游本次全部失败，且本地还没有任何快照 ⇒ 这一屏没有数据可显示（不是来自快照）；下面逐行给出各自的失败原因' },
+        ...missing,
+      ]
+      return payload
+    }
+    const fallback = await payloadFromSnapshot(snap, payload.snapshot, now, day, 'fallback')
     fallback.missing = [
-      { what: '实时取数', why: 'transient', note: '五个市场的上游本次全部失败 ⇒ 下表与曲线来自最近一次本地快照（不是实时值）' },
-      // **保留每一处失败的真实原因**：否则回退以后只剩一句"全部失败"，看不到是哪一个源挂了
+      { what: '实时取数', why: 'transient', note: `五个市场的上游本次全部失败 ⇒ 下表与曲线来自最近一次本地快照（${snapDays[snapDays.length - 1]}），不是实时值` },
+      // 保留每一处失败的真实原因：否则回退以后只剩一句"全部失败"，看不到是哪一个源挂了
       ...missing,
-      ...fallback.missing.filter((m) => m.what !== '实时取数'),
+      ...fallback.missing.filter((m) => m.what !== '实时取数' && m.what !== '本地快照' && m.what !== '实时取数'),
     ]
     return fallback
   }
@@ -916,7 +947,13 @@ function observedMapOf(snap: FlowSnapshotFile): Map<string, ObservedDay> {
 }
 
 /** 只用本地快照装配载荷（零上游请求） */
-async function payloadFromSnapshot(snap: FlowSnapshotFile, stats: { path: string; days: number; bytes: number | null; firstDay: string | null; lastDay: string | null }, now: number, day: string): Promise<GlobalFlowPayload> {
+async function payloadFromSnapshot(
+  snap: FlowSnapshotFile,
+  stats: { path: string; days: number; bytes: number | null; firstDay: string | null; lastDay: string | null },
+  now: number,
+  day: string,
+  source: 'snapshot' | 'fallback' = 'snapshot',
+): Promise<GlobalFlowPayload> {
   const keys = Object.keys(snap.days).sort()
   const points: FlowPoint[] = keys.map((d) => {
     const rec = snap.days[d]
@@ -960,7 +997,7 @@ async function payloadFromSnapshot(snap: FlowSnapshotFile, stats: { path: string
   return {
     asOf: now,
     day,
-    source: 'snapshot',
+    source,
     fallbackDay: lastRec === null ? null : keys[keys.length - 1],
     fx: { usdCny: lastRec?.fx ?? null, at: lastRec?.at ?? null, source: '新浪 fx_susdcny（在岸人民币）', note: lastRec === null ? '本地还没有快照，因此汇率也是未取到' : '取自最近一条本地快照（本次不发上游请求）' },
     markets: rows,

@@ -165,10 +165,23 @@ export function renderWiringProblems(src: string): string[] {
   need(/model\.status/.test(src), '状态行（数据时刻/来源/原因）必须渲染')
   // 返回按钮：只有拿到 onBack 才渲染（null ⇒ 不渲染）
   need(/props\.onBack === null\s*\?\s*null/.test(src), '没有可返回的页时不许渲染返回按钮')
+  // ④ 边界声明（含「不是真实跨境资金净流入」这条免责）与状态行**不许复用 tw-hint**：
+  // 那个类在紧凑/隐身视图下 display:none（styles.ts:90-98）⇒ 复用等于把免责声明藏起来。
+  need(/'data-role': 'tool-legal'/.test(src), '边界声明区块必须带 data-role="tool-legal"（可断言且可定位）')
+  for (const [role, label] of [['tool-legal-line', '边界声明的每一条'], ['tool-status', '状态行'], ['tool-row-note', '逐行缺口原因']] as const) {
+    const at = src.indexOf(`'data-role': '${role}'`)
+    need(at >= 0, `${label}必须带 data-role="${role}"（可断言且可定位）`)
+    if (at >= 0) {
+      // 只扫这个元素紧挨着的 props（前面的注释会提到 tw-hint，别把注释当成复用了它；
+      // 窗口也刻意开小，免得把后面 curveChart 里的 tw-hint 算进来）
+      const block = src.slice(at, at + 160)
+      need(/className: 'tw-hint'/.test(block) === false, `${label}不许复用 tw-hint（紧凑/隐身视图会把它整块隐藏）`)
+    }
+  }
   return bad
 }
 
-test('目录页/详情页渲染接线齐全；六种"关掉渲染"的注入各让检查非空', () => {
+test('目录页/详情页渲染接线齐全；九种"关掉渲染/藏起免责"的注入各让检查非空', () => {
   const src = readSrc('src/client/ToolsPage.tsx')
   const bad = renderWiringProblems(src)
   assert.deepEqual(bad, [], `渲染接线检查未通过：${bad.join(' ／ ')}`)
@@ -180,6 +193,21 @@ test('目录页/详情页渲染接线齐全；六种"关掉渲染"的注入各�
     // v0.72.0：接数据后的四个接线点，各自配一条注入
     { name: 'KPI 的 delta 不渲染', mutate: (s) => s.replace('cell.delta === null ? null :', 'null ? null :'), hit: /delta/ },
     { name: '回放滑块改成固定文本', mutate: (s) => s.replace("type: 'range',", "type: 'hidden',"), hit: /回放滑块/ },
+    {
+      name: '边界声明复用 tw-hint（紧凑/隐身视图会把免责藏掉）',
+      mutate: (s) => s.replace("'data-role': 'tool-legal-line', style: { margin: 0, fontSize: 11, lineHeight: 1.65, color: 'var(--tw-muted)' }", "'data-role': 'tool-legal-line', className: 'tw-hint'"),
+      hit: /边界声明.*不许复用 tw-hint/,
+    },
+    {
+      name: '逐行缺口原因复用 tw-hint（紧凑档只剩「未取到」没有原因）',
+      mutate: (s) => s.replace("'data-role': 'tool-row-note', colSpan", "'data-role': 'tool-row-note', className: 'tw-hint', colSpan"),
+      hit: /逐行缺口原因.*不许复用 tw-hint/,
+    },
+    {
+      name: '状态行复用 tw-hint（数据来源/回退态会被藏掉）',
+      mutate: (s) => s.replace("'data-role': 'tool-status', style: { margin: 0, fontSize: 11.5, lineHeight: 1.6, color: 'var(--tw-muted)' }", "'data-role': 'tool-status', className: 'tw-hint'"),
+      hit: /状态行不许复用 tw-hint/,
+    },
   ]
   for (const { name, mutate, hit } of injections) {
     const mutated = mutate(src)

@@ -98,7 +98,8 @@ export interface GlobalFlowPointDto {
 export interface GlobalFlowPayloadDto {
   asOf: number
   day: string
-  source: 'live' | 'snapshot'
+  /** live = 上游现取；snapshot = 本次只读本地快照（零上游请求）；fallback = 上游全失败、退化为最近一次快照 */
+  source: 'live' | 'snapshot' | 'fallback'
   fallbackDay: string | null
   fx: { usdCny: number | null; at: number | null; source: string; note: string | null }
   markets: GlobalFlowMarketDto[]

@@ -194,8 +194,10 @@ function detailView(
     'div',
     { style: { display: 'flex', flexDirection: 'column', gap: 8, padding: '8px 12px 12px' } },
     React.createElement(Btn, { onClick: backToCatalog, title: '回到工具目录' }, model.backAction),
-    // 状态行：数据时刻 / 来源 / 曲线构成（缺数据时它就是原因）
-    React.createElement('div', { className: 'tw-hint', style: { margin: 0 } }, io.loading ? '正在取数…' : model.status),
+    // 状态行：数据时刻 / 来源 / 曲线构成（缺数据时它就是原因）。
+    // ⚠ **不用 `tw-hint`**：紧凑/隐身档会把 `.tw-hint` 整类隐藏（styles.ts:90-98），
+    // 而"这一屏的数据来自快照/回退"是诚实性信息，必须默认可见（AUDIT-IMPL46 §4）。
+    React.createElement('div', { 'data-role': 'tool-status', style: { margin: 0, fontSize: 11.5, lineHeight: 1.6, color: 'var(--tw-muted)' } }, io.loading ? '正在取数…' : model.status),
     React.createElement(
       'div',
       { className: 'tw-panel' },
@@ -316,9 +318,12 @@ function detailView(
                   React.createElement(
                     'tr',
                     { key: `${i}-note` },
+                    // ⚠ 逐行缺口原因**不用 `tw-hint`**：红线是"缺数据必须给原因"，
+                    // 而紧凑/隐身档会隐藏 `.tw-hint` ⇒ 那一行只剩「未取到」没有原因（AUDIT-IMPL46 §2）。
+                    // 只有缺数据的行才有这行说明，正常情形零成本。
                     React.createElement(
                       'td',
-                      { colSpan: Math.max(1, model.market.columns.length), style: { padding: '0 6px 6px', color: 'var(--tw-dim)', fontSize: 10.5, lineHeight: 1.5 } },
+                      { 'data-role': 'tool-row-note', colSpan: Math.max(1, model.market.columns.length), style: { padding: '0 6px 6px', color: 'var(--tw-muted)', fontSize: 10.5, lineHeight: 1.5 } },
                       `${NOT_FETCHED}：${note}`,
                     ),
                   ),
@@ -358,8 +363,13 @@ function detailView(
       sectionHead(model.boundary.title, model.boundary.note),
       React.createElement(
         'ul',
-        { style: { margin: 0, paddingLeft: 18, display: 'flex', flexDirection: 'column', gap: 4 } },
-        model.boundary.lines.map((line) => React.createElement('li', { key: line, className: 'tw-hint', style: { margin: 0 } }, line)),
+        { 'data-role': 'tool-legal', style: { margin: 0, paddingLeft: 18, display: 'flex', flexDirection: 'column', gap: 4 } },
+        // ⚠ 边界声明（含「不是真实跨境资金净流入」这条免责）**不许用 `tw-hint`**：
+        // 那个类在紧凑/隐身视图下 display:none（styles.ts:90-98），会把免责声明整块藏掉。
+        // 这里改用等价的内联样式 ⇒ 任何视图档下都默认可见（AUDIT-IMPL46 §4）。
+        model.boundary.lines.map((line) =>
+          React.createElement('li', { key: line, 'data-role': 'tool-legal-line', style: { margin: 0, fontSize: 11, lineHeight: 1.65, color: 'var(--tw-muted)' } }, line),
+        ),
       ),
     ),
   )
