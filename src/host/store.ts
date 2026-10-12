@@ -32,6 +32,7 @@ import { log } from './context.ts'
 import { bulkBatchMatches, numOrNull } from '../shared/model.ts'
 import { shanghaiDayStart } from './time.ts'
 import { writeJsonAtomic } from './atomic.ts'
+import { withFileLocks } from './lock.ts'
 import { normalizeChipPrefs } from './chips.ts'
 import { normalizeSplitRatio } from '../client/splitDrag.ts'
 
@@ -342,6 +343,35 @@ function roundMoney(n: number): number {
   return Math.round(n * 100) / 100
 }
 
+/**
+ * prefs.json 的归一（`init()` 装载与"锁内刷新"共用同一口径，避免两处漂移）。
+ *
+ * 原则不变：坏值不阻断启动（回退默认），排序键按白名单收敛、隐藏集合按宽容规则归一，
+ * `live` 汇率档位按 `none` 处理（未验证源不给假象）。
+ */
+function prefsFrom(loaded: Partial<PortPrefs>): PortPrefs {
+  return {
+    ...DEFAULT_PREFS,
+    ...loaded,
+    rescue: { ...DEFAULT_PREFS.rescue, ...(loaded.rescue ?? {}) },
+    // 排序偏好来自明文文件（可被手改）：装载时按白名单收敛，非法键回退默认而不是带进界面
+    watchSort: safeSortPref(loaded.watchSort, WATCH_SORT_KEYS, DEFAULT_PREFS.watchSort),
+    portSort: safeSortPref(loaded.portSort, PORT_SORT_KEYS, DEFAULT_PREFS.portSort),
+    stripCfg: normalizeStripCfg(loaded.stripCfg),
+    splitRatio: normalizeSplitRatio(loaded.splitRatio).ratio,
+    chipsDecay: normalizeChipPrefs({ decay: loaded.chipsDecay, spread: loaded.chipsSpread }).decay,
+    chipsSpread: normalizeChipPrefs({ decay: loaded.chipsDecay, spread: loaded.chipsSpread }).spread,
+    // 老 prefs.json 没有 viewMode → 回退完整视图（启动不该因一个坏偏好失败）
+    viewMode: loaded.viewMode === 'compact' || loaded.viewMode === 'incognito' ? loaded.viewMode : 'full',
+    panelOpacity: normalizePanelOpacity(loaded.panelOpacity, DEFAULT_PREFS.panelOpacity ?? 1),
+    blurDigits: loaded.blurDigits === true,
+    trendArchive: loaded.trendArchive !== false, // 默认开；只有显式 false 才关
+    // live 是"未验证源"，装载时按 none 处理（启动不该因为一个不可用档位就崩）
+    fxMode: loaded.fxMode === 'fixed' ? 'fixed' : 'none',
+    fxRates: normalizeFxRates(loaded.fxRates),
+  }
+}
+
 // ──────────────────────────────── store ───────────────────────────────────
 
 export class DataStore {
@@ -454,49 +484,72 @@ export class DataStore {
     await writeJsonAtomic(join(this.dir, file), value)
   }
 
+  /**
+   * 跨进程互斥的"读最新 → 改 → 写回"（本轮数据安全修复的核心，见 `lock.ts` 的协议说明）。
+   *
+   * 为什么必须**整个**读-改-写都在锁里，而不是只把 `writeJsonAtomic` 包起来：
+   * 本类的任何变更都是拿"内存里的那份状态"改完再整文件覆写，而内存那份是**装载/上次刷新**
+   * 时的磁盘快照。回合一：A 进程加了自选条目 a；回合并发：B 进程（内存里没有 a）加了 b 并覆写
+   * ⇒ a 被整体抹掉。锁只串行化"写"是挡不住这个的 —— 所以进锁后先 `reload*()` 把**磁盘最新**
+   * 读进来，再在它上面改。
+   *
+   * 多文件时用 `withFileLocks`（按路径排序获取，杜绝互相等待的死锁）。
+   */
+  private async lockedWrite<T>(files: readonly string[], fn: () => Promise<T>): Promise<T> {
+    return withFileLocks(files.map((f) => join(this.dir, f)), fn, { note: `store:${files.join('+')}` })
+  }
+
+  /** 从磁盘重读自选（含"条目必须指向存在的分组"的一致性收敛，与 init 同一口径） */
+  private async reloadWatch(): Promise<void> {
+    this.watch = await this.readNormalized<WatchFile>('watch.json', normalizeWatchFile, { v: 1, groups: [], items: [] })
+    const groupIds = new Set(this.watch.groups.map((g) => g.id))
+    this.watch.items = this.watch.items.filter((p) => groupIds.has(p.groupId))
+  }
+
+  /** 从磁盘重读持仓（同上的一致性收敛） */
+  private async reloadPort(): Promise<void> {
+    this.port = await this.readNormalized<PortFile>('positions.json', normalizePortFile, { v: 1, groups: [], items: [] })
+    const groupIds = new Set(this.port.groups.map((g) => g.id))
+    this.port.items = this.port.items.filter((p) => groupIds.has(p.groupId))
+  }
+
+  /** 从磁盘重读流水（单条非法同样隔离原件 + 告警，见 readLedger） */
+  private async reloadLedger(): Promise<void> {
+    this.ledger = await this.readLedger()
+  }
+
+  /** 从磁盘重读偏好（归一口径与 init 完全一致） */
+  private async reloadPrefs(): Promise<void> {
+    const loaded = await this.readNormalized<Partial<PortPrefs>>('prefs.json', (raw) => (isRecord(raw) ? (raw as Partial<PortPrefs>) : null), {})
+    this.prefs = prefsFrom(loaded)
+  }
+
   async init(): Promise<void> {
     if (this.loaded !== null) return this.loaded
     this.loaded = (async () => {
       await mkdir(this.dir, { recursive: true })
-      this.watch = await this.readNormalized<WatchFile>('watch.json', normalizeWatchFile, { v: 1, groups: [], items: [] })
-      this.port = await this.readNormalized<PortFile>('positions.json', normalizePortFile, { v: 1, groups: [], items: [] })
+      await this.reloadWatch()
+      await this.reloadPort()
       // 账本是用户唯一的交易记录：单条非法也要隔离原件 + 告警（绝不静默丢数据）
-      this.ledger = await this.readLedger()
-      const loaded = await this.readNormalized<Partial<PortPrefs>>('prefs.json', (raw) => (isRecord(raw) ? (raw as Partial<PortPrefs>) : null), {})
-      this.prefs = {
-        ...DEFAULT_PREFS,
-        ...loaded,
-        rescue: { ...DEFAULT_PREFS.rescue, ...(loaded.rescue ?? {}) },
-        // 排序偏好来自明文文件（可被手改）：装载时按白名单收敛，非法键回退默认而不是带进界面
-        watchSort: safeSortPref(loaded.watchSort, WATCH_SORT_KEYS, DEFAULT_PREFS.watchSort),
-        portSort: safeSortPref(loaded.portSort, PORT_SORT_KEYS, DEFAULT_PREFS.portSort),
-        stripCfg: normalizeStripCfg(loaded.stripCfg),
-        splitRatio: normalizeSplitRatio(loaded.splitRatio).ratio,
-        chipsDecay: normalizeChipPrefs({ decay: loaded.chipsDecay, spread: loaded.chipsSpread }).decay,
-        chipsSpread: normalizeChipPrefs({ decay: loaded.chipsDecay, spread: loaded.chipsSpread }).spread,
-      // 筹码口径：装载时同样收敛（手改坏的值不让启动失败）
-        // 老 prefs.json 没有 viewMode → 回退完整视图（启动不该因一个坏偏好失败）
-        viewMode: loaded.viewMode === 'compact' || loaded.viewMode === 'incognito' ? loaded.viewMode : 'full',
-        panelOpacity: normalizePanelOpacity(loaded.panelOpacity, DEFAULT_PREFS.panelOpacity ?? 1),
-        blurDigits: loaded.blurDigits === true,
-        trendArchive: loaded.trendArchive !== false, // 默认开；只有显式 false 才关
-        // live 是"未验证源"，装载时按 none 处理（启动不该因为一个不可用档位就崩）
-        fxMode: loaded.fxMode === 'fixed' ? 'fixed' : 'none',
-        fxRates: normalizeFxRates(loaded.fxRates),
-      }
-      // Coherence: drop descriptors that reference missing groups (never drop ledger).
-      const groupIds = new Set(this.port.groups.map((g) => g.id))
-      this.port.items = this.port.items.filter((p) => groupIds.has(p.groupId))
-      const watchIds = new Set(this.watch.groups.map((g) => g.id))
-      this.watch.items = this.watch.items.filter((p) => watchIds.has(p.groupId))
+      await this.reloadLedger()
+      await this.reloadPrefs()
     })()
     return this.loaded
   }
 
-  /** Serialize a mutation's writes behind all previous writes. */
+  /**
+   * 串行化一次变更的写入（进程内顺序）+ 逐文件跨进程互斥。
+   *
+   * 进程内 `writeChain` 保证"谁先 commit 谁先落盘"的既有语义；跨进程互斥由
+   * `withFileLock` 保证（`<file>.lock`，带陈旧回收）。若调用方已经在外层
+   * `lockedWrite()` 里持锁，这里是**可重入**的（同进程已持有 ⇒ 直接写）。
+   */
   private commit(writes: Array<[string, unknown]>): Promise<void> {
     const run = this.writeChain.then(async () => {
-      for (const [file, value] of writes) await this.persist(file, value)
+      for (const [file, value] of writes) {
+        const target = join(this.dir, file)
+        await withFileLocks([target], () => this.persist(file, value), { note: `store:${file}` })
+      }
     })
     this.writeChain = run.catch(() => undefined)
     return run
@@ -553,6 +606,11 @@ export class DataStore {
    *  2) 再逐文件原子写入（tmp + rename），任何一步失败都不会留下半截文件；
    *  3) 最后重新读回内存，保证之后所有读接口都反映新内容（而不是"写盘了但内存还是旧的"）。
    *
+   * **跨进程**（本轮）：从写 `.bak` 到四个文件写完，整段都在四个文件的锁内
+   * （`withFileLocks` 按路径排序获取）。导入是**显式覆盖**语义（用户就是要用备份替换当前数据），
+   * 所以这里**不做合并**；锁保证的是"另一个进程不会插在我这四次写入中间"，
+   * 而不是把两边的数据揉在一起。
+   *
    * 调用方必须先跑 backup.verifyBundle()：这里不做业务校验，只做写入。
    */
   async importFiles(files: {
@@ -562,40 +620,30 @@ export class DataStore {
     prefs: unknown
   }): Promise<{ backedUp: string[] }> {
     await this.init()
-    const backedUp: string[] = []
     const pairs: Array<[string, unknown]> = [
       ['watch.json', files.watch],
       ['positions.json', files.positions],
       ['ledger.json', files.ledger],
       ['prefs.json', files.prefs],
     ]
-    for (const [file] of pairs) {
-      try {
-        await copyFile(join(this.dir, file), join(this.dir, `${file}.bak`))
-        backedUp.push(`${file}.bak`)
-      } catch {
-        /* 原本不存在该文件：没有可备份的内容，不算失败 */
+    return this.lockedWrite(pairs.map(([file]) => file), async () => {
+      const backedUp: string[] = []
+      for (const [file] of pairs) {
+        try {
+          await copyFile(join(this.dir, file), join(this.dir, `${file}.bak`))
+          backedUp.push(`${file}.bak`)
+        } catch {
+          /* 原本不存在该文件：没有可备份的内容，不算失败 */
+        }
       }
-    }
-    for (const [file, value] of pairs) await this.persist(file, value)
-    // 重读内存：换机导入后立刻可用，不需要重启 dsh web
-    this.watch = await this.readNormalized<WatchFile>('watch.json', normalizeWatchFile, { v: 1, groups: [], items: [] })
-    this.port = await this.readNormalized<PortFile>('positions.json', normalizePortFile, { v: 1, groups: [], items: [] })
-    this.ledger = await this.readLedger()
-    const loaded = await this.readNormalized<Partial<PortPrefs>>('prefs.json', (raw) => (isRecord(raw) ? (raw as Partial<PortPrefs>) : null), {})
-    this.prefs = {
-      ...DEFAULT_PREFS,
-      ...loaded,
-      rescue: { ...DEFAULT_PREFS.rescue, ...(loaded.rescue ?? {}) },
-      watchSort: safeSortPref(loaded.watchSort, WATCH_SORT_KEYS, DEFAULT_PREFS.watchSort),
-      portSort: safeSortPref(loaded.portSort, PORT_SORT_KEYS, DEFAULT_PREFS.portSort),
-      stripCfg: normalizeStripCfg(loaded.stripCfg),
-      // 筹码口径：装载时同样收敛（手改坏的值不让启动失败）
-      chipsDecay: normalizeChipPrefs({ decay: loaded.chipsDecay, spread: loaded.chipsSpread }).decay,
-      chipsSpread: normalizeChipPrefs({ decay: loaded.chipsDecay, spread: loaded.chipsSpread }).spread,
-      viewMode: loaded.viewMode === 'compact' || loaded.viewMode === 'incognito' ? loaded.viewMode : 'full',
-    }
-    return { backedUp }
+      for (const [file, value] of pairs) await this.persist(file, value)
+      // 重读内存：换机导入后立刻可用，不需要重启 dsh web
+      await this.reloadWatch()
+      await this.reloadPort()
+      await this.reloadLedger()
+      await this.reloadPrefs()
+      return { backedUp }
+    })
   }
 
   /**
@@ -696,6 +744,17 @@ export class DataStore {
 
   async mutateWatch(body: MutateWatchBody): Promise<WatchData> {
     await this.init()
+    // 跨进程：进锁 → 先把磁盘最新状态读进来 → 在它上面改 → 写回（见 lockedWrite 的说明）
+    return this.lockedWrite(['watch.json'], async () => {
+      await this.reloadWatch()
+      this.applyWatchMutation(body)
+      await this.commit([['watch.json', this.watch]])
+      return this.watchData()
+    })
+  }
+
+  /** 自选变更的**纯内存**部分（校验 + 改 `this.watch`）；落盘与跨进程锁在 `mutateWatch` 里 */
+  private applyWatchMutation(body: MutateWatchBody): void {
     switch (body.op) {
       case 'addGroup': {
         const name = this.sanitizeText(body.name, NAME_MAX, '分组名')
@@ -772,8 +831,6 @@ export class DataStore {
         throw new Error(`未知操作: ${op}`)
       }
     }
-    await this.commit([['watch.json', this.watch]])
-    return this.watchData()
   }
 
   // ─────────────────────────── portfolio mutations ────────────────────────
@@ -854,6 +911,20 @@ export class DataStore {
 
   async mutatePortfolio(body: MutatePortBody): Promise<void> {
     await this.init()
+    // 跨进程：持仓与流水**一起**进锁（`withFileLocks` 按路径排序获取）→ 刷新磁盘最新 → 改 → 写回
+    return this.lockedWrite(['positions.json', 'ledger.json'], async () => {
+      await this.reloadPort()
+      await this.reloadLedger()
+      await this.applyPortfolioMutation(body)
+      await this.commit([
+        ['positions.json', this.port],
+        ['ledger.json', this.ledger],
+      ])
+    })
+  }
+
+  /** 持仓/流水变更的**纯内存**部分（校验 + 改 `this.port` / `this.ledger`）；刷新、落盘与锁在 `mutatePortfolio` 里 */
+  private async applyPortfolioMutation(body: MutatePortBody): Promise<void> {
     switch (body.op) {
       case 'addGroup': {
         const name = this.sanitizeText(body.name, NAME_MAX, '分组名')
@@ -1019,10 +1090,6 @@ export class DataStore {
         throw new Error(`未知操作: ${op}`)
       }
     }
-    await this.commit([
-      ['positions.json', this.port],
-      ['ledger.json', this.ledger],
-    ])
   }
 
   private requireId(v: unknown): string {
@@ -1031,17 +1098,40 @@ export class DataStore {
     return s
   }
 
-  /** Persist current state files (used after direct tool edits, none in v1). */
+  /**
+   * Persist current state files (used after direct tool edits, none in v1).
+   *
+   * **跨进程**（本轮）：先刷新再写回，而不是"把内存那份整份覆写"—— 后者在多进程下
+   * 正是丢更新的来源（内存那份可能落后于磁盘）。刷新后写回等于"按本类的归一规则重写一遍
+   * 磁盘上的现状"，不会覆盖别人刚写进去的变更。
+   */
   async touch(): Promise<void> {
-    await this.commit([
-      ['positions.json', this.port],
-      ['ledger.json', this.ledger],
-      ['watch.json', this.watch],
-    ])
+    await this.lockedWrite(['positions.json', 'ledger.json', 'watch.json'], async () => {
+      await this.reloadPort()
+      await this.reloadLedger()
+      await this.reloadWatch()
+      await this.commit([
+        ['positions.json', this.port],
+        ['ledger.json', this.ledger],
+        ['watch.json', this.watch],
+      ])
+    })
   }
 
   async setPrefs(patch: Partial<PortPrefs>): Promise<PortPrefs> {
     await this.init()
+    // 跨进程：进锁 → 重读磁盘最新 prefs → 只把这一个 patch 应用上去 → 写回。
+    // 因此两个进程各自改**不同**偏好项时，两项都会留下（而不是后写者把先写者的改动抹掉）。
+    return this.lockedWrite(['prefs.json'], async () => {
+      await this.reloadPrefs()
+      this.applyPrefsPatch(patch)
+      await this.commit([['prefs.json', this.prefs]])
+      return this.getPrefs()
+    })
+  }
+
+  /** 偏好 patch 的**纯内存**部分（逐字段校验 + 改 `this.prefs`）；刷新、落盘与锁在 `setPrefs` 里 */
+  private applyPrefsPatch(patch: Partial<PortPrefs>): void {
     if (patch.theme !== undefined && !['auto', 'light', 'dark'].includes(patch.theme)) {
       throw new Error('theme 必须是 auto/light/dark')
     }
@@ -1117,8 +1207,6 @@ export class DataStore {
       this.prefs.chipsSpread = next.spread
       if (next.notes.length > 0) log('筹码口径回落：', next.notes.join('；'))
     }
-    await this.commit([['prefs.json', this.prefs]])
-    return this.getPrefs()
   }
 }
 

@@ -19,6 +19,7 @@ import { isMultiDayTrend, stitchTrendDays } from '../shared/trendStitch.ts'
 import { TREND_ARCHIVE_KEEP_DAYS, archiveTrendDays, loadTrendArchive, type TrendArchiveEntry } from './trendArchive.ts'
 import { mkdir, readdir, readFile, rm, stat } from 'node:fs/promises'
 import { writeFileAtomic } from './atomic.ts'
+import { updateJsonLocked, withFileLock } from './lock.ts'
 import { breakerFor, hostsAllowed, minutesToRecover } from './breaker.ts'
 import { fetchSinaEtfRanking, fetchSinaQuotes, sinaSymbol as sinaQuoteSymbol } from './sina.ts'
 import { fetchTencentBoards, fetchTencentMinutes, fetchTencentQuoteRows, fetchTencentSuggest, minuteTrendPointsOf, tencentCode, type TencentQuoteFull } from './tencent.ts'
@@ -1778,8 +1779,25 @@ async function saveKlineCache(secid: string, klt: number, fqt: FqMode, bars: Day
     // 落盘时判定最后一根：盘中抓到的当日 bar 标 partial（读侧按 60s TTL 决定是否回源）
     const last = bars.length > 0 ? bars[bars.length - 1] : null
     const partial = last !== null && isPartialBar(last.date, Date.now())
-    // 原子写：半截 JSON 会被读侧当成"没有缓存" ⇒ 又回源一次（正是本轮要减少的那种请求）
-    await writeFileAtomic(klineFile(secid, klt, fqt), JSON.stringify({ v: KLINE_CACHE_V, secid, klt, fqt, updatedAt: Date.now(), partial, bars }))
+    // 跨进程：**锁内「读磁盘最新 → 按日期合并 → 原子写回」**。
+    // 两个进程同时落盘同一标的时，裸写会让一份覆盖另一份（谁的 bars 更全取决于时序）；
+    // 半截 JSON 还会被读侧当成"没有缓存"⇒ 白拉一遍上游（正是本轮要减少的那种请求）。
+    await updateJsonLocked(
+      klineFile(secid, klt, fqt),
+      (disk) => {
+        const old = (disk !== null && typeof disk === 'object' ? (disk as { bars?: DayBar[] }).bars : undefined) ?? []
+        return {
+          v: KLINE_CACHE_V,
+          secid,
+          klt,
+          fqt,
+          updatedAt: Date.now(),
+          partial,
+          bars: mergeBars(old, bars, KLINE_CAP[klt] ?? Math.max(old.length, bars.length)),
+        }
+      },
+      { note: `kline:${secid}:${klt}:${fqt}` },
+    )
     void pruneKlineCache()
   } catch (error) {
     console.warn('[tradewatcher] 保存K线缓存失败:', String(error))
@@ -1800,23 +1818,28 @@ async function pruneKlineCache(): Promise<void> {
   klinePruneAt = now
   try {
     const dir = join(dataHome(), 'klines')
-    const names = await readdir(dir)
-    if (names.length <= KLINE_CACHE_MAX) return
-    const stats = await Promise.all(
-      names.map(async (name) => {
-        try {
-          const st = await stat(join(dir, name))
-          return { name, mtime: st.mtimeMs }
-        } catch {
-          return { name, mtime: 0 }
-        }
-      }),
-    )
-    stats.sort((a, b) => a.mtime - b.mtime)
-    for (const drop of stats.slice(0, stats.length - KLINE_CACHE_MAX)) {
-      await rm(join(dir, drop.name), { force: true }).catch(() => undefined)
-    }
-    console.log(`[tradewatcher] K线缓存裁剪：保留 ${KLINE_CACHE_MAX} 个，清理 ${stats.length - KLINE_CACHE_MAX} 个`)
+    // 跨进程："读目录 → 按配额删"是读-改-写；两个进程同时裁剪会各自按同一份旧清单删
+    // （并且可能把对方刚写的文件删掉）。锁文件放在被裁剪的目录里 ⇒ **清单必须排除非 .json 与点文件**，
+    // 否则裁剪会把锁自己删掉（那是硬要求，见 docs/AUDIT-IMPL42.md §5.2）。
+    await withFileLock(join(dir, '.klines'), async () => {
+      const names = (await readdir(dir)).filter((n) => n.endsWith('.json') && !n.startsWith('.'))
+      if (names.length <= KLINE_CACHE_MAX) return
+      const stats = await Promise.all(
+        names.map(async (name) => {
+          try {
+            const st = await stat(join(dir, name))
+            return { name, mtime: st.mtimeMs }
+          } catch {
+            return { name, mtime: 0 }
+          }
+        }),
+      )
+      stats.sort((a, b) => a.mtime - b.mtime)
+      for (const drop of stats.slice(0, stats.length - KLINE_CACHE_MAX)) {
+        await rm(join(dir, drop.name), { force: true }).catch(() => undefined)
+      }
+      console.log(`[tradewatcher] K线缓存裁剪：保留 ${KLINE_CACHE_MAX} 个，清理 ${stats.length - KLINE_CACHE_MAX} 个`)
+    }, { note: 'klines:prune', staleMs: 30_000, timeoutMs: 10_000 })
   } catch {
     /* 目录不存在或权限不足：不影响主路径 */
   }

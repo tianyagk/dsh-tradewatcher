@@ -15,7 +15,7 @@ import { dayOf as shDayOf, hhmmOf as shHhmmOf, weekdayOf as shWeekdayOf } from '
 import { buildBottomLane, calibrateAcross } from './bottom.ts'
 import { SingleFlight } from './singleflight.ts'
 import { dataHome } from './store.ts'
-import { writeFileAtomic } from './atomic.ts'
+import { mergeByKey, updateJsonLocked } from './lock.ts'
 
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
 // 主机组与取数实现都从 em.ts 复用（单一所有者）：本地再写一份只会让两边的退避与熔断语义漂移
@@ -130,6 +130,67 @@ export function stripSnapshot(s: RescueSnapshot): PersistedSnapshot {
   // （所以缺分单资金流因子）"与"最近一次采样失败于何时"，而不是只剩一个时间戳
   const { ts, level, score, summary, factors, etfs, indexPct, indexName, timeCoef, resonance, pulseBand, completeness, thresholdSource, selfSampleDays, config, activeIntervalSec, flowSource, lastFailTs } = s
   return { ts, level, score, summary, factors, etfs, indexPct, indexName, timeCoef, resonance, pulseBand, completeness, thresholdSource, selfSampleDays, config, activeIntervalSec, flowSource, lastFailTs }
+}
+
+/**
+ * 锁内合并（rescue-log 专用）：把"磁盘上那份"与"本进程这份"并成一份。
+ * 每条规则都对应一种会丢的数据；改动前先看 docs/AUDIT-IMPL42.md §5.1。
+ */
+function mergeRescueLog(disk: unknown, mem: LogFile, base: Map<string, number>): LogFile {
+  const onDisk = (disk !== null && typeof disk === 'object' ? disk : {}) as Partial<LogFile>
+  const days: Record<string, DayLog> = { ...(onDisk.days ?? {}) }
+  for (const [day, baseSamples] of base) {
+    const mine = mem.days[day]
+    if (mine === undefined) continue
+    const theirs = days[day]
+    // ① 计数：磁盘现值 + 我自上次成功写盘以来的拍数 ⇒ 两个进程各 +1 都留下
+    const delta = Math.max(0, mine.samples - baseSamples)
+    // ② 当日峰值不能被另一次较小的观测抹小
+    const peak: Record<string, number> = { ...(theirs?.etfPeak ?? {}) }
+    for (const [secid, v] of Object.entries(mine.etfPeak ?? {})) {
+      const prev = peak[secid]
+      if (typeof prev !== 'number' || v > prev) peak[secid] = v
+    }
+    const scoreLog = theirs?.scoreLog === undefined && mine.scoreLog === undefined
+      ? undefined
+      : mergeByKey(theirs?.scoreLog ?? [], mine.scoreLog ?? [], (s) => s.ts)
+    days[day] = {
+      ...theirs,                                     // 别的进程写进同一日的其它字段先留着
+      ...mine,                                       // 本进程的视图（gap / etfLast / …）
+      samples: (typeof theirs?.samples === 'number' ? theirs.samples : 0) + delta,
+      events: mergeByKey(theirs?.events ?? [], mine.events ?? [], (e) => e.ts),
+      intraday: mergeByKey(theirs?.intraday ?? [], mine.intraday ?? [], (p) => p.hhmm).slice(-120),
+      etfPeak: peak,
+      etfLast: { ...(theirs?.etfLast ?? {}), ...(mine.etfLast ?? {}) },
+      ...(scoreLog === undefined ? {} : { scoreLog }),
+    }
+  }
+  // ③ 裁剪放在**合并结果**上：只裁内存那份的话，被裁掉的旧日期会从磁盘"复活"
+  const keys = Object.keys(days).sort()
+  while (keys.length > KEEP_DAYS) {
+    const drop = keys.shift()
+    if (drop !== undefined) delete days[drop]
+  }
+  // ④ 本进程没动过的日（base 里没有的 key）一律用磁盘那份 —— 别的进程写的整天记录不许被我覆盖
+  const selfSamples: LogFile['selfSamples'] = { ...(onDisk.selfSamples ?? {}) }
+  for (const [secid, list] of Object.entries(mem.selfSamples ?? {})) {
+    selfSamples[secid] = mergeByKey(selfSamples[secid] ?? [], list, (s) => s.day)
+  }
+  const pickSnapshot = (a?: PersistedSnapshot | null, b?: PersistedSnapshot | null): PersistedSnapshot | null => {
+    if (a === undefined || a === null) return b ?? null
+    if (b === undefined || b === null) return a
+    return b.ts > a.ts ? b : a
+  }
+  return {
+    v: mem.v,
+    days,
+    lastSnapshot: pickSnapshot(onDisk.lastSnapshot, mem.lastSnapshot),
+    baselines: { ...(onDisk.baselines ?? {}), ...mem.baselines },
+    selfSamples,
+    progressCurve: mem.progressCurve ?? onDisk.progressCurve ?? null,
+    progressDays: Math.max(mem.progressDays ?? 0, onDisk.progressDays ?? 0),
+    updatedAt: mem.updatedAt,
+  }
 }
 
 /**一条出分日志（P0-7）：把各因子的原始值 + 当次生效阈值一起落盘，供阈值漂移回溯 */
@@ -887,6 +948,12 @@ export class RescueMonitor {
   private config: RescueConfig
   private ring: Record<string, Sample[]> = {}
   private today: DayLog = { events: [], intraday: [], samples: 0, gap: false }
+  /**
+   * 本进程"上次成功写盘时"各日的 samples（重基准点）。
+   * `today.samples += 1` 只加在**本进程内存**里；写盘时必须变成"磁盘现值 + 我的增量"，
+   * 否则两个进程各 +1 会互相吞掉（谁后写谁赢）。见 docs/AUDIT-IMPL42.md §5.1。
+   */
+  private samplesBase = new Map<string, number>()
   private todayKey = ''
   private lastSnapshot: RescueSnapshot | null = null
   private timer: ReturnType<typeof setTimeout> | null = null
@@ -990,6 +1057,8 @@ export class RescueMonitor {
     this.todayKey = key
     this.today = this.file.days[key] ?? { events: [], intraday: [], samples: 0, gap: false }
     this.file.days[key] = this.today
+    // 首次见到该日时记下基准（之后每次**成功写盘**后再重基准，见 persist）
+    if (!this.samplesBase.has(key)) this.samplesBase.set(key, this.today.samples)
     this.ring = {}
     this.lastIntradayMin = -1
     this.lastLevel = this.today.events.length > 0 ? this.today.events[this.today.events.length - 1].level : 0
@@ -1007,15 +1076,17 @@ export class RescueMonitor {
       const now = Date.now()
       if (!force && now - this.lastPersist < 60_000) return
       this.lastPersist = now
-      const days = Object.keys(this.file.days).sort()
-      while (days.length > KEEP_DAYS) {
-        const drop = days.shift()
-        if (drop !== undefined) delete this.file.days[drop]
-      }
       this.file.updatedAt = now
-      const payload = JSON.stringify(this.file)
       try {
-        await writeFileAtomic(this.path(), payload)
+        // 跨进程：整份覆写 → **锁内「读磁盘最新 → 合并 → 写回」**（KEEP_DAYS 裁剪在合并函数里做）
+        await updateJsonLocked(this.path(), (disk) => mergeRescueLog(disk, this.file, this.samplesBase), {
+          note: 'rescue-log',
+        })
+        // **成功之后**才重基准：失败就不动基准，这次的增量下次继续算（不会丢）
+        for (const day of this.samplesBase.keys()) {
+          const cur = this.file.days[day]?.samples
+          if (typeof cur === 'number') this.samplesBase.set(day, cur)
+        }
       } catch (error) {
         console.warn('[tradewatcher] rescue persist failed:', String(error))
       }

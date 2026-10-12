@@ -13,7 +13,7 @@
 **七条修法全部落地**（P0-1/P0-2/P1-1/P1-2/P1-3/P2-1/P2-2 ＋ 稳态命中率根因、收盘后时段判断、采样器复用缓存），
 每条的**上游请求数**都有"改前 → 改后"实测：**分时并发 8→1、分布 112→56、行情稳态 6→3、收盘后 6→1、
 熔断全开时 `/kline` 6→0、行业榜 5→1（不退化）、采样器 3→1**，另加分布扫描墙钟 **5855ms → 1246ms**（并发峰值 1 → 6）。
-**`npm run check` 全绿：EXIT=0，473/473 × 2 时区 + selftest + build**（末尾三行见 §4.1）。
+**`npm run check` 全绿：EXIT=0，474/474 × 2 时区 + selftest + build**（末尾三行见 §4.1；473 是加锁批次接入前的口径，接入后又 +1 条跨进程用例，见 §9）。
 （中途它曾被 `fix-store-lock` 的 `lock.test.ts:101` 抖动挡住，对方 16:16 修好后即全绿；取证见 §7.3。）
 
 ---
@@ -104,13 +104,13 @@
 
 ## 4. `npm run check`
 
-### 4.1 `npm run check` —— **全绿**（EXIT=0，473/473 × 2 时区）
+### 4.1 `npm run check` —— **全绿**（EXIT=0，474/474 × 2 时区）
 
 ```
 > dsh-tradewatcher@0.66.0 typecheck → 0 error
 > dsh-tradewatcher@0.66.0 test
-ℹ tests 473   ℹ suites 0   ℹ pass 473   ℹ fail 0      （TZ=Asia/Shanghai）
-ℹ tests 473   ℹ suites 0   ℹ pass 473   ℹ fail 0      （TZ=UTC，package.json 的 test 脚本跑两遍）
+ℹ tests 474   ℹ suites 0   ℹ pass 474   ℹ fail 0      （TZ=Asia/Shanghai）
+ℹ tests 474   ℹ suites 0   ℹ pass 474   ℹ fail 0      （TZ=UTC，package.json 的 test 脚本跑两遍）
 > dsh-tradewatcher@0.66.0 selftest
 ALL HOST CHECKS PASSED (live probes soft)
 > dsh-tradewatcher@0.66.0 build
@@ -125,7 +125,7 @@ built lib/index.js + lib/client.js （v0.66.0，客户端片段校验通过：73
 built lib/index.js + lib/client.js （v0.66.0，客户端片段校验通过：73 项）
 ```
 
-（473 条 = 基线 435 + 我新增 20 + 其它批次新增 18。本条 `npm run check` 是在
+（474 条 = 基线 435 + 我新增 21（`fetchDedupe` 20 + `rescuePersist` 1，后者见 §9）+ 其它批次新增 18。本条 `npm run check` 是在
 `fix-store-lock` 于 16:16 修好它那条抖动用例之后跑的，见 §7.3。）
 
 ### 4.2 中途观测到的一条跨团队抖动（**已由对方修好**）
@@ -133,7 +133,7 @@ built lib/index.js + lib/client.js （v0.66.0，客户端片段校验通过：73
 `src/host/lock.test.ts:101`（L3）在 15:5x–16:1x 之间会挂：单独跑 5 连绿（11/11），
 整套跑两次都挂（`lock.child.ts:99` `JSON.parse` 读到半截文件 ⇒ `SyntaxError`）——
 它在"故意去掉锁"的竞态下断言一个具体结果，文件级并行时不稳。
-`fix-store-lock` 于 **16:16** 更新了该文件（`ls -la`：`lock.test.ts 16:16:36`），此后整套 473/473 全绿。
+`fix-store-lock` 于 **16:16** 更新了该文件（`ls -la`：`lock.test.ts 16:16:36`），此后整套 474/474 全绿（含我按它的补丁接入的三处，见 §9）。
 取数层全程未参与该文件。
 
 ## 5. 未做 / 明确不做的项
@@ -194,7 +194,7 @@ built lib/index.js + lib/client.js （v0.66.0，客户端片段校验通过：73
 - **整套跑**：`npm run check` 里两次都挂，`SyntaxError: Unexpected end of JSON input`（`lock.child.ts:99` 的
   `JSON.parse` 读到半截文件）⇒ 该用例在"故意去掉锁"的竞态下断言一个具体结果，**在整套并发（文件级并行）下不稳**。
 - 归 `fix-store-lock`；我未改动 `lock.ts` / `lock.child.ts` / `lock.test.ts` / `store.ts`。
-- **结局**：对方 16:16 更新后，整套 473/473 全绿（§4.1 的 `npm run check` EXIT=0）。
+- **结局**：对方 16:16 更新后，整套全绿（§4.1 的 `npm run check` EXIT=0；接入它的补丁后为 474/474，见 §9）。
 
 ### 7.4 其余"时刻敏感用例"清单（本次实测扫描，不只靠读代码）
 
@@ -224,3 +224,33 @@ built lib/index.js + lib/client.js （v0.66.0，客户端片段校验通过：73
    （`em.ts:164-165`），而我把 K 线的**逐主机尝试**也接了记账 ⇒ K 线链路的 `fails` 增长速度与行情链路不同
    （实测：一次冷取数 `fails=2/台`）。这是有意的（否则这条链路的失败对熔断器永远不可见），已在 §1 与
    断言里写明；若要统一到"每次调用每台 1 次"，改 `fetchHostThroughBreaker` 的记账点即可。
+
+---
+
+## 9. 加锁批次的三处接入（`fix-store-lock` 的补丁：已落 + 已验）
+
+来源：`docs/AUDIT-IMPL42.md` §1.2（API 契约）/ §5.1（rescue-log）/ §5.2（klines）/ §5.3（LKG 不需要加锁）。
+**我按它的契约落在自己的文件里，未改动 `lock.ts`。**
+
+| 接入点 | 位置 | 改法 |
+|---|---|---|
+| ① `rescue-log.json` 计数合并 | `rescue.ts:18`（import）· `:956`（`samplesBase` 字段）· `:1061`（`rollDay()` 记基准）· `:1075-1098`（`persist()` 换 `updateJsonLocked` + 成功后重基准）· `:139-200`（新纯函数 `mergeRescueLog`） | 锁内「读磁盘最新 → 合并 → 写回」；计数 = **磁盘现值 + 本进程自上次成功写盘以来的拍数**；`events`/`intraday`/`scoreLog` 取并集；`etfPeak` 取大；`KEEP_DAYS` 裁剪放在**合并结果**上；本进程没动过的日期用磁盘那份 |
+| ② K 线缓存落盘 | `em.ts:1785-1809`（`saveKlineCache`） | `writeFileAtomic` → `updateJsonLocked(klineFile, (disk) => ({…, bars: mergeBars(diskBars, bars, KLINE_CAP[klt])}), {note})`。用 `KLINE_CAP`（1200/800/600）而不是补丁示例里的 `KLINE_FULL_LMT`：前者才是**缓存上限**，与 `refreshKline` 的用法一致 |
+| ③ K 线缓存裁剪 | `em.ts:1824`（`pruneKlineCache`） | 整段"读目录 → 排序 → 删"包进 `withFileLock(join(dir, '.klines'), …, { staleMs: 30_000, timeoutMs: 10_000 })`；`readdir` 清单**过滤成 `*.json` 且非点文件**（否则裁剪会把锁文件自己删掉 —— 硬要求） |
+| ④ 三个 LKG | `em.ts:277/735/1055` | 按补丁 §5.3 的复查结论**不加锁**（语义是"最近一次快照，最新者胜"，不是读-改-写）；保持我已改的原子写 |
+
+**端到端验证（新文件 `src/host/rescuePersist.test.ts` + `src/host/rescuePersist.child.ts`，两个**真子进程**）**
+
+```
+初值 days[2026-10-12].samples = 7
+两个子进程各做一次 "today.samples += 1 → persist(true)"（第二个晚 150ms）
+⇒ 文件里 = 9（+2）✓          # 两次采样都留下
+反例注入（persist 退回 writeFileAtomic(this.path(), JSON.stringify(this.file))）
+⇒ 文件里 = 8（+1）✗ 断言红     # 日志 /tmp/impl41/inject/rescue-persist.log
+```
+
+（子进程内钉住时钟 `TW_CHILD_NOW`，避免"跨北京自然日边界"时父子落在不同 `day` key 上造成假红。）
+
+**落完后的门禁**：`npm run check` = **EXIT=0，474/474 × 2 时区 + selftest + build**（末尾三行同 §4.1 形态）。
+「改前 → 改后」各条请求数**复跑未变**：分时 1 / 分布 56 / 稳态 \[1,0,1,0,1,0] / 收盘后 1 / 熔断全开 `/kline` 0 /
+分布墙钟 1293ms·峰值 6。

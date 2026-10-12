@@ -5,6 +5,7 @@ import { DEFAULT_PREFS, TW_ROWS, VIEW_MODES, normalizePanelOpacity, type PortPre
 import { api } from './api.ts'
 import { badgeView, type BadgeState } from './badgeView.ts'
 import { useQuoteEngine } from './useQuotes.ts'
+import { pageExtraIds, quoteEngineIds } from './engineIds.ts'
 import { TopBar } from './TopBar.tsx'
 import { WatchlistPage } from './WatchlistPage.tsx'
 import { PortfolioPage } from './PortfolioPage.tsx'
@@ -291,13 +292,22 @@ function Dashboard(): React.ReactElement {
     : prefs.theme === 'auto' ? (systemDark ? 'dark' : 'light') : prefs.theme
 
   // shared quote engine: topbar always, page symbols when their page is open.
-  const baseIds = useMemo(() => TW_ROWS.flatMap((r) => (r.items as ReadonlyArray<{ secid: string }>).map((i) => i.secid)), [])
-  const extraIds = page === 'watch' ? watchIds : page === 'portfolio' ? posIds : []
-  const engineIds = useMemo(() => {
-    const set = new Set<string>(baseIds)
-    for (const id of extraIds) set.add(id)
-    return [...set]
-  }, [baseIds, extraIds])
+  //
+  // 请求集合 = **会被渲染的卡片**（隐藏的卡不再每拍请求，见 engineIds.ts）+ **当前页面需要的标的**
+  // （自选/持仓页的行、大盘页直接读的指数）。此前 baseIds 取的是 TW_ROWS **全量** ——
+  // 用户已隐藏的标的（实测 1.000012）仍在每一拍被请求，而结果永远不会被渲染。
+  const hiddenCards = prefs?.stripCfg?.hidden
+  const hiddenKey = Array.isArray(hiddenCards) ? hiddenCards.join(',') : ''
+  const extraIds = useMemo(
+    () => pageExtraIds({ page, watchIds, posIds }),
+    [page, watchIds, posIds],
+  )
+  const engineIds = useMemo(
+    () => quoteEngineIds(TW_ROWS, hiddenCards, extraIds),
+    // hiddenCards 用 join 出来的字符串当依赖：同一份配置不必因为数组 identity 变化而重算
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [hiddenKey, extraIds],
+  )
   const engine = useQuoteEngine(engineIds, refreshSec * 1000, visible)
 
   const onWatchSymbols = useCallback((ids: string[]) => setWatchIds(ids), [])
