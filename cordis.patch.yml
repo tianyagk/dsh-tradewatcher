@@ -1,17 +1,56 @@
-# dsh-tradewatcher bundle patch。
+# dsh-tradewatcher bundle patch —— **六行形态**：聚合包 + 可单独开关的子组件。
 #
-# ⚠ **当前只装一行（`id: tradewatcher`，不带 config）** —— 这是刻意的回退：
-# 六行形态（core + 五个功能行）在本机启动时**未能装载**（所有 /tradewatcher/* 路由 404、
-# 面板显示"插件服务异常"）。DSH 侧有一条硬规则：`dsh-client-modules` 把"同一 package
-# 出现多个活跃 Loader 源"视为 composition error，而本包**同时带客户端半区**
-# （`dsh.client` + `exports['./client']`）⇒ 同包多行会被整体拒绝。
-# 要真正做成可独立开关的子组件，需要走"每个子组件各自一个包"的路子（参考 @linxin666/dsh-web-all），
-# 细节见 docs/DESIGN-SUBPLUGINS.md 的「回退记录」一节。
+# 六行 = 一个内核行 + 五个功能行，全部 `name: 'dsh-tradewatcher'`（**同一个包、同一个加载源**），
+# 靠 **`id` 前缀**区分、由 `config.row` 决定这一行注册哪一段（代码见 src/index.ts:32-60、:253-269）：
+#   tradewatcher-core      → row: core       内核：store/rescue 采样、共享路由（行情/详情图/云图/备份…）、
+#                                            `GET /tradewatcher/rows`、核心 agent 工具
+#   tradewatcher-calendar  → row: calendar   `/tradewatcher/calendar` + `tradewatcher_calendar`/`_calendar_add`
+#   tradewatcher-watchlist → row: watchlist  `/tradewatcher/watch|industries|anomaly` + `_watchlist`/`_group_rank`
+#   tradewatcher-portfolio → row: portfolio  `/tradewatcher/portfolio|ledger` + `_portfolio`/`_ledger`
+#   tradewatcher-market    → row: market     `/tradewatcher/breadth|rescue` + `_rescue`
+#   tradewatcher-cloudmap  → row: cloudmap   纯客户端 iframe（host 侧无独占路由/工具，只贡献 activeRows）
 #
-# 行语义（代码侧仍然支持，供单独调试用）：
-#   - 不带 config        ⇒ `all`：全量注册（**与拆分前逐字一致**，老 profile 靠这条）
-#   - `config: { row: core }`      ⇒ 只注册内核那一段（排除功能行独占前缀与工具）
-#   - `config: { row: <功能行> }`  ⇒ 只注册该行那一段
+# ⚠ **历史归因纠正（这一条要读，前一轮的结论是错的）**
+# v0.50.0 曾把"六行装载失败"归因成"同一 package 多个活跃 Loader 源 = composition error"，
+# **该归因不成立**：
+#   ① DSH 原文是 "distinct active Loader **sources** for that package are a composition error"
+#      （@deepseek-ai/dsh-client-modules/lib/index.js:122-123）。这里的 source 指**解析源**
+#      （`sourceKey = baseUrl + "\0" + loaderName`，:791-792）：:833-840 把同名行按 sourceKey
+#      收进 `Map` ⇒ **六行同名 + 同 baseUrl ⇒ 只有一个 sourceKey ⇒ 永远走不到 :873 的报错**。
+#   ② 真正打死它的是 `apply` 里读了 `ctx.config`：真宿主的 ctx 是 Cordis Proxy，**访问未 inject
+#      的属性直接抛**（@deepseek-ai/cordis/lib/index.js:676 `cannot get property "config" without inject`）
+#      ⇒ 那一行 fiber failed，用户端表现为"插件服务异常"。**这个 bug 与行数无关：1 行和 6 行同样被打死。**
+#      v0.45.3 已修（只读第二参数 `config` + `ctxSafe` 包住 `ctx.config`，src/index.ts:85-91、:253-255）。
+#   ⇒ 结论：**六行方案此前从未被真正验证过**，本轮重做。（完整证据链见 docs/AUDIT-IMPL35.md）
+#
+# 行语义（`rowOf`，src/index.ts:104-111）：
+#   · 不带 config        ⇒ `all`：全量注册（**与拆分前逐字一致**；老 profile 的单行靠这条）
+#   · `config: { row: <行名> }` ⇒ 只注册该行那一段（行未激活 ⇒ 路由/工具都不注册，天然 404）
+#   · 认不出的 row 值    ⇒ 回退 `all`（宁可多给，不可少给）
+#
+# 单独关掉某一行：**不要改本文件**，在 profile 层
+# (`~/.dsh/profiles/<profile>/cordis.patch.yml`) 按 id 覆盖即可，例如只关日历：
+#   - id: tradewatcher-calendar
+#     disabled: true
+# ⚠ 改完 **必须重启 `dsh web`** —— 宿主行只在启动时装载，**刷新页面不够**。
+#
+# 回退成单行（用户端若再次异常）：见 docs/AUDIT-IMPL35.md 的「回滚」一节（一条命令）。
 - insert:
-    - id: tradewatcher
+    - id: tradewatcher-core
       name: 'dsh-tradewatcher'
+      config: { row: core }
+    - id: tradewatcher-calendar
+      name: 'dsh-tradewatcher'
+      config: { row: calendar }
+    - id: tradewatcher-watchlist
+      name: 'dsh-tradewatcher'
+      config: { row: watchlist }
+    - id: tradewatcher-portfolio
+      name: 'dsh-tradewatcher'
+      config: { row: portfolio }
+    - id: tradewatcher-market
+      name: 'dsh-tradewatcher'
+      config: { row: market }
+    - id: tradewatcher-cloudmap
+      name: 'dsh-tradewatcher'
+      config: { row: cloudmap }

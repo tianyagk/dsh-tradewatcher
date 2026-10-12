@@ -6,10 +6,60 @@
  */
 import { after, test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync } from 'node:fs'
+import { mkdtempSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import type { PluginContext, PluginWebRoute } from './host/context.ts'
+
+const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
+
+/**
+ * 六行 manifest 的**唯一解析器**（task-6）：剥掉注释行后按
+ * `- id:` / `name:` / `config: { row: … }` **三段式**匹配。
+ *
+ * 严格点是刻意的：`config: { row: … }` 缺失的行**匹配不上** ⇒ "数量守恒"的断言会红
+ * （少了 config 的行在运行时回退成 `all`，会把五段功能路又注册一遍 ⇒ 必须被抓到）。
+ */
+function parseRowsFromText(raw: string): Array<{ id: string; name: string; row: string }> {
+  const text = raw.split('\n').filter((l) => !l.trim().startsWith('#')).join('\n')
+  return [...text.matchAll(/- id: (tradewatcher-[a-z0-9]+)\n\s*name: '([^']+)'\n\s*config: \{ row: ([a-z]+) \}/g)].map((m) => ({ id: m[1], name: m[2], row: m[3] }))
+}
+
+/** `- id:` 行原文（剥注释后），供"行级精确 + 数量守恒"用 */
+function idLinesOf(raw: string): string[] {
+  return raw
+    .split('\n')
+    .filter((l) => !l.trim().startsWith('#'))
+    .map((l) => l.trim())
+    .filter((l) => l.startsWith('- id:'))
+}
+
+function parseManifestRows(): Array<{ id: string; name: string; row: string }> {
+  return parseRowsFromText(readFileSync(join(ROOT, 'cordis.patch.yml'), 'utf8'))
+}
+
+/** 六行的期望集合（id ↔ config.row 一一对应；顺序即 manifest 顺序） */
+const EXPECTED_ROWS: ReadonlyArray<{ id: string; row: string }> = [
+  { id: 'tradewatcher-core', row: 'core' },
+  { id: 'tradewatcher-calendar', row: 'calendar' },
+  { id: 'tradewatcher-watchlist', row: 'watchlist' },
+  { id: 'tradewatcher-portfolio', row: 'portfolio' },
+  { id: 'tradewatcher-market', row: 'market' },
+  { id: 'tradewatcher-cloudmap', row: 'cloudmap' },
+]
+
+/** manifest 里**不许**被 core 注册的路径（功能行独占；core 注册了就等于关不掉该行） */
+const FUNCTION_OWNED_PATHS = [
+  '/tradewatcher/calendar',
+  '/tradewatcher/watch',
+  '/tradewatcher/industries',
+  '/tradewatcher/anomaly',
+  '/tradewatcher/portfolio',
+  '/tradewatcher/ledger',
+  '/tradewatcher/breadth',
+  '/tradewatcher/rescue',
+] as const
 
 // 隔离数据目录：**绝不能在测试里碰用户的 ~/.dsh**（store.init 会读写真实文件）
 process.env.DSH_HOME = mkdtempSync(join(tmpdir(), 'tw-rows-'))
@@ -138,26 +188,29 @@ test('P2：cloudmap 行启用 ⇒ rows 含 cloudmap，gate 含云图 tab；停�
   stopMonitor()
 })
 
-test('P2：cordis.patch.yml 与代码的行集合一致（防漂移）', async () => {
-  const { readFileSync } = await import('node:fs')
-  const { fileURLToPath } = await import('node:url')
-  const { dirname, join } = await import('node:path')
-  const root = join(dirname(fileURLToPath(import.meta.url)), '..')
-  const raw = readFileSync(join(root, 'cordis.patch.yml'), 'utf8')
+test('task-6：六行 manifest —— id ↔ config.row 一一对应，且与代码的行集合一致（防漂移）', () => {
+  const raw = readFileSync(join(ROOT, 'cordis.patch.yml'), 'utf8')
   // 注释里也会出现 `- id: …`（说明文字）⇒ 先剥掉注释行再抓
   const text = raw.split('\n').filter((l) => !l.trim().startsWith('#')).join('\n')
-  // manifest 已回退为**单行**（六行形态在本机装载失败：同包多活跃 Loader 源 + 本包带客户端半区
-  // 会触发 dsh-client-modules 的 composition error ⇒ 全部路由 404，用户端表现为"插件服务异常"）。
-  // 这里锁住"只有一个 id: tradewatcher、且不带 config"（带 config 就会退化成只有 core 一段）。
-  const ids = [...text.matchAll(/- id: ([a-z0-9-]+)/g)].map((m) => m[1])
-  assert.deepEqual(ids, ['tradewatcher'], '只装一行（老 profile 的 id），不带 config ⇒ 全量注册')
-  const rows = [...text.matchAll(/config: \{ row: ([a-z]+) \}/g)].map((m) => m[1])
-  assert.deepEqual(rows, [], 'manifest 不许带 config.row（否则缺省全量语义被绕过，功能行路由会 404）')
-  // task-60 的行级精确 + 数量守恒（防"大写/数字被正则截断"逃检）
+  const rows = parseManifestRows()
+  // ⓪ 汇总检查（同一份检查在下面的注入用例里必须非空 ⇒ 断言非恒真）
+  assert.deepEqual(checkManifest(raw), [], '真实 manifest 必须通过全部六行检查')
+  // ① id ↔ config.row 一一对应（顺序也锁住：core 必须在第一行 —— 它先提供内核服务）
+  assert.deepEqual(
+    rows.map((r) => ({ id: r.id, row: r.row })),
+    EXPECTED_ROWS.map((r) => ({ id: r.id, row: r.row })),
+    '六行必须齐、顺序不变、每行的 config.row 与自己 id 的后缀对应',
+  )
+  assert.deepEqual([...new Set(rows.map((r) => r.name))], ['dsh-tradewatcher'], '六行都指向同一个包（聚合包 + 按行切分，不是拆成六个 npm 包）')
+  // ② 数量守恒：解析结果数 == `- id:` 行数（漏 config / 多一行都会红）
   const idLines = text.split('\n').map((l) => l.trim()).filter((l) => l.startsWith('- id:'))
-  assert.deepEqual(idLines, ['- id: tradewatcher'], 'id 行必须完整且唯一（截断/新增/多行都会失败）')
-  assert.equal(idLines.length, ids.length, '抓到的 id 数必须等于 - id: 行数（守恒）')
-  assert.equal(text.includes('disabled: true'), false, 'manifest 不该自己禁用行（要关由 profile 层覆盖）')
+  assert.equal(rows.length, idLines.length, `解析到的行数必须等于 - id: 行数（${rows.length} vs ${idLines.length}）`)
+  // ③ 行级精确：整行必须是 `- id: tradewatcher-<小写+数字>`，不许有被正则截断的尾巴
+  for (const line of idLines) assert.match(line, /^- id: tradewatcher-[a-z0-9]+$/, `id 行有截断/大写残留：${line}`)
+  assert.equal(idLines.length, new Set(idLines).size, 'id 不许重复（重复 id 会让 Loader 启动即崩）')
+  // ④ manifest 里的 row 值必须被**代码里的 rowOf 认**（锚真实实现：认不出就静默回退 all ⇒ 关不掉还多注册一遍）
+  for (const { row } of EXPECTED_ROWS) assert.equal(rowOf({ row }), row, `rowOf 必须认识 ${row}（否则该行回退成 all）`)
+  assert.equal(text.includes('disabled: true'), false, 'manifest 自己不许禁用行（要关由 profile 层按 id 覆盖）')
 })
 
 test('P3：market 行只注册独占前缀；/tradewatcher/industry 留在 core（详情抽屉要用）', () => {
@@ -270,43 +323,169 @@ test('task-60：归属按**实测调用方所在行**（board=core / industries=
   stopMonitor()
 })
 
-test('task-60：patch id 正则放宽 + 行级精确 + 数量守恒（两种注入都抓得住）', async () => {
-  const { readFileSync } = await import('node:fs')
-  const { fileURLToPath } = await import('node:url')
-  const { dirname, join } = await import('node:path')
-  const root = join(dirname(fileURLToPath(import.meta.url)), '..')
-  const raw = readFileSync(join(root, 'cordis.patch.yml'), 'utf8')
-  const text = raw.split('\n').filter((l) => !l.trim().startsWith('#')).join('\n')
-  // ① 正则放宽到 [a-z0-9-]+（数字行 market2 不再逃过）
-  const ID_RE = /- id: (tradewatcher(?:-[a-z0-9-]+)?)/g
-  const ids = [...text.matchAll(ID_RE)].map((m) => m[1])
-  // ② 数量守恒：抓到的 id 数 == patch 里 `- id:` 行数
-  const idLines = text.split('\n').filter((l) => l.includes('- id:')).length
-  assert.equal(ids.length, idLines, `抓到的 id 数必须等于 - id: 行数（${ids.length} vs ${idLines}）`)
-  // ③ 行级精确：整行必须是 `- id: tradewatcher-<小写+数字+连字符>`，**不许有被正则截断的尾巴**
-  //   （这条专门抓 `tradewatcher-portfolioX`：旧正则 [a-z]+ 会截成 tradewatcher-portfolio ⇒ 数量与列表都不变 ⇒ 逃过检测）
-  for (const line of text.split('\n')) {
-    if (!line.includes('- id:')) continue
-    assert.match(line.trim(), /^- id: tradewatcher(?:-[a-z0-9-]+)?$/, `id 行有截断残留：${line.trim()}`)
+/** 把一个 manifest 文本跑完整套"六行"检查，返回**失败原因**列表（空 = 通过）。
+ *  同一份检查既跑真实文件（必须空）、也跑下面每个注入（必须非空）⇒ 断言**非恒真**。 */
+function checkManifest(raw: string): string[] {
+  const fail: string[] = []
+  const rows = parseRowsFromText(raw)
+  const ids = idLinesOf(raw)
+  if (rows.length !== ids.length) fail.push(`数量不守恒：解析到 ${rows.length} 行 vs - id: ${ids.length} 行（有行漏了 config: { row: … }）`)
+  const want = EXPECTED_ROWS.map((r) => `${r.id}=${r.row}`).join(' | ')
+  const got = rows.map((r) => `${r.id}=${r.row}`).join(' | ')
+  if (want !== got) fail.push(`id↔row 不匹配：期望 ${want}；实得 ${got}`)
+  if (rows.some((r) => r.name !== 'dsh-tradewatcher')) fail.push('有行的 name 不是 dsh-tradewatcher（六行必须是同一个包）')
+  for (const line of ids) if (!/^- id: tradewatcher-[a-z0-9]+$/.test(line)) fail.push(`id 行不合法（截断/大写/多余字符）：${line}`)
+  if (new Set(ids).size !== ids.length) fail.push('id 有重复（Loader 启动即崩）')
+  for (const r of rows) if (rowOf({ row: r.row }) !== r.row) fail.push(`代码里的 rowOf 不认 ${r.row}（该行会静默回退成 all）`)
+  return fail
+}
+
+test('task-6：四种注入各让"六行检查"非空（改名/大写/数字后缀/漏 config）—— 证明断言非恒真', () => {
+  const raw = readFileSync(join(ROOT, 'cordis.patch.yml'), 'utf8')
+  // 注入只改**正文**（剥注释后的文本）：本文件的注释里也写着 `tradewatcher-portfolio` 这类字样，
+  // 直接在原文上 replace 会改到注释 ⇒ 被剥掉 ⇒ 注入静默失效（这本身就是个假阴性陷阱，记在这里）。
+  const body = raw.split('\n').filter((l) => !l.trim().startsWith('#')).join('\n')
+  assert.deepEqual(checkManifest(body), [], '基准（未注入）必须通过 —— 否则下面的注入证明无效')
+  const injections: Array<{ name: string; mutate: (s: string) => string; hit: RegExp }> = [
+    { name: '改名（小写后缀拼错）', mutate: (s) => s.replace('- id: tradewatcher-portfolio\n', '- id: tradewatcher-portfoliox\n'), hit: /id↔row 不匹配/ },
+    { name: '大写残留（正则截断的经典逃检）', mutate: (s) => s.replace('- id: tradewatcher-portfolio\n', '- id: tradewatcher-Portfolio\n'), hit: /id 行不合法|数量不守恒/ },
+    { name: '数字后缀（旧 [a-z]+ 正则会把 market2 截成 market）', mutate: (s) => s.replace('- id: tradewatcher-market\n', '- id: tradewatcher-market2\n'), hit: /id↔row 不匹配/ },
+    { name: '漏掉 config（该行会静默回退成 all，把别的行那几段又注册一遍）', mutate: (s) => s.replace('      config: { row: market }\n', ''), hit: /数量不守恒/ },
+    { name: 'row 值拼错（认不出的 row 静默回退 all）', mutate: (s) => s.replace('config: { row: market }', 'config: { row: marketx }'), hit: /id↔row 不匹配|rowOf 不认/ },
+  ]
+  for (const { name, mutate, hit } of injections) {
+    const mutated = mutate(body)
+    assert.notEqual(mutated, body, `注入「${name}」必须真的改到了正文（否则这条证明无效）`)
+    const fail = checkManifest(mutated)
+    assert.ok(fail.length > 0, `注入「${name}」必须被抓到（实际一条都没报 ⇒ 断言恒真）`)
+    assert.match(fail.join(' ／ '), hit, `注入「${name}」报的原因应是预期的：${JSON.stringify(fail)}`)
   }
-  // manifest 已回退为单行（六行形态装载失败：同包多活跃 Loader 源 + 带客户端半区 ⇒ composition error）
-  assert.deepEqual(ids, ['tradewatcher'], '当前只装一行（legacy id），不带 config ⇒ 全量注册')
+  // 注入 A 的具体逃检路径：`portfolioX` 用旧正则 [a-z]+ 会截成 `portfolio` ⇒ 数量与列表都不变
+  const oldRe = /- id: (tradewatcher-[a-z]+)/g
+  assert.deepEqual([..."- id: tradewatcher-portfolioX\n".matchAll(oldRe)].map((m) => m[1]), ['tradewatcher-portfolio'], '旧正则确实会截断成合法 id ⇒ 必须靠行级精确才抓得住')
+  const newRe = /- id: (tradewatcher-[a-z0-9]+)/g
+  assert.deepEqual([..."- id: tradewatcher-portfolioX\n".matchAll(newRe)].map((m) => m[1]), ['tradewatcher-portfolio'], '新正则也截断（X 不在 [a-z0-9] 里）⇒ 由 `id 行不合法` 那条兜住')
 })
 
-test('task-60：两种注入的模拟（各证明一次断言会失败）', () => {
-  const ID_RE = /- id: (tradewatcher-[a-z0-9-]+)/g
-  const base = "- id: tradewatcher-portfolio\n- id: tradewatcher-market\n"
-  const baseIds = [...base.matchAll(ID_RE)].map((m) => m[1])
-  // 注入 A：`portfolioX` —— 正则截断成 tradewatcher-portfolio ⇒ 数量/列表都不变 ⇒ **必须靠行级精确才抓得住**
-  const a = "- id: tradewatcher-portfolioX\n- id: tradewatcher-market\n"
-  assert.deepEqual([...a.matchAll(ID_RE)].map((m) => m[1]), baseIds, '截断后数量与列表都没变（换行级检查前确实逃过）')
-  const badLines = a.split('\n').filter((l) => l.includes('- id:') && !/^- id: tradewatcher-[a-z0-9-]+$/.test(l.trim()))
-  assert.equal(badLines.length, 1, '行级精确能抓到 portfolioX')
-  // 注入 B：`market2` —— 数字在字符类里 ⇒ 被抓成一个新 id ⇒ 列表不等 ⇒ 抓得住
-  const b = "- id: tradewatcher-portfolio\n- id: tradewatcher-market2\n"
-  const bIds = [...b.matchAll(ID_RE)].map((m) => m[1])
-  assert.deepEqual(bIds, ['tradewatcher-portfolio', 'tradewatcher-market2'], 'market2 被完整抓到')
-  assert.notDeepEqual(bIds, baseIds, '列表不同 ⇒ 断言会失败')
+/**
+ * 等**别的**用例遗留的 `store.init()` promise 全部落定。
+ *
+ * 为什么必须等：`__kernelStats.starts` 是在 `store.init().then(...)` 的**异步链**里 +1 的，
+ * 而前面几个用例 `setKernel(null)` 之后没有 dispose 掉旧内核（假 ctx 不 dispose）⇒
+ * 它们的 init 会在后面的用例窗口里陆续落定，把全局计数抬高（实测：不等就直接读到 9）。
+ * 不先排空就断言 `starts === 1`，等于在断言"别的用例的异步尾巴不落在我这儿"——那是**恒假/恒真**的赌博。
+ */
+async function drainForeignStarts(): Promise<void> {
+  let last = __kernelStats.starts
+  let stable = 0
+  for (let i = 0; i < 80 && stable < 3; i++) {
+    await new Promise((r) => setTimeout(r, 20))
+    if (__kernelStats.starts === last) stable += 1
+    else {
+      stable = 0
+      last = __kernelStats.starts
+    }
+  }
+  assert.ok(stable >= 3, `前置内核的 store.init() 迟迟不落定（starts=${__kernelStats.starts}）—— 测试环境异常，别把不稳定当通过`)
+}
+
+test('task-6：六行装载（manifest 驱动）—— 幂等各 1 次、每行只注册自己那段、跨行零重复、并集 == 老单行', async () => {
+  const tick = (): Promise<void> => new Promise((r) => setTimeout(r, 50))
+  await drainForeignStarts()
+  setKernel(null)
+  __kernelStats.inits = 0
+  __kernelStats.starts = 0
+  __kernelStats.applies = 0
+  __kernelStats.rows.length = 0
+  __kernelStats.routeRegs.length = 0
+
+  // —— ① 幂等：core 行 apply 两次（同一行出现两条 fiber）+ 五个功能行各一次 = 真实六行装载 ——
+  const twice = fakeCtx()
+  apply(twice.ctx, { row: 'core' })
+  apply(twice.ctx, { row: 'core' })
+  for (const { row } of EXPECTED_ROWS.filter((r) => r.row !== 'core')) {
+    const c = fakeCtx()
+    apply(c.ctx, { row })
+  }
+  await tick()
+  assert.equal(__kernelStats.applies, 7, 'apply 共七次（core 两次 + 五个功能行各一次）')
+  assert.equal(__kernelStats.inits, 1, 'store.init() 只跑一次（六个 fiber 共用一个内核）')
+  assert.equal(__kernelStats.starts, 1, 'rescue.start() 只跑一次（采样器只能有一个）')
+  assert.equal((coreKernel()?.rescue as unknown as { running?: boolean }).running, true, '采样器处于运行态')
+
+  // —— ② 分工：manifest 声明的那六行，每行一条 fiber，一条不多一条不少 ——
+  const coreCtx = fakeCtx()
+  apply(coreCtx.ctx, { row: 'core' })
+  const perRow: Array<[string, FakeCtx]> = [['core', coreCtx]]
+  for (const { row } of EXPECTED_ROWS.filter((r) => r.row !== 'core')) {
+    const c = fakeCtx()
+    apply(c.ctx, { row })
+    perRow.push([row, c])
+  }
+  await tick()
+  assert.equal(__kernelStats.inits, 1, '再注册一轮也不许重跑 store.init()')
+  assert.equal(__kernelStats.starts, 1, '再注册一轮也不许再起采样器')
+
+  const byRow = new Map(perRow)
+  // —— ② 跨行零重复（**先查这个**：它是最根本的不变量，隔离性由它 + 每行前缀表共同保证）——
+  // 同一路径/工具被两行各注册一次 ⇒ 关掉一行会连带弄坏另一行（这正是"可单独开关"的失败模式）。
+  const owner = new Map<string, string>()
+  const dupes: string[] = []
+  const toolOwner = new Map<string, string>()
+  const toolDupes: string[] = []
+  for (const [row, c] of perRow) {
+    for (const p of c.routes) {
+      const prev = owner.get(p)
+      if (prev === undefined) owner.set(p, row)
+      else dupes.push(`${p} ← ${prev} 与 ${row}`)
+    }
+    for (const t of c.tools) {
+      const prev = toolOwner.get(t)
+      if (prev === undefined) toolOwner.set(t, row)
+      else toolDupes.push(`${t} ← ${prev} 与 ${row}`)
+    }
+  }
+  assert.deepEqual(dupes, [], '同一路径被两行各注册一次 ⇒ 关掉一行会连带弄坏另一行')
+  assert.deepEqual(toolDupes, [], '同一工具被两行各注册一次')
+
+  // —— ③ 分工：每一行只注册自己前缀下的路由/工具 ——
+  for (const { row } of EXPECTED_ROWS.filter((r) => r.row !== 'core')) {
+    const c = byRow.get(row) as FakeCtx
+    const ownedRoutes = ROW_ROUTES_FOR_TEST[row]
+    const ownedTools = ROW_TOOLS_FOR_TEST[row].map((t) => `tradewatcher_${t}`)
+    if (ownedRoutes.length === 0) {
+      assert.deepEqual(c.routes, [], `${row} 行不该注册 host 路由（它只贡献 activeRows）`)
+      assert.deepEqual(c.tools, [], `${row} 行不该注册 agent 工具`)
+      continue
+    }
+    assert.ok(c.routes.length > 0, `${row} 行应注册路由（实际 ${JSON.stringify(c.routes)}）`)
+    for (const p of c.routes) assert.equal(ownedRoutes.some((x) => p.startsWith(x)), true, `${row} 行不该注册 ${p}`)
+    for (const p of ownedRoutes) assert.equal(c.routes.includes(p), true, `${row} 行应注册 ${p}`)
+    for (const t of c.tools) assert.equal(ownedTools.includes(t), true, `${row} 行不该注册工具 ${t}`)
+    for (const t of ownedTools) assert.equal(c.tools.includes(t), true, `${row} 行应注册工具 ${t}`)
+  }
+  // core 逐条给出"确实不含功能行独占路径"的证据（关掉一行的前提是 core 不兜着它）
+  for (const p of FUNCTION_OWNED_PATHS) {
+    assert.equal(coreCtx.routes.includes(p), false, `core 不许注册 ${p}（否则那一行关不掉）`)
+    assert.equal(coreCtx.routes.some((x) => x.startsWith(p)), false, `core 不许注册 ${p} 前缀下的任何路径`)
+  }
+  for (const t of ['tradewatcher_calendar', 'tradewatcher_calendar_add', 'tradewatcher_watchlist', 'tradewatcher_group_rank', 'tradewatcher_portfolio', 'tradewatcher_ledger', 'tradewatcher_rescue']) {
+    assert.equal(coreCtx.tools.includes(t), false, `core 不许提供 ${t}（归功能行）`)
+  }
+  // core 必须保住的东西（被 ≥2 行消费 / 内核自己持有）
+  for (const p of ['/tradewatcher/health', '/tradewatcher/rows', '/tradewatcher/board', '/tradewatcher/industry', '/tradewatcher/trades', '/tradewatcher/chips']) {
+    assert.equal(coreCtx.routes.includes(p), true, `${p} 必须留在 core（共享消费者 / 内核持有）`)
+  }
+
+  // —— ④ 六行的并集必须与老的单行全量**逐字一致**（不多、不少）——
+  // 这是"用户重启 dsh web 后不掉功能"的判据，也是回退成单行不会丢东西的判据。
+  const all = fakeCtx()
+  apply(all.ctx) // 无 config ⇒ row=all（向后兼容路径，老 profile 靠它）
+  await tick()
+  assert.equal(all.routes.length, new Set(all.routes).size, '单行全量自己不许有重复路径')
+  assert.deepEqual([...new Set(all.routes)].sort(), [...owner.keys()].sort(), '六行注册的路径并集 == 单行全量注册的路径集合')
+  assert.deepEqual([...new Set(all.tools)].sort(), [...toolOwner.keys()].sort(), '六行的工具并集 == 单行全量的工具集合')
+  stopMonitor()
 })
 
 test('真宿主 ctx 是 Proxy：访问未 inject 的属性会抛 —— apply 不许因此 failed', () => {

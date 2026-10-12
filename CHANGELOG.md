@@ -11,6 +11,43 @@
 
 ---
 
+## v0.59.0 — 恢复组件分离：六行 manifest（含归因纠正，附代码级证据）
+
+### 纠正我此前的一个错误结论
+
+我曾判定"同包多活跃 Loader 源 = composition error ⇒ 六行方案不可行"。**这个结论是错的**，依据是源码注释里的一句话，而非实测。
+真原文是 **"distinct active Loader *sources* for that package are a composition error"**。本轮的**代码级证据**：
+`dsh-client-modules/lib/index.js` 的 `processOne()` 把同名行按 **`sourceKey = baseUrl + "\0" + loaderName`** 收进 Map（`:833-840`，`:791-792`）⇒ **六行同名同 baseUrl ⇒ 只有一个 sourceKey ⇒ 永远走不到 `:874` 的 `sources.length > 1` 报错**。"多个 row"与"多个 source"是两件事。
+
+**当年失败的真凶**（v0.45.3 才查到，且与行数无关）：`apply` 读了 `ctx.config`，而 Cordis 的 ctx 是 Proxy —— `cordis/lib/index.js:672` 的 get trap、`:676` 的 `cannot get property "…" without inject`（`:736/:743` 的 mixin accessor 注册解释了为什么 `effect`/`get` 能用而 `config` 抛）。**这个 bug 会同等打死 1 行或 6 行 ⇒ 六行方案从未被真正验证过。**
+
+### 改动
+
+`cordis.patch.yml` 恢复六行（`tradewatcher-core / -calendar / -watchlist / -portfolio / -market / -cloudmap`），全部启用，每行 `config: { row: … }`，`name` 全为 `dsh-tradewatcher`；**代码零改动**（`rowOf` 已支持显式行；无 config 仍是 `all` 默认 ⇒ 向后兼容保留）。注释写明归因纠正。
+YAML 用 **DSH 自带解析器**验过：`errors = 0 / warnings = 0`，结构 `[{insert: [6 行]}]`（语法错才是启动期硬失败；"目标行不存在"只是 warning）。
+**不需要 install**：`profiles/web/package.json` 为 `link:`、`node_modules/dsh-tradewatcher` 是 symlink（**同 inode 4879983**）⇒ profile 看到的就是工作区那份。
+
+### 静态自查（锚**真实产物** `lib/index.js`）
+
+`inits = 1` / `starts = 1`（再注册一轮仍为 1）；**跨行重复路径 `[]`**；**路由账 24 = core 16 + calendar 1 + watchlist 3 + portfolio 2 + market 2 + cloudmap 0**；**六行并集 == 单行全量**；**core 不含** `/watch`、`/calendar`、`/portfolio`、`/ledger`、`/breadth`、`/rescue`。工具同样逐行分开（core 5 / calendar 2 / watchlist 2 / portfolio 2 / market 1 / cloudmap 0）。
+
+### 反例证据（三组，各贴输出后恢复）
+
+1. **代码级（点名的）**：`applyCore(ctx, true)` 当默认 ⇒ `pass 5 / fail 7`（含"calendar 行不该注册 `/tradewatcher/health`"）；`git checkout` 后 `cmp` 逐字一致。
+2. **跨行重叠**：让 market 前缀多一段 `/tradewatcher/watch` ⇒ 报 `同一路径被两行各注册一次`。为此把"跨行零重复"排在"每行只注册自己那段"**之前** —— 两条不是同一条断言的重复。
+3. **改真实文件**：大写 / 数字后缀 / 漏 `config` 三种 ⇒ 每次 `fail 2`；每次立刻还原，收尾 `sha256sum -c` 通过。
+另：三种注入**固化进测试**（`checkManifest()` 对真实文件必须返空、对 5 个字符串注入必须非空）。
+
+### 回滚（已**演练**，非纸上步骤）
+
+主命令 `git checkout HEAD -- cordis.patch.yml src/index.test.ts`。备用（不依赖 git）heredoc 写回单行：实测写入后 `tests 12 / pass 10 / fail 2`（红的正是两条锁六行的清单断言，设计如此），运行时断言全绿；还原六行后 `pass 12 / fail 0`、sha256 与基线一致。
+
+### 验收
+
+`npm run check` = **412 / 412** × 2 时区 + `ALL HOST CHECKS PASSED`；**测试条数仍 412**（删 3 条锁单行的旧断言、加 3 条锁六行的新断言，净 0）；`build.mjs` 零改动。
+**最后一公里只能由装机验证**：重启 `dsh web` 后看 `plugin_manager list_plugins` 是否出现六行且 `fiberPhase=active`、`/tradewatcher/rows` 是否六项、关一行后是否 404。
+**已知兼容点**：profile 里旧有的 `- id: tradewatcher`（`disabled: false`）重启后会变成 warning（absent target 只 warning、不挂启动），无需处理。
+
 ## v0.58.0 — 逐日盈亏边界价：柱色与当日「盈利比例」同源（拖滑杆看历史日不再自相矛盾）
 
 ### 问题
