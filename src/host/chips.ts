@@ -91,6 +91,17 @@ export interface ChipDay {
   support: number | null
   resistance: number | null
   narrow: boolean
+  /**
+   * 该展示日的**盈亏边界价**（与 `profitRatio` **同源**：同一行代码里那一个变量算出来的）。
+   *
+   * 口径：**最新展示日** = 顶层 `priceUsed`（现价：优先 quote，宿主按需回落到收盘价）；
+   * **历史展示日** = **当日收盘价**（`bars[i].close`）—— 历史那天的"套牢/获利"只能按那天的价算。
+   * 不可得 ⇒ `null`（界面按"未取到"处理，**不猜一个价**）。
+   *
+   * 为什么要逐日给：界面用 `priceUsed` 给筹码柱上色时，拖到历史日就会与该日 `profitRatio`
+   * 形成两套边界 ⇒ 同一屏自相矛盾。有了它，柱色与盈利比例用同一个价。
+   */
+  price: number | null
   profitRatio: number | null
   samples: number
 }
@@ -398,6 +409,8 @@ export function chipSeriesOf(bars: readonly ChipBar[], opts: ChipOptions = {}): 
       support: support === null ? null : round(support, 4),
       resistance: resistance === null ? null : round(resistance, 4),
       narrow,
+      // 与 `profitRatio` 同一个 `price`（上面那行）⇒ 两者永远同源，不许各算一套
+      price: price === null ? null : round(price, 4),
       profitRatio: profitRatio === null ? null : round(profitRatio * 100, 2),
       samples: i + 1,
     })

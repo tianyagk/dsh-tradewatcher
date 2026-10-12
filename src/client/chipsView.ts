@@ -230,6 +230,34 @@ export function chipsRowsLayoutOf(availablePx: number, rows: number, wantGap = C
 }
 
 /**
+ * 展示日的**盈亏边界价**（柱色与「盈利比例」共用它）。
+ *
+ * 口径：优先用该日 DTO 的 `price`（宿主按"最新日=现价、历史日=当日收盘价"给，与 `profitRatio` 同源）；
+ * 该字段**缺失**（老宿主）或不是有限数 ⇒ **如实回退**到顶层 `priceUsed`，并给出 `note`（不静默 ——
+ * 因为回退后柱色与该日 `盈利比例` 可能不同源，这件事必须能被追到）。
+ * 两者都不可得 ⇒ `price: null`（界面按"未取到"处理，**不猜一个价**）。
+ */
+export function chipsDayPriceOf(input: { dayPrice?: number | null; topPriceUsed: number | null }): {
+  price: number | null
+  fallback: boolean
+  note: string | null
+} {
+  const day = input.dayPrice
+  if (typeof day === 'number' && Number.isFinite(day)) return { price: day, fallback: false, note: null }
+  const top = input.topPriceUsed
+  if (typeof top === 'number' && Number.isFinite(top)) {
+    return {
+      price: top,
+      fallback: true,
+      note: input.dayPrice === undefined
+        ? `该展示日未带 price（老宿主）⇒ 回退顶层现价 ${top}：柱色与该日盈利比例可能不同源`
+        : `该展示日 price 不可用（${String(input.dayPrice)}）⇒ 回退顶层现价 ${top}：柱色与该日盈利比例可能不同源`,
+    }
+  }
+  return { price: null, fallback: false, note: null }
+}
+
+/**
  * 单个桶的**盈亏方向**类（`tw-up`/`tw-down`/`tw-flat`）—— 筹码柱的唯一着色入口。
  *
  * | 桶中心 vs **现价** | 语义 | `redUp=true` | `redUp=false` |

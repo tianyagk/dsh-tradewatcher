@@ -15,7 +15,7 @@ import { countMount } from './mounts.ts'
 import { CHIPS_LINE_TOKENS } from './theme.ts'
 import {
   bucketCenterTicks, caliberDeviates, chipAxisOf, chipsLinesOf, chipsPlotHeightOf, chipsProfileOf,
-  chipProfitDirOf, chipsRowsLayoutOf, chipsRowsOf, CHIPS_ROW_GAP_PX,
+  chipProfitDirOf, chipsDayPriceOf, chipsRowsLayoutOf, chipsRowsOf, CHIPS_ROW_GAP_PX,
 } from './chipsView.ts'
 import type { ChipsState } from './useChips.ts'
 
@@ -87,6 +87,12 @@ export function ChipsPanel(props: ChipsPanelProps): React.ReactElement | null {
   const xTicks = axis.ticks
   // 行序：**价格降序**（顶行 = 最高价）—— 与左轴刻度、三条语义线同向（见 chipsRowsOf 的说明）
   const rowsDesc = chipsRowsOf(viewCenters, viewBuckets)
+  /**
+   * 盈亏边界价：**按当前展示日取**（历史日 = 当日收盘价、最新日 = 现价），与宿主算 `profitRatio`
+   * 用的是同一个价 ⇒ 柱色与该日「盈利比例」同源。缺失（老宿主）⇒ 回退顶层现价并留痕（进 tooltip）。
+   */
+  const dayPrice = chipsDayPriceOf({ dayPrice: day.price, topPriceUsed: d.priceUsed })
+  const priceLabel = at === days.length - 1 ? '现价' : '当日收盘价'
   // 分布轮廓：与柱**同源**（同一个 axis.widthOf、同一个 rowH/gap）⇒ 不可能对不上
   const profile = chipsProfileOf({
     widths: rowsDesc.map((r) => axis.widthOf(r.weight)),
@@ -119,8 +125,11 @@ export function ChipsPanel(props: ChipsPanelProps): React.ReactElement | null {
         React.createElement('span', { title: `筹码累积分布 P95；${d.disclaimer}` }, `压力 ${d.narrow ? '—' : money(day.resistance)}`),
         React.createElement('span', { className: 'tw-chips-sep' }),
         React.createElement('span', {
-          title: `Σ(桶价 < 现价 的权重)/Σ权重；现价 ${d.priceUsed === null ? '未取到' : d.priceUsed.toFixed(2)}` +
-            `（来源 ${d.priceSource ?? '未取到'}，价格空间 fqt=${d.fqt}，换算因子 ${d.priceScale}，最新一根 ${d.latestBarDate ?? '—'}）`,
+          title: `Σ(桶价 < ${priceLabel} 的权重)/Σ权重；${priceLabel} ` +
+            `${dayPrice.price === null ? '未取到' : dayPrice.price.toFixed(2)}` +
+            `（${priceLabel === '现价' ? `来源 ${d.priceSource ?? '未取到'}` : '该展示日为历史日，用当日收盘价'}，` +
+            `价格空间 fqt=${d.fqt}，换算因子 ${d.priceScale}，最新一根 ${d.latestBarDate ?? '—'}）` +
+            (dayPrice.note === null ? '' : `\n⚠ ${dayPrice.note}`),
         }, `盈利比例 ${pct(profitPct)}`),
       ),
     ),
@@ -184,8 +193,8 @@ export function ChipsPanel(props: ChipsPanelProps): React.ReactElement | null {
               // 只画**裁剪窗口内**的行；条宽按轴顶换算（axis.widthOf）⇒ 与刻度同尺度
               ...rowsDesc.map((r, i) => React.createElement('div', {
                 key: i,
-                // 盈亏方向：边界是**现价**（不是平均成本），且方向为"中心 vs 现价"（见 chipProfitDirOf）
-                className: `tw-chips-bar ${chipProfitDirOf({ center: r.center, priceUsed: d.priceUsed, redUp: props.redUp })}`,
+                // 盈亏方向：边界是**该展示日的价**（不是平均成本），方向为"中心 vs 价"（见 chipProfitDirOf）
+                className: `tw-chips-bar ${chipProfitDirOf({ center: r.center, priceUsed: dayPrice.price, redUp: props.redUp })}`,
                 style: { height: rowH, width: `${axis.widthOf(r.weight)}%` },
                 title: `${r.center.toFixed(2)} 元 · 权重 ${(r.weight * 100).toFixed(2)}%（占总筹码）`,
               })),

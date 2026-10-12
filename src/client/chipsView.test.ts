@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 import {
   axisTicks, bucketCenterTicks, caliberDeviates, chipAxisOf, chipBarPxOf, chipProfitDirOf, chipsColumnsOf,
-  chipsProfileOf, chipsRowsLayoutOf, chipsRowsOf, drawerFillOf,
+  chipsDayPriceOf, chipsProfileOf, chipsRowsLayoutOf, chipsRowsOf, drawerFillOf,
   CHIPS_AXIS_MIN_PX, CHIPS_CHART_GAP_PX, CHIPS_LABEL_RESERVE_PX,
 } from './chipsView.ts'
 import { loadChips, resetChipsCache } from './chipsLoader.ts'
@@ -508,9 +508,11 @@ test('④ 盈亏着色：高于现价=套牢(绿)、低于现价=获利(红)；�
   assert.equal(/chipProfitDirOf\(\{[^}]*avgCost/.test(panel), false, '⚠ 着色入口不许把 avgCost 传进去（边界只能是现价）')
   assert.equal(/chipProfitDirOf\([^)]*avgCost/.test(view), false, '⚠ chipsView 的着色函数不许引用 avgCost')
   assert.equal(/avgCost/.test(String(chipProfitDirOf)), false, '⚠ chipProfitDirOf 的实现里不许出现 avgCost')
-  // 面板必须把**现价**传进去
-  assert.ok(panel.includes('chipProfitDirOf({ center: r.center, priceUsed: d.priceUsed, redUp: props.redUp })'),
-    '面板必须用 d.priceUsed 作为盈亏边界')
+  // 面板必须把**价**（v0.57.0 起 = 该展示日的价：最新日=现价、历史日=当日收盘价）传进去
+  assert.ok(panel.includes('chipProfitDirOf({ center: r.center, priceUsed: dayPrice.price, redUp: props.redUp })'),
+    '面板必须用展示日的价作为盈亏边界')
+  assert.ok(panel.includes('chipsDayPriceOf({ dayPrice: day.price, topPriceUsed: d.priceUsed })'),
+    '展示日的价由 chipsDayPriceOf 决定（缺失才回退顶层现价，且留痕）')
   assert.equal(/dirClass\(r\.center - /.test(panel), false, '⚠ 旧方向（center − 现价）必须已被移除')
   // 平均成本仍然合法地用在别处（头部的数值 + 橙色语义线），但**不许**当盈亏边界：
   // 只看筹码柱那一行的 className 表达式
@@ -533,5 +535,88 @@ test('④ 盈亏着色：高于现价=套牢(绿)、低于现价=获利(红)；�
     () => assert.equal(brokenDir(20, 19, true), 'tw-down', '反例上"高于现价=套牢/绿"必须失败'),
     /反例上/,
     '⚠ 反例注入（方向改回 center − price）必须让"高于现价=套牢"这条断言失败',
+  )
+})
+
+/**
+ * v0.57.0（task-5）：柱色的盈亏边界必须**按展示日取**（该日 DTO 的 `price`），
+ * 与宿主算该日 `盈利比例` 用的是同一个价 ⇒ 柱色与那个数字**同源**。
+ *
+ * 背景：原来统一用顶层 `priceUsed`（现价），而宿主对**历史展示日**用当日收盘价算 `profitRatio`
+ * ⇒ 拖滑杆看历史日时同屏两套边界（我上一轮顺带发现、lead 决定修）。
+ */
+test('⑤ 逐日边界价：切日 ⇒ 翻转点随之移动；与宿主 profitRatio **同源**；缺失则回退并留痕', () => {
+  const panel = read('./ChipsPanel.tsx')
+  const view = read('./chipsView.ts')
+
+  // ── 取价规则 ──
+  const hasDay = chipsDayPriceOf({ dayPrice: 18, topPriceUsed: 20 })
+  assert.deepEqual(hasDay, { price: 18, fallback: false, note: null }, '有逐日 price ⇒ 用它（不是顶层现价）')
+  const missing = chipsDayPriceOf({ dayPrice: undefined, topPriceUsed: 20 })
+  assert.equal(missing.price, 20, '老宿主不带 price ⇒ 回退顶层现价')
+  assert.equal(missing.fallback, true, '回退要标记 fallback')
+  assert.ok(missing.note !== null && missing.note.includes('未带 price'), `回退必须**留痕**（不静默）：${missing.note}`)
+  const bad = chipsDayPriceOf({ dayPrice: null, topPriceUsed: 20 })
+  assert.equal(bad.price, 20, 'price 为 null 也回退')
+  assert.ok(bad.note !== null && bad.note.includes('不可用'), 'null 的回退原因要和"字段缺失"区分')
+  assert.deepEqual(chipsDayPriceOf({ dayPrice: null, topPriceUsed: null }), { price: null, fallback: false, note: null },
+    '两个价都没有 ⇒ null（界面按"未取到"处理，不猜一个价）')
+
+  // ── 两天价格不同的 fixture：翻转点必须跟着展示日走 ──
+  // 桶中心 [16,17,18,19,20,21,22]；第 1 天价 18、第 2 天价 20 ⇒ 翻转点分别在 18 / 20
+  const centers = [16, 17, 18, 19, 20, 21, 22]
+  const buckets = [0.1, 0.1, 0.2, 0.2, 0.2, 0.1, 0.1]
+  const dayDto = (date: string, price: number): { date: string; centers: number[]; buckets: number[]; price: number; profitRatio: number } => ({
+    date, centers, buckets, price,
+    // 宿主口径：低于该价的权重占比（百分比，2 位小数）
+    profitRatio: Math.round(buckets.reduce((s, w, i) => (centers[i] < price ? s + w : s), 0) * 100 * 100) / 100,
+  })
+  const days = [dayDto('2026-10-01', 18), dayDto('2026-10-02', 20)]
+  const flipOf = (price: number): number => {
+    // 用"最近一次颜色变化"定位翻转点（与 ④ 的二分同法，但走真实着色入口）
+    let lo = price - 2
+    let hi = price + 2
+    for (let i = 0; i < 40; i += 1) {
+      const mid = (lo + hi) / 2
+      if (chipProfitDirOf({ center: mid, priceUsed: price, redUp: true }) === 'tw-down') hi = mid
+      else lo = mid
+    }
+    return (lo + hi) / 2
+  }
+  const flips = days.map((d) => flipOf(chipsDayPriceOf({ dayPrice: d.price, topPriceUsed: 20 }).price as number))
+  assert.ok(Math.abs(flips[0] - 18) < 0.001, `第 1 天翻转点必须是它的价 18（实际 ${flips[0]}）`)
+  assert.ok(Math.abs(flips[1] - 20) < 0.001, `第 2 天翻转点必须是它的价 20（实际 ${flips[1]}）`)
+  assert.notEqual(flips[0], flips[1], '切展示日 ⇒ 翻转点必须移动（这就是"按展示日取价"）')
+
+  // ── 同源断言：从 DTO 的 price 推出的分界 == 该日 profitRatio ──
+  for (const d of days) {
+    const boundary = chipsDayPriceOf({ dayPrice: d.price, topPriceUsed: 20 }).price as number
+    const fromDto = Math.round(buckets.reduce((s, w, i) => (centers[i] < boundary ? s + w : s), 0) * 100 * 100) / 100
+    assert.equal(fromDto, d.profitRatio, `${d.date}：用 DTO 的 price 复算的分界必须等于该日 profitRatio（${d.profitRatio}%）`)
+  }
+  // 顶层现价（20）与第 1 天的价（18）不同 ⇒ 若客户端统一用顶层，第 1 天的分界会错成 60% 而不是 40%
+  const wrongBoundary = Math.round(buckets.reduce((s, w, i) => (centers[i] < 20 ? s + w : s), 0) * 100 * 100) / 100
+  assert.notEqual(days[0].profitRatio, wrongBoundary, '两天分界必须不同（否则这条断言证明不了同源）')
+  // 数值明细（口算：centers = 16/17/18/19/20/21/22，weights = .1/.1/.2/.2/.2/.1/.1）
+  assert.equal(days[0].profitRatio, 20, '第 1 天（价 18）：低于 18 的只有 16、17 ⇒ 0.1+0.1 = 20%')
+  assert.equal(days[1].profitRatio, 60, '第 2 天（价 20）：低于 20 的有 16/17/18/19 ⇒ 0.1+0.1+0.2+0.2 = 60%')
+
+  // ── 结构：面板必须用逐日价（不是顶层现价）给柱子上色 ──
+  assert.ok(panel.includes('chipsDayPriceOf({ dayPrice: day.price, topPriceUsed: d.priceUsed })'), '面板必须按展示日取价')
+  const barLine = panel.split('\n').find((l) => l.includes('tw-chips-bar')) ?? ''
+  assert.ok(barLine.includes('dayPrice.price'), `筹码柱必须用逐日价（实际：${barLine.trim()}）`)
+  assert.equal(barLine.includes('d.priceUsed'), false, '筹码柱不许再用顶层现价')
+  // 回退留痕必须被消费（进 tooltip，不做常驻可见文案）
+  assert.ok(/dayPrice\.note === null \? '' : /.test(panel), '回退留痕必须出现在 tooltip 里（不许静默）')
+  assert.ok(view.includes('export function chipsDayPriceOf'), '取价规则必须是 chipsView 的纯函数（可断言）')
+
+  // ── 反例注入：客户端改回统一用顶层 priceUsed ⇒ "随日移动"必须失败 ──
+  const brokenFlip = (topPrice: number): number => flipOf(topPrice) // 三天同一个价
+  assert.equal(brokenFlip(20), flips[1], '反例：统一用顶层 20 ⇒ 第 2 天恰好一致')
+  assert.notEqual(brokenFlip(20), flips[0], '⚠ 反例与第 1 天的翻转点不同 ⇒ "随日移动"断言必然抓住它')
+  assert.throws(
+    () => assert.equal(brokenFlip(20), flips[0], '反例上"第 1 天翻转点 = 18"必须失败'),
+    /反例上/,
+    '⚠ 反例注入（统一用顶层 priceUsed）必须让"随日移动"这条断言失败',
   )
 })

@@ -236,3 +236,70 @@ test('task-61 ④：不足 180 根时如实写"近 N 根"（不假装够）', ()
   assert.ok(r.methodology.includes('用了近 60 根'), r.methodology.slice(0, 160))
   assert.equal(r.days.length, 45, '展示 45 天（少于实际根数时按展示窗口给）')
 })
+
+/**
+ * v0.57.0（task-5）：`ChipDay.price` —— 逐日盈亏边界价，且**与 profitRatio 同源**。
+ *
+ * 背景：界面原先统一用顶层 `priceUsed`（现价）给筹码柱上色，而宿主算 `profitRatio` 时
+ * **历史展示日用当日收盘价** ⇒ 拖到历史日会看到"柱色一套边界、盈利比例另一套边界"。
+ */
+test('逐日 price：历史日=当日收盘价、最新日=priceUsed；且与该日 profitRatio **同源**（可复算）', () => {
+  // 三天：收盘 10 / 20 / 30；现价给 25（刻意**不等于**任何一天收盘，便于分辨用了哪天的价）
+  const bars = [
+    { date: '2026-01-01', close: 10, vol: 100 },
+    { date: '2026-01-02', close: 20, vol: 100 },
+    { date: '2026-01-03', close: 30, vol: 100 },
+  ]
+  const r = chipSeriesOf(bars, { fqSupported: true, floatMv: 1e5, decay: 1.5, spread: 'triangle', buckets: 16, minSamples: 1, price: 25 })
+  assert.equal(r.days.length, 3, '三天都在（display 默认覆盖）')
+  // ① 边界价：前两天 = 各自收盘价；最后一天 = 顶层现价
+  assert.equal(r.days[0].price, 10, '第 1 天（历史）⇒ 当日收盘价 10')
+  assert.equal(r.days[1].price, 20, '第 2 天（历史）⇒ 当日收盘价 20')
+  assert.equal(r.days[2].price, 25, '第 3 天（最新）⇒ 顶层现价 25')
+  assert.equal(r.priceUsed, 25, '顶层 priceUsed 仍然保留（别的消费方在用）')
+  // ② **同源**：用该日 price 复算"低于该价的权重占比"，必须等于该日 profitRatio（百分比，2 位小数）
+  for (const d of r.days) {
+    const redo = d.buckets.reduce((s, w, i) => (d.centers[i] < (d.price as number) ? s + w : s), 0)
+    const expect = Math.round(redo * 100 * 100) / 100
+    assert.ok(Math.abs((d.profitRatio as number) - expect) <= 0.01,
+      `${d.date}：用 price=${d.price} 复算的占比 ${expect}% 必须等于宿主给的 profitRatio ${d.profitRatio}%`)
+  }
+  // ③ 缺 priceUsed（现价不可得）⇒ 最新日 price 为 null（不猜一个价），历史日仍给收盘价
+  const noQuote = chipSeriesOf(bars, { fqSupported: true, floatMv: 1e5, decay: 1.5, spread: 'triangle', buckets: 16, minSamples: 1, price: null })
+  assert.equal(noQuote.days[2].price, null, '现价不可得 ⇒ 最新日 price 为 null（界面按"未取到"处理）')
+  assert.equal(noQuote.days[0].price, 10, '历史日不受现价缺失影响')
+  // ④ 三种价不同 ⇒ 翻转点必须跟着展示日走（这条是"随日移动"的宿主侧证据）
+  const flips = r.days.map((d) => d.price)
+  assert.deepEqual(flips, [10, 20, 25], '逐日边界价必须是 [10, 20, 25]（不是三天同一个价）')
+  assert.ok(new Set(flips).size === 3, '三天三个不同的价 ⇒ 若客户端统一用顶层价，翻转点就不会移动')
+})
+
+/**
+ * v0.57.0（task-5）端到端：**宿主产出的 DTO → 客户端取价 → 柱色翻转点**必须与该日 `profitRatio` 一致。
+ *
+ * 这条跨了宿主/客户端两侧（`chips.buckets.test.ts` 已有先例），因为要证明的正是"两侧同源"：
+ * 只测一侧都可能是"各自自洽、合起来矛盾"。
+ */
+test('端到端同源：宿主 days[].price → 客户端 chipProfitDirOf，翻转点 == 该日 profitRatio 的分界', async () => {
+  const { chipsDayPriceOf, chipProfitDirOf } = await import('../client/chipsView.ts')
+  const bars = Array.from({ length: 10 }, (_, i) => ({ date: `2026-02-${String(i + 1).padStart(2, '0')}`, close: 12 + i * 1.3, vol: 100 + i * 7 }))
+  const r = chipSeriesOf(bars, { fqSupported: true, floatMv: 1e5, decay: 1.5, spread: 'triangle', buckets: 16, minSamples: 1, price: 26.75 })
+  let checked = 0
+  for (const d of r.days) {
+    // ① 客户端必须原样取用该日的价（有 price 就不许回退）
+    const picked = chipsDayPriceOf({ dayPrice: d.price, topPriceUsed: r.priceUsed })
+    assert.equal(picked.fallback, false, `${d.date}：有逐日 price 时不许回退`)
+    assert.equal(picked.price, d.price, `${d.date}：客户端取价必须等于该日 price`)
+    // ② 翻转点方向：价下方=获利(tw-up)、价上方=套牢(tw-down)
+    assert.equal(chipProfitDirOf({ center: (d.price as number) - 0.01, priceUsed: d.price, redUp: true }), 'tw-up', `${d.date}：价下方=获利`)
+    assert.equal(chipProfitDirOf({ center: (d.price as number) + 0.01, priceUsed: d.price, redUp: true }), 'tw-down', `${d.date}：价上方=套牢`)
+    // ③ 同源：用该日 price 复算的分界 == 宿主给的 profitRatio
+    const redo = Math.round(d.buckets.reduce((s2, w, i) => (d.centers[i] < (d.price as number) ? s2 + w : s2), 0) * 10000) / 100
+    assert.ok(Math.abs(redo - (d.profitRatio as number)) <= 0.01,
+      `${d.date}：客户端按 price=${d.price} 得到的分界 ${redo}% 必须等于宿主 profitRatio ${d.profitRatio}%`)
+    checked += 1
+  }
+  assert.ok(checked >= 5, `至少核到 5 天（实际 ${checked}）`)
+  // 逐日价不全相同 ⇒ "统一用顶层现价"一定会在某些天出错
+  assert.ok(new Set(r.days.map((d) => d.price)).size > 1, '逐日价必须真的逐日不同（否则这条断言证明不了什么）')
+})

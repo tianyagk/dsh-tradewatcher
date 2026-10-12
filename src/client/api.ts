@@ -7,6 +7,13 @@ export interface ChipDayDto {
   support: number | null
   resistance: number | null
   narrow: boolean
+  /**
+   * 该展示日的**盈亏边界价**（与 `profitRatio` 同源：最新日=现价、历史日=当日收盘价）。
+   *
+   * ⚠ **可选**：老宿主不带这个字段 ⇒ 客户端按 `chipsDayPriceOf` **如实回退**到顶层 `priceUsed`
+   * 并留下原因（不静默）。
+   */
+  price?: number | null
   profitRatio: number | null
   samples: number
 }
