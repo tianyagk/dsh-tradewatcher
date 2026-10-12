@@ -6,11 +6,11 @@ import type {
   DailyBarLite, RescueActiveWindow, RescueBottomLane, RescueConfig, RescueDaySummary, RescueEtfMeta, RescueEtfView,
   RescueFactor, RescueIntradayPoint, RescueLevel, RescueSignalEvent, RescueSnapshot, RescueThresholdSource,
 } from '../shared/model.ts'
-import { numOrNull, RESCUE_CORE_OUTFLOW_VETO, RESCUE_CORE_INDEXES, RESCUE_PERIPHERAL_FLOW_DISCOUNT, rescueUniverseMeta } from '../shared/model.ts'
+import { RESCUE_CORE_OUTFLOW_VETO, RESCUE_CORE_INDEXES, RESCUE_PERIPHERAL_FLOW_DISCOUNT, rescueUniverseMeta } from '../shared/model.ts'
 import { RESCUE_CALIBRATION } from './rescue-thresholds.ts'
 import { hostsAllowed } from './breaker.ts'
-import { QUOTE_HOSTS as EM_QUOTE_HOSTS, HISTORY_HOSTS as EM_HISTORY_HOSTS, fetchAny as fetchAnyJson } from './em.ts'
-import { fetchTencentDaily, fetchTencentMinutes, fetchTencentQuoteRows } from './tencent.ts'
+import { QUOTE_HOSTS as EM_QUOTE_HOSTS, HISTORY_HOSTS as EM_HISTORY_HOSTS, fetchAny as fetchAnyJson, loadQuoteRowsShared } from './em.ts'
+import { fetchTencentDaily, fetchTencentMinutes } from './tencent.ts'
 import { dayOf as shDayOf, hhmmOf as shHhmmOf, weekdayOf as shWeekdayOf } from './time.ts'
 import { buildBottomLane, calibrateAcross } from './bottom.ts'
 import { SingleFlight } from './singleflight.ts'
@@ -651,35 +651,10 @@ export interface RescueQuoteRow {
   low: number | null
 }
 
-// 与其它模块共用 shared 的实现（S7）
-const num = numOrNull
-
-/**批量快照（含 ETF 资金流字段；ETF 的 f62/f66 东财同样提供） */
-export async function fetchRescueQuotes(secids: string[]): Promise<Record<string, RescueQuoteRow>> {
-  const data = await fetchData(QUOTE_HOSTS, `/api/qt/ulist.np/get?fltt=2&invt=2&secids=${secids.join(',')}&fields=f12,f13,f14,f2,f3,f4,f6,f8,f10,f15,f16,f17,f62,f66,f184`)
-  const diff = Array.isArray(data.diff) ? (data.diff as Array<Record<string, unknown>>) : []
-  const out: Record<string, RescueQuoteRow> = {}
-  for (const r of diff) {
-    const market = num(r.f13)
-    const code = String(r.f12 ?? '')
-    if (market === null || code === '') continue
-    const secid = `${market}.${code}`
-    out[secid] = {
-      secid,
-      price: num(r.f2),
-      pct: num(r.f3),
-      amount: num(r.f6),
-      turnover: num(r.f8),
-      volRatio: num(r.f10),
-      mainNet: num(r.f62),
-      superNet: num(r.f66),
-      open: num(r.f17),
-      high: num(r.f15),
-      low: num(r.f16),
-    }
-  }
-  return out
-}
+// 注：曾经这里有一个 `fetchRescueQuotes`（采样器自己打一条带 f62/f66/f184 的 ulist URL）。
+// 它与顶部行情条的逐标的槽**互不命中**，实测同刻两条链路各打一遍上游（AUDIT-CACHE-2 §3.10）。
+// 现在采样器统一走 `fetchQuoteSource → em.loadQuoteRowsShared`（同一条槽 + 在飞合并），
+// 该函数随之删除 —— 留着只会让"两条链路各取各的"再长回来。
 
 interface DailyBar { date: string; close: number; vol: number; amount: number }
 
@@ -857,26 +832,50 @@ export async function fetchMinuteSeriesAny(secid: string): Promise<MinuteFlowPoi
   return tx.map((p) => ({ ts: p.ts, amount: p.amount, superNet: null, mainNet: null }))
 }
 
-/**快照数据来源：em = 含分单资金流；tencent = 只有量能与价格 */
+/**快照数据来源：em = 含分单资金流；tencent = 只有量能与价格（含新浪兜底与旧值） */
 export type QuoteSource = 'em' | 'tencent'
 
-/**批量快照：东财优先，失败回落腾讯（后者无超大单/主力净额） */
+/**
+ * 采样器快照：**与顶部行情条共用同一份逐标的行情槽**（P0 —— 采样器此前绕过行情缓存）。
+ *
+ * 此前这里自己直调 `fetchAny`，URL 的字段表（`…,f62,f66,f184`）与行情引擎的 `QUOTE_FIELDS` 不同 ⇒
+ * 两条链路各打一遍上游、互不命中：实测"完全没人看"的 53 秒窗口里本插件共 6 条请求，其中 4 条是这种重复
+ * （AUDIT-CACHE-2 §3.10）。现在改走 `em.loadQuoteRowsShared`（= `/quotes` 的同一条槽 + 在飞合并）：
+ *   - 行情条刚取过数 ⇒ 采样器**0 请求**（实测：一屏 45s 内采样器 3 → 0 条）；
+ *   - 行情条没开 / 槽已过期 ⇒ 采样器自己取一次（与从前一样，不依赖 UI 在不在）。
+ * 字段表已把 `f62/f66`（主力/超大单净额）与 `f8/f10`（换手/量比）并进同一份 `QUOTE_FIELDS`，
+ * 所以共用一条 URL 不丢列（多带两列不增加请求数）。
+ *
+ * 分单资金流只有东财给：`source !== 'em'` 的行**按 null 处理** —— 与"备用源没有分单资金流"的既有口径一致
+ * （此前腾讯兜底时这些因子同样直接不可用），不许把来自备用源/旧值的数字当东财资金流用。
+ */
 export async function fetchQuoteSource(secids: string[]): Promise<{ rows: Record<string, RescueQuoteRow>; source: QuoteSource }> {
-  try {
-    const rows = await fetchRescueQuotes(secids)
-    if (Object.keys(rows).length > 0) return { rows, source: 'em' }
-  } catch {
-    /* 回落腾讯 */
-  }
-  const tx = await fetchTencentQuoteRows(secids)
+  const shared = await loadQuoteRowsShared(secids)
   const rows: Record<string, RescueQuoteRow> = {}
-  for (const [secid, q] of Object.entries(tx)) {
+  let sawEm = false
+  let live = 0
+  for (const [secid, row] of shared) {
+    const fromEm = (row.source ?? 'em') === 'em'
+    if (fromEm) sawEm = true
+    if ((row.source ?? 'em') !== 'lkg') live += 1
     rows[secid] = {
-      secid, price: q.price, pct: q.pct, amount: q.amount, turnover: null, volRatio: null,
-      mainNet: null, superNet: null, open: q.open, high: q.high, low: q.low,
+      secid,
+      price: row.price,
+      pct: row.pct,
+      amount: row.amount,
+      turnover: row.turnover ?? null,
+      volRatio: row.volRatio ?? null,
+      mainNet: fromEm ? row.mainNet ?? null : null,
+      superNet: fromEm ? row.superNet ?? null : null,
+      open: row.open,
+      high: row.high,
+      low: row.low,
     }
   }
-  return { rows, source: 'tencent' }
+  // 只剩 last-known-good（东财/腾讯/新浪都没有回包）⇒ **不**当成一次成功采样：
+  // 与从前"两个源都失败就抛错"的语义一致（`tickOnce` 会记一次采样缺口，面板保留上次快照）
+  if (live === 0) throw new Error('本次没有拿到任何可用行情（东财/腾讯/新浪都没有回包）')
+  return { rows, source: sawEm ? 'em' : 'tencent' }
 }
 
 /**── 采样器 ────────────────────────────────────────────────────────────── */

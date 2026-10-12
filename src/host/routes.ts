@@ -17,7 +17,7 @@ import { detectAnomalies } from './anomaly.ts'
 import { YTD_MAX_IDS, computeYtds } from './ytd.ts'
 import { TONE_MAX_IDS, computeTones } from './tonesService.ts'
 import { BREADTH_MIN_DAYS, BREADTH_WINDOW, BreadthStore, breadthUsable, percentileOf, upRatio } from './breadth.ts'
-import { BREADTH_METHODOLOGY, BREADTH_COUNT_CALIBER, BREADTH_PAGE_SIZE, BreadthCountCache, resolveBreadthCount } from './breadthCount.ts'
+import { BREADTH_METHODOLOGY, BREADTH_COUNT_CALIBER, BREADTH_CLIST_MAX_PAGES, BREADTH_PAGE_SIZE, BreadthCountCache, resolveBreadthCount } from './breadthCount.ts'
 import { dayOf } from './time.ts'
 import { distributionBinsOf } from '../client/breadthView.ts'
 import { log, type PluginWebRoute } from './context.ts'
@@ -29,13 +29,21 @@ import { CHIPS_DISPLAY, CHIPS_DISPLAY_MAX, CHIPS_MIN_SAMPLES, CHIPS_WINDOW, CHIP
  *
  * 成本与边界（写死在注释里，免得后人以为它免费）：
  *   - 每页 100 只（`BREADTH_PAGE_SIZE`，上游上限），A 股约 5500 只 ⇒ **~56 页**；
- *   - 页数上限 `BREADTH_PAGES_MAX`，超了或中途失败 ⇒ 返回 `counts: null` + 原因，
+ *   - 并发 `DIST_CONCURRENCY`：此前是**串行**扫 56 次（实测并发峰值 1、上游 100ms 延迟下墙钟 5.9s、
+ *     真实上游 100–300ms 时 ≈6–20s 才出图，AUDIT-CACHE-1 §2.4）；现在与源 B 同量级的有限并发，
+ *     但顺序不影响结果（分档计数与页序无关）、失败即整轮失败（红线不变）；
+ *   - 页数上限**与源 B 共用同一个常量**（`BREADTH_CLIST_MAX_PAGES`）—— 两侧各自写死会漂移；
+ *   - 超上限 / 中途失败 / 上游未给总数 ⇒ `counts: null` + 原因，
  *     **绝不**用"扫到的那部分"冒充全市场；
- *   - 结果按 `DIST_TTL_MS` 缓存（默认 60s），重复打开大盘页不再重复扫描。
+ *   - 结果按 `DIST_TTL_MS` 缓存（默认 60s）；页级另有 20s 短缓存（`em.fetchClistPctPage`），
+ *     并与源 B（涨跌家数全量分页）**共享同一份页数据** ⇒ 同一次调用里两遍扫只打一遍上游
+ *     （实测 113 → 57 次，AUDIT-CACHE-1 P0-2）。
  * 口径：只按**涨跌幅**分档；`null`（停牌/上游给 `-`）单独计入 `blank`，不当 0（不许凭空加一只平盘）。
  */
 const DIST_TTL_MS = 60_000
-const BREADTH_PAGES_MAX = 60
+const BREADTH_PAGES_MAX = BREADTH_CLIST_MAX_PAGES
+/** 分布扫描的并发（页数上限仍写死在常量里；顺序无关，故可乱序完成） */
+const DIST_CONCURRENCY = 6
 interface DistSnapshot {
   labels: readonly string[]
   counts: number[] | null
@@ -52,16 +60,44 @@ async function distributionSnapshot(now = Date.now()): Promise<DistSnapshot> {
   const pcts: Array<number | null> = []
   let total: number | null = null
   let reason: string | null = null
-  for (let pn = 1; pn <= BREADTH_PAGES_MAX; pn += 1) {
-    try {
-      const page = await em.fetchClistPctPage(pn, BREADTH_PAGE_SIZE)
-      if (total === null) total = page.total
-      if (page.rows.length === 0) break
-      pcts.push(...page.rows)
-      if (total !== null && pcts.length >= total) break
-    } catch (error) {
-      reason = `第 ${pn} 页取数失败（${String(error).slice(0, 80)}）⇒ 没有扫全，不给部分分布冒充全市场`
-      break
+  // 第 1 页必须先取：它给出 `total`，决定要扫多少页（"扫全"的判据也是它）
+  try {
+    const first = await em.fetchClistPctPage(1, BREADTH_PAGE_SIZE)
+    total = first.total
+    pcts.push(...first.rows)
+  } catch (error) {
+    reason = `第 1 页取数失败（${String(error).slice(0, 80)}）`
+  }
+  if (reason === null && total === null) {
+    // 不知道总数就无法确认"扫全了没有" ⇒ 宁可报失败，也不给一个看起来正常的截面
+    reason = '上游未给出总数（无法确认是否扫全）'
+  }
+  if (reason === null && total !== null) {
+    const pageCount = Math.max(1, Math.ceil(total / BREADTH_PAGE_SIZE))
+    if (pageCount > BREADTH_PAGES_MAX) {
+      reason = `需要 ${pageCount} 页 > 上限 ${BREADTH_PAGES_MAX} 页（总数 ${total}）`
+    } else {
+      const queue = Array.from({ length: pageCount - 1 }, (_, i) => i + 2)
+      const failures: string[] = []
+      const workers = Array.from({ length: Math.min(DIST_CONCURRENCY, Math.max(1, queue.length)) }, async () => {
+        for (;;) {
+          if (failures.length > 0) return
+          const pn = queue.shift()
+          if (pn === undefined) return
+          try {
+            const page = await em.fetchClistPctPage(pn, BREADTH_PAGE_SIZE)
+            if (page.rows.length === 0 && pn < pageCount) {
+              failures.push(`第 ${pn} 页为空（上游限流或分页被截断）`)
+            } else {
+              pcts.push(...page.rows)
+            }
+          } catch (error) {
+            failures.push(`第 ${pn} 页取数失败（${String(error).slice(0, 80)}）`)
+          }
+        }
+      })
+      await Promise.all(workers)
+      if (failures.length > 0) reason = failures[0]
     }
   }
   const bins = distributionBinsOf(pcts)
@@ -75,7 +111,7 @@ async function distributionSnapshot(now = Date.now()): Promise<DistSnapshot> {
     asOf: now,
     reason: full
       ? null
-      : reason ?? `只扫到 ${pcts.length} 只 / 全市场 ${total ?? '未知'} 只（页数上限 ${BREADTH_PAGES_MAX}）⇒ 不给部分分布冒充全市场`,
+      : `${reason ?? `只扫到 ${pcts.length} 只 / 全市场 ${total ?? '未知'} 只（页数上限 ${BREADTH_PAGES_MAX}）`}⇒ 没有扫全，不给部分分布冒充全市场`,
   }
   distCache = snap
   return snap

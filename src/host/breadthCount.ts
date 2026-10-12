@@ -16,6 +16,15 @@ export const BREADTH_CLIST_CONCURRENCY = 4
 export const BREADTH_SINA_MAX_PAGES = 10
 /**结果缓存（毫秒）：一轮快照的有效期，避免每次刷新都把上游打一遍 */
 export const BREADTH_COUNT_TTL_MS = 120_000
+/**
+ * **失败**结果的负缓存时长（P1-1）。
+ *
+ * 此前只缓存成功：故障期间每次 `/breadth` 调用都会重跑一整遍 56 页循环 ——
+ * 网络流量为 0（`fetchAny` 已被熔断快速失败），代价是 CPU，以及**每个调用都去抢半开探针名额**：
+ * 一次低价值的页请求就能把探针名额吃掉。窗口取 30s（远短于成功结果的 60–300s），
+ * 保证恢复后的第一次请求不会被长时间挡住。
+ */
+export const BREADTH_COUNT_FAIL_TTL_MS = 30_000
 
 /**界面/工具要照原样说明的统计口径（自己算的数不能与上游给的混为一谈） */
 export const BREADTH_COUNT_CALIBER =
@@ -447,6 +456,8 @@ export async function countBreadthFromClist(
 export class BreadthCountCache {
   private at = 0
   private value: { counts: BreadthCounts; source: BreadthCountSource; asOf: number } | null = null
+  private failAt = 0
+  private failValue: { reason: string; checks: string[] } | null = null
   private readonly ttlMs: number
 
   constructor(ttlMs: number = BREADTH_COUNT_TTL_MS) {
@@ -462,6 +473,23 @@ export class BreadthCountCache {
   set(value: { counts: BreadthCounts; source: BreadthCountSource; asOf: number }, now: number = Date.now()): void {
     this.at = now
     this.value = value
+    // 成功即清掉负缓存：恢复后的第一次请求必须能真的去取数
+    this.failAt = 0
+    this.failValue = null
+  }
+
+  /**
+   * 失败结果的负缓存（P1-1）：`null` = 没有可用的负缓存（该真的去取数了）。
+   * 用 `now - failAt <= BREADTH_COUNT_FAIL_TTL_MS`，窗口很短且只影响"同一轮故障内的重复调用"。
+   */
+  getFailure(now: number = Date.now()): { reason: string; checks: string[] } | null {
+    if (this.failValue === null || now - this.failAt > BREADTH_COUNT_FAIL_TTL_MS) return null
+    return this.failValue
+  }
+
+  setFailure(value: { reason: string; checks: string[] }, now: number = Date.now()): void {
+    this.failAt = now
+    this.failValue = value
   }
 }
 
@@ -521,6 +549,17 @@ export async function resolveBreadthCount(args: {
   if (cached !== undefined && cached !== null) {
     return { counts: cached.counts, source: cached.source, asOf: cached.asOf, reason: null, checks: ['源 B/C：命中自统计结果缓存'] }
   }
+  // 负缓存（P1-1）：刚失败过就别再重跑一遍 56 页循环（它会去抢半开探针名额）
+  const failed = args.cache?.getFailure(now)
+  if (failed !== undefined && failed !== null) {
+    return {
+      counts: null,
+      source: null,
+      asOf: null,
+      reason: failed.reason,
+      checks: [`源 B/C：命中失败负缓存（${Math.round(BREADTH_COUNT_FAIL_TTL_MS / 1000)}s 内不重复扫页，到点自动重试）`, ...failed.checks],
+    }
+  }
   const b = await countBreadthFromClist(args.deps.clistPage, { pageSize: args.deps.clistPageSize })
   if (b.counts !== null) {
     const at = args.now ?? Date.now()
@@ -541,11 +580,8 @@ export async function resolveBreadthCount(args: {
   tried.push(`源B 东财 clist：${b.reason ?? '失败'}`)
   if (c !== null) tried.push(`源C 降序分页扫描：${c.reason ?? '失败'}`)
   const detail = tried.join('；')
-  return {
-    counts: null,
-    source: null,
-    asOf: null,
-    reason: breadthFailReason(detail, 'transient'),
-    checks: [...b.checks, ...(c?.checks ?? [])],
-  }
+  const failure = { reason: breadthFailReason(detail, 'transient'), checks: [...b.checks, ...(c?.checks ?? [])] }
+  // 失败也记进负缓存（短窗口 + 带原因）：故障期间不让每个调用都重跑一遍 56 页循环
+  args.cache?.setFailure(failure, now)
+  return { counts: null, source: null, asOf: null, ...failure }
 }

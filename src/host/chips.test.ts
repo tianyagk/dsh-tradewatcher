@@ -319,6 +319,16 @@ test('端到端：缓存 40 根 + 最后一根未完成超 TTL + 回源失败 �
   const home = mkdtempSync(join(tmpdir(), 'tw-chips-degrade-'))
   const prevHome = process.env.DSH_HOME
   const prevFetch = globalThis.fetch
+  /**
+   * ⚠ **必须钉住时钟**：这条用例的前提是"最后一根未完成 bar 已超过 60s TTL、需要回源"，
+   * 而 `isSettledOffline(cacheUpdatedAt)` 在**收盘后**会把任何晚于最近收盘（15:05）的缓存判成
+   * "已定稿" ⇒ 根本不回源、也不标 `stale`。也就是说：**不钉时钟时这条用例只在 09:25–15:05 之间成立**
+   * （2026-10-12 15:57 实测：干净 HEAD 上就红；同一天 14:14 的"全绿"是假绿，见 AUDIT-IMPL41 §7）。
+   * 钉在北京时间 2026-10-12（周一）10:30 —— 连续竞价中。
+   */
+  const realNow = Date.now
+  const FAKE_NOW = Date.parse('2026-10-12T10:30:00+08:00')
+  Date.now = () => FAKE_NOW
   process.env.DSH_HOME = home
   // 上游一律失败（不碰网络）
   globalThis.fetch = (() => Promise.reject(new Error('offline (test)'))) as typeof fetch
@@ -352,6 +362,7 @@ test('端到端：缓存 40 根 + 最后一根未完成超 TTL + 回源失败 �
     assert.ok(series.latest !== null, '筹码序列必须算得出来')
     assert.ok(series.latest.samples >= 10, `样本数必须 ≥ 10（实际 ${series.latest.samples}）—— 这就是用户报的"样本不足"被修好`)
   } finally {
+    Date.now = realNow
     globalThis.fetch = prevFetch
     if (prevHome === undefined) delete process.env.DSH_HOME
     else process.env.DSH_HOME = prevHome

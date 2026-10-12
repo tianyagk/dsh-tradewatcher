@@ -17,7 +17,8 @@ import { MISSING_TIER_ADVICE, SECID_RE, normalizeTrendSeries } from '../shared/m
 import { BREADTH_HS_A_FS, BREADTH_PAGE_SIZE, type CountPage } from './breadthCount.ts'
 import { isMultiDayTrend, stitchTrendDays } from '../shared/trendStitch.ts'
 import { TREND_ARCHIVE_KEEP_DAYS, archiveTrendDays, loadTrendArchive, type TrendArchiveEntry } from './trendArchive.ts'
-import { mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
+import { mkdir, readdir, readFile, rm, stat } from 'node:fs/promises'
+import { writeFileAtomic } from './atomic.ts'
 import { breakerFor, hostsAllowed, minutesToRecover } from './breaker.ts'
 import { fetchSinaEtfRanking, fetchSinaQuotes, sinaSymbol as sinaQuoteSymbol } from './sina.ts'
 import { fetchTencentBoards, fetchTencentMinutes, fetchTencentQuoteRows, fetchTencentSuggest, minuteTrendPointsOf, tencentCode, type TencentQuoteFull } from './tencent.ts'
@@ -38,12 +39,6 @@ const SEARCH_HOST = 'searchapi.eastmoney.com'
 interface CacheSlot {
   exp: number
   value: unknown
-  /**
-   * peek 的额外宽限（ms）。新鲜数据允许小幅过期复用（省上游请求）；
-   * 而 last-known-good 兜底项必须**显式 grace: 0** —— 否则 "20s 短缓存"
-   * 会被 peekCache 的 45s 宽限吞掉，真实陈旧窗口变成 ~65s（README 曾据此写错）。
-   */
-  grace?: number
 }
 
 const inflight = new Map<string, Promise<unknown>>()
@@ -68,11 +63,17 @@ async function ttlCache<T>(key: string, ttlMs: number, loader: () => Promise<T>)
 
 const cache = new Map<string, CacheSlot>()
 
-function peekCache<T>(key: string, maxAgeMs: number): T | undefined {
+/**
+ * 严格 TTL 命中（**没有**隐式宽限）。
+ *
+ * 此前这里叫 `peekCache(key, 45_000)`：槽的 `exp` 之外再允许 45s 的"宽限"，
+ * 于是分时那条 60s 的 TTL 实际等于 **≈105s**，而界面/口径按 60s 读"数据有多新"
+ * （AUDIT-CACHE-1 P2-2：不是请求放大，是**口径不一致**，会让人把 105s 前的行情当成 60s 内的）。
+ * 真要提前复用，就调 TTL 本身 —— 不再叠一层看不见的窗口。
+ */
+function readFresh<T>(key: string): T | undefined {
   const slot = cache.get(key)
-  if (slot === undefined) return undefined
-  const grace = slot.grace ?? maxAgeMs
-  if (Date.now() > slot.exp + grace) return undefined
+  if (slot === undefined || Date.now() >= slot.exp) return undefined
   return slot.value as T
 }
 
@@ -205,8 +206,15 @@ function diffList(d: unknown): Array<Record<string, unknown>> {
 
 // ─────────────────────────────── quotes ───────────────────────────────────
 
+/**
+ * ⚠ `f62`（主力净额）/`f66`（超大单净额）是**护盘采样器**要的分单资金流字段。
+ * 它们加在这里（而不是让采样器自己打一条 URL）是有意的：采样器的标的（6 只宽基 ETF + 上证指数）
+ * 与顶部行情条的引擎集合高度重叠，字段表相同 ⇒ 两条链路共用同一个逐标的槽，
+ * 同一秒内谁先取数、另一个就命中缓存（实测此前两条链路各打一遍、互不命中，见 AUDIT-CACHE-2 §3.10）。
+ * 多带两列不增加 HTTP 请求数（同一个 URL）。
+ */
 const QUOTE_FIELDS =
-  'f1,f2,f3,f4,f5,f6,f8,f9,f10,f12,f13,f14,f15,f16,f17,f18,f20,f21,f23,f104,f105,f106,f124'
+  'f1,f2,f3,f4,f5,f6,f8,f9,f10,f12,f13,f14,f15,f16,f17,f18,f20,f21,f23,f62,f66,f104,f105,f106,f124'
 
 const LKG_MAX = 1500
 const LKG_PERSIST_MS = 45_000
@@ -262,8 +270,10 @@ function persistLastGood(): void {
   const rows = [...lastGood.values()]
   void (async () => {
     try {
-      await mkdir(dataHome(), { recursive: true })
-      await writeFile(join(dataHome(), 'quotes-lkg.json'), JSON.stringify({ ts: Date.now(), rows }), 'utf8')
+      // ⚠ 原子写（tmp + rename）：这份文件会被下一次读取与另一个写者同时看到，
+      // 直接 writeFile 会让读者读到半截 JSON（解析失败 ⇒ 被当成"没有缓存" ⇒ 白拉一遍上游）。
+      // 序列化保持**逐字节不变**（compact，不换缩进）—— 4MB 级的 trends-lkg 不值得为好看翻倍。
+      await writeFileAtomic(join(dataHome(), 'quotes-lkg.json'), JSON.stringify({ ts: Date.now(), rows }))
     } catch (error) {
       console.warn('[tradewatcher] persist quotes-lkg failed:', String(error))
     }
@@ -459,6 +469,12 @@ function rowsFrom(json: unknown): Map<string, QuoteRow> {
       low: num(it.f16),
       vol: num(it.f5),
       amount: num(it.f6),
+      // 换手率 f8 / 量比 f10：行情本身用不到，但护盘采样器要（它此前自己打一条 URL 拿这两列）
+      turnover: num(it.f8),
+      volRatio: num(it.f10),
+      // 分单资金流（主力净额 f62 / 超大单净额 f66）：只有东财给；腾讯/新浪备用源为 null
+      mainNet: num(it.f62),
+      superNet: num(it.f66),
       up: num(it.f104),
       down: num(it.f105),
       even: num(it.f106),
@@ -714,8 +730,8 @@ function persistBoardLkg(): void {
   const entries = [...boardLkg.entries()].slice(-40).map(([key, v]) => ({ key, ts: v.ts, total: v.total, rows: v.rows }))
   void (async () => {
     try {
-      await mkdir(dataHome(), { recursive: true })
-      await writeFile(join(dataHome(), 'board-lkg.json'), JSON.stringify({ ts: Date.now(), entries }), 'utf8')
+      // 原子写（同上：读者可能正在解析这份文件）
+      await writeFileAtomic(join(dataHome(), 'board-lkg.json'), JSON.stringify({ ts: Date.now(), entries }))
     } catch (error) {
       console.warn('[tradewatcher] persist board-lkg failed:', String(error))
     }
@@ -743,7 +759,11 @@ const quoteInflight = new Map<string, Promise<void>>()
 /** 兜底可用窗口：上游失败时仍可服务最近一次成功读数（旧到看不出来时由 `at`/`stale` 如实暴露） */
 const QUOTE_SERVE_STALE_MS = 10 * 60_000
 
-/** 新鲜度窗口（ms）：跟随用户的刷新间隔设置，夹在 5–60 秒；由插件入口与 prefs 变更处写入 */
+/**
+ * 新鲜度窗口（ms）：跟随用户的刷新间隔设置，夹在 5–60 秒；由插件入口与 prefs 变更处写入。
+ *
+ * ⚠ 这是**客户端轮询间隔**，不是服务端槽的有效期：`loadQuotes` 用的 TTL 见 `quoteSlotTtlMs()`。
+ */
 let quoteFreshMs = 10_000
 
 export function setQuoteFreshnessMs(ms: number): void {
@@ -753,6 +773,39 @@ export function setQuoteFreshnessMs(ms: number): void {
 
 export function quoteFreshnessMs(): number {
   return quoteFreshMs
+}
+
+/** 槽有效期相对轮询间隔的余量：间隔的 20%，夹在 1–5 秒（覆盖定时器抖动 + 一次网络往返） */
+const QUOTE_SLOT_MARGIN_MIN_MS = 1_000
+const QUOTE_SLOT_MARGIN_MAX_MS = 5_000
+
+/**
+ * 服务端行情槽的有效期 = **客户端轮询间隔 + 一档余量**。
+ *
+ * 为什么必须严格大于间隔：此前两者是同一个数（`quoteFreshMs`，实测 prefs 里 `refreshSec=10` ⇒ 两边都 10s），
+ * 客户端下一拍回来时槽**刚好**过期 ⇒ 稳态命中率 0%，每拍必然回源
+ * （实测连续三拍 8 条/拍、每拍一模一样，见 AUDIT-CACHE-2 §3.1b）；这是"同一数据反复拉取"的根因。
+ *
+ * 语义边界（不许让界面数据变陈旧）：余量只有一档（20%），因此
+ *   - 下一拍（间隔 + 网络往返）必定命中 ⇒ 请求数减半；
+ *   - 最坏情况下界面上那一行也只比"刚刚取到"旧**一拍**（≤ 客户端间隔），
+ *     不会出现"看着是 10s 刷新、数据其实旧了两三拍"。
+ * 界面上的"数据时刻"始终取行内 `at`/`asOf`，与本 TTL 无关，因此标注永远如实。
+ */
+export function quoteSlotTtlMs(): number {
+  const margin = Math.min(QUOTE_SLOT_MARGIN_MAX_MS, Math.max(QUOTE_SLOT_MARGIN_MIN_MS, Math.round(quoteFreshMs * 0.2)))
+  return quoteFreshMs + margin
+}
+
+/**
+ * 非交易时段且该槽的观测时刻已越过最近一次收盘 ⇒ 这份行情不会再变，直接复用（**零回源**）。
+ *
+ * 只对**沪/深（`1.`/`0.` 市场）**生效：它们的交易时段就是 `time.inSession` 的口径；
+ * 外盘指数（`100.*`）、商品/期货（`101/112/113/114/122.*`）、美债收益率（`171.*`）的交易时段不同
+ * （夜盘/美盘都在北京深夜），用 A 股时段把它们冻住会让面板在真正有行情时不刷新 —— 所以它们仍按 TTL 轮询。
+ */
+function frozenOfflineSlot(secid: string, slotAt: number, now: number): boolean {
+  return /^[01]\./.test(secid) && isSettledOffline(slotAt, now)
 }
 
 /** 去重（大小写无关，保留首次出现的写法）+ 稳定排序 */
@@ -777,11 +830,16 @@ async function loadQuotes(secids: string[]): Promise<Map<string, QuoteRow>> {
   const waiters = new Set<Promise<void>>()
   const need: string[] = []
   const now = Date.now()
+  /** 槽是否可直接复用：仍在有效期内，或（沪/深 + 已收盘定稿）不会再变 */
+  const reusable = (secid: string, slot: { exp: number; at: number; row: QuoteRow } | undefined): boolean => {
+    if (slot === undefined) return false
+    return now < slot.exp || frozenOfflineSlot(secid, slot.at, now)
+  }
   for (const secid of list) {
     const key = secid.toUpperCase()
     const slot = quoteSlots.get(key)
-    if (slot !== undefined && now < slot.exp) {
-      picked.set(key, slot.row)
+    if (reusable(secid, slot)) {
+      picked.set(key, slot!.row)
       continue
     }
     const flying = quoteInflight.get(key)
@@ -799,14 +857,14 @@ async function loadQuotes(secids: string[]): Promise<Map<string, QuoteRow>> {
     const key = secid.toUpperCase()
     if (picked.has(key)) continue
     const slot = quoteSlots.get(key)
-    if (slot !== undefined && Date.now() < slot.exp) {
-      picked.set(key, slot.row)
+    if (reusable(secid, slot)) {
+      picked.set(key, slot!.row)
       continue
     }
     still.push(secid)
   }
   if (still.length > 0) {
-    const ttl = quoteFreshMs
+    const ttl = quoteSlotTtlMs()
     const batch = (async () => {
       const got = await rawQuotes(still)
       // 东财整体不可用或部分丢码时，用腾讯/新浪把缺口补上
@@ -874,6 +932,18 @@ export async function fetchQuotesDetailed(secids: string[]): Promise<QuoteProven
 /** 只要行情的调用方用这个（tools 等）；需要新鲜度信息的用 fetchQuotesDetailed */
 export async function fetchQuotes(secids: string[]): Promise<Record<string, QuoteRow>> {
   return rowsToRecord(await loadQuotes(secids))
+}
+
+/**
+ * **共用行情槽**的批量读取出口（护盘采样器等后台取数方用；不经过路由）。
+ *
+ * 契约：与 `/quotes`（顶部行情条/自选/持仓）读的是**同一份**逐标的槽 + 同一个在飞合并
+ * （`quoteInflight`），因此两条链路同刻取数时只有一条会真的打上游。
+ * 返回的行可能来自东财、备用源（腾讯/新浪）或 last-known-good —— 来源如实写在 `row.source` 里，
+ * 分单资金流（`mainNet`/`superNet`）只有 `source === 'em'` 的行才有值。
+ */
+export async function loadQuoteRowsShared(secids: string[]): Promise<Map<string, QuoteRow>> {
+  return loadQuotes(secids)
 }
 
 /** Detail card for one stock/ETF (extra fundamentals; indices return what the feed has). */
@@ -980,8 +1050,8 @@ function persistTrendLkg(): void {
   const entries = [...trendLkg.entries()].map(([key, v]) => ({ key, at: v.at, trend: v.trend }))
   void (async () => {
     try {
-      await mkdir(dataHome(), { recursive: true })
-      await writeFile(join(dataHome(), 'trends-lkg.json'), JSON.stringify({ ts: Date.now(), entries }), 'utf8')
+      // 原子写（同上：4MB 级的文件更容易被读者撞上"半截"）
+      await writeFileAtomic(join(dataHome(), 'trends-lkg.json'), JSON.stringify({ ts: Date.now(), entries }))
     } catch (error) {
       console.warn('[tradewatcher] persist trends-lkg failed:', String(error))
     }
@@ -1003,6 +1073,19 @@ export function lastGoodTrend(secid: string, ndays: number, maxAgeMs = Infinity)
   return { ...hit.trend, staleAt: hit.at }
 }
 
+/**
+ * 分时的**在飞合并**：同一个 `trend:<secid>:<ndays>` 的回源段只跑一份。
+ *
+ * 为什么必须有：客户端有三条互不共享缓存的分时消费者（行情条迷你卡 90s、抽屉图表 30s、
+ * 大盘页滚动 `openDetail` 无缓存），它们会撞在同一瞬间 —— 实测**并发 8 个同 secid 请求 ⇒ 8 次上游**
+ * （AUDIT-CACHE-1 S2-3），同一份数据被打了 8 遍。对照：K 线与五日分时都走 `ttlCache` 的同一套机制，
+ * 并发 8 / 4 ⇒ **1 次**。这里补上的就是那一套（`inflight` 合并）。
+ *
+ * 合并范围只覆盖"回源那一段"（上游 → 活的备用源 → LKG 的判定与写缓存），
+ * 不覆盖已命中新鲜缓存/休市定稿的快路径 —— 它们本来就 0 请求，没必要排队等。
+ */
+const trendInflight = new Map<string, Promise<TrendData | null>>()
+
 /** 分时取数统一入口：内存新鲜缓存 → 休市定稿复用 → 上游（带重试）→ last-known-good */
 async function trendWithFallbackRaw(
   secid: string,
@@ -1012,7 +1095,7 @@ async function trendWithFallbackRaw(
 ): Promise<TrendData | null> {
   await loadTrendLkg()
   const key = `trend:${secid}:${ndays}`
-  const fresh = peekCache<TrendData>(key, 45_000)
+  const fresh = readFresh<TrendData>(key)
   if (fresh !== undefined) return fresh
   // 休市且本地快照已越过最近一次收盘 → 当天的分时/五日序列不会再变，直接吃本地
   // （进程重启后仍生效：trendLkg 是落盘的）。盘中 / 快照过期一律走上游。
@@ -1023,44 +1106,55 @@ async function trendWithFallbackRaw(
     cache.set(key, { exp: Date.now() + 300_000, value: reused })
     return reused
   }
-  // ⚠ 顺序：**上游 → 活的备用源（腾讯分钟线）→ LKG**（判据见 pickTrendFallback）。
-  // 决不能在备用源之前吃 LKG：那会让"有昨日 LKG 的标的"在东财不可达时永远显示昨天。
-  let upstream: TrendData | null = null
-  let upstreamThrew = false
-  try {
-    upstream = await loader()
-  } catch {
-    upstreamThrew = true
-  }
-  let backup: TrendData | null = null
-  if (upstream === null || upstream.points.length < 2) {
-    backup = await (opts.fallbackSource ?? tencentTrend)(secid).catch(() => null)
-  }
-  const now = opts.now ?? Date.now()
-  const picked = pickTrendFallback({ upstream, backup, lkg: lastGoodTrend(secid, ndays), today: dayOf(now) })
-  if (picked.data === null) {
-    // 上游与备用源都没给数据 —— 记账（"东财被限流"与"该标的没有分时"必须能分开）
-    if (upstreamThrew) noteUpstreamFailure('trend')
-    // 返回 null（路由回 200 + trend:null），客户端按"暂无分时"降级
-    return null
-  }
-  // 缓存 TTL 按来源区分：实时值给长 TTL；LKG 不享受 peek 宽限（20s 后必须重新回源试探）
-  // 方向二：**不是今天**的数据必须留下痕迹（节假日上游会回节前那天的分时）。
-  // `expired` 就是为此算的 —— 客户端拿它写「· 非当日数据（MM-DD）」，否则旧交易日会被读成今天。
-  const annotate = (data: TrendData): TrendData =>
-    picked.sessionDay !== null && (picked.expired || picked.from === 'lkg')
-      ? { ...data, sessionDay: picked.sessionDay }
-      : data
-  if (picked.from === 'lkg') {
-    // 兜底回 LKG：带上这份数据自己的交易日，界面据此写明"这是哪天的"
+  const pending = trendInflight.get(key)
+  if (pending !== undefined) return pending
+  const run = (async (): Promise<TrendData | null> => {
+    // ⚠ 顺序：**上游 → 活的备用源（腾讯分钟线）→ LKG**（判据见 pickTrendFallback）。
+    // 决不能在备用源之前吃 LKG：那会让"有昨日 LKG 的标的"在东财不可达时永远显示昨天。
+    let upstream: TrendData | null = null
+    let upstreamThrew = false
+    try {
+      upstream = await loader()
+    } catch {
+      upstreamThrew = true
+    }
+    let backup: TrendData | null = null
+    if (upstream === null || upstream.points.length < 2) {
+      backup = await (opts.fallbackSource ?? tencentTrend)(secid).catch(() => null)
+    }
+    const now = opts.now ?? Date.now()
+    const picked = pickTrendFallback({ upstream, backup, lkg: lastGoodTrend(secid, ndays), today: dayOf(now) })
+    if (picked.data === null) {
+      // 上游与备用源都没给数据 —— 记账（"东财被限流"与"该标的没有分时"必须能分开）
+      if (upstreamThrew) noteUpstreamFailure('trend')
+      // 返回 null（路由回 200 + trend:null），客户端按"暂无分时"降级
+      return null
+    }
+    // 缓存 TTL 按来源区分：实时值 60s、备用源 30s、LKG 20s（LKG 是"可能过期"的数据，短 TTL 逼着重新回源试探；
+    // TTL 就是 TTL，不再有隐式宽限，见 readFresh 的说明）
+    // 方向二：**不是今天**的数据必须留下痕迹（节假日上游会回节前那天的分时）。
+    // `expired` 就是为此算的 —— 客户端拿它写「· 非当日数据（MM-DD）」，否则旧交易日会被读成今天。
+    const annotate = (data: TrendData): TrendData =>
+      picked.sessionDay !== null && (picked.expired || picked.from === 'lkg')
+        ? { ...data, sessionDay: picked.sessionDay }
+        : data
+    if (picked.from === 'lkg') {
+      // 兜底回 LKG：带上这份数据自己的交易日，界面据此写明"这是哪天的"
+      const annotated = annotate(picked.data)
+      cache.set(key, { exp: Date.now() + 20_000, value: annotated })
+      return annotated
+    }
     const annotated = annotate(picked.data)
-    cache.set(key, { exp: Date.now() + 20_000, value: annotated, grace: 0 })
+    cache.set(key, { exp: Date.now() + (picked.from === 'upstream' ? 60_000 : 30_000), value: annotated })
+    rememberTrend(secid, ndays, annotated)
     return annotated
+  })()
+  trendInflight.set(key, run)
+  try {
+    return await run
+  } finally {
+    if (trendInflight.get(key) === run) trendInflight.delete(key)
   }
-  const annotated = annotate(picked.data)
-  cache.set(key, { exp: Date.now() + (picked.from === 'upstream' ? 60_000 : 30_000), value: annotated })
-  rememberTrend(secid, ndays, annotated)
-  return annotated
 }
 
 /**
@@ -1684,7 +1778,8 @@ async function saveKlineCache(secid: string, klt: number, fqt: FqMode, bars: Day
     // 落盘时判定最后一根：盘中抓到的当日 bar 标 partial（读侧按 60s TTL 决定是否回源）
     const last = bars.length > 0 ? bars[bars.length - 1] : null
     const partial = last !== null && isPartialBar(last.date, Date.now())
-    await writeFile(klineFile(secid, klt, fqt), JSON.stringify({ v: KLINE_CACHE_V, secid, klt, fqt, updatedAt: Date.now(), partial, bars }), 'utf8')
+    // 原子写：半截 JSON 会被读侧当成"没有缓存" ⇒ 又回源一次（正是本轮要减少的那种请求）
+    await writeFileAtomic(klineFile(secid, klt, fqt), JSON.stringify({ v: KLINE_CACHE_V, secid, klt, fqt, updatedAt: Date.now(), partial, bars }))
     void pruneKlineCache()
   } catch (error) {
     console.warn('[tradewatcher] 保存K线缓存失败:', String(error))
@@ -1821,6 +1916,51 @@ async function requestKlineFromTencent(secid: string, klt: number, lmt: number, 
   }
 }
 
+/**
+ * 熔断冷却中（一台可用主机都没有）：与"试过但失败"**必须分开**。
+ *
+ * 分开的意义在负缓存：`ttlCache` 连 `null` 也缓存（full 键 1 小时、incr 键 2 分钟），
+ * 若把"熔断中"也写进负缓存，一次冷却就会把该标的的 K 线锁死一小时（而冷却通常 2–15 分钟就恢复了）。
+ * 所以冷却时抛这个错误，由 `refreshKline` 识别后**不写缓存**，下次调用重新判断
+ * （冷却期内每次都是本地快速失败，不会产生任何上游请求）。
+ */
+class UpstreamCoolingError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'UpstreamCoolingError'
+  }
+}
+
+/**
+ * 单主机取数，**过熔断器**：放行判定、半开探针名额、成功/失败记账与释放，与 `fetchAny` 同源。
+ *
+ * 为什么 K 线不直接用 `fetchAny`：`fetchAny` 把"200 + 空数组"当成功返回（任一台成功即返回），
+ * 而 K 线必须识别"这台回了但没有数据 ⇒ 换下一台"（push2delay/push2 常回空），所以保留逐主机循环；
+ * 但**账本必须共用** —— 此前这里直调裸 `fetchFromHost`：既不查 `allow()` 也不 `recordFailure`，
+ * 实测三台主机全部熔断时一次 `/kline` 仍发 **6 条**请求，而 `trips`/`fails` 一字不变
+ * （AUDIT-CACHE-2 §3.2 / C2，两份审计独立命中）。
+ */
+async function fetchHostThroughBreaker(host: string, pathAndQuery: string, timeoutMs: number): Promise<unknown> {
+  const breaker = breakerFor(host)
+  if (!breaker.allow()) {
+    throw new UpstreamCoolingError(`上游熔断冷却中（约 ${minutesToRecover([host])} 分钟后自动重试）`)
+  }
+  // 半开期只放行一个探针（与 fetchAny 同语义）：抢不到名额就当"这次没发请求"，不计失败
+  if (!breaker.claimProbe()) {
+    throw new UpstreamCoolingError(`上游熔断半开探测中（约 ${minutesToRecover([host])} 分钟后重试）`)
+  }
+  try {
+    const json = await fetchFromHost(host, pathAndQuery, timeoutMs)
+    breaker.recordSuccess()
+    return json
+  } catch (error) {
+    breaker.recordFailure(error)
+    throw error
+  } finally {
+    breaker.releaseProbe()
+  }
+}
+
 /** 单主机取 K 线；空数组视为失败（push2delay/push2 会返回 200 + 空）。优先腾讯。 */
 async function requestKlineRaw(secid: string, klt: number, lmt: number, fqt: FqMode): Promise<DayBar[] | null> {
   /** 至少有一个源给了**成功回包**（哪怕没有这个标的的 K 线）—— 决定 missing 的 why 是 no-source 还是 transient */
@@ -1830,9 +1970,12 @@ async function requestKlineRaw(secid: string, klt: number, lmt: number, fqt: FqM
   const fields2 = 'f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61'
   const path = `/api/qt/stock/kline/get?secid=${encodeURIComponent(secid)}&klt=${klt}&fqt=${fqt}&lmt=${lmt}&end=20500101&fields1=f1,f2,f3&fields2=${fields2}`
   for (let attempt = 0; attempt < 2; attempt += 1) {
+    /** 本轮是否真的发出过请求（三台全在冷却 ⇒ 一条都没发 ⇒ 不必再等 500ms 重试第二轮） */
+    let triedThisRound = false
     for (const host of HISTORY_HOSTS) {
       try {
-        const json = await fetchFromHost(host, path, 9000)
+        const json = await fetchHostThroughBreaker(host, path, 9000)
+        triedThisRound = true
         replied = true
         const data = (bodyOf(json)?.data ?? null) as { klines?: unknown } | null
         const raw = Array.isArray(data?.klines) ? data?.klines ?? [] : []
@@ -1854,10 +1997,14 @@ async function requestKlineRaw(secid: string, klt: number, lmt: number, fqt: FqM
           })
         }
         if (bars.length > 0) return bars
-      } catch {
+      } catch (error) {
+        // 熔断冷却/半开探针被别人占用：这一次没发请求，换下一台，**不计失败**
+        if (error instanceof UpstreamCoolingError) continue
+        triedThisRound = true
         /* 换主机 / 重试 */
       }
     }
+    if (!triedThisRound) throw new UpstreamCoolingError('东财历史行情主机全部处于熔断冷却中')
     if (attempt === 0) await new Promise((r) => setTimeout(r, 500))
   }
   // 全程一个成功回包都没有 ⇒ 上游故障（transient）；有回包但没数据 ⇒ 结构性缺失（no-source）
@@ -2059,9 +2206,17 @@ export function detailMissingReason(opts: { emDown?: boolean } = {}): UpstreamRe
  */
 async function refreshKline(secid: string, baseKlt: number, fqt: FqMode, entry: KlineEntry, needFull: boolean): Promise<boolean> {
   const key = `kline:${secid}:${baseKlt}:${fqt}:${needFull ? 'full' : 'incr'}`
-  const fetched = await ttlCache<DayBar[] | null>(key, needFull ? 3600_000 : 120_000, () =>
-    requestKlineRaw(secid, baseKlt, needFull ? KLINE_FULL_LMT[baseKlt] : KLINE_RECENT_LMT[baseKlt], fqt),
-  )
+  let fetched: DayBar[] | null
+  try {
+    fetched = await ttlCache<DayBar[] | null>(key, needFull ? 3600_000 : 120_000, () =>
+      requestKlineRaw(secid, baseKlt, needFull ? KLINE_FULL_LMT[baseKlt] : KLINE_RECENT_LMT[baseKlt], fqt),
+    )
+  } catch (error) {
+    if (!(error instanceof UpstreamCoolingError)) throw error
+    // 熔断冷却中（一台可用主机都没有）：**不写负缓存** —— 否则一次冷却会把该标的锁到 1 小时后，
+    // 而熔断通常 2–15 分钟就恢复。冷却期内每次调用都是本地快速失败（0 上游请求），代价可忽略。
+    fetched = null
+  }
   if (fetched !== null && fetched.length > 0) {
     const before = entry.bars.length
     const beforeLast = entry.bars[entry.bars.length - 1]?.date ?? ''
@@ -2090,23 +2245,55 @@ const BOARD_FIELDS = 'f2,f3,f4,f5,f6,f8,f12,f13,f14,f62,f104,f105,f128,f136'
 
 /** Sector/ETF ranking. sort: pct (default) | money (boards) | amount (ETF). */
 /**
- * 东财 clist 的**一页**（涨跌幅），供涨跌家数自统计（源 B）用。
+ * 东财 clist 的**一页**（涨跌幅），供涨跌家数自统计（源 B）与涨跌分布扫描用。
  *
  * `pz` 被上游截在 100（实测），所以调用方按 100 分页；`fs` 固定为沪深A股（不含北交所，
  * 口径写在 `BREADTH_COUNT_CALIBER` 里）。返回 `rows` = 该页每只的涨跌幅（f3），`total` = 上游给的总数。
+ *
+ * ── 短 TTL（P0-2）：同一轮里两遍扫只会打一遍上游 ──────────────────────────────
+ * `/breadth?dist=1` 在"指数行情没有涨跌家数"（＝行情走备用源时的常态）下，源 B（涨跌家数全量分页）
+ * 与涨跌分布扫描会**各扫一遍字节级相同的 56 个 URL** —— 实测一次调用 **112 次上游**（56 × 2，
+ * AUDIT-CACHE-1 S4-4）。两条链路都走本函数，所以缓存加在这里、同轮两遍自然共享：
+ * 改后同一场景实测 56 次（每个 URL 恰好一遍）。
+ * 窗口取 20s，**必须小于分布快照的 60s 口径** —— 直方图描述的是"同一时刻全市场"的截面，
+ * 跨 60s 复用会让两处口径不一致。
+ *
+ * ── 负缓存（P1-1）：失败也要记一小会儿 ────────────────────────────────────────
+ * 此前失败**什么都不缓存**，于是故障期间每次 `/breadth` 调用都会重跑一整遍 56 页循环
+ * （网络流量为 0，因为 `fetchAny` 已把主机熔断、快速失败），代价是 CPU，以及
+ * **每个调用都去抢半开探针名额** —— 一次低价值的页请求就能把探针名额吃掉。
+ * 现在失败记 15s（带原因），到点自动重试；恢复后的第一次请求不会被挡（窗口很短且只挡同一页）。
  */
+const CLIST_PCT_TTL_MS = 20_000
+const CLIST_PCT_FAIL_TTL_MS = 15_000
+const CLIST_PCT_FAIL_MAX = 200
+const clistPctFail = new Map<string, { at: number; message: string }>()
+
 export async function fetchClistPctPage(pn: number, pz: number): Promise<CountPage> {
   const p = Math.max(1, Math.round(pn))
   const z = Math.max(1, Math.min(BREADTH_PAGE_SIZE, Math.round(pz)))
+  const key = `clist-pct:${p}:${z}`
+  const failed = clistPctFail.get(key)
+  if (failed !== undefined && Date.now() - failed.at < CLIST_PCT_FAIL_TTL_MS) {
+    throw new Error(failed.message)
+  }
   const path = `/api/qt/clist/get?pn=${p}&pz=${z}&po=1&np=1&fltt=2&invt=2&fid=f3&fs=${encodeURIComponent(BREADTH_HS_A_FS)}&fields=f3,f12`
-  const json = await fetchAny(QUOTE_HOSTS, path)
-  const body = bodyOf(json)
-  const rawTotal = body?.data?.total
-  const total = typeof rawTotal === 'number' && Number.isFinite(rawTotal) ? rawTotal : null
-  // 无涨跌幅的行（停牌 / 上游给 '-'）**保留为 null 占位**：既不能当 0，也不能悄悄丢掉 ——
-  // 丢掉会让"三类之和 = 上游总数"的等式永远不成立（当日有 1 只停牌就判失败）
-  const rows = diffList(json).map((r) => num(r.f3))
-  return { rows, total }
+  try {
+    return await ttlCache<CountPage>(key, CLIST_PCT_TTL_MS, async () => {
+      const json = await fetchAny(QUOTE_HOSTS, path)
+      const body = bodyOf(json)
+      const rawTotal = body?.data?.total
+      const total = typeof rawTotal === 'number' && Number.isFinite(rawTotal) ? rawTotal : null
+      // 无涨跌幅的行（停牌 / 上游给 '-'）**保留为 null 占位**：既不能当 0，也不能悄悄丢掉 ——
+      // 丢掉会让"三类之和 = 上游总数"的等式永远不成立（当日有 1 只停牌就判失败）
+      const rows = diffList(json).map((r) => num(r.f3))
+      return { rows, total }
+    })
+  } catch (error) {
+    if (clistPctFail.size >= CLIST_PCT_FAIL_MAX) clistPctFail.clear()
+    clistPctFail.set(key, { at: Date.now(), message: String(error instanceof Error ? error.message : error).slice(0, 120) })
+    throw error
+  }
 }
 
 export async function fetchBoard(
@@ -2224,18 +2411,60 @@ async function industryNameOf(secid: string): Promise<string | null> {
   return String(raw)
 }
 
-/** name → 板块当日涨跌幅；分页拉全行业榜（每页 30s 缓存），供批量复用。 */
-async function industryBoardPctMap(): Promise<Map<string, number | null>> {
-  const map = new Map<string, number | null>()
-  let total = Infinity
-  for (let pn = 1; pn <= 8 && map.size < total; pn += 1) {
-    const board = await fetchBoard('industry', 'pct', pn, 100)
-    total = board.total
-    for (const r of board.rows) {
-      if (!map.has(r.name)) map.set(r.name, r.pct)
-    }
+/** 行业榜结果的有效期（与 `fetchBoard` 的 30s 页缓存对齐）：窗口内反复查询不再翻页 */
+const INDUSTRY_MAP_TTL_MS = 30_000
+/** 行业榜一次全量的页数上限（上游 total 异常时不至于无限翻页） */
+const INDUSTRY_BOARD_MAX_PAGES = 8
+interface IndustryBoardMap { at: number; map: Map<string, number | null>; total: number }
+let industryMapCache: IndustryBoardMap | null = null
+let industryMapInflight: Promise<IndustryBoardMap> | null = null
+
+/**
+ * name → 板块当日涨跌幅。**按需取页**（P2-1）。
+ *
+ * 此前无论要几个板块名，都从 `pn=1` 一路翻到 `map.size >= total`：用户数据里行业榜
+ * `total=496`（`board-lkg.json` 实测）、`pz` 被上游截在 100 ⇒ 至少 5 页，抽屉首开实测 **+8 次上游**
+ * （AUDIT-CACHE-1 S7-5，"8 页只为 1 个板块"）。现在两处收口：
+ *   ① `wanted` 里的名字**全部定位到**就停翻（只查 1 个板块且它在第 1 页 ⇒ 实测 5 → 1 次）；
+ *   ② 同一份结果 30s 内复用 + **在飞合并** ⇒ 抽屉反复开关、`/industries` 与 `/industry` 同刻调用
+ *      都只翻一遍（页本身另有 30s 缓存，所以"续翻"也不会让已取过的页重打上游）。
+ *
+ * ⚠ 定位不到的名字**照实缺席**（调用方记 `pct: null`，界面显示未取到），
+ * 绝不用别的板块的涨幅顶替 —— 那不是"省一次请求"，是编数。
+ */
+async function industryBoardPctMap(wanted: ReadonlySet<string>): Promise<IndustryBoardMap> {
+  const cached = industryMapCache
+  if (cached !== null && Date.now() - cached.at < INDUSTRY_MAP_TTL_MS && [...wanted].every((n) => cached.map.has(n))) {
+    return cached
   }
-  return map
+  if (industryMapInflight !== null) {
+    // 在飞：等它结算；若它的结果没覆盖这次要的名字，再续翻（已取过的页命中 30s 页缓存 ⇒ 0 请求）
+    const flying = await industryMapInflight
+    if ([...wanted].every((n) => flying.map.has(n))) return flying
+  }
+  const run = (async (): Promise<IndustryBoardMap> => {
+    const map = new Map<string, number | null>()
+    let total = Infinity
+    for (let pn = 1; pn <= INDUSTRY_BOARD_MAX_PAGES && map.size < total; pn += 1) {
+      const board = await fetchBoard('industry', 'pct', pn, 100)
+      total = board.total
+      for (const r of board.rows) {
+        if (!map.has(r.name)) map.set(r.name, r.pct)
+      }
+      // 按需取页：要的名字都定位到了就不再翻（顺序按涨幅降序，与"同一个板块的涨幅"无关）
+      if (wanted.size > 0 && [...wanted].every((n) => map.has(n))) break
+      if (board.rows.length === 0) break
+    }
+    return { at: Date.now(), map, total }
+  })()
+  industryMapInflight = run
+  try {
+    const done = await run
+    industryMapCache = done
+    return done
+  } finally {
+    if (industryMapInflight === run) industryMapInflight = null
+  }
 }
 
 /** 小并发池：批量执行（行业名逐代码抓取时用，避免打爆上游）。 */
@@ -2261,7 +2490,7 @@ export async function fetchIndustryOverview(secids: string[]): Promise<Record<st
     if (name !== null) names.set(secid, name)
   })
   if (names.size === 0) return {}
-  const board = await industryBoardPctMap()
+  const board = (await industryBoardPctMap(new Set(names.values()))).map
   const out: Record<string, { name: string; pct: number | null }> = {}
   for (const [secid, name] of names) {
     out[secid] = { name, pct: board.get(name) ?? null }

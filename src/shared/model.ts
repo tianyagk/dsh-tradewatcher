@@ -134,6 +134,18 @@ export interface QuoteRow {
   vol: number | null
   /** Turnover in CNY (or instrument currency as reported). */
   amount: number | null
+  /**
+   * 换手率（东财 `f8`，%）。行情条不用它，但**护盘采样器**要 ——
+   * 采样器与行情条共用同一份逐标的槽（同一个 URL、同一张字段表），
+   * 因此这些列必须落在同一个 `QuoteRow` 上，否则两条链路会各打一遍上游。
+   */
+  turnover?: number | null
+  /** 量比（东财 `f10`）。同上：采样器在用量比，因此与行情共用一列。 */
+  volRatio?: number | null
+  /** 当日主力净额（东财 `f62`，元）。只有东财给；备用源（腾讯/新浪）为 null。 */
+  mainNet?: number | null
+  /** 当日超大单净额（东财 `f66`，元）。护盘评分的关键列；备用源没有分单资金流 ⇒ null。 */
+  superNet?: number | null
   /** Breadth for A-share indices: rising / falling / flat counts. */
   up: number | null
   down: number | null
