@@ -33,30 +33,30 @@ export const CHART_CHROME = 8 + 6 + 6 + 16
  * |---|---|---|---|
  * | SVG → 均线图例 | `.tw-kline{gap:2px}` + `kline.tsx` 内联 `margin:'4px 0 0'` | 2+4 | 6 |
  * | 均线图例一块 | 内联 `fontSize:10` 实测 15px | 15 | 15 |
- * | 均线图例 → 买卖点图例 | `.tw-kline{gap:2px}` + 内联 `margin:'2px 0 0'` | 2+2 | 4 |
- * | 买卖点图例一块 | 内联 `fontSize:10` 实测 15px（无流水时不渲染，仍按**恒在**预留） | 15 | 15 |
- * | 买卖点图例 → 缩放轴 | `.tw-kline{gap:2px}` | 2 | 2 |
+ * | 均线图例 → 缩放轴 | `.tw-kline{gap:2px}` | 2 | 2 |
  * | 缩放轴自己 | 外距 `.tw-zoom{margin-top:6px}` + 轨道 16（含边框，`.tw-root *{box-sizing:border-box}`）+ 内间隙 5 + 文案行 15.75⇒16 | 6+16+5+16 | 43 |
- * | | | **合计** | **85** |
+ * | | | **合计** | **66** |
  *
- * 上表把"缩放轴"整块算进来了：v0.48.0 的回归正是**漏了这 85px**，
+ * 上表把"缩放轴"整块算进来了：v0.48.0 的回归正是**漏了这几十 px**，
  * 于是 SVG 占满上窗（`klineHeightsOf` 只扣了 36+24）、缩放轴被上窗的 `overflow:hidden` 整体裁掉。
+ *
+ * ⚠ v0.55.0：区间买卖图例（15px 一块 + 4px 间距）**已按用户要求删除**（改成悬停提示）⇒ 本常量 85 → 66；
+ * 无标记与有标记两种情况的实测值现在都是 65.75px（不再有"有流水才出现"的最坏情况）。
  */
-export const CHART_CONTROLS_PX = 6 + 15 + 4 + 15 + 2 + 43
+export const CHART_CONTROLS_PX = 6 + 15 + 2 + 43
 
 /**
  * 控件块的逐段分项（与上表**同序**，不重不漏；`CONTROL_PARTS_PX` 必须等于 `CHART_CONTROLS_PX`，
  * 否则模块一加载就抛 —— 谁改了表里的数而没改分项，立刻会被抓住）。
  * 每段的实测值来自 Chromium（真组件标记 + 真 CSS）：`svg 底 → .tw-zoom 底` 逐段量到
- * 6 / 15 / 4 / 15 / 2 / 36.75，合计 **84.75px** ⇒ 预留时向上取整 85。
+ * 6 / 15 / 2 / 36.75，合计 **65.75px** ⇒ 预留时向上取整 66（v0.55.0 删掉买卖点图例后重测）。
  */
 const SEG_SVG_TO_LEGEND = 6 // `.tw-kline{gap:2px}` + 图例 `margin-top:4px`
 const SEG_LEGEND = 15
-const SEG_LEGEND_TO_BS = 4 // `.tw-kline{gap:2px}` + 买卖点图例 `margin-top:2px`
-const SEG_BS = 15 // 有 B/S 文案时实测 15px（无流水时不渲染，仍恒预留）
+const SEG_BS = 0 // v0.55.0：区间买卖图例已删（改成悬停提示）⇒ 不再占高度
 const SEG_BS_TO_ZOOM = 2 // `.tw-kline{gap:2px}`
 const SEG_ZOOM = 43 // `.tw-zoom{margin-top:6px}` + 轨道 16 + 内间隙 5 + 文案行 15.75⇒16
-const CONTROL_PARTS_PX = SEG_SVG_TO_LEGEND + SEG_LEGEND + SEG_LEGEND_TO_BS + SEG_BS + SEG_BS_TO_ZOOM + SEG_ZOOM
+const CONTROL_PARTS_PX = SEG_SVG_TO_LEGEND + SEG_LEGEND + SEG_BS + SEG_BS_TO_ZOOM + SEG_ZOOM
 if (CONTROL_PARTS_PX !== CHART_CONTROLS_PX) {
   throw new Error(`控件块高度账自相矛盾：分项和 ${CONTROL_PARTS_PX} ≠ CHART_CONTROLS_PX ${CHART_CONTROLS_PX}`)
 }
@@ -193,7 +193,7 @@ export function chartGeomOf(top: number): ChartGeom {
   return {
     top: t, svg,
     legend: SEG_SVG_TO_LEGEND + SEG_LEGEND,
-    bsLegend: SEG_LEGEND_TO_BS + SEG_BS,
+    bsLegend: SEG_BS,
     gaps: SEG_BS_TO_ZOOM,
     zoomBar: SEG_ZOOM,
     controls, content, clipped: overflow > 0, overflow, overlap,

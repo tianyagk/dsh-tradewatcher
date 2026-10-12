@@ -20,7 +20,6 @@ import {
   cacheNoteOf,
   chartCache,
   fqFor,
-  fqNoteOf,
   isKlineTab,
   rememberedTab,
   rememberFq,
@@ -29,6 +28,7 @@ import {
   type ChartTab,
 } from './chartCache.ts'
 
+import { visibleProvenanceOf } from './chartNote.ts'
 import { sessionOf } from './sessionAxis.ts'
 import { isUsableBaseline } from './trendView.ts'
 import { trendCaliberOf } from '../shared/trendCaliber.ts'
@@ -403,11 +403,19 @@ export function QuoteDrawer(props: {
     })
   }
 
-  // per-tab caption (period/range + baseline info)
+  /**
+   * 脚注（v0.55.0 逐条瘦身：用户截图红框要求去掉下方那条常驻提示）。
+   *
+   * 每一条子信息都先问"这话别处有没有"（处置表见 `docs/AUDIT-IMPL32.md`）：
+   *   - K 线那一行（`共 N 根 / 前复权（详情头为真实成交价）/ 日期区间 / MA5/10/30/60 / 滚轮或拖动…`）
+   *     **逐条都有别处承载** ⇒ 整行走掉：根数与日期区间在缩放滑杆行、复权在口径行与复权段控、
+   *     MA 在图上图例、滚轮/拖动是控件自证；其中唯一"别处没有"的 `（详情头为真实成交价）`
+   *     已搬到 **B/S 标记的 title/aria-label**（`kline.tsx` 的 `BS_PRICE_CALIBER`）；
+   *   - `B 买入/S 卖出 笔数`（`legend`）：持仓页流水已有 ⇒ 去掉；
+   *   - **分时那一行保留**（`昨收 …` 只在这里出现，且 P0-5 要求口径常驻可见 —— 不在用户红框内）；
+   *   - 来源提示只留**会影响判断**的那些（降级/非当日/定稿），命中 TTL 缓存不再占位。
+   */
   let note = ''
-  const buys = trades.filter((t) => t.verb === 'buy').length
-  const sells = trades.filter((t) => t.verb === 'sell').length
-  const legend = trades.length > 0 && tab !== '5d' ? ` · B 买入 ${buys} 笔 / S 卖出 ${sells} 笔（来自持仓流水）` : ''
   if (payload !== null && err === null) {
     if (payload.kind === 'trend') {
       const t = payload.trend
@@ -419,16 +427,6 @@ export function QuoteDrawer(props: {
           ? `昨收 ${isUsableBaseline(t.prePrice) ? fmtPrice(t.prePrice) : '—'} · ${first.label.slice(11)} ~ ${last.label.slice(11)}`
           : `共 ${dates.size} 个交易日 · ${first.label.slice(5, 10)} ~ ${last.label.slice(5, 10)}（末行为今日）`
       }
-    } else if (payload.kind === 'kline') {
-      const k = payload.kline
-      const first = k.days[0]
-      const last = k.days[k.days.length - 1]
-      if (first !== undefined && last !== undefined) {
-        // D4：降级说明只留一处（下面 `cacheNoteOf` 的统一写法）；这里不再各写一句
-        note = `共 ${k.days.length} 根${fqNoteOf(k)} · ${first.date} ~ ${last.date} · MA5/10/30/60 · 滚轮或拖动滑块缩放日期区间`
-      } else {
-        note = fqNoteOf(k).replace(/^ · /, '')
-      }
     }
     // 数据来源如实标注：本地缓存 / 休市定稿 / 本次刷新失败时的上次成功数据
     let cn = cacheNoteOf(payload)
@@ -438,7 +436,8 @@ export function QuoteDrawer(props: {
       const snap = snapshotLabel()
       if (snap !== null && !cn.includes('快照')) cn = cn.replace('本地缓存', `本地缓存（最近一次成功快照 ${snap}）`)
     }
-    if (cn !== '') note = note === '' ? cn.replace(/^ · /, '') : note + cn
+    const visibleCn = visibleProvenanceOf(cn)
+    if (visibleCn !== '') note = note === '' ? visibleCn.replace(/^ · /, '') : note + visibleCn
   }
 
   /**
@@ -695,8 +694,8 @@ export function QuoteDrawer(props: {
           onOpenChange: setChipsOpen,
         }),
         ),
-        note !== '' || legend !== ''
-          ? React.createElement('div', { className: 'tw-chartnote' }, `${note}${legend}`)
+        note !== ''
+          ? React.createElement('div', { className: 'tw-chartnote' }, note)
           : null,
       ),
       React.createElement('div', { className: 'tw-drawer-foot' },

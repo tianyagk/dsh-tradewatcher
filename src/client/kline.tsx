@@ -593,7 +593,15 @@ export function KlineChart(props: {
     else g.sells.push(detail)
     grouped.set(i, g)
   }
-  /** 一笔/一日的小结文本：笔数 + 合计数量 + 成交均价（缺字段时不编数） */
+  /**
+   * B/S 标记的**口径说明**（v0.55.0 从"K线脚注"搬到这里）。
+   *
+   * 为什么必须留着：图上画的是**前复权**后的蜡烛，而 B/S 标记的价格来自持仓流水（**真实成交价**）——
+   * 两者口径不同，不说明就会被读成"图上的点画错了"。原来它常驻在下方脚注里（用户要求去掉那条），
+   * 现在挂在**标记元素自身的 title 与 aria-label** 上：常驻可见处不出现，悬停/读屏可达。
+   */
+  const BS_PRICE_CALIBER = '标记价格是真实成交价（详情头为真实成交价；前复权只改图形，不改成交价）'
+  /** 一笔/一日的小结文本：笔数 + 合计数量 + 成交均价（缺字段时不编数）+ 口径 */
   const detailText = (label: string, list: readonly TradeDetail[], date: string): string => {
     const qty = list.reduce((a, t) => a + (t.qty ?? 0), 0)
     const amount = list.reduce((a, t) => a + (t.qty ?? 0) * (t.price ?? 0), 0)
@@ -602,6 +610,7 @@ export function KlineChart(props: {
     // E14：同一标的在持仓页按「份」、这里按「股」会让人对不上券商流水 ⇒ 标签写明两种
     if (qty > 0) parts.push(`合计 ${Math.round(qty * 1e4) / 1e4} 份/股`)
     if (vwap !== null) parts.push(`均价 ${vwap.toFixed(3)}`)
+    parts.push(BS_PRICE_CALIBER)
     return parts.join(' · ')
   }
   for (const [i, g] of grouped) {
@@ -609,16 +618,18 @@ export function KlineChart(props: {
     const x = xAt(i)
     if (g.buys.length > 0) {
       const my = Math.min(yOf(b.low) + 13, PAD_TOP + mainH - 1)
-      children.push(React.createElement('g', { key: `mb${i}` },
-        React.createElement('title', null, detailText('买入', g.buys, b.date)),
+      const buyText = detailText('买入', g.buys, b.date)
+      children.push(React.createElement('g', { key: `mb${i}`, 'aria-label': buyText },
+        React.createElement('title', null, buyText),
         React.createElement('line', { x1: x, y1: yOf(b.low), x2: x, y2: my - 4, style: { stroke: UP_COLOR }, strokeWidth: 1, opacity: 0.7 }),
         React.createElement('text', { x, y: my, textAnchor: 'middle', style: { fill: UP_COLOR, fontSize: 9.5, fontWeight: 700, paintOrder: 'stroke', stroke: 'var(--tw-card)', strokeWidth: 2.5 } }, g.buys.length > 1 ? `B${g.buys.length}` : 'B'),
       ))
     }
     if (g.sells.length > 0) {
       const my = Math.max(yOf(b.high) - 8, PAD_TOP + 8)
-      children.push(React.createElement('g', { key: `ms${i}` },
-        React.createElement('title', null, detailText('卖出', g.sells, b.date)),
+      const sellText = detailText('卖出', g.sells, b.date)
+      children.push(React.createElement('g', { key: `ms${i}`, 'aria-label': sellText },
+        React.createElement('title', null, sellText),
         React.createElement('line', { x1: x, y1: yOf(b.high), x2: x, y2: my + 4, style: { stroke: DOWN_COLOR }, strokeWidth: 1, opacity: 0.7 }),
         React.createElement('text', { x, y: my, textAnchor: 'middle', style: { fill: DOWN_COLOR, fontSize: 9.5, fontWeight: 700, paintOrder: 'stroke', stroke: 'var(--tw-card)', strokeWidth: 2.5 } }, g.sells.length > 1 ? `S${g.sells.length}` : 'S'),
       ))
@@ -711,26 +722,26 @@ export function KlineChart(props: {
     sellQty += sl.qty; sellAmt += sl.amount; sellCount += g.sells.length
   }
   const netQty = Math.round((buyQty - sellQty) * 1e4) / 1e4
-  const bsLegend = buyCount + sellCount > 0 || outCount > 0
-    ? React.createElement('div', { className: 'tw-ma-legend', style: { display: 'flex', gap: 10, flexWrap: 'wrap', fontSize: 10, fontFamily: 'var(--tw-mono)', margin: '2px 0 0' } },
-        buyCount + sellCount > 0
-          ? React.createElement('span', { style: { color: UP_COLOR } },
-              `区间内 B ${buyCount} 笔 / S ${sellCount} 笔`)
-          : React.createElement('span', { className: 'tw-muted' }, '区间内无买卖点'),
-        buyCount + sellCount > 0
-          ? React.createElement('span', { className: netQty >= 0 ? (redUp ? 'tw-up' : 'tw-down') : (redUp ? 'tw-down' : 'tw-up') },
-              `净${netQty >= 0 ? '买入' : '卖出'} ${Math.abs(netQty)} 份/股`)
-          : null,
+  /**
+   * 区间买卖统计（v0.55.0：**从常驻图例改成只存在于悬停提示**）。
+   *
+   * 用户的截图红框要求去掉这条常驻提示条（"减少不必要的提示"）。逐条核对后：
+   *   - `区间内 B/S 笔数` `净买入` `买入均价/卖出均价`：持仓页流水（`tradewatcher_ledger`）已有 ⇒ 不再常驻；
+   *   - `区间外另有 N 笔`：**别处没有**（它依赖当前缩放窗口）⇒ 必须仍可达（这里进提示），
+   *     读屏摘要（本组件的 `aria-label`）里也仍然有它；
+   *   - ⚠ `区间内无买卖点` 与 `区间外另有` 两句被 `build.mjs` 的片段表**锁定**（改字面量会构建失败）⇒
+   *     本轮**不改字面量**，只把它们搬到悬停提示里（常驻可见处不再出现，悬停可见）。
+   */
+  const bsHint = buyCount + sellCount > 0 || outCount > 0
+    ? [
+        buyCount + sellCount > 0 ? `区间内 B ${buyCount} 笔 / S ${sellCount} 笔` : '区间内无买卖点',
+        buyCount + sellCount > 0 ? `净${netQty >= 0 ? '买入' : '卖出'} ${Math.abs(netQty)} 份/股` : '',
         buyCount + sellCount > 0 && buyQty > 0 && sellQty > 0
-          ? React.createElement('span', { className: 'tw-muted' },
-              `买入均价 ${(buyAmt / buyQty).toFixed(3)} / 卖出均价 ${(sellAmt / sellQty).toFixed(3)}`)
-          : null,
-        outCount > 0
-          ? React.createElement('span', { className: 'tw-muted', title: '缩放区间外仍有买卖记录；缩小日期范围即可看到' },
-              `（区间外另有 ${outCount} 笔）`)
-          : null,
-      )
-    : null
+          ? `买入均价 ${(buyAmt / buyQty).toFixed(3)} / 卖出均价 ${(sellAmt / sellQty).toFixed(3)}`
+          : '',
+        outCount > 0 ? `区间外另有 ${outCount} 笔（缩小日期范围即可看到）` : '',
+      ].filter((x) => x !== '').join('\n')
+    : ''
 
   /**
    * 读屏摘要（P2-3）。SVG 本身对读屏软件是黑箱，因此把"这张图说了什么"写成文本：
@@ -812,7 +823,9 @@ export function KlineChart(props: {
       tabIndex: 0,
       role: 'img',
       'aria-label': summary,
-      title: '键盘：←/→ 平移（未显示卡片时）／移动光标并显示细节卡（Shift 加速），Enter 显示，Esc 隐藏，+/- 缩放，Home/End 到两端',
+      // 常驻键盘说明 + （有区间买卖时）区间统计：两者都在**悬停/读屏**里，界面上不占位
+      title: '键盘：←/→ 平移（未显示卡片时）／移动光标并显示细节卡（Shift 加速），Enter 显示，Esc 隐藏，+/- 缩放，Home/End 到两端'
+        + (bsHint === '' ? '' : `\n${bsHint}`),
       style: { outlineOffset: 2, position: 'relative' },
       onKeyDown: chartKey,
     },
@@ -822,7 +835,6 @@ export function KlineChart(props: {
     // 读屏专用：完整摘要（含买卖点明细），视觉上不可见但可被朗读
     React.createElement('div', { className: 'tw-sr' }, summary),
     legend,
-    bsLegend,
     React.createElement(RangeSlider, { total: bars.length, range: [s, e], bars, onChange: setRange }),
   )
 }

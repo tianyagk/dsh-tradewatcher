@@ -90,7 +90,7 @@ test('动态高度（补强 1）：mainH 随高度变 + 刻度条数随高度变
   //   并由 `chartGeomOf().clipped` 断言"装得下"。v0.48.0 的回归就是漏了那 85px。
   const OFFCUT = CHART_CHROME + 24
   assert.equal(OFFCUT, 60, 'SVG 自己的固定开销 = 36 + 24 = 60px')
-  assert.equal(CHART_CONTROLS_PX, 85, 'SVG 之下的控件块 = 85px（含日期范围缩放轴）')
+  assert.equal(CHART_CONTROLS_PX, 66, 'SVG 之下的控件块 = 66px（含日期范围缩放轴；v0.55.0 删掉区间买卖图例后 85→66）')
   const offcut = (k: { chartHeight: number; mainH: number; volH: number; macdH: number }): number =>
     k.chartHeight - (k.mainH + k.volH + k.macdH)
   const short = klineHeightsOf(384) // 620px 抽屉在默认 0.62 下的上窗
@@ -193,26 +193,24 @@ test('日期范围缩放轴：控件在 DOM 里、接线可交互、且在上窗
   assert.equal(zoomMarginTop, 6, '缩放轴外距 6px')
   assert.equal(handleH, 22, '手柄高 22px')
   assert.equal(klineGap, 2, '.tw-kline 的 flex gap 2px')
-  // 两块图例的"上距"写在 kline.tsx 的内联样式里（断言直读源码，不另写一套）
+  // 均线图例的"上距"写在 kline.tsx 的内联样式里（断言直读源码，不另写一套）
   assert.ok(klineSrc.includes("fontFamily: 'var(--tw-mono)', margin: '4px 0 0' }"), '均线图例上距 4px 必须写在源码里')
-  assert.ok(klineSrc.includes("fontFamily: 'var(--tw-mono)', margin: '2px 0 0' }"), '买卖点图例上距 2px 必须写在源码里')
-  // 控件块 = SVG 底 → 缩放轴底（Chromium 逐段实测）：6 + 15 + 4 + 15 + 2 + 36.75 = 84.75 ⇒ 记账 85
+  // v0.55.0：区间买卖图例整块已删（用户红框）⇒ 控件块从 85 → 66；有/无标记两种情况实测现在都是 65.75px
+  assert.equal(klineSrc.includes("className: 'tw-ma-legend'"), true, '均线图例仍在（它上面的 MA 数值不是重复信息）')
+  assert.equal(/tw-ma-legend[\s\S]{0,120}margin: '2px 0 0'/.test(klineSrc), false, '⚠ 区间买卖图例的内联样式必须已删（否则控件块又要多算 19px）')
   const segSvgToLegend = klineGap + 4 // SVG→图例：flex gap 2 + 图例 `margin-top:4px`
   const segLegend = 15 // 图例一块（实测）
-  const segLegendToBs = klineGap + 2 // 图例→买卖点图例：gap 2 + `margin-top:2px`
-  const segBs = 15 // 买卖点图例一块（实测有 B/S 文案时 15px）
-  const segBsToZoom = klineGap // →缩放轴：只剩 flex gap（外距算在 zoomBar 里）
+  const segToZoom = klineGap // 图例→缩放轴：只剩 flex gap（外距算在 zoomBar 里）
   const segZoom = zoomMarginTop + trackH + zoomGap + 16 /* 文案行实测 15.75 ⇒ 记账 16 */
   assert.equal(segZoom, 43, `缩放轴自己那一块必须=43px（实际 ${segZoom}）`)
-  const controlsSum = segSvgToLegend + segLegend + segLegendToBs + segBs + segBsToZoom + segZoom
-  assert.equal(controlsSum, 85, `逐段之和必须=85px（实际 ${controlsSum}）`)
+  const controlsSum = segSvgToLegend + segLegend + segToZoom + segZoom
+  assert.equal(controlsSum, 66, `逐段之和必须=66px（实际 ${controlsSum}）`)
   assert.equal(CHART_CONTROLS_PX, controlsSum,
     `CHART_CONTROLS_PX 必须等于控件的逐段之和（实际 ${CHART_CONTROLS_PX}，期望 ${controlsSum}）`)
   assert.equal(CHART_CHROME, 36, 'CHART_CHROME 是 SVG **内部**开销（8+6+6+16），不含缩放轴')
-  assert.equal(CHART_CONTROLS_PX, 85, '控件块记账 85px（浏览器实测 84.75px 向上取整）')
-  // 探针：控件块的每一段都要≥0，且合计覆盖到缩放轴（否则"缩放轴被裁"会从这里漏过去）
-  for (const [name, px] of [['SVG→图例', segSvgToLegend], ['图例', segLegend], ['图例→买卖点', segLegendToBs],
-    ['买卖点', segBs], ['买卖点→缩放轴', segBsToZoom], ['缩放轴', segZoom]] as Array<[string, number]>) {
+  assert.equal(CHART_CONTROLS_PX, 66, '控件块记账 66px（浏览器实测 65.75px 向上取整）')
+  for (const [name, px] of [['SVG→图例', segSvgToLegend], ['图例', segLegend],
+    ['图例→缩放轴', segToZoom], ['缩放轴', segZoom]] as Array<[string, number]>) {
     assert.ok(px > 0, `控件块的「${name}」段必须 > 0（实际 ${px}）`)
   }
 

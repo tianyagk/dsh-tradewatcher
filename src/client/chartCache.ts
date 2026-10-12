@@ -1,7 +1,6 @@
 /**
  */
 import type { FqMode, KlineData, MissingField, TrendData } from '../shared/model.ts'
-import { FQ_LABEL } from '../shared/model.ts'
 import { cacheNoteOf as noteOf, settled as noteSettled } from './chartNote.ts'
 import { api } from './api.ts'
 
@@ -197,12 +196,6 @@ export function rememberFq(secid: string, fqt: FqMode): void {
   fqBySymbol.set(secid, fqt)
 }
 
-/** 图表脚注里的复权口径说明（不适用时必须说明原因，不能只显示"不复权"让人以为是选择） */
-export function fqNoteOf(kline: KlineData): string {
-  if (kline.fqSupported === false) return ' · 不复权（指数/期货无除权除息）'
-  const mode: FqMode = kline.fqt ?? 1
-  return mode === 0 ? ' · 不复权' : ` · ${FQ_LABEL[mode]}（详情头为真实成交价）`
-}
 
 /** 图表脚注说明：实现与用词统一在 `chartNote.ts`（E1：降级复用一律带日期） */
 export function cacheNoteOf(payload: ChartPayload | null): string {

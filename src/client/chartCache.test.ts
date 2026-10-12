@@ -2,13 +2,15 @@
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
+import { dirname, join } from 'node:path'
 import {
   KLINE_PLAN,
   TAB_LABEL,
   cacheNoteOf,
   createChartCache,
   fqFor,
-  fqNoteOf,
   isKlineTab,
   rememberedTab,
   rememberFq,
@@ -222,10 +224,18 @@ test('复权口径只作用于 K 线：分时/五日不分键（切口径不该�
   assert.equal(calls, 1, '分时只有一条序列，两种口径必须共用缓存')
 })
 
-test('复权脚注：指数/期货必须说明"无除权除息"，不能只写不复权让人以为是选择', () => {
-  assert.equal(fqNoteOf({ ...klineOf(), fqt: 1, fqSupported: true }), ' · 前复权（详情头为真实成交价）')
-  assert.equal(fqNoteOf({ ...klineOf(), fqt: 0, fqSupported: true }), ' · 不复权')
-  assert.equal(fqNoteOf({ ...klineOf(), fqt: 0, fqSupported: false }), ' · 不复权（指数/期货无除权除息）')
+test('复权口径：指数/期货说明"不适用"在口径行里（脚注已按用户要求删除）', () => {
+  // v0.55.0：K 线脚注整条删除（用户红框）⇒ 这里不再断言 `fqNoteOf`。
+  // 复权口径仍在两处可见：口径行（`${mode} · klt … · ${fq} · 截至 …`，指数/期货为"不复权（该标的不适用）"）
+  // 与页签行的复权段控（含"不适用"角标）。`（详情头为真实成交价）` 搬到 B/S 标记上，断言见下方那条。
+  const raw = readFileSync(join(dirname(fileURLToPath(import.meta.url)), './QuoteDrawer.tsx'), 'utf8')
+  // 先去注释再断言：说明性注释里会**提到**被删的字面量，不去掉就会对注释做断言
+  const drawer = raw.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
+  assert.ok(drawer.includes("不复权（该标的不适用）"), '口径行必须说明指数/期货的复权不适用')
+  assert.equal(drawer.includes('fqNoteOf'), false, 'K 线脚注已删：不许再调用 fqNoteOf')
+  assert.equal(drawer.includes('MA5/10/30/60'), false, '脚注里的 MA 清单已删（图上图例已有）')
+  assert.equal(drawer.includes('滚轮或拖动滑块缩放日期区间'), false, '脚注里的操作说明已删（控件自证）')
+  assert.equal(drawer.includes('来自持仓流水'), false, '脚注里的 B/S 笔数已删（持仓页流水已有）')
 })
 
 test('复权记忆：按标的记住各自口径，新标的回到全局默认（前复权）', () => {

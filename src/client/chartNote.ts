@@ -68,6 +68,19 @@ export function settled(payload: NotePayloadLike): boolean {
   return payload.kind === 'kline' ? payload.kline?.cached === true : payload.trend?.cached === true
 }
 
+/**
+ * 脚注里**该不该出现**这条来源提示（v0.55.0）。
+ *
+ * 用户要求减少常驻提示：**命中 TTL 缓存**（`· 本地缓存`）是实现细节、数据本身没变，不占位；
+ * 而**会影响读数判断**的三类必须照旧常驻 —— 降级复用（上次成功数据）、非当日数据、休市定稿。
+ * 带快照时刻的 `本地缓存（最近一次成功快照 …）`（本地归档拼接）也算"要说清"的一类，保留。
+ */
+export function visibleProvenanceOf(cn: string): string {
+  const t = cn.trim()
+  if (t === '' || t === '· 本地缓存') return ''
+  return cn
+}
+
 /** `· 非当日数据（MM-DD）`：上游这次回的是**过去某个交易日**的序列（节假日/停市） */
 export function nonSessionNote(day: string): string {
   return ` · 非当日数据（${day.slice(5)}）`
