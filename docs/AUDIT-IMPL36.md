@@ -314,3 +314,113 @@ built lib/index.js + lib/client.js （v0.60.0，客户端片段校验通过：75
 ```
 
 `build.mjs` 零改动；`cordis.patch.yml` / `package.json` / `src/index.ts` / `src/client/**` 本轮**未动**（只改了 `locale/**` 与 `src/index.test.ts`）。
+
+---
+
+# 9. task-12 追加：命名改成 `dsh-tradewatcher` / `dsh-tradewatcher-*`
+
+> 用户口径（覆盖 v0.61.0 的英文友好名）：**插件名（头部）显示 `dsh-tradewatcher`；组件名显示 `dsh-tradewatcher-*`**。
+
+## 9.1 先查清「头部标题」的来源（卡里要求给 `文件:行号`）
+
+插件页是 `@deepseek-ai/dsh-client-ui-plugin-manager`，**头部与行标题是两个不同的函数**：
+
+| 位置 | 代码 | 取的是 |
+|---|---|---|
+| `dsh-client-ui-plugin-manager/lib/client.js:615`（`packageText`，`:2334` 的 `PackageCard` 用它做卡头） | `title: pkg.meta?.title === void 0 ? pkg.name : resolveText(pkg.meta.title)` | **包级 meta**，没有才回退**包名** |
+| `…/lib/client.js:628`（`rowText`，`:2071`/`:2461` 用它做每一行） | `title: row.meta?.title === void 0 ? row.moduleName : resolveText(row.meta.title)` | **行级 meta**，没有才回退 **moduleName** |
+
+包级 `meta` 从哪来 —— `dsh-plugin-manager/lib/index.js:1525`：
+
+```js
+const meta = readPluginMeta(info.name ?? name, pathToFileURL(join(dir, "package.json")).href);
+bundles.push({ name, …, ...meta === void 0 ? {} : { meta }, … })
+```
+
+行级 `meta` 从哪来 —— 同文件 `:1931`（`declaredRows`）：`const meta = packages?.metaOf(row.name, base)`，而 `metaOf` 就是 `readPluginMeta`。
+
+⇒ **两处都是 `readPluginMeta(<specifier>, …)`，而 core 行的 specifier 就是裸包名 `dsh-tradewatcher`**
+⇒ 头部与 core 行**解析同一个 specifier、读同一份 `locale/{zh,en}.json`**。实测（真函数、两个不同的 base URL）：
+
+```
+① 头部（包目录 base）  = {"en":"Tradewatcher · Core","zh":"Tradewatcher · Core"}
+② core 行（profile base）= {"en":"Tradewatcher · Core","zh":"Tradewatcher · Core"}
+两者是否同源同值 = true
+```
+
+⇒ **卡里列的两条分支其实是同一条**：不存在"头部取包清单名"这条独立路径。要满足「头部 = `dsh-tradewatcher`」，
+**包级 locale 的 title 就必须是 `dsh-tradewatcher`**；而 core 行用的是同一个 specifier ⇒ **core 行也只能显示 `dsh-tradewatcher`**，
+写不成 `dsh-tradewatcher-core`。这就是卡里说的那处取舍，已按"头部为准"落定。
+（想两者不同就得让 core 行走子路径 ⇒ 裸包名一行不剩 ⇒ **浏览器半区整体消失**，即 task-8 实测否决的方案 B，绝不可取。）
+
+## 9.2 改后对照（真 `readPluginMeta` 复算）
+
+| 行 | 标题（zh/en 同值） | 中文描述（`zh.json`） |
+|---|---|---|
+| **头部（包级）** | **`dsh-tradewatcher`** | — |
+| core（= 包级，同一 specifier） | `dsh-tradewatcher` | 行情条 / 详情图 / 数据层与共享路由 |
+| calendar | `dsh-tradewatcher-calendar` | 财经日历：宏观数据 / 新股 / 财报 / 分红 |
+| watchlist | `dsh-tradewatcher-watchlist` | 自选分组、行业板块与异动队列 |
+| portfolio | `dsh-tradewatcher-portfolio` | 持仓盈亏、逐笔流水与费用 |
+| market | `dsh-tradewatcher-market` | 涨跌家数与护盘信号 |
+| cloudmap | `dsh-tradewatcher-cloudmap` | 大盘云图（行业热力，纯前端） |
+
+（`en.json` 的 description 仍是英文，`zh.json` 的仍是中文 —— task-9 的规则不变；13 个文件的 `title` 两语都改成 id 形式。）
+
+## 9.3 断言更新（不放宽，且新增一条不变量）
+
+- 允许集（可打印 ASCII + `·`）、**不得含 CJK**、描述必须含中文 —— 三条原样保留、不放宽。
+- **新增命名不变量** `^dsh-tradewatcher(-[a-z]+)?$`（`TITLE_NAME_OK`）—— 这条正是"防回到英文友好名"的那道闸门：
+  `Tradewatcher · Calendar` 既不含 CJK、也不含非法字符，**上面三条全都拦不住它**，只有它拦得住。
+- **六行互不相同**照旧；新增两条：`core 行标题 === package.json 的 name`、
+  五个功能行标题 === `<包名>-<row>`。注释里写明「core 与插件名同值」是**构造使然**（同一个 specifier），不是巧合。
+
+## 9.4 反例证据
+
+**改真文件**：把 `locale/rows/calendar/zh.json` 的 title 改回 `Tradewatcher · Calendar` ⇒
+
+```
+ℹ tests 16 / pass 14 / fail 2
+AssertionError: locale 元数据检查未通过
+  （失败项：locale/rows/calendar/zh.json 的 title 不符合命名不变量 ^dsh-tradewatcher(-[a-z]+)?$：Tradewatcher · Calendar）
+AssertionError: 基准（未注入）必须通过 —— 否则下面的注入证明无效
+```
+
+恢复后 `diff -q` 逐字一致 → `16/16` 全绿。**另有一条同内容注入固化进用例**（"title 改回英文友好名（task-12 要防的回归）"），
+连同 task-9 的三条，共四条注入常驻。
+
+## 9.5 验收（`npm run check`）
+
+```
+ℹ tests 421 / pass 421 / fail 0      （本地时区；TZ=UTC 同）
+ALL HOST CHECKS PASSED (live probes soft)
+```
+
+末尾四行（倒数第三行是构建分段器的空行）：
+
+```
+> dsh-tradewatcher@0.63.0 build
+> node build.mjs
+
+built lib/index.js + lib/client.js （v0.63.0，客户端片段校验通过：73 项）
+```
+
+`build.mjs` 零改动；`cordis.patch.yml` / `package.json` / `src/index.ts` / `src/client/**` 未动（本轮只改 `locale/**` 与 `src/index.test.ts`）。
+
+> 条数说明：本卡基线写的是 **414**，最终跑出来是 **421** —— 差额来自**并行进行的 task-11**
+> （`impl-client` 的 kline 缓存降级，落在 `src/host/em.ts`/`em.test.ts`，+7 条）。我这条卡的用例数没变
+> （task-8/9 那条用例内部增删断言，不新增用例）。
+
+## 9.6 ⚠ 并发写入的如实记录（给 Lead 的最终验收提个醒）
+
+本轮我这边出现过一次**两个写者同时改树**的情况，按纪律必须记下：
+
+1. 我第一次跑全量 `npm run check` 拿了 `EXIT=0`，但**同一时间 `impl-client` 正在改 `src/host/em.ts`/`routes.ts`**
+   （mtime 13:14:02 / 13:14:25，正好落在我的检查窗口内）⇒ **那一轮的绿不能当"冻结版本上的验收"**，已作废。
+2. 随后我重跑，`tsc` 报了 **2 个错、全在 `src/host/em.test.ts`**（`TS2353`）—— 那是 task-11 的中间态，**与我的文件无关**：
+   `tsc --noEmit | grep -oE '^src/[^(]+' | sort -u` 只列出 `src/host/em.test.ts`；我的 `src/index.test.ts` 在同一时刻 **16/16 全绿**。
+3. 等 `impl-client` 把类型错误修掉后我再跑，全程**无写入**（5 个 mtime 都早于本轮），得到 §9.5 的绿。
+
+⇒ 结论：**我的范围（`locale/**` + `src/index.test.ts`）是绿的、且与 task-11 无交集**；
+但**树级最终验收请在所有写者停下后再跑一次**（规则是"Lead 在冻结版本上跑最终验收"），
+我这次的绿是"我的回合结束时恰好无人写入"的那一版，版本号也已随并行工作涨到 v0.63.0。

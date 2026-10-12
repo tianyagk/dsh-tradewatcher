@@ -579,6 +579,16 @@ test('真宿主 ctx 是 Proxy：访问未 inject 的属性会抛 —— apply �
 const TITLE_OK = /^[\x20-\x7E·]+$/
 /** CJK 及其标点/全角字符：标题里一个都不许有（描述里允许且 zh 必须含） */
 const CJK_RE = /[\u3400-\u9FFF\u3000-\u303F\uFF00-\uFFEF]/
+/**
+ * 标题的**命名不变量**（task-12）：`dsh-tradewatcher` 或 `dsh-tradewatcher-<小写单词>`。
+ *
+ * 用户口径：插件名（头部）显示 `dsh-tradewatcher`，组件名显示 `dsh-tradewatcher-*`。
+ * core 行的 specifier 是**裸包名**（`dsh-client-modules` 只认它，见 checkManifest 的注释）⇒
+ * 头部（`packageText` 取 `pkg.meta.title`，`dsh-plugin-manager` 的 bundles 构造）与
+ * core 行（`packages.metaOf(row.name)`，`declaredRows`）**解析的是同一个 specifier**
+ * ⇒ 两者**必然同值**：core 行标题只能是 `dsh-tradewatcher`（= 插件名），不可能写成 `dsh-tradewatcher-core`。
+ */
+const TITLE_NAME_OK = /^dsh-tradewatcher(-[a-z]+)?$/
 
 interface LocaleEntry { dir: string; lang: 'en' | 'zh'; title: string; description: string }
 
@@ -593,6 +603,7 @@ function localeMetaViolations(entries: readonly LocaleEntry[]): string[] {
     if (e.title.trim() === '') fail.push(`${where} 的 title 为空`)
     if (!TITLE_OK.test(e.title)) fail.push(`${where} 的 title 含非允许字符（只允许可打印 ASCII 与 ·）：${e.title}`)
     if (CJK_RE.test(e.title)) fail.push(`${where} 的 title 含 CJK —— 标题必须是英文：${e.title}`)
+    if (!TITLE_NAME_OK.test(e.title)) fail.push(`${where} 的 title 不符合命名不变量 ^dsh-tradewatcher(-[a-z]+)?$：${e.title}`)
     if (e.description.trim() === '') fail.push(`${where} 的 description 为空`)
     if (e.lang === 'zh' && !CJK_RE.test(e.description)) fail.push(`${where} 的 description 必须含中文（中文解释只留在描述行）：${e.description}`)
     if (e.lang === 'en' && CJK_RE.test(e.description)) fail.push(`${where} 的 description 应是英文：${e.description}`)
@@ -602,7 +613,7 @@ function localeMetaViolations(entries: readonly LocaleEntry[]): string[] {
 
 test('task-8/9：六行标题各自可区分 + 标题必须英文（两语都是）、中文只留在 zh 描述行', () => {
   const rows = parseRowsFromText(readFileSync(join(ROOT, 'cordis.patch.yml'), 'utf8'))
-  const pkg = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')) as { exports: Record<string, unknown>; files: string[] }
+  const pkg = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')) as { name: string; exports: Record<string, unknown>; files: string[] }
   // ① `readPluginMeta` 的入口是 `<specifier>/locale/en.json`（@deepseek-ai/dsh-app-boot 的 readPluginMeta）⇒
   //    en.json 必须存在（否则整个 locale 目录都不会被读），且 exports 必须把它暴露出去。
   const entries: LocaleEntry[] = []
@@ -626,9 +637,13 @@ test('task-8/9：六行标题各自可区分 + 标题必须英文（两语都是
   assert.deepEqual(fail, [], `locale 元数据检查未通过（失败项：${fail.join(' ／ ')}）`)
   // ③ **zh 的 title 也必须是英文** —— 解析是 `text.zh ?? text.en`，中文环境取的是 zh 键（最容易漏的一条）
   for (const e of entries) assert.equal(CJK_RE.test(e.title), false, `${e.dir}/${e.lang}.json 的 title 必须是英文`)
-  // ④ 六个标题**互不相同** —— 这就是用户在插件列表里看到的「哪个是 Cloudmap」
+  // ④ 六行标题**互不相同**；其中 **core 的标题 = 插件名**（两者同一个 specifier，见 TITLE_NAME_OK 的注释）
   assert.equal(titles.size, rows.length, '六行都要有自己的标题')
-  assert.equal(new Set(titles.values()).size, rows.length, `六个标题必须互不相同（实得 ${JSON.stringify([...titles.values()])}）`)
+  assert.equal(new Set(titles.values()).size, rows.length, `六行标题必须互不相同（实得 ${JSON.stringify([...titles.values()])}）`)
+  assert.equal(titles.get('core'), pkg.name, `core 行标题必须等于包名（头部显示的就是它）：${titles.get('core')} vs ${pkg.name}`)
+  for (const row of ['calendar', 'watchlist', 'portfolio', 'market', 'cloudmap']) {
+    assert.equal(titles.get(row), `${pkg.name}-${row}`, `${row} 行标题应是 <包名>-<row>：${titles.get(row)}`)
+  }
   // ⑤ 发布清单要带上 locale（否则打包后标题解析不到）
   assert.equal(pkg.files.includes('locale'), true, 'package.json 的 files 必须包含 locale')
 })
@@ -648,6 +663,8 @@ test('task-9：三种注入各让 locale 检查非空（title 写回中文 / zh 
     { name: 'title 写回中文（用户当初的诉求就是不要这个）', mutate: (e) => e.map((x) => (x.dir === 'locale/rows/cloudmap' && x.lang === 'zh' ? { ...x, title: '盯盘 · 云图' } : x)), hit: /title 含 CJK/ },
     { name: 'zh 描述失去中文（中文解释没地方放了）', mutate: (e) => e.map((x) => (x.lang === 'zh' && x.dir === 'locale' ? { ...x, description: 'quotes and charts' } : x)), hit: /必须含中文/ },
     { name: 'title 混入全角括号（不是 CJK 字，但也不是 ASCII）', mutate: (e) => e.map((x) => (x.dir === 'locale' && x.lang === 'en' ? { ...x, title: 'Tradewatcher（Core）' } : x)), hit: /非允许字符|含 CJK/ },
+    // task-12：改回"英文友好名" —— 它既不含 CJK 也不含非法字符，**只有命名不变量抓得住**
+    { name: 'title 改回英文友好名（task-12 要防的回归）', mutate: (e) => e.map((x) => (x.dir === 'locale/rows/calendar' && x.lang === 'zh' ? { ...x, title: 'Tradewatcher · Calendar' } : x)), hit: /命名不变量/ },
   ]
   for (const { name, mutate, hit } of injections) {
     const mutated = mutate(real)

@@ -1,6 +1,6 @@
 {
   "meta": {
-    "title": "Tradewatcher · Core",
+    "title": "dsh-tradewatcher",
     "description": "行情条 / 详情图 / 数据层与共享路由"
   }
 }

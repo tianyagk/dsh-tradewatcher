@@ -11,6 +11,45 @@
 
 ---
 
+## v0.63.1 — 命名改为 `dsh-tradewatcher` / `dsh-tradewatcher-*`
+
+用户要求：插件名显示 `dsh-tradewatcher`，组件名显示 `dsh-tradewatcher-*`（覆盖 v0.61.0 的英文友好名）。
+
+### 先查清头部标题的来源（卡里给的两条分支其实是同一条）
+
+| 位置 | 代码 | 取的是 |
+| --- | --- | --- |
+| `dsh-client-ui-plugin-manager/lib/client.js:615`（`packageText`；`:2334` 的 `PackageCard` 当**头部**） | `pkg.meta?.title ?? pkg.name` | **包级** meta |
+| `…/client.js:628`（`rowText`） | `row.meta?.title ?? row.moduleName` | **行级** meta |
+
+包级 meta 来自 `dsh-plugin-manager/lib/index.js:1525` 的 `readPluginMeta(info.name ?? name, <包目录>/package.json)`；行级来自 `:1931` 的 `metaOf(row.name, base)`（同一个 `readPluginMeta`）。**core 行的 specifier 就是裸包名** ⇒ 用真函数、两个不同 base 实测：头部与 core 行**同源同值**。
+⇒ **不存在"头部取包清单名 ⇒ core 可写 `-core`"这条路**：要头部 = `dsh-tradewatcher`，core 行只能同值。反过来让 core 走子路径就是被实测否决的方案 B（裸包名一行不剩 ⇒ 浏览器半区整体消失）。
+
+### 改后实际显示
+
+| 层 | 标题 |
+| --- | --- |
+| **头部（插件名）** | **`dsh-tradewatcher`** |
+| core（与包级同源） | `dsh-tradewatcher` |
+| calendar / watchlist / portfolio / market / cloudmap | `dsh-tradewatcher-calendar` / `-watchlist` / `-portfolio` / `-market` / `-cloudmap` |
+
+描述行保持中文未动；13 个 locale 文件的 title **两语都改**（解析是 `text.zh ?? text.en`，只改一侧在中文环境失效）。
+
+### 断言（不放宽 + 新增一条关键闸门）
+
+保留三条：允许集（ASCII + `·`）、不得含 CJK、描述必须含中文。
+**新增 `^dsh-tradewatcher(-[a-z]+)?$`** —— 这是**唯一**能拦住"改回 `Tradewatcher · Calendar`"的闸门：那条既不含 CJK、也没有非法字符，前三条全拦不住。
+另加 `core 标题 === package.json 的 name`、五个功能行 `=== <包名>-<row>`（注释写明"core 与插件名同值"是**构造使然**，同一 specifier）。
+**反例实测**（改真文件）⇒ `fail 2`，失败项点名 `title 不符合命名不变量 ^dsh-tradewatcher(-[a-z]+)?$：Tradewatcher · Calendar`；恢复后逐字一致、16/16 全绿。该注入已固化进用例（与 task-9 的三条共四条常驻）。
+
+### 并发写入的记录（实现者主动作废了一次绿）
+
+它第一次 `EXIT=0` 时另一批（`task-11`）正在改 `src/host/em.ts`/`routes.ts`，写入落在其检查窗口内 ⇒ **该轮绿作废**；重跑撞上对方中间态；等对方停下、全程无写入后再跑才得到最终绿。**Lead 随后在无写入状态下复跑树级校验：421 / 421 × 2 时区、fail 0。**
+
+### 验证
+
+`npm run check` = 421/421 × 2 时区（Lead 树级复跑）；片段校验 73 项。
+
 ## v0.63.0 — 修「丢数据」：缓存被判不可用时不得整段丢弃
 
 用户报「筹码分布突然样本不足」并问「历史数据是不是没落库」。**落库了**（盘上 v3、801 根），是我们的读侧把整段缓存判废后返回 0 根。
