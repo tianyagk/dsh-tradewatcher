@@ -196,6 +196,23 @@ UI 侧 `resolveText` 在中文环境下取 `zh`（§1.1 的 fallback 链）⇒ �
 > 这 3 条注入是**先有实测结论、后写的断言**：态 B 的失败（浏览器半区消失）就是「裸包名一行都不剩」，
 > 所以把「裸包名恰好一行且在 core」写成不变量 —— 它同时挡住态 B 与"标题又全都一样"两种回归。
 
+### 5.1 「裸包名不变量」的反例实测（Lead 要求保留的回归闸门）
+
+改动**真实 `cordis.patch.yml`**：把 core 行的 `name` 换成 `'dsh-tradewatcher/rows/core'`（＝态 B 的最小复现），跑测试：
+
+```
+ℹ tests 13 / pass 11 / fail 2
+AssertionError: 真实 manifest 必须通过全部六行检查
+  （失败项：必须恰好一行用裸包名 dsh-tradewatcher（实测 0 行）⇒ 否则浏览器半区不注册）
+AssertionError: 基准（未注入）必须通过 —— 否则下面的注入证明无效
+  （失败项：必须恰好一行用裸包名 dsh-tradewatcher（实测 0 行）⇒ 否则浏览器半区不注册）
+```
+
+恢复后：`sha256sum -c` 通过、`ℹ tests 13 / pass 13 / fail 0`。
+
+> 为此把两条断言的消息改成**带上失败原因**（原来只说"必须通过全部六行检查"，看不出是哪条不变量破了）——
+> 以后谁再把子路径写进 core 行，红的第一行就直接点名原因。
+
 ---
 
 ## 6. 回滚（一条命令）
@@ -217,3 +234,7 @@ cd /home/hu/workspace/Servers/dsh/Dev/dsh-tradewatcher && git checkout HEAD -- c
    「灰色小字即组件的 id 对照表」，列出六行 id ↔ 中文名（`tradewatcher-core`=核心、`-calendar`=日历、
    `-watchlist`=自选、`-portfolio`=持仓、`-market`=大盘、`-cloudmap`=云图）。**本方案的标题更好看，且已验证不伤浏览器半区**，
    但代价是 manifest 里多了一种 specifier 形态（文档与测试都已跟上）。
+   > 注：Lead 已选定本方案（方案 C），此条仅作为存档的备选记录。
+4. **两处旧文本随本方案过时，未改**（不在 task-8 的 write scope，且 Lead 正在提交，避免与提交打架）：
+   - `docs/DESIGN-SUBPLUGINS.md:3` 的抬头仍写「…每行 `config: { row: … }`、**`name` 全为 `dsh-tradewatcher`**」—— 现行是 core 裸名 + 其余五行 `/rows/<row>`；
+   - `CHANGELOG.md:48`（v0.59.0 条目）同类表述 —— 那是**当时的事实**，建议在 v0.60.0 条目里写明"name 不再全是裸包名"即可，不必回头改写历史条目。

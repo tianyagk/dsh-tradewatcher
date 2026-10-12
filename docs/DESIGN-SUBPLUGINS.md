@@ -1,6 +1,6 @@
 # 设计：一个 bundle 内的多行子组件（可独立开关）+ 迁移路径
 
-**状态：已落地（v0.59.0 / `a2066e1`）**。`cordis.patch.yml:38-56` 是**六行**（`tradewatcher-core`/`-calendar`/`-watchlist`/`-portfolio`/`-market`/`-cloudmap`，全部启用、每行 `config: { row: … }`、`name` 全为 `dsh-tradewatcher`；无 config 的 `all` 语义保留给老 profile）；`src/index.test.ts` 的清单断言已从"锁单行"改为"锁六行"。
+**状态：已落地（v0.59.0 / `a2066e1`）**。`cordis.patch.yml:38-56` 是**六行**（`tradewatcher-core`/`-calendar`/`-watchlist`/`-portfolio`/`-market`/`-cloudmap`，全部启用、每行 `config: { row: … }`、`name`：**core 行用裸包名 `dsh-tradewatcher`**（保住浏览器半区，见 §归因纠正）、**另五行用 `dsh-tradewatcher/rows/<row>`**（标题可区分）；无 config 的 `all` 语义保留给老 profile）；`src/index.test.ts` 的清单断言已从"锁单行"改为"锁六行"。
 静态验证（锚真实产物 `lib/index.js`）见 `docs/AUDIT-IMPL35.md`：`inits/starts` 各 1、跨行零重复、路由账 24 = core 16 + calendar 1 + watchlist 3 + portfolio 2 + market 2 + cloudmap 0、六行并集 == 单行全量。
 **最后一公里**（重启 `dsh web` 后的真实装载：插件列表六行 `fiberPhase=active`、`/tradewatcher/rows` 六项、关一行后 404）**待装机验证**。
 > ⚠ **归因纠正（重要）**：本文件此前写着"六行装载失败：同一 package 多个活跃 Loader 源 + 带客户端半区 ⇒ `dsh-client-modules` 判为 composition error"——**这个归因是错的**（2026-10 纠正）。真原文是 *"distinct active Loader **sources** for that package are a composition error"*，指的是**不同的加载源**（`sourceKey = baseUrl + "\0" + loaderName`），**不是"同一个源的多个 row"**；而当年真正的失败原因是 `apply` 读了未 inject 的 `ctx.config`（Cordis Proxy 直接抛），**该 bug 与行数无关：1 行和 6 行同样被打死**。完整证据与纠正后的记录见文末「归因纠正与恢复记录」。
