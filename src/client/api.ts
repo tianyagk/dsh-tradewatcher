@@ -32,6 +32,13 @@ export interface ChipsPayload {
   samples: number
   methodology: string
   why: string | null
+  /** 盈利比例用到的现价（已换算到前复权空间）；null ⇒ 界面显示"未取到" */
+  priceUsed: number | null
+  priceSource: 'quote' | 'close' | null
+  fqt: 1
+  priceScale: number
+  latestBarDate: string | null
+  barAlignsWithDisplay: boolean
   disclaimer: string
   missing: Array<{ what: string; why: string; note: string }>
 }

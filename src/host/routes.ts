@@ -242,9 +242,18 @@ export function makeTradeRoutes(
           const disp = Number.isFinite(wantDisplay) ? Math.min(CHIPS_DISPLAY_MAX, Math.max(1, Math.round(wantDisplay))) : CHIPS_DISPLAY
           const supported = em.fqSupported(secid)
           const k = supported ? await em.fetchKline(secid, 101, cum, 1) : null
+          // 价格空间换算因子：**同一天**的 fqt=1 与 fqt=0 收盘价之比（日期不等 ⇒ 不换算，如实标注）
+          const kRaw = supported ? await em.fetchKline(secid, 101, 5, 0) : null
+          const lastFq1 = k?.days?.[k.days.length - 1] ?? null
+          const rawDay = kRaw?.days?.find((d) => d.date === lastFq1?.date) ?? null
+          const priceScale = lastFq1 !== null && rawDay !== null && rawDay.close > 0 ? lastFq1.close / rawDay.close : 1
           const qp = await em.fetchQuotesWithProvenance([secid])
           const qprovenance = qp.provenance
           const quote = qp.items[secid] ?? null
+          const quotePrice = typeof quote?.price === 'number' && Number.isFinite(quote.price) && quote.price > 0 ? quote.price : null
+          // 报价缺失 ⇒ 回落"最新前复权收盘价"（priceSource=close，如实标注）；两者都没有 ⇒ 现价不可得
+          const priceForRatio = quotePrice ?? (lastFq1 !== null ? lastFq1.close / (priceScale || 1) : null)
+          const priceSourceForRatio: 'quote' | 'close' = quotePrice !== null ? 'quote' : 'close'
           const bars = (k?.days ?? []).map((d) => ({ date: d.date, close: d.close, vol: d.vol }))
           // 口径来自 prefs（老 profile 缺键 ⇒ 默认 k=1.5 / triangle，由 store 的装载归一保证）
           const prefs = store.getPrefs()
@@ -252,7 +261,9 @@ export function makeTradeRoutes(
             fqSupported: supported,
             isHk: secid.startsWith('116.'),
             floatMv: quote?.floatMv ?? null,
-            price: quote?.price ?? null,
+            price: priceForRatio,
+            priceSource: priceSourceForRatio,
+            priceScale: quotePrice !== null ? priceScale : 1,
             window: cum,
             display: disp,
             decay: prefs.chipsDecay,
@@ -267,6 +278,8 @@ export function makeTradeRoutes(
             asOf: k === null ? null : Date.now(),
             stale: k?.stale === true || qprovenance.stale === true,
             source: 'em-kline+quote',
+            // 最后一根 bar 的元信息：partial=true 说明是盘中未完成 bar（数值会变，不可当最终值）
+            lastBar: em.lastBarOfKline(secid, 101, 1),
             ...series,
             missing,
           })

@@ -13,7 +13,7 @@ import { dirClass } from './format.ts'
 import { clampIndex } from './chipsView.ts'
 import { countMount } from './mounts.ts'
 import { CHIPS_LINE_TOKENS } from './theme.ts'
-import { axisTicks, caliberDeviates, chipAxisOf, chipsLinesOf, chipsRowHeight } from './chipsView.ts'
+import { bucketCenterTicks, caliberDeviates, chipAxisOf, chipsLinesOf, chipsRowHeight } from './chipsView.ts'
 import type { ChipsState } from './useChips.ts'
 
 export interface ChipsPanelProps {
@@ -68,7 +68,8 @@ export function ChipsPanel(props: ChipsPanelProps): React.ReactElement | null {
   const viewCenters = day.centers.slice(win.from, win.to + 1)
   const viewBuckets = day.buckets.slice(win.from, win.to + 1)
   const rowH = chipsRowHeight(props.maxBottom === undefined ? 140 : props.maxBottom, Math.max(1, win.rows))
-  const ticks = axisTicks(viewCenters)
+  // task-78：刻度取**真实的桶中心价**（与行一一对应），不再按两端线性等分
+  const ticks = bucketCenterTicks(viewCenters)
   const xTicks = axis.ticks
   const lines = chipsLinesOf({ avgCost: day.avgCost, support: day.support, resistance: day.resistance })
   const hint = `${hint0}\n显示区间按筹码质量覆盖裁剪：${(axis.window.covered * 100).toFixed(2)}% 的筹码在轴内，` +
@@ -77,7 +78,8 @@ export function ChipsPanel(props: ChipsPanelProps): React.ReactElement | null {
   const colorOf = (k: 'avg' | 'resistance' | 'support'): string =>
     k === 'avg' ? CHIPS_LINE_TOKENS.avg : k === 'resistance' ? CHIPS_LINE_TOKENS.resistance : CHIPS_LINE_TOKENS.support
   const money = (v: number | null): string => (v === null ? '—' : v.toFixed(2))
-  const pct = (v: number | null): string => (v === null ? '—' : `${v.toFixed(2)}%`)
+  // 现价不可得 ⇒ 「未取到」（不是 0，也不是 —）
+  const pct = (v: number | null): string => (v === null ? '未取到' : `${v.toFixed(2)}%`)
 
   return React.createElement('div', { className: 'tw-chips' },
     React.createElement('div', { className: 'tw-chips-head' },
@@ -94,7 +96,10 @@ export function ChipsPanel(props: ChipsPanelProps): React.ReactElement | null {
         React.createElement('span', { className: 'tw-chips-sep' }),
         React.createElement('span', { title: `筹码累积分布 P95；${d.disclaimer}` }, `压力 ${d.narrow ? '—' : money(day.resistance)}`),
         React.createElement('span', { className: 'tw-chips-sep' }),
-        React.createElement('span', { title: 'Σ(桶价 < 现价 的权重)/Σ权重；现价缺失时为 —' }, `盈利比例 ${pct(profitPct)}`),
+        React.createElement('span', {
+          title: `Σ(桶价 < 现价 的权重)/Σ权重；现价 ${d.priceUsed === null ? '未取到' : d.priceUsed.toFixed(2)}` +
+            `（来源 ${d.priceSource ?? '未取到'}，价格空间 fqt=${d.fqt}，换算因子 ${d.priceScale}，最新一根 ${d.latestBarDate ?? '—'}）`,
+        }, `盈利比例 ${pct(profitPct)}`),
       ),
     ),
     // 只有**偏离默认口径**时才给一行原因（正常情况一个字都不显示：k=1.5 + 三角形是写死的默认）

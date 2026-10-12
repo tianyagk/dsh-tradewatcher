@@ -16,6 +16,24 @@ export function clampIndex(index: number, length: number): number {
   return Math.min(length - 1, Math.max(0, Math.round(index)))
 }
 
+/**
+ * 筹码分布的纵轴刻度：取 3–5 个刻度覆盖窗口两端，且**每个刻度值都必须是某行的桶中心价**
+ * （task-78：旧实现按窗口两端线性等分 ⇒ 17.20/19.07/20.95 这类值不在桶中心集合里，刻度与行对不上）。
+ */
+export function bucketCenterTicks(centers: readonly number[], max = 5): number[] {
+  const n = centers.length
+  if (n === 0) return []
+  if (n === 1) return [centers[0]]
+  const count = Math.min(max, Math.max(2, n))
+  const out: number[] = []
+  for (let i = 0; i < count; i += 1) {
+    const idx = Math.round((i * (n - 1)) / (count - 1))
+    const v = centers[idx]
+    if (out.length === 0 || out[out.length - 1] !== v) out.push(v)
+  }
+  return out
+}
+
 /** 筹码分布的纵轴刻度：取 3–5 个均匀刻度覆盖 [lo, hi]（含两端），与横条逐行对齐用 */
 export function axisTicks(centers: readonly number[], max = 5): number[] {
   const n = centers.length
@@ -168,18 +186,8 @@ export function massWindowOf(centers: readonly number[], buckets: readonly numbe
     tail += buckets[to]
     to -= 1
   }
-  // 第二步：在质量窗口内再丢掉**稀疏行**（权重 < 窗口峰值的 20%）—— 券商观感只显示密集带；
-  // 被丢的质量一并算进 dropped，如实报告（不静默）。
-  const winPeak = Math.max(...buckets.slice(from, to + 1), 0)
-  const thr = winPeak * MASS_THRESHOLD
-  if (thr > 0) {
-    let f2 = from
-    let t2 = to
-    while (f2 < t2 && buckets[f2] < thr) f2 += 1
-    while (t2 > f2 && buckets[t2] < thr) t2 -= 1
-    const kept2 = buckets.slice(f2, t2 + 1).reduce((a, b) => a + b, 0)
-    if (t2 - f2 + 1 >= 3) return { from: f2, to: t2, covered: total > 0 ? kept2 / total : 0, dropped: 1 - (total > 0 ? kept2 / total : 0), rows: t2 - f2 + 1, lo: centers[f2], hi: centers[t2] }
-  }
+  // ⚠ **不得**再按"权重小"删行：价格轴必须连续（窗口内每个桶都占位，空桶画零长度）。
+  // 观感的"稀疏"只能靠**缩小窗口区间**（即这里的质量覆盖）解决 —— 删行会让刻度与桶价失真（task-78）。
   const kept = buckets.slice(from, to + 1).reduce((a, b) => a + b, 0)
   const covered = total > 0 ? kept / total : 0
   return { from, to, covered, dropped: 1 - covered, rows: to - from + 1, lo: centers[from], hi: centers[to] }

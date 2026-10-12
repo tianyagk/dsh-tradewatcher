@@ -115,6 +115,20 @@ export interface ChipSeries {
   samples: number
   /** 口径字符串（与算法同源，随结果返回） */
   methodology: string
+  /** 盈利比例实际用到的现价（已换算到前复权空间）；不可得 ⇒ null（界面显示"未取到"，不是 0） */
+  priceUsed: number | null
+  /** 现价来源：quote = 报价快照（已换算）；close = 回落用展示日前复权收盘价 */
+  priceSource: 'quote' | 'close' | null
+  /** 价格空间：桶价与 priceUsed 都在这个口径下（固定 1 = 前复权） */
+  fqt: 1
+  /** 换算因子（1 = 恒等；≠1 时说明现价被换算了多少） */
+  priceScale: number
+  /** 递推窗口最后一根 bar 的日期（"最新一根"的语义锚点） */
+  latestBarDate: string | null
+  /** 展示日（滑杆当前日）与最新 bar 是否同一天；不一致时盈利比例用**展示日收盘价**，不混用 */
+  barAlignsWithDisplay: boolean
+  /** 最后一根 bar 的元信息（partial = 盘中未完成 bar，数值会变） */
+  lastBar: { date: string; close: number; vol: number; partial: boolean } | null
   /** 不提供该模块时的一句话原因（指数/期货/样本不足），否则 null */
   why: string | null
   disclaimer: string
@@ -222,8 +236,17 @@ export interface ChipOptions {
   floatMv?: number | null
   /** 港股（`116.*`）：vol/amount 单位未标定 ⇒ **必须**回落半衰期 */
   isHk?: boolean
-  /** 现价（盈利比例用；缺失 ⇒ 盈利比例 —，平均成本仍给） */
+  /** 现价（盈利比例用；缺失 ⇒ 盈利比例未取到，平均成本仍给） */
   price?: number | null
+  /**
+   * **价格空间换算因子**：桶价来自 `fqt=1` 前复权序列，而报价快照是**未复权**的 ⇒
+   * 比较前必须换算：`priceAdj = priceRaw × priceScale`，其中
+   * `priceScale = closeFq1_last / closeFq0_last`（两个 close 取**同一根**最新日线）。
+   * 缺失/为 1 ⇒ 不换算（恒等，不引入漂移）。
+   */
+  priceScale?: number | null
+  /** 现价来源：`quote`（报价快照，已按 priceScale 换算）/ `close`（回落用展示日的前复权收盘价） */
+  priceSource?: 'quote' | 'close'
   /** 该标的是否支持前复权（指数/期货/板块 ⇒ false，直接不提供模块） */
   fqSupported?: boolean
   /**
@@ -263,6 +286,12 @@ export function chipSeriesOf(bars: readonly ChipBar[], opts: ChipOptions = {}): 
   const shape = norm.spread
   const mvMode = opts.floatMvMode ?? 'now'
   const win = bars.filter((b) => Number.isFinite(b.close) && b.close > 0).slice(-window)
+  // 价格空间：桶价是 fqt=1 前复权；报价快照未复权 ⇒ 先换算再比较（因子缺失/非有限 ⇒ 1，恒等）
+  const scaleRaw = typeof opts.priceScale === 'number' && Number.isFinite(opts.priceScale) && opts.priceScale > 0 ? opts.priceScale : 1
+  const priceRaw = typeof opts.price === 'number' && Number.isFinite(opts.price) && opts.price > 0 ? opts.price : null
+  const priceUsed = priceRaw === null ? null : priceRaw * scaleRaw
+  const priceSource: 'quote' | 'close' | null = priceRaw === null ? null : (opts.priceSource ?? 'quote')
+  const latestBarDate = win.length > 0 ? win[win.length - 1].date : null
   const samples = win.length
   const base: Omit<ChipSeries, 'days' | 'latest'> = {
     window,
@@ -277,6 +306,13 @@ export function chipSeriesOf(bars: readonly ChipBar[], opts: ChipOptions = {}): 
     profitRatio: null,
     samples,
     methodology: '',
+    priceUsed,
+    priceSource,
+    fqt: 1,
+    priceScale: scaleRaw,
+    latestBarDate,
+    barAlignsWithDisplay: true,
+    lastBar: win.length > 0 ? { date: latestBarDate ?? '', close: win[win.length - 1].close, vol: win[win.length - 1].vol ?? 0, partial: false } : null,
     why: null,
     disclaimer: '这是筹码分布统计量（成交量的历史累积），不是支撑/压力的预测，也不是买卖建议。',
   }
@@ -346,10 +382,12 @@ export function chipSeriesOf(bars: readonly ChipBar[], opts: ChipOptions = {}): 
     const support = percentilePrice(norm, centers, 0.05)
     const resistance = percentilePrice(norm, centers, 0.95)
     const narrow = support !== null && resistance !== null && (resistance - support) / (high - low) < CHIPS_NARROW_RATIO
-    const price = opts.price === undefined ? null : opts.price
+    // 最新一根（= 展示日的默认值）用换算后的现价；**历史展示日**用当天收盘价 —— 不得混用（口径字段如实标注）
+    const isLatest = i === win.length - 1
+    const price = isLatest ? priceUsed : b.close
     const profitRatio = price === null || total <= 0
       ? null
-      : norm.reduce((s, x, idx) => (centers[idx] < price ? s + x : s), 0)
+      : norm.reduce((s2, x, idx) => (centers[idx] < price ? s2 + x : s2), 0)
     // 只为**最近 display 天**记录状态（递推仍在整个 window 上跑）
     if (i < win.length - display) continue
     days.push({
@@ -365,12 +403,16 @@ export function chipSeriesOf(bars: readonly ChipBar[], opts: ChipOptions = {}): 
     })
   }
   const latest = days[days.length - 1] ?? null
+  const barAligns = latest !== null && latestBarDate !== null && latest.date === latestBarDate
   return {
     ...base,
     days,
     latest,
     decay,
     decayReason,
+    priceUsed: barAligns ? priceUsed : (latest !== null ? null : priceUsed),
+    priceSource: barAligns ? (priceSource ?? (latest !== null ? 'close' : null)) : (latest !== null ? 'close' : priceSource),
+    barAlignsWithDisplay: barAligns,
     avgCost: latest?.avgCost ?? null,
     support: latest?.support ?? null,
     resistance: latest?.resistance ?? null,
@@ -389,6 +431,6 @@ export function chipSeriesOf(bars: readonly ChipBar[], opts: ChipOptions = {}): 
       `。新增筹码按${shape === 'triangle' ? '三角形分布（峰在当日均价 (high+low+close)/3）' : '均匀分布'}铺到当日 [low, high]` +
       `（均价均值 ${(peakSum / Math.max(1, win.length)).toFixed(4)}）；` +
       `窗口：用了近 ${samples} 根日线${samples < CHIPS_WINDOW ? `（不足累积窗口 ${CHIPS_WINDOW} 根 ⇒ 历史越短越不准，如实标注）` : ''}（fqt=1 前复权）；` +
-      `桶数 ${buckets}（显示区间裁剪：先按筹码质量 99% 覆盖，再隐去权重低于窗口峰值 20% 的稀疏行；被裁到轴外的权重不显示、也不参与四数统计口径）；支撑/压力 = 筹码累积分布的 P5/P95 价位；平均成本 = Σ(桶价×权重)/Σ权重；盈利比例 = Σ(桶价 < 现价 的权重)/Σ权重。`,
+      `桶数 ${buckets}（显示区间裁剪：先按筹码质量 99% 覆盖，再隐去权重低于窗口峰值 20% 的稀疏行；被裁到轴外的权重不显示、也不参与四数统计口径）；支撑/压力 = 筹码累积分布的 P5/P95 价位；平均成本 = Σ(桶价×权重)/Σ权重；盈利比例 = Σ(桶价 < 现价 的权重)/Σ权重；价格空间：fqt=1 前复权（桶价与现价同一空间）；换算因子 ${scaleRaw}（1 = 恒等）；现价来源 ${priceSource ?? '未取到'}（原始价 ${priceRaw ?? '未取到'} × ${scaleRaw}）；"最新一根" = 递推窗口最后一根 ${latestBarDate ?? '—'}：最新一根用换算后的现价，展示日与它不一致时该展示日用当天收盘价，不混用。`,
   }
 }

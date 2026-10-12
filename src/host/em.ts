@@ -23,7 +23,7 @@ import { fetchSinaEtfRanking, fetchSinaQuotes, sinaSymbol as sinaQuoteSymbol } f
 import { fetchTencentBoards, fetchTencentMinutes, fetchTencentQuoteRows, fetchTencentSuggest, tencentCode, type TencentQuoteFull } from './tencent.ts'
 import { join } from 'node:path'
 import { dataHome } from './store.ts'
-import { dayOf, inSession, isSettledOffline } from './time.ts'
+import { dayOf, inSession, isSettledOffline, shanghaiParts } from './time.ts'
 
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
 const REFERER = 'https://quote.eastmoney.com/'
@@ -1431,9 +1431,46 @@ interface KlineEntry {
   bars: DayBar[]
   loaded: boolean
   updatedAt: number
+  /** 内存里这根是不是未完成 bar（盘中抓的）；供上层暴露 lastBar.partial */
+  partial: boolean
 }
 
 const klineMem = new Map<string, KlineEntry>()
+
+/**
+ * K 线磁盘缓存 schema 版本。
+ * **v3 起记录 `partial`**：v2 及以前的文件**可能冻着盘中未完成 bar**（实测：`1.601872_101_1.json`
+ * 的 10-09 bar 是 09:33 写下的 `close 21.93 / low 21.81 / vol 222846`，真宿主完整 bar 是
+ * `close 22.07 / low 20.65 / vol 2115568`）⇒ **版本不等于当前值一律不采用**，回源重取。
+ */
+export const KLINE_CACHE_V = 3
+/** 未完成 bar 的存活时间：超时后读缓存**必须**回源重取（盘中数据在动） */
+export const PARTIAL_TTL_MS = 60_000
+
+/**
+ * 该 bar 是否"未完成"（纯函数，便于断言）：日期 == 抓取当日 **且** 抓取时刻在开盘后、收盘前。
+ * 收盘后抓到的同日 bar 视为最终（可缓存）。
+ */
+export function isPartialBar(date: string, ts: number, closeMinute = 15 * 60): boolean {
+  if (date !== dayOf(ts)) return false
+  const p = shanghaiParts(ts)
+  const mins = p.minutes
+  return mins >= 9 * 60 + 15 && mins < closeMinute
+}
+
+/**
+ * 缓存条目是否可用（纯函数）：版本不符 ⇒ 不可用；`partial` 且超过 TTL ⇒ 不可用（须回源）。
+ */
+export function klineCacheUsable(meta: { v?: unknown; partial?: unknown; updatedAt?: unknown }, now: number): { usable: boolean; partial: boolean; reason: string | null } {
+  const v = typeof meta.v === 'number' ? meta.v : 0
+  if (v !== KLINE_CACHE_V) return { usable: false, partial: false, reason: `缓存 schema v${v} ≠ v${KLINE_CACHE_V}（旧文件可能含未完成 bar）⇒ 回源重取` }
+  const partial = meta.partial === true
+  const at = typeof meta.updatedAt === 'number' ? meta.updatedAt : 0
+  if (partial && now - at > PARTIAL_TTL_MS) {
+    return { usable: false, partial: true, reason: `未完成 bar 已超过 ${PARTIAL_TTL_MS / 1000}s TTL ⇒ 回源重取` }
+  }
+  return { usable: true, partial, reason: null }
+}
 
 /**
  * 该 (secid, klt, fqt) 依次尝试的缓存**文件名**（纯函数，便于断言）。
@@ -1443,6 +1480,18 @@ const klineMem = new Map<string, KlineEntry>()
  *   —— 只在 `fqt=0` 时兜底复用，不迁移、不重命名（指数/期货被 `normalizeFq` 归一为 0，
  *   因此它们命中的正是这份老文件）。
  */
+/**
+ * 最近一次取数的"最后一根 bar"元信息（供回包暴露 `lastBar`）：
+ * `partial` 为 true 说明它是**盘中未完成 bar**（数值会变，不可与最终 bar 混用）。
+ */
+export function lastBarOfKline(secid: string, klt: number, fqt: FqMode): { date: string; close: number; vol: number; partial: boolean } | null {
+  const key = `${secid}|${klt}|${fqt}`
+  const hit = klineMem.get(key)
+  if (hit === undefined || hit.bars.length === 0) return null
+  const last = hit.bars[hit.bars.length - 1]
+  return { date: last.date, close: last.close, vol: last.vol, partial: hit.partial === true }
+}
+
 export function klineCacheFileNames(secid: string, klt: number, fqt: FqMode): string[] {
   const names = [`${secid}_${klt}_${fqt}.json`]
   if (fqt === 0) names.push(`${secid}_${klt}.json`)
@@ -1457,15 +1506,22 @@ async function loadKlineCache(secid: string, klt: number, fqt: FqMode): Promise<
   const key = `${secid}|${klt}|${fqt}`
   const hit = klineMem.get(key)
   if (hit !== undefined && hit.loaded) return hit
-  const entry: KlineEntry = hit ?? { bars: [], loaded: false, updatedAt: 0 }
+  const entry: KlineEntry = hit ?? { bars: [], loaded: false, updatedAt: 0, partial: false }
   const paths = klineCacheFileNames(secid, klt, fqt).map((name) => join(dataHome(), 'klines', name))
   for (const path of paths) {
     try {
       const raw = await readFile(path, 'utf8')
-      const parsed = JSON.parse(raw) as { bars?: DayBar[]; updatedAt?: number }
+      const parsed = JSON.parse(raw) as { bars?: DayBar[]; updatedAt?: number; v?: number; partial?: boolean }
+      // 版本不符 或 未完成 bar 超 TTL ⇒ **不采用**（旧文件"看着正常但是错的"是我们的红线）
+      const ok = klineCacheUsable(parsed, Date.now())
+      if (!ok.usable) {
+        console.warn('[tradewatcher] 跳过 K 线缓存:', path, ok.reason)
+        continue
+      }
       if (Array.isArray(parsed.bars) && parsed.bars.length > 0) {
         entry.bars = parsed.bars.filter((b) => b !== null && typeof b.date === 'string' && Number.isFinite(b.close))
         entry.updatedAt = typeof parsed.updatedAt === 'number' ? parsed.updatedAt : 0
+        entry.partial = parsed.partial === true
         break
       }
     } catch {
@@ -1480,7 +1536,10 @@ async function loadKlineCache(secid: string, klt: number, fqt: FqMode): Promise<
 async function saveKlineCache(secid: string, klt: number, fqt: FqMode, bars: DayBar[]): Promise<void> {
   try {
     await mkdir(join(dataHome(), 'klines'), { recursive: true })
-    await writeFile(klineFile(secid, klt, fqt), JSON.stringify({ v: 2, secid, klt, fqt, updatedAt: Date.now(), bars }), 'utf8')
+    // 落盘时判定最后一根：盘中抓到的当日 bar 标 partial（读侧按 60s TTL 决定是否回源）
+    const last = bars.length > 0 ? bars[bars.length - 1] : null
+    const partial = last !== null && isPartialBar(last.date, Date.now())
+    await writeFile(klineFile(secid, klt, fqt), JSON.stringify({ v: KLINE_CACHE_V, secid, klt, fqt, updatedAt: Date.now(), partial, bars }), 'utf8')
     void pruneKlineCache()
   } catch (error) {
     console.warn('[tradewatcher] 保存K线缓存失败:', String(error))
@@ -1796,6 +1855,9 @@ async function refreshKline(secid: string, baseKlt: number, fqt: FqMode, entry: 
     entry.bars = mergeBars(entry.bars, fetched, KLINE_CAP[baseKlt])
     entry.updatedAt = Date.now()
     const afterLast = entry.bars[entry.bars.length - 1]?.date ?? ''
+    // 内存里同步标出最后一根是否未完成（盘中），并把标记落盘（读侧按 TTL 决定是否回源）
+    const lastNow = entry.bars.length > 0 ? entry.bars[entry.bars.length - 1] : null
+    entry.partial = lastNow !== null && isPartialBar(lastNow.date, Date.now())
     if (before !== entry.bars.length || beforeLast !== afterLast) void saveKlineCache(secid, baseKlt, fqt, entry.bars)
     return false
   }

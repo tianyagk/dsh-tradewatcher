@@ -9,7 +9,12 @@ import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { TrendData } from '../shared/model.ts'
-import { fetchTrend, pickTrendFallback, trendSessionDay } from './em.ts'
+
+// ⚠ 隔离数据目录：`em.ts` 会读 <DSH_HOME>/dsh-tradewatcher/trends/ 的 LKG 归档。
+// 不隔离 ⇒ 测试会读到**真宿主当天写的归档**（10-12），于是"今天的序列不标 sessionDay"这类断言
+// 会随真实日期变红（P1-2 的翻车原因）。必须在**首次调用 dataHome() 之前**设好。
+process.env.DSH_HOME = mkdtempSync(join(tmpdir(), 'tw-trend-fb-'))
+const { fetchTrend, pickTrendFallback, trendSessionDay } = await import('./em.ts')
 
 const DAY_YESTERDAY = '2026-10-08'
 const DAY_TODAY = '2026-10-09'
@@ -127,21 +132,26 @@ test('③ 休市定稿 ⇒ 仍复用本地，且不去打上游/备用源（不�
 })
 
 test('P1-2：上游回的是过去某交易日的序列 ⇒ 回包必须带 sessionDay（否则会被读成今天）', async () => {
-  const secid = '1.518880' // 未被其它用例用过，避免命中 peek 缓存
-  const staleDay = trendOf('2026-10-01')
-  const got = await fetchTrend(secid, 1, {
-    now: Date.parse(`${DAY_TODAY}T10:00:00+08:00`),
-    upstream: async () => staleDay,
-    fallbackSource: async () => null,
-  })
-  assert.ok(got !== null)
-  assert.equal(got.points[0].label.slice(0, 10), '2026-10-01')
-  assert.equal(got.sessionDay, '2026-10-01', '非当日数据必须留下痕迹（客户端据此写「非当日数据（10-01）」）')
-  // 是今天的序列 ⇒ 不标（免得每张图都多一句噪声）
-  const fresh = await fetchTrend('1.518880', 2, {
-    now: Date.parse(`${DAY_TODAY}T10:00:00+08:00`),
-    upstream: async () => trendOf(DAY_TODAY),
-    fallbackSource: async () => null,
-  })
-  assert.equal(fresh?.sessionDay, undefined)
+  // 同一断言在**两个不同的固定假时间**下都必须成立 ⇒ 证明不依赖真实时钟。
+  // 两个"今天"取**交易日**（周二 / 周三），避免落在周末让"定稿复用"分支抢在前面。
+  for (const [i, fakeToday] of ['2026-10-06', '2026-10-07'].entries()) {
+    // secid 必须**全局唯一**：真宿主可能已经把今天的归档写进 trends/（本地缓存命中就与注入的输入无关了）
+    const secid = `1.5188${i}${Date.now()}9`
+    const staleDay = trendOf('2026-10-01')
+    const got = await fetchTrend(secid, 1, {
+      now: Date.parse(`${fakeToday}T10:00:00+08:00`),
+      upstream: async () => staleDay,
+      fallbackSource: async () => null,
+    })
+    assert.ok(got !== null)
+    assert.equal(got.points[0].label.slice(0, 10), '2026-10-01')
+    assert.equal(got.sessionDay, '2026-10-01', `非当日数据必须留下痕迹（假时间 ${fakeToday}）`)
+    // 是"今天"的序列 ⇒ 不标（免得每张图都多一句噪声）
+    const fresh = await fetchTrend(secid, 2, {
+      now: Date.parse(`${fakeToday}T10:00:00+08:00`),
+      upstream: async () => trendOf(fakeToday),
+      fallbackSource: async () => null,
+    })
+    assert.equal(fresh?.sessionDay, undefined, `今天的序列不标 sessionDay（假时间 ${fakeToday}）`)
+  }
 })

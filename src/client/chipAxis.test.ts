@@ -1,7 +1,7 @@
 /** task-69：价格轴裁剪（质量覆盖）+ 横轴与条宽同源同尺度。 */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { CHIPS_COVERAGE, chipAxisOf, massWindowOf } from './chipsView.ts'
+import { CHIPS_COVERAGE, axisTicks, bucketCenterTicks, chipAxisOf, massWindowOf } from './chipsView.ts'
 
 const centers = (n: number, lo = 5.47, hi = 22.82): number[] => Array.from({ length: n }, (_, i) => lo + ((hi - lo) * i) / (n - 1))
 
@@ -67,4 +67,48 @@ test('② 刻度跟随展示日自适应；峰值为 0 不刻度；极值不抛�
   assert.ok(ax.widthOf(1) <= 100 + 1e-9, '条宽不得超过 100%')
   assert.doesNotThrow(() => chipAxisOf([], []))
   assert.doesNotThrow(() => chipAxisOf(c, new Array(n).fill(Number.NaN)))
+})
+
+test('task-78 ①：窗口内行数 == 覆盖的桶数（不许因权重小少行），空桶占位、权重守恒', () => {
+  const n = 96
+  const c = centers(n)
+  const b = new Array(n).fill(0)
+  // 中段密集 + **中间夹一个空桶**（旧实现会把它删掉 ⇒ 轴出现空洞）
+  for (let i = 30; i <= 60; i += 1) b[i] = 1 / 31
+  b[45] = 0
+  const w = massWindowOf(c, b, CHIPS_COVERAGE)
+  assert.equal(w.rows, w.to - w.from + 1, '布局行数必须等于窗口覆盖的桶数')
+  const view = b.slice(w.from, w.to + 1)
+  assert.equal(view.length, w.rows)
+  assert.equal(view.some((x) => x === 0), true, '窗口里必须仍有空桶（占位，不删行）')
+  // 空桶不参与权重，但守恒关系不变
+  const kept = view.reduce((a, x) => a + x, 0)
+  assert.ok(Math.abs(kept - b.reduce((a, x) => a + x, 0)) < 1e-9, '权重之和守恒（没有归一化拉伸）')
+})
+
+test('task-78 ②：刻度值**必须**是某行的桶中心价（旧实现按两端等分 ⇒ 不在集合里）', () => {
+  const n = 42
+  const c = centers(n, 15.33, 22.82)
+  const ticks = bucketCenterTicks(c)
+  assert.ok(ticks.length >= 2 && ticks.length <= 5, `刻度数应在 2–5（实际 ${ticks.length}）`)
+  for (const t of ticks) {
+    assert.ok(c.some((y) => Math.abs(y - t) < 1e-12), `刻度 ${t} 必须是某个桶的中心价`)
+  }
+  assert.equal(ticks[0], c[0], '首刻度覆盖窗口下端')
+  assert.equal(ticks[ticks.length - 1], c[n - 1], '末刻度覆盖窗口上端')
+  // 旧函数（对照）：线性等分产生**非**桶中心值 ⇒ 正是"刻度与行对不上"的来源
+  const legacy = axisTicks(c)
+  assert.equal(legacy.some((t) => !c.some((y) => Math.abs(y - t) < 1e-12)), true, '旧 axisTicks 会产生非桶中心值（这就是要换掉它的原因）')
+})
+
+test('task-78 ③：轴顶与条宽同源（同一峰值变量），换一天一起变', () => {
+  const n = 96
+  const c = centers(n)
+  const day1 = new Array(n).fill(0); day1[50] = 0.05
+  const day2 = new Array(n).fill(0); day2[50] = 0.08
+  const a1 = chipAxisOf(c, day1), a2 = chipAxisOf(c, day2)
+  assert.equal(a1.peak, 0.05); assert.equal(a2.peak, 0.08)
+  assert.ok(Math.abs(a1.widthOf(a1.peak) - (a1.peak / a1.top) * 100) < 1e-9, '条宽分母就是轴顶（同源）')
+  assert.notEqual(a1.top, a2.top, '换一天（峰值不同）⇒ 轴顶跟着变')
+  assert.notDeepEqual(a1.ticks.map((t) => t.pct), a2.ticks.map((t) => t.pct), '刻度位置也一起变')
 })

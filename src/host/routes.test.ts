@@ -318,7 +318,8 @@ function writeKlineFixture(secid: string, klt: number, n: number, fqt: 0 | 1 | 2
   }
  // 'legacy' = 之前的文件名（<secid>_<klt>.json，当时一律不复权）
   const name = fqt === 'legacy' ? `${secid}_${klt}.json` : `${secid}_${klt}_${fqt}.json`
-  writeFileSync(join(dir, name), JSON.stringify({ v: 2, secid, klt, updatedAt: now, bars }))
+  // ⚠ task-77 起缓存带 schema 版本 v3（v2 及以前可能冻着未完成 bar ⇒ 一律不采用）
+  writeFileSync(join(dir, name), JSON.stringify({ v: 3, secid, klt, updatedAt: now, partial: false, bars }))
   return bars
 }
 
