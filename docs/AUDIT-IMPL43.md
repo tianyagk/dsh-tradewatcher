@@ -235,3 +235,88 @@ built lib/index.js + lib/client.js （v0.70.0，客户端片段校验通过：73
    「`tools`｜**无**独占路由/工具（本轮）｜工具箱：工具目录 + 工具详情；只贡献 `activeRows`」。
 6. **`package.json` 只加了 exports**（`./rows/tools`、`./rows/tools/locale/*`）——`files` 里已有 `locale`，无需再改。
 7. 工具详情页**没有**"星标/收藏"（用户明确不做）；也没有二级导航（目录 ↔ 详情用页内返回即可）。
+
+---
+
+## 7. 追加：用户三项改动（工具箱目录页，v0.73.x 之后）—— 2026-10-12 第二批
+
+### 7.1 背景（用户截图红框 + Lead 转述的三条）
+
+1. **删掉页头那一行**：截图红框 = `← 返回` + `工具目录` + `本插件自带 1 个工具` ⇒ 页标题与计数**整行去掉**，
+   只保留一个**最小返回控件（图标 + `返回`）**（用户此前明确要过"左上方一个小倒退按钮"）。
+2. **工具名与 chip 按用户口径逐字锁定**：标题 = `全球资金流蛋糕模型`、chip = `宏观 | 全球轮动`
+   （此前我把卡片标题写成了 `五市场蛋糕`、chip 写成 `蛋糕` —— 属自行改名，**已纠正**）。
+3. **卡片视觉与交互**：阴影悬浮 + 圆角的卡片控件；**整卡可点**（真实按钮语义、键盘可达）；
+   **移除**页脚 `打开工具 →` 文案。
+
+### 7.2 改动点（`文件:行号`）
+
+| 文件 | 位置 | 改动 |
+| --- | --- | --- |
+| `src/client/toolText.ts` | `:14-26` | **删除** `CATALOG_TITLE`（页标题）与 `CARD_ACTION`（页脚入口文案）两个常量；`PAGE_BACK_ACTION` 由 `'← 返回'` 改为 `'返回'`（箭头改由图标承担） |
+| `src/client/toolRegistry.ts` | `:114-127`、`:154-166`、`:168-190`、`:190-207` | 再导出里去掉 `CATALOG_TITLE`/`CARD_ACTION`；`ToolCard` 去掉 `action`；`CatalogModel` 去掉 `title`/`subtitle`（页头那一行的数据来源整个删掉，避免"没人渲染的死字段"）；`catalogModel()` 只产出分类标签行 / 搜索占位 / 卡片 / 空态 |
+| `src/client/tools/cake.ts` | `:2`、`:27-31` | 注释与条目：`name: '全球资金流蛋糕模型'`、`chip: '宏观 \| 全球轮动'`（逐字锁定，含反例说明） |
+| `src/client/toolCardView.ts`（新） | `:15`、`:24`、`:32-46`、`:53-64`、`:69-78` | **新模块**：`CARD_TAG='button'`、`CARD_PROPS={type:'button',tabIndex:0}`、`CARD_STYLE`（`borderRadius:12` + `boxShadow:var(--tw-shadow-lg)`，其余走主题 token）、判据 `cardBoxProblems` / `cardA11yProblems` |
+| `src/client/ToolsPage.tsx` | `:40-48`、`:108-124`、`:170-203` | 新增 `BackIcon`（内联 SVG，`currentColor`）；页头**只留返回控件**（目录页不再有标题/计数；详情页仍显示 `chip · 名称`）；卡片改 `React.createElement(CARD_TAG, { ...CARD_PROPS, style: CARD_STYLE, 'aria-label': card.title, … })`，**删掉页脚入口文案那一行** |
+| `src/client/api.ts` `:70`、`:182`；`src/client/tools/globalFlowView.ts` `:2` | — | 顺手把注释里"五市场蛋糕"的旧称同步为新工具名（**只改注释**，零行为；这两份当时另有别人在改，见 §7.5） |
+| `src/client/toolCardView.test.ts`（新） | `:12`、`:29` | ③-1 阴影/圆角、③-2 按钮语义/键盘可达（含各自的反例注入） |
+| `src/client/toolRegistry.test.ts` | `:59`、`:74` | 新增 ①′（名称/chip **逐字**断言 + 改名/chip 的反例）、①″（页标题/计数/页脚文案"已删除"的字段级与常量级断言） |
+| `src/client/toolsPage.test.ts` | `:150-186`、`:199-250` | 渲染接线：**页头块**（`// 页头：` → `entry === null ?`）里不许再出现 `工具目录` / `本插件自带` / `model.title` / `model.subtitle`；必须有 `BackIcon` + `PAGE_BACK_ACTION` 成对；卡片必须用 `CARD_TAG`/`CARD_PROPS`/`CARD_STYLE`；用户可见文案（**剥注释后**）不许出现页脚入口文案 |
+
+### 7.3 断言与反例证据（每条"关掉该行为"都必须红）
+
+文件级注入脚本 `/tmp/tools2-inject.py`（真改工作区文件 → 跑断言 → 立刻还原 + sha256 校验）：
+
+| # | 注入（关掉行为） | 结果 | 首条失败断言 |
+| --- | --- | --- | --- |
+| ① | 把页标题那一行加回页头 | exit=1 | `页头不许再出现页标题「工具目录」（用户要求删掉那一行）` |
+| ②-a | 工具名改回旧名 `五市场蛋糕` | exit=1 | `卡片标题必须逐字等于「全球资金流蛋糕模型」（实得 "五市场蛋糕"）` |
+| ②-b | chip 改回旧值 `蛋糕` | exit=1 | `chip 必须逐字等于「宏观 \| 全球轮动」（实得 "蛋糕"）` |
+| ③-a | `boxShadow: 'none'`（去掉阴影） | exit=1 | `卡片缺少 box-shadow（用户要求悬浮阴影；实得 "none"）` |
+| ③-b | `borderRadius: 0`（圆角归零） | exit=1 | `卡片缺少 border-radius（用户要求圆角；实得 0）` |
+| ③-c | `CARD_TAG = 'div'`（丢按钮语义） | exit=1 | `卡片根元素必须是原生 button（…实得 "div"）` |
+| ③-d | `tabIndex: -1`（踢出 Tab 序列） | exit=1 | `卡片必须在 Tab 序列里（tabIndex 必须 >= 0；实得 -1）` |
+| ③-e | 把页脚 `打开工具 →` 加回卡片（用户可见文案） | exit=1 | `卡片页脚入口文案「打开工具」不许再出现在用户可见文案里` |
+| ③-f | 卡片不再用 `CARD_STYLE` | exit=1 | `卡片必须用 toolCardView 的常量建（原生 button 语义 + 阴影圆角的唯一来源）` |
+| ③-g | 卡片不再用 `CARD_PROPS` | exit=1 | 同上（键盘可达 / `type=button` 一起丢） |
+
+汇总（原始输出 `/tmp/tools2-inject-evidence.txt`）：**10/10 全被抓住**；每条注入后立刻还原，
+`sha256` 与注入前一致，恢复后三个测试文件复跑 `exit=0`（`toolCardView 2 / toolRegistry 12 / toolsPage 5`）。
+另有测试内建的反例（不需要改文件就成立）：`cardBoxProblems({boxShadow:'none'})`、`cardA11yProblems('div',…)`、
+`assert.throws(... renamed.title ...)` 等，见 §7.2 表里的测试位置。
+
+一条**判据换写法**的记录：最早我用"全文里不许出现 `工具目录`"来锁第 ① 条，但详情页那个
+`title: '回到工具目录'`（回目录入口的 tooltip）是**合法**的 ⇒ 会误伤。改成**按页头块断言**
+（`headerBlock()`，并把注释剥掉：注释里写"历史上那行是什么"是给人看的，不是用户可见文案）。
+
+### 7.4 `npm run check`（第 7.4 节口径同 §5）
+
+- 基线 `main` @ `43f0f40`（v0.73.0）= **523 × 2 全绿**（本人在工作区实测）。
+- 本批 **527 × 2 全绿**（+4：`toolCardView.test.ts` 2 条、`toolRegistry.test.ts` ①/①′/①″ 拆成 3 条净 +2）。
+- 末尾三行（隔离副本 `/tmp/tw2-iso2`）：
+
+```
+> dsh-tradewatcher@0.73.0 build
+> node build.mjs
+built lib/index.js + lib/client.js （v0.73.0，客户端片段校验通过：73 项）
+```
+
+- 产物层复核（`lib/client.js`，ASCII 转义与原文两种形式都查）：**含** `全球资金流蛋糕模型`、`宏观 | 全球轮动`、
+  `tw-tool-card`、`返回`、`← 工具目录`；**不含** 页脚入口文案（`打开工具`）与 `本插件自带`。
+- `build.mjs` **零改动**（片段数仍 73 项）。
+
+### 7.5 未做项 / 注意事项
+
+1. **并行写冲突的风险（如实记录）**：本轮我用"整文件读-改-写"的脚本改了 `src/client/api.ts` 与
+   `src/client/tools/globalFlowView.ts` 的**注释**（同步工具新名）——而这两份当时正被另一位成员在改。
+   事后逐行核对 `git diff`：他们的改动**都在**（hk/kr 成分、`usdHkd`、`fmtHkdYi` 等），我的注释也在，
+   没有丢内容。**教训**：并行期改共享文件必须走带版本守卫的 `edit`，不要整文件回写（这条写在这里给下一位）。
+2. **别人的在改文件导致工作区 `check` 当前不绿**：工作区里 `src/host/globalFlow.ts`（+ `sina.ts`/`tencent.ts`）
+   正在被改（成分 v2：A股/港股/美国/日本/韩国），连带 `src/host/globalFlow.test.ts` 与
+   `src/client/tools/globalFlowView.test.ts` 出现类型/断言不一致 —— **与本批无关**。
+   本批的绿灯证据取自隔离副本 `/tmp/tw2-iso2`（把上述并行在改的文件回退到 HEAD 基线）。
+3. **旧工具名仍在别人的文件里**：`src/host/routes.ts:399`、`src/host/globalFlow.ts:2`、`src/host/globalFlow.test.ts:2`
+   的注释仍写「五市场蛋糕」⇒ 建议由那两份的 owner 顺手同步（我未触碰 host 侧在改文件）。
+4. 仍未做**浏览器实机**验证（约束：不装 bundle、不动 profile、不重启用户的 `dsh web`）：
+   "卡片看起来是不是阴影悬浮"这类观感只能由用户在界面上确认；本批给的是"样式常量 + 渲染接线 + 产物字符串"三层证据。
+5. 分类标签行仍只有「全部」（与本批无关，未动）。

@@ -1,16 +1,23 @@
 /**
- * 全球五市场「宽基 ETF 规模权重」数据层（工具箱 → 工具①「五市场蛋糕」）。
+ * 全球五市场「宽基 ETF 规模权重」数据层（工具箱 → 工具①「全球资金流蛋糕模型」）。
  *
- * ── 口径（用户已定，写死在代码里，改口径必须先改这里与 docs/AUDIT-IMPL45.md）────────
+ * ── 口径（用户已定，写死在代码里；**改口径必须先改这里 + 口径标识 + docs**）──────────
+ *  成分 v2（2026-10-12 用户改口径）= **A股、港股、美国、日本、韩国**；口径标识 `FLOW_SCOPE`；
+ *  旧成分（美股/欧股/日股/A股/新兴市场，v1）**已废弃**，相关历史见 docs/AUDIT-IMPL45.md 与
+ *  docs/AUDIT-IMPL47.md（变更依据、逐市场可得性实测）。
+ *
  *  ① **份额 = 该市场规模 ÷ Σ 有值市场规模**。分母只含**有值**的市场：某个市场取不到数时，
  *     它既不做分子也不做分母，并在该行如实显示「未取到 + 原因」⇒ 有值部分的份额合计恒为 100%
  *     （±0.1 显示位）。**绝不用 0 补位**（0 会被读成"这个市场没有规模"）。
- *  ② **规模 = 该市场宽基 ETF 的规模**：美股 SPY / 欧股 VGK / 日股 EWJ / A股 510300 / 新兴 EEM。
- *     四者来自新浪 `gb_*` 的「总市值」字段（美元），A股来自新浪 ETF 节点的 `nmc`（万元，人民币）。
- *  ③ **币种必须统一**：A股规模是人民币 ⇒ 用新浪在岸汇率 `fx_susdcny` 折成美元后再进分母。
- *     汇率取不到时**不许静默混算**：A股规模按人民币单列、不进美元合计，并如实标注口径不一致。
- *  ④ **动量 = 20/60/120 日收益率 + 横截面排序**：各市场取自己的宽基口径（美股标普 500、A股沪深 300、
- *     欧/日/新兴用对应 ETF 日线），分别算 20/60/120 个**该市场交易日**的收益率；
+ *  ② **规模 = 该市场宽基 ETF 的规模**：A股 510300（新浪 ETF 节点 `nmc`，万元，人民币）、
+ *     港股 02800 盈富基金（腾讯 `f45` 总市值，**亿港元**）、美国 SPY 与 日本 EWJ
+ *     （新浪 `gb_*` 的「总市值」，美元；缺失时兜底腾讯 `f71` 股本 × 最新价）、
+ *     韩国 EWY（腾讯 `f71` 股本 × 最新价 —— 新浪 `gb_ewy` 的「总市值」实测恒为 0）。
+ *  ③ **币种必须统一**：A股人民币 → `fx_susdcny`，港股港元 → `fx_susdhkd`，折成美元后再进分母。
+ *     对应汇率取不到时**不许静默混算**：该市场规模按原币单列、不进美元合计，并如实标注口径不一致。
+ *  ④ **动量 = 20/60/120 日收益率 + 横截面排序**：A股 沪深 300、港股 恒生指数（`hkHSI`）、美国 标普 500、
+ *     日本 EWJ / 韩国 EWY（**KOSPI200 在腾讯与新浪都没有日线源**，实测四个候选代码全 `pv_none_match`）；
+ *     分别算 20/60/120 个**该市场交易日**的收益率；
  *     每个口径先横截面排名（1 = 最强），综合分 = 各口径名次的均值，再按综合分排名。
  *     某市场某个口径样本不足 ⇒ 该项 null（不参与该口径排名），综合分只用能算出来的部分。
  *  ⑤ **A股净流入（`MoneyFlow.ssl_qsfx_zjlrqs` 的 20 日 netamount）单列，不参与份额/规模计算** ——
@@ -18,11 +25,12 @@
  *  ⑥ 时间一律 `Asia/Shanghai`（`dayOf`）。**不显示"延迟 15 分钟"提示**（用户明确要求）。
  *
  * ── 数据来源（全部公开源；**不**用 Arkvol 数据、**不**标 Arkvol 来源）────────────────
- *   腾讯：`web.ifzq.gtimg.cn` 日线（美股 `us.INX`／A股 `sh000300`／`sh510300`）
- *   新浪：`hq.sinajs.cn`（`gb_*` 规模、`fx_susdcny` 汇率）、`vip.stock.finance.sina.com.cn`
+ *   腾讯：`web.ifzq.gtimg.cn` 日线（美股 `us.INX`／A股 `sh000300`／`sh510300`／港股 `hk02800`／`hkHSI`）、
+ *         `qt.gtimg.cn` 行情（港股 `hk02800` 的总市值；美股 ETF 的 `f71` 股本）
+ *   新浪：`hq.sinajs.cn`（`gb_*` 规模、`fx_susdcny`/`fx_susdhkd` 汇率）、`vip.stock.finance.sina.com.cn`
  *         （ETF 节点 `nmc`、MoneyFlow 资金流）、`stock.finance.sina.com.cn`（美股 ETF 日线）
  *   所有新浪请求都带 `Referer: https://finance.sina.com.cn`（见 sina.ts）。
- *   **不走东财 `push2*`**（本机实测 0 成功率）。
+ *   **不走东财 `push2*`**（本机实测 0 成功率）；新浪 `int_*` 族仍禁用（陈旧快照 + 无时间戳）。
  *
  * ── 缓存/去重/快照（沿用仓库数据层规矩，见 docs/AUDIT-CACHE-1/-2）──────────────────
  *   · 三层 TTL，值小、TTL 长（用户明确要求"量小就大幅延长缓存"）：
@@ -44,11 +52,11 @@ import type { MissingField } from '../shared/model.ts'
 import { writeJsonAtomic } from './atomic.ts'
 import { log } from './context.ts'
 import { dataHome } from './store.ts'
-import { fetchTencentDaily } from './tencent.ts'
+import { fetchTencentDaily, fetchTencentRawQuotes } from './tencent.ts'
 import { dayOf } from './time.ts'
 import {
   fetchSinaEtfNodeSize,
-  fetchSinaFxUsdCny,
+  fetchSinaFxRate,
   fetchSinaGb,
   fetchSinaMoneyFlow,
   fetchSinaUsDaily,
@@ -58,8 +66,15 @@ import {
 
 // ── 五市场定义（顺序 = 页面顺序；测试锁它） ────────────────────────────────────
 
-export type FlowMarketKey = 'us' | 'eu' | 'jp' | 'cn' | 'em'
-export const FLOW_MARKET_ORDER: readonly FlowMarketKey[] = ['us', 'eu', 'jp', 'cn', 'em']
+export type FlowMarketKey = 'cn' | 'hk' | 'us' | 'jp' | 'kr'
+/** 展示顺序 = 需求文档 T-5 的列举顺序（A股、港股、美国、日本、韩国）—— 断言逐字锁它 */
+export const FLOW_MARKET_ORDER: readonly FlowMarketKey[] = ['cn', 'hk', 'us', 'jp', 'kr']
+
+/**
+ * 口径标识（写进快照文件）：五市场成分一变，**旧快照一律作废**（不许与新成分混用）。
+ * v1（v0.72.0）= 美股/欧股/日股/A股/新兴市场；v2（本版）= A股/港股/美国/日本/韩国。
+ */
+export const FLOW_SCOPE = 'v2:cn,hk,us,jp,kr'
 
 export interface FlowMarketDef {
   key: FlowMarketKey
@@ -68,37 +83,77 @@ export interface FlowMarketDef {
   etf: string
   /** 规模来源（出处块按"需要时才标"的原则，只在这张表里写一次） */
   aumSource: string
-  currency: 'USD' | 'CNY'
+  /** 该市场规模的原币 */
+  currency: 'USD' | 'CNY' | 'HKD'
   /** 动量口径标的 */
   benchmark: string
   benchmarkSource: string
 }
 
+/**
+ * 五市场定义（用户口径 v2：A股、港股、美国、日本、韩国）。
+ *
+ * 规模取数路径（2026-10-12 本机实测，原始回包见 docs/AUDIT-IMPL47.md §1）：
+ *   · A股 ：新浪 ETF 节点 `nmc`（510300，万元，人民币）—— 与腾讯 f45/f72 交叉一致
+ *   · 港股：腾讯 `hk02800` 的 **f45「总市值」= 亿港元**（实测 1262.1791 亿港元；同字段对腾讯控股
+ *           = 38716 亿港元、汇丰 25377 亿港元，与已知市值吻合 ⇒ 量纲确认）
+ *   · 美国：新浪 `gb_spy` 的「总市值」（美元）；缺失时兜底腾讯 `usSPY` 的 f71（股本）× 最新价
+ *   · 日本：新浪 `gb_ewj` 的「总市值」（美元）；缺失时兜底腾讯 `usEWJ` 的 f71 × 最新价
+ *           （两条路径实测一致：97.375 × 243300000 = 236.91 亿美元 ↔ 新浪 236.913375 亿美元）
+ *   · 韩国：**新浪 `gb_ewy` 的该字段实测为 0（不可用）** ⇒ 用腾讯 `usEWY` 的 f71（股本 142550000）
+ *           × 最新价 = 243.4 亿美元（f71 与新浪「股本」字段同义：EWJ/SPY 两条路径都对得上）
+ *
+ * 动量口径：A股 沪深300（腾讯 sh000300）、港股 恒生指数（腾讯 hkHSI）、美国 标普 500（腾讯 us.INX）、
+ * 日本/韩国 = EWJ / EWY 自身日线（**KOSPI200 在腾讯/新浪都没有日线** —— 实测 `us.KOSPI200`/`kr.KOSPI`/
+ * `hkKOSPI200`/`us.KOSPI` 全 `pv_none_match`；新浪 `int_*` 族仍禁用）。
+ */
 export const FLOW_MARKETS: readonly FlowMarketDef[] = [
-  { key: 'us', name: '美股', etf: 'SPY', aumSource: '新浪 gb_spy 总市值（美元）', currency: 'USD', benchmark: '标普 500', benchmarkSource: '腾讯 us.INX 日线' },
-  { key: 'eu', name: '欧股', etf: 'VGK', aumSource: '新浪 gb_vgk 总市值（美元）', currency: 'USD', benchmark: 'VGK 欧洲宽基', benchmarkSource: '新浪美股日线 VGK' },
-  { key: 'jp', name: '日股', etf: 'EWJ', aumSource: '新浪 gb_ewj 总市值（美元）', currency: 'USD', benchmark: 'EWJ 日本宽基', benchmarkSource: '新浪美股日线 EWJ' },
-  { key: 'cn', name: 'A股', etf: '510300', aumSource: '新浪 ETF 节点 nmc（万元）', currency: 'CNY', benchmark: '沪深 300', benchmarkSource: '腾讯 sh000300 日线' },
-  { key: 'em', name: '新兴市场', etf: 'EEM', aumSource: '新浪 gb_eem 总市值（美元）', currency: 'USD', benchmark: 'EEM 新兴市场宽基', benchmarkSource: '新浪美股日线 EEM' },
+  { key: 'cn', name: 'A股', etf: '510300', aumSource: '新浪 ETF 节点 nmc（万元，人民币）', currency: 'CNY', benchmark: '沪深 300', benchmarkSource: '腾讯 sh000300 日线' },
+  { key: 'hk', name: '港股', etf: '02800 盈富基金', aumSource: '腾讯 hk02800 总市值（亿港元）', currency: 'HKD', benchmark: '恒生指数', benchmarkSource: '腾讯 hkHSI 日线' },
+  { key: 'us', name: '美国', etf: 'SPY', aumSource: '新浪 gb_spy 总市值（美元）', currency: 'USD', benchmark: '标普 500', benchmarkSource: '腾讯 us.INX 日线' },
+  { key: 'jp', name: '日本', etf: 'EWJ', aumSource: '新浪 gb_ewj 总市值（美元）', currency: 'USD', benchmark: 'EWJ 日本宽基', benchmarkSource: '新浪美股日线 EWJ' },
+  { key: 'kr', name: '韩国', etf: 'EWY', aumSource: '腾讯 usEWY 股本（f71）× 最新价（美元）', currency: 'USD', benchmark: 'EWY 韩国宽基', benchmarkSource: '新浪美股日线 EWY' },
 ]
 
-/** 规模（AUM）取数时用的 gb 符号；A股不用它（走 ETF 节点） */
-const AUM_GB_SYMBOL: Record<FlowMarketKey, string | null> = { us: 'spy', eu: 'vgk', jp: 'ewj', cn: null, em: 'eem' }
-/** 曲线重建用的价格序列：美股/欧股/日股/新兴 = 该 ETF 的日线；A股 = 510300 的日线 */
-const CURVE_SYMBOL: Record<FlowMarketKey, { via: 'sina-us' | 'tencent'; symbol: string }> = {
-  us: { via: 'sina-us', symbol: 'spy' },
-  eu: { via: 'sina-us', symbol: 'vgk' },
-  jp: { via: 'sina-us', symbol: 'ewj' },
-  cn: { via: 'tencent', symbol: '1.510300' },
-  em: { via: 'sina-us', symbol: 'eem' },
+/** 汇率对：原币 → 美元。美/日/韩 直接用美元 ETF ⇒ 不需要汇率 */
+export const FLOW_FX_SYMBOLS: Record<'CNY' | 'HKD', string> = { CNY: 'fx_susdcny', HKD: 'fx_susdhkd' }
+/** 原币 → 该币种的"1 美元值多少原币"的换算标签（口径行/行级原因用） */
+export const FLOW_FX_LABEL: Record<'CNY' | 'HKD', string> = { CNY: '美元/人民币', HKD: '美元/港元' }
+
+/** 规模（AUM）取数路径 */
+type AumRoute =
+  | { kind: 'sina-etf'; symbol: string }
+  | { kind: 'sina-gb'; symbol: string; fallbackTencent: string }
+  | { kind: 'tencent-quote'; code: string }
+  | { kind: 'tencent-shares'; code: string }
+const AUM_ROUTE: Record<FlowMarketKey, AumRoute> = {
+  cn: { kind: 'sina-etf', symbol: 'sh510300' },
+  hk: { kind: 'tencent-quote', code: 'hk02800' }, // 港股 f45 = 总市值（亿港元），走"市值字段"分支
+  us: { kind: 'sina-gb', symbol: 'spy', fallbackTencent: 'usSPY' },
+  jp: { kind: 'sina-gb', symbol: 'ewj', fallbackTencent: 'usEWJ' },
+  kr: { kind: 'tencent-shares', code: 'usEWY' },
 }
-/** 动量口径：美股 = 标普 500（腾讯 us.INX）；A股 = 沪深 300；其余 = 该 ETF 自身日线 */
-const MOMENTUM_SYMBOL: Record<FlowMarketKey, { via: 'sina-us' | 'tencent'; symbol: string }> = {
-  us: { via: 'tencent', symbol: '100.SPX' },
-  eu: { via: 'sina-us', symbol: 'vgk' },
+/** 需要从腾讯行情里拿 f45/f71 的**原码**（一次批量取，冷启动只多 1 次请求） */
+const TENCENT_AUM_CODES: readonly string[] = ['hk02800', 'usSPY', 'usEWJ', 'usEWY']
+
+/** 曲线重建用的价格序列（= 规模口径标的自身的日线） */
+const CURVE_SYMBOL: Record<FlowMarketKey, { via: 'sina-us' | 'tencent'; symbol: string }> = {
+  cn: { via: 'tencent', symbol: '1.510300' },
+  hk: { via: 'tencent', symbol: '116.02800' },
+  us: { via: 'sina-us', symbol: 'spy' },
   jp: { via: 'sina-us', symbol: 'ewj' },
+  kr: { via: 'sina-us', symbol: 'ewy' },
+}
+/**
+ * 动量口径：A股 沪深300；港股 恒生指数（`100.HSI` → 腾讯 `hkHSI`）；美国 标普500；
+ * 日本/韩国 = 该 ETF 自身日线（KOSPI200 无日线源，见文件头实测）
+ */
+const MOMENTUM_SYMBOL: Record<FlowMarketKey, { via: 'sina-us' | 'tencent'; symbol: string }> = {
   cn: { via: 'tencent', symbol: '1.000300' },
-  em: { via: 'sina-us', symbol: 'eem' },
+  hk: { via: 'tencent', symbol: '100.HSI' },
+  us: { via: 'tencent', symbol: '100.SPX' },
+  jp: { via: 'sina-us', symbol: 'ewj' },
+  kr: { via: 'sina-us', symbol: 'ewy' },
 }
 
 // ── TTL（用户要求：量小则大幅延长缓存） ───────────────────────────────────────
@@ -180,12 +235,22 @@ export interface FlowSeriesPoint {
   close: number
 }
 
-/** 原币 → 美元；汇率缺失时**人民币不允许被静默当成美元**（返回 null，调用方标口径不一致） */
-export function toUsd(native: number | null, currency: 'USD' | 'CNY', fx: number | null): number | null {
+/** 两条汇率（都是"1 美元 = 多少原币"）：人民币与港元 —— 任一缺失 ⇒ 该币种的市场不折算 */
+export interface FlowRates {
+  usdCny: number | null
+  usdHkd: number | null
+}
+
+/**
+ * 原币 → 美元；**汇率缺失时不许静默当成美元**（返回 null，调用方标口径不一致 + 该行给原因）。
+ * 美/日/韩 用美股上市的 ETF ⇒ 天然美元，不需要汇率。
+ */
+export function toUsd(native: number | null, currency: 'USD' | 'CNY' | 'HKD', rates: FlowRates): number | null {
   if (native === null || !Number.isFinite(native) || native <= 0) return null
   if (currency === 'USD') return native
-  if (fx === null || !Number.isFinite(fx) || fx <= 0) return null
-  return native / fx
+  const rate = currency === 'CNY' ? rates.usdCny : rates.usdHkd
+  if (rate === null || !Number.isFinite(rate) || rate <= 0) return null
+  return native / rate
 }
 
 /**
@@ -403,7 +468,7 @@ export interface FlowPoint {
 
 export interface ObservedDay {
   at: number
-  fx: number | null
+  rates: FlowRates
   /** 各市场**原币**规模 */
   aumNative: Array<number | null>
 }
@@ -419,7 +484,7 @@ export function buildCurve(input: {
   anchors: ReadonlyArray<number | null>
   chartSeries: ReadonlyArray<readonly FlowSeriesPoint[] | null>
   observed: ReadonlyMap<string, ObservedDay>
-  marketCurrency: ReadonlyArray<'USD' | 'CNY'>
+  marketCurrency: ReadonlyArray<'USD' | 'CNY' | 'HKD'>
   window?: number
 }): FlowPoint[] {
   const window = input.window ?? FLOW_CURVE_WINDOW
@@ -443,7 +508,7 @@ export function buildCurve(input: {
     if (obs !== undefined) {
       // 实测日：只用实测值。那次缺哪个市场就是缺哪个（**不拿重建值去补实测日的洞**）
       origin = 'observed'
-      aumUsd = obs.aumNative.map((native, m) => toUsd(native, input.marketCurrency[m], obs.fx))
+      aumUsd = obs.aumNative.map((native, m) => toUsd(native, input.marketCurrency[m], obs.rates))
     } else {
       origin = 'rebuilt'
       aumUsd = anchors.map((a, m) => {
@@ -466,13 +531,15 @@ export interface FlowSnapshotMarket {
   aumNative: number | null
   aumUsd: number | null
   share: number | null
-  currency: 'USD' | 'CNY'
+  currency: 'USD' | 'CNY' | 'HKD'
   aumSource: string
 }
 
 export interface FlowSnapshotDay {
   at: number
-  fx: number | null
+  rates: FlowRates
+  /** 该记录所属的口径（`FLOW_SCOPE`）—— 成分一变，**当天起就不再采用旧记录** */
+  scope: string
   markets: Record<FlowMarketKey, FlowSnapshotMarket>
   momentum: Record<FlowMarketKey, FlowMomentum | null>
   ranks: Record<FlowMarketKey, number | null>
@@ -481,9 +548,20 @@ export interface FlowSnapshotDay {
   missing: string[]
 }
 
+/** 口径不一致而被作废的旧快照记录（留痕，不删数据） */
+export interface FlowSnapshotPurged {
+  day: string
+  scope: string | null
+  reason: string
+}
+
 export interface FlowSnapshotFile {
-  v: 1
+  v: 2
+  /** 文件级口径标识（与 `FLOW_SCOPE` 不一致 ⇒ 整份 days 作废并留痕） */
+  scope: string
   days: Record<string, FlowSnapshotDay>
+  /** 作废留痕（口径变更/不可解析的记录；只增不删，供事后核对） */
+  purged?: FlowSnapshotPurged[]
   /** 最近一次落盘时刻（本机） */
   writtenAt?: number
 }
@@ -492,14 +570,54 @@ export function flowSnapshotPath(): string {
   return join(dataHome(), 'global-flow.json')
 }
 
+let purgedFromOldScope: FlowSnapshotPurged[] = []
+
+/** 本进程本次装载时因"口径不一致"被作废的旧快照记录（自检/断言用） */
+export function flowSnapshotPurged(): readonly FlowSnapshotPurged[] {
+  return purgedFromOldScope
+}
+
+/**
+ * 读快照文件。
+ *
+ * **口径隔离（v0.74.0）**：文件级 `scope`（或任何一天的 `scope`）与当前 `FLOW_SCOPE` 不一致 ⇒
+ * 那份 days **一律不采用**（旧成分欧股/新兴市场的数据不许混进新成分的分母），
+ * 并逐条记进 `purged`（留痕、不删数据），由下一次落盘写回文件。
+ */
 export async function readFlowSnapshot(): Promise<FlowSnapshotFile> {
   try {
     const raw = await readFile(flowSnapshotPath(), 'utf8')
-    const parsed = JSON.parse(raw) as Partial<FlowSnapshotFile>
-    if (parsed === null || typeof parsed !== 'object' || parsed.days === null || typeof parsed.days !== 'object') return { v: 1, days: {} }
-    return { v: 1, days: parsed.days as Record<string, FlowSnapshotDay>, writtenAt: typeof parsed.writtenAt === 'number' ? parsed.writtenAt : undefined }
+    const parsed = JSON.parse(raw) as Partial<FlowSnapshotFile> & { v?: number; days?: Record<string, FlowSnapshotDay>; purged?: FlowSnapshotPurged[] }
+    if (parsed === null || typeof parsed !== 'object' || parsed.days === null || typeof parsed.days !== 'object') {
+      purgedFromOldScope = Array.isArray(parsed?.purged) ? parsed.purged : []
+      return { v: 2, scope: FLOW_SCOPE, days: {} }
+    }
+    const keepPurged = Array.isArray(parsed.purged) ? parsed.purged : []
+    const sameScope = parsed.v === 2 && parsed.scope === FLOW_SCOPE
+    if (sameScope) {
+      // 文件级一致还不够：逐日再查一遍（防"同一文件里混了两种口径"）
+      const good: Record<string, FlowSnapshotDay> = {}
+      const bad: FlowSnapshotPurged[] = []
+      for (const [day, rec] of Object.entries(parsed.days)) {
+        if (rec !== null && typeof rec === 'object' && rec.scope === FLOW_SCOPE) good[day] = rec
+        else bad.push({ day, scope: (rec as FlowSnapshotDay | undefined)?.scope ?? null, reason: `该日记录的口径与当前成分不一致（A股/港股/美国/日本/韩国）⇒ 作废，不参与曲线与回放` })
+      }
+      purgedFromOldScope = [...keepPurged, ...bad]
+      if (bad.length > 0) log(`global-flow：作废 ${bad.length} 条口径不一致的历史快照（${bad.map((b) => b.day).join(',')}）`)
+      return { v: 2, scope: FLOW_SCOPE, days: good, purged: purgedFromOldScope }
+    }
+    const days = Object.keys(parsed.days)
+    const purged = days.map((day) => ({
+      day,
+      scope: (parsed.days as Record<string, FlowSnapshotDay>)[day]?.scope ?? parsed.scope ?? null,
+      reason: `旧口径快照（文件 scope=${String(parsed.scope ?? 'v1/无')}，当前=${FLOW_SCOPE}）⇒ 整份作废，不与新成分（A股/港股/美国/日本/韩国）混用`,
+    }))
+    purgedFromOldScope = [...keepPurged, ...purged]
+    if (days.length > 0) log(`global-flow：口径变更 ⇒ 作废 ${days.length} 天的旧快照（${days.join(',')}），留痕 purged`)
+    return { v: 2, scope: FLOW_SCOPE, days: {}, purged: purgedFromOldScope }
   } catch {
-    return { v: 1, days: {} }
+    purgedFromOldScope = []
+    return { v: 2, scope: FLOW_SCOPE, days: {} }
   }
 }
 
@@ -514,20 +632,14 @@ export function trimSnapshotDays(days: Record<string, FlowSnapshotDay>, keep = F
 
 let lastSnapshotWriteAt = 0
 
-/**
- * 写当日快照（一天一条，覆盖写；节流 ≥5 分钟）。
- *
- * 节流与"一天一条"并存的原因：当天数据会随价格漂移，覆盖写能让回放的最新一天更接近实测；
- * 但每次页面刷新都落盘没有意义，所以 5 分钟内只写一次（且**新的一天必定写**）。
- */
 export async function writeFlowSnapshot(day: string, record: FlowSnapshotDay): Promise<{ written: boolean; reason?: string }> {
   const now = Date.now()
   const file = await readFlowSnapshot()
   const isNewDay = file.days[day] === undefined
   if (!isNewDay && now - lastSnapshotWriteAt < SNAPSHOT_WRITE_MIN_MS) return { written: false, reason: `距上次落盘不足 ${Math.round(SNAPSHOT_WRITE_MIN_MS / 1000)}s（节流）` }
-  const days = trimSnapshotDays({ ...file.days, [day]: record })
+  const days = trimSnapshotDays({ ...file.days, [day]: { ...record, scope: FLOW_SCOPE } })
   try {
-    await writeJsonAtomic(flowSnapshotPath(), { v: 1, days, writtenAt: now })
+    await writeJsonAtomic(flowSnapshotPath(), { v: 2, scope: FLOW_SCOPE, days, purged: file.purged ?? [], writtenAt: now })
     lastSnapshotWriteAt = now
     return { written: true }
   } catch (error) {
@@ -537,7 +649,15 @@ export async function writeFlowSnapshot(day: string, record: FlowSnapshotDay): P
 }
 
 /** 快照文件的规模（页面/自检用；拿不到就如实 null） */
-export async function flowSnapshotStats(): Promise<{ path: string; days: number; bytes: number | null; firstDay: string | null; lastDay: string | null }> {
+export async function flowSnapshotStats(): Promise<{
+  path: string
+  days: number
+  bytes: number | null
+  firstDay: string | null
+  lastDay: string | null
+  /** 因口径不一致作废的旧快照（留痕；成分变更后非空 —— UI 要能说清"历史为什么这么短"） */
+  purged: FlowSnapshotPurged[]
+}> {
   const file = await readFlowSnapshot()
   const keys = Object.keys(file.days).sort()
   let bytes: number | null = null
@@ -547,14 +667,14 @@ export async function flowSnapshotStats(): Promise<{ path: string; days: number;
   } catch {
     bytes = null
   }
-  return { path: flowSnapshotPath(), days: keys.length, bytes, firstDay: keys[0] ?? null, lastDay: keys[keys.length - 1] ?? null }
+  return { path: flowSnapshotPath(), days: keys.length, bytes, firstDay: keys[0] ?? null, lastDay: keys[keys.length - 1] ?? null , purged: file.purged ?? purgedFromOldScope }
 }
 
 // ── 取数（五市场原始输入） ───────────────────────────────────────────────────
 
 interface MarketRaw {
   key: FlowMarketKey
-  currency: 'USD' | 'CNY'
+  currency: 'USD' | 'CNY' | 'HKD'
   /** 原币规模（A股 = 元，其余 = 美元） */
   aumNative: number | null
   aumNote: string | null
@@ -595,64 +715,134 @@ async function dailySeries(key: FlowMarketKey, which: 'chart' | 'momentum'): Pro
 }
 
 /** 各市场当期规模（原币）+ 取不到的原因 */
-export async function marketRaws(): Promise<{ markets: MarketRaw[]; fx: { value: number | null; at: number | null; note: string | null } }> {
-  // ⚠ 失败（抛错 / 上游没给可用价）**必须抛出到 cached 外面**：否则会被当成"成功值"写进 30 分钟 TTL，
-  // 一次瞬时抖动会让 A股 在半小时里持续缺席美元分母（review §6 附带缺陷 A；对照 AUDIT-IMPL46 §5）
-  let fxOut: { value: number | null; at: number; note: string | null }
-  try {
-    fxOut = await cached('fx:usdcny', FLOW_QUOTE_TTL_MS, async () => {
-      const q = await fetchSinaFxUsdCny()
-      if (q.rate === null || !(q.rate > 0)) throw new Error('新浪 fx_susdcny 没有给出可用最新价（已按 ±5% 剔除明显错值）')
-      return { value: q.rate, at: Date.now(), note: null }
-    })
-  } catch (error) {
-    fxOut = { value: null, at: Date.now(), note: `新浪 fx_susdcny 本次没有可用值（${String(error).slice(0, 120)}）` }
+export interface FlowFxOut {
+  rates: FlowRates
+  at: number | null
+  /** 某条汇率没有可用值时的原因（键 = 原币） */
+  notes: Partial<Record<'CNY' | 'HKD', string>>
+}
+
+/** 一条汇率：失败/不可用 ⇒ **抛出**（不许进 30 分钟 TTL，见 AUDIT-IMPL46 §5） */
+async function rateOf(currency: 'CNY' | 'HKD'): Promise<number> {
+  const symbol = FLOW_FX_SYMBOLS[currency]
+  return cached(`fx:${symbol}`, FLOW_QUOTE_TTL_MS, async () => {
+    const q = await fetchSinaFxRate(symbol)
+    if (q.rate === null || !(q.rate > 0)) throw new Error(`新浪 ${symbol} 没有给出可用最新价（已按 ±5% 剔除明显错值）`)
+    return q.rate
+  })
+}
+
+/** 腾讯行情批量（f45 市值 / f71 股本）—— 一次请求覆盖港股规模与美股兜底 */
+async function tencentAumQuotes(): Promise<Record<string, { totalMv: number | null; shares: number | null; price: number | null; name: string }>> {
+  return cached('tencent:aum-quotes', FLOW_QUOTE_TTL_MS, async () => {
+    const rows = await fetchTencentRawQuotes([...TENCENT_AUM_CODES])
+    const out: Record<string, { totalMv: number | null; shares: number | null; price: number | null; name: string }> = {}
+    for (const [code, row] of Object.entries(rows)) out[code.toLowerCase()] = { totalMv: row.totalMv, shares: row.shares, price: row.price, name: row.name }
+    return out
+  })
+}
+
+/** 各市场当期规模（原币）+ 取不到的原因；汇率两条各自独立成败 */
+export async function marketRaws(): Promise<{ markets: MarketRaw[]; fx: FlowFxOut }> {
+  const notes: Partial<Record<'CNY' | 'HKD', string>> = {}
+  const rates: FlowRates = { usdCny: null, usdHkd: null }
+  let fxAt: number | null = null
+  for (const currency of ['CNY', 'HKD'] as const) {
+    try {
+      const rate = await rateOf(currency)
+      if (currency === 'CNY') rates.usdCny = rate
+      else rates.usdHkd = rate
+      fxAt = fxAt ?? Date.now()
+    } catch (error) {
+      notes[currency] = `新浪 ${FLOW_FX_SYMBOLS[currency]} 本次没有可用值（${String(error).slice(0, 120)}）`
+    }
   }
+
   const markets: MarketRaw[] = []
   for (const def of FLOW_MARKETS) {
     const missing: MissingField[] = []
     let aumNative: number | null = null
     let aumNote: string | null = null
     let aumAsOf: number | null = null
-    const gbSymbol = AUM_GB_SYMBOL[def.key]
-    if (gbSymbol !== null) {
-      try {
+    const route = AUM_ROUTE[def.key]
+    try {
+      if (route.kind === 'sina-etf') {
+        // A股：新浪 ETF 节点 nmc（万元）→ 元
+        const aum = await cached(`aum:etf:${def.key}`, FLOW_QUOTE_TTL_MS, async () => {
+          const row = await fetchSinaEtfNodeSize(route.symbol)
+          if (row.nmcWan === null || !(row.nmcWan > 0)) return { value: null as number | null, note: '新浪 ETF 节点的 nmc（流通市值/规模）字段为空', at: Date.now(), from: '新浪 ETF 节点 nmc' }
+          return { value: row.nmcWan * 1e4, note: null as string | null, at: Date.now(), from: '新浪 ETF 节点 nmc' }
+        })
+        aumNative = aum.value
+        aumNote = aum.note
+        aumAsOf = aum.at
+      } else if (route.kind === 'tencent-quote' || route.kind === 'tencent-shares') {
+        // 港股：腾讯 f45「总市值」（**亿港元**）⇒ ×1e8；
+        // 韩国：腾讯 f71「股本」× 最新价（新浪 gb_ewy 的总市值字段实测为 0 ⇒ 只能用这条）
+        const quotes = await tencentAumQuotes()
+        const q = quotes[route.code.toLowerCase()]
+        if (q === undefined) {
+          aumNote = `腾讯行情没有回 ${route.code} 这一行`
+        } else if (route.kind === 'tencent-quote') {
+          if (q.totalMv === null || !(q.totalMv > 0)) aumNote = `腾讯 ${route.code} 的「总市值」字段为空/为 0`
+          else {
+            aumNative = q.totalMv
+            aumAsOf = Date.now()
+          }
+        } else {
+          if (q.shares === null || !(q.shares > 0)) aumNote = `腾讯 ${route.code} 的「股本」（f71）字段为空/为 0`
+          else if (q.price === null || !(q.price > 0)) aumNote = `腾讯 ${route.code} 没有可用最新价（无法用 股本×价 估算规模）`
+          else {
+            aumNative = q.shares * q.price
+            aumAsOf = Date.now()
+            aumNote = '规模 = 股本（腾讯 f71）× 最新价（推导值：新浪该标的的「总市值」字段实测为 0）'
+          }
+        }
+      } else {
+        // 美国 / 日本：新浪 gb_* 的「总市值」（美元）；缺失时兜底腾讯 f71 × 最新价
         const aum = await cached(`aum:gb:${def.key}`, FLOW_QUOTE_TTL_MS, async () => {
-          const got = await fetchSinaGb([gbSymbol])
-          const q = got[`gb_${gbSymbol}`]
-          if (q === undefined) return { value: null as number | null, note: `新浪 gb_${gbSymbol} 没有回这一行`, at: Date.now() }
-          if (q.totalMv === null || !(q.totalMv > 0)) return { value: null as number | null, note: `新浪 gb_${gbSymbol} 的「总市值」字段为空/为 0`, at: Date.now() }
+          const got = await fetchSinaGb([route.symbol])
+          const q = got[`gb_${route.symbol}`]
+          if (q === undefined) return { value: null as number | null, note: `新浪 gb_${route.symbol} 没有回这一行`, at: Date.now(), from: '新浪 gb_* 总市值' }
+          if (q.totalMv === null || !(q.totalMv > 0)) return { value: null as number | null, note: `新浪 gb_${route.symbol} 的「总市值」字段为空/为 0`, at: Date.now(), from: '新浪 gb_* 总市值' }
           // 口径自校：总市值 应当 ≈ 最新价 × 股本（实测一致；不一致就如实标出来，不静默用）
           const implied = q.price !== null && q.shares !== null ? q.price * q.shares : null
           const drift = implied !== null && implied > 0 ? Math.abs(q.totalMv / implied - 1) : null
-          const note = drift !== null && drift > 0.05 ? `新浪 gb_${gbSymbol} 的「总市值」与「最新价×股本」差 ${(drift * 100).toFixed(1)}%（按总市值计，但口径存疑）` : null
-          return { value: q.totalMv, note, at: Date.now(), name: q.name, time: q.time }
+          const note = drift !== null && drift > 0.05 ? `新浪 gb_${route.symbol} 的「总市值」与「最新价×股本」差 ${(drift * 100).toFixed(1)}%（按总市值计，但口径存疑）` : null
+          return { value: q.totalMv, note, at: Date.now(), from: '新浪 gb_* 总市值' }
         })
         aumNative = aum.value
         aumNote = aum.note
         aumAsOf = aum.at
-        if (aumNative === null) missing.push({ what: `${def.name}规模（${def.etf}）`, why: 'transient', note: `${def.name}规模（${def.etf}）：${aumNote ?? '新浪美股行情没有给出总市值'} ⇒ 这一行显示「未取到」，并且不参与份额分母（不用 0 顶替）` })
-        // 口径自校告警**必须被消费**：有值但"总市值 vs 最新价×股本"对不上时也进 missing，
-        // 否则一旦上游把下标 12 换成别的量，界面会给出一个"看起来合理"的错规模且毫无提示（review §9.1）
-        else if (aumNote !== null) missing.push({ what: `${def.name}规模（${def.etf}）`, why: 'no-source', note: `${def.name}规模（${def.etf}）：${aumNote} ⇒ 该值仍按「总市值」字段使用，但请核对上游字段口径` })
-      } catch (error) {
-        missing.push({ what: `${def.name}规模（${def.etf}）`, why: 'transient', note: `${def.name}规模（${def.etf}）：新浪 hq.sinajs.cn（gb_${gbSymbol}）本次取数失败（${String(error).slice(0, 120)}）⇒ 稍后重试即可；这一行不参与份额分母` })
+        if (aumNative === null) {
+          // 兜底：腾讯 f71（股本）× 最新价（与新浪同口径：都是"发行份额 × 最新价"）
+          const quotes = await tencentAumQuotes()
+          const q = quotes[route.fallbackTencent.toLowerCase()]
+          if (q !== undefined && q.shares !== null && q.shares > 0 && q.price !== null && q.price > 0) {
+            aumNative = q.shares * q.price
+            aumAsOf = Date.now()
+            aumNote = `${aumNote ?? '新浪总市值为空'} ⇒ 兜底用腾讯 ${route.fallbackTencent} 的 股本（f71）× 最新价（推导值）`
+          } else {
+            aumNote = `${aumNote ?? '新浪总市值为空'}；腾讯 ${route.fallbackTencent} 的兜底也不可用（股本/最新价缺）`
+          }
+        }
       }
-    } else {
-      // A股：ETF 节点 nmc（万元）→ 元
-      try {
-        const aum = await cached(`aum:etf:${def.key}`, FLOW_QUOTE_TTL_MS, async () => {
-          const row = await fetchSinaEtfNodeSize('sh510300')
-          if (row.nmcWan === null || !(row.nmcWan > 0)) return { value: null as number | null, note: '新浪 ETF 节点的 nmc（流通市值/规模）字段为空', at: Date.now() }
-          return { value: row.nmcWan * 1e4, note: null as string | null, at: Date.now(), name: row.name }
-        })
-        aumNative = aum.value
-        aumNote = aum.note
-        aumAsOf = aum.at
-        if (aumNative === null) missing.push({ what: `${def.name}规模（${def.etf}）`, why: 'transient', note: `${def.name}规模（${def.etf}）：${aumNote ?? 'ETF 节点未给出规模'} ⇒ 这一行显示「未取到」` })
-      } catch (error) {
-        missing.push({ what: `${def.name}规模（${def.etf}）`, why: 'transient', note: `${def.name}规模（${def.etf}）：新浪 ETF 节点（etf_hq_fund）本次取数失败（${String(error).slice(0, 120)}）⇒ 稍后重试；这一行不参与份额分母` })
+      if (aumNative === null) {
+        missing.push({ what: `${def.name}规模（${def.etf}）`, why: 'transient', note: `${def.name}规模（${def.etf}）：${aumNote ?? '上游没有给出规模'} ⇒ 这一行显示「未取到」，并且不参与份额分母（不用 0 顶替）` })
+      } else if (aumNote !== null) {
+        // 口径自校告警 / 兜底说明**必须被消费**：有值但口径存疑时也进 missing（AUDIT-IMPL46 §6）
+        missing.push({ what: `${def.name}规模（${def.etf}）`, why: 'no-source', note: `${def.name}规模（${def.etf}）：${aumNote}` })
       }
+    } catch (error) {
+      missing.push({ what: `${def.name}规模（${def.etf}）`, why: 'transient', note: `${def.name}规模（${def.etf}）：本次取数失败（${String(error).slice(0, 120)}）⇒ 稍后重试即可；这一行不参与份额分母` })
+    }
+    // 汇率缺 ⇒ 该市场折算不出来：**明确标注**（行级原因由渲染层给）
+    if (aumNative !== null && def.currency !== 'USD' && rates[def.currency === 'CNY' ? 'usdCny' : 'usdHkd'] === null) {
+      missing.push({
+        what: `${def.name}规模（${def.etf}）折算`,
+        why: 'transient',
+        note: `${def.name}规模是${def.currency === 'CNY' ? '人民币' : '港元'}（${FLOW_FX_LABEL[def.currency]} 换算），本次 ${def.currency === 'CNY' ? '美元/人民币' : '美元/港元'} 汇率未取到 ⇒ 不做美元折算、不进美元合计（口径不一致，不许静默混算）`,
+      })
     }
     const chart = await dailySeries(def.key, 'chart')
     if (chart.missing !== null) missing.push(chart.missing)
@@ -660,7 +850,7 @@ export async function marketRaws(): Promise<{ markets: MarketRaw[]; fx: { value:
     if (mom.missing !== null) missing.push(mom.missing)
     markets.push({ key: def.key, currency: def.currency, aumNative, aumNote, aumAsOf, chart: chart.points, momentum: mom.points, missing })
   }
-  return { markets, fx: { value: fxOut.value, at: fxOut.at, note: fxOut.note } }
+  return { markets, fx: { rates, at: fxAt, notes } }
 }
 
 // ── 载荷 ─────────────────────────────────────────────────────────────────────
@@ -670,7 +860,7 @@ export interface FlowMarketRow {
   name: string
   etf: string
   aumSource: string
-  currency: 'USD' | 'CNY'
+  currency: 'USD' | 'CNY' | 'HKD'
   benchmark: string
   benchmarkSource: string
   /** 规模（原币） */
@@ -702,7 +892,7 @@ export interface GlobalFlowPayload {
   source: 'live' | 'snapshot' | 'fallback'
   /** true 表示当期数值来自最近一次快照（上游这次全部失败） */
   fallbackDay: string | null
-  fx: { usdCny: number | null; at: number | null; source: string; note: string | null }
+  fx: { usdCny: number | null; usdHkd: number | null; at: number | null; source: string; note: string | null }
   markets: FlowMarketRow[]
   totalUsd: number | null
   totalNote: string | null
@@ -719,7 +909,15 @@ export interface GlobalFlowPayload {
     basis: string
     miss: string | null
   }
-  snapshot: { path: string; days: number; bytes: number | null; firstDay: string | null; lastDay: string | null }
+  snapshot: {
+    path: string
+    days: number
+    bytes: number | null
+    firstDay: string | null
+    lastDay: string | null
+    /** 因口径不一致作废的旧快照（留痕，UI 用来说清"历史为什么这么短"） */
+    purged: FlowSnapshotPurged[]
+  }
   notes: { kpi: string; curve: string; pie: string; market: string; boundary: string }
   boundary: string[]
   missing: MissingField[]
@@ -735,13 +933,13 @@ export const FLOW_NOTES = {
 } as const
 
 export const FLOW_BOUNDARY: readonly string[] = [
-  // ⚠ 与工具文件 `tools/cake.ts` 的边界声明**不许重复**（v0.73.0 前是 6+7 拼接，5 组近似重复，review §8 附带缺陷 C）：
+  // ⚠ 与工具文件 `tools/cake.ts` 的边界声明**不许重复**（v0.73.0 前是 6+7 拼接，5 组近似重复，AUDIT-HY4-1 §8）：
   //   工具文件讲「这个模型是什么 / 不是什么」；这里只讲「具体的数字口径与数据源事实」。
-  '规模字段口径：美股 / 欧股 / 日股 / 新兴取新浪 gb_* 的「总市值」字段（美元），A股 取新浪 ETF 节点的 nmc（万元）；两条都用「最新价 × 股本」或与腾讯 f45 交叉校验，对不上时会在该行的说明里标出。',
-  '汇率来源：新浪 fx_susdcny（在岸人民币）最新价；缺值或明显错值（相对昨收 ≥ 5%）一律视为未取到。',
-  '动量 = 各市场自己的 20 / 60 / 120 个交易日收益率，再做横截面名次（并列取最靠前）；轮动判定线 = 5 日份额变化 0.05 个百分点，低于它算「未见明确轮动」。',
-  '曲线固定 180 个序列日、滑块回放最近 30 个交易日；每日快照一天一条、保留 90 天。回放只读本地快照，不发上游请求。',
-  '这个口径天然偏美股：SPY 本身就是全世界最大的宽基 ETF，规模远大于其余四家之和 ⇒ 饼图会明显向美股倾斜。这是口径本身的形状（「几只超大宽基 ETF 的规模权重」），不是错数；要「各市场全部 ETF 合计」是另一个口径，本工具不做。',
+  '规模字段口径（成分 v2：A股 / 港股 / 美国 / 日本 / 韩国）：A股 取新浪 ETF 节点 nmc（510300，万元人民币）；港股 取腾讯 02800 盈富基金的「总市值」字段（亿港元）；美国 / 日本 取新浪 gb_* 的「总市值」（美元）；韩国 取腾讯 EWY 的股本（f71）× 最新价（美元）—— 新浪 gb_ewy 的「总市值」字段实测为 0，只能用这条推导值。每条都用第二条路径交叉校验，对不上时在该行说明里标出。',
+  '汇率来源：新浪 fx_susdcny（美元/人民币，在岸）与 fx_susdhkd（美元/港元即期）最新价；缺值或明显错值（相对昨收 ≥ 5%）一律视为未取到 ⇒ 该币种的市场保持原币、不进美元合计。美 / 日 / 韩 用的是美股上市 ETF，天然美元。',
+  '动量 = 各市场自己的 20 / 60 / 120 个交易日收益率，再做横截面名次（并列取最靠前）；轮动判定线 = 5 日份额变化 0.05 个百分点，低于它算「未见明确轮动」。A股 用沪深 300、港股 用恒生指数（hkHSI）、美国 用标普 500；日本 / 韩国 用对应 ETF 自身日线 —— KOSPI200 在腾讯与新浪都没有日线源（实测四个候选代码全 pv_none_match）。',
+  '曲线固定 180 个序列日、滑块回放最近 30 个交易日；每日快照一天一条、保留 90 天，且带口径标识：成分一变，旧快照整份作废并留痕，不与新成分混用。回放只读本地快照，不发上游请求。',
+  '这个口径天然偏美国：SPY 本身就是全世界最大的宽基 ETF，规模远大于其余四家之和 ⇒ 饼图会明显向美国倾斜。这是口径本身的形状（「五只代表性宽基 ETF 的规模权重」），不是错数；要「各市场全部 ETF 合计」是另一个口径，本工具不做。',
 ]
 
 /** 主入口：装配载荷。`source='snapshot'` ⇒ **只读本地快照，零上游请求** */
@@ -777,7 +975,7 @@ export async function globalFlowPayload(opts: { source?: 'auto' | 'snapshot'; no
 
 async function buildLivePayload(now: number, day: string): Promise<GlobalFlowPayload> {
   const { markets: raw, fx } = await marketRaws()
-  const usdOf = (m: MarketRaw): number | null => toUsd(m.aumNative, m.currency, m.currency === 'CNY' ? fx.value : null)
+  const usdOf = (m: MarketRaw): number | null => toUsd(m.aumNative, m.currency, fx.rates)
   const aumUsd = raw.map(usdOf)
   const shares = sharesOf(aumUsd)
   const mom = raw.map((m) => (m.momentum === null ? null : momentumOf(m.momentum)))
@@ -790,7 +988,7 @@ async function buildLivePayload(now: number, day: string): Promise<GlobalFlowPay
   // 只有当**至少一个市场**拿到规模时，今天才算一次"实测"：全缺时若也登记，
   // 曲线上会出现一个"什么都没测到的实测点"（origin=observed 但每个值都是 null），
   // 既误导又会把空态顶掉（v0.73.0 修，见 AUDIT-IMPL46 §1/§5）
-  if (raw.some((m) => m.aumNative !== null)) observed.set(day, { at: now, fx: fx.value, aumNative: raw.map((m) => m.aumNative) })
+  if (raw.some((m) => m.aumNative !== null)) observed.set(day, { at: now, rates: fx.rates, aumNative: raw.map((m) => m.aumNative) })
   const curve = buildCurve({
     anchors: aumUsd,
     chartSeries: raw.map((m) => m.chart),
@@ -831,8 +1029,11 @@ async function buildLivePayload(now: number, day: string): Promise<GlobalFlowPay
 
   const totalUsd = aumUsd.some((v) => v !== null) ? aumUsd.reduce((s: number, v) => s + (v ?? 0), 0) : null
   const missing: MissingField[] = raw.flatMap((m) => m.missing)
-  if (fx.value === null) {
-    missing.push({ what: '美元/人民币汇率', why: 'transient', note: `${fx.note ?? '新浪 fx_susdcny 没给出可用值'} ⇒ A股 规模按人民币单列、不进美元合计（口径不一致，不许静默混算）` })
+  for (const currency of ['CNY', 'HKD'] as const) {
+    if (fx.rates[currency === 'CNY' ? 'usdCny' : 'usdHkd'] !== null) continue
+    const label = FLOW_FX_LABEL[currency]
+    const who = currency === 'CNY' ? 'A股' : '港股'
+    missing.push({ what: `${label}汇率`, why: 'transient', note: `${fx.notes[currency] ?? `新浪 ${FLOW_FX_SYMBOLS[currency]} 没给出可用值`} ⇒ ${who} 规模保持${currency === 'CNY' ? '人民币' : '港元'}、不进美元合计（口径不一致，不许静默混算）` })
   }
 
   // A股净流入（单列，**不参与**上面的任何计算）。
@@ -864,7 +1065,13 @@ async function buildLivePayload(now: number, day: string): Promise<GlobalFlowPay
     day,
     source: 'live',
     fallbackDay: null,
-    fx: { usdCny: fx.value, at: fx.at, source: '新浪 fx_susdcny（在岸人民币）', note: fx.note },
+    fx: {
+      usdCny: fx.rates.usdCny,
+      usdHkd: fx.rates.usdHkd,
+      at: fx.at,
+      source: `新浪 ${FLOW_FX_SYMBOLS.CNY}（在岸人民币）/ ${FLOW_FX_SYMBOLS.HKD}（美元兑港元即期）`,
+      note: Object.entries(fx.notes).map(([, v]) => v).join('；') || null,
+    },
     markets: rows,
     totalUsd,
     totalNote,
@@ -903,7 +1110,8 @@ async function buildLivePayload(now: number, day: string): Promise<GlobalFlowPay
   const hasAnyAum = aumUsd.some((v) => v !== null)
   const record: FlowSnapshotDay = {
     at: now,
-    fx: fx.value,
+    rates: fx.rates,
+    scope: FLOW_SCOPE,
     markets: Object.fromEntries(rows.map((r) => [r.key, { aumNative: r.aumNative, aumUsd: r.aumUsd, share: r.share, currency: r.currency, aumSource: r.aumSource }])) as Record<FlowMarketKey, FlowSnapshotMarket>,
     momentum: Object.fromEntries(rows.map((r, i) => [r.key, mom[i]])) as Record<FlowMarketKey, FlowMomentum | null>,
     ranks: Object.fromEntries(rows.map((r, i) => [r.key, ranks[i]])) as Record<FlowMarketKey, number | null>,
@@ -941,7 +1149,7 @@ function observedMapOf(snap: FlowSnapshotFile): Map<string, ObservedDay> {
   const out = new Map<string, ObservedDay>()
   for (const [day, rec] of Object.entries(snap.days)) {
     const aumNative = FLOW_MARKET_ORDER.map((k) => rec.markets?.[k]?.aumNative ?? null)
-    out.set(day, { at: rec.at, fx: rec.fx, aumNative })
+    out.set(day, { at: rec.at, rates: rec.rates ?? { usdCny: null, usdHkd: null }, aumNative })
   }
   return out
 }
@@ -949,7 +1157,14 @@ function observedMapOf(snap: FlowSnapshotFile): Map<string, ObservedDay> {
 /** 只用本地快照装配载荷（零上游请求） */
 async function payloadFromSnapshot(
   snap: FlowSnapshotFile,
-  stats: { path: string; days: number; bytes: number | null; firstDay: string | null; lastDay: string | null },
+  stats: {
+    path: string
+    days: number
+    bytes: number | null
+    firstDay: string | null
+    lastDay: string | null
+    purged: FlowSnapshotPurged[]
+  },
   now: number,
   day: string,
   source: 'snapshot' | 'fallback' = 'snapshot',
@@ -999,7 +1214,13 @@ async function payloadFromSnapshot(
     day,
     source,
     fallbackDay: lastRec === null ? null : keys[keys.length - 1],
-    fx: { usdCny: lastRec?.fx ?? null, at: lastRec?.at ?? null, source: '新浪 fx_susdcny（在岸人民币）', note: lastRec === null ? '本地还没有快照，因此汇率也是未取到' : '取自最近一条本地快照（本次不发上游请求）' },
+    fx: {
+      usdCny: lastRec?.rates?.usdCny ?? null,
+      usdHkd: lastRec?.rates?.usdHkd ?? null,
+      at: lastRec?.at ?? null,
+      source: `新浪 ${FLOW_FX_SYMBOLS.CNY}（在岸人民币）/ ${FLOW_FX_SYMBOLS.HKD}（美元兑港元即期）`,
+      note: lastRec === null ? '本地还没有快照，因此汇率也是未取到' : '取自最近一条本地快照（本次不发上游请求）',
+    },
     markets: rows,
     totalUsd: aumUsd.some((v) => v !== null) ? aumUsd.reduce((s: number, v) => s + (v ?? 0), 0) : null,
     totalNote: aumUsd.some((v) => v === null) ? '合计只含有值市场；缺值市场不进分母' : null,

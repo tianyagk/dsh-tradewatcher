@@ -1,5 +1,5 @@
 /**
- * 工具①「五市场蛋糕」的**视图映射**（纯函数，无 React 依赖 ⇒ 可直接断言）。
+ * 工具①「全球资金流蛋糕模型」的**视图映射**（纯函数，无 React 依赖 ⇒ 可直接断言）。
  *
  * 职责边界（这条边界就是可测性的来源）：
  *   · 宿主 `globalFlow.ts` 负责**口径与计算**（份额、动量排名、轮动、曲线、快照）；
@@ -31,6 +31,12 @@ export function fmtUsd(n: number | null): string {
   if (abs >= 1e12) return `${(n / 1e12).toFixed(2)} 万亿美元`
   if (abs >= 1e8) return `${(n / 1e8).toFixed(2)} 亿美元`
   return `${Math.round(n).toLocaleString('en-US')} 美元`
+}
+
+/** 港元金额（亿港元）—— 港股行用 */
+export function fmtHkdYi(n: number | null): string {
+  if (n === null || !Number.isFinite(n)) return NOT_FETCHED
+  return `${(n / 1e8).toFixed(2)} 亿港元`
 }
 
 /** 人民币金额（亿元）——A股单列那一栏用 */
@@ -131,7 +137,7 @@ export function marketRowsAt(payload: GlobalFlowPayloadDto, step: number, isLate
     rows.push([
       m.name,
       m.etf,
-      fmtSizeCell(m.currency, aumNative, aumUsd, payload.fx.usdCny),
+      fmtSizeCell(m.currency, aumNative, aumUsd, rateOf(payload, m.currency)),
       fmtSharePct(share === null ? null : share * 100),
       fmtPp(dPp),
       // 动量/排名只反映**最新交易日**：回放到历史日时如实标"不适用"，不重算（上游只留当下的横截面）
@@ -154,10 +160,24 @@ export function nativeAtDay(payload: GlobalFlowPayloadDto, idx: number, marketIn
   const m = payload.markets[marketIndex]
   const isLatestPoint = idx === payload.curve.points.length - 1
   if (m === undefined) return null
+  // ⚠ 最新一日先看载荷里的原币值：**汇率缺时美元值是 null，但原币值仍在** ——
+  // 顺序反过来会让"缺汇率"的行连原币都显示不出来、行级原因也无从触发（AUDIT-IMPL47 §3）
   if (isLatestPoint && m.aumNative !== null) return m.aumNative
   if (aumUsd === null) return null
   if (m.currency === 'USD') return aumUsd
-  return payload.fx.usdCny === null || payload.fx.usdCny <= 0 ? null : aumUsd * payload.fx.usdCny
+  const rate = m.currency === 'CNY' ? payload.fx.usdCny : payload.fx.usdHkd
+  return rate === null || rate <= 0 ? null : aumUsd * rate
+}
+
+/** 该币种对应的汇率（美/日/韩 用美元 ETF ⇒ 不需要） */
+export function rateOf(payload: GlobalFlowPayloadDto, currency: 'USD' | 'CNY' | 'HKD'): number | null {
+  if (currency === 'USD') return null
+  return currency === 'CNY' ? payload.fx.usdCny : payload.fx.usdHkd
+}
+
+/** 币种的中文名（行级原因与单元格用） */
+export function currencyLabel(currency: 'USD' | 'CNY' | 'HKD'): string {
+  return currency === 'CNY' ? '人民币' : currency === 'HKD' ? '港元' : '美元'
 }
 
 /**
@@ -166,10 +186,10 @@ export function nativeAtDay(payload: GlobalFlowPayloadDto, idx: number, marketIn
  *   · 人民币市场：`1063.50 亿元 ≈ 158.87 亿美元`；汇率缺 ⇒ `1063.50 亿元（汇率未取到，未折算）`
  *   · 没有值 ⇒ `未取到`（原因在行下）
  */
-export function fmtSizeCell(currency: 'USD' | 'CNY', aumNative: number | null, aumUsd: number | null, fx: number | null): string {
+export function fmtSizeCell(currency: 'USD' | 'CNY' | 'HKD', aumNative: number | null, aumUsd: number | null, fx: number | null): string {
   if (aumNative === null && aumUsd === null) return NOT_FETCHED
   if (currency === 'USD') return aumNative === null ? fmtUsd(aumUsd) : fmtUsd(aumNative)
-  const native = fmtCnyYi(aumNative)
+  const native = currency === 'CNY' ? fmtCnyYi(aumNative) : fmtHkdYi(aumNative)
   if (aumUsd === null) return fx === null ? `${native}（汇率未取到，未折算）` : `${native}（未折算）`
   return `${native} ≈ ${fmtUsd(aumUsd)}`
 }
@@ -180,8 +200,10 @@ export function fmtSizeCell(currency: 'USD' | 'CNY', aumNative: number | null, a
  */
 export function rowReasonOf(m: Pick<GlobalFlowMarketDto, 'currency' | 'name' | 'missing'>, aumNative: number | null, aumUsd: number | null): string | null {
   if (m.missing !== null && m.missing !== '') return m.missing
-  if (m.currency === 'CNY' && aumNative !== null && aumUsd === null) {
-    return `${m.name} 规模 ${fmtCnyYi(aumNative)}（人民币）已取到，但本次汇率（新浪 fx_susdcny）未取到 ⇒ 不做美元折算、不进美元合计；其余市场照常（口径不一致，不许静默混算）`
+  if (m.currency !== 'USD' && aumNative !== null && aumUsd === null) {
+    const native = m.currency === 'CNY' ? fmtCnyYi(aumNative) : fmtHkdYi(aumNative)
+    const pair = m.currency === 'CNY' ? '美元/人民币（新浪 fx_susdcny）' : '美元/港元（新浪 fx_susdhkd）'
+    return `${m.name} 规模 ${native}（${currencyLabel(m.currency)}）已取到，但本次汇率 ${pair} 未取到 ⇒ 不做美元折算、不进美元合计；其余市场照常（口径不一致，不许静默混算）`
   }
   return null
 }
@@ -191,6 +213,18 @@ function prevShareOf(payload: GlobalFlowPayloadDto, idx: number, marketIndex: nu
   const prev = idx > 0 ? payload.curve.points[idx - 1] : undefined
   const v = prev?.share[marketIndex]
   return v === null || v === undefined ? null : v * 100
+}
+
+/** 汇率摘要（两条各自显示；缺的那条如实写"未取到"） */
+export function rateSummary(payload: GlobalFlowPayloadDto): string {
+  const one = (v: number | null, label: string): string => (v === null ? `${label} 未取到` : `${label} ${v.toFixed(4)}`)
+  const needCny = payload.markets.some((m) => m.currency === 'CNY' && m.aumUsd !== null)
+  const needHkd = payload.markets.some((m) => m.currency === 'HKD' && m.aumUsd !== null)
+  const parts: string[] = []
+  if (needCny) parts.push(one(payload.fx.usdCny, '美元/人民币'))
+  if (needHkd) parts.push(one(payload.fx.usdHkd, '美元/港元'))
+  if (parts.length === 0) parts.push('本屏不需要汇率（美/日/韩 用美元计价 ETF）')
+  return `汇率：${parts.join('、')}`
 }
 
 /** 完整视图模型（页面只渲染它） */
@@ -217,11 +251,17 @@ export function globalFlowToolData(payload: GlobalFlowPayloadDto, step = 0): Too
       : allMissing
         ? '⚠ 上游本次全部失败，且本地还没有任何快照 ⇒ 这一屏没有数据（逐行原因见下方说明）'
         : `上游现取（宿主三层 TTL：现价类 30 分钟 / 日线 12 小时 / 载荷 10 分钟）`
+  // 口径变更后必须主动解释"历史为什么这么短"（留痕不能只躺在文件里）
+  const purged = payload.snapshot.purged ?? []
+  const purgedNote = purged.length === 0
+    ? null
+    : `⚠ 另有 ${purged.length} 天旧口径快照已作废（成分变更，不与新成分混用；留痕见快照文件${purged.length > 0 ? `，如 ${purged[purged.length - 1].day}` : ''}）`
   const status = [
     `数据时刻 ${fmtBeijing(payload.asOf, payload.day)}（北京时间）`,
     snapshotNote,
     `曲线 ${points.length} 个序列日（实测 ${payload.curve.observedDays} / 重建 ${payload.curve.rebuiltDays}）`,
-  ].join('｜')
+    purgedNote,
+  ].filter((x): x is string => x !== null).join('｜')
 
   return {
     status,
@@ -242,7 +282,7 @@ export function globalFlowToolData(payload: GlobalFlowPayloadDto, step = 0): Too
       '五市场合计规模': {
         text: fmtUsd(payload.totalUsd),
         value: payload.totalUsd,
-        delta: payload.totalNote ?? (payload.fx.usdCny === null ? '汇率未取到 ⇒ A股 未折算进合计' : `汇率 ${payload.fx.usdCny.toFixed(4)}（${payload.fx.source}）`),
+        delta: payload.totalNote ?? rateSummary(payload),
       },
       '近五日轮动': {
         text: payload.rotation.text,

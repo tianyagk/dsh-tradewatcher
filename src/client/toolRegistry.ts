@@ -115,8 +115,6 @@ export interface ToolData {
  * 这里**原样再导出**，调用方与断言仍然只从 `toolRegistry` 拿。
  */
 export {
-  CARD_ACTION,
-  CATALOG_TITLE,
   DETAIL_BACK_ACTION,
   NO_DATA_WHY,
   NO_MATCH,
@@ -127,8 +125,6 @@ export {
   SECTION_EMPTY_WHY,
 } from './toolText.ts'
 import {
-  CARD_ACTION,
-  CATALOG_TITLE,
   DETAIL_BACK_ACTION,
   NO_DATA_WHY,
   NO_MATCH,
@@ -160,15 +156,16 @@ export interface ToolCard {
   chip: string
   title: string
   blurb: string
-  /** 页脚入口文案 */
-  action: string
   category: string
 }
 
-/** 目录页模型（标题 / 副标题 / 分类标签行 / 搜索框占位 / 卡片 / 空态） */
+/**
+ * 目录页模型（分类标签行 / 搜索框占位 / 卡片 / 空态）。
+ *
+ * ⚠ 曾经有 `title`（`工具目录`）与 `subtitle`（`本插件自带 N 个工具`）两个字段：用户要求**删掉页头那一行**
+ * ⇒ 字段一并删除（留着就是"没人渲染的死字段"，还会误导下一个人以为页头该有标题）。
+ */
 export interface CatalogModel {
-  title: string
-  subtitle: string
   categories: ReadonlyArray<{ key: string; label: string }>
   searchPlaceholder: string
   cards: ToolCard[]
@@ -199,11 +196,8 @@ export function catalogModel(
   const cards = orderEntries(entries)
     .filter((e) => category === 'all' || e.category === category)
     .filter((e) => matchesQuery(e, query))
-    .map((e): ToolCard => ({ id: e.id, chip: e.chip, title: e.name, blurb: e.blurb, action: CARD_ACTION, category: e.category }))
-  const total = orderEntries(entries).filter((e) => category === 'all' || e.category === category).length
+    .map((e): ToolCard => ({ id: e.id, chip: e.chip, title: e.name, blurb: e.blurb, category: e.category }))
   return {
-    title: CATALOG_TITLE,
-    subtitle: total === 1 ? '本插件自带 1 个工具' : `本插件自带 ${total} 个工具`,
     categories,
     searchPlaceholder: SEARCH_PLACEHOLDER,
     cards,

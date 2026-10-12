@@ -1,9 +1,11 @@
 /**
  * 工具箱页（主面板里的一个页）：**目录页 + 工具详情页容器 + 左上角返回按钮**。
  *
- * 布局（照用户给的参考图结构）：
- *   目录页 = 页标题 `工具目录` + 副标题 + 分类标签行（本轮只有「全部」）+ 搜索框（本地过滤）
- *            + 三列卡片网格；卡片 = 左上角标识 chip / 标题 / 一句话说明 / 页脚 `打开工具 →`。
+ * 布局（用户 v0.74.0 的口径）：
+ *   目录页 = **左上角一个最小返回控件（图标 + `返回`）** + 分类标签行（本轮只有「全部」）+ 搜索框（本地过滤）
+ *            + 三列卡片网格；卡片 = 左上角标识 chip / 标题 / 一句话说明，**整卡可点**（阴影 + 圆角、原生 button）。
+ *            ⚠ 页标题与计数那一行（`工具目录` / `本插件自带 N 个工具`）与卡片页脚那行入口文案已按用户要求删除，
+ *              见 `docs/AUDIT-IMPL43.md` §7；`toolsPage.test.ts` 有"全页不许再出现该文案"的断言。
  *   详情页 = KPI 行（含 delta）/ 份额曲线 / **静态**饼图 / 市场表（份额 + 变化）/ 边界声明
  *            + 附加块（A股净流入单列）+ 回放滑块（最近 30 个交易日，本地切换、不发请求）。
  *
@@ -25,8 +27,23 @@ import {
   type ToolData,
   type ToolPayload,
 } from './toolRegistry.ts'
+import { CARD_PROPS, CARD_STYLE, CARD_TAG } from './toolCardView.ts'
 import { FLOW_SERIES_COLORS } from './tools/globalFlowView.ts'
 import { Btn, EmptyHint } from './ui.tsx'
+
+/**
+ * 页头返回控件的图标（内联 SVG，跟主题 `currentColor` ⇒ 深浅色都对）。
+ *
+ * 为什么用图标 + 文字而不是纯文字：用户要的是"左上方一个小倒退按钮"，
+ * `toolsPage.test.ts` 断言"图标与 `返回` 文案必须成对出现"（缺一个都算把控件做丢）。
+ */
+function BackIcon(): React.ReactElement {
+  return React.createElement(
+    'svg',
+    { width: 12, height: 12, viewBox: '0 0 16 16', fill: 'none', stroke: 'currentColor', strokeWidth: 1.8, strokeLinecap: 'round', strokeLinejoin: 'round', 'aria-hidden': true, focusable: false, style: { display: 'block', marginRight: 2 } },
+    React.createElement('path', { key: 'shaft', d: 'M9.5 2.5 4 8l5.5 5.5' }),
+  )
+}
 
 /** 无数据区的占位框（虚线，跟随主题 token） */
 const PLACEHOLDER_BOX: React.CSSProperties = {
@@ -90,15 +107,21 @@ export function ToolsPage(props: {
   return React.createElement(
     'div',
     { className: 'tw-tools', style: { flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'auto' } },
-    // 页头：左上角返回按钮（回上一个非 tools 页签）+ 页标题 + 副标题
+    // 页头：**只有最小返回控件**（图标 + `返回`）。用户已明确删掉页标题与计数那一行 ——
+    // 目录页不再有任何标题文案；详情页保留"当前工具是谁"（chip · 名称），否则进去以后认不出在哪个工具里。
     React.createElement(
       'div',
       { style: { display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px 0', flexWrap: 'wrap' } },
       props.onBack === null
         ? null
-        : React.createElement(Btn, { onClick: props.onBack, title: '返回上一个页签', 'aria-label': '返回上一个页签' }, PAGE_BACK_ACTION),
-      React.createElement('div', { style: { fontWeight: 600, fontSize: 13 } }, entry === null ? model.title : `${entry.chip} · ${entry.name}`),
-      React.createElement('div', { className: 'tw-hint', style: { margin: 0 } }, entry === null ? model.subtitle : entry.blurb),
+        : React.createElement(
+            Btn,
+            { onClick: props.onBack, title: '返回上一个页签', 'aria-label': '返回上一个页签' },
+            React.createElement(BackIcon, null),
+            PAGE_BACK_ACTION,
+          ),
+      entry === null ? null : React.createElement('div', { style: { fontWeight: 600, fontSize: 13 } }, `${entry.chip} · ${entry.name}`),
+      entry === null ? null : React.createElement('div', { className: 'tw-hint', style: { margin: 0 } }, entry.blurb),
     ),
     entry === null
       ? catalogView(model, { query, category, setQuery, setCategory, onOpen: setOpenId })
@@ -144,16 +167,18 @@ function catalogView(
           'div',
           { style: GRID3 },
           model.cards.map((card) =>
+            // 整卡可点：**原生 button**（键盘可达）+ 阴影/圆角卡片（常量在 toolCardView.ts，断言直接读它）
+            // 无障碍名 = 工具名（页脚那行入口文案已按用户要求移除，整卡即入口）
             React.createElement(
-              'button',
+              CARD_TAG,
               {
+                ...CARD_PROPS,
                 key: card.id,
-                type: 'button',
-                className: 'tw-panel',
+                className: 'tw-panel tw-tool-card',
                 title: card.blurb,
-                'aria-label': `打开工具：${card.title}`,
+                'aria-label': card.title,
                 onClick: () => io.onOpen(card.id),
-                style: { textAlign: 'left', display: 'flex', flexDirection: 'column', gap: 6, cursor: 'pointer', minHeight: 104 },
+                style: CARD_STYLE,
               },
               React.createElement(
                 'span',
@@ -173,7 +198,6 @@ function catalogView(
               ),
               React.createElement('div', { style: { fontWeight: 600, fontSize: 12.5 } }, card.title),
               React.createElement('div', { className: 'tw-hint', style: { margin: 0, flex: 1 } }, card.blurb),
-              React.createElement('div', { style: { color: 'var(--tw-accent)', fontSize: 11.5 } }, card.action),
             ),
           ),
         )

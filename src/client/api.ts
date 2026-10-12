@@ -67,13 +67,14 @@ export interface DayTradeView {
   methodology: string
 }
 
-// 全球五市场（工具箱 → 工具①「五市场蛋糕」）：与宿主 `globalFlow.ts` 同形（客户端只消费，不重算份额）
+// 全球五市场（工具箱 → 工具①「全球资金流蛋糕模型」）：与宿主 `globalFlow.ts` 同形（客户端只消费，不重算份额）
 export interface GlobalFlowMarketDto {
-  key: 'us' | 'eu' | 'jp' | 'cn' | 'em'
+  /** 成分 v2（A股、港股、美国、日本、韩国）—— 顺序即展示顺序 */
+  key: 'cn' | 'hk' | 'us' | 'jp' | 'kr'
   name: string
   etf: string
   aumSource: string
-  currency: 'USD' | 'CNY'
+  currency: 'USD' | 'CNY' | 'HKD'
   benchmark: string
   benchmarkSource: string
   aumNative: number | null
@@ -101,7 +102,7 @@ export interface GlobalFlowPayloadDto {
   /** live = 上游现取；snapshot = 本次只读本地快照（零上游请求）；fallback = 上游全失败、退化为最近一次快照 */
   source: 'live' | 'snapshot' | 'fallback'
   fallbackDay: string | null
-  fx: { usdCny: number | null; at: number | null; source: string; note: string | null }
+  fx: { usdCny: number | null; usdHkd: number | null; at: number | null; source: string; note: string | null }
   markets: GlobalFlowMarketDto[]
   totalUsd: number | null
   totalNote: string | null
@@ -109,7 +110,15 @@ export interface GlobalFlowPayloadDto {
   curve: { points: GlobalFlowPointDto[]; window: number; observedDays: number; rebuiltDays: number; note: string }
   replay: { days: string[]; max: number; note: string }
   netFlow: { code: string; label: string; days: number; sumCny: number | null; asOf: number | null; series: Array<{ day: string; netCny: number }>; basis: string; miss: string | null }
-  snapshot: { path: string; days: number; bytes: number | null; firstDay: string | null; lastDay: string | null }
+  snapshot: {
+    path: string
+    days: number
+    bytes: number | null
+    firstDay: string | null
+    lastDay: string | null
+    /** 因口径不一致而作废的旧快照（留痕；成分变更后非空） */
+    purged: Array<{ day: string; scope: string | null; reason: string }>
+  }
   notes: { kpi: string; curve: string; pie: string; market: string; boundary: string }
   boundary: string[]
   missing: Array<{ what: string; why: 'no-source' | 'transient'; note: string }>
@@ -176,7 +185,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 export const api = {
   /**
-   * 全球五市场（工具箱 → 五市场蛋糕）。
+   * 全球五市场（工具箱 → 全球资金流蛋糕模型）。
    * `source='snapshot'` = 只读宿主本地快照（一天一条、保留 90 天），**宿主不会发上游请求**
    * —— 30 日手动回放走这条；默认 `auto` 走宿主的现取模式（三层 TTL + 在飞合并）。
    */

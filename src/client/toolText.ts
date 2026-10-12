@@ -11,16 +11,19 @@
  * 所以"文案唯一来源"这条约定不变（调用方还是从 `toolRegistry` 拿）。
  */
 
-/** 目录页标题 */
-export const CATALOG_TITLE = '工具目录'
+/**
+ * ⚠ 页标题 / 副标题 / 卡片页脚入口文案**已按用户要求删除**（`docs/AUDIT-IMPL43.md` §7）：
+ *   · 页头那一行（`工具目录` + `本插件自带 N 个工具`）整行去掉，只留一个最小返回控件；
+ *   · 卡片不再有页脚入口文案（原来那一行 `CARD_ACTION`），改为**整卡可点**（真实按钮语义、阴影 + 圆角）。
+ * ⇒ 页标题与那行页脚文案都不许加回来：`toolsPage.test.ts` 有"全页不出现"的断言（注释里也不再写这两个字面量，
+ *   免得 esbuild 保留注释时又被 grep 命中）。
+ */
 /** 搜索框占位 */
 export const SEARCH_PLACEHOLDER = '搜索工具、市场或指标'
-/** 卡片页脚入口文案 */
-export const CARD_ACTION = '打开工具 →'
 /** 详情页"回到目录"的入口文案 */
 export const DETAIL_BACK_ACTION = '← 工具目录'
-/** 页级返回按钮文案（回上一个非 tools 页签） */
-export const PAGE_BACK_ACTION = '← 返回'
+/** 页级返回控件文案（回上一个非 tools 页签；图标在页头，见 ToolsPage 的 BackIcon） */
+export const PAGE_BACK_ACTION = '返回'
 /** 无数据占位（**唯一来源**：不许用 `0` / `—` / `暂无` 冒充） */
 export const NOT_FETCHED = '未取到'
 /** 占位的原因：工具**还没有**数据源（结构先行） */

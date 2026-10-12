@@ -93,9 +93,45 @@ export interface TencentQuoteFull extends TencentQuote {
   totalMv: number | null
   /** 流通市值（元）：腾讯 f44，原始单位为**亿元** */
   floatMv: number | null
+  /**
+   * 股本 / 发行份额（股）：腾讯 **f71**，**只在美股（`us*`）上验证过**：
+   * 实测 `usEWJ` f71 = 243300000 与新浪 `gb_ewj` 的「股本」逐位一致；`usSPY` f71 = 1055532000
+   * 与新浪 1056132116 同量级（差 0.06%，报价时刻不同）。
+   * ⚠ 其它市场该位含义不同（A股该位是负的比值）⇒ 只对 `us*` 取值，其余一律 null。
+   */
+  shares: number | null
 }
 
 /** 完整批量行情（含名称/开高低/量），供自选与持仓的行情链路兜底使用 */
+/** 拉 `qt.gtimg.cn` 原始文本（GBK） */
+async function tencentQuoteText(codes: string[]): Promise<string> {
+  const res = await fetch(`https://qt.gtimg.cn/q=${codes.join(',')}`, {
+    headers: { 'user-agent': UA, referer: 'https://gu.qq.com/' },
+    signal: AbortSignal.timeout(8000),
+  })
+  if (!res.ok) throw new Error(`HTTP ${res.status} from qt.gtimg.cn`)
+  const buf = await res.arrayBuffer()
+  try {
+    return new TextDecoder('gbk').decode(buf)
+  } catch {
+    return new TextDecoder('latin1').decode(buf)
+  }
+}
+
+/**
+ * 按**腾讯原码**取行情（如 `hk02800` / `usSPY` / `usEWY`）：返回的键就是传进去的原码。
+ *
+ * 为什么不并进 `tencentCode`：那张映射同时被**日线**（fqkline/mkline）复用，
+ * 而腾讯对美股只回 1 根日线（实测 `param=usEWY,day,,,10,qfq` ⇒ 1 bar）⇒ 并进去会给日线路径
+ * 凭空加一条注定拿不到历史的请求。这里只开**行情**（f44/f45/f71）这一条链。
+ */
+export async function fetchTencentRawQuotes(codes: string[]): Promise<Record<string, TencentQuoteFull>> {
+  const wanted = codes.map((c) => c.trim()).filter((c) => /^(us|hk)[a-z0-9.]{1,12}$/i.test(c))
+  if (wanted.length === 0) return {}
+  const text = await tencentQuoteText(wanted)
+  return parseTencentQuoteText(text, (code) => (wanted.includes(code) ? code : undefined))
+}
+
 export async function fetchTencentQuoteRows(secids: string[]): Promise<Record<string, TencentQuoteFull>> {
   const map = new Map<string, string>()
   for (const secid of secids) {
@@ -105,24 +141,18 @@ export async function fetchTencentQuoteRows(secids: string[]): Promise<Record<st
     if (code !== null) map.set(code, secid)
   }
   if (map.size === 0) return {}
-  const res = await fetch(`https://qt.gtimg.cn/q=${[...map.keys()].join(',')}`, {
-    headers: { 'user-agent': UA, referer: 'https://gu.qq.com/' },
-    signal: AbortSignal.timeout(8000),
-  })
-  if (!res.ok) throw new Error(`HTTP ${res.status} from qt.gtimg.cn`)
-  const buf = await res.arrayBuffer()
-  let text: string
-  try {
-    text = new TextDecoder('gbk').decode(buf)
-  } catch {
-    text = new TextDecoder('latin1').decode(buf)
-  }
+  const text = await tencentQuoteText([...map.keys()])
+  return parseTencentQuoteText(text, (code) => map.get(code))
+}
+
+/** 解析 `v_CODE="a~b~c";` 文本；`keyOf(code)` 返回该行的键（null/undefined = 丢弃这一行） */
+export function parseTencentQuoteText(text: string, keyOf: (code: string) => string | undefined): Record<string, TencentQuoteFull> {
   const out: Record<string, TencentQuoteFull> = {}
   for (const line of text.split(';')) {
     const eq = line.indexOf('=')
     if (eq < 0) continue
     const code = line.slice(0, eq).trim().replace(/^v_/, '')
-    const secid = map.get(code)
+    const secid = keyOf(code)
     if (secid === undefined) continue
     const raw = line.slice(eq + 1).trim().replace(/^"/, '').replace(/"$/, '')
     const f = raw.split('~')
@@ -142,6 +172,8 @@ export async function fetchTencentQuoteRows(secids: string[]): Promise<Record<st
       // 指数/ETF 也有值（ETF 为基金规模），期货/国际指数无该字段 → null
       totalMv: num(f[45]) !== null ? (num(f[45]) as number) * 1e8 : null,
       floatMv: num(f[44]) !== null ? (num(f[44]) as number) * 1e8 : null,
+      // f71 = 股本：只在美股上验证过（见字段注释），其它市场一律 null（含义不同，不许猜）
+      shares: /^us/i.test(code) && num(f[71]) !== null && (num(f[71]) as number) > 0 ? (num(f[71]) as number) : null,
       ts: parseTencentStamp(f[30]),
     }
   }

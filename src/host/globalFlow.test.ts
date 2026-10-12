@@ -17,9 +17,9 @@
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import {
   __resetFlowCache,
@@ -31,6 +31,10 @@ import {
   momentumOf,
   momentumRanks,
   readFlowSnapshot,
+  writeFlowSnapshot,
+  FLOW_MARKETS,
+  FLOW_SCOPE,
+  flowSnapshotPurged,
   rotationOf,
   sharesOf,
   sharesSumPct,
@@ -47,23 +51,31 @@ import { makeTradeRoutes } from './routes.ts'
 import { DataStore } from './store.ts'
 import { CalendarStore } from './calendar.ts'
 
+/** 按 market key 找行下标（成分顺序是口径的一部分，断言里不许写死下标） */
+function rowIdxOf(payload: GlobalFlowPayloadDto, key: GlobalFlowMarketDto['key']): number {
+  const i = payload.markets.findIndex((m) => m.key === key)
+  assert.notEqual(i, -1, `载荷里必须有 ${key} 这个市场`)
+  return i
+}
+
 /** 最小载荷骨架（只填渲染断言会用到的字段；③ 的渲染层断言用） */
 function payloadShell(): GlobalFlowPayloadDto {
-  const mk = (key: GlobalFlowMarketDto['key'], name: string, etf: string, currency: 'USD' | 'CNY') => ({
-    key, name, etf, aumSource: '新浪', currency, benchmark: '基准', benchmarkSource: '腾讯日线',
+  const mk = (key: GlobalFlowMarketDto['key'], name: string, etf: string, currency: 'USD' | 'CNY' | 'HKD') => ({
+    key, name, etf, aumSource: '公开源', currency, benchmark: '基准', benchmarkSource: '腾讯日线',
     aumNative: null, aumUsd: null, sharePct: null, delta1Pp: null, delta5Pp: null,
     momentum: null, rank: null, missing: null,
   })
   return {
     asOf: NOW, day: DAY, source: 'live', fallbackDay: null,
-    fx: { usdCny: 6.7, at: NOW, source: '新浪 fx_susdcny（在岸人民币）', note: null },
-    markets: [mk('us', '美股', 'SPY', 'USD'), mk('eu', '欧股', 'VGK', 'USD'), mk('jp', '日股', 'EWJ', 'USD'), mk('cn', 'A股', '510300', 'CNY'), mk('em', '新兴市场', 'EEM', 'USD')],
+    fx: { usdCny: 6.6937, usdHkd: 7.8473, at: NOW, source: '新浪 fx_susdcny / fx_susdhkd', note: null },
+    // 成分 v2：A股、港股、美国、日本、韩国（顺序 = 展示顺序）
+    markets: [mk('cn', 'A股', '510300', 'CNY'), mk('hk', '港股', '02800 盈富基金', 'HKD'), mk('us', '美国', 'SPY', 'USD'), mk('jp', '日本', 'EWJ', 'USD'), mk('kr', '韩国', 'EWY', 'USD')],
     totalUsd: null, totalNote: null,
     rotation: { kind: 'unknown', fromKey: null, toKey: null, maxAbsPp: null, comparable: 0, window: 5, text: '判不了' },
     curve: { points: [], window: 180, observedDays: 0, rebuiltDays: 0, note: '曲线口径' },
     replay: { days: [], max: 0, note: '回放口径' },
     netFlow: { code: 'sh510300', label: '净流入', days: 0, sumCny: null, asOf: null, series: [], basis: '口径', miss: '未取到' },
-    snapshot: { path: '/tmp/x.json', days: 0, bytes: null, firstDay: null, lastDay: null },
+    snapshot: { path: '/tmp/x.json', days: 0, bytes: null, firstDay: null, lastDay: null, purged: [] },
     notes: { kpi: 'k', curve: 'c', pie: 'p', market: 'm', boundary: 'b' },
     boundary: ['宿主边界'],
     missing: [],
@@ -99,16 +111,31 @@ function tradingDays(count: number): string[] {
 
 const DATES = tradingDays(200)
 
-/** 各市场规模（原币）：与实测同一量级（SPY 8222 亿美元 / 510300 1063.5 亿元 …） */
+/**
+ * 各市场规模（原币）：与 2026-10-12 真网络实测同一量级（见 docs/AUDIT-IMPL47.md §1）
+ *   · A股 510300：新浪 ETF 节点 nmc = 10635037.4372 万元 = 1063.50 亿元（人民币）
+ *   · 港股 02800：腾讯 f45 = 1262.1791 亿港元
+ *   · 美国 SPY ：新浪 gb_spy 总市值 = 822272781554 美元
+ *   · 日本 EWJ ：新浪 gb_ewj 总市值 = 23809338000 美元
+ *   · 韩国 EWY ：腾讯 f71 股本 = 142550000 × 最新价（新浪该标的的总市值字段实测为 0）
+ */
 const AUM: Record<string, { totalMv: string; shares: string }> = {
   // 下标 12 = 总市值（用户口径的"字段 13"，1 起数），下标 19 = 股本（用于交叉校验）
   spy: { totalMv: '822272781554.0000', shares: '1056132116' },
-  vgk: { totalMv: '29219072367.0000', shares: '339638177' },
   ewj: { totalMv: '23809338000.0000', shares: '243300000' },
-  eem: { totalMv: '30961800000.0000', shares: '463500000' },
+  ewy: { totalMv: '0.0000', shares: '0' }, // ⚠ 实测为 0 ⇒ 必须走腾讯 f71×价 的推导路径
 }
-const PRICE: Record<string, number> = { spy: 778.57, vgk: 86.03, ewj: 97.86, eem: 66.8 }
+const PRICE: Record<string, number> = { spy: 778.57, ewj: 97.86, ewy: 170.62 }
 const CN_NMC_WAN = '10635037.4372'
+/** 腾讯行情：hk02800 的 f45（亿港元）+ 三只美股 ETF 的 f71（股本） */
+const TENCENT_AUM: Record<string, { price: string; totalMvYi: string | null; shares: string | null }> = {
+  hk02800: { price: '24.900', totalMvYi: '1262.1791', shares: null },
+  usSPY: { price: '778.570', totalMvYi: null, shares: '1055532000' },
+  usEWJ: { price: '97.860', totalMvYi: null, shares: '243300000' },
+  usEWY: { price: '170.620', totalMvYi: null, shares: '142550000' },
+}
+/** 两条汇率（1 美元 = 多少原币）：与实测同一量级 */
+const FXRATE: Record<string, string> = { fx_susdcny: '6.6937', fx_susdhkd: '7.8473' }
 
 interface StubOptions {
   /** 让这些上游符号失败（按 URL 片段匹配） */
@@ -125,6 +152,8 @@ interface StubOptions {
   gapDay?: { symbol: string; day: string }
   /** 把某个 gb 符号的「总市值」乘一个系数（自校告警断言用：与 price×股本 对不上） */
   aumDrift?: Record<string, number>
+  /** 从腾讯行情批量里**去掉**这些代码（模拟"只有走腾讯那条路径的市场取不到数"） */
+  tencentDrop?: string[]
 }
 
 interface Stub {
@@ -160,20 +189,42 @@ function usDailyJsonp(symbol: string, opts: StubOptions): string {
   return `/*<script>location.href='//sina.com';</script>*/x(${JSON.stringify(rows)});`
 }
 
-/** 各市场收盘价序列：`distinct` 时涨速不同（名次确定），`same` 时完全一致 */
+/** 各标的收盘价序列：`distinct` 时涨速不同（名次确定），`same` 时完全一致 */
 function closeOf(symbol: string, i: number, opts: StubOptions): number {
-  const base: Record<string, number> = { spy: 600, vgk: 85, ewj: 95, eem: 65, '510300': 4.3, '000300': 4300 }
-  const slope: Record<string, number> = { spy: 0.30, vgk: 0.02, ewj: 0.10, eem: 0.06, '510300': -0.05, '000300': -0.05 }
+  const base: Record<string, number> = { spy: 600, ewj: 95, ewy: 160, '510300': 4.3, '000300': 4300, '02800': 22, hsi: 24000 }
+  // 涨速（distinct 时各市场不同 ⇒ 动量名次确定）
+  const slope: Record<string, number> = { spy: 0.30, ewj: 0.10, ewy: 0.42, '510300': -0.05, '000300': -0.05, '02800': 0.16, hsi: 0.18 }
   const s = opts.seriesMode === 'same' ? 0.05 : (slope[symbol] ?? 0.05)
   return (base[symbol] ?? 100) * (1 + (s * i) / DATES.length) + 0.0
 }
 
 function tencentDaily(param: string, opts: StubOptions): string {
   const code = param.split(',')[0]
-  const rows = DATES.map((d, i) => [d, closeOf(code, i, opts).toFixed(3), closeOf(code, i, opts).toFixed(3), '0', '0', '1000'])
-    .filter((r) => !(opts.gapDay !== undefined && opts.gapDay.symbol === code && opts.gapDay.day === r[0]))
+  const key = code === 'hkHSI' ? 'hsi' : code
+  const rows = DATES.map((d, i) => [d, closeOf(key, i, opts).toFixed(3), closeOf(key, i, opts).toFixed(3), '0', '0', '1000'])
+    .filter((r) => !(opts.gapDay !== undefined && opts.gapDay.symbol === key && opts.gapDay.day === r[0]))
   const node: Record<string, unknown> = { [code]: { day: rows, qfqday: rows } }
   return JSON.stringify({ code: 0, data: node })
+}
+
+/** 腾讯行情批量（`qt.gtimg.cn/q=...`）：f44/f45 = 总市值（亿），f71 = 股本（美股） */
+function tencentQuotePayload(opts: StubOptions): string {
+  const lines: string[] = []
+  const drop = new Set(opts.tencentDrop ?? [])
+  for (const [code, row] of Object.entries(TENCENT_AUM)) {
+    if (drop.has(code)) continue
+    const f: string[] = new Array(80).fill('0.00')
+    f[1] = code
+    f[3] = row.price
+    f[30] = '2026-10-12 16:08:24'
+    if (row.totalMvYi !== null) {
+      f[44] = row.totalMvYi
+      f[45] = row.totalMvYi
+    }
+    if (row.shares !== null) f[71] = row.shares
+    lines.push(`v_${code}="${f.join('~')}"`)
+  }
+  return `${lines.join(';')};`
 }
 
 function etfNodePayload(opts: StubOptions): string {
@@ -213,7 +264,12 @@ function stubFetch(opts: StubOptions = {}): Stub {
     if (u.host === 'hq.sinajs.cn') {
       // ⚠ 新浪这个端点把代码列表放在**路径**里（`/list=gb_spy`），不是查询串 —— 按 searchParams 取会是空
       const list = decodeURIComponent(u.pathname.replace(/^\/list=/, ''))
-      if (list === 'fx_susdcny') return reply('var hq_str_fx_susdcny="20:48:01,6.6932,6.6935,6.6929,25.0,6.6930,6.6940,6.6915,6.6937,USDCNY,0.0120,0.0008,0.0025";')
+      if (list.startsWith('fx_')) {
+        const rate = FXRATE[list]
+        if (rate === undefined) throw new TypeError(`fetch failed (fixture: unknown fx ${list})`)
+        // 下标：0 时刻 / 3 昨收 / 8 最新 / 9 名称（见 sina.parseSinaFx）
+        return reply(`var hq_str_${list}="20:48:01,${rate},${rate},${rate},25.0,${rate},${rate},${rate},${rate},FAKE,0.0120,0.0008,0.0025";`)
+      }
       const symbols = list.split(',').filter((s) => s.startsWith('gb_')).map((s) => s.slice(3))
       if (symbols.length === 0) throw new TypeError('fetch failed (fixture: unknown sina list)')
       const drift = opts.aumDrift ?? {}
@@ -235,6 +291,7 @@ function stubFetch(opts: StubOptions = {}): Stub {
       if (u.pathname.includes('MoneyFlow')) return reply(moneyFlowPayload(opts.moneyFlow ?? defaultMoneyFlow()))
       return reply(etfNodePayload(opts))
     }
+    if (u.host === 'qt.gtimg.cn') return reply(tencentQuotePayload(opts))
     if (u.host === 'web.ifzq.gtimg.cn') {
       const param = String(u.searchParams.get('param') ?? '')
       if (param.startsWith('us.INX')) {
@@ -277,7 +334,7 @@ test('① 份额合计 = 100%（±0.1 显示位）：五市场全有值时，以
     near(sharesSumPct(payload.markets.map((m) => m.share)), 100, 0.1, '当期份额合计')
     // ② A股 的规模单元格必须**同时**给出人民币原值与折算值（不许只剩折美元后的份额）
     const view0 = globalFlowToolData(payload, 0)
-    const cnCell = view0.market?.rows[3][2] ?? ''
+    const cnCell = view0.market?.rows[rowIdxOf(payload, 'cn')][2] ?? ''
     assert.equal(cnCell.includes('亿元'), true, `A股 规模单元格要显示人民币原值：${cnCell}`)
     assert.equal(cnCell.includes('≈'), true, `A股 规模单元格要显示折算关系：${cnCell}`)
     assert.equal(cnCell.includes('亿美元'), true, `A股 规模单元格要显示折算后的美元值：${cnCell}`)
@@ -288,11 +345,11 @@ test('① 份额合计 = 100%（±0.1 显示位）：五市场全有值时，以
 
     // 有市场缺值时同样成立（这是用户口径的硬要求：合计恒为 100%，缺的市场不进分母）
     __resetFlowCache()
-    const s2 = stubFetch({ fail: ['gb_vgk'] })
+    const s2 = stubFetch({ tencentDrop: ['hk02800'] })
     try {
       const partial = await globalFlowPayload({ now: NOW })
-      const eu = partial.markets.find((m) => m.key === 'eu')
-      assert.equal(eu?.sharePct, null, '取不到数的市场必须是 null（不是 0）')
+      const hk = partial.markets.find((m) => m.key === 'hk')
+      assert.equal(hk?.sharePct, null, '取不到数的市场必须是 null（不是 0）')
       near(sharesSumPct(partial.markets.map((m) => m.share)), 100, 0.1, '缺一个市场后的合计仍为 100%')
     } finally {
       s2.restore()
@@ -302,31 +359,240 @@ test('① 份额合计 = 100%（±0.1 显示位）：五市场全有值时，以
   }
 })
 
+// ── 口径 v2：五市场成分（A股、港股、美国、日本、韩国） ──────────────────────
+
+test('① 五市场名称/顺序/代码/币种逐字 = 需求 T-5（A股、港股、美国、日本、韩国）', async () => {
+  freshHome()
+  const s = stubFetch()
+  try {
+    const payload = await globalFlowPayload({ now: NOW })
+    assert.deepEqual(payload.markets.map((m) => m.name), ['A股', '港股', '美国', '日本', '韩国'], '五市场名称与顺序逐字')
+    assert.deepEqual(payload.markets.map((m) => m.key), ['cn', 'hk', 'us', 'jp', 'kr'], '内部键与展示顺序一致')
+    assert.deepEqual(payload.markets.map((m) => m.currency), ['CNY', 'HKD', 'USD', 'USD', 'USD'], '原币：A股人民币 / 港股港元 / 美日韩 美元')
+    // 旧成分（v1：美股/欧股/日股/新兴市场）一个都不许留
+    const dump = JSON.stringify(payload)
+    for (const stale of ['欧股', '新兴市场', 'VGK', 'EEM', "'em'", 'gb_vgk', 'gb_eem']) {
+      assert.equal(dump.includes(stale), false, `口径 v2 之后不许再出现旧成分「${stale}」`)
+    }
+    // 展示顺序 = 需求文档的列举顺序（不是按规模排序）
+    assert.equal(payload.markets[0].name, 'A股', '第一行必须是 A股（需求列举顺序）')
+  } finally {
+    s.restore()
+  }
+})
+
+test('① 成分表本身就是口径：每条都要有规模来源与动量来源（不许留空）', () => {
+  assert.deepEqual([...FLOW_MARKET_ORDER], ['cn', 'hk', 'us', 'jp', 'kr'])
+  for (const def of FLOW_MARKETS) {
+    assert.ok(def.aumSource.length > 0, `${def.name} 必须写明规模来源`)
+    assert.ok(def.benchmark.length > 0 && def.benchmarkSource.length > 0, `${def.name} 必须写明动量口径与来源`)
+    assert.equal(def.etf.length > 0, true, `${def.name} 必须写明代理标的`)
+  }
+  // 港股走"腾讯总市值"、韩国走"腾讯股本×价"（两条都是实测确认过的路径）
+  assert.equal(FLOW_MARKETS.find((m) => m.key === 'hk')?.aumSource.includes('亿港元'), true)
+  assert.equal(FLOW_MARKETS.find((m) => m.key === 'kr')?.aumSource.includes('f71'), true)
+})
+
+test('② 份额合计恒为 100%：两条汇率都缺、只缺一条、缺一个市场 ⇒ 分母只含有值市场', async () => {
+  freshHome()
+  // 只缺美元/人民币 ⇒ A股 不进分母，其余四个照常
+  {
+    const s = stubFetch({ fail: ['fx_susdcny'] })
+    try {
+      const p = await globalFlowPayload({ now: NOW })
+      const cn = p.markets.find((m) => m.key === 'cn')
+      assert.equal(cn?.aumNative !== null && cn?.aumNative !== undefined, true, '人民币原值仍在（缺的只是折算）')
+      assert.equal(cn?.aumUsd, null, '没有汇率 ⇒ 美元规模必须是 null')
+      assert.equal(cn?.sharePct, null, '不进分母 ⇒ 份额 null')
+      near(sharesSumPct(p.markets.map((m) => m.share)), 100, 0.1, '四个有值市场的合计仍是 100%')
+      assert.equal(p.markets.filter((m) => m.sharePct !== null).length, 4)
+    } finally {
+      s.restore()
+    }
+  }
+  // 只缺美元/港元 ⇒ 港股 不进分母（A股 不受影响）
+  {
+    __resetFlowCache()
+    const s = stubFetch({ fail: ['fx_susdhkd'] })
+    try {
+      const p = await globalFlowPayload({ now: NOW })
+      const hk = p.markets.find((m) => m.key === 'hk')
+      const cn = p.markets.find((m) => m.key === 'cn')
+      assert.equal(hk?.aumNative !== null && hk?.aumNative !== undefined, true, '港元原值仍在')
+      assert.equal(hk?.aumUsd, null, '没有港元汇率 ⇒ 美元规模 null')
+      assert.equal(hk?.sharePct, null, '不进分母')
+      assert.notEqual(cn?.sharePct, null, 'A股 走另一条汇率，不受影响')
+      near(sharesSumPct(p.markets.map((m) => m.share)), 100, 0.1, '合计仍 100%')
+    } finally {
+      s.restore()
+    }
+  }
+  // 两条都缺 ⇒ 只有美/日/韩 有值，合计仍 100%
+  {
+    __resetFlowCache()
+    const s = stubFetch({ fail: ['fx_susdcny', 'fx_susdhkd'] })
+    try {
+      const p = await globalFlowPayload({ now: NOW })
+      assert.equal(p.markets.filter((m) => m.sharePct !== null).length, 3, '只剩美国/日本/韩国')
+      near(sharesSumPct(p.markets.map((m) => m.share)), 100, 0.1, '合计仍 100%')
+      for (const pnt of p.curve.points) near(sharesSumPct(pnt.share), 100, 0.1, `${pnt.day} 的合计`)
+    } finally {
+      s.restore()
+    }
+  }
+})
+
+test('③ 缺汇率 ⇒ 该市场不进分母 + 行级给原因（两条汇率各测一遍）', async () => {
+  freshHome()
+  const cases = [
+    { fail: 'fx_susdcny', key: 'cn' as const, nativeWord: '亿元', currencyWord: '人民币', pair: '美元/人民币' },
+    { fail: 'fx_susdhkd', key: 'hk' as const, nativeWord: '亿港元', currencyWord: '港元', pair: '美元/港元' },
+  ]
+  for (const c of cases) {
+    __resetFlowCache()
+    const s = stubFetch({ fail: [c.fail] })
+    try {
+      const p = await globalFlowPayload({ now: NOW })
+      const view = globalFlowToolData(p, 0)
+      const idx = rowIdxOf(p, c.key)
+      const row = view.market?.rows[idx] ?? []
+      const note = view.market?.rowNotes?.[idx] ?? null
+      assert.equal(row[2].includes(c.nativeWord), true, `${c.key} 行必须显示原币值：${row[2]}`)
+      assert.equal(row[2].includes('未折算'), true, `${c.key} 行必须写"未折算"：${row[2]}`)
+      assert.equal(row[3], NOT_FETCHED, `${c.key} 的份额必须是「${NOT_FETCHED}」`)
+      assert.notEqual(note, null, `${c.key} 必须有行级原因（不许只在载荷 missing[] 里）`)
+      assert.equal(note?.includes(c.currencyWord), true, `行级原因要说清币种：${note}`)
+      assert.equal(note?.includes(c.pair), true, `行级原因要指名缺的是哪条汇率：${note}`)
+      assert.equal(note?.includes('不进美元合计'), true, `行级原因要说清后果：${note}`)
+      // 载荷层也必须有对应条目（两处都要有，不是二选一）
+      assert.equal(p.missing.some((m) => m.what.includes(c.pair)), true, `载荷 missing 要有 ${c.pair} 这条`)
+    } finally {
+      s.restore()
+    }
+  }
+})
+
+test('④ 旧口径快照不被采用：v1（美股/欧股/日股/A股/新兴）整份作废 + 留痕', async () => {
+  freshHome()
+  // ⚠ 用 flowSnapshotPath()（= DSH_HOME/dsh-tradewatcher/...），不是 DSH_HOME 根
+  const path = flowSnapshotPath()
+  mkdirSync(dirname(path), { recursive: true })
+  // 手写一份 v0.72.0 形状的旧快照（含旧成分的市场键）
+  const oldDay = {
+    at: NOW - 86_400_000,
+    fx: 6.7,
+    markets: {
+      us: { aumNative: 822272781554, aumUsd: 822272781554, share: 0.89, currency: 'USD', aumSource: '新浪 gb_spy 总市值' },
+      eu: { aumNative: 29219072367, aumUsd: 29219072367, share: 0.03, currency: 'USD', aumSource: '新浪 gb_vgk 总市值' },
+      jp: { aumNative: 23809338000, aumUsd: 23809338000, share: 0.026, currency: 'USD', aumSource: '新浪 gb_ewj 总市值' },
+      cn: { aumNative: 106350374372, aumUsd: 15887190204, share: 0.017, currency: 'CNY', aumSource: '新浪 ETF 节点 nmc' },
+      em: { aumNative: 30961800000, aumUsd: 30961800000, share: 0.034, currency: 'USD', aumSource: '新浪 gb_eem 总市值' },
+    },
+    momentum: { us: null, eu: null, jp: null, cn: null, em: null },
+    ranks: { us: null, eu: null, jp: null, cn: null, em: null },
+    totalUsd: 936383101921,
+    rotationText: '从 新兴市场 转向 美股',
+    missing: [],
+  }
+  writeFileSync(path, JSON.stringify({ v: 1, days: { '2026-10-11': oldDay }, writtenAt: NOW }), 'utf8')
+
+  const s = stubFetch()
+  try {
+    const snap = await readFlowSnapshot()
+    assert.deepEqual(Object.keys(snap.days), [], '⚠ 旧口径的 days 一律不采用（不许与新成分混用）')
+    assert.equal(snap.scope, FLOW_SCOPE)
+    const purged = flowSnapshotPurged()
+    assert.equal(purged.length, 1, `作废必须留痕（实际 ${purged.length} 条）`)
+    assert.equal(purged[0].day, '2026-10-11')
+    assert.equal(purged[0].reason.includes('口径'), true, `留痕要写清原因：${purged[0].reason}`)
+
+    // 载荷里也不许出现旧成分的历史点
+    const p = await globalFlowPayload({ now: NOW })
+    const dump = JSON.stringify(p.curve.points)
+    assert.equal(dump.includes('2026-10-11'), false, '旧口径的日期不许出现在曲线里')
+    assert.equal(p.curve.observedDays, 1, '只有"今天"这一次实测（旧快照不算）')
+    // 落盘后文件里要能看到 purged 留痕 + 新的 scope
+    await writeFlowSnapshot(p.day, {
+      at: NOW,
+      rates: { usdCny: 6.69, usdHkd: 7.85 },
+      scope: FLOW_SCOPE,
+      markets: {} as never,
+      momentum: {} as never,
+      ranks: {} as never,
+      totalUsd: null,
+      rotationText: '',
+      missing: [],
+    })
+    const onDisk = JSON.parse(readFileSync(path, 'utf8')) as { v: number; scope: string; purged?: Array<{ day: string }> }
+    assert.equal(onDisk.v, 2, '落盘后文件版本 = 2')
+    assert.equal(onDisk.scope, FLOW_SCOPE, '落盘后文件带口径标识')
+    assert.equal((onDisk.purged ?? []).some((x) => x.day === '2026-10-11'), true, '作废留痕要写回文件（只增不删）')
+
+    // 留痕必须**在界面上说得出来**（不能只躺在文件里）：状态行要主动解释"历史为什么这么短"
+    const liveAfter = await globalFlowPayload({ now: NOW })
+    const viewAfter = globalFlowToolData(liveAfter, 0)
+    assert.equal(liveAfter.snapshot.purged.length > 0, true, '载荷要把作废留痕带出来（否则界面无从解释）')
+    assert.equal(viewAfter.status.includes('旧口径快照已作废'), true, `状态行要说出作废这件事：${viewAfter.status}`)
+    assert.equal(viewAfter.status.includes('2026-10-11'), true, `状态行要给出被作废的日期示例：${viewAfter.status}`)
+
+    // 二级防线：**同一份 v2 文件里**混进一条没有口径标识的旧记录 ⇒ 逐日校验必须丢掉它（不是只信文件头）
+    __resetFlowCache()
+    const mixed = {
+      v: 2,
+      scope: FLOW_SCOPE,
+      days: {
+        '2026-10-11': { ...oldDay, scope: 'v1:us,eu,jp,cn,em' },
+        '2026-10-12': {
+          at: NOW, rates: { usdCny: 6.69, usdHkd: 7.85 }, scope: FLOW_SCOPE,
+          markets: { cn: { aumNative: 1, aumUsd: 1, share: 0.5, currency: 'CNY', aumSource: 'x' }, hk: { aumNative: 1, aumUsd: 1, share: 0.5, currency: 'HKD', aumSource: 'x' }, us: { aumNative: 1, aumUsd: 1, share: null, currency: 'USD', aumSource: 'x' }, jp: { aumNative: 1, aumUsd: 1, share: null, currency: 'USD', aumSource: 'x' }, kr: { aumNative: 1, aumUsd: 1, share: null, currency: 'USD', aumSource: 'x' } },
+          momentum: { cn: null, hk: null, us: null, jp: null, kr: null },
+          ranks: { cn: null, hk: null, us: null, jp: null, kr: null },
+          totalUsd: 5, rotationText: '', missing: [],
+        },
+      },
+      purged: [],
+      writtenAt: NOW,
+    }
+    writeFileSync(path, JSON.stringify(mixed), 'utf8')
+    const again = await readFlowSnapshot()
+    assert.deepEqual(Object.keys(again.days), ['2026-10-12'], '只有带当前口径标识的那一天能用')
+    const mixedPurged = flowSnapshotPurged()
+    assert.equal(mixedPurged.some((x) => x.day === '2026-10-11' && x.scope === 'v1:us,eu,jp,cn,em'), true, '混进来的旧记录也要留痕')
+  } finally {
+    s.restore()
+  }
+})
+
 // ── ② 某市场失败 ⇒ 该行「未取到」+ 原因；整表不显示 0 ────────────────────────
 
 test('② 某市场取数失败 ⇒ 该行「未取到」+ 原因，且整表不显示 0（含客户端渲染层）', async () => {
   freshHome()
-  const s = stubFetch({ fail: ['gb_vgk', 'symbol=vgk'] })
+  const s = stubFetch({ tencentDrop: ['hk02800'] })
   try {
     const payload = await globalFlowPayload({ now: NOW })
-    const eu = payload.markets.find((m) => m.key === 'eu')
-    assert.equal(eu?.aumUsd, null, '欧股规模取不到 ⇒ null')
-    assert.equal(eu?.sharePct, null, '份额也必须 null')
-    assert.ok((eu?.missing ?? '').length > 0, '该行必须带原因（缺什么 + 为什么）')
+    const hk = payload.markets.find((m) => m.key === 'hk')
+    assert.equal(hk?.aumUsd, null, '港股规模取不到 ⇒ null')
+    assert.equal(hk?.sharePct, null, '份额也必须 null')
+    assert.ok((hk?.missing ?? '').length > 0, '该行必须带原因（缺什么 + 为什么）')
     assert.ok(
-      payload.missing.some((m) => m.what.includes('欧股')),
+      payload.missing.some((m) => m.what.includes('港股')),
       `整份载荷的 missing 里要有这一条：${JSON.stringify(payload.missing.map((m) => m.what))}`,
     )
     // 其余四个市场照常，且合计仍 100%
-    assert.equal(payload.markets.filter((m) => m.aumUsd !== null).length, 4, '另外四个市场不受影响')
+    assert.equal(
+      payload.markets.filter((m) => m.aumUsd !== null).length,
+      4,
+      `另外四个市场不受影响（实际有值的：${payload.markets.filter((m) => m.aumUsd !== null).map((m) => m.name).join('、')}）`,
+    )
     near(sharesSumPct(payload.markets.map((m) => m.share)), 100, 0.1, '有值部分的合计')
 
     // 客户端渲染层：那一行显示「未取到」，并且**整表没有 0 顶替**
     const model = detailModel(cakeTool, globalFlowToolData(payload, 0))
     assert.equal(model.market.rows.length, 5, '五行都要在（缺数据的那行也要在，不许整行消失）')
-    const euRow = model.market.rows[1]
-    assert.deepEqual(euRow.slice(2, 5), [NOT_FETCHED, NOT_FETCHED, NOT_FETCHED], `欧股行的规模/份额/变化必须是「${NOT_FETCHED}」：${JSON.stringify(euRow)}`)
-    assert.ok((model.market.rowNotes[1] ?? '').includes('欧股'), '行下必须给出这一行的原因')
+    const hkIdx = rowIdxOf(payload, 'hk')
+    const hkRow = model.market.rows[hkIdx]
+    assert.deepEqual(hkRow.slice(2, 5), [NOT_FETCHED, NOT_FETCHED, NOT_FETCHED], `港股行的规模/份额/变化必须是「${NOT_FETCHED}」：${JSON.stringify(hkRow)}`)
+    assert.ok((model.market.rowNotes[hkIdx] ?? '').includes('港股'), '行下必须给出这一行的原因')
     // 0 顶替判据用**单点实现**（`looksLikeZeroStandIn`），并先自证它非恒真：
     // 手写锚定正则过的那次（`/^0(\.0+)?/`）就是教训（AUDIT-HY4-1 §2）
     assert.equal(looksLikeZeroStandIn('0.00%'), true, '判据必须抓到 0.00%')
@@ -531,7 +797,8 @@ test('口径：汇率取不到 ⇒ A股 不折算、不进美元合计（不静�
     assert.equal(cnNote?.includes('汇率'), true, `行级原因要说清是汇率的问题：${cnNote}`)
     assert.equal(cnNote?.includes('不进美元合计'), true, `行级原因要说清后果：${cnNote}`)
     // 有值时也要显示原币 + 折算值（正常路径同样不许只剩折美元）
-    assert.equal((view.market?.rows[1] ?? [])[2].includes('亿美元'), true, '美元市场显示亿美元口径')
+    const usCell = view.market?.rows[rowIdxOf(payload, 'us')][2] ?? ''
+    assert.equal(usCell.includes('亿美元'), true, `美元市场显示亿美元口径：${usCell}`)
     const usdTotal = payload.markets.filter((m) => m.key !== 'cn').reduce((acc, m) => acc + (m.aumUsd ?? 0), 0)
     near(payload.totalUsd, usdTotal, 1, '合计只含能折算成美元的市场')
     assert.ok((payload.totalNote ?? '').includes('有值市场'), `合计口径要写清楚：${payload.totalNote}`)
@@ -592,7 +859,7 @@ test('曲线：锚定当日实测规模，历史日按收盘价之比重建；�
   const withSnap: FlowPoint[] = buildCurve({
     anchors: [1000],
     chartSeries: [chart],
-    observed: new Map([['2026-10-12', { at: NOW, fx: null, aumNative: [1234] }]]),
+    observed: new Map([['2026-10-12', { at: NOW, rates: { usdCny: null, usdHkd: 7.8 }, aumNative: [1234] }]]),
     marketCurrency: ['USD'],
     window: 10,
   })
@@ -619,11 +886,16 @@ test('动量：20/60/120 日收益率 + 横截面排名；样本不足 ⇒ null�
 })
 
 test('币种：只有拿到汇率才允许把人民币折成美元', () => {
-  assert.equal(toUsd(100, 'USD', null), 100, '美元不需要汇率')
-  assert.equal(toUsd(100, 'CNY', null), null, '⚠ 没有汇率 ⇒ null（不许静默当美元）')
-  assert.equal(toUsd(100, 'CNY', 7), 100 / 7, '有汇率才折算')
-  assert.equal(toUsd(null, 'USD', 7), null, '没有值就是 null')
-  assert.equal(toUsd(0, 'USD', 7), null, '0 不是"规模为零"，当缺失处理')
+  const noRates = { usdCny: null, usdHkd: null }
+  const rates = { usdCny: 6.6937, usdHkd: 7.8473 }
+  assert.equal(toUsd(100, 'USD', noRates), 100, '美元不需要汇率')
+  assert.equal(toUsd(100, 'CNY', noRates), null, '⚠ 没有汇率 ⇒ null（不许静默当美元）')
+  assert.equal(toUsd(100, 'HKD', noRates), null, '⚠ 港元没有汇率 ⇒ null')
+  assert.equal(toUsd(100, 'CNY', rates), 100 / 6.6937, '有汇率才折算')
+  assert.equal(toUsd(100, 'HKD', rates), 100 / 7.8473, '港元走美元/港元那条')
+  assert.equal(toUsd(100, 'CNY', { usdCny: 6.6937, usdHkd: null }), 100 / 6.6937, '两条汇率互相独立')
+  assert.equal(toUsd(null, 'USD', rates), null, '没有值就是 null')
+  assert.equal(toUsd(0, 'USD', rates), null, '0 不是"规模为零"，当缺失处理')
 })
 
 test('自校告警必须被消费：总市值与「最新价×股本」对不上时，界面必须看见（不许静默用）', async () => {
@@ -633,12 +905,13 @@ test('自校告警必须被消费：总市值与「最新价×股本」对不上
     const payload = await globalFlowPayload({ now: NOW })
     const us = payload.markets.find((m) => m.key === 'us')
     assert.notEqual(us?.aumUsd, null, '对不上也照旧给出值（不静默丢数据）')
-    const warn = payload.missing.find((m) => m.what.includes('美股'))
+    const warn = payload.missing.find((m) => m.what.includes('美国'))
     assert.ok(warn !== undefined, `口径存疑必须进 missing（否则界面看不到）：${JSON.stringify(payload.missing.map((m) => m.what))}`)
     assert.equal(warn.note.includes('差 50'), true, `告警要说清差多少：${warn.note}`)
     assert.equal(warn.note.includes('存疑'), true, `告警要说清口径存疑：${warn.note}`)
     const view = globalFlowToolData(payload, 0)
-    assert.equal((view.market?.rowNotes[0] ?? '').includes('存疑'), true, `行级说明必须带上这条告警：${view.market?.rowNotes[0]}`)
+    const usIdx = rowIdxOf(payload, 'us')
+    assert.equal((view.market?.rowNotes[usIdx] ?? '').includes('存疑'), true, `行级说明必须带上这条告警：${view.market?.rowNotes[usIdx]}`)
   } finally {
     s.restore()
   }
@@ -660,7 +933,7 @@ test('红线：实测日缺的市场必须留成真洞（不许拿重建值补�
   assert.notEqual(rebuiltDay?.aumUsd[1], null, '对照组：没有快照的日子第二家会被重建（不是 null）')
 
   // 正题：09 有快照、且那天第二家缺规模 ⇒ 必须留成真洞
-  const withSnap = buildCurve({ ...common, observed: new Map([['2026-10-09', { at: NOW, fx: null, aumNative: [900, null] }]]) })
+  const withSnap = buildCurve({ ...common, observed: new Map([['2026-10-09', { at: NOW, rates: { usdCny: null, usdHkd: null }, aumNative: [900, null] }]]) })
   const day = withSnap.find((p) => p.day === '2026-10-09')
   assert.equal(day?.origin, 'observed', '有快照的日期必须是实测日')
   assert.equal(day?.aumUsd[1], null, '⚠ 实测日缺的市场必须是 null（真洞）—— 不许拿重建值补上')
@@ -693,8 +966,8 @@ test('失败不进缓存：汇率与资金流本次失败 ⇒ 上游恢复后必
     assert.equal(first.netFlow.sumCny, null, '资金流失败 ⇒ null')
     const fx0 = s.count('fx_susdcny')
     const nf0 = s.count('MoneyFlow')
-    assert.equal(fx0, 1, '汇率失败轮打了一次')
-    assert.equal(nf0, 1, '资金流失败轮打了一次')
+    assert.equal(fx0, 1, `汇率失败轮打了 ${fx0} 次（期望 1 次）`)
+    assert.equal(nf0, 1, `资金流失败轮打了 ${nf0} 次（期望 1 次）`)
 
     // 上游恢复；把"现在"推进到**残缺载荷 TTL（2 分钟）之外**，其余 TTL（30 分钟）之内
     s.fail.clear()

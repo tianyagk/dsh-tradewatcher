@@ -19,6 +19,29 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..')
 const readSrc = (rel: string): string => readFileSync(join(ROOT, rel), 'utf8')
 
 /**
+ * 剥掉块注释与行注释（**只用于"用户可见文案"类断言**）。
+ *
+ * 为什么必须剥：源码注释里会写"页脚 `打开工具 →` 已按用户要求删除"这类**说明历史**的话；
+ * 把注释算进去就等于禁止注释提到那个词 —— 那会逼着后续维护者把历史删掉（信息反而丢了）。
+ * 规则与 `src/host/markdownScan.test.ts` 的 `stripComments` 同源（先块后行；`//` 前不能是 `:` 免得吃掉 URL）。
+ */
+function stripComments(src: string): string {
+  return src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/[^\n]*/g, '$1')
+}
+
+/**
+ * 页头块（`// 页头：` 到页面主体 `entry === null ?` 之间），已剥注释。
+ *
+ * 为什么按块而不是全文：详情页那个"回到工具目录"tooltip 是**合法**的（它是回目录入口，不是被删掉的页标题）；
+ * 用户删掉的是**页头那一行**。按块断言才能既锁住"页头没有标题"，又不误伤别处的正当文案。
+ */
+function headerBlock(src: string): string {
+  const start = src.indexOf('// 页头：')
+  const end = src.indexOf('entry === null', start)
+  return start >= 0 && end > start ? stripComments(src.slice(start, end)) : ''
+}
+
+/**
  * 从 `src/client/index.tsx` 抽出**真实的** `tabs` 字面量（不另抄一份）——
  * 抄一份就必然漂移：页面加/删页签，测试还是绿的。
  * 抽不到 ⇒ 返回空数组（下面的断言会以"少于 6 项"失败，而不是静默通过）。
@@ -142,15 +165,24 @@ export function renderWiringProblems(src: string): string[] {
   need(/detailModel\(entry, data\)/.test(src), '详情页必须由 detailModel(entry, data) 生成（占位/原因只有一份来源）')
   need(/payload\.at\(step\)/.test(src), '回放必须走载荷句柄的 at(step)（本地换帧，不许每帧发请求）')
   need(/entry\?\.load/.test(src), '数据必须来自工具自己的 load()（页面不许另写一份取数）')
-  // 目录页四个要素
-  need(/model\.title/.test(src), '目录页标题未渲染')
-  need(/model\.subtitle/.test(src), '目录页副标题未渲染')
+  // 目录页要素（v0.74.0 起：**没有**页标题/副标题，用户要求删掉那一行）
   need(/model\.categories\.map\(/.test(src), '分类标签行未渲染')
   need(/placeholder: model\.searchPlaceholder/.test(src), '搜索框占位必须来自 catalogModel（不许在页面里另写一份文案）')
   need(/repeat\(3, minmax\(0, 1fr\)\)/.test(src), '卡片网格必须是三列（repeat(3, minmax(0, 1fr))）')
   need(/model\.cards\.map\(/.test(src), '卡片网格未渲染目录页模型给出的卡片')
-  // 卡片四个字段（chip / 标题 / 一句话说明 / 页脚入口文案）
-  for (const field of ['card.chip', 'card.title', 'card.blurb', 'card.action']) need(src.includes(field), `卡片字段未渲染：${field}`)
+  // ⚠ 反向断言：被用户删掉的那三样**不许回来**（模型层的字段删了、页面也不许再渲染）
+  for (const gone of ['model.title', 'model.subtitle', 'card.action']) need(src.includes(gone) === false, `页头标题/计数或卡片页脚入口文案被加回来了：${gone}`)
+  const head = headerBlock(src)
+  need(head !== '', '页头块锚点变了（`// 页头：` … `entry === null ?`），负向断言会失效 —— 请同步锚点')
+  need(head.includes('工具目录') === false, '页头不许再出现页标题「工具目录」（用户要求删掉那一行）')
+  need(head.includes('本插件自带') === false, '页头不许再出现「本插件自带 N 个工具」这句计数')
+  need(head.includes('model.title') === false && head.includes('model.subtitle') === false, '页头不许再渲染目录页模型的标题/副标题')
+  need(/BackIcon/.test(head) && /PAGE_BACK_ACTION/.test(head), '页头必须保留最小返回控件（图标 + 返回）')
+  const visible = stripComments(src)
+  need(visible.includes('打开工具') === false, '卡片页脚入口文案「打开工具」不许再出现在用户可见文案里')
+  // 卡片三个字段（chip / 标题 / 一句话说明）——整卡可点，所以没有页脚入口文案
+  for (const field of ['card.chip', 'card.title', 'card.blurb']) need(src.includes(field), `卡片字段未渲染：${field}`)
+  need(/\.\.\.CARD_PROPS/.test(src) && /style: CARD_STYLE/.test(src) && /React\.createElement\(\s*CARD_TAG,/.test(src), '卡片必须用 toolCardView 的常量建（原生 button 语义 + 阴影圆角的唯一来源）')
   // 详情页五个区
   for (const field of ['model.kpi.cells.map(', 'model.curve.empty', 'model.pie.empty', 'model.market.columns.map(', 'model.boundary.lines.map(']) {
     need(src.includes(field), `详情页骨架未渲染：${field}`)
@@ -163,8 +195,9 @@ export function renderWiringProblems(src: string): string[] {
   need(/model\.market\.rowNotes\[i\]/.test(src), '市场表的逐行原因必须渲染（缺数据行要显示「未取到 + 原因」）')
   need(/model\.extras\.map\(/.test(src), '附加块（A股净流入单列）必须渲染')
   need(/model\.status/.test(src), '状态行（数据时刻/来源/原因）必须渲染')
-  // 返回按钮：只有拿到 onBack 才渲染（null ⇒ 不渲染）
+  // 返回控件：只有拿到 onBack 才渲染（null ⇒ 不渲染）；**图标 + `返回` 文案成对**（用户要"一个小倒退按钮"）
   need(/props\.onBack === null\s*\?\s*null/.test(src), '没有可返回的页时不许渲染返回按钮')
+  need(/React\.createElement\(BackIcon, null\),\s*PAGE_BACK_ACTION/.test(src), '返回控件必须是「图标 + 返回文案」成对出现（缺一个都算把控件做丢）')
   // ④ 边界声明（含「不是真实跨境资金净流入」这条免责）与状态行**不许复用 tw-hint**：
   // 那个类在紧凑/隐身视图下 display:none（styles.ts:90-98）⇒ 复用等于把免责声明藏起来。
   need(/'data-role': 'tool-legal'/.test(src), '边界声明区块必须带 data-role="tool-legal"（可断言且可定位）')
@@ -181,13 +214,19 @@ export function renderWiringProblems(src: string): string[] {
   return bad
 }
 
-test('目录页/详情页渲染接线齐全；九种"关掉渲染/藏起免责"的注入各让检查非空', () => {
+test('目录页/详情页渲染接线齐全；十四种"关掉渲染/藏起免责/删掉控件"的注入各让检查非空', () => {
   const src = readSrc('src/client/ToolsPage.tsx')
   const bad = renderWiringProblems(src)
   assert.deepEqual(bad, [], `渲染接线检查未通过：${bad.join(' ／ ')}`)
   const injections: Array<{ name: string; mutate: (s: string) => string; hit: RegExp }> = [
     { name: '卡片网格改成两列', mutate: (s) => s.replace('repeat(3, minmax(0, 1fr))', 'repeat(2, minmax(0, 1fr))'), hit: /三列/ },
-    { name: '页脚入口文案不再渲染', mutate: (s) => s.replace('}, card.action),', '}, card.title),'), hit: /card\.action/ },
+    // v0.74.0（用户三项改动）：页头那一行 / 卡片入口文案 / 卡片视觉与语义
+    { name: '页标题那一行加回来', mutate: (s) => s.replace('            PAGE_BACK_ACTION,\n          ),', "            PAGE_BACK_ACTION,\n          ), React.createElement('div', null, '工具目录'),"), hit: /页标题|页头/ },
+    { name: '卡片页脚入口文案加回来', mutate: (s) => s.replace('}, card.blurb),', "}, card.blurb), React.createElement('div', null, '打开工具 →'),"), hit: /打开工具/ },
+    { name: '卡片换成 div（丢按钮语义）', mutate: (s) => s.replace('React.createElement(\n              CARD_TAG,', "React.createElement(\n              'div',"), hit: /CARD_TAG|toolCardView/ },
+    { name: '卡片不再用 CARD_PROPS（键盘可达与 type=button 没了）', mutate: (s) => s.replace('...CARD_PROPS,\n                key: card.id,', 'key: card.id,'), hit: /CARD_PROPS|toolCardView/ },
+    { name: '卡片不再用 CARD_STYLE（阴影/圆角没了）', mutate: (s) => s.replace('style: CARD_STYLE,', "style: { cursor: 'pointer' },"), hit: /CARD_STYLE|toolCardView/ },
+    { name: '返回控件只剩文字（图标丢了）', mutate: (s) => s.replace('React.createElement(BackIcon, null),\n            PAGE_BACK_ACTION,', 'PAGE_BACK_ACTION,'), hit: /图标/ },
     { name: '搜索框占位改写字面量（绕过唯一来源）', mutate: (s) => s.replace('placeholder: model.searchPlaceholder', "placeholder: '搜索'"), hit: /搜索框占位/ },
     { name: '空数据时不再渲染占位文案', mutate: (s) => s.replace('model.pie.empty', "''"), hit: /model\.pie\.empty/ },
     // v0.72.0：接数据后的四个接线点，各自配一条注入

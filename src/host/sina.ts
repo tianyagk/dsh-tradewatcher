@@ -435,9 +435,20 @@ export function parseSinaFx(payload: string, symbol: string): SinaFxQuote {
   return { rate: sane ? rate : null, prev, time: parts[0] === undefined ? null : String(parts[0]).trim(), name: parts[9] === undefined ? null : String(parts[9]).trim() }
 }
 
-/** 拉美元兑人民币在岸价（新浪 `fx_susdcny`） */
+/**
+ * 拉一条新浪外汇行情（`fx_*` 符号，例如 `fx_susdcny` 在岸人民币 / `fx_susdhkd` 美元兑港元即期）。
+ * 两条的下标布局一致（见 `parseSinaFx`）。
+ */
+export async function fetchSinaFxRate(symbol: string): Promise<SinaFxQuote> {
+  const sym = symbol.trim()
+  // ⚠ 币种对是 6–8 个字母：`fx_susdcny` / `fx_susdhkd` / `fx_shkdcny`（早先写成恰好 6 个 ⇒ 直接把请求挡掉）
+  if (!/^fx_[a-z]{6,8}$/.test(sym)) throw new Error(`外汇符号不合法：${symbol}`)
+  return parseSinaFx(await sinaText(`https://hq.sinajs.cn/list=${sym}`), sym)
+}
+
+/** 拉美元兑人民币在岸价（新浪 `fx_susdcny`）—— `fetchSinaFxRate` 的便捷包装 */
 export async function fetchSinaFxUsdCny(): Promise<SinaFxQuote> {
-  return parseSinaFx(await sinaText('https://hq.sinajs.cn/list=fx_susdcny'), 'fx_susdcny')
+  return fetchSinaFxRate('fx_susdcny')
 }
 
 /** 拉取新浪 ETF 排行（成交额或涨跌幅降序） */

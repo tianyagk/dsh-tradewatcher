@@ -1,8 +1,10 @@
 /**
  * 工具箱注册表 + 目录页/详情页模型的断言（纯函数层）。
  *
- * 覆盖（每条都配反例注入，证据见 `docs/AUDIT-IMPL43.md` §3）：
- *   ① 目录页模型渲染出 **1 张卡片**且字段齐全（chip / 标题 / 一句话说明 / 页脚入口文案）；
+ * 覆盖（每条都配反例注入，证据见 `docs/AUDIT-IMPL43.md` §3、§7）：
+ *   ① 目录页模型渲染出 **1 张卡片**且字段齐全（chip / 标题 / 一句话说明）；
+ *   ①′ 卡片的**标题与 chip 逐字**等于用户口径（不许自行改名/改 chip）—— v0.74.0；
+ *   ①″ 页标题 / 计数 / 卡片页脚入口文案**已从模型里删除**（用户要求删掉页头那一行）—— v0.74.0；
  *   ② 搜索框的**本地过滤**生效（命中/不命中/大小写/多词 AND/空查询）；
  *   ③ 分类标签行**只有「全部」**一个；
  *   ⑤ 注册表新增条目**不改变既有卡片排序规则**（顺序 = 注册顺序，新条目只追加）。
@@ -14,8 +16,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
-  CARD_ACTION,
-  CATALOG_TITLE,
   CATEGORY_TABS,
   NO_DATA_WHY,
   NO_MATCH,
@@ -30,6 +30,7 @@ import {
   toolById,
   type ToolEntry,
 } from './toolRegistry.ts'
+import * as ToolText from './toolText.ts'
 import { cakeTool } from './tools/cake.ts'
 
 /** 断言用的固定条目（不碰真实注册表；`sections: []` 时 detailModel 走"缺区"回退） */
@@ -37,12 +38,11 @@ function fixture(id: string, name: string, blurb: string, chip: string, category
   return { id, name, blurb, chip, category, sections: [], boundary: [] }
 }
 
-const CAKE_LIKE = fixture('cake', '五市场蛋糕', '把五个市场的宽基 ETF 规模切成一块蛋糕', '蛋糕', 'flow')
+const CAKE_LIKE = fixture('cake', '蛋糕示例', '把五个市场的宽基 ETF 规模切成一块蛋糕', '蛋糕', 'flow')
 const OTHER = fixture('zeta', '估值快照', '看一眼估值与位置', '估值', 'valuation')
 
-test('① 目录页模型：1 张卡片且字段齐全（chip / 标题 / 一句话说明 / 页脚入口文案）', () => {
+test('① 目录页模型：1 张卡片且字段齐全（chip / 标题 / 一句话说明）', () => {
   const model = catalogModel()
-  assert.equal(model.title, CATALOG_TITLE, `页标题必须是「${CATALOG_TITLE}」`)
   assert.equal(model.searchPlaceholder, SEARCH_PLACEHOLDER, `搜索框占位文案必须是「${SEARCH_PLACEHOLDER}」`)
   assert.equal(model.cards.length, 1, `本批只有蛋糕工具 ⇒ 目录页必须恰好 1 张卡片（实得 ${model.cards.length}）`)
   const card = model.cards[0]
@@ -50,13 +50,42 @@ test('① 目录页模型：1 张卡片且字段齐全（chip / 标题 / 一句�
   assert.equal(card.chip, cakeTool.chip)
   assert.equal(card.title, cakeTool.name)
   assert.equal(card.blurb, cakeTool.blurb)
-  assert.equal(card.action, CARD_ACTION, '页脚入口文案必须来自唯一来源（CARD_ACTION）')
   // 字段齐全：一个都不许是空串（空串在页面上就是"没有内容"，等于卡片缺胳膊）
   for (const [k, v] of Object.entries(card)) assert.equal(String(v).trim() === '', false, `卡片字段 ${k} 不许为空`)
+  assert.deepEqual(Object.keys(card).sort(), ['blurb', 'category', 'chip', 'id', 'title'], '卡片的字段集合是契约（多一个字段就意味着页面要渲染一处新文案）')
   assert.equal(model.empty, null, '有卡片 ⇒ 不该有"没有匹配"的空态')
-  // 副标题说的是真实数量（不是写死的文案）
-  assert.match(model.subtitle, /1/, `副标题应给出真实数量：${model.subtitle}`)
-  assert.equal(model.subtitle.includes(String(TOOL_ENTRIES.length)), true, '副标题里的数量必须来自注册表长度')
+})
+
+test('①′ 工具名与 chip 逐字锁定用户口径（不许自行改名/改 chip）—— 反例注入必败', () => {
+  const card = catalogModel().cards[0]
+  // 逐字断言（这是用户明确给的名字，不是"从实现里读出来的期望值"）
+  assert.equal(card.title, '全球资金流蛋糕模型', `卡片标题必须逐字等于「全球资金流蛋糕模型」（实得 ${JSON.stringify(card.title)}）`)
+  assert.equal(card.chip, '宏观 | 全球轮动', `chip 必须逐字等于「宏观 | 全球轮动」（实得 ${JSON.stringify(card.chip)}）`)
+  // 工具文件里也必须是同一个字面量（防止有人只改卡片模型、不改条目）
+  assert.equal(cakeTool.name, '全球资金流蛋糕模型')
+  assert.equal(cakeTool.chip, '宏观 | 全球轮动')
+  // 反例注入：把名字改回旧名 ⇒ 上面第一条必须失败（证明断言不是恒真）
+  const renamed = { ...card, title: '五市场蛋糕' }
+  assert.throws(() => assert.equal(renamed.title, '全球资金流蛋糕模型', '反例上必须失败'), /反例上/, '⚠ 反例注入（改名）必须让逐字断言失败')
+  const rechip = { ...card, chip: '蛋糕' }
+  assert.notEqual(rechip.chip, '宏观 | 全球轮动', '⚠ 反例注入（改 chip）必须让逐字断言失败')
+})
+
+test('①″ 页标题 / 计数 / 卡片页脚入口文案已删除（用户 v0.74.0 要求）', () => {
+  const model = catalogModel()
+  // 模型层：那三个字段不该存在（留着就是"没人渲染的死字段"）
+  assert.equal('title' in model, false, '目录页模型不许再有 title（页标题已删）')
+  assert.equal('subtitle' in model, false, '目录页模型不许再有 subtitle（计数那一行已删）')
+  assert.equal('action' in model.cards[0], false, '卡片不许再有 action（页脚「打开工具 →」已删）')
+  // 文案层：常量也不许再导出（否则下一个人一定会把它加回来）
+  assert.equal('CATALOG_TITLE' in ToolText, false, 'toolText 不许再导出 CATALOG_TITLE')
+  assert.equal('CARD_ACTION' in ToolText, false, 'toolText 不许再导出 CARD_ACTION')
+  // 注意：`工具目录` 这四个字**仍然合法**（详情页的"← 工具目录"是回目录入口，不在被删的那一行里）；
+  // 被删的是"页头那一个页标题"，模型层已按字段锁住（上面两条 + toolsPage.test.ts 的渲染检查）。
+  const text = JSON.stringify(ToolText)
+  for (const gone of ['打开工具', '本插件自带']) {
+    assert.equal(text.includes(gone), false, `文案模块里不许再出现「${gone}」：${text.slice(0, 200)}`)
+  }
 })
 
 test('② 搜索框本地过滤生效：命中 / 不命中 / 大小写 / 多词 AND / 空查询', () => {
