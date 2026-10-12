@@ -11,6 +11,40 @@
 
 ---
 
+## v0.61.0 — 组件标题用英文，中文只留在描述行
+
+用户要求：插件名与各组件名用**英文**；中文解释**只出现在组件详情（描述行）**。
+
+### 改动（只动 locale 元数据）
+
+`locale/**`（13 个 json）的 **`title` 全部英文**，`description` 保持中文（`zh`）/ 英文（`en`）：
+
+| 行 | `title` | 描述（中文环境） |
+| --- | --- | --- |
+| core | `Tradewatcher · Core` | 行情条 / 详情图 / 数据层与共享路由 |
+| calendar | `Tradewatcher · Calendar` | 财经日历：宏观数据 / 新股 / 财报 / 分红 |
+| watchlist | `Tradewatcher · Watchlist` | 自选分组、行业板块与异动队列 |
+| portfolio | `Tradewatcher · Portfolio` | 持仓盈亏、逐笔流水与费用 |
+| market | `Tradewatcher · Market` | 涨跌家数与护盘信号 |
+| cloudmap | `Tradewatcher · Cloudmap` | 大盘云图（行业热力，纯前端） |
+
+> **最容易漏的一条**：解析规则是 `text.zh ?? text.en` ⇒ **`zh.json` 的 `title` 也必须是英文**，只改 `en` 的话中文界面仍显示中文标题。两语都已写英文。
+
+### 我给的规格里有一处自相矛盾（实现者指出并正确处理）
+
+我的断言写「`title` 匹配 `^[\x20-\x7E]+$`（纯 ASCII）」，但**同一张卡给的示例**用了 `Tradewatcher · Core`，其中 `·` 是 U+00B7 —— 不在 ASCII 可打印区间内。严格断言会把示例自己判红。
+采纳的处理：允许集 = 可打印 ASCII **+ `·`**（注释写明原因），并**另加一条真正的本意断言 —— 标题不得含 CJK**（含 CJK 标点与全角）。若将来要严格 ASCII，把分隔符换成 `: ` 即可（一条 `sed`，已写进报告）。
+
+### 验证
+
+414 条测试 × 2 时区全绿（413 → 414，EXIT=0）；`build.mjs` / `cordis.patch.yml` / `package.json` / `src/index.ts` **零改动**（只动 13 个 locale 文件 + 测试 + 报告）。
+断言设计成「真实文件必须返回空、注入必须非空」⇒ **非恒真是结构性保证**：抽出 `localeMetaViolations(entries)`（标题非空 + 允许集 + 不得含 CJK；描述非空；`zh` 描述必须含中文；`en` 描述不得含 CJK）。
+**改真文件反例**（把 `locale/rows/cloudmap/zh.json` 的 `title` 写回中文）⇒ `fail 2`，失败信息**直接点名原因**（"title 含非允许字符" + "title 含 CJK —— 标题必须是英文"）；恢复后逐字一致、14/14 全绿。另 3 条注入（title 写回中文 / zh 描述失去中文 / title 混入全角括号）固化进用例。
+
+### 结果
+
+插件列表现在显示：六个**英文标题**（`Tradewatcher · Core / Calendar / Watchlist / Portfolio / Market / Cloudmap`）+ **全中文描述行**。若标题再出现中文，红的就是那条 CJK 断言。
+
 ## v0.60.0 — 六个组件行可区分：core 留裸包名 + 五行子路径 + locale 元数据
 
 用户反馈：插件列表里**六行标题都叫 `dsh-tradewatcher`**，分不清哪个是云图。

@@ -1,6 +1,6 @@
 {
   "meta": {
     "title": "Tradewatcher · Core",
-    "description": "行情条 / 详情图 / 数据层与共享路由"
+    "description": "Quotes strips, detail charts, data layer and shared routes"
   }
 }

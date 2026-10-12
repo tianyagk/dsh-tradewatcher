@@ -548,30 +548,91 @@ test('真宿主 ctx 是 Proxy：访问未 inject 的属性会抛 —— apply �
   assert.equal(coreKernel()?.started, true, '内核仍应启动')
 })
 
-test('task-8：六行标题各自可区分 —— 子路径 locale 元数据可解析、六个标题互不相同（防退回同名）', () => {
+/**
+ * 标题允许的字符集：**可打印 ASCII + 分隔符 `·`（U+00B7）**。
+ *
+ * ⚠ 任务卡里写的是严格 `^[\x20-\x7E]+$`，但**同一张卡给的示例标题 `Tradewatcher · Core` 自带 `·`** ——
+ * 严格 ASCII 断言会把卡里的示例判红。这里按这条要求的**本意**实现（用户要的是"标题用英文"，
+ * 即标题不得含中文），把 `·` 显式列进允许集；真要严格 ASCII，把分隔符换成 `: ` 即可（见 AUDIT-IMPL36 §8）。
+ */
+const TITLE_OK = /^[\x20-\x7E·]+$/
+/** CJK 及其标点/全角字符：标题里一个都不许有（描述里允许且 zh 必须含） */
+const CJK_RE = /[\u3400-\u9FFF\u3000-\u303F\uFF00-\uFFEF]/
+
+interface LocaleEntry { dir: string; lang: 'en' | 'zh'; title: string; description: string }
+
+/**
+ * 一份 locale 元数据的完整检查，返回**失败原因**（空 = 通过）。
+ * 同一份检查既跑真实文件（必须空）、也跑下面的注入（必须非空）⇒ 断言**非恒真**。
+ */
+function localeMetaViolations(entries: readonly LocaleEntry[]): string[] {
+  const fail: string[] = []
+  for (const e of entries) {
+    const where = `${e.dir}/${e.lang}.json`
+    if (e.title.trim() === '') fail.push(`${where} 的 title 为空`)
+    if (!TITLE_OK.test(e.title)) fail.push(`${where} 的 title 含非允许字符（只允许可打印 ASCII 与 ·）：${e.title}`)
+    if (CJK_RE.test(e.title)) fail.push(`${where} 的 title 含 CJK —— 标题必须是英文：${e.title}`)
+    if (e.description.trim() === '') fail.push(`${where} 的 description 为空`)
+    if (e.lang === 'zh' && !CJK_RE.test(e.description)) fail.push(`${where} 的 description 必须含中文（中文解释只留在描述行）：${e.description}`)
+    if (e.lang === 'en' && CJK_RE.test(e.description)) fail.push(`${where} 的 description 应是英文：${e.description}`)
+  }
+  return fail
+}
+
+test('task-8/9：六行标题各自可区分 + 标题必须英文（两语都是）、中文只留在 zh 描述行', () => {
   const rows = parseRowsFromText(readFileSync(join(ROOT, 'cordis.patch.yml'), 'utf8'))
   const pkg = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')) as { exports: Record<string, unknown>; files: string[] }
   // ① `readPluginMeta` 的入口是 `<specifier>/locale/en.json`（@deepseek-ai/dsh-app-boot 的 readPluginMeta）⇒
   //    en.json 必须存在（否则整个 locale 目录都不会被读），且 exports 必须把它暴露出去。
+  const entries: LocaleEntry[] = []
   const titles = new Map<string, string>()
   for (const r of rows) {
     const dir = r.row === 'core' ? 'locale' : `locale/rows/${r.row}`
-    const en = JSON.parse(readFileSync(join(ROOT, dir, 'en.json'), 'utf8')) as { meta?: { title?: string; description?: string } }
-    const zh = JSON.parse(readFileSync(join(ROOT, dir, 'zh.json'), 'utf8')) as { meta?: { title?: string; description?: string } }
-    for (const [lang, file] of [['en', en], ['zh', zh]] as const) {
-      assert.equal(typeof file.meta?.title, 'string', `${dir}/${lang}.json 必须有 meta.title`)
-      assert.ok((file.meta?.title ?? '').trim() !== '', `${dir}/${lang}.json 的 meta.title 不许为空`)
-      assert.equal(typeof file.meta?.description, 'string', `${dir}/${lang}.json 必须有 meta.description`)
+    for (const lang of ['en', 'zh'] as const) {
+      const raw = JSON.parse(readFileSync(join(ROOT, dir, `${lang}.json`), 'utf8')) as { meta?: { title?: string; description?: string } }
+      assert.equal(typeof raw.meta?.title, 'string', `${dir}/${lang}.json 必须有 meta.title`)
+      assert.equal(typeof raw.meta?.description, 'string', `${dir}/${lang}.json 必须有 meta.description`)
+      entries.push({ dir, lang, title: raw.meta?.title ?? '', description: raw.meta?.description ?? '' })
     }
     // exports 必须让 `<specifier>/locale/*.json` 可解析（Node 的 exports 门禁：没映射就 ERR_PACKAGE_PATH_NOT_EXPORTED）
     const pattern = r.row === 'core' ? './locale/*' : `./rows/${r.row}/locale/*`
     assert.equal(pattern in pkg.exports, true, `package.json 缺少 exports["${pattern}"]（locale 资源解析不到）`)
     assert.equal(r.row === 'core' ? './rows/core' in pkg.exports : `./rows/${r.row}` in pkg.exports, r.row !== 'core', `core 行必须留在裸包名上（不给自己开子路径）`)
-    titles.set(r.row, zh.meta?.title ?? '')
+    titles.set(r.row, entries[entries.length - 1].title) // zh 是最后读的一个 ⇒ 中文环境实际取到的那个
   }
-  // ② 六个标题**互不相同** —— 这就是用户在插件列表里看到的「哪个是云图」
+  // ② 真实文件必须全过（标题英文、zh 描述含中文、en 描述英文）
+  const fail = localeMetaViolations(entries)
+  assert.deepEqual(fail, [], `locale 元数据检查未通过（失败项：${fail.join(' ／ ')}）`)
+  // ③ **zh 的 title 也必须是英文** —— 解析是 `text.zh ?? text.en`，中文环境取的是 zh 键（最容易漏的一条）
+  for (const e of entries) assert.equal(CJK_RE.test(e.title), false, `${e.dir}/${e.lang}.json 的 title 必须是英文`)
+  // ④ 六个标题**互不相同** —— 这就是用户在插件列表里看到的「哪个是 Cloudmap」
   assert.equal(titles.size, rows.length, '六行都要有自己的标题')
   assert.equal(new Set(titles.values()).size, rows.length, `六个标题必须互不相同（实得 ${JSON.stringify([...titles.values()])}）`)
-  // ③ 发布清单要带上 locale（否则打包后标题解析不到）
+  // ⑤ 发布清单要带上 locale（否则打包后标题解析不到）
   assert.equal(pkg.files.includes('locale'), true, 'package.json 的 files 必须包含 locale')
+})
+
+test('task-9：三种注入各让 locale 检查非空（title 写回中文 / zh 描述失去中文 / title 混入全角）—— 证明断言非恒真', () => {
+  const rows = parseRowsFromText(readFileSync(join(ROOT, 'cordis.patch.yml'), 'utf8'))
+  const real: LocaleEntry[] = []
+  for (const r of rows) {
+    const dir = r.row === 'core' ? 'locale' : `locale/rows/${r.row}`
+    for (const lang of ['en', 'zh'] as const) {
+      const raw = JSON.parse(readFileSync(join(ROOT, dir, `${lang}.json`), 'utf8')) as { meta?: { title?: string; description?: string } }
+      real.push({ dir, lang, title: raw.meta?.title ?? '', description: raw.meta?.description ?? '' })
+    }
+  }
+  assert.deepEqual(localeMetaViolations(real), [], '基准（未注入）必须通过 —— 否则下面的注入证明无效')
+  const injections: Array<{ name: string; mutate: (e: LocaleEntry[]) => LocaleEntry[]; hit: RegExp }> = [
+    { name: 'title 写回中文（用户当初的诉求就是不要这个）', mutate: (e) => e.map((x) => (x.dir === 'locale/rows/cloudmap' && x.lang === 'zh' ? { ...x, title: '盯盘 · 云图' } : x)), hit: /title 含 CJK/ },
+    { name: 'zh 描述失去中文（中文解释没地方放了）', mutate: (e) => e.map((x) => (x.lang === 'zh' && x.dir === 'locale' ? { ...x, description: 'quotes and charts' } : x)), hit: /必须含中文/ },
+    { name: 'title 混入全角括号（不是 CJK 字，但也不是 ASCII）', mutate: (e) => e.map((x) => (x.dir === 'locale' && x.lang === 'en' ? { ...x, title: 'Tradewatcher（Core）' } : x)), hit: /非允许字符|含 CJK/ },
+  ]
+  for (const { name, mutate, hit } of injections) {
+    const mutated = mutate(real)
+    assert.notDeepEqual(mutated, real, `注入「${name}」必须真的改到了数据（否则这条证明无效）`)
+    const fail = localeMetaViolations(mutated)
+    assert.ok(fail.length > 0, `注入「${name}」必须被抓到（实际一条都没报 ⇒ 断言恒真）`)
+    assert.match(fail.join(' ／ '), hit, `注入「${name}」报的原因应是预期的：${JSON.stringify(fail)}`)
+  }
 })

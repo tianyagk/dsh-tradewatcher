@@ -238,3 +238,79 @@ cd /home/hu/workspace/Servers/dsh/Dev/dsh-tradewatcher && git checkout HEAD -- c
 4. **两处旧文本随本方案过时，未改**（不在 task-8 的 write scope，且 Lead 正在提交，避免与提交打架）：
    - `docs/DESIGN-SUBPLUGINS.md:3` 的抬头仍写「…每行 `config: { row: … }`、**`name` 全为 `dsh-tradewatcher`**」—— 现行是 core 裸名 + 其余五行 `/rows/<row>`；
    - `CHANGELOG.md:48`（v0.59.0 条目）同类表述 —— 那是**当时的事实**，建议在 v0.60.0 条目里写明"name 不再全是裸包名"即可，不必回头改写历史条目。
+
+---
+
+# 8. task-9 追加：标题改英文（中文只留在描述行）
+
+> 用户重启确认方案 C 生效（面板正常、六个组件可区分）后提出的新要求。
+
+## 8.1 六个标题 + 中英描述对照表（`locale/**`，13 个文件）
+
+| 行 | `title`（**两语都英文**） | `description`（`en.json`） | `description`（`zh.json`） |
+|---|---|---|---|
+| core（包级） | `Tradewatcher · Core` | Quotes strips, detail charts, data layer and shared routes | 行情条 / 详情图 / 数据层与共享路由 |
+| calendar | `Tradewatcher · Calendar` | Economic calendar: macro data, IPOs, earnings, dividends | 财经日历：宏观数据 / 新股 / 财报 / 分红 |
+| watchlist | `Tradewatcher · Watchlist` | Watchlist groups, industry boards and the anomaly queue | 自选分组、行业板块与异动队列 |
+| portfolio | `Tradewatcher · Portfolio` | Position P&L, per-trade ledger and fees | 持仓盈亏、逐笔流水与费用 |
+| market | `Tradewatcher · Market` | Advance/decline breadth and the rescue-signal monitor | 涨跌家数与护盘信号 |
+| cloudmap | `Tradewatcher · Cloudmap` | Market cloud map (industry heat), client-side only | 大盘云图（行业热力，纯前端） |
+
+**最容易漏的一条（卡里已点名，这里再记一次）**：解析是 `text.zh ?? text.en`
+（`dsh-client-locale` 的 `resolveText`：`fallbackChain(active).reduceRight((r, loc) => text[localeKey(loc)] ?? r, text.en)`）⇒
+**中文环境下取的是 `zh.json` 的 `title`**。只改 `en.json` 的话中文界面仍是中文标题 —— 所以 `zh.json` 的 `title` 也写英文，
+中文只放在 `zh.json` 的 `description` 里。
+
+## 8.2 ⚠ 任务卡里的一处自相矛盾（已按本意处理，请确认）
+
+- 卡里的**断言**是「`title` 匹配 `^[\x20-\x7E]+$`（纯 ASCII）」；
+- 但**同一张卡给的示例标题**是 `Tradewatcher · Core` —— 那个 `·` 是 **U+00B7**（不在 `\x20-\x7E` 里）。
+
+⇒ 严格 ASCII 断言会把卡里的示例自己判红。**我按这条要求的本意实现**（用户要的是"标题用英文"）：
+断言拆成两条 —— ① 允许集 = 可打印 ASCII **+ `·`**（`/^[\x20-\x7E·]+$/`）；② **标题不得含 CJK**（`/[\u3400-\u9FFF\u3000-\u303F\uFF00-\uFFEF]/`，覆盖中日韩字、CJK 标点、全角字符）。
+要继续用 `·` 就无需改动；**若你要严格 ASCII**，把分隔符换成 `: ` 即可（一条命令）：
+
+```bash
+cd /home/hu/workspace/Servers/dsh/Dev/dsh-tradewatcher && sed -i 's/ · /: /g' locale/*.json locale/rows/*/*.json
+```
+
+## 8.3 断言与反例证据
+
+**断言（`src/index.test.ts`）**：抽出可直接复用的 `localeMetaViolations(entries)`（返回失败原因列表），
+对 13 个文件的 26 条元数据统一检查：`title` 非空 + 允许集 + **不得含 CJK**；`description` 非空；
+`zh` 描述**必须含中文**；`en` 描述**不得含 CJK**。真实文件必须返回空 ⇒ 失败时红的那行直接点名原因。
+
+**反例注入（改真实文件，贴输出后恢复）** —— 把 `locale/rows/cloudmap/zh.json` 的 `title` 写回中文：
+
+```
+ℹ tests 14 / pass 12 / fail 2
+AssertionError: locale 元数据检查未通过
+  （失败项：locale/rows/cloudmap/zh.json 的 title 含非允许字符（只允许可打印 ASCII 与 ·）：盯盘 · 云图
+     ／ locale/rows/cloudmap/zh.json 的 title 含 CJK —— 标题必须是英文：盯盘 · 云图）
+AssertionError: 基准（未注入）必须通过 —— 否则下面的注入证明无效
+```
+
+恢复：`cp /tmp/keep-cm.json locale/rows/cloudmap/zh.json` + `diff -q` 逐字一致 → `ℹ tests 14 / pass 14 / fail 0`。
+
+**另有三条注入固化进用例**（不必再手改文件）：① `title` 写回中文；② `zh` 描述失去中文；③ `title` 混入全角括号。
+
+## 8.4 验收（`npm run check`）
+
+```
+ℹ tests 414 / pass 414 / fail 0      （本地时区；TZ=UTC 同）
+ALL HOST CHECKS PASSED (live probes soft)
+```
+
+> 条数 **413 → 414**：task-9 新增 1 条用例（`localeMetaViolations` 的真实检查 + 3 条固化注入）；
+> task-8 那条用例被改写（标题断言从"有 title"升级为"标题必须英文/无 CJK"），条数不变。
+
+末尾四行（倒数第三行是构建分段器的空行）：
+
+```
+> dsh-tradewatcher@0.60.0 build
+> node build.mjs
+
+built lib/index.js + lib/client.js （v0.60.0，客户端片段校验通过：75 项）
+```
+
+`build.mjs` 零改动；`cordis.patch.yml` / `package.json` / `src/index.ts` / `src/client/**` 本轮**未动**（只改了 `locale/**` 与 `src/index.test.ts`）。
