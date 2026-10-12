@@ -194,14 +194,18 @@ test('task-6：六行 manifest —— id ↔ config.row 一一对应，且与代
   const text = raw.split('\n').filter((l) => !l.trim().startsWith('#')).join('\n')
   const rows = parseManifestRows()
   // ⓪ 汇总检查（同一份检查在下面的注入用例里必须非空 ⇒ 断言非恒真）
-  assert.deepEqual(checkManifest(raw), [], '真实 manifest 必须通过全部六行检查')
+  const failReal = checkManifest(raw)
+  assert.deepEqual(failReal, [], `真实 manifest 必须通过全部六行检查（失败项：${failReal.join(' ／ ')}）`)
   // ① id ↔ config.row 一一对应（顺序也锁住：core 必须在第一行 —— 它先提供内核服务）
   assert.deepEqual(
     rows.map((r) => ({ id: r.id, row: r.row })),
     EXPECTED_ROWS.map((r) => ({ id: r.id, row: r.row })),
     '六行必须齐、顺序不变、每行的 config.row 与自己 id 的后缀对应',
   )
-  assert.deepEqual([...new Set(rows.map((r) => r.name))], ['dsh-tradewatcher'], '六行都指向同一个包（聚合包 + 按行切分，不是拆成六个 npm 包）')
+  // 六行仍指向**同一个 npm 包**（只是五行用了本包的 /rows/<row> 子路径来让标题可区分，见 task-8）；
+  // 不许出现别的包名（那才是"拆成六个包"）
+  const names = [...new Set(rows.map((r) => r.name))]
+  for (const n of names) assert.equal(n === BARE_PKG || n.startsWith(`${BARE_PKG}/rows/`), true, `行名必须属于本包（裸名或其 /rows 子路径），实得 ${n}`)
   // ② 数量守恒：解析结果数 == `- id:` 行数（漏 config / 多一行都会红）
   const idLines = text.split('\n').map((l) => l.trim()).filter((l) => l.startsWith('- id:'))
   assert.equal(rows.length, idLines.length, `解析到的行数必须等于 - id: 行数（${rows.length} vs ${idLines.length}）`)
@@ -323,6 +327,9 @@ test('task-60：归属按**实测调用方所在行**（board=core / industries=
   stopMonitor()
 })
 
+/** 本包的**裸包名**：必须恰好出现在一行（core）上，否则浏览器半区不注册（见 checkManifest 的注释与 AUDIT-IMPL36） */
+const BARE_PKG = 'dsh-tradewatcher'
+
 /** 把一个 manifest 文本跑完整套"六行"检查，返回**失败原因**列表（空 = 通过）。
  *  同一份检查既跑真实文件（必须空）、也跑下面每个注入（必须非空）⇒ 断言**非恒真**。 */
 function checkManifest(raw: string): string[] {
@@ -333,25 +340,45 @@ function checkManifest(raw: string): string[] {
   const want = EXPECTED_ROWS.map((r) => `${r.id}=${r.row}`).join(' | ')
   const got = rows.map((r) => `${r.id}=${r.row}`).join(' | ')
   if (want !== got) fail.push(`id↔row 不匹配：期望 ${want}；实得 ${got}`)
-  if (rows.some((r) => r.name !== 'dsh-tradewatcher')) fail.push('有行的 name 不是 dsh-tradewatcher（六行必须是同一个包）')
+  if (rows.some((r) => r.name !== BARE_PKG && !r.name.startsWith(`${BARE_PKG}/rows/`))) fail.push('有行的 name 既不是裸包名也不是本包的 /rows/<row> 子路径')
+  // **裸包名必须恰好一行、且必须在 core 上** —— 这条是「浏览器半区还在不在」的判据（task-8）：
+  // dsh-client-modules 只把裸包名当成 client source（`exactPackageSpecifier` 对含 `/` 的非 scoped
+  // specifier 返回 undefined，lib/index.js:82-88 配合 :746-747 的 `return void 0`）⇒
+  // **六行全给子路径 ⇒ 浏览器半区整体不注册**（实测：`window.__DSH_BOOT__` 里 `dsh-tradewatcher` 出现 0 次，
+  // 而宿主路由照样 200 ⇒ 静默失败）。详见 docs/AUDIT-IMPL36.md。
+  const bare = rows.filter((r) => r.name === BARE_PKG)
+  if (bare.length !== 1) fail.push(`必须恰好一行用裸包名 ${BARE_PKG}（实测 ${bare.length} 行）⇒ 否则浏览器半区不注册`)
+  else if (bare[0].row !== 'core') fail.push(`裸包名必须留在 core 行上（实测在 ${bare[0].row} 行）`)
+  // 其余功能行必须是自己的子路径（标题由它决定，见 task-8 的 locale 元数据）
+  for (const r of rows) {
+    if (r.row === 'core') continue
+    if (r.name !== `${BARE_PKG}/rows/${r.row}`) fail.push(`功能行 ${r.row} 的 name 应为 ${BARE_PKG}/rows/${r.row}（实得 ${r.name}）`)
+  }
   for (const line of ids) if (!/^- id: tradewatcher-[a-z0-9]+$/.test(line)) fail.push(`id 行不合法（截断/大写/多余字符）：${line}`)
   if (new Set(ids).size !== ids.length) fail.push('id 有重复（Loader 启动即崩）')
   for (const r of rows) if (rowOf({ row: r.row }) !== r.row) fail.push(`代码里的 rowOf 不认 ${r.row}（该行会静默回退成 all）`)
   return fail
 }
 
-test('task-6：四种注入各让"六行检查"非空（改名/大写/数字后缀/漏 config）—— 证明断言非恒真', () => {
+test('task-6/8：八种注入各让"六行检查"非空（改名/大写/数字后缀/漏 config/row 拼错/裸包名不变量三种）—— 证明断言非恒真', () => {
   const raw = readFileSync(join(ROOT, 'cordis.patch.yml'), 'utf8')
   // 注入只改**正文**（剥注释后的文本）：本文件的注释里也写着 `tradewatcher-portfolio` 这类字样，
   // 直接在原文上 replace 会改到注释 ⇒ 被剥掉 ⇒ 注入静默失效（这本身就是个假阴性陷阱，记在这里）。
   const body = raw.split('\n').filter((l) => !l.trim().startsWith('#')).join('\n')
-  assert.deepEqual(checkManifest(body), [], '基准（未注入）必须通过 —— 否则下面的注入证明无效')
+  const failBase = checkManifest(body)
+  assert.deepEqual(failBase, [], `基准（未注入）必须通过 —— 否则下面的注入证明无效（失败项：${failBase.join(' ／ ')}）`)
   const injections: Array<{ name: string; mutate: (s: string) => string; hit: RegExp }> = [
     { name: '改名（小写后缀拼错）', mutate: (s) => s.replace('- id: tradewatcher-portfolio\n', '- id: tradewatcher-portfoliox\n'), hit: /id↔row 不匹配/ },
     { name: '大写残留（正则截断的经典逃检）', mutate: (s) => s.replace('- id: tradewatcher-portfolio\n', '- id: tradewatcher-Portfolio\n'), hit: /id 行不合法|数量不守恒/ },
     { name: '数字后缀（旧 [a-z]+ 正则会把 market2 截成 market）', mutate: (s) => s.replace('- id: tradewatcher-market\n', '- id: tradewatcher-market2\n'), hit: /id↔row 不匹配/ },
     { name: '漏掉 config（该行会静默回退成 all，把别的行那几段又注册一遍）', mutate: (s) => s.replace('      config: { row: market }\n', ''), hit: /数量不守恒/ },
     { name: 'row 值拼错（认不出的 row 静默回退 all）', mutate: (s) => s.replace('config: { row: market }', 'config: { row: marketx }'), hit: /id↔row 不匹配|rowOf 不认/ },
+    // task-8：把 core 也换成子路径 ⇒ **浏览器半区会整体消失**（实测 0 次），断言必须抓到
+    { name: '六行全给子路径（core 也换掉 ⇒ 浏览器半区不注册）', mutate: (s) => s.replace("      name: 'dsh-tradewatcher'\n", "      name: 'dsh-tradewatcher/rows/core'\n"), hit: /必须恰好一行用裸包名|裸包名必须留在 core/ },
+    // task-8：两行抢裸包名 ⇒ 同样要抓到（多了也不行）
+    { name: '两行抢裸包名', mutate: (s) => s.replace("      name: 'dsh-tradewatcher/rows/cloudmap'\n", "      name: 'dsh-tradewatcher'\n"), hit: /必须恰好一行用裸包名/ },
+    // task-8：功能行悄悄退回裸包名 ⇒ 标题又会全都一样
+    { name: '功能行退回裸包名（标题将不可区分）', mutate: (s) => s.replace("      name: 'dsh-tradewatcher/rows/market'\n", "      name: 'dsh-tradewatcher'\n"), hit: /必须恰好一行用裸包名|的 name 应为/ },
   ]
   for (const { name, mutate, hit } of injections) {
     const mutated = mutate(body)
@@ -519,4 +546,32 @@ test('真宿主 ctx 是 Proxy：访问未 inject 的属性会抛 —— apply �
     assert.equal(routes.includes(path), true, `${path} 必须注册（row=all）`)
   }
   assert.equal(coreKernel()?.started, true, '内核仍应启动')
+})
+
+test('task-8：六行标题各自可区分 —— 子路径 locale 元数据可解析、六个标题互不相同（防退回同名）', () => {
+  const rows = parseRowsFromText(readFileSync(join(ROOT, 'cordis.patch.yml'), 'utf8'))
+  const pkg = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')) as { exports: Record<string, unknown>; files: string[] }
+  // ① `readPluginMeta` 的入口是 `<specifier>/locale/en.json`（@deepseek-ai/dsh-app-boot 的 readPluginMeta）⇒
+  //    en.json 必须存在（否则整个 locale 目录都不会被读），且 exports 必须把它暴露出去。
+  const titles = new Map<string, string>()
+  for (const r of rows) {
+    const dir = r.row === 'core' ? 'locale' : `locale/rows/${r.row}`
+    const en = JSON.parse(readFileSync(join(ROOT, dir, 'en.json'), 'utf8')) as { meta?: { title?: string; description?: string } }
+    const zh = JSON.parse(readFileSync(join(ROOT, dir, 'zh.json'), 'utf8')) as { meta?: { title?: string; description?: string } }
+    for (const [lang, file] of [['en', en], ['zh', zh]] as const) {
+      assert.equal(typeof file.meta?.title, 'string', `${dir}/${lang}.json 必须有 meta.title`)
+      assert.ok((file.meta?.title ?? '').trim() !== '', `${dir}/${lang}.json 的 meta.title 不许为空`)
+      assert.equal(typeof file.meta?.description, 'string', `${dir}/${lang}.json 必须有 meta.description`)
+    }
+    // exports 必须让 `<specifier>/locale/*.json` 可解析（Node 的 exports 门禁：没映射就 ERR_PACKAGE_PATH_NOT_EXPORTED）
+    const pattern = r.row === 'core' ? './locale/*' : `./rows/${r.row}/locale/*`
+    assert.equal(pattern in pkg.exports, true, `package.json 缺少 exports["${pattern}"]（locale 资源解析不到）`)
+    assert.equal(r.row === 'core' ? './rows/core' in pkg.exports : `./rows/${r.row}` in pkg.exports, r.row !== 'core', `core 行必须留在裸包名上（不给自己开子路径）`)
+    titles.set(r.row, zh.meta?.title ?? '')
+  }
+  // ② 六个标题**互不相同** —— 这就是用户在插件列表里看到的「哪个是云图」
+  assert.equal(titles.size, rows.length, '六行都要有自己的标题')
+  assert.equal(new Set(titles.values()).size, rows.length, `六个标题必须互不相同（实得 ${JSON.stringify([...titles.values()])}）`)
+  // ③ 发布清单要带上 locale（否则打包后标题解析不到）
+  assert.equal(pkg.files.includes('locale'), true, 'package.json 的 files 必须包含 locale')
 })

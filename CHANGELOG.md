@@ -11,6 +11,49 @@
 
 ---
 
+## v0.60.0 — 六个组件行可区分：core 留裸包名 + 五行子路径 + locale 元数据
+
+用户反馈：插件列表里**六行标题都叫 `dsh-tradewatcher`**，分不清哪个是云图。
+
+### 标题的真实来源（先查清再改）
+
+标题取自 `row.meta.title`，无 meta 才回退 `moduleShortName(name)`；meta 由 **`readPluginMeta(specifier, base)` 按 specifier 解析 `<specifier>/locale/{en,zh}.json`**（源码注释原文：*"A subpath specifier never reads package.json"*）⇒ **子路径本来就是元数据主体**。
+
+### 我的方案被实测否决（记录在此，避免以后重犯）
+
+我原提"六行全用子路径模块名"。实现者**按我的要求先做端到端实测再决定**，结论：**会静默干掉浏览器半区**。
+`dsh-client-modules` 的 `exactPackageSpecifier()`（`:82-88`）对**非 scoped 且含 `/`** 的 specifier 返回 `void 0`，配合 `:746-747` ⇒ **子路径行根本不是 client source**（`resolveMeta → null`）⇒ 该包**一条 client source 都不剩**。
+三态实测（临时实例 `dsh --profile web --port 0 --no-open`，用完即杀；用户 3080 服务未动），探针 = 首页 `__DSH_BOOT__` 里 `{"id":"dsh-tradewatcher"}` 出现次数：
+
+| 态 | 宿主 6 路由 | `/rows` | 日志 | 浏览器半区 |
+| --- | --- | --- | --- | --- |
+| A 基线 v0.59.1 | 全 200 | 六项 | 无 error | **1 次 ✅** |
+| **B 我的方案（六行全子路径）** | 全 200 | 六项 | 无 error | **0 次 ❌ 界面消失** |
+| **C 采纳方案** | 全 200 | 六项 | 无 error | **1 次 ✅** |
+
+态 B 是最阴的一种失败：**日志一个字不报、六个路由全 200、`/rows` 照旧六项**，只有抠首页 HTML 才看得出 —— 与当初"插件服务异常"同款形态。
+另：我原先担心的 composition error **不会发生**（冲突判据是解析后的**包名**，`:871-876`；子路径不构成第二个 source）—— 但代价是**这个包名一条 source 都不剩**，这点我没想到。
+
+### 改动（方案 C）
+
+- `cordis.patch.yml`：**core 行保持裸包名**（保住浏览器半区）+ 另五行用 `dsh-tradewatcher/rows/<row>`，头部注释写明这条硬约束与实测依据。
+- `package.json`：新增 5 个 `/rows/<row>` 宿主入口、6 个 locale 映射、`files` 加 `locale`。
+- 新增 `locale/**`（13 个 json：core + 五行，各 zh/en 标题）。
+- `src/index.test.ts`：+1 条标题/locale 断言 + 3 条**裸包名不变量**注入。
+- `src/index.ts` / `build.mjs` / `src/client/**` 零改动。
+
+**实测标题对照**（直接调真实 `readPluginMeta`）：`dsh-tradewatcher` → `盯盘 · 核心`；`/rows/calendar` → `盯盘 · 自选`… 六个互不相同，即 `盯盘 · 核心 / 日历 / 自选 / 持仓 / 大盘 / 云图`。
+
+### 验证
+
+413 条测试 × 2 时区全绿（412 → 413）；`build.mjs` 零改动。
+**裸包名不变量**（本轮新增的回归闸门）：core 行的 `name` 必须是裸包名 —— 断言 + 反例注入（改成子路径 ⇒ 必须失败）。
+回滚命令（已演练）：`git checkout HEAD -- cordis.patch.yml package.json src/index.test.ts && rm -rf locale`，随后重启 `dsh web`。
+
+### 未做
+
+装机后确认（用户重启）：六行标题可区分 **且** 浏览器半区仍在（面板正常渲染）。
+
 ## v0.59.1 — 修正三处旧文本的错误归因（纯文字与注释，产物逐字不变）
 
 六行方案已恢复（v0.59.0），但三处旧文本仍写着**错误归因**（"同包多行会被整体拒绝"）。

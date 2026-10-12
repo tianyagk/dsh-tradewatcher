@@ -35,22 +35,31 @@
 # ⚠ 改完 **必须重启 `dsh web`** —— 宿主行只在启动时装载，**刷新页面不够**。
 #
 # 回退成单行（用户端若再次异常）：见 docs/AUDIT-IMPL35.md 的「回滚」一节（一条命令）。
+# 行**标题**（插件列表里显示什么）与「为什么 core 必须留在裸包名上」：
+#   · 列表标题取自 `row.meta.title`（没有 meta 时回退 `moduleShortName(name)`）；meta 由 `readPluginMeta(specifier, base)`
+#     解析：**`<specifier>/locale/{en,zh}.json`** 里的 `meta.title` / `meta.description`（@deepseek-ai/dsh-app-boot）。
+#   · ⚠ 硬约束：`dsh-client-modules` 只把**裸包名**当成「客户端半区加载源」——`exactPackageSpecifier()` 对含 `/` 的
+#     **非 scoped** specifier 返回 undefined（`lib/index.js:82-88`，配合 `:746-747` 的 `return void 0`）⇒ 子路径行**不是** client source。
+#     所以**必须有且只有一行保持裸包名**（本文件的 `tradewatcher-core`），否则浏览器半区**整体不注册**：
+#     TCP 路由照样 200、`/rows` 照样六项，**但界面直接没了**（实测：六行全用子路径时，`window.__DSH_BOOT__` 里 `dsh-tradewatcher` 出现 0 次）。
+#   · 其余五行用 `dsh-tradewatcher/rows/<row>`：正好不参与 client 注册（也就不会触发「多个 source」），但各自能解析自己的 locale ⇒ 标题可区分。
+#   · 一句话：**六行不能都给子路径；core 必须留在裸包名 `dsh-tradewatcher` 上。**
 - insert:
     - id: tradewatcher-core
       name: 'dsh-tradewatcher'
       config: { row: core }
     - id: tradewatcher-calendar
-      name: 'dsh-tradewatcher'
+      name: 'dsh-tradewatcher/rows/calendar'
       config: { row: calendar }
     - id: tradewatcher-watchlist
-      name: 'dsh-tradewatcher'
+      name: 'dsh-tradewatcher/rows/watchlist'
       config: { row: watchlist }
     - id: tradewatcher-portfolio
-      name: 'dsh-tradewatcher'
+      name: 'dsh-tradewatcher/rows/portfolio'
       config: { row: portfolio }
     - id: tradewatcher-market
-      name: 'dsh-tradewatcher'
+      name: 'dsh-tradewatcher/rows/market'
       config: { row: market }
     - id: tradewatcher-cloudmap
-      name: 'dsh-tradewatcher'
+      name: 'dsh-tradewatcher/rows/cloudmap'
       config: { row: cloudmap }
