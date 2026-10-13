@@ -1313,7 +1313,7 @@ export function makeAgentTools(
           ts: snapshot.ts,
           trading: snapshot.trading,
           level: snapshot.level,
-          levelLabel: RESCUE_LEVEL_LABEL[snapshot.level],
+          levelLabel: snapshot.level === null ? '休市（非交易日）' : RESCUE_LEVEL_LABEL[snapshot.level],
           score: snapshot.score,
           summary: snapshot.summary,
           indexPct: snapshot.indexPct,

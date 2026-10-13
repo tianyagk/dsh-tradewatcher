@@ -41,14 +41,20 @@ test('P0-4 采样窗口：收盘后下一次是次日 09:25（跨周末则推到
   assert.equal(afterClose.reason, 'closed')
   assert.equal(afterClose.nextLabel, '09-29 09:25')
 
-  // 周五 15:30 → 下周一 09:25（周末整段跳过）
+  // 周五 15:30 → **下一个交易日** 09:25。
+  // ⚠ 2026-10-02 与 10-05 都在国庆假期里（上交所公告：10/1–10/7 休市、10/8 起开市）
+  // ⇒ 下一个交易日是 10-08，不是"下周一"（旧断言把下次采样指进了假期，FIX-5/IMPL48 修掉）
   const fri = samplingWindow(BJ('15:30', '2026-10-02'), { enabled: true, intervalSec: 15, samples: 200 })
-  assert.equal(fri.nextLabel, '10-05 09:25', '周五收盘后应指向下周一')
+  assert.equal(fri.nextLabel, '10-08 09:25', '假期里的周五收盘后应指向假期后的首个交易日')
 
-  // 周六 → 周一
+  // 周六（同样在国庆假期内）→ 10-08
   const sat = samplingWindow(BJ('10:00', '2026-10-03'), { enabled: true, intervalSec: 15, samples: 0 })
   assert.equal(sat.reason, 'weekend')
-  assert.equal(sat.nextLabel, '10-05 09:25')
+  assert.equal(sat.nextLabel, '10-08 09:25')
+
+  // 普通周末（非假期）：周五 15:30 → 下周一 09:25
+  const fri2 = samplingWindow(BJ('15:30', '2026-10-09'), { enabled: true, intervalSec: 15, samples: 200 })
+  assert.equal(fri2.nextLabel, '10-12 09:25', '10-09 是周五（交易日）⇒ 下次是周一 10-12')
 })
 
 test('P0-4 采样窗口：关闭监测时不承诺任何下次时刻', () => {

@@ -732,8 +732,9 @@ export function makeTradeRoutes(
           const posSet = new Set(posSecids.map((x) => x.toUpperCase()))
           const posMissing = q.provenance.missing.filter((m) => posSet.has(m.what.toUpperCase()))
           send(res, 200, {
-            level: snap?.level ?? 0,
-            levelLabel: snap === null ? null : RESCUE_LEVEL_LABEL[snap.level],
+            // 非交易日 ⇒ level 为 null（不出等级）；这里保留 null 供界面显示「休市（非交易日）」
+            level: snap === null ? 0 : snap.level,
+            levelLabel: snap === null ? null : snap.level === null ? '休市（非交易日）' : RESCUE_LEVEL_LABEL[snap.level],
             dayPnl: Math.round(dayPnlBase * 100) / 100,
             dayPnlPct: dayPnlPct === null ? null : Math.round(dayPnlPct * 100) / 100,
             indexPoint: indexRow?.price ?? null,

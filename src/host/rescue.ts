@@ -201,6 +201,8 @@ interface ScoreLogEntry {
   score: number
   /**未乘时点系数的原始分 */
   rawScore: number
+  /** 本次生效的等级线（= 基准线 ÷ 时点系数；供界面/报告显示"为什么是这个等级"） */
+  levelLines?: { t1: number; t2: number; t3: number }
   timeCoef: number
   /**评分引擎版本：口径改动后旧条目仍能说明"当时用的是哪套权重" */
   engine: string
@@ -292,6 +294,18 @@ export function resonanceScore(count: number): number {
   return 0
 }
 
+/**等级线基准（平静 < t1 ≤ 资金异动 < t2 ≤ 疑似护盘 < t3 ≤ 强护盘）；**按时点系数缩放后**使用 */
+export const RESCUE_LEVEL_BASE = [35, 55, 75] as const
+
+/**
+ * 等级线（按时点系数缩放）。系数越大（越靠近尾盘）线越低 ⇒ 越容易出等级；
+ * 系数越小（早盘）线越高 ⇒ 越保守（早盘成交量天然少，不设更严的线会被误读成"有资金托底"）。
+ */
+export function levelLines(coef: number): { t1: number; t2: number; t3: number } {
+  const c = Number.isFinite(coef) && coef > 0 ? coef : 1
+  return { t1: RESCUE_LEVEL_BASE[0] / c, t2: RESCUE_LEVEL_BASE[1] / c, t3: RESCUE_LEVEL_BASE[2] / c }
+}
+
 /**时点系数：午后与尾盘是护盘的典型时点，早盘天量多为情绪 */
 export function timeCoefficient(elapsedMin: number): number {
   if (elapsedMin <= 0) return 0.4
@@ -357,6 +371,13 @@ export interface RescueScoreResult {
   timeCoef: number
   /**Σ 贡献度（= 未乘时点系数的原始分）。与 score 的差全部来自 timeCoef 与四舍五入 */
   rawScore: number
+  /**
+   * 本次生效的**等级线**（= 基准线 {35,55,75} ÷ timeCoef）。
+   *
+   * 等级判据只认它（`raw ≥ line`），`score` 仅用于展示 —— 这样"时点调整"只有一处，
+   * 不会出现"分数乘一次系数、阈值再乘一次"的双重计算。
+   */
+  levelLines: { t1: number; t2: number; t3: number }
 }
 
 const fmt = (v: number | null, unit: string, digits = 2): string => (v === null ? '—' : `${v.toFixed(digits)}${unit}`)
@@ -455,7 +476,19 @@ export function scoreRescue(input: RescueFactorInput): RescueScoreResult {
   const raw = factors.reduce((a, f) => a + f.weight * f.score, 0)
   const coef = input.timeCoef ?? 1
   const score = Math.max(0, Math.min(100, Math.round(raw * coef)))
-  const scaled: RescueLevel = score >= 75 ? 3 : score >= 55 ? 2 : score >= 35 ? 1 : 0
+  /**
+   * 等级线**按时点系数缩放**（唯一一处时点调整；`score` 只用于展示）。
+   *
+   * 为什么把调整做在**线**上而不是分数上（用户给的二选一里的推荐项）：
+   *   - 旧实现是 `score = raw × coef` 再与固定线 `{35,55,75}` 比较 —— 判据里同时躺着"系数"
+   *     与"线"两套机制，任何一处单独调整都会变成双重计算；
+   *   - 现在等级只由 `raw` 与**缩放后的线**比较得出，缩放方向即"越早越保守"：
+   *     早盘 0.4 ⇒ 线升到 87.5/137.5/187.5（>100 的线意味着早盘不可能上「疑似/强」），
+   *     尾盘 1.1 ⇒ 线降到 31.8/50/68.2。
+   * 与旧实现的差异只在取整边界（±1 分），方向唯一：早盘只会更保守、不会更激进。
+   */
+  const lines = levelLines(coef)
+  const scaled: RescueLevel = raw >= lines.t3 ? 3 : raw >= lines.t2 ? 2 : raw >= lines.t1 ? 1 : 0
 
   // 防误报约束（每条都写进归因，不做静默降级）
   const caps: string[] = []
@@ -519,7 +552,7 @@ export function scoreRescue(input: RescueFactorInput): RescueScoreResult {
   const base = level === 0 || hits === '' ? '宽基 ETF 量能与资金流均在常态区间（无异动）' : hits
   const incomplete = missing.length > 0 ? `；因子 ${completeness.available}/${completeness.total}（缺 ${missing.join('、')}，评分偏保守）` : ''
   const summary = `${base}${caps.length > 0 ? ` —— ${caps.join('；')}` : ''}（评分 ${score}，时点系数 ${coef}${incomplete}）`
-  return { score, level, factors, summary, completeness, timeCoef: coef, rawScore: raw }
+  return { score, level, factors, summary, completeness, timeCoef: coef, rawScore: raw, levelLines: lines }
 }
 
 /**
@@ -552,11 +585,64 @@ const hhmmOf = (ts: number): string => shHhmmOf(ts)
 /**YYYY-MM-DD（北京时间自然日）：驱动 todayKey / rollDay / 60 日归档 */
 const dayOf = (ts: number): string => shDayOf(ts)
 
-/**是否处于采样时段（含开盘前 5 分钟与收盘后 5 分钟收口） */
+/**
+ * A股**法定休市日**（整日休市；周末不在此列 —— 由 `shWeekdayOf` 判定）。
+ *
+ * 来源：上海证券交易所《关于上海证券交易所2026年部分节假日休市安排的通知》
+ * （上证公告〔2025〕45号，2025-12-22）：元旦 1/1–1/3、春节 2/15–2/23、清明 4/4–4/6、
+ * 劳动节 5/1–5/5、端午 6/19–6/21、中秋 9/25–9/27、国庆 10/1–10/7（**10/8 起照常开市**）。
+ * 区间里落在周末的日子不用单列（星期判定已经会拦掉）。
+ *
+ * ⚠ 这是**年限快照**：表过期后 `holidayOf` 不再命中 ⇒ 退化为「周末 + 未命中即按交易日」，
+ * 即失败方向是**多采一天**而不是把真交易日误判成休市（后者会漏掉真实信号）。新公告发布后更新本表。
+ */
+export const A_SHARE_HOLIDAYS: readonly { from: string; to: string; name: string }[] = [
+  { from: '2026-01-01', to: '2026-01-03', name: '元旦' },
+  { from: '2026-02-15', to: '2026-02-23', name: '春节' },
+  { from: '2026-04-04', to: '2026-04-06', name: '清明节' },
+  { from: '2026-05-01', to: '2026-05-05', name: '劳动节' },
+  { from: '2026-06-19', to: '2026-06-21', name: '端午节' },
+  { from: '2026-09-25', to: '2026-09-27', name: '中秋节' },
+  { from: '2026-10-01', to: '2026-10-07', name: '国庆节' },
+]
+
+/** 命中法定休市日则给出假期名（按 `YYYY-MM-DD` 字符串比较，无时区参与） */
+export function holidayOf(day: string): { name: string } | null {
+  for (const h of A_SHARE_HOLIDAYS) if (day >= h.from && day <= h.to) return { name: h.name }
+  return null
+}
+
+export interface TradingDayState {
+  trading: boolean
+  /** 非交易日的原因：周末 / 法定假日 */
+  reason: 'weekend' | 'holiday' | null
+  /** 人类可读的假期名（周末为 null） */
+  label: string | null
+}
+
+/**
+ * 交易日判定（纯函数）：周末 + 法定假日。
+ *
+ * 为什么不用「指数当日有没有成交」当主判据：那是**延时行情**，节假日它会回上一交易日的收盘值
+ * （`amount` 也还是上一日的），只能靠时间戳分辨 —— 时间戳在跨零点/半日市/上游陈旧时会给出
+ * 假的「今天有成交」。因此主判据用**离线可判定的日历**（周末 + 上交所公告表）：确定性、零请求、
+ * 不依赖上游；失败方向是「表过期 ⇒ 多采一天」，不会把交易日误判成休市。
+ */
+export function tradingDayState(ts: number): TradingDayState {
+  const dow = shWeekdayOf(ts)
+  if (dow === 0 || dow === 6) return { trading: false, reason: 'weekend', label: null }
+  const hol = holidayOf(dayOf(ts))
+  if (hol !== null) return { trading: false, reason: 'holiday', label: hol.name }
+  return { trading: true, reason: null, label: null }
+}
+
+/**是否处于采样时段（含开盘前 5 分钟与收盘后 5 分钟收口）；**非交易日一律 false** */
 export function inTradingWindow(ts: number): boolean {
   // 星期也必须按北京时间（宿主时区下的星期会错位一天）
   const dow = shWeekdayOf(ts)
   if (dow === 0 || dow === 6) return false
+  // 法定假日：与周末同等处理（假日的"平稳"是假信号，不是平静）
+  if (holidayOf(dayOf(ts)) !== null) return false
   const hhmm = hhmmOf(ts)
   return (hhmm >= '09:25' && hhmm <= '11:35') || (hhmm >= '12:55' && hhmm <= '15:05')
 }
@@ -581,20 +667,20 @@ export function samplingWindow(
   if (!opts.enabled) {
     return { sampling: false, reason: 'disabled', nextAt: null, nextLabel: null, intervalSec, samples: opts.samples }
   }
-  const dow = shWeekdayOf(ts)
   const hhmm = hhmmOf(ts)
   const sampling = inTradingWindow(ts)
   if (sampling) {
     return { sampling: true, nextAt: null, nextLabel: null, intervalSec, samples: opts.samples }
   }
-  const reason: RescueActiveWindow['reason'] =
-    dow === 0 || dow === 6 ? 'weekend' : hhmm > '11:35' && hhmm < '12:55' ? 'noon-break' : 'closed'
-  // 下一个窗口起点：今天剩下的窗口 → 否则回溯到下一个工作日 09:25（周末/假期靠逐日推进）
+  const dayState = tradingDayState(ts)
+  const reason: RescueActiveWindow['reason'] = !dayState.trading
+    ? (dayState.reason === 'holiday' ? 'holiday' : 'weekend')
+    : hhmm > '11:35' && hhmm < '12:55' ? 'noon-break' : 'closed'
+  // 下一个窗口起点：今天剩下的窗口 → 否则回溯到下一个交易日 09:25（周末与法定假日逐日跳过）
   let nextAt: number | null = null
-  for (let i = 0; i < 10 && nextAt === null; i += 1) {
+  for (let i = 0; i < 15 && nextAt === null; i += 1) {
     const day = shDayOf(ts + i * 86_400_000)
-    const wd = shWeekdayOf(Date.parse(`${day}T00:00:00+08:00`))
-    if (wd === 0 || wd === 6) continue
+    if (tradingDayState(Date.parse(`${day}T09:25:00+08:00`)).trading !== true) continue
     for (const w of SAMPLE_WINDOWS) {
       const at = Date.parse(`${day}T${w.from}:00+08:00`)
       if (at > ts) {
@@ -1181,6 +1267,9 @@ export class RescueMonitor {
   /**立即采样一次（手动刷新/非交易时段复盘）；与在飞的定时采样合并 */
   async sampleNow(): Promise<RescueSnapshot> {
     await this.init()
+    // 非交易日：**不采样**（假日里"量能平稳"会被算成一份平静的当日分 —— 那正是假信号）。
+    // 也不发上游请求：按日历就能判定，问上游只是浪费。
+    if (!tradingDayState(Date.now()).trading) return this.snapshot()
     await this.tick()
     return this.snapshot()
   }
@@ -1741,7 +1830,31 @@ export class RescueMonitor {
     if (log.length > 240) log.splice(0, log.length - 240)
   }
 
+  /**
+   * 快照（对外入口）。**非交易日门禁在这里**：休市日不出等级、不显示当日分，理由如实。
+   *
+   * 为什么放在最外层：读取方不止定时采样器（路由、面板手动刷新、agent 工具都走 `snapshot()`），
+   * 只在采样器里拦会让"周末打开面板"照样看到一个等级（实测：本地日志里 10-10 周六 21:44、
+   * 10-11 周日 12:10 各写出过一条 27~30 分的"平静"记录）。
+   */
   snapshot(): RescueSnapshot {
+    const inner = this.snapshotInner()
+    const day = tradingDayState(Date.now())
+    const lines = inner.levelLines ?? levelLines(inner.timeCoef ?? 1)
+    if (day.trading) return { ...inner, levelLines: lines, nonTrading: null }
+    const what = day.reason === 'weekend' ? '周末休市' : `法定假日休市（${day.label ?? '节假日'}）`
+    return {
+      ...inner,
+      trading: false,
+      level: null,
+      score: 0,
+      levelLines: lines,
+      nonTrading: { reason: day.reason === 'holiday' ? 'holiday' : 'weekend', label: day.label },
+      summary: `休市（非交易日）：${what} —— 今天不是交易日，不采样、不出等级、不写当日分`,
+    }
+  }
+
+  private snapshotInner(): RescueSnapshot {
     if (this.lastSnapshot === null && this.file.lastSnapshot != null) {
       // 兜底：本次会话还没采到数据（例如收盘后重启），用上次成功快照，注明为旧数据
       const p = this.file.lastSnapshot

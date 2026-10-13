@@ -396,11 +396,18 @@ export function RescuePanel(props: {
       })
   }
 
+  /**
+   * 非交易日（周末/法定假日）：**不出等级** —— 显示「休市（非交易日）」而不是「平静」。
+   * 宿主给的 `level` 此时是 `null`，这里的 `0` 只用于配色索引，文案一律走 `shutLabel`。
+   */
+  const shut = snapshot?.nonTrading ?? null
   const level = snapshot?.level ?? 0
+  const levelText = shut !== null ? '休市（非交易日）' : RESCUE_LEVEL_LABEL[level]
  // 采样窗口状态由宿主给出（含下次采样时刻）；老宿主没有该字段时不冒充"暂停"
   const win = snapshot?.activeWindow
   const paused = snapshot !== null && win !== undefined && win.sampling !== true
   const pauseReason = win?.reason === 'weekend' ? '周末休市'
+    : win?.reason === 'holiday' ? `法定假日休市${shut?.label != null ? `（${shut.label}）` : ''}`
     : win?.reason === 'noon-break' ? '午休'
       : win?.reason === 'disabled' ? '监测已关闭'
         : win?.reason === 'closed' ? '已收盘' : '非交易时段'
@@ -423,7 +430,7 @@ export function RescuePanel(props: {
       }),
       React.createElement('span', { className: 't' }, '护盘信号'),
       snapshot !== null
-        ? React.createElement('span', { className: 'tw-badge', style: { color: LEVEL_COLOR[level], borderColor: LEVEL_COLOR[level] } }, RESCUE_LEVEL_LABEL[level])
+        ? React.createElement('span', { className: 'tw-badge', style: { color: LEVEL_COLOR[level], borderColor: LEVEL_COLOR[level] } }, levelText)
         : null,
       snapshot !== null
         ? React.createElement('span', {
@@ -538,7 +545,7 @@ export function RescuePanel(props: {
     loading && data === null ? React.createElement(Skeleton, { lines: 3, height: 20 }) : null,
     snapshot !== null
       ? React.createElement('div', { className: 'tw-rescue-summary' },
-          React.createElement('span', { style: { color: LEVEL_COLOR[level], fontWeight: 600, flex: 'none' } }, RESCUE_LEVEL_LABEL[level]),
+          React.createElement('span', { style: { color: LEVEL_COLOR[level], fontWeight: 600, flex: 'none' } }, levelText),
           React.createElement('span', { className: 'tw-muted', style: { flex: 1, minWidth: 0 } }, snapshot.summary),
           React.createElement('span', { className: 'tw-muted', style: { fontSize: 10.5, flex: 'none' } },
             `${snapshot.indexName} ${fmtPct(snapshot.indexPct)} · ${snapshot.pulseBand.label}${

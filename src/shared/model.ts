@@ -1599,7 +1599,12 @@ export interface RescueSnapshot {
   ts: number
   /** 是否处于采样时段 */
   trading: boolean
-  level: RescueLevel
+  /**
+   * 等级。**`null` = 非交易日（休市）：不出等级**。
+   *
+   * 为什么不是 0：`0` 是「平静」这一档 —— 把假日显示成"平静"正是要消除的假信号。
+   */
+  level: RescueLevel | null
   score: number
   /** 一句话归因 */
   summary: string
@@ -1610,6 +1615,13 @@ export interface RescueSnapshot {
   indexName: string
   /** 时点系数（0.4 早盘 ~ 1.1 尾盘，已接入评分） */
   timeCoef: number
+  /** 本次生效的等级线（= 基准 {35,55,75} ÷ 时点系数）；等级判据只认它 */
+  levelLines?: { t1: number; t2: number; t3: number }
+  /**
+   * 非交易日信息（有值 ⇒ 今天休市：不采样、不出等级、不写当日分）。
+   * `reason`：周末 / 法定假日；`label`：假期名（如「国庆节」）。
+   */
+  nonTrading?: { reason: 'weekend' | 'holiday'; label: string | null } | null
   /** 全池共振分层 */
   resonance: RescueResonance
   /** 当前脉冲时段与锚点 */
@@ -1666,7 +1678,11 @@ export interface RescueActiveWindow {
   /** 当前是否在采样时段内 */
   sampling: boolean
   /** 不在采样时段时的原因 */
-  reason?: 'closed' | 'weekend' | 'noon-break' | 'disabled'
+  /**
+   * 不在采样时段时的原因。`holiday` = 法定休市日（与周末同级：**不采样、不出等级**）；
+   * `closed` = 交易日但已收盘/未开盘。
+   */
+  reason?: 'closed' | 'weekend' | 'holiday' | 'noon-break' | 'disabled'
   /** 下次采样时刻（epoch ms）；已收盘时为下一交易日开盘，disabled 时为 null */
   nextAt: number | null
   /** 下次采样时刻的人类可读说明，如「10-09 09:25」 */
