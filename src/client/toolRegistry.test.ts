@@ -5,9 +5,10 @@
  *   ① 目录页模型渲染出 **1 张卡片**且字段齐全（chip / 标题 / 一句话说明）；
  *   ①′ 卡片的**标题与 chip 逐字**等于用户口径（不许自行改名/改 chip）—— v0.74.0；
  *   ①″ 页标题 / 计数 / 卡片页脚入口文案**已从模型里删除**（用户要求删掉页头那一行）—— v0.74.0；
- *   ② 搜索框的**本地过滤**生效（命中/不命中/大小写/多词 AND/空查询）；
+ *   ② **搜索框已删**（v0.81.0：用户判冗余）⇒ 模型里不许再有搜索字段，页面里不许再有输入框；
  *   ③ 分类标签行**只有「全部」**一个；
- *   ⑤ 注册表新增条目**不改变既有卡片排序规则**（顺序 = 注册顺序，新条目只追加）。
+ *   ⑤ 注册表新增条目**不改变既有卡片排序规则**（顺序 = 注册顺序，新条目只追加）；
+ *   ⑥ 详情页三段式所需的新字段：Hero（kicker/标题/说明）、摘要卡、`AS OF`、时间范围三档（v0.81.0）。
  * 另有三条红线断言（v0.72.0 接数据后扩写）：
  *   · 无数据时每个数据格都是 `未取到` + 原因，且**整份模型零阿拉伯数字**（不得写假数字）；
  *   · 没有 loader 的"结构先行"工具仍走 `PENDING_WHY`（原因分档，不许含糊）；
@@ -21,17 +22,18 @@ import {
   NO_MATCH,
   NOT_FETCHED,
   PENDING_WHY,
-  SEARCH_PLACEHOLDER,
   TOOL_ENTRIES,
   catalogModel,
   detailModel,
-  matchesQuery,
   orderEntries,
   toolById,
   type ToolEntry,
 } from './toolRegistry.ts'
+import * as ToolReg from './toolRegistry.ts'
 import * as ToolText from './toolText.ts'
 import { cakeTool } from './tools/cake.ts'
+// ⚠ 从宿主读窗口集合：工具档位必须与宿主允许的窗口一致（两处漂移是"切档拿到不存在的窗口"的根因）
+import { FLOW_CURVE_WINDOWS } from '../host/globalFlow.ts'
 
 /** 断言用的固定条目（不碰真实注册表；`sections: []` 时 detailModel 走"缺区"回退） */
 function fixture(id: string, name: string, blurb: string, chip: string, category: string): ToolEntry {
@@ -43,7 +45,9 @@ const OTHER = fixture('zeta', '估值快照', '看一眼估值与位置', '估�
 
 test('① 目录页模型：1 张卡片且字段齐全（chip / 标题 / 一句话说明）', () => {
   const model = catalogModel()
-  assert.equal(model.searchPlaceholder, SEARCH_PLACEHOLDER, `搜索框占位文案必须是「${SEARCH_PLACEHOLDER}」`)
+  // ② 搜索框已删（v0.81.0）：模型里不许再留搜索字段（留字段 = 下一个人一定会把它渲染回来）
+  assert.equal('searchPlaceholder' in model, false, '目录页模型不许再有 searchPlaceholder（搜索框已按用户要求删除）')
+  assert.equal('query' in model, false, '目录页模型不许再有 query 字段')
   assert.equal(model.cards.length, 1, `本批只有蛋糕工具 ⇒ 目录页必须恰好 1 张卡片（实得 ${model.cards.length}）`)
   const card = model.cards[0]
   assert.equal(card.id, cakeTool.id, '卡片 id 必须指向注册里的那个工具')
@@ -88,23 +92,18 @@ test('①″ 页标题 / 计数 / 卡片页脚入口文案已删除（用户 v0.
   }
 })
 
-test('② 搜索框本地过滤生效：命中 / 不命中 / 大小写 / 多词 AND / 空查询', () => {
-  const all = catalogModel([CAKE_LIKE, OTHER], '', 'all')
-  assert.equal(all.cards.length, 2, '空查询 ⇒ 全部（不筛）')
-  const hit = catalogModel([CAKE_LIKE, OTHER], '蛋糕', 'all')
-  assert.deepEqual(hit.cards.map((c) => c.id), ['cake'], '搜"蛋糕"只该剩蛋糕工具')
-  assert.ok(hit.cards.length < all.cards.length, '过滤必须真的减少卡片（否则等于没过滤）')
-  const miss = catalogModel([CAKE_LIKE, OTHER], '不存在的关键词', 'all')
-  assert.deepEqual(miss.cards, [], '搜不到 ⇒ 零卡片')
-  assert.equal(miss.empty, NO_MATCH, '零结果必须给一句空态说明（不是白屏）')
-  // 大小写不敏感（搜索文本统一小写后包含匹配）
-  assert.deepEqual(catalogModel([CAKE_LIKE, OTHER], 'CAKE', 'all').cards.map((c) => c.id), ['cake'], '大小写不影响命中')
-  // 多词 = AND（每个词都要命中）
-  assert.deepEqual(catalogModel([CAKE_LIKE, OTHER], '蛋糕 flow', 'all').cards.map((c) => c.id), ['cake'], '多词 AND')
-  assert.deepEqual(catalogModel([CAKE_LIKE, OTHER], '蛋糕 zeta', 'all').cards, [], '只要有一个词不命中 ⇒ 不算命中')
-  // 命中字段包含一句话说明（用户可能按说明里的词搜）
-  assert.equal(matchesQuery(OTHER, '估值'), true, '标题/说明里出现的词必须能命中')
-  assert.equal(matchesQuery(OTHER, '估值 '), true, '首尾空白不该让查询失效')
+test('② 搜索链路已删除（v0.81.0）：模型无搜索字段、注册表不再导出搜索函数与文案', () => {
+  // 模型层：字段不存在（上面 ① 已锁 searchPlaceholder/query）
+  const model = catalogModel([CAKE_LIKE, OTHER], 'all')
+  assert.deepEqual(model.cards.map((c) => c.id), ['cake', 'zeta'], '目录页只剩分类过滤：两工具都该在')
+  // 函数层：`matchesQuery` / `searchTextOf` 必须从注册表导出面消失
+  assert.equal('matchesQuery' in ToolReg, false, '注册表不许再导出 matchesQuery（搜索已删，留着就是死代码）')
+  assert.equal('searchTextOf' in ToolReg, false, '注册表不许再导出 searchTextOf')
+  // 文案层：搜索占位与页级返回文案都不许再导出
+  assert.equal('SEARCH_PLACEHOLDER' in ToolText, false, 'toolText 不许再导出 SEARCH_PLACEHOLDER')
+  assert.equal('PAGE_BACK_ACTION' in ToolText, false, 'toolText 不许再导出 PAGE_BACK_ACTION（页级返回控件已删）')
+  // 空态仍保留（分类过滤可能过滤空）——但它与搜索无关
+  assert.equal(catalogModel([CAKE_LIKE, OTHER], 'nope').empty, NO_MATCH, '分类过滤到零结果 ⇒ 仍给一句空态说明')
 })
 
 test('③ 分类标签行只有「全部」一个（且它就是页面渲染的那一份）', () => {
@@ -115,15 +114,15 @@ test('③ 分类标签行只有「全部」一个（且它就是页面渲染的�
   const labels = model.categories.map((c) => c.label)
   assert.equal(labels.includes(cakeTool.category), false, '条目分类不是标签（本轮标签行只有「全部」）')
   // 分类过滤仍按条目字段生效（`all` = 不筛）
-  assert.deepEqual(catalogModel([CAKE_LIKE, OTHER], '', 'flow').cards.map((c) => c.id), ['cake'])
-  assert.deepEqual(catalogModel([CAKE_LIKE, OTHER], '', 'all').cards.map((c) => c.id), ['cake', 'zeta'])
+  assert.deepEqual(catalogModel([CAKE_LIKE, OTHER], 'flow').cards.map((c) => c.id), ['cake'])
+  assert.deepEqual(catalogModel([CAKE_LIKE, OTHER], 'all').cards.map((c) => c.id), ['cake', 'zeta'])
 })
 
 test('⑤ 注册表新增条目不改变既有卡片排序规则（顺序 = 注册顺序，新条目只追加）', () => {
-  const before = catalogModel([CAKE_LIKE, OTHER], '', 'all')
+  const before = catalogModel([CAKE_LIKE, OTHER], 'all')
   // 新增一个**名字排在字母表最前**的工具：按名字/分类重排的实现会把它插到最前面 ⇒ 这条会红
   const appended = fixture('aaa', 'AAA 工具', '名字最靠前的工具', 'AAA', 'aaa')
-  const after = catalogModel([CAKE_LIKE, OTHER, appended], '', 'all')
+  const after = catalogModel([CAKE_LIKE, OTHER, appended], 'all')
   assert.deepEqual(
     after.cards.slice(0, 2),
     before.cards,
@@ -161,6 +160,48 @@ test('详情页骨架：五个区齐全且顺序固定（KPI 行 / 曲线区 / �
   assert.ok(d.boundary.lines.length >= 3, '边界声明至少要有几条实质内容')
 })
 
+test('⑥ 三段式骨架（v0.81.0）：Hero / 摘要卡 / AS OF / 时间范围三档 —— 反例注入必败', () => {
+  const d = detailModel(cakeTool)
+  // ① Hero：kicker + 大标题（= 工具名，逐字）+ 说明；三段结构的第一段
+  assert.equal(d.hero.title, cakeTool.name, 'Hero 大标题必须就是工具名（不许在 Hero 里另写一个标题）')
+  assert.equal(d.hero.kicker.trim() === '', false, 'Hero 必须有 kicker 小标签')
+  assert.equal(d.hero.note.trim() === '', false, 'Hero 必须有一段说明')
+  assert.equal(d.hero.note, cakeTool.hero?.note, 'Hero 说明来自工具文件（页面不许另写一份文案）')
+  // ② 摘要卡：无数据 ⇒ 空数组（页面不渲染空卡；值都必须来自数据，见下面的数据路径用例）
+  assert.deepEqual(d.summary, [], '无数据时不许有摘要卡（编不出值就别摆一张空卡）')
+  // ③ 图表卡右上角 AS OF：无数据 ⇒ null
+  assert.equal(d.chartAsOf, null, '无数据时 AS OF 必须是 null（不许拿"今天"顶上）')
+  // ④ 时间范围三档：档位来自工具文件，且与宿主允许的窗口集合一致（唯一来源）
+  assert.deepEqual(d.ranges.options, [90, 180, 365], '时间范围必须是 90 / 180 / 365 三档')
+  assert.deepEqual([...FLOW_CURVE_WINDOWS], [90, 180, 365], '工具声明的三档必须与宿主 FLOW_CURVE_WINDOWS 一致（否则切档会拿到不存在的窗口）')
+  assert.deepEqual(cakeTool.ranges?.options, [...FLOW_CURVE_WINDOWS], '工具档位 = 宿主窗口集合（同一份口径）')
+  assert.equal(d.ranges.selected, 180, '默认档必须是 180（与改动前的行为一致）')
+  assert.equal(cakeTool.ranges?.initial, 180, '工具文件里的默认档也必须是 180')
+  // 反例注入：把档位写死成一档 ⇒ 上面两条必败（证明断言不是从实现里读出来的）
+  const fixed = { ...d, ranges: { options: [180], selected: 180 } }
+  assert.throws(() => assert.deepEqual(fixed.ranges.options, [90, 180, 365], '反例上必须失败'), /反例上/, '⚠ 反例（把范围写死一档）必须让断言失败')
+})
+
+test('⑥ 摘要卡/AS OF/范围选中值都来自 ToolData（页面不造数）', () => {
+  const d = detailModel(cakeTool, {
+    status: '数据时刻 X',
+    chartAsOf: '2026-10-12',
+    rangeDays: 90,
+    summary: [
+      { key: 'cake', label: '资金蛋糕', value: '9015.54 亿美元', note: '美国 占 91.14%' },
+      { key: 'prefer', label: '当前偏好', value: '美国', note: '从 韩国 转向 美国' },
+    ],
+    kpi: { 规模榜首: { text: '美国 91.14%', value: 91.14, delta: '五日 +0.20pp' } },
+  })
+  assert.equal(d.summary.length, 2, '摘要卡来自数据')
+  assert.equal(d.summary[0].value, '9015.54 亿美元', '摘要卡的值必须原样来自数据')
+  assert.equal(d.chartAsOf, '2026-10-12', 'AS OF 来自数据（当前显示那一天）')
+  assert.equal(d.ranges.selected, 90, '选中档来自数据（工具回报的 rangeDays）')
+  // 数据里没有的格子仍是「未取到」+ null（不许因为别的字段有数就补 0）
+  assert.equal(d.kpi.cells[1].text, NOT_FETCHED)
+  assert.equal(d.kpi.cells[1].value, null)
+})
+
 test('红线：无数据时必须「未取到」占位 + 给原因，且骨架里不许出现任何数字', () => {
   const d = detailModel(cakeTool)
   // ① 每个 KPI 格子都是占位文案 + value null（不许用 0 顶替）
@@ -182,8 +223,12 @@ test('红线：无数据时必须「未取到」占位 + 给原因，且骨架�
     assert.equal(note.includes(NO_DATA_WHY), true, `区的口径行必须写明原因：${note}`)
   }
   assert.equal(d.status.startsWith(NOT_FETCHED), true, `状态行也必须以「${NOT_FETCHED}」开头：${d.status}`)
-  // ④ **整份模型里一个阿拉伯数字都不许有**（`未取到` 之外的任何数都等于编数据）
-  const text = JSON.stringify(d)
+  // ④ **整份模型里一个阿拉伯数字都不许有**（`未取到` 之外的任何数都等于编数据）。
+  //    唯一例外：`ranges`（时间范围分段控件的档位 90/180/365）是**声明在工具文件里的 UI 契约常量**，
+  //    不是"看起来像数"的编造值 —— 它被单独钉死（见 ⑥：必须等于 [90,180,365] 且与宿主窗口集合一致）。
+  //    因此这里把 ranges 归一化后再扫全文，例外面被上面那条断言收紧了。
+  assert.deepEqual(d.ranges.options, [90, 180, 365], '范围档位只有这三档（例外面必须被钉死，否则例外会变成洞）')
+  const text = JSON.stringify({ ...d, ranges: { options: [], selected: null } })
   assert.equal(/\d/.test(text), false, `详情页骨架里出现了数字（可能是编造的默认值）：${text.slice(0, 200)}`)
 })
 

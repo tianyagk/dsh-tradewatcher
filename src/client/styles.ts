@@ -207,6 +207,29 @@ color-scheme:dark}
 .tw-panel-h{display:flex;align-items:center;gap:8px;padding-bottom:7px;min-height:24px}
 .tw-panel-h .t{font-weight:600;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;letter-spacing:-0.2px}
 .tw-statrow{display:flex;gap:8px;flex-wrap:wrap;padding:2px 0 8px}
+/* 【涨跌分布】模块（v0.81.0 重排，对齐参考版 Arkvol）：
+   左列三段紧凑内联行 + 右列两块；每段一个小色条 + 标题 */
+.tw-dist-seg{display:flex;flex-direction:column;gap:5px;min-width:0}
+.tw-dist-seg-h{display:flex;align-items:center;gap:6px;min-width:0}
+.tw-dist-seg-bar{flex:none;width:3px;height:12px;border-radius:2px;background:var(--tw-accent, #5da5ff)}
+.tw-dist-seg-t{font-size:11px;font-weight:600;color:var(--tw-dim);letter-spacing:.02em;white-space:nowrap}
+.tw-dist-seg-sub{font-size:10px;color:var(--tw-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+/* 内联统计行：一行 5 个（或 4 个）紧凑项，不做磁贴 */
+.tw-dist-inline{display:flex;flex-wrap:wrap;gap:4px 12px;align-items:baseline}
+.tw-dist-inline .it{display:inline-flex;align-items:baseline;gap:4px;white-space:nowrap}
+.tw-dist-inline .it .k{font-size:10.5px;color:var(--tw-dim)}
+.tw-dist-inline .it .v{font-size:12.5px;font-family:var(--tw-mono)}
+.tw-dist-inline .it .v.tw-dim{font-size:11px}
+/* 图例行（两融/日内）：序列名 + 未取到；有数据时是色点 + 名 */
+.tw-dist-legend{display:flex;flex-wrap:wrap;gap:4px 14px;align-items:baseline}
+.tw-dist-legend .lg{display:inline-flex;align-items:center;gap:5px;font-size:10.5px;color:var(--tw-dim)}
+.tw-dist-legend .dot{width:7px;height:7px;border-radius:50%;flex:none}
+/* 直方图：纵轴 + 网格线 + 柱（柱宽用百分比，窄面板也不会把某档挤成 0 宽） */
+.tw-dist-chart{position:relative;padding-left:30px;min-width:0}
+.tw-dist-axis{position:absolute;left:0;top:0;bottom:14px;width:28px}
+.tw-dist-axis .tk{position:absolute;right:2px;font-size:9px;font-family:var(--tw-mono);color:var(--tw-muted);transform:translateY(-50%)}
+.tw-dist-grid{position:absolute;left:30px;right:0;bottom:14px;top:0;pointer-events:none}
+.tw-dist-grid .gl{position:absolute;left:0;right:0;border-top:1px dashed var(--tw-chips-grid, rgba(0,0,0,.14))}
 /* 【涨跌分布】两列布局（task-14 ②）：左列三块（趋势/成交量/两融）、右列两块（分布/日内） */
 .tw-dist-cols{display:flex;gap:14px;flex-wrap:wrap;align-items:flex-start}
 .tw-dist-col{flex:1 1 260px;min-width:240px;display:flex;flex-direction:column;gap:10px}

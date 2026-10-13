@@ -227,12 +227,22 @@ export function rateSummary(payload: GlobalFlowPayloadDto): string {
   return `汇率：${parts.join('、')}`
 }
 
-/** 完整视图模型（页面只渲染它） */
-export function globalFlowToolData(payload: GlobalFlowPayloadDto, step = 0): ToolData {
-  const points = payload.curve.points
+/**
+ * 完整视图模型（页面只渲染它）。
+ *
+ * `rangeDays` = 曲线窗口（90 / 180 / 365 个序列日，见宿主 `FLOW_CURVE_WINDOWS`）：
+ * 只在这里**从同一条曲线上切片**（宿主一次构建到最大档）⇒ 切档不发请求、不重算份额。
+ */
+export function globalFlowToolData(payload: GlobalFlowPayloadDto, step = 0, rangeDays?: number): ToolData {
+  const all = payload.curve.points
+  const range = rangeDays === undefined ? all.length : Math.max(0, Math.round(rangeDays))
+  // 切片 = 最近 `range` 个序列日（曲线的最后一天是最新一天）
+  const points = range > 0 && range < all.length ? all.slice(all.length - range) : all
+  // 切片后**所有按天的计算都走切片视图**（回放步、合计、饼图、市场表），否则会拿全窗口的份额去凑合计
+  const view: GlobalFlowPayloadDto = points === all ? payload : { ...payload, curve: { ...payload.curve, points } }
   const isLatest = step === 0
-  const pie = pieSlicesAt(payload, step)
-  const market = marketRowsAt(payload, step, isLatest)
+  const pie = pieSlicesAt(view, step)
+  const market = marketRowsAt(view, step, isLatest)
   const idx = pointIndexAt(points.length, step)
   const point = points[idx]
   // ⚠ 合计/榜首一律取**当前显示那一天**的份额（回放历史日时不能拿"今天"的份额去凑合计）
@@ -243,29 +253,64 @@ export function globalFlowToolData(payload: GlobalFlowPayloadDto, step = 0): Too
   const live = payload.markets.filter((_, i) => shownShares[i] !== null)
   const allMissing = live.length === 0
   const why = allMissing ? (payload.missing[0]?.note ?? '本次没有取到任何一个市场的规模') : null
-  // 状态行必须说清"这一屏的数据是怎么来的"（三种来源各自的实话；见 AUDIT-IMPL46 §5）
-  const snapshotNote = payload.source === 'snapshot'
-    ? `本次只读本地快照（不发上游请求）；快照已累积 ${payload.snapshot.days} 天`
-    : payload.source === 'fallback'
-      ? `⚠ 本次上游全部失败 ⇒ 下表与曲线来自最近一次本地快照${payload.fallbackDay === null ? '' : `（${payload.fallbackDay}）`}，不是实时值`
-      : allMissing
-        ? '⚠ 上游本次全部失败，且本地还没有任何快照 ⇒ 这一屏没有数据（逐行原因见下方说明）'
-        : `上游现取（宿主三层 TTL：现价类 30 分钟 / 日线 12 小时 / 载荷 10 分钟）`
-  // 口径变更后必须主动解释"历史为什么这么短"（留痕不能只躺在文件里）
+
+  // ── 状态行：**常驻只留必要事实**（数据时刻 + 降级/陈旧标记）────────────────────────────────
+  // 用户口径（v0.81.0）：图上那几行长说明太啰嗦 ⇒ 常驻只留"数据时刻"和"这一屏有没有降级"，
+  // 取数方式、曲线构成等细节全部进 `title`/`aria-label`（`statusDetail`）。**诚实性不许降级**：
+  // 凡是"数据不是实时/来自快照/上游全失败/有作废留痕"这类会误导读数的信息，一律留在常驻行里。
   const purged = payload.snapshot.purged ?? []
-  const purgedNote = purged.length === 0
+  const degrade = payload.source === 'snapshot'
+    ? `快照只读（累积 ${payload.snapshot.days} 天）`
+    : payload.source === 'fallback'
+      ? `⚠ 上游全部失败 ⇒ 快照回退${payload.fallbackDay === null ? '' : `（${payload.fallbackDay}）`}，不是实时值`
+      : allMissing
+        ? '⚠ 上游本次全部失败，且本地还没有任何快照 ⇒ 这一屏没有数据（逐行原因见下）'
+        : null
+  const purgeMark = purged.length === 0
     ? null
-    : `⚠ 另有 ${purged.length} 天旧口径快照已作废（成分变更，不与新成分混用；留痕见快照文件${purged.length > 0 ? `，如 ${purged[purged.length - 1].day}` : ''}）`
+    : `⚠ 另有 ${purged.length} 天旧口径快照已作废（成分变更；留痕见快照文件，如 ${purged[purged.length - 1].day}）`
   const status = [
     `数据时刻 ${fmtBeijing(payload.asOf, payload.day)}（北京时间）`,
-    snapshotNote,
-    `曲线 ${points.length} 个序列日（实测 ${payload.curve.observedDays} / 重建 ${payload.curve.rebuiltDays}）`,
-    purgedNote,
+    degrade,
+    purgeMark,
   ].filter((x): x is string => x !== null).join('｜')
+  // 细节（进 title/aria-label；缺数据时它就是原因）
+  const statusDetail = [
+    payload.source === 'snapshot'
+      ? `本次只读本地快照（不发上游请求）；快照已累积 ${payload.snapshot.days} 天`
+      : payload.source === 'fallback'
+        ? `本次上游全部失败 ⇒ 下表与曲线来自最近一次本地快照${payload.fallbackDay === null ? '' : `（${payload.fallbackDay}）`}，不是实时值`
+        : allMissing
+          ? '上游本次全部失败，且本地还没有任何快照 ⇒ 这一屏没有数据（逐行原因见市场表下方）'
+          : '上游现取（宿主三层 TTL：现价类 30 分钟 / 日线 12 小时 / 载荷 10 分钟）',
+    `曲线 ${points.length} 个序列日（实测 ${points.filter((p) => p.origin === 'observed').length} / 重建 ${points.filter((p) => p.origin === 'rebuilt').length}）`,
+    `窗口 ${points.length} / 可选 ${(payload.curve.windowOptions ?? [payload.curve.window]).join(' / ')} 个序列日`,
+    ...(purged.length === 0 ? [] : [purgeMark as string]),
+  ].join('｜')
 
   return {
     status,
+    statusDetail,
     why,
+    chartAsOf: point?.day ?? payload.day,
+    rangeDays: points.length,
+    rangeOptions: payload.curve.windowOptions ?? [payload.curve.window],
+    summary: [
+      // 摘要卡 ①「资金蛋糕」：值 = 五市场合计规模（真实）；状态词 = 份额集中度（由真实份额导出，不是编造的"温度"）
+      {
+        key: 'cake',
+        label: '资金蛋糕',
+        value: fmtUsd(payload.totalUsd),
+        note: live.length === 0 ? `${NOT_FETCHED}：没有有值市场` : top === null ? null : `${top.name} 占 ${fmtSharePct(topShare)}`,
+      },
+      // 摘要卡 ②「当前偏好」：值 = 份额榜首（真实，取当前显示那天）
+      {
+        key: 'prefer',
+        label: '当前偏好',
+        value: top?.name ?? NOT_FETCHED,
+        note: isLatest ? payload.rotation.text : '（回放历史日：显示那一天的份额榜首）',
+      },
+    ],
     notes: {
       kpi: payload.notes.kpi,
       curve: payload.notes.curve,
@@ -278,7 +323,7 @@ export function globalFlowToolData(payload: GlobalFlowPayloadDto, step = 0): Too
     kpi: {
       '规模榜首': top === null
         ? { text: NOT_FETCHED, value: null, delta: null }
-        : { text: `${top.name} ${fmtSharePct(topShare)}`, value: topShare, delta: isLatest ? `五日 ${fmtPp(top.delta5Pp)}` : `较前一序列日 ${fmtPp(topShare === null || prevShareOf(payload, idx, payload.markets.indexOf(top)) === null ? null : topShare - (prevShareOf(payload, idx, payload.markets.indexOf(top)) as number))}` },
+        : { text: `${top.name} ${fmtSharePct(topShare)}`, value: topShare, delta: isLatest ? `五日 ${fmtPp(top.delta5Pp)}` : `较前一序列日 ${fmtPp(topShare === null || prevShareOf(view, idx, payload.markets.indexOf(top)) === null ? null : topShare - (prevShareOf(view, idx, payload.markets.indexOf(top)) as number))}` },
       '五市场合计规模': {
         text: fmtUsd(payload.totalUsd),
         value: payload.totalUsd,
@@ -336,8 +381,15 @@ export function globalFlowToolData(payload: GlobalFlowPayloadDto, step = 0): Too
   }
 }
 
-/** 载荷句柄：一次取数 + 本地回放（换帧不发请求） */
+/**
+ * 载荷句柄：一次取数 + 本地回放 + 本地换窗口（都不发请求）。
+ *
+ * 第二个参数是曲线窗口（90 / 180 / 365 个序列日）；省略 ⇒ 用宿主构建的整条曲线。
+ */
 export function globalFlowToolPayload(payload: GlobalFlowPayloadDto): ToolPayload {
   const days = payload.replay.days
-  return { replayMax: Math.max(0, days.length - 1), at: (step: number) => globalFlowToolData(payload, step) }
+  return {
+    replayMax: Math.max(0, days.length - 1),
+    at: (step: number, rangeDays?: number) => globalFlowToolData(payload, step, rangeDays),
+  }
 }

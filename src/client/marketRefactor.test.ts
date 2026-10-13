@@ -108,23 +108,26 @@ test('② 未取到的格子：常驻只写「未取到」，原因进 title/ari
     const m = new RegExp(`const ${reason} = '([^']+)'`).exec(page)
     assert.ok(m !== null, `${name}的原因常量必须在（${reason}）`)
     assert.ok(m[1].length > 20, `${name}的原因必须说清而不是"未取到"三个字`)
-    // 旧写法含 `page.includes('title: reason')` —— 那是 kvRow/missRow **通用实现**里的兜底，与循环变量无关，
-    // 因此删掉某一行的原因也照样绿（INJ-5）。现在要求该常量**被某条 kvRow/missRow 调用点实际传入**。
+    // v0.81.0 重排后，"未取到"由 `item()`（内联项）与 `legendRow()`（图例行）渲染 ⇒ 原因必须以
+    // **调用点实参**的形式出现（`..., ${REASON})` 或 `note: ${REASON}`），不能靠通用兜底掩盖漏传。
     assert.ok(
-      // 三种「未取到」渲染助手都算：kvRow / missRow / statMiss（都要求该常量作为实参传入）
-      new RegExp(`\\w*(?:Row|Miss)\\([^)]*,\\s*${reason}\\)`).test(page),
-      `${name}的原因必须由一条 kvRow/missRow 调用点实际传入（不能靠通用 title: reason 兜底）`,
+      new RegExp(`(?:,\\s*${reason}\\)|note:\\s*${reason}\\s*[,}])`).test(page),
+      `${name}的原因必须由一条 item()/legendRow() 调用点实际传入`,
     )
+    const uses = page.split(reason).length - 1
+    assert.ok(uses >= 2, `${name}的原因常量必须被真正用到（声明 + 至少一处实参；实际出现 ${uses} 次）`)
   }
-  // 常驻可见的只有「未取到」三个字（没有把原因铺成正文）
-  assert.ok(page.includes("}, '未取到')"), '未取到的常驻文本就是三个字')
-  assert.equal(/'未取到'\)[^\n]*\$\{/.test(page), false, '常驻里不许把原因跟在"未取到"后面')
+  // 常驻可见的只有「未取到」四个字（没有把原因铺成正文）：值一律以实参形式给出
+  assert.ok(/'未取到'/.test(page), '未取到的常驻文本就是四个字')
+  assert.equal(/'未取到'\s*\+/.test(page), false, '常驻里不许把原因拼在"未取到"后面')
   // 反例注入：把预测全天写成编的数 ⇒ 判据必须非空
-  const injected = page.replace("kvRow('预测全天', '未取到', FORECAST_REASON)", "kvRow('预测全天', '1.23 万亿', FORECAST_REASON)")
+  const anchor = "item('预测全天', '未取到', 'tw-dim', FORECAST_REASON)"
+  assert.ok(page.includes(anchor), '反例锚点必须还在（预测全天那一项）')
+  const injected = page.replace(anchor, "item('预测全天', '1.23 万亿', 'tw-dim', FORECAST_REASON)")
   assert.notEqual(injected, page, '反例注入必须真改到源码')
   assert.ok(injected.includes("'1.23 万亿'"), '⚠ 反例（编一个预测数）必须能被识别出来')
   assert.throws(
-    () => assert.equal(injected.includes("kvRow('预测全天', '未取到'"), true, '反例上"必须显示未取到"必须失败'),
+    () => assert.equal(injected.includes("item('预测全天', '未取到'"), true, '反例上"必须显示未取到"必须失败'),
     /反例上/,
     '⚠ 反例注入（给预测全天编数）必须让断言失败',
   )

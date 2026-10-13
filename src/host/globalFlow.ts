@@ -166,8 +166,18 @@ export const FLOW_SERIES_TTL_MS = 12 * 60 * 60_000
 /** 最终载荷：全齐时 10 分钟；有缺项时 2 分钟（让恢复能很快被看见） */
 export const FLOW_PAYLOAD_TTL_MS = 10 * 60_000
 export const FLOW_PAYLOAD_TTL_PARTIAL_MS = 2 * 60_000
-/** 曲线/回放的固定窗口（用户已定：曲线 180 日、回放最近 30 个交易日） */
+/**
+ * 曲线窗口（用户口径 v0.81.0）：**90 / 180 / 365 个序列日可切换**（分段控件在详情页 Hero 右上角）。
+ *
+ * 实现取舍：宿主**一次构建到最大窗口**（`FLOW_CURVE_WINDOW_MAX`），客户端在这条曲线上**本地切片**
+ * 出 90 / 180 / 365 —— 切档不发请求、不重算份额，三个窗口天然共用同一条日线序列；
+ * 代价是载荷大一点（≈ 每点 0.3KB × 365 ⇒ 约 105KB，本机 localhost 可接受）。
+ */
+export const FLOW_CURVE_WINDOWS: readonly number[] = [90, 180, 365]
+/** 默认窗口（首次打开时的选中档） */
 export const FLOW_CURVE_WINDOW = 180
+/** 实际构建的窗口 = 最大档（客户端从它切片） */
+export const FLOW_CURVE_WINDOW_MAX = 365
 export const FLOW_REPLAY_DAYS = 30
 /** 快照保留天数 */
 export const FLOW_SNAPSHOT_KEEP_DAYS = 90
@@ -739,7 +749,7 @@ async function dailySeries(key: FlowMarketKey, which: 'chart' | 'momentum'): Pro
       // 日线源在缺字段/解析不到时会 `return []`（不抛）—— 旧实现把它当成功值写进 **12 小时**正缓存，
       // 于是"这次空包"被锁半天，还按 `no-source` 报给用户（"重试无用"）。
       // 现在空/过短一律抛，由上层记成本次失败（不写正缓存，下次会重试）。
-      const series = def.via === 'sina-us' ? barsToSeries(await fetchSinaUsDaily(def.symbol)) : barsToSeries(await fetchTencentDaily(def.symbol, 260))
+      const series = def.via === 'sina-us' ? barsToSeries(await fetchSinaUsDaily(def.symbol)) : barsToSeries(await fetchTencentDaily(def.symbol, FLOW_CURVE_WINDOW_MAX + 60))
       if (series.length < 2) throw new Error(`日线源回了 ${series.length} 个点（空包/过短 ⇒ 不写正缓存）`)
       return series
     })
@@ -935,7 +945,16 @@ export interface GlobalFlowPayload {
   totalUsd: number | null
   totalNote: string | null
   rotation: FlowRotation
-  curve: { points: FlowPoint[]; window: number; observedDays: number; rebuiltDays: number; note: string }
+  curve: {
+    points: FlowPoint[]
+    /** 本次**实际构建**的窗口（= 最大档；客户端从这条曲线切片出各档） */
+    window: number
+    /** 可选窗口（分段控件用；顺序即显示顺序） */
+    windowOptions: number[]
+    observedDays: number
+    rebuiltDays: number
+    note: string
+  }
   replay: { days: string[]; max: number; note: string }
   netFlow: {
     code: string
@@ -964,7 +983,7 @@ export interface GlobalFlowPayload {
 /** 曲线/饼图/市场表共用的口径行（唯一来源；页面不许另写一份） */
 export const FLOW_NOTES = {
   kpi: `规模 = 各市场宽基 ETF 规模；delta = 与 ${FLOW_ROTATION_WINDOW} 个序列日前的份额变化（百分点）`,
-  curve: `份额曲线固定 ${FLOW_CURVE_WINDOW} 个序列日：有实测快照的日期用实测规模，其余按「当前实测规模 × 该市场日线收盘价之比」重建（假定 ETF 份额数量不变 ⇒ 只反映价格驱动的相对规模变化，不反映申赎）`,
+  curve: `份额曲线可选 ${FLOW_CURVE_WINDOWS.join(' / ')} 个序列日：有实测快照的日期用实测规模，其余按「当前实测规模 × 该市场日线收盘价之比」重建（假定 ETF 份额数量不变 ⇒ 只反映价格驱动的相对规模变化，不反映申赎）`,
   pie: `静态饼图（无动画、无自动播放）：份额 = 该市场规模 ÷ Σ 有值市场规模；缺值的市场不进分母，在该行如实显示「未取到 + 原因」`,
   market: `份额合计恒为 100%（分母只含有值市场）；「未取到」= 该行本次没有数，不用 0 顶替；动量列 = 各市场自己的 ${FLOW_HORIZONS.join(' / ')} 个交易日收益率（样本不足的那一格显示「—」，不回填 0），且只反映最新交易日 —— 回放历史日时不重算`,
   boundary: `A股净流入是「流量」，单列且不参与份额/规模计算；份额是「存量加权」，两者量纲不同，禁止相加`,
@@ -1032,7 +1051,7 @@ async function buildLivePayload(now: number, day: string): Promise<GlobalFlowPay
     chartSeries: raw.map((m) => m.chart),
     observed,
     marketCurrency: raw.map((m) => m.currency),
-    window: FLOW_CURVE_WINDOW,
+    window: FLOW_CURVE_WINDOW_MAX,
   })
   const latest = curve.length > 0 ? curve[curve.length - 1].share : shares
   const prevIdx = curve.length - 1 - FLOW_ROTATION_WINDOW
@@ -1116,7 +1135,8 @@ async function buildLivePayload(now: number, day: string): Promise<GlobalFlowPay
     rotation,
     curve: {
       points: curve,
-      window: FLOW_CURVE_WINDOW,
+      window: FLOW_CURVE_WINDOW_MAX,
+      windowOptions: [...FLOW_CURVE_WINDOWS],
       observedDays: curve.filter((p) => p.origin === 'observed').length,
       rebuiltDays: curve.filter((p) => p.origin === 'rebuilt').length,
       note: FLOW_NOTES.curve,
@@ -1263,7 +1283,7 @@ async function payloadFromSnapshot(
     totalUsd: aumUsd.some((v) => v !== null) ? aumUsd.reduce((s: number, v) => s + (v ?? 0), 0) : null,
     totalNote: aumUsd.some((v) => v === null) ? '合计只含有值市场；缺值市场不进分母' : null,
     rotation,
-    curve: { points, window: FLOW_CURVE_WINDOW, observedDays: points.length, rebuiltDays: 0, note: '本次只读本地快照：曲线只含已记录的日期（没有重建补齐）' },
+    curve: { points, window: FLOW_CURVE_WINDOW_MAX, windowOptions: [...FLOW_CURVE_WINDOWS], observedDays: points.length, rebuiltDays: 0, note: '本次只读本地快照：曲线只含已记录的日期（没有重建补齐）' },
     replay: { days: points.slice(Math.max(0, points.length - FLOW_REPLAY_DAYS)).map((p) => p.day), max: Math.max(0, Math.min(FLOW_REPLAY_DAYS, points.length) - 1), note: '回放取本地快照，不发上游请求' },
     netFlow: { code: 'sh510300', label: '沪深300ETF（510300）主力净流入', days: 0, sumCny: null, asOf: null, series: [], basis: '本地快照不保存资金流明细（单列项，不参与份额计算）', miss: '本次只读快照 ⇒ 资金流未取到' },
     snapshot: stats,

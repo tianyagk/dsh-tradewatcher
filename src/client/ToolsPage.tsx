@@ -1,16 +1,22 @@
 /**
- * 工具箱页（主面板里的一个页）：**目录页 + 工具详情页容器 + 左上角返回按钮**。
+ * 工具箱页（主面板里的一个页）：**目录页 + 工具详情页容器**。
  *
- * 布局（用户 v0.74.0 的口径）：
- *   目录页 = **左上角一个最小返回控件（图标 + `返回`）** + 分类标签行（本轮只有「全部」）+ 搜索框（本地过滤）
- *            + 三列卡片网格；卡片 = 左上角标识 chip / 标题 / 一句话说明，**整卡可点**（阴影 + 圆角、原生 button）。
- *            ⚠ 页标题与计数那一行（`工具目录` / `本插件自带 N 个工具`）与卡片页脚那行入口文案已按用户要求删除，
- *              见 `docs/AUDIT-IMPL43.md` §7；`toolsPage.test.ts` 有"全页不许再出现该文案"的断言。
- *   详情页 = KPI 行（含 delta）/ 份额曲线 / **静态**饼图 / 市场表（份额 + 变化）/ 边界声明
- *            + 附加块（A股净流入单列）+ 回放滑块（最近 30 个交易日，本地切换、不发请求）。
+ * 布局（用户 v0.81.0 的口径）：
+ *   目录页 = 分类标签行（本轮只有「全部」）+ 三列卡片网格；卡片 = 左上角标识 chip / 标题 / 一句话说明，
+ *            **整卡可点**（阴影 + 圆角、原生 button）。
+ *            ⚠ 已按用户要求删掉的三样（`toolsPage.test.ts` 有"全页不许再出现"的断言）：
+ *              页标题与计数那一行（`docs/AUDIT-IMPL43.md` §7）、卡片页脚入口文案、
+ *              **页级返回控件**与**搜索框**（v0.81.0：工具页是顶层页签 ⇒ 返回无意义；搜索被判冗余）。
+ *   详情页 = **三段式**（向用户参考版对齐）：
+ *           ① Hero：kicker 小标签 + 大标题 + 一段说明，右上角**时间范围分段控件**（90 / 180 / 365 序列日）；
+ *           ② 摘要卡 ×2：`资金蛋糕`（五市场合计规模 + 集中度状态词）｜`当前偏好`（份额榜首市场）；
+ *           ③ 图表卡：标题 + 右侧 `AS OF <日期>` + **四个 KPI 磁贴**（名称 + 值 + delta）+ 主图
+ *              （带图例、右侧纵轴）+ 本地回放滑块；
+ *           其后仍是**功能块**：静态饼图 / 市场表（份额 + 变化）/ A股净流入单列 / 边界声明。
  *
  * 数据：由工具自己的 `load()` 取一次（见 `tools/cake.ts` 与 `tools/globalFlowView.ts`），
  * 页面**只渲染** `detailModel()` 的输出 —— 页面里不算份额、不造数、不写第二份占位文案。
+ * 时间范围只做**本地切片**（宿主一次构建到最大窗口）⇒ 切档不发请求。
  * 主题：一切都用 `var(--tw-*)`（跟随 DSH 主题）与既有 class（`.tw-panel` / `.tw-tab` / `.tw-hint` / `.tw-empty`），
  * **不硬编码深色**；颜色取 `FLOW_SERIES_COLORS`（全部是主题 token）。
  */
@@ -18,7 +24,6 @@ import React, { useEffect, useMemo, useState } from 'react'
 import {
   CATEGORY_TABS,
   NOT_FETCHED,
-  PAGE_BACK_ACTION,
   TOOL_ENTRIES,
   catalogModel,
   detailModel,
@@ -30,20 +35,6 @@ import {
 import { CARD_PROPS, CARD_STYLE, CARD_TAG } from './toolCardView.ts'
 import { FLOW_SERIES_COLORS } from './tools/globalFlowView.ts'
 import { Btn, EmptyHint } from './ui.tsx'
-
-/**
- * 页头返回控件的图标（内联 SVG，跟主题 `currentColor` ⇒ 深浅色都对）。
- *
- * 为什么用图标 + 文字而不是纯文字：用户要的是"左上方一个小倒退按钮"，
- * `toolsPage.test.ts` 断言"图标与 `返回` 文案必须成对出现"（缺一个都算把控件做丢）。
- */
-function BackIcon(): React.ReactElement {
-  return React.createElement(
-    'svg',
-    { width: 12, height: 12, viewBox: '0 0 16 16', fill: 'none', stroke: 'currentColor', strokeWidth: 1.8, strokeLinecap: 'round', strokeLinejoin: 'round', 'aria-hidden': true, focusable: false, style: { display: 'block', marginRight: 2 } },
-    React.createElement('path', { key: 'shaft', d: 'M9.5 2.5 4 8l5.5 5.5' }),
-  )
-}
 
 /** 无数据区的占位框（虚线，跟随主题 token） */
 const PLACEHOLDER_BOX: React.CSSProperties = {
@@ -62,20 +53,21 @@ const PLACEHOLDER_BOX: React.CSSProperties = {
 
 const GRID3: React.CSSProperties = { display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 8 }
 
-export function ToolsPage(props: {
-  /** 返回上一个非 tools 页签；`null` ⇒ 没有可返回的页（按钮不渲染） */
-  onBack: (() => void) | null
-}): React.ReactElement {
-  const [query, setQuery] = useState('')
+/**
+ * 工具箱页。**不接任何 props**（v0.81.0：页级返回控件已删 ⇒ `onBack` 与 `toolsNav.ts` 一并删除）。
+ */
+export function ToolsPage(): React.ReactElement {
   const [category, setCategory] = useState('all')
   /** 打开的工具 id；null = 目录页 */
   const [openId, setOpenId] = useState<string | null>(null)
-  /** 工具数据：一次取数（`load()`）+ 本地回放（`at(step)`，不发请求） */
+  /** 工具数据：一次取数（`load()`）+ 本地回放（`at(step, range)`，不发请求） */
   const [payload, setPayload] = useState<ToolPayload | null>(null)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [step, setStep] = useState(0)
+  /** 曲线窗口档位；null = 用工具声明的默认档（本地切片，不发请求） */
+  const [rangeDays, setRangeDays] = useState<number | null>(null)
 
-  const model = useMemo(() => catalogModel(TOOL_ENTRIES, query, category, CATEGORY_TABS), [query, category])
+  const model = useMemo(() => catalogModel(TOOL_ENTRIES, category, CATEGORY_TABS), [category])
   const entry = openId === null ? null : toolById(openId)
   const loader = entry?.load
 
@@ -83,6 +75,7 @@ export function ToolsPage(props: {
     setPayload(null)
     setLoadError(null)
     setStep(0)
+    setRangeDays(null)
     if (loader === undefined) return
     let alive = true
     loader()
@@ -97,51 +90,38 @@ export function ToolsPage(props: {
     }
   }, [loader])
 
+  // 选中档 = 用户选过的档，否则工具声明的默认档
+  const selectedRange = rangeDays ?? entry?.ranges?.initial ?? null
   const data: ToolData | null = useMemo(() => {
     if (loader === undefined) return null
     if (loadError !== null) return { status: `${NOT_FETCHED}：${loadError}`, why: loadError }
     if (payload === null) return null
-    return payload.at(step)
-  }, [loader, loadError, payload, step])
+    return payload.at(step, selectedRange ?? undefined)
+  }, [loader, loadError, payload, step, selectedRange])
 
   return React.createElement(
     'div',
     { className: 'tw-tools', style: { flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'auto' } },
-    // 页头：**只有最小返回控件**（图标 + `返回`）。用户已明确删掉页标题与计数那一行 ——
-    // 目录页不再有任何标题文案；详情页保留"当前工具是谁"（chip · 名称），否则进去以后认不出在哪个工具里。
-    React.createElement(
-      'div',
-      { style: { display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px 0', flexWrap: 'wrap' } },
-      props.onBack === null
-        ? null
-        : React.createElement(
-            Btn,
-            { onClick: props.onBack, title: '返回上一个页签', 'aria-label': '返回上一个页签' },
-            React.createElement(BackIcon, null),
-            PAGE_BACK_ACTION,
-          ),
-      entry === null ? null : React.createElement('div', { style: { fontWeight: 600, fontSize: 13 } }, `${entry.chip} · ${entry.name}`),
-      entry === null ? null : React.createElement('div', { className: 'tw-hint', style: { margin: 0 } }, entry.blurb),
-    ),
     entry === null
-      ? catalogView(model, { query, category, setQuery, setCategory, onOpen: setOpenId })
+      ? catalogView(model, { category, setCategory, onOpen: setOpenId })
       : detailView(detailModel(entry, data), () => setOpenId(null), {
           loading: loader !== undefined && data === null && loadError === null,
           step,
           maxStep: payload === null ? 0 : payload.replayMax,
           onStep: setStep,
+          onRange: setRangeDays,
         }),
   )
 }
 
-/** 目录页：分类标签行 + 搜索框 + 三列卡片网格 */
+/** 目录页：分类标签行 + 三列卡片网格（搜索框已按用户要求删除） */
 function catalogView(
   model: ReturnType<typeof catalogModel>,
-  io: { query: string; category: string; setQuery: (v: string) => void; setCategory: (v: string) => void; onOpen: (id: string) => void },
+  io: { category: string; setCategory: (v: string) => void; onOpen: (id: string) => void },
 ): React.ReactElement {
   return React.createElement(
     'div',
-    { style: { display: 'flex', flexDirection: 'column', gap: 8, padding: '8px 12px 12px', minHeight: 0 } },
+    { 'data-role': 'tool-catalog', style: { display: 'flex', flexDirection: 'column', gap: 8, padding: '8px 12px 12px', minHeight: 0 } },
     // 分类标签行（本轮只有「全部」；工具条目自己的分类字段已落库，标签行下一批再加）
     React.createElement(
       'div',
@@ -154,14 +134,6 @@ function catalogView(
         ),
       ),
     ),
-    React.createElement('input', {
-      type: 'search',
-      value: io.query,
-      placeholder: model.searchPlaceholder,
-      'aria-label': model.searchPlaceholder,
-      onChange: (e: React.ChangeEvent<HTMLInputElement>) => io.setQuery(e.target.value),
-      style: { maxWidth: 320 },
-    }),
     model.empty === null
       ? React.createElement(
           'div',
@@ -205,50 +177,139 @@ function catalogView(
   )
 }
 
-/** 详情页：五块真实数据（缺数据区一律走模型里的 `未取到 + 原因` 占位） */
+/** 时间范围分段控件（Hero 右上角）：三档可切换，切档只做本地切片 */
+function rangeControl(model: DetailModel, io: { onRange: (n: number) => void }): React.ReactElement | null {
+  if (model.ranges.options.length === 0) return null
+  return React.createElement(
+    'div',
+    { className: 'tw-tabs', 'data-role': 'tool-range', role: 'group', 'aria-label': '时间范围', style: { border: 'none', background: 'transparent', padding: 0 } },
+    model.ranges.options.map((n) =>
+      React.createElement(
+        'button',
+        {
+          key: n,
+          className: 'tw-tab',
+          type: 'button',
+          'data-role': 'tool-range-option',
+          'data-value': n,
+          'data-on': model.ranges.selected === n,
+          'aria-pressed': model.ranges.selected === n,
+          title: `曲线窗口：最近 ${n} 个序列日（本地切片，不发请求）`,
+          onClick: () => io.onRange(n),
+        },
+        `${n}日`,
+      ),
+    ),
+  )
+}
+
+/** Hero：kicker 小标签 + 大标题 + 一段说明（说明只留必要事实，细节在 title 里） */
+function heroView(model: DetailModel, io: { onRange: (n: number) => void }): React.ReactElement {
+  return React.createElement(
+    'div',
+    { 'data-role': 'tool-hero', style: { display: 'flex', alignItems: 'flex-start', gap: 12, flexWrap: 'wrap' } },
+    React.createElement(
+      'div',
+      { style: { display: 'flex', flexDirection: 'column', gap: 3, minWidth: 220, flex: 1 } },
+      React.createElement(
+        'span',
+        {
+          'data-role': 'tool-hero-kicker',
+          style: {
+            alignSelf: 'flex-start',
+            fontSize: 10.5,
+            lineHeight: '16px',
+            padding: '0 6px',
+            borderRadius: 6,
+            border: '1px solid var(--tw-border)',
+            background: 'var(--tw-accent-soft)',
+            color: 'var(--tw-accent)',
+          },
+        },
+        model.hero.kicker,
+      ),
+      React.createElement('div', { style: { fontSize: 17, fontWeight: 600 } }, model.hero.title),
+      React.createElement('div', { style: { fontSize: 11.5, lineHeight: 1.6, color: 'var(--tw-muted)' } }, model.hero.note),
+    ),
+    rangeControl(model, io),
+  )
+}
+
+/** 两张摘要卡：值 + 状态词（值一律来自数据；取不到 ⇒ 未取到） */
+function summaryCards(model: DetailModel): React.ReactElement | null {
+  if (model.summary.length === 0) return null
+  return React.createElement(
+    'div',
+    { 'data-role': 'tool-summary', style: { display: 'grid', gridTemplateColumns: `repeat(${Math.min(2, Math.max(1, model.summary.length))}, minmax(0, 1fr))`, gap: 8 } },
+    model.summary.map((card) =>
+      React.createElement(
+        'div',
+        { key: card.key, 'data-role': 'tool-summary-card', className: 'tw-panel', style: { padding: '8px 12px', display: 'flex', flexDirection: 'column', gap: 2 } },
+        React.createElement('div', { className: 'tw-hint', style: { margin: 0 } }, card.label),
+        React.createElement('div', { style: { fontSize: 16, fontWeight: 600, color: card.value === NOT_FETCHED ? 'var(--tw-muted)' : 'var(--tw-text)' } }, card.value),
+        card.note === null ? null : React.createElement('div', { style: { fontSize: 11, color: 'var(--tw-muted)' } }, card.note),
+      ),
+    ),
+  )
+}
+
+/** 详情页：三段式（Hero → 摘要卡 → 图表卡）+ 饼图 / 市场表 / 附加块 / 边界声明 */
 function detailView(
   model: DetailModel,
   backToCatalog: () => void,
-  io: { loading: boolean; step: number; maxStep: number; onStep: (n: number) => void },
+  io: { loading: boolean; step: number; maxStep: number; onStep: (n: number) => void; onRange: (n: number) => void },
 ): React.ReactElement {
   const hasCurve = model.curve.series.length > 0 && model.curve.days.length > 0
   const hasPie = model.pie.slices.length > 0
   const hasRows = model.market.rows.length > 0
   return React.createElement(
     'div',
-    { style: { display: 'flex', flexDirection: 'column', gap: 8, padding: '8px 12px 12px' } },
+    { 'data-role': 'tool-detail', style: { display: 'flex', flexDirection: 'column', gap: 8, padding: '8px 12px 12px' } },
     React.createElement(Btn, { onClick: backToCatalog, title: '回到工具目录' }, model.backAction),
-    // 状态行：数据时刻 / 来源 / 曲线构成（缺数据时它就是原因）。
-    // ⚠ **不用 `tw-hint`**：紧凑/隐身档会把 `.tw-hint` 整类隐藏（styles.ts:90-98），
-    // 而"这一屏的数据来自快照/回退"是诚实性信息，必须默认可见（AUDIT-IMPL46 §4）。
-    React.createElement('div', { 'data-role': 'tool-status', style: { margin: 0, fontSize: 11.5, lineHeight: 1.6, color: 'var(--tw-muted)' } }, io.loading ? '正在取数…' : model.status),
+    // ── ① Hero（右上角时间范围）② 摘要卡 ────────────────────────────────────────
+    heroView(model, io),
+    summaryCards(model),
+    // ── ③ 图表卡的 KPI 磁贴：值/名称/delta 全部来自模型（工具数据），页面不造数 ─────────
     React.createElement(
       'div',
-      { className: 'tw-panel' },
+      { className: 'tw-panel', 'data-role': 'tool-chart-card' },
       React.createElement(
         'div',
         { className: 'tw-panel-h' },
-        React.createElement('span', { className: 't' }, model.kpi.title),
-        React.createElement('span', { className: 'tw-hint', style: { margin: 0 } }, model.kpi.note),
+        // 图表卡标题：口径/原因进 title（用户口径：常驻只留必要事实，长文案不占版面但必须可读）
+        React.createElement(
+          'span',
+          { className: 't', 'data-role': 'tool-chart-title', title: `${model.kpi.title}｜${model.kpi.note}`, 'aria-label': `${model.kpi.title}：${model.kpi.note}` },
+          model.curve.title,
+        ),
+        // 常驻状态行：只留必要事实（数据时刻 + 降级标记）；完整口径进 title/aria-label
+        React.createElement(
+          'span',
+          {
+            'data-role': 'tool-status',
+            title: model.statusTitle,
+            'aria-label': model.statusTitle,
+            style: { margin: 0, fontSize: 11, lineHeight: 1.5, color: 'var(--tw-muted)', textAlign: 'right', flex: 1 },
+          },
+          io.loading ? '正在取数…' : model.status,
+        ),
+        model.chartAsOf === null
+          ? null
+          : React.createElement('span', { 'data-role': 'tool-chart-asof', style: { fontSize: 11, color: 'var(--tw-muted)', whiteSpace: 'nowrap' } }, `AS OF ${model.chartAsOf}`),
       ),
       React.createElement(
         'div',
-        { style: { display: 'grid', gridTemplateColumns: `repeat(${Math.max(1, model.kpi.cells.length)}, minmax(0, 1fr))`, gap: 8 } },
+        { style: { display: 'grid', gridTemplateColumns: `repeat(${Math.max(1, model.kpi.cells.length)}, minmax(0, 1fr))`, gap: 8, marginBottom: 6 } },
         model.kpi.cells.map((cell) =>
           React.createElement(
             'div',
-            { key: cell.label, style: { border: '1px solid var(--tw-border)', borderRadius: 9, padding: '6px 9px', background: 'var(--tw-card2)', minWidth: 0 } },
+            { key: cell.label, 'data-role': 'tool-kpi-tile', style: { border: '1px solid var(--tw-border)', borderRadius: 9, padding: '6px 9px', background: 'var(--tw-card2)', minWidth: 0 } },
             React.createElement('div', { className: 'tw-hint', style: { margin: 0 } }, cell.label),
             React.createElement('div', { style: { fontSize: 12.5, color: cell.value === null ? 'var(--tw-muted)' : 'var(--tw-text)', wordBreak: 'break-word' } }, cell.text),
             cell.delta === null ? null : React.createElement('div', { className: 'tw-hint', style: { margin: 0, color: 'var(--tw-accent)' } }, cell.delta),
           ),
         ),
       ),
-    ),
-    React.createElement(
-      'div',
-      { className: 'tw-panel' },
-      sectionHead(model.curve.title, model.curve.note),
       // 回放滑块（本地切换：只换展示的那一天，不发请求）
       model.replay === null
         ? null
@@ -273,7 +334,6 @@ function detailView(
       hasCurve
         ? React.createElement(curveChart, { days: model.curve.days, series: model.curve.series, marks: model.curve.marks })
         : React.createElement('div', { style: PLACEHOLDER_BOX }, model.curve.empty),
-      React.createElement('div', { className: 'tw-hint', style: { margin: '6px 0 0' } }, model.replay === null ? '' : model.replay.note),
     ),
     React.createElement(
       'div',
@@ -413,11 +473,13 @@ function sectionHead(title: string, note: string): React.ReactElement {
  * 份额曲线（页面内联 SVG，无动画）。
  *
  * 缺的点画**断**（不连成假线）：某个市场某天没有值就断开，绝不插值补点。
+ * 纵轴刻度在**右侧**（向用户参考版对齐）；图例在下方。
  */
 function curveChart(props: { days: string[]; series: Array<{ name: string; points: Array<number | null> }>; marks: Array<{ index: number; label: string }> }): React.ReactElement {
   const W = 720
   const H = 180
-  const PAD_L = 34
+  const PAD_L = 8
+  const PAD_R = 40
   const PAD_B = 16
   const PAD_T = 8
   const values: number[] = []
@@ -426,7 +488,7 @@ function curveChart(props: { days: string[]; series: Array<{ name: string; point
   const min = Math.min(...values)
   const max = Math.max(...values)
   const span = max - min < 0.05 ? 0.05 : max - min
-  const x = (i: number): number => (props.days.length <= 1 ? PAD_L : PAD_L + (i * (W - PAD_L - 8)) / (props.days.length - 1))
+  const x = (i: number): number => (props.days.length <= 1 ? PAD_L : PAD_L + (i * (W - PAD_L - PAD_R)) / (props.days.length - 1))
   const y = (v: number): number => PAD_T + (1 - (v - min) / span) * (H - PAD_T - PAD_B)
   const paths: React.ReactElement[] = []
   props.series.forEach((s, si) => {
@@ -459,13 +521,14 @@ function curveChart(props: { days: string[]; series: Array<{ name: string; point
     { style: { display: 'flex', flexDirection: 'column', gap: 4 } },
     React.createElement(
       'svg',
-      { viewBox: `0 0 ${W} ${H}`, style: { width: '100%', height: 180, overflow: 'visible' }, role: 'img', 'aria-label': `份额曲线（${props.days[0]} 至 ${props.days[props.days.length - 1]}）` },
+      { viewBox: `0 0 ${W} ${H}`, style: { width: '100%', height: 180, overflow: 'visible' }, role: 'img', 'aria-label': `份额曲线（${props.days[0]} 至 ${props.days[props.days.length - 1]}，共 ${props.days.length} 个序列日）` },
+      // 纵轴在右侧：刻度线从左侧画到右轴，标签贴右边
       yTicks.map((t, i) =>
         React.createElement(
           'g',
           { key: `tick-${i}` },
-          React.createElement('line', { x1: PAD_L, x2: W - 8, y1: y(t), y2: y(t), stroke: 'var(--tw-border)', strokeWidth: 0.7, strokeDasharray: i === 1 ? '3 3' : undefined }),
-          React.createElement('text', { x: 2, y: y(t) + 3.5, fontSize: 9, fill: 'var(--tw-muted)' }, `${t.toFixed(1)}%`),
+          React.createElement('line', { x1: PAD_L, x2: W - PAD_R, y1: y(t), y2: y(t), stroke: 'var(--tw-border)', strokeWidth: 0.7, strokeDasharray: i === 1 ? '3 3' : undefined }),
+          React.createElement('text', { x: W - PAD_R + 4, y: y(t) + 3.5, fontSize: 9, fill: 'var(--tw-muted)' }, `${t.toFixed(1)}%`),
         ),
       ),
       props.marks.map((mk) =>
@@ -480,11 +543,11 @@ function curveChart(props: { days: string[]; series: Array<{ name: string; point
       ),
       paths,
       React.createElement('text', { x: PAD_L, y: H - 3, fontSize: 9, fill: 'var(--tw-muted)' }, props.days[0]),
-      React.createElement('text', { x: W - 8, y: H - 3, fontSize: 9, fill: 'var(--tw-muted)', textAnchor: 'end' }, props.days[props.days.length - 1]),
+      React.createElement('text', { x: W - PAD_R, y: H - 3, fontSize: 9, fill: 'var(--tw-muted)', textAnchor: 'end' }, props.days[props.days.length - 1]),
     ),
     React.createElement(
       'div',
-      { style: { display: 'flex', gap: 10, flexWrap: 'wrap' } },
+      { 'data-role': 'tool-chart-legend', style: { display: 'flex', gap: 10, flexWrap: 'wrap' } },
       props.series.map((s, i) =>
         React.createElement(
           'span',

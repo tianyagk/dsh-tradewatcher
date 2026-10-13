@@ -72,7 +72,7 @@ function payloadShell(): GlobalFlowPayloadDto {
     markets: [mk('cn', 'A股', '510300', 'CNY'), mk('hk', '港股', '02800 盈富基金', 'HKD'), mk('us', '美国', 'SPY', 'USD'), mk('jp', '日本', 'EWJ', 'USD'), mk('kr', '韩国', 'EWY', 'USD')],
     totalUsd: null, totalNote: null,
     rotation: { kind: 'unknown', fromKey: null, toKey: null, maxAbsPp: null, comparable: 0, window: 5, text: '判不了' },
-    curve: { points: [], window: 180, observedDays: 0, rebuiltDays: 0, note: '曲线口径' },
+    curve: { points: [], window: 365, windowOptions: [90, 180, 365], observedDays: 0, rebuiltDays: 0, note: '曲线口径' },
     replay: { days: [], max: 0, note: '回放口径' },
     netFlow: { code: 'sh510300', label: '净流入', days: 0, sumCny: null, asOf: null, series: [], basis: '口径', miss: '未取到' },
     snapshot: { path: '/tmp/x.json', days: 0, bytes: null, firstDay: null, lastDay: null, purged: [] },
@@ -947,7 +947,7 @@ test('红线：实测日缺的市场必须留成真洞（不许拿重建值补�
   const view = globalFlowToolData(
     {
       ...payloadShell(),
-      curve: { points: withSnap, window: 10, observedDays: 1, rebuiltDays: 2, note: '曲线口径' },
+      curve: { points: withSnap, window: 10, windowOptions: [90, 180, 365], observedDays: 1, rebuiltDays: 2, note: '曲线口径' },
       replay: { days: withSnap.map((p) => p.day), max: withSnap.length - 1, note: '回放口径' },
     },
     1,

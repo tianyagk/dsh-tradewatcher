@@ -5,6 +5,7 @@ import React, { useCallback, useEffect, useState } from 'react'
 import type { BoardRow, QuoteRow, StockDetail, TrendData } from '../shared/model.ts'
 import { api } from './api.ts'
 import { UPDOWN_MISSING_NOTE, breadthCells, pickBreadthCounts, upDownPair } from './breadthView.ts'
+import { distAxisOf, distBarPctOf } from './distView.ts'
 import { dirClass, fmtAmt, fmtBig, fmtPct, fmtPrice, fmtSigned } from './format.ts'
 import { CN_PHASE_LABEL, cnSessionState, shClockText } from './marketTime.ts'
 import { useNow } from './useNow.ts'
@@ -141,6 +142,13 @@ export function MarketPage(props: {
         selfCount.asOf === null ? '未知' : hhmmssOf(selfCount.asOf)
       }（不是行情条那一刻）`
   const countsReason = breadth?.missing[0]?.note ?? cells.reason ?? null
+  /**
+   * 「上涨/平盘/下跌」三格的**悬停说明**（唯一来源）：
+   * 缺失 ⇒ 带原因（红线：缺失必须给原因，且要能被键盘/触屏读到）；有数据 ⇒ 带口径与自统计时刻。
+   */
+  const countsNote = !breadthOk
+    ? `涨跌家数本次未取到 —— ${countsReason ?? '原因未给出'}`
+    : (countsTitle ?? '沪深两市涨跌家数（指数行情 f104/f105/f106；取不到时由本插件自统计）')
   // 昨日成交（本地上一交易日快照）：取不到就是 null ⇒ 显示「未取到」，**不拿今天的数顶替**
   const prevAmt = breadth?.prevAmount ?? null
   const delta = prevAmt === null || !cells.amountOk ? null : cells.amount - prevAmt.amount
@@ -178,50 +186,48 @@ export function MarketPage(props: {
   const MARGIN_REASON = '两融（融资余额/融资净买）：本插件未集成两融数据源，现有路由里没有任何 margin 字段 ⇒ 未取到（需新路由 + 新缓存 + 归属，另开）'
   const INTRADAY_REASON = '日内上涨/下跌家数折线：宿主只按**交易日**存快照（breadth.json 每天一条），没有日内采样序列 ⇒ 画不出来（需新增日内采样与存储，另开）'
 
-  /** 一**格**"未取到"（与 `statCell` 同形，用于涨跌趋势那一排）：常驻三字，原因进 title/aria */
-  const statMiss = (label: string, reason: string): React.ReactElement =>
-    React.createElement('div', { className: 'tw-stat' },
-      React.createElement('div', { className: 'k' }, label),
-      React.createElement('div', {
-        className: 'v tw-dim',
-        title: reason,
-        'aria-label': `${label} 未取到 —— ${reason}`,
-        tabIndex: 0,
-        role: 'note',
-      }, '未取到'),
-    )
-
-  /** 一行"未取到"（键值形，用于成交量/两融/日内）：常驻三字，原因进 title/aria */
-  const missRow = (label: string, reason: string): React.ReactElement =>
-    React.createElement('div', { className: 'tw-dist-kv' },
-      React.createElement('span', { className: 'k' }, label),
-      React.createElement('span', {
-        className: 'v tw-dim',
-        title: reason,
-        'aria-label': `${label} 未取到 —— ${reason}`,
-        tabIndex: 0,
-        role: 'note',
-      }, '未取到'),
-    )
-
-  /** 成交量那一列的一行：值 + 口径/原因进 title */
-  const kvRow = (label: string, value: React.ReactNode, title: string, cls?: string): React.ReactElement =>
-    React.createElement('div', { className: 'tw-dist-kv' },
-      React.createElement('span', { className: 'k' }, label),
-      React.createElement('span', { className: `v ${cls ?? ''}`, title, 'aria-label': `${label}：${typeof value === 'string' ? value : ''} —— ${title}`, tabIndex: 0 }, value),
-    )
-
-  /** 一个小节（左列三块 / 右列两块，同形）；正文可变长（多行一起给） */
-  const distBlock = (title: string, ...body: React.ReactNode[]): React.ReactElement =>
-    React.createElement('div', { className: 'tw-dist-block' },
-      React.createElement('div', { className: 'tw-dist-h' }, title),
+  /**
+   * 分段（参考版 Arkvol 每段：一个小色条 + 标题 [+ 副标题]）。
+   * `data-role` 让结构断言能挂在**真实渲染**上（不是只断言源码文本）。
+   */
+  const seg = (title: string, role: string, sub: React.ReactNode, ...body: React.ReactNode[]): React.ReactElement =>
+    React.createElement('div', { className: 'tw-dist-seg', 'data-role': `dist-${role}` },
+      React.createElement('div', { className: 'tw-dist-seg-h' },
+        React.createElement('span', { className: 'tw-dist-seg-bar' }),
+        React.createElement('span', { className: 'tw-dist-seg-t' }, title),
+        sub ?? null,
+      ),
       ...body,
     )
 
-  const statCell = (label: string, v: React.ReactNode, cls?: string, title?: string): React.ReactElement =>
-    React.createElement('div', { className: 'tw-stat', ...(title === undefined ? {} : { title }) },
-      React.createElement('div', { className: 'k' }, label),
-      React.createElement('div', { className: `v ${cls ?? ''}` }, v),
+  /**
+   * **内联**统计项（一行 5 个/4 个，**不做磁贴**）：只有一个"标签 + 值"。
+   * 口径与原因进 `title`/`aria-label`；取不到时值就是「未取到」四个字（原因照旧在悬停层）。
+   */
+  const item = (label: string, value: React.ReactNode, cls: string, note: string): React.ReactElement =>
+    React.createElement('span', {
+      className: 'it', title: note, tabIndex: 0, role: 'note',
+      'aria-label': `${label} ${typeof value === 'string' ? value : ''} —— ${note}`,
+    },
+      React.createElement('span', { className: 'k' }, label),
+      React.createElement('span', { className: `v ${cls}` }, value),
+    )
+
+  /** 内联行容器（一行到底，窄面板自动换行） */
+  const inline = (...items: Array<React.ReactNode | null>): React.ReactElement =>
+    React.createElement('div', { className: 'tw-dist-inline' }, ...items.filter((x) => x !== null))
+
+  /** 图例行：色点 + 序列名 + 值（取不到时是「未取到」，原因进 title/aria） */
+  const legendRow = (rows: Array<{ name: string; color: string; value: string; note: string }>): React.ReactElement =>
+    React.createElement('div', { className: 'tw-dist-legend' },
+      ...rows.map((r) => React.createElement('span', {
+        key: r.name, className: 'lg', title: r.note, tabIndex: 0, role: 'note',
+        'aria-label': `${r.name} ${r.value} —— ${r.note}`,
+      },
+        React.createElement('span', { className: 'dot', style: { background: r.color } }),
+        React.createElement('span', null, r.name),
+        React.createElement('span', { className: r.value === '未取到' ? 'tw-dim' : '' }, r.value),
+      )),
     )
 
   return React.createElement(
@@ -232,102 +238,84 @@ export function MarketPage(props: {
         React.createElement('span', { className: 't' }, '涨跌分布'),
         React.createElement('span', { className: 'tw-muted' }, '沪深两市'),
       ),
-      // ── 【涨跌分布】两列（task-14 ②）：左 = 涨跌趋势 / 成交量 / 两融走势；右 = 分布直方图 / 日内家数 ──
-      React.createElement('div', { className: 'tw-dist-cols' },
+      // ── 【涨跌分布】模块（v0.81.0 重排，对齐参考版 Arkvol）──
+      // 左列三段（每段：小色条 + 标题）：涨跌趋势（一行 5 个内联统计）｜成交量（一行 4 个内联统计）｜两融走势（图例行）
+      // 右列两块：涨跌分布（直方图，带纵轴与网格线）｜日内家数（双序列折线，无源 ⇒ 未取到 + 原因）
+      React.createElement('div', { className: 'tw-dist-cols', 'data-role': 'dist-cols', 'data-cols': '2' },
         React.createElement('div', { className: 'tw-dist-col' },
-          distBlock('涨跌趋势',
-            React.createElement('div', { className: 'tw-statrow', style: { padding: '0 0 4px' } },
-              statCell('上涨', up === null ? '—' : String(up), breadthOk ? (redUp ? 'tw-up' : 'tw-down') : '', countsTitle),
-              statCell('平盘', even === null ? '—' : String(even), undefined, countsTitle),
-              statCell('下跌', down === null ? '—' : String(down), breadthOk ? (redUp ? 'tw-down' : 'tw-up') : '', countsTitle),
-              statMiss('涨停', LIMIT_REASON),
-              statMiss('跌停', LIMIT_REASON),
-            )),
-          distBlock('成交量',
-            kvRow('当日成交额', cells.amountOk ? fmtAmt(cells.amount) : '未取到',
-              cells.amountOk ? '沪深两市成交额（指数行情 f6 之和）' : cells.reason ?? '指数行情本轮没给成交额'),
-            kvRow('昨日成交', prevAmt === null ? '未取到' : fmtAmt(prevAmt.amount),
-              prevAmt === null
-                ? '本地没有上一交易日的收盘快照（breadth.json 里没有那一天）——不用今天的数顶替'
-                : `上一交易日 ${prevAmt.day} 的收盘快照${prevAmt.final ? '（已定稿）' : '（尚未定稿）'}`),
-            kvRow('较昨日变动', delta === null ? '未取到' : `${delta >= 0 ? '+' : ''}${fmtAmt(delta)}`,
-              delta === null ? '取不到昨日成交就无法算变动（不是 0）' : '当日成交额 − 上一交易日收盘快照'),
-            kvRow('预测全天', '未取到', FORECAST_REASON),
+          seg('涨跌趋势', 'trend',
+            React.createElement('span', { className: 'tw-dist-seg-sub' }, '沪深两市'),
+            inline(
+              item('上涨', up === null ? '—' : String(up), breadthOk ? (redUp ? 'tw-up' : 'tw-down') : 'tw-dim', countsNote),
+              item('平盘', even === null ? '—' : String(even), 'tw-dim', countsNote),
+              item('下跌', down === null ? '—' : String(down), breadthOk ? (redUp ? 'tw-down' : 'tw-up') : 'tw-dim', countsNote),
+              item('涨停', '未取到', 'tw-dim', LIMIT_REASON),
+              item('跌停', '未取到', 'tw-dim', LIMIT_REASON),
+            ),
+            // 参考版副标题样式的一行小字：上涨占比 + 样本/快照说明（过长部分进悬停）
+            // ⚠ 原「上证/深成两张大卡」按用户决定**直接删除**（这两个值在下方移出的「指数行情」表里仍可见）
+            inline(
+              item('上涨占比',
+                breadth === null || breadth.percentile.value === null ? '—' : `${(breadth.percentile.value * 100).toFixed(1)}%`,
+                'tw-dim',
+                '上涨家数 ÷ 三类之和；与上方三格同一份家数口径'),
+              breadth === null || breadth.percentile.pct === null
+                ? item('近 N 日分位', '—', 'tw-dim', breadth === null
+                    ? `涨跌家数分位本次未取到${breadthErr === null ? '' : `：${breadthErr}`}（稍后随行情轮询自动重试）`
+                    : breadth.percentile.sampleSmall
+                      ? `已存 ${breadth.percentile.n} 个交易日，需 ≥ ${breadth.minDays} 天；样本太少的"分位"是噪音，故不显示`
+                      : '分位不可算（原因见数据来源）')
+                : item('近 N 日分位', `${breadth.percentile.pct}%`, 'tw-dim',
+                    `${breadth.percentile.metric}；分位定义：历史中 ≤ 当前值的比例（0 低 / 100 高）；样本 ${breadth.percentile.n} 日`),
+              breadth === null || breadth.storedDays <= 0
+                ? null
+                : item('快照', `${breadth.storedDays}/${breadth.window} 天`, 'tw-dim',
+                    `每日快照在收盘后记录一条；窗口 ${breadth.window} 日。累积到 ${breadth.minDays} 天后开始显示分位`),
+            ),
           ),
-          distBlock('两融走势',
-            missRow('两融余额', MARGIN_REASON),
-            missRow('融资净买', MARGIN_REASON),
+          seg('成交量', 'volume', null,
+            inline(
+              item('当日成交额', cells.amountOk ? fmtAmt(cells.amount) : '未取到', cells.amountOk ? '' : 'tw-dim',
+                cells.amountOk ? '沪深两市成交额（指数行情 f6 之和）' : cells.reason ?? '指数行情本轮没给成交额'),
+              item('昨日成交', prevAmt === null ? '未取到' : fmtAmt(prevAmt.amount), prevAmt === null ? 'tw-dim' : '',
+                prevAmt === null
+                  ? '本地没有上一交易日的收盘快照（breadth.json 里没有那一天）——不用今天的数顶替'
+                  : `上一交易日 ${prevAmt.day} 的收盘快照${prevAmt.final ? '（已定稿）' : '（尚未定稿）'}`),
+              item('较昨日变动', delta === null ? '未取到' : `${delta >= 0 ? '+' : ''}${fmtAmt(delta)}`,
+                delta === null ? 'tw-dim' : (delta >= 0 ? (redUp ? 'tw-up' : 'tw-down') : (redUp ? 'tw-down' : 'tw-up')),
+                delta === null ? '取不到昨日成交就无法算变动（不是 0）' : '当日成交额 − 上一交易日收盘快照'),
+              item('预测全天', '未取到', 'tw-dim', FORECAST_REASON),
+            ),
+          ),
+          seg('两融走势', 'margin',
+            React.createElement('span', { className: 'tw-dist-seg-sub' }, '本插件未集成两融数据源'),
+            legendRow([
+              { name: '两融余额', color: 'var(--tw-chip-avg, #c97a1c)', value: '未取到', note: MARGIN_REASON },
+              { name: '上证指数', color: 'var(--tw-chip-sup, #2f74c0)', value: '未取到', note: '本段的主序列（两融余额）无源，单画一条指数会被读成"两融走势" ⇒ 不画' },
+              { name: '融资净买', color: 'var(--tw-chip-res, #7a5cc4)', value: '未取到', note: MARGIN_REASON },
+            ]),
           ),
         ),
         React.createElement('div', { className: 'tw-dist-col' },
-          distBlock('涨跌分布',
+          seg('涨跌分布', 'hist', null,
             React.createElement(DistHistogram, { distribution: breadth?.distribution ?? null, distErr: breadthErr }),
           ),
-          distBlock('日内家数',
-            missRow('上涨家数 / 下跌家数', INTRADAY_REASON),
+          seg('日内家数', 'intraday', null,
+            legendRow([
+              { name: '上涨家数', color: 'var(--tw-up)', value: '未取到', note: INTRADAY_REASON },
+              { name: '下跌家数', color: 'var(--tw-down)', value: '未取到', note: INTRADAY_REASON },
+            ]),
           ),
         ),
       ),
-      React.createElement('div', { className: 'tw-statrow', style: { paddingTop: 2 } },
-        statCell('上证', sh?.price !== undefined && sh?.price !== null ? fmtPrice(sh.price) : '—', dirClass(sh?.chg ?? null, redUp)),
-        statCell('深成', sz?.price !== undefined && sz?.price !== null ? fmtPrice(sz.price) : '—', dirClass(sz?.chg ?? null, redUp)),
+      // 家数整体取不到时的说明已并入上面三格（`countsNote`）；本模块不再单开常驻提示行
+    ),
+    // 指数表：**移出**【涨跌分布】模块，作为大盘页独立区块（自带标题；功能不变，点行仍看详情）
+    React.createElement('div', { className: 'tw-panel', 'data-role': 'index-table' },
+      React.createElement('div', { className: 'tw-panel-h' },
+        React.createElement('span', { className: 't' }, '指数行情'),
+        React.createElement('span', { className: 'tw-muted' }, '点行看详情'),
       ),
-      // 缺失必须能被键盘/触屏读到（不能只挂在 title 上：那是鼠标专属）
-      breadthOk
-        ? null
-        : React.createElement('div', {
-            className: 'tw-hint',
-            style: { color: 'var(--tw-up)' },
-            tabIndex: 0,
-            role: 'note',
-            // M1：正文 8 字，长原因与"备用源不含该字段"这类结构性说明进 title/aria（原则 1/5）
-            title: `涨跌家数本次未取到 —— ${countsReason ?? '原因未给出'}`,
-            'aria-label': `涨跌家数未取到 —— ${countsReason ?? '原因未给出'}`,
-          }, '涨跌家数未取到'),
-      // P1-8：分位必须带口径与样本量一起读；样本不足或取不到时不显示分位（而不是显示 0）
-      breadthErr !== null
-        ? React.createElement('div', { className: 'tw-hint', style: { color: 'var(--tw-up)' } }, `涨跌家数分位本次未取到：${breadthErr}（稍后随行情轮询自动重试）`)
-        : breadth !== null
-          ? React.createElement('div', { className: 'tw-hint', style: { display: 'flex', gap: 12, flexWrap: 'wrap' } },
-              breadth.current === null
-                ? React.createElement('span', { style: { color: 'var(--tw-up)' } }, breadth.missing[0]?.note ?? '涨跌家数未取到')
-                : React.createElement(React.Fragment, null,
-                    React.createElement('span', null,
-                      `上涨占比 ${breadth.percentile.value === null ? '—' : (breadth.percentile.value * 100).toFixed(1) + '%'}`),
-                    breadth.percentile.pct === null
-                      ? React.createElement('span', {
-                          className: 'tw-muted',
-                          tabIndex: 0,
-                          role: 'note',
-                          title: breadth.percentile.sampleSmall
-                            ? `已存 ${breadth.percentile.n} 个交易日，需 ≥ ${breadth.minDays} 天；样本太少的"分位"是噪音，故不显示`
-                            : '分位不可算（原因见数据来源）',
-                        },
-                          breadth.percentile.sampleSmall
-                            ? `样本不足 ${breadth.percentile.n}/${breadth.minDays} 天`
-                            : '分位不可算')
-                      : React.createElement('span', {
-                          title: `${breadth.percentile.metric}；分位定义：历史中 ≤ 当前值的比例（0 低 / 100 高）`,
-                        }, `近 ${breadth.percentile.n} 日分位 ${breadth.percentile.pct}%`),
-                    // 家数可能是**本插件自己统计**出来的（源 A 拿不到时）：来源与时刻必须与上游给的能区分开。
-                    // 正文压到 ≤12 字，口径全文进 title/aria（读屏无法悬停 ⇒ aria 必须自包含）
-                    breadth.current.source === 'em-index'
-                      ? null
-                      : React.createElement('span', {
-                          tabIndex: 0,
-                          role: 'note',
-                          title: breadth.current.caliber ?? '本插件自行统计',
-                          'aria-label': `涨跌家数由本插件自行统计。${breadth.current.caliber ?? ''}数据时刻 ${
-                            breadth.current.asOf === null ? '未知' : hhmmssOf(breadth.current.asOf)
-                          }`,
-                        }, `· 自统计 ${breadth.current.asOf === null ? '—' : hhmmssOf(breadth.current.asOf)}`),
-                  ),
-              React.createElement('span', {
-                className: 'tw-muted',
-                title: `每日快照在收盘后记录一条；窗口 ${breadth.window} 日。累积到 ${breadth.minDays} 天后开始显示分位`,
-              }, breadth.storedDays > 0 ? `· 快照 ${breadth.storedDays}/${breadth.window} 天` : `· 快照累积中（${breadth.minDays} 天后出分位）`),
-            )
-          : null,
       React.createElement('div', { className: 'tw-tablewrap' },
         React.createElement('table', { className: 'tw-table', style: { minWidth: 560 } },
           React.createElement('thead', null,
@@ -566,15 +554,34 @@ function DistHistogram(props: {
       role: 'note',
     }, '未取到')
   }
-  const max = Math.max(1, ...d.counts)
-  return React.createElement('div', { className: 'tw-dist-hist', title: `覆盖 ${d.scanned} 只 / 全市场 ${d.total ?? '未知'} 只；无涨跌幅（停牌等）${d.blank} 只未计入任何档` },
-    ...d.labels.map((label, i) => React.createElement('div', { key: label, className: 'tw-dist-bar-wrap' },
-      React.createElement('div', { className: 'tw-dist-count' }, String(d.counts?.[i] ?? 0)),
-      React.createElement('div', { className: `tw-dist-bar ${i < 4 ? 'up' : i === 4 ? 'flat' : 'down'}` },
-        React.createElement('div', { className: 'tw-dist-bar-fill', style: { height: `${Math.max(1, Math.round(((d.counts?.[i] ?? 0) / max) * 100))}%` } }),
-      ),
-      React.createElement('div', { className: 'tw-dist-label' }, label),
-    )),
+  // 纵轴：值域按数据取整（1/2/5 × 10ⁿ）⇒ 刻度是整洁数字；柱高按**轴的上界**归一（与网格线对齐）
+  const axis = distAxisOf(d.counts)
+  const yAxis = React.createElement('div', { className: 'tw-dist-axis', 'data-role': 'dist-axis' },
+    ...axis.ticks.map((t) => React.createElement('span', {
+      key: `t${t}`, className: 'tk', 'data-role': 'dist-ytick', style: { bottom: `${distBarPctOf(t, axis.max)}%` },
+    }, String(t))),
+  )
+  const grid = React.createElement('div', { className: 'tw-dist-grid', 'data-role': 'dist-grid' },
+    ...axis.ticks.filter((t) => t > 0).map((t) => React.createElement('span', {
+      key: `g${t}`, className: 'gl', 'data-role': 'dist-gridline', style: { bottom: `${distBarPctOf(t, axis.max)}%` },
+    })),
+  )
+  return React.createElement('div', {
+    className: 'tw-dist-chart',
+    'data-role': 'dist-chart',
+    title: `纵轴上界 ${axis.max}（按数据取整）；覆盖 ${d.scanned} 只 / 全市场 ${d.total ?? '未知'} 只；无涨跌幅（停牌等）${d.blank} 只未计入任何档`,
+  },
+    yAxis,
+    grid,
+    React.createElement('div', { className: 'tw-dist-hist' },
+      ...d.labels.map((label, i) => React.createElement('div', { key: label, className: 'tw-dist-bar-wrap' },
+        React.createElement('div', { className: 'tw-dist-count' }, String(d.counts?.[i] ?? 0)),
+        React.createElement('div', { className: `tw-dist-bar ${i < 4 ? 'up' : i === 4 ? 'flat' : 'down'}` },
+          React.createElement('div', { className: 'tw-dist-bar-fill', style: { height: `${Math.max(1, distBarPctOf(d.counts?.[i] ?? 0, axis.max))}%` } }),
+        ),
+        React.createElement('div', { className: 'tw-dist-label' }, label),
+      )),
+    ),
   )
 }
 

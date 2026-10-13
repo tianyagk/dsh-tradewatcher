@@ -103,7 +103,7 @@ function payloadFixture(opts: { hkMissing?: boolean } = {}): GlobalFlowPayloadDt
     totalUsd: AUM_USD.reduce((acc, v) => acc + v, 0),
     totalNote: null,
     rotation: { kind: 'rotation', fromKey: 'cn', toKey: 'us', maxAbsPp: 0.2, comparable: 5, window: 5, text: '从 A股 转向 美国（5 日份额 -0.11pp → +0.20pp）' },
-    curve: { points, window: 180, observedDays: 1, rebuiltDays: 2, note: '曲线口径' },
+    curve: { points, window: 365, windowOptions: [90, 180, 365], observedDays: 1, rebuiltDays: 2, note: '曲线口径' },
     replay: { days, max: 2, note: '回放口径' },
     netFlow: { code: 'sh510300', label: '沪深300ETF（510300）主力净流入', days: 20, sumCny: 1_556_374_734, asOf: Date.now(), series: [], basis: '逐日 netamount 累加；单列，不参与份额/规模计算', miss: null },
     snapshot: { path: '/tmp/x/global-flow.json', days: 1, bytes: 1930, firstDay: '2026-10-12', lastDay: '2026-10-12', purged: [] },
@@ -193,6 +193,59 @@ test('某市场缺规模 ⇒ 该行「未取到」+ 行下原因；整表与饼�
   assert.equal(model.pie.slices.some((s) => (s.value ?? 0) === 0), false, '缺的那一块不许以 0 出现')
   // 份额合计仍按有值市场算（脚注给出）
   assert.ok(model.market.footnotes.join(' ').includes('100.00%'), `脚注要给合计：${model.market.footnotes.join(' ／ ')}`)
+})
+
+/** 造一条 `n` 个序列日的曲线（用于时间范围切档断言）：份额在 5 个市场间按固定比例分摊 */
+function wideFixture(n: number): GlobalFlowPayloadDto {
+  const base = payloadFixture()
+  const w = [0.0172, 0.0175, 0.8917, 0.0258, 0.0264]
+  const scale = (weights: number[]): number[] => {
+    const sum = weights.reduce((a, b) => a + b, 0)
+    return weights.map((x) => x / sum)
+  }
+  const points = Array.from({ length: n }, (_, i) => {
+    const day = `2026-${String(1 + Math.floor(i / 28)).padStart(2, '0')}-${String(1 + (i % 28)).padStart(2, '0')}`
+    // 最后一天抖一点，保证份额不是常数（曲线有形状）
+    const tilt = 1 + (i % 7) * 0.0005
+    return {
+      day,
+      origin: (i === n - 1 ? 'observed' : 'rebuilt') as 'observed' | 'rebuilt',
+      aumUsd: w.map((x, k) => Math.round((x * tilt ** (k === 2 ? -1 : 1)) * 1e12)),
+      share: scale(w.map((x, k) => x * (k === 2 ? 1 / tilt : tilt))),
+      partial: false,
+    }
+  })
+  return { ...base, curve: { ...base.curve, points, window: 365, windowOptions: [90, 180, 365], observedDays: 1, rebuiltDays: n - 1 } }
+}
+
+test('② 时间范围三档：切片后曲线点数与窗口一致，且切档只做本地切片（同一份载荷）', () => {
+  const payload = wideFixture(365)
+  const before = JSON.stringify(payload)
+  for (const days of [90, 180, 365]) {
+    const d = globalFlowToolData(payload, 0, days)
+    assert.equal(d.rangeDays, days, `选中档要如实回报（${days}）`)
+    assert.equal(d.curve?.days.length, days, `${days} 日档 ⇒ 曲线点数必须是 ${days}`)
+    assert.equal(d.curve?.series.length, 5, '切档不许改变序列条数（仍是五个市场）')
+    assert.equal(d.curve?.series[0].points.length, days, '每条序列的点数 = 窗口')
+    assert.equal(d.curve?.days[days - 1], payload.curve.points[364].day, '窗口的最后一天必须是最新一天')
+    assert.equal(d.curve?.days[0], payload.curve.points[365 - days].day, `窗口的第一天必须正好往前推 ${days} 天`)
+    assert.deepEqual(d.rangeOptions, [90, 180, 365], '可选档位来自载荷（与工具声明同源）')
+    // 份额仍是"有值市场"的合计 100%（切片后口径不变）
+    const last = d.curve?.series.map((s) => s.points[s.points.length - 1] ?? null) ?? []
+    const pct = last.reduce((acc: number, v) => acc + (v ?? 0), 0)
+    assert.ok(Math.abs(pct - 100) < 0.11, `切片后份额合计仍应为 100%（实得 ${pct.toFixed(2)}%）`)
+  }
+  // 超过可用点数 ⇒ 如实给全部（不补齐、不编造）
+  assert.equal(globalFlowToolData(payload, 0, 999).curve?.days.length, 365, '窗口大于可用点数 ⇒ 给全部，不编造')
+  // 省略窗口 ⇒ 用宿主构建的整条曲线
+  assert.equal(globalFlowToolData(payload, 0).curve?.days.length, 365, '省略窗口 ⇒ 整条曲线')
+  // 纯函数：切档不许改动传入的载荷
+  assert.equal(JSON.stringify(payload), before, '切档是纯函数（不许改传入的载荷）')
+  // 饼图/市场表也跟着切片走（用切到 90 天的那一天算份额榜首）
+  const narrow = globalFlowToolData(payload, 0, 90)
+  const wide = globalFlowToolData(payload, 0, 365)
+  assert.equal(narrow.pie?.center, payload.curve.points[364].day, '窄窗口的饼图中心仍是最新一天')
+  assert.equal(narrow.kpi?.['规模榜首']?.text, wide.kpi?.['规模榜首']?.text, '同一天 ⇒ 榜首一致（切片不影响当天读数）')
 })
 
 test('④ 边界声明：含「风险偏好代理 ≠ 真实跨境资金净流入」，且条目不许重复', () => {

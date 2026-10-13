@@ -44,6 +44,13 @@ export interface ToolEntry {
   chip: string
   /** 分类键（分类标签行用它过滤；本轮标签行只有「全部」） */
   category: string
+  /**
+   * Hero 区（详情页最上面那块）：小标签（kicker）+ 大标题 + 一段说明。
+   * 标题取 `name`（工具名逐字锁定，不许在 Hero 里另写一个）；这里只补 kicker 与说明。
+   */
+  hero?: { kicker: string; note: string }
+  /** 曲线窗口档位与默认档（如 `{ options: [90, 180, 365], initial: 180 }`）；省略 ⇒ 不渲染时间范围控件 */
+  ranges?: { options: readonly number[]; initial: number }
   /** 详情页各区（顺序即渲染顺序） */
   sections: readonly ToolSectionSpec[]
   /** 边界声明（详情页最后一区的正文，逐条）。**不许含阿拉伯数字**（红线：无数据时整份模型零数字） */
@@ -62,8 +69,11 @@ export interface ToolEntry {
 export interface ToolPayload {
   /** 回放最大步数（0 = 最新一日；越大越早） */
   replayMax: number
-  /** 取某一回放步的详情视图模型（本地计算，不发请求） */
-  at(replayIndex: number): ToolData
+  /**
+   * 取某一回放步的详情视图模型（本地计算，不发请求）。
+   * 第二个参数是曲线窗口（工具的 `ranges` 档位之一）；省略 ⇒ 用宿主构建的整条曲线。
+   */
+  at(replayIndex: number, rangeDays?: number): ToolData
 }
 
 /** KPI 格子：`text` 是显示文本（缺数据时必须走 `NOT_FETCHED`），`delta` 是右侧的对比值 */
@@ -90,8 +100,17 @@ export interface ToolPieSlice {
 
 /** 工具的真实数据（缺什么就缺什么：`未取到` 由 detailModel 统一补，页面不许再写一份） */
 export interface ToolData {
-  /** 页头状态行（数据时刻/来源/口径） */
+  /** 常驻状态行：**只放必要事实**（数据时刻 + 降级/陈旧标记） */
   status: string
+  /** 状态行的完整版（取数方式/曲线构成/作废留痕等）⇒ 进 `title` / `aria-label`，不占版面 */
+  statusDetail?: string
+  /** 图表卡右上角 `AS OF`（当前显示那一天的日期） */
+  chartAsOf?: string | null
+  /** 当前窗口（序列日数）与可选档位（时间范围分段控件用） */
+  rangeDays?: number
+  rangeOptions?: number[]
+  /** 摘要卡（Hero 下方的 1–2 张：值 + 状态词，值必须来自真实数据） */
+  summary?: Array<{ key: string; label: string; value: string; note: string | null }>
   /** 整份数据缺失时的原因（分区里单点缺失各自写在 notes/missing 里） */
   why?: string | null
   /** 各区可覆写的口径行（缺省 = 结构声明里的文案） */
@@ -119,9 +138,7 @@ export {
   NO_DATA_WHY,
   NO_MATCH,
   NOT_FETCHED,
-  PAGE_BACK_ACTION,
   PENDING_WHY,
-  SEARCH_PLACEHOLDER,
   SECTION_EMPTY_WHY,
 } from './toolText.ts'
 import {
@@ -130,7 +147,6 @@ import {
   NO_MATCH,
   NOT_FETCHED,
   PENDING_WHY,
-  SEARCH_PLACEHOLDER,
   SECTION_EMPTY_WHY,
 } from './toolText.ts'
 
@@ -167,42 +183,27 @@ export interface ToolCard {
  */
 export interface CatalogModel {
   categories: ReadonlyArray<{ key: string; label: string }>
-  searchPlaceholder: string
   cards: ToolCard[]
   /** 过滤后为空时的说明（否则 null） */
   empty: string | null
 }
 
-/** 一条卡片的搜索文本（一句话说明 + 标题 + chip + 分类 —— 全部小写后做包含匹配） */
-export function searchTextOf(entry: ToolEntry): string {
-  return [entry.name, entry.blurb, entry.chip, entry.category, entry.id].join(' ').toLowerCase()
-}
-
-/** 本地过滤：查询串按空白切成词，**每个词都要命中**（AND）；空查询 ⇒ 全部 */
-export function matchesQuery(entry: ToolEntry, query: string): boolean {
-  const words = query.trim().toLowerCase().split(/\s+/).filter((w) => w !== '')
-  if (words.length === 0) return true
-  const hay = searchTextOf(entry)
-  return words.every((w) => hay.includes(w))
-}
-
-/** 目录页模型（分类过滤 + 本地搜索；`all` 显示全部） */
+/**
+ * 目录页模型（分类过滤；`all` 显示全部）。
+ *
+ * ⚠ v0.81.0：用户判定**搜索框冗余** ⇒ 整条搜索链路（`query` 参数、`matchesQuery`、`searchTextOf`、
+ * `searchPlaceholder` 字段与 `SEARCH_PLACEHOLDER` 文案）全部删除。`empty` 仍保留：
+ * 分类过滤（或将来工具变多）仍可能过滤出零结果，页面照旧给一句空态而不是白屏。
+ */
 export function catalogModel(
   entries: readonly ToolEntry[] = TOOL_ENTRIES,
-  query = '',
   category = 'all',
   categories: ReadonlyArray<{ key: string; label: string }> = CATEGORY_TABS,
 ): CatalogModel {
   const cards = orderEntries(entries)
     .filter((e) => category === 'all' || e.category === category)
-    .filter((e) => matchesQuery(e, query))
     .map((e): ToolCard => ({ id: e.id, chip: e.chip, title: e.name, blurb: e.blurb, category: e.category }))
-  return {
-    categories,
-    searchPlaceholder: SEARCH_PLACEHOLDER,
-    cards,
-    empty: cards.length === 0 ? NO_MATCH : null,
-  }
+  return { categories, cards, empty: cards.length === 0 ? NO_MATCH : null }
 }
 
 /**
@@ -217,8 +218,18 @@ export interface DetailModel {
   title: string
   chip: string
   backAction: string
-  /** 页头状态行：有数据 = 数据时刻/来源；无数据 = 缺失原因 */
+  /** Hero：小标签 + 大标题 + 一段说明（标题 = 工具名） */
+  hero: { kicker: string; title: string; note: string }
+  /** 摘要卡（0–2 张；值来自数据，取不到 ⇒ 未取到） */
+  summary: Array<{ key: string; label: string; value: string; note: string | null }>
+  /** 图表卡右上角 `AS OF` */
+  chartAsOf: string | null
+  /** 时间范围分段控件（`options` 为空 ⇒ 不渲染） */
+  ranges: { options: number[]; selected: number | null }
+  /** 常驻状态行：有数据 = 数据时刻 + 降级标记；无数据 = 缺失原因 */
   status: string
+  /** 状态行的完整版（进 title/aria-label） */
+  statusTitle: string
   kpi: { title: string; note: string; cells: Array<{ label: string; text: string; value: number | null; delta: string | null }> }
   curve: { title: string; note: string; days: string[]; series: ToolCurveSeries[]; marks: Array<{ index: number; label: string }>; empty: string }
   pie: { title: string; note: string; slices: ToolPieSlice[]; center: string | null; empty: string }
@@ -265,12 +276,25 @@ export function detailModel(entry: ToolEntry, data: ToolData | null = null): Det
     return { label, text: datum.text, value: datum.value, delta: datum.delta }
   })
   const boundaryLines = data?.boundary === undefined ? [...entry.boundary] : [...entry.boundary, ...data.boundary]
+  const ranges = [...(entry.ranges?.options ?? [])]
   return {
     id: entry.id,
     title: entry.name,
     chip: entry.chip,
     backAction: DETAIL_BACK_ACTION,
+    hero: {
+      kicker: entry.hero?.kicker ?? entry.chip,
+      title: entry.name,
+      note: entry.hero?.note ?? entry.blurb,
+    },
+    summary: data?.summary ?? [],
+    chartAsOf: data?.chartAsOf ?? null,
+    ranges: {
+      options: ranges,
+      selected: ranges.length === 0 ? null : (data?.rangeDays ?? entry.ranges?.initial ?? ranges[0]),
+    },
     status: data?.status ?? `${NOT_FETCHED}：${why}`,
+    statusTitle: data?.statusDetail ?? data?.status ?? `${NOT_FETCHED}：${why}`,
     kpi: { title: kpi.title, note: noteOf(kpi, data, 'kpi', fallback), cells: kpiCells },
     curve: {
       title: curve.title,

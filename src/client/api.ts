@@ -107,7 +107,16 @@ export interface GlobalFlowPayloadDto {
   totalUsd: number | null
   totalNote: string | null
   rotation: { kind: 'rotation' | 'flat' | 'unknown'; fromKey: string | null; toKey: string | null; maxAbsPp: number | null; comparable: number; window: number; text: string }
-  curve: { points: GlobalFlowPointDto[]; window: number; observedDays: number; rebuiltDays: number; note: string }
+  curve: {
+    points: GlobalFlowPointDto[]
+    /** 本次实际构建的窗口（= 最大档；客户端从这条曲线切片出各档） */
+    window: number
+    /** 可选窗口（90 / 180 / 365），分段控件用 */
+    windowOptions: number[]
+    observedDays: number
+    rebuiltDays: number
+    note: string
+  }
   replay: { days: string[]; max: number; note: string }
   netFlow: { code: string; label: string; days: number; sumCny: number | null; asOf: number | null; series: Array<{ day: string; netCny: number }>; basis: string; miss: string | null }
   snapshot: {
