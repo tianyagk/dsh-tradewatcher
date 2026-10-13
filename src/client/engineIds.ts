@@ -20,18 +20,20 @@
  *  - ② 里的标的**不因隐藏而被过滤**：隐藏作用于行情条卡片，而自选页/持仓页/大盘页上
  *    真正要显示的那一行必须继续取数，否则那些页面会凭空出现空值（那才是语义被改坏）。
  */
-import { TW_ROWS } from '../shared/model.ts'
 import { visibleCards, type StripCardLike, type StripRowLike } from './stripTone.ts'
 
 /**
  * 大盘页**直接读 `quotes[secid]`** 的标的（`MarketPage.tsx`）：
- *   - `quotes['1.000001']` / `quotes['0.399001']`：涨跌家数/成交额三格的分量（breadthCells）；
- *   - 页内 6 个 A 股指数行（`cnIndices`）与它们逐行同源。
- * 从 `TW_ROWS` 的 `cn` 行取，避免"两处各写一份 secid"漂移；`engineIds.test.ts` 钉住
- * 它与 MarketPage 显示的 6 个指数名一一对应（改名/换标的时测试会红，逼人回来核对）。
+ *   - `quotes['1.000001']`（上证）/ `quotes['0.399001']`（深证）：涨跌家数/成交额那几格的分量
+ *     （`breadthCells(sh, sz)`，见 `MarketPage.tsx` 顶部）。
+ *
+ * ⚠ v0.81.1（归属收窄）：页内那 6 个 A 股指数行（原 `cnIndices` 表 /【指数行情】模块）已按用户要求**删除**
+ * ⇒ 大盘页真正还会读的只剩这 2 个。按本文件开头的原则（"不渲染的东西不该被轮询"），
+ * 这里从"6 个 `cn` 行"收窄成这 2 个：其余指数照常由行情条**可见卡片**取数，隐藏语义不变。
+ *
+ * `engineIds.test.ts` 钉住这 2 个确实在 `TW_ROWS` 里、且被隐藏时仍不断供（改了 MarketPage 会红，逼人回来核对）。
  */
-export const MARKET_PAGE_SECIDS: readonly string[] = TW_ROWS.filter((r) => r.key === 'cn')
-  .flatMap((r) => r.items.map((i) => i.secid))
+export const MARKET_PAGE_SECIDS: readonly string[] = ['1.000001', '0.399001']
 
 /** 页面 key（与 `index.tsx` 的 `PageKey` 同一套值；这里只声明用得到的那些） */
 export interface EnginePageLike {

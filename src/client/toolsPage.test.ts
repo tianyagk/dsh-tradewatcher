@@ -319,7 +319,7 @@ test('③ KPI 磁贴四块的值都来自模型（不是常量）：无数据 �
   for (const invented of ['温度', '流动性支持', '美元指数', '10Y']) {
     assert.equal(labels.some((l) => l.includes(invented)), false, `KPI 磁贴不许出现没有数据来源的口径「${invented}」：${labels.join(' / ')}`)
   }
-  assert.deepEqual(labels, ['规模榜首', '五市场合计规模', '近五日轮动', '数据时刻'], '四块磁贴 = 我们真有的四个指标')
+  assert.deepEqual(labels, ['偏好榜首', '五市场合计规模', '近五日轮动', '数据时刻'], '四块磁贴 = 我们真有的四个指标（口径 v0.82.0：榜首叫「偏好榜首」）')
   // 反例注入：把某块磁贴改成常量（页面/模型里都不许出现"常量磁贴"）
   const fake = { ...d, kpi: { ...d.kpi, cells: d.kpi.cells.map((c, i) => (i === 0 ? { ...c, text: '蛋糕温度 42', value: 42 } : c)) } }
   assert.throws(() => assert.deepEqual(fake.kpi.cells.map((c) => c.text), [NOT_FETCHED, NOT_FETCHED, NOT_FETCHED, NOT_FETCHED], '反例上必须失败'), /反例上/, '⚠ 反例（塞一个常量磁贴）必须让断言失败')

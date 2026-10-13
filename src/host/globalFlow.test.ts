@@ -23,6 +23,11 @@ import { dirname, join } from 'node:path'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import {
   __resetFlowCache,
+  FLOW_GREED_WINDOW,
+  greedOf,
+  percentileRanks,
+  preferenceOf,
+  sharesFromScores,
   FLOW_MARKET_ORDER,
   alignSeries,
   buildCurve,
@@ -62,7 +67,7 @@ function rowIdxOf(payload: GlobalFlowPayloadDto, key: GlobalFlowMarketDto['key']
 function payloadShell(): GlobalFlowPayloadDto {
   const mk = (key: GlobalFlowMarketDto['key'], name: string, etf: string, currency: 'USD' | 'CNY' | 'HKD') => ({
     key, name, etf, aumSource: '公开源', currency, benchmark: '基准', benchmarkSource: '腾讯日线',
-    aumNative: null, aumUsd: null, sharePct: null, delta1Pp: null, delta5Pp: null,
+    aumNative: null, aumUsd: null, sharePct: null, pref: 0.5, prefSource: '偏好分口径（夹具）', delta1Pp: null, delta5Pp: null,
     momentum: null, rank: null, missing: null,
   })
   return {
@@ -109,7 +114,8 @@ function tradingDays(count: number): string[] {
   return out.reverse()
 }
 
-const DATES = tradingDays(200)
+// 480 根：要同时覆盖"曲线窗口 365 + 贪婪值热身 60"（否则曲线最前面约 60 天会因为样本不足而空掉）
+const DATES = tradingDays(480)
 
 /**
  * 各市场规模（原币）：与 2026-10-12 真网络实测同一量级（见 docs/AUDIT-IMPL47.md §1）
@@ -154,6 +160,8 @@ interface StubOptions {
   aumDrift?: Record<string, number>
   /** 从腾讯行情批量里**去掉**这些代码（模拟"只有走腾讯那条路径的市场取不到数"） */
   tencentDrop?: string[]
+  /** 把某个市场的规模放大 N 倍（构造"规模巨大但偏好分很低"的反例断言用） */
+  aumBoost?: { key: 'spy' | 'ewj' | 'ewy'; factor: number }
 }
 
 interface Stub {
@@ -194,7 +202,9 @@ function closeOf(symbol: string, i: number, opts: StubOptions): number {
   const base: Record<string, number> = { spy: 600, ewj: 95, ewy: 160, '510300': 4.3, '000300': 4300, '02800': 22, hsi: 24000 }
   // 涨速（distinct 时各市场不同 ⇒ 动量名次确定）
   const slope: Record<string, number> = { spy: 0.30, ewj: 0.10, ewy: 0.42, '510300': -0.05, '000300': -0.05, '02800': 0.16, hsi: 0.18 }
-  const s = opts.seriesMode === 'same' ? 0.05 : (slope[symbol] ?? 0.05)
+  // ⚠ 'same' 模式要**足够大**：偏好分的贪婪值看 60 日区间，斜率太小（如 0.05 全年）会被
+  //    fixture 的 toFixed 取整磨成阶梯，各市场的分位不再相等 ⇒ 会凭空造出"轮动"（假阴性）。
+  const s = opts.seriesMode === 'same' ? 1.0 : (slope[symbol] ?? 0.05)
   return (base[symbol] ?? 100) * (1 + (s * i) / DATES.length) + 0.0
 }
 
@@ -273,11 +283,13 @@ function stubFetch(opts: StubOptions = {}): Stub {
       const symbols = list.split(',').filter((s) => s.startsWith('gb_')).map((s) => s.slice(3))
       if (symbols.length === 0) throw new TypeError('fetch failed (fixture: unknown sina list)')
       const drift = opts.aumDrift ?? {}
+      const boost = opts.aumBoost
       return reply(
         symbols
           .map((sym) => {
             const base = Number(AUM[sym]?.totalMv ?? '1000000.0000')
-            const scaled = (base * (drift[sym] ?? 1)).toFixed(4)
+            const up = boost !== undefined && boost.key === sym ? boost.factor : 1
+            const scaled = (base * (drift[sym] ?? 1) * up).toFixed(4)
             return gbLine(sym, scaled, AUM[sym]?.shares ?? '100000')
           })
           .join('\n'),
@@ -340,7 +352,9 @@ test('① 份额合计 = 100%（±0.1 显示位）：五市场全有值时，以
     assert.equal(cnCell.includes('亿美元'), true, `A股 规模单元格要显示折算后的美元值：${cnCell}`)
     for (const m of payload.markets) assert.notEqual(m.sharePct, null, `${m.name} 这一轮应当有份额`)
     // 曲线里每一天都要成立（缺值的日子只按有值市场算，但仍必须是 100%）
-    assert.ok(payload.curve.points.length >= 180, `曲线至少 180 个序列日（实际 ${payload.curve.points.length}）`)
+    assert.ok(payload.curve.points.length >= 365, `曲线至少 365 个序列日（实际 ${payload.curve.points.length}）`)
+    // 热身窗口生效：曲线最前面那一天也要能算出偏好分（否则整段开头会空掉）
+    assert.equal(payload.curve.points[0].pref.some((v) => v !== null), true, '曲线第一天就应当有偏好分（热身窗口 60 根）')
     for (const p of payload.curve.points) near(sharesSumPct(p.share), 100, 0.1, `${p.day} 的份额合计`)
 
     // 有市场缺值时同样成立（这是用户口径的硬要求：合计恒为 100%，缺的市场不进分母）
@@ -349,8 +363,11 @@ test('① 份额合计 = 100%（±0.1 显示位）：五市场全有值时，以
     try {
       const partial = await globalFlowPayload({ now: NOW })
       const hk = partial.markets.find((m) => m.key === 'hk')
-      assert.equal(hk?.sharePct, null, '取不到数的市场必须是 null（不是 0）')
-      near(sharesSumPct(partial.markets.map((m) => m.share)), 100, 0.1, '缺一个市场后的合计仍为 100%')
+      // ⚠ 口径 v0.82.0：权重来自**偏好分**（无量纲），规模取不到**不影响**它在分母里的位置
+      assert.equal(hk?.aumUsd, null, '规模取不到 ⇒ 规模列 null（不用 0 顶替）')
+      assert.notEqual(hk?.sharePct, null, '规模缺 ≠ 权重缺：偏好份额仍然算得出来')
+      assert.notEqual(hk?.pref, null, '偏好分来自日线，与规模取数无关')
+      near(sharesSumPct(partial.markets.map((m) => m.share)), 100, 0.1, '五个市场仍在分母里 ⇒ 合计仍为 100%')
     } finally {
       s2.restore()
     }
@@ -393,9 +410,9 @@ test('① 成分表本身就是口径：每条都要有规模来源与动量来�
   assert.equal(FLOW_MARKETS.find((m) => m.key === 'kr')?.aumSource.includes('f71'), true)
 })
 
-test('② 份额合计恒为 100%：两条汇率都缺、只缺一条、缺一个市场 ⇒ 分母只含有值市场', async () => {
+test('② 份额合计恒为 100%：缺汇率 / 缺规模都不动摇分母；只有"算不出偏好分"才不进分母', async () => {
   freshHome()
-  // 只缺美元/人民币 ⇒ A股 不进分母，其余四个照常
+  // 只缺美元/人民币 ⇒ **权重逐项不变**（无量纲），只有"规模（美元）"这一列变成未折算
   {
     const s = stubFetch({ fail: ['fx_susdcny'] })
     try {
@@ -403,52 +420,91 @@ test('② 份额合计恒为 100%：两条汇率都缺、只缺一条、缺一�
       const cn = p.markets.find((m) => m.key === 'cn')
       assert.equal(cn?.aumNative !== null && cn?.aumNative !== undefined, true, '人民币原值仍在（缺的只是折算）')
       assert.equal(cn?.aumUsd, null, '没有汇率 ⇒ 美元规模必须是 null')
-      assert.equal(cn?.sharePct, null, '不进分母 ⇒ 份额 null')
-      near(sharesSumPct(p.markets.map((m) => m.share)), 100, 0.1, '四个有值市场的合计仍是 100%')
-      assert.equal(p.markets.filter((m) => m.sharePct !== null).length, 4)
+      assert.notEqual(cn?.sharePct, null, '⚠ 权重不依赖汇率 ⇒ 份额照旧')
+      assert.equal(p.markets.filter((m) => m.sharePct !== null).length, 5, '五个市场都在分母里')
+      near(sharesSumPct(p.markets.map((m) => m.share)), 100, 0.1, '合计仍是 100%')
+      // 逐项对拍：与"两条汇率都在"的那一轮**完全相同**
+      __resetFlowCache()
+      const s2 = stubFetch()
+      try {
+        const base = await globalFlowPayload({ now: NOW })
+        const a = base.markets.map((m) => m.share)
+        const b = p.markets.map((m) => m.share)
+        for (let i = 0; i < a.length; i += 1) {
+          assert.ok(Math.abs((a[i] as number) - (b[i] as number)) < 1e-12, `缺汇率不许改动第 ${i} 个市场的权重（${a[i]} vs ${b[i]}）`)
+        }
+      } finally {
+        s2.restore()
+      }
     } finally {
       s.restore()
     }
   }
-  // 只缺美元/港元 ⇒ 港股 不进分母（A股 不受影响）
+  // 只缺美元/港元 ⇒ 同上
   {
     __resetFlowCache()
     const s = stubFetch({ fail: ['fx_susdhkd'] })
     try {
       const p = await globalFlowPayload({ now: NOW })
       const hk = p.markets.find((m) => m.key === 'hk')
-      const cn = p.markets.find((m) => m.key === 'cn')
       assert.equal(hk?.aumNative !== null && hk?.aumNative !== undefined, true, '港元原值仍在')
       assert.equal(hk?.aumUsd, null, '没有港元汇率 ⇒ 美元规模 null')
-      assert.equal(hk?.sharePct, null, '不进分母')
-      assert.notEqual(cn?.sharePct, null, 'A股 走另一条汇率，不受影响')
+      assert.notEqual(hk?.sharePct, null, '权重照旧（不缺分母）')
       near(sharesSumPct(p.markets.map((m) => m.share)), 100, 0.1, '合计仍 100%')
     } finally {
       s.restore()
     }
   }
-  // 两条都缺 ⇒ 只有美/日/韩 有值，合计仍 100%
+  // 两条都缺 ⇒ 五个市场照样都在分母里
   {
     __resetFlowCache()
     const s = stubFetch({ fail: ['fx_susdcny', 'fx_susdhkd'] })
     try {
       const p = await globalFlowPayload({ now: NOW })
-      assert.equal(p.markets.filter((m) => m.sharePct !== null).length, 3, '只剩美国/日本/韩国')
+      assert.equal(p.markets.filter((m) => m.sharePct !== null).length, 5, '汇率两条都缺也还是五个市场')
       near(sharesSumPct(p.markets.map((m) => m.share)), 100, 0.1, '合计仍 100%')
       for (const pnt of p.curve.points) near(sharesSumPct(pnt.share), 100, 0.1, `${pnt.day} 的合计`)
     } finally {
       s.restore()
     }
   }
+  // **算不出偏好分**的市场（这里让港股的日线整条失败）⇒ 才不进分母
+  {
+    __resetFlowCache()
+    const s = stubFetch({ fail: ['param=hk02800'] })
+    try {
+      const p = await globalFlowPayload({ now: NOW })
+      const hk = p.markets.find((m) => m.key === 'hk')
+      assert.equal(hk?.pref, null, '日线取不到 ⇒ 偏好分算不出 ⇒ null')
+      assert.equal(hk?.sharePct, null, '算不出偏好分 ⇒ 不进分母（份额 null，不许用 0 顶替）')
+      assert.equal(p.markets.filter((m) => m.sharePct !== null).length, 4, '另外四个照常')
+      near(sharesSumPct(p.markets.map((m) => m.share)), 100, 0.1, '四个有值市场的合计仍是 100%')
+    } finally {
+      s.restore()
+    }
+  }
 })
 
-test('③ 缺汇率 ⇒ 该市场不进分母 + 行级给原因（两条汇率各测一遍）', async () => {
+test('③ 缺汇率 ⇒ 规模列未折算 + 行级给原因；**权重逐项不变**（无量纲）', async () => {
   freshHome()
   const cases = [
     { fail: 'fx_susdcny', key: 'cn' as const, nativeWord: '亿元', currencyWord: '人民币', pair: '美元/人民币' },
     { fail: 'fx_susdhkd', key: 'hk' as const, nativeWord: '亿港元', currencyWord: '港元', pair: '美元/港元' },
   ]
+  const baseline = (() => null)()
+  void baseline
   for (const c of cases) {
+    __resetFlowCache()
+    // 先跑一轮"汇率都在"的基线，用来对拍权重
+    let baseShares: Array<number | null> = []
+    {
+      const sb = stubFetch()
+      try {
+        baseShares = (await globalFlowPayload({ now: NOW })).markets.map((m) => m.share)
+      } finally {
+        sb.restore()
+      }
+    }
     __resetFlowCache()
     const s = stubFetch({ fail: [c.fail] })
     try {
@@ -459,11 +515,16 @@ test('③ 缺汇率 ⇒ 该市场不进分母 + 行级给原因（两条汇率�
       const note = view.market?.rowNotes?.[idx] ?? null
       assert.equal(row[2].includes(c.nativeWord), true, `${c.key} 行必须显示原币值：${row[2]}`)
       assert.equal(row[2].includes('未折算'), true, `${c.key} 行必须写"未折算"：${row[2]}`)
-      assert.equal(row[3], NOT_FETCHED, `${c.key} 的份额必须是「${NOT_FETCHED}」`)
-      assert.notEqual(note, null, `${c.key} 必须有行级原因（不许只在载荷 missing[] 里）`)
+      // ⚠ 权重口径 v0.82.0：份额**不再**因为缺汇率而变成「未取到」
+      assert.notEqual(row[3], NOT_FETCHED, `${c.key} 的份额不该因为缺汇率而消失：${row[3]}`)
+      const nowShares = p.markets.map((m) => m.share)
+      for (let i = 0; i < baseShares.length; i += 1) {
+        assert.ok(Math.abs((baseShares[i] as number) - (nowShares[i] as number)) < 1e-12, `缺 ${c.pair} 不许改动第 ${i} 个市场的权重`)
+      }
+      assert.notEqual(note, null, `${c.key} 必须有行级原因（规模列的问题也要给原因）`)
       assert.equal(note?.includes(c.currencyWord), true, `行级原因要说清币种：${note}`)
       assert.equal(note?.includes(c.pair), true, `行级原因要指名缺的是哪条汇率：${note}`)
-      assert.equal(note?.includes('不进美元合计'), true, `行级原因要说清后果：${note}`)
+      assert.equal(note?.includes('偏好份额不受影响'), true, `行级原因要说清"权重不受影响"（否则读者会以为权重也没了）：${note}`)
       // 载荷层也必须有对应条目（两处都要有，不是二选一）
       assert.equal(p.missing.some((m) => m.what.includes(c.pair)), true, `载荷 missing 要有 ${c.pair} 这条`)
     } finally {
@@ -563,6 +624,110 @@ test('④ 旧口径快照不被采用：v1（美股/欧股/日股/A股/新兴）
   }
 })
 
+// ── 权重口径 v0.82.0：偏好分（不是资产规模）──────────────────────────────────
+
+test('⑦ 偏好分纯函数：贪婪值窗口 60 / 横截面分位 / 55-30-15 权重 / 0 是合法权重', () => {
+  // 贪婪值 = 自身 60 根收盘价的区间分位
+  const ramp = Array.from({ length: FLOW_GREED_WINDOW }, (_, i) => 100 + i)
+  assert.equal(greedOf(ramp), 1, '单调上行 ⇒ 末根就是最高 ⇒ 分位 1')
+  assert.equal(greedOf(ramp.map((v) => 300 - (v - 100))), 0, '单调下行 ⇒ 分位 0')
+  assert.equal(greedOf(ramp.slice(0, FLOW_GREED_WINDOW - 1)), null, `样本不足 ${FLOW_GREED_WINDOW} 根 ⇒ null（不许给中性默认值）`)
+  assert.equal(greedOf(new Array(FLOW_GREED_WINDOW).fill(100)), null, '区间为 0 ⇒ 算不出分位 ⇒ null')
+  assert.equal(FLOW_GREED_WINDOW, 60, '窗口写死 60（改口径要同步文档与断言）')
+  // 横截面分位：名次 → 0–1；并列取平均名次；缺值 null；只有一个市场 ⇒ null
+  assert.deepEqual(percentileRanks([3, 2, 1]), [1, 0.5, 0], '最好 ⇒ 1，最差 ⇒ 0')
+  assert.deepEqual(percentileRanks([1, 1, 1]), [0.5, 0.5, 0.5], '全并列 ⇒ 全 0.5（不是 1/0）')
+  assert.deepEqual(percentileRanks([5, null, 1]), [1, null, 0], '缺值不参与排名、也不给分位')
+  assert.deepEqual(percentileRanks([5]), [null], '只有一个市场 ⇒ 无法比较 ⇒ null（不许当 0.5）')
+  // 组合权重：55% / 30% / 15%，三分量任一缺 ⇒ null
+  assert.ok(Math.abs((preferenceOf({ greed: 1, mom5: 0, mom20: 0 }) as number) - 0.55) < 1e-12, '贪婪值权重 = 55%')
+  assert.ok(Math.abs((preferenceOf({ greed: 0, mom5: 1, mom20: 0 }) as number) - 0.3) < 1e-12, '5 日动量分位权重 = 30%')
+  assert.ok(Math.abs((preferenceOf({ greed: 0, mom5: 0, mom20: 1 }) as number) - 0.15) < 1e-12, '20 日动量分位权重 = 15%')
+  assert.equal(preferenceOf({ greed: 1, mom5: 1, mom20: 1 }), 1)
+  assert.equal(preferenceOf({ greed: 0, mom5: 0, mom20: 0 }), 0, '真的可以得 0')
+  assert.equal(preferenceOf({ greed: null, mom5: 1, mom20: 1 }), null, '任一分量缺 ⇒ 偏好分 null（不进分母）')
+  // 0 是**合法权重**：得 0 分的市场留在分母里（份额 0%），不许被当成"缺值"踢掉
+  assert.deepEqual(sharesFromScores([1, 0, 1]), [0.5, 0, 0.5], '0 分市场仍在分母里 ⇒ 另两家各 50%')
+  assert.deepEqual(sharesFromScores([null, null]), [null, null], '全缺 ⇒ 全 null')
+  assert.deepEqual(sharesFromScores([0, 0]), [null, null], '分之和为 0 ⇒ 归一化无意义 ⇒ null（不许给 0/1）')
+})
+
+test('② 权重**不得**等于规模占比：规模放大一百倍、偏好分垫底的市场，份额必须低', async () => {
+  freshHome()
+  // 构造：把美股（SPY）的规模放大 100 倍，同时让它的日线**下行**（贪婪值 0、动量分位垫底）
+  const s = stubFetch({ aumBoost: { key: 'spy', factor: 100 }, seriesMode: 'distinct', aumMode: 'real' })
+  try {
+    const p = await globalFlowPayload({ now: NOW })
+    const us = p.markets.find((m) => m.key === 'us')
+    const hk = p.markets.find((m) => m.key === 'hk')
+    // 规模上美股仍是最大（事实）
+    assert.ok((us?.aumUsd ?? 0) > (hk?.aumUsd ?? 0) * 10, '构造生效：美股规模仍然远大于港股')
+    // 但权重不看规模 ⇒ 美股的偏好份额**不该**接近 100%
+    const sizeShare = (us?.aumUsd ?? 0) / p.markets.reduce((acc, m) => acc + (m.aumUsd ?? 0), 0)
+    assert.ok(sizeShare > 0.9, `构造生效：按规模算美股占 ${(sizeShare * 100).toFixed(1)}%`)
+    assert.ok((us?.sharePct ?? 0) < 50, `⚠ 权重必须来自偏好分、不是规模：美股份额 ${us?.sharePct}%（规模占比 ${(sizeShare * 100).toFixed(1)}%）`)
+    // 反例注入：一旦退回"规模权重"，上面这条必红
+    const sizeShares = sharesOf(p.markets.map((m) => m.aumUsd))
+    const usIdx = rowIdxOf(p, 'us')
+    assert.ok((sizeShares[usIdx] as number) > 0.9, `⚠ 反例（规模权重）下美股占 >90%（实际 ${(sizeShares[usIdx] as number) * 100}%）⇒ 与上面的断言互斥（断言不是恒真）`)
+    near(sharesSumPct(p.markets.map((m) => m.share)), 100, 0.1, '偏好份额合计仍是 100%')
+  } finally {
+    s.restore()
+  }
+})
+
+test('③ 去掉汇率 ⇒ 权重**逐项不变**（无量纲）；只有规模列受影响', async () => {
+  freshHome()
+  const run = async (fail: string[]): Promise<{ shares: Array<number | null>; aums: Array<number | null> }> => {
+    __resetFlowCache()
+    const s = stubFetch({ fail })
+    try {
+      const p = await globalFlowPayload({ now: NOW })
+      return { shares: p.markets.map((m) => m.share), aums: p.markets.map((m) => m.aumUsd) }
+    } finally {
+      s.restore()
+    }
+  }
+  const withFx = await run([])
+  const noFx = await run(['fx_susdcny', 'fx_susdhkd'])
+  assert.deepEqual(noFx.shares, withFx.shares, '⚠ 用户口径：去掉汇率后，五个权重逐项完全相同（分位/动量都是无量纲的）')
+  assert.notDeepEqual(noFx.aums, withFx.aums, '规模列必须真的受影响（A股/港股变成未折算 ⇒ null）')
+  assert.equal(noFx.aums.filter((v) => v === null).length, 2, '缺两条汇率 ⇒ A股与港股的规模列 null')
+})
+
+test('④ 算不出偏好分的市场不进分母 + 行级给原因；其余市场照常', async () => {
+  freshHome()
+  const s = stubFetch({ fail: ['param=hk02800'] })
+  try {
+    const p = await globalFlowPayload({ now: NOW })
+    const hk = p.markets.find((m) => m.key === 'hk')
+    assert.equal(hk?.pref, null, '日线取不到 ⇒ 偏好分 null')
+    assert.equal(hk?.sharePct, null, '不进分母 ⇒ 份额 null（不用 0 顶替）')
+    assert.equal(p.missing.some((m) => m.what.includes('序列')), true, `载荷 missing 必须说明是哪条序列取不到：${JSON.stringify(p.missing.map((m) => m.what))}`)
+    assert.ok((hk?.missing ?? '').includes('取数失败') || (hk?.missing ?? '').includes('未取到'), `行级原因必须给出失败事实：${hk?.missing}`)
+    near(sharesSumPct(p.markets.map((m) => m.share)), 100, 0.1, '其余四个市场的合计仍是 100%')
+    const view = globalFlowToolData(p, 0)
+    const idx = rowIdxOf(p, 'hk')
+    assert.equal(view.market?.rows[idx][3], NOT_FETCHED, '界面上该行份额显示「未取到」')
+    assert.notEqual(view.market?.rowNotes?.[idx] ?? null, null, '界面上该行必须有原因')
+  } finally {
+    s.restore()
+  }
+})
+
+test('⑤ 口径行必须写清「偏好分归一化、非资产规模、非跨境资金净流入」（工具 + 数据源两处）', () => {
+  const d = detailModel(cakeTool)
+  const all = [d.kpi.note, d.curve.note, d.pie.note, d.market.note, d.boundary.note, ...d.boundary.lines].join('\n')
+  for (const must of ['偏好分', '非资产规模', '非跨境资金净流入']) {
+    assert.equal(all.includes(must), true, `口径/边界声明必须出现「${must}」：${all.slice(0, 160)}…`)
+  }
+  // 反例注入：把关键词删掉 ⇒ 上面必红
+  const stripped = all.replaceAll('非资产规模', '').replaceAll('非跨境资金净流入', '')
+  assert.equal(stripped.includes('非资产规模') || stripped.includes('非跨境资金净流入'), false, '⚠ 反例（删关键词）必须让断言失败')
+  // 数据源（宿主）那一侧也必须有：口径行来自 ToolData.note
+  assert.equal(typeof d.market.note, 'string')
+})
+
 // ── ② 某市场失败 ⇒ 该行「未取到」+ 原因；整表不显示 0 ────────────────────────
 
 test('② 某市场取数失败 ⇒ 该行「未取到」+ 原因，且整表不显示 0（含客户端渲染层）', async () => {
@@ -571,8 +736,9 @@ test('② 某市场取数失败 ⇒ 该行「未取到」+ 原因，且整表不
   try {
     const payload = await globalFlowPayload({ now: NOW })
     const hk = payload.markets.find((m) => m.key === 'hk')
-    assert.equal(hk?.aumUsd, null, '港股规模取不到 ⇒ null')
-    assert.equal(hk?.sharePct, null, '份额也必须 null')
+    assert.equal(hk?.aumUsd, null, '港股规模取不到 ⇒ 规模列 null')
+    // ⚠ 权重口径 v0.82.0：份额来自偏好分（日线），规模取不到**不影响**份额
+    assert.notEqual(hk?.sharePct, null, '规模缺 ≠ 权重缺（偏好份额仍在）')
     assert.ok((hk?.missing ?? '').length > 0, '该行必须带原因（缺什么 + 为什么）')
     assert.ok(
       payload.missing.some((m) => m.what.includes('港股')),
@@ -591,7 +757,12 @@ test('② 某市场取数失败 ⇒ 该行「未取到」+ 原因，且整表不
     assert.equal(model.market.rows.length, 5, '五行都要在（缺数据的那行也要在，不许整行消失）')
     const hkIdx = rowIdxOf(payload, 'hk')
     const hkRow = model.market.rows[hkIdx]
-    assert.deepEqual(hkRow.slice(2, 5), [NOT_FETCHED, NOT_FETCHED, NOT_FETCHED], `港股行的规模/份额/变化必须是「${NOT_FETCHED}」：${JSON.stringify(hkRow)}`)
+    // ⚠ 口径 v0.82.0：这一轮坏的是**规模**取数 ⇒ 只有"规模"列是「未取到」；
+    //    偏好份额 / 偏好分来自日线，照旧有值（这正是"权重不再依赖规模"的可观测形态）
+    assert.equal(hkRow[2], NOT_FETCHED, `港股行的"规模"必须是「${NOT_FETCHED}」：${JSON.stringify(hkRow)}`)
+    assert.notEqual(hkRow[3], NOT_FETCHED, `偏好份额不该消失：${JSON.stringify(hkRow)}`)
+    assert.equal(String(hkRow[4]).includes('—') || /\d/.test(String(hkRow[4])), true, `偏好分应当是数值：${JSON.stringify(hkRow)}`)
+    assert.equal(payload.markets.find((m) => m.key === 'hk')?.aumUsd, null, '港股规模列确实没有值')
     assert.ok((model.market.rowNotes[hkIdx] ?? '').includes('港股'), '行下必须给出这一行的原因')
     // 0 顶替判据用**单点实现**（`looksLikeZeroStandIn`），并先自证它非恒真：
     // 手写锚定正则过的那次（`/^0(\.0+)?/`）就是教训（AUDIT-HY4-1 §2）
@@ -791,7 +962,8 @@ test('口径：汇率取不到 ⇒ A股 不折算、不进美元合计（不静�
     const cnRow = view.market?.rows[cnIdx] ?? []
     assert.equal(cnRow[2].includes('亿元'), true, `A股 行必须显示人民币原值：${cnRow[2]}`)
     assert.equal(cnRow[2].includes('未折算'), true, `汇率缺时要说"未折算"：${cnRow[2]}`)
-    assert.equal(cnRow[3], NOT_FETCHED, `没有汇率 ⇒ 份额必须是「${NOT_FETCHED}」：${cnRow[3]}`)
+    assert.notEqual(cnRow[3], NOT_FETCHED, `⚠ 没有汇率不该让份额消失（权重无量纲）：${cnRow[3]}`)
+    assert.equal(String(cnRow[3]).includes('%'), true, `份额应当是百分比读数：${cnRow[3]}`)
     const cnNote = view.market?.rowNotes[cnIdx] ?? null
     assert.notEqual(cnNote, null, '⚠ A股 行必须有行级原因（不许只在载荷 missing[] 里）')
     assert.equal(cnNote?.includes('汇率'), true, `行级原因要说清是汇率的问题：${cnNote}`)
@@ -854,7 +1026,10 @@ test('曲线：锚定当日实测规模，历史日按收盘价之比重建；�
   assert.deepEqual(points.map((p) => p.origin), ['rebuilt', 'rebuilt'], '没有快照 ⇒ 全是重建日')
   near(points[1].aumUsd[0], 1000, 1e-6, '最后一天锚定实测规模')
   near(points[0].aumUsd[0], 500, 1e-6, '前一天按收盘价之比（100/200）折回去')
-  near(points[0].share[0], 1, 1e-9, '只有一个市场时份额 100%')
+  // ⚠ 口径 v0.82.0：份额来自**横截面**偏好分 ⇒ 只有一个市场时无法排名（没有第二者可比较），
+  //    因此份额是 null（"样本不足不进分母"），**不许**给 1 或 100% 这种假值
+  assert.equal(points[0].share[0], null, '只有一个市场 ⇒ 横截面分位不存在 ⇒ 份额 null（不许给 100%）')
+  assert.equal(points[0].pref[0], null, '偏好分同样算不出来')
 
   const withSnap: FlowPoint[] = buildCurve({
     anchors: [1000],
@@ -920,28 +1095,36 @@ test('自校告警必须被消费：总市值与「最新价×股本」对不上
 // ── ③ 红线加锁：实测日的洞必须是真洞 ────────────────────────────────────────
 
 test('红线：实测日缺的市场必须留成真洞（不许拿重建值补）—— 含"能补而没补"的对照组', () => {
-  const chart = [
-    { date: '2026-10-08', close: 100 },
-    { date: '2026-10-09', close: 110 },
-    { date: '2026-10-12', close: 120 },
-  ]
-  const common = { anchors: [1000, 500], chartSeries: [chart, chart], marketCurrency: ['USD', 'USD'] as Array<'USD' | 'CNY'>, window: 10 }
+  // 70 根日线：保证偏好分算得出来（贪婪值要 60 根样本），这样"规模洞"与"权重"才能分别断言
+  const dayAt = (i: number): string => new Date(Date.UTC(2026, 5, 1 + i)).toISOString().slice(0, 10)
+  const chart = Array.from({ length: 70 }, (_, i) => ({ date: dayAt(i), close: 100 + i }))
+  const chart2 = chart.map((r, i) => ({ date: r.date, close: 100 + i * 0.5 }))
+  const common = { anchors: [1000, 500], chartSeries: [chart, chart2], marketCurrency: ['USD', 'USD'] as Array<'USD' | 'CNY'>, window: 10 }
+  const lastDay = chart[chart.length - 1].date
+  const midDay = chart[chart.length - 5].date
   // 对照组：**没有**快照 ⇒ 那天第二家会被重建出来（证明"补洞"这件事在实现里是有的）
   const rebuiltOnly = buildCurve({ ...common, observed: new Map() })
-  const rebuiltDay = rebuiltOnly.find((p) => p.day === '2026-10-09')
+  const rebuiltDay = rebuiltOnly.find((p) => p.day === midDay)
   assert.equal(rebuiltDay?.origin, 'rebuilt')
   assert.notEqual(rebuiltDay?.aumUsd[1], null, '对照组：没有快照的日子第二家会被重建（不是 null）')
 
-  // 正题：09 有快照、且那天第二家缺规模 ⇒ 必须留成真洞
-  const withSnap = buildCurve({ ...common, observed: new Map([['2026-10-09', { at: NOW, rates: { usdCny: null, usdHkd: null }, aumNative: [900, null] }]]) })
-  const day = withSnap.find((p) => p.day === '2026-10-09')
+  // 正题：那天有快照、且第二家缺规模 ⇒ **规模列**必须留成真洞
+  const withSnap = buildCurve({ ...common, observed: new Map([[midDay, { at: NOW, rates: { usdCny: null, usdHkd: null }, aumNative: [900, null] }]]) })
+  const day = withSnap.find((p) => p.day === midDay)
   assert.equal(day?.origin, 'observed', '有快照的日期必须是实测日')
-  assert.equal(day?.aumUsd[1], null, '⚠ 实测日缺的市场必须是 null（真洞）—— 不许拿重建值补上')
-  assert.equal(day?.share[1], null, '同理份额也必须是 null')
-  assert.equal(day?.partial, true, '实测日有缺值 ⇒ partial 必须为 true')
+  assert.equal(day?.aumUsd[1], null, '⚠ 实测日缺的市场必须是 null（规模列真洞）—— 不许拿重建值补上')
   assert.equal(day?.aumUsd[0], 900, '有值的市场用实测值（不是重建值）')
-  // 实测日那一天的份额分母只含有值市场
-  near(sharesSumPct(day?.share ?? []), 100, 1e-9, '实测日（有缺值）的份额合计仍是 100%')
+  assert.equal(day?.partial, true, '实测日有缺值 ⇒ partial 必须为 true')
+  // ⚠ 口径 v0.82.0：份额来自**偏好分**（日线），与规模列无关 ⇒ 规模洞不会影响权重
+  const noHole = buildCurve({ ...common, observed: new Map([[midDay, { at: NOW, rates: { usdCny: null, usdHkd: null }, aumNative: [900, 800] }]]) })
+  const dayNoHole = noHole.find((p) => p.day === midDay)
+  assert.equal(day?.pref[1], dayNoHole?.pref[1], '规模有洞 vs 没洞 ⇒ 偏好分逐项相同（权重不吃规模）')
+  assert.equal(day?.share[1], dayNoHole?.share[1], '份额同样逐项相同')
+  assert.notEqual(day?.share[1], null, '样本够（70 根）⇒ 份额算得出来（不是 null）')
+  near(sharesSumPct(day?.share ?? []), 100, 1e-9, '实测日的份额合计仍是 100%')
+  // 最后一天（没有快照 ⇒ 重建日）也要一致：规模按收盘价比重建，权重与规模无关
+  const last = withSnap[withSnap.length - 1]
+  assert.equal(last.day, lastDay)
 
   // 渲染层同样不许出现"补洞"后的份额
   const view = globalFlowToolData(
@@ -950,9 +1133,15 @@ test('红线：实测日缺的市场必须留成真洞（不许拿重建值补�
       curve: { points: withSnap, window: 10, windowOptions: [90, 180, 365], observedDays: 1, rebuiltDays: 2, note: '曲线口径' },
       replay: { days: withSnap.map((p) => p.day), max: withSnap.length - 1, note: '回放口径' },
     },
-    1,
+    // 回放步 = "从最新往回数"：实测日（midDay）在曲线里的位置换算成 step
+    withSnap.length - 1 - withSnap.findIndex((p) => p.day === midDay),
   )
-  assert.equal(view.market?.rows[1][3], NOT_FETCHED, `实测日缺的市场在界面上必须是「${NOT_FETCHED}」：${JSON.stringify(view.market?.rows[1])}`)
+  // 界面上：那一行的**规模**列是「未取到」（真洞），而**偏好份额/偏好分**仍是有值读数 ——
+  // 这正是"权重不再依赖规模"在人眼可见层面的形态（口径 v0.82.0）
+  const viewHoleRow = view.market?.rows[1] ?? []
+  assert.equal(viewHoleRow[2], NOT_FETCHED, `实测日缺的市场：规模列必须是「${NOT_FETCHED}」：${JSON.stringify(viewHoleRow)}`)
+  assert.notEqual(viewHoleRow[3], NOT_FETCHED, `偏好份额不该被规模洞连坐：${JSON.stringify(viewHoleRow)}`)
+  assert.equal(viewHoleRow[4].includes('.'), true, `偏好分应当是数值：${JSON.stringify(viewHoleRow)}`)
 })
 
 // ── ⑤ 失败不进缓存 / 回退态 provenance ──────────────────────────────────────

@@ -5,7 +5,7 @@ import React, { useCallback, useEffect, useState } from 'react'
 import type { BoardRow, QuoteRow, StockDetail, TrendData } from '../shared/model.ts'
 import { api } from './api.ts'
 import { UPDOWN_MISSING_NOTE, breadthCells, pickBreadthCounts, upDownPair } from './breadthView.ts'
-import { distAxisOf, distBarPctOf } from './distView.ts'
+import { distAxisOf, distBarPctOf, forecastCellOf, limitNoteOf, marginRowOf } from './distView.ts'
 import { dirClass, fmtAmt, fmtBig, fmtPct, fmtPrice, fmtSigned } from './format.ts'
 import { CN_PHASE_LABEL, cnSessionState, shClockText } from './marketTime.ts'
 import { useNow } from './useNow.ts'
@@ -120,6 +120,26 @@ export function MarketPage(props: {
     // 行情每轮刷新后顺带重读（分位只在收盘后变化，但当日数值要跟着动）
   }, [props.quotes])
 
+  // 附加行情（v0.81.2）：涨停/跌停家数、两融（双源交叉）、全天成交额预测。
+  // 预测要把"页面自己已经显示的那个当日成交额"带过去（宿主不再抓一遍）；缺/0 ⇒ 预测部分如实缺失。
+  const [extras, setExtras] = useState<Awaited<ReturnType<typeof api.marketExtras>> | null>(null)
+  const amountForForecast = breadth?.current?.amount ?? null
+  useEffect(() => {
+    let alive = true
+    api
+      .marketExtras(amountForForecast === null || !(amountForForecast > 0) ? null : amountForForecast)
+      .then((x) => {
+        if (alive) setExtras(x)
+      })
+      .catch(() => {
+        if (alive) setExtras(null)
+      })
+    return () => {
+      alive = false
+    }
+    // 成交额变了（行情轮询）就重取：宿主侧有缓存，预测本身每分钟才该变
+  }, [amountForForecast])
+
   const sh = quotes['1.000001']
   const sz = quotes['0.399001']
   // 涨跌家数与成交额：任一分量缺失即整格 `—` + 原因（**不用 0 顶替**，见 breadthView.ts）
@@ -153,14 +173,6 @@ export function MarketPage(props: {
   const prevAmt = breadth?.prevAmount ?? null
   const delta = prevAmt === null || !cells.amountOk ? null : cells.amount - prevAmt.amount
 
-  const cnIndices: Array<{ secid: string; name: string }> = [
-    { secid: '1.000001', name: '上证指数' },
-    { secid: '0.399001', name: '深证成指' },
-    { secid: '0.399006', name: '创业板指' },
-    { secid: '1.000688', name: '科创50' },
-    { secid: '1.000300', name: '沪深300' },
-    { secid: '1.000905', name: '中证500' },
-  ]
 
   const openDetail = (secid: string): void => {
     setPick({ secid })
@@ -185,6 +197,18 @@ export function MarketPage(props: {
   const FORECAST_REASON = '预测全天成交额：本插件没有日内成交额采样，也没有任何校准基准 ⇒ 任何"预测"都是编的，故不给'
   const MARGIN_REASON = '两融（融资余额/融资净买）：本插件未集成两融数据源，现有路由里没有任何 margin 字段 ⇒ 未取到（需新路由 + 新缓存 + 归属，另开）'
   const INTRADAY_REASON = '日内上涨/下跌家数折线：宿主只按**交易日**存快照（breadth.json 每天一条），没有日内采样序列 ⇒ 画不出来（需新增日内采样与存储，另开）'
+
+  /**
+   * 「预测全天」这一格的取值（v0.81.2）：宿主没给 extras ⇒ 回落「未取到 + 原因」；
+   * 给了就按 `forecastCellOf` 的判据（**只在盘中给值**，收盘后回落实际值，口径随值走）。
+   */
+  const forecastCell: { value: string; cls: string; note: string } =
+    extras === null
+      ? { value: '未取到', cls: 'tw-dim', note: FORECAST_REASON }
+      : forecastCellOf(
+          extras.forecast,
+          extras.forecast.forecast !== null ? fmtAmt(extras.forecast.forecast) : fmtAmt(extras.forecast.actual),
+        )
 
   /**
    * 分段（参考版 Arkvol 每段：一个小色条 + 标题 [+ 副标题]）。
@@ -216,6 +240,15 @@ export function MarketPage(props: {
   /** 内联行容器（一行到底，窄面板自动换行） */
   const inline = (...items: Array<React.ReactNode | null>): React.ReactElement =>
     React.createElement('div', { className: 'tw-dist-inline' }, ...items.filter((x) => x !== null))
+
+  /** 两融图例行的取值（`extras === null` 或两源都缺 ⇒ 「未取到」+ 原因） */
+  const marginLegendOf = (
+    x: Awaited<ReturnType<typeof api.marketExtras>> | null,
+    pick: (r: { marginBalance: number | null; marginBuy: number | null }) => number | null,
+  ): { value: string; note: string } =>
+    x === null
+      ? { value: '未取到', note: MARGIN_REASON }
+      : marginRowOf(x.margin, pick as (r: never) => number | null)
 
   /** 图例行：色点 + 序列名 + 值（取不到时是「未取到」，原因进 title/aria） */
   const legendRow = (rows: Array<{ name: string; color: string; value: string; note: string }>): React.ReactElement =>
@@ -249,8 +282,23 @@ export function MarketPage(props: {
               item('上涨', up === null ? '—' : String(up), breadthOk ? (redUp ? 'tw-up' : 'tw-down') : 'tw-dim', countsNote),
               item('平盘', even === null ? '—' : String(even), 'tw-dim', countsNote),
               item('下跌', down === null ? '—' : String(down), breadthOk ? (redUp ? 'tw-down' : 'tw-up') : 'tw-dim', countsNote),
-              item('涨停', '未取到', 'tw-dim', LIMIT_REASON),
-              item('跌停', '未取到', 'tw-dim', LIMIT_REASON),
+              // 涨停/跌停（v0.81.2）：池接口直接给家数与样本；取不到仍是「未取到」+ 原因（不是 0）
+              item(
+                '涨停',
+                extras === null || extras.limits.up.count === null ? '未取到' : String(extras.limits.up.count),
+                extras !== null && extras.limits.up.count !== null ? (redUp ? 'tw-up' : 'tw-down') : 'tw-dim',
+                extras === null
+                  ? LIMIT_REASON
+                  : limitNoteOf(extras.limits.up.count === null ? null : extras.limits.up, extras.limits.caliber, '涨停'),
+              ),
+              item(
+                '跌停',
+                extras === null || extras.limits.down.count === null ? '未取到' : String(extras.limits.down.count),
+                extras !== null && extras.limits.down.count !== null ? (redUp ? 'tw-down' : 'tw-up') : 'tw-dim',
+                extras === null
+                  ? LIMIT_REASON
+                  : limitNoteOf(extras.limits.down.count === null ? null : extras.limits.down, extras.limits.caliber, '跌停'),
+              ),
             ),
             // 参考版副标题样式的一行小字：上涨占比 + 样本/快照说明（过长部分进悬停）
             // ⚠ 原「上证/深成两张大卡」按用户决定**直接删除**（这两个值在下方移出的「指数行情」表里仍可见）
@@ -284,15 +332,16 @@ export function MarketPage(props: {
               item('较昨日变动', delta === null ? '未取到' : `${delta >= 0 ? '+' : ''}${fmtAmt(delta)}`,
                 delta === null ? 'tw-dim' : (delta >= 0 ? (redUp ? 'tw-up' : 'tw-down') : (redUp ? 'tw-down' : 'tw-up')),
                 delta === null ? '取不到昨日成交就无法算变动（不是 0）' : '当日成交额 − 上一交易日收盘快照'),
-              item('预测全天', '未取到', 'tw-dim', FORECAST_REASON),
+              item('预测全天', forecastCell.value, forecastCell.cls, forecastCell.note),
             ),
           ),
           seg('两融走势', 'margin',
             React.createElement('span', { className: 'tw-dist-seg-sub' }, '本插件未集成两融数据源'),
+            // 两融（v0.81.2）：深交所官方 + 东财**双源交叉**。两源不一致时两个读数都显示 + ⚠ 标注（不取其一）。
             legendRow([
-              { name: '两融余额', color: 'var(--tw-chip-avg, #c97a1c)', value: '未取到', note: MARGIN_REASON },
-              { name: '上证指数', color: 'var(--tw-chip-sup, #2f74c0)', value: '未取到', note: '本段的主序列（两融余额）无源，单画一条指数会被读成"两融走势" ⇒ 不画' },
-              { name: '融资净买', color: 'var(--tw-chip-res, #7a5cc4)', value: '未取到', note: MARGIN_REASON },
+              { name: '两融余额', color: 'var(--tw-chip-avg, #c97a1c)', ...marginLegendOf(extras, (r) => r.marginBalance) },
+              { name: '融资买入', color: 'var(--tw-chip-res, #7a5cc4)', ...marginLegendOf(extras, (r) => r.marginBuy) },
+              { name: '上证指数', color: 'var(--tw-chip-sup, #2f74c0)', value: '未取到', note: '本段的主序列（两融余额）与上证指数同图；两融已按上方双源列出，指数曲线本身可取自 /trend，但单画一条会被读成"两融走势" ⇒ 不画' },
             ]),
           ),
         ),
@@ -309,64 +358,6 @@ export function MarketPage(props: {
         ),
       ),
       // 家数整体取不到时的说明已并入上面三格（`countsNote`）；本模块不再单开常驻提示行
-    ),
-    // 指数表：**移出**【涨跌分布】模块，作为大盘页独立区块（自带标题；功能不变，点行仍看详情）
-    React.createElement('div', { className: 'tw-panel', 'data-role': 'index-table' },
-      React.createElement('div', { className: 'tw-panel-h' },
-        React.createElement('span', { className: 't' }, '指数行情'),
-        React.createElement('span', { className: 'tw-muted' }, '点行看详情'),
-      ),
-      React.createElement('div', { className: 'tw-tablewrap' },
-        React.createElement('table', { className: 'tw-table', style: { minWidth: 560 } },
-          React.createElement('thead', null,
-            React.createElement('tr', null,
-              React.createElement('th', null, '指数'),
-              React.createElement('th', null, '现价'),
-              React.createElement('th', null, '涨跌'),
-              React.createElement('th', null, '幅度'),
-              React.createElement('th', null, '上涨/下跌'),
-              React.createElement('th', null, '成交额'),
-            ),
-          ),
-          React.createElement('tbody', null,
-            cnIndices.map((it) => {
-              const q = quotes[it.secid]
-              const cls = dirClass(q?.chg ?? null, redUp)
-              return React.createElement('tr', {
-                key: it.secid,
-                className: 'tw-rowhover',
-                style: { cursor: 'pointer' },
-                tabIndex: 0,
-                role: 'button',
-                'aria-label': `${it.name} 详情`,
-                onClick: () => openDetail(it.secid),
-                onKeyDown: (e: React.KeyboardEvent) => {
-                  if (e.key === 'Enter' || e.key === ' ') {
-                    e.preventDefault()
-                    openDetail(it.secid)
-                  }
-                },
-              },
-                React.createElement('td', { className: 'tl' }, it.name),
-                React.createElement('td', null, fmtPrice(q?.price ?? null)),
-                React.createElement('td', { className: cls }, fmtSigned(q?.chg ?? null)),
-                React.createElement('td', null, React.createElement('span', { className: `tw-chg-chip ${q?.pct === null || q?.pct === undefined ? 'tw-chip-flat' : (q.pct >= 0) === redUp ? 'tw-chip-up' : 'tw-chip-down'}` }, fmtPct(q?.pct ?? null))),
-                React.createElement('td', { className: 'tw-dim' },
-                  // 上涨/下跌是同一个事实的两个分量：一侧缺失就整格 —（否则会读成"没有一只下跌"）
-                  upDownPair(q?.up, q?.down).ok
-                    ? React.createElement(React.Fragment, null,
-                        React.createElement('span', { className: dirClass(1, redUp) }, String(q?.up)),
-                        ' / ',
-                        React.createElement('span', { className: dirClass(-1, redUp) }, String(q?.down)),
-                      )
-                    : React.createElement('span', { tabIndex: 0, role: 'note', 'aria-label': UPDOWN_MISSING_NOTE, title: UPDOWN_MISSING_NOTE }, '—'),
-                ),
-                React.createElement('td', null, fmtAmt(q?.amount ?? null)),
-              )
-            }),
-          ),
-        ),
-      ),
     ),
     React.createElement(RescuePanel, { prefs, redUp, onPrefs: props.onPrefs }),
     React.createElement('div', { className: 'tw-panel' },

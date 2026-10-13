@@ -79,6 +79,10 @@ export interface GlobalFlowMarketDto {
   benchmarkSource: string
   aumNative: number | null
   aumUsd: number | null
+  /** 该市场的**偏好分**（0–1；权重口径：55% 贪婪值 + 30% 5 日动量分位 + 15% 20 日动量分位；null = 样本不足 ⇒ 不进分母） */
+  pref?: number | null
+  /** 偏好分的口径说明（悬停/口径行用） */
+  prefSource?: string
   sharePct: number | null
   delta1Pp: number | null
   delta5Pp: number | null
@@ -351,6 +355,17 @@ export const api = {
   trend(secid: string, ndays = 1): Promise<{ trend: TrendData | null; missing?: MissingField[] }> {
     return request(`/tradewatcher/trend?secid=${encodeURIComponent(secid)}&ndays=${ndays}`)
   },
+  /**
+   * 大盘页的**附加行情**（v0.81.2，只读镜像 `/tradewatcher/market-extras`）：
+   * 涨停/跌停家数（池接口，含样本）、两融（深交所官方 + 东财**双源交叉**，不一致时两个读数都带）、
+   * 全天成交额预测（只在盘中给值；收盘后回落实际值）。
+   * ⚠ `amount` 传**页面自己已经显示的那个**当日成交额（宿主不再抓一遍）；缺/非正数 ⇒ 预测部分如实缺失。
+   * ⚠ 类型是**线缆契约**（结构对齐宿主 `marketExtras.ts` 的导出）；客户端不 import 宿主模块。
+   */
+  marketExtras(amount: number | null = null): Promise<MarketExtras> {
+    const q = amount === null || !(amount > 0) ? '' : `?amount=${encodeURIComponent(String(Math.round(amount)))}`
+    return request(`/tradewatcher/market-extras${q}`)
+  },
   /** fqt：0=不复权 1=前复权（默认）2=后复权；实际生效口径见回包 kline.fqt */
   kline(secid: string, klt: 101 | 102 | 103 | 104 = 101, lmt = 120, fqt: FqMode = 1): Promise<{ kline: KlineData | null; missing?: MissingField[] }> {
     return request(`/tradewatcher/kline?secid=${encodeURIComponent(secid)}&klt=${klt}&lmt=${lmt}&fqt=${fqt}`)
@@ -468,4 +483,37 @@ export const api = {
   setPrefs(patch: Partial<PortPrefs>): Promise<{ prefs: PortPrefs }> {
     return request('/tradewatcher/prefs', { method: 'POST', body: JSON.stringify({ patch }) })
   },
+}
+
+// ── `/tradewatcher/market-extras` 的线缆契约（v0.81.2）────────────────────────
+export interface LimitCountSideWire {
+  count: number | null
+  sample: Array<{ code: string; name: string; pct: number | null }>
+  source: string
+  at: number
+}
+export interface MarginReadingWire {
+  marginBalance: number | null
+  marginBuy: number | null
+  shortBalance: number | null
+  day: string | null
+  source: string
+}
+export interface AmountForecastWire {
+  current: number | null
+  forecast: number | null
+  band: { low: number; high: number } | null
+  progress: number | null
+  caliber: { curve: string; samples: number; generatedAt: string; note: string }
+  actual: number | null
+  phase: 'pre' | 'intraday' | 'closed' | 'non-trading'
+  missing: MissingField[]
+}
+export type LimitCountsWire = MarketExtras['limits']
+export type MarginCrossWire = MarketExtras['margin']
+export interface MarketExtras {
+  limits: { up: LimitCountSideWire; down: LimitCountSideWire; missing: MissingField[]; caliber: string }
+  margin: { szse: MarginReadingWire | null; em: MarginReadingWire | null; diffPct: number | null; mismatch: boolean; note: string; missing: MissingField[] }
+  forecast: AmountForecastWire
+  asOf: number
 }

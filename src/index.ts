@@ -47,7 +47,7 @@ const ROW_ROUTES: Record<Exclude<RowId, 'core'>, readonly string[]> = {
   //   · /tradewatcher/industries 只有 `WatchlistPage.tsx` 的 `api.industries(...)` 用 ⇒ 归 **watchlist**
   //   · /tradewatcher/anomaly    调用链 `alerts.ts` 的 `api.anomaly(...)` ← 只被 `WatchlistPage` 引用 ⇒ 归 **watchlist**
   //   · /tradewatcher/industry   （单 secid 行业查询）详情抽屉（core）在用 ⇒ 留 core
-  market: ['/tradewatcher/breadth', '/tradewatcher/rescue', '/tradewatcher/board'],
+  market: ['/tradewatcher/breadth', '/tradewatcher/rescue', '/tradewatcher/board', '/tradewatcher/market-extras'],
   cloudmap: [],
   /**
    * tools 行（工具箱：工具目录 + 工具详情）。

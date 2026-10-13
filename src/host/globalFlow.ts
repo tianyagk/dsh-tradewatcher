@@ -75,7 +75,7 @@ export const FLOW_MARKET_ORDER: readonly FlowMarketKey[] = ['cn', 'hk', 'us', 'j
  * 口径标识（写进快照文件）：五市场成分一变，**旧快照一律作废**（不许与新成分混用）。
  * v1（v0.72.0）= 美股/欧股/日股/A股/新兴市场；v2（本版）= A股/港股/美国/日本/韩国。
  */
-export const FLOW_SCOPE = 'v2:cn,hk,us,jp,kr'
+export const FLOW_SCOPE = 'v3:pref:cn,hk,us,jp,kr'
 
 export interface FlowMarketDef {
   key: FlowMarketKey
@@ -259,9 +259,112 @@ export function toUsd(native: number | null, currency: 'USD' | 'CNY' | 'HKD', ra
   return native / rate
 }
 
+// ── 权重口径（v0.82.0，用户口径：从"资产规模"改为"偏好分"）─────────────────────
+//
+// 为什么换：用 ETF 资产规模做权重时，SPY（约 8200 亿美元）比其余四家（各 200–300 亿美元）
+// 大两个数量级 ⇒ 权重天然 91% 对几个 %，**曲线被压平**（用户 2026-10-13 反馈，参考版是
+// 日本 34.9% / 韩国 22.0% / 美国 20.8% / A股 11.7% / 港股 10.6%）。参考版自述用的是
+// 「市场情绪与趋势」，因此本口径改为**无量纲的偏好分**。
+//
+//   · 每市场「贪婪值」= 该市场**自身**最近 `FLOW_GREED_WINDOW`（60）根日线收盘价的区间分位
+//     `(close − min₆₀) / (max₆₀ − min₆₀)` ∈ [0,1]（越高 = 越贴近这段时间的高位）；
+//   · 每市场「偏好分」= `FLOW_PREF_WEIGHTS`：55% × 贪婪值 + 30% × 5 日动量**横截面分位**
+//     + 15% × 20 日动量**横截面分位**（比例与参考版公开的那半句同形）；
+//   · **份额 = 偏好分 ÷ 五者之和 × 100%**。
+//
+// 关键性质（有断言锁）：分位与动量都是**无量纲**的 ⇒ **权重不依赖汇率**；
+// 汇率只影响"规模折成美元"的**展示**。三个分量任一算不出（样本不足）⇒ 该市场**不进分母**并给原因。
+
+/** 贪婪值窗口（该市场自身日线的区间分位；写死，改口径要同步文档与断言） */
+export const FLOW_GREED_WINDOW = 60
+/** 偏好分权重（55% 贪婪 + 30% 5 日动量分位 + 15% 20 日动量分位） */
+export const FLOW_PREF_WEIGHTS = { greed: 0.55, mom5: 0.3, mom20: 0.15 } as const
+/** 动量分位的两个窗口（序列日） */
+export const FLOW_PREF_MOM_WINDOWS = [5, 20] as const
+
+/**
+ * 贪婪值：收盘价在最近 `window` 根（含当日）里的区间分位 ∈ [0,1]。
+ * 样本不足 `window` 根、或区间为 0、或有非有限值 ⇒ null（**不返回 0.5 之类的"中性默认值"**：
+ * 那会把"算不出"伪装成"中性"，进而偷偷进分母）。
+ */
+export function greedOf(closes: ReadonlyArray<number | null>, window = FLOW_GREED_WINDOW): number | null {
+  if (window < 2 || closes.length < window) return null
+  const slice = closes.slice(closes.length - window)
+  let min = Number.POSITIVE_INFINITY
+  let max = Number.NEGATIVE_INFINITY
+  for (const c of slice) {
+    if (c === null || !Number.isFinite(c)) return null
+    if (c < min) min = c
+    if (c > max) max = c
+  }
+  const span = max - min
+  if (!(span > 0)) return null
+  const last = slice[slice.length - 1] as number
+  return (last - min) / span
+}
+
+/**
+ * 横截面分位（0–1）：把各市场的同一指标按"越大越好"排成名次再归一。
+ * 名次 1（最大）⇒ 1，末位 ⇒ 0；并列取**平均名次**；缺值 ⇒ null。
+ * 只有 1 个有值市场时无法比较 ⇒ 也给 null（"样本不足不进分母"这条规则在横截面上的对应形态）。
+ */
+export function percentileRanks(values: ReadonlyArray<number | null>): Array<number | null> {
+  const idx = values.map((v, i) => ({ v, i })).filter((x): x is { v: number; i: number } => x.v !== null && Number.isFinite(x.v))
+  if (idx.length < 2) return values.map(() => null)
+  const sorted = [...idx].sort((a, b) => b.v - a.v)
+  const score = new Map<number, number>()
+  let i = 0
+  while (i < sorted.length) {
+    let j = i
+    while (j + 1 < sorted.length && sorted[j + 1].v === sorted[i].v) j += 1
+    // 名次区间 [i, j] 的平均名次 → 分位：最好的名次(0) ⇒ 1，最差(len-1) ⇒ 0
+    const avgRank = (i + j) / 2
+    const pct = 1 - avgRank / (sorted.length - 1)
+    for (let k = i; k <= j; k += 1) score.set(sorted[k].i, pct)
+    i = j + 1
+  }
+  return values.map((v, k) => (v === null || !Number.isFinite(v) ? null : (score.get(k) ?? null)))
+}
+
+/** 偏好分的三个分量；任一为 null ⇒ 偏好分 null（该市场不进分母） */
+export interface FlowPreferenceParts {
+  greed: number | null
+  mom5: number | null
+  mom20: number | null
+}
+
+/** 偏好分 = 55% × 贪婪值 + 30% × 5 日动量分位 + 15% × 20 日动量分位 */
+export function preferenceOf(parts: FlowPreferenceParts): number | null {
+  const { greed, mom5, mom20 } = parts
+  if (greed === null || mom5 === null || mom20 === null) return null
+  if (!Number.isFinite(greed) || !Number.isFinite(mom5) || !Number.isFinite(mom20)) return null
+  return FLOW_PREF_WEIGHTS.greed * greed + FLOW_PREF_WEIGHTS.mom5 * mom5 + FLOW_PREF_WEIGHTS.mom20 * mom20
+}
+
+/**
+ * 由**偏好分**归一化成份额（0–1）。与 `sharesOf` 的关键差别：**0 是合法权重**
+ * （贪婪值 0 且两个分位都垫底 ⇒ 偏好分真的可以是 0），因此这里只把 `null` 当缺值，
+ * 不再用 `> 0` 当"有值"的判据（否则得 0 分的市场会被错误地踢出分母）。
+ */
+export function sharesFromScores(scores: ReadonlyArray<number | null>): Array<number | null> {
+  let total = 0
+  let any = false
+  for (const v of scores) {
+    if (v !== null && Number.isFinite(v) && v >= 0) {
+      total += v
+      any = true
+    }
+  }
+  if (!any || total <= 0) return scores.map(() => null)
+  return scores.map((v) => (v !== null && Number.isFinite(v) && v >= 0 ? v / total : null))
+}
+
 /**
  * 份额（0–1）：分母 = **有值市场**之和。全缺 ⇒ 全 null（不返回 0/1/N 这种假值）。
  * 除法后做一次"合计校验"由调用方断言（`sharesSumPct`）。
+ *
+ * ⚠ v0.82.0 起它**只用于"规模占比"的辅助展示**（例如审计对拍），**不再**用于权重：
+ * 权重走 `sharesFromScores` + `preferenceOf`（偏好分口径）。
  */
 export function sharesOf(aumUsd: ReadonlyArray<number | null>): Array<number | null> {
   let total = 0
@@ -461,14 +564,49 @@ export function alignSeries(
   return { days, closes }
 }
 
+/**
+ * 逐日计算各市场的偏好分与份额（**无量纲**：只用各市场自己的日线收盘价）。
+ *
+ * 输入是 `alignSeries` 对齐后的收盘价矩阵（每个市场一条、同一天一条，节假日按"最近一个已知收盘价"前向填充），
+ * 输出与 `days` 一一对应：`scores[i][m]` = 第 i 天第 m 个市场的偏好分（null = 样本不足 ⇒ 不进分母）。
+ *
+ * 每一天都用**那一天为止**的窗口：贪婪值 = 当日往前 `FLOW_GREED_WINDOW` 根的区间分位，
+ * 5/20 日动量 = 当日往前 5/20 根的收益率（再在同一天做横截面分位）⇒ 曲线是**可复现**的纯函数，
+ * 不吃快照、不吃汇率、不吃"当前实测规模"。
+ */
+export function preferenceScoresByDay(closes: ReadonlyArray<ReadonlyArray<number | null>>): Array<Array<number | null>> {
+  const days = closes.length > 0 ? closes[0].length : 0
+  const [w5, w20] = FLOW_PREF_MOM_WINDOWS
+  const out: Array<Array<number | null>> = []
+  for (let i = 0; i < days; i += 1) {
+    const greed = closes.map((c) => greedOf(c.slice(0, i + 1)))
+    const ret = (w: number): Array<number | null> =>
+      closes.map((c) => {
+        const now = c[i]
+        const then = i - w >= 0 ? c[i - w] : null
+        if (now === null || then === null || !Number.isFinite(now) || !Number.isFinite(then) || !(then > 0)) return null
+        return now / then - 1
+      })
+    const mom5 = percentileRanks(ret(w5))
+    const mom20 = percentileRanks(ret(w20))
+    out.push(closes.map((_, m) => preferenceOf({ greed: greed[m], mom5: mom5[m], mom20: mom20[m] })))
+  }
+  return out
+}
+
 export interface FlowPoint {
   day: string
   origin: 'observed' | 'rebuilt'
-  /** 各市场规模（美元），顺序 = FLOW_MARKET_ORDER */
+  /** 各市场规模（美元，**只作展示**），顺序 = FLOW_MARKET_ORDER */
   aumUsd: Array<number | null>
-  /** 各市场份额（0–1） */
+  /** 各市场**偏好分**（0–1；null = 样本不足 ⇒ 不进分母） */
+  pref: Array<number | null>
+  /** 各市场**偏好份额**（0–1）：由偏好分归一化，**不是**规模占比 */
   share: Array<number | null>
-  /** 该日是否有市场缺值（分母只含有值市场） */
+  /**
+   * 该日是否有缺口：**权重缺口**（偏好分算不出）或**规模缺口**（规模列没有值）。
+   * 两者要分开看：规模缺不影响权重（分母照旧），但这一天的"规模列"确实不完整 ⇒ 都算 partial。
+   */
   partial: boolean
 }
 
@@ -480,10 +618,14 @@ export interface ObservedDay {
 }
 
 /**
- * 建曲线：有实测快照的日期用实测（origin = observed），其余用
- * `当前实测规模 × 该市场收盘价 / 该市场最新收盘价` 重建（origin = rebuilt）。
+ * 建曲线。
  *
- * `anchors` = 各市场**当前实测**美元规模；null 表示该市场当前取不到 ⇒ 整条序列都是 null
+ * · **份额（曲线画的就是它）= 偏好分归一化**：逐日由各市场自己的日线算出贪婪值 / 5 日与 20 日动量分位
+ *   （见 `preferenceScoresByDay`）⇒ 与规模、汇率**无关**，因此不会出现"SPY 一家 91% 把曲线压平"。
+ * · **规模（只作展示）**：有实测快照的日期用实测（origin = observed），其余用
+ *   `当前实测规模 × 该市场收盘价 / 该市场最新收盘价` 重建（origin = rebuilt）。
+ *
+ * `anchors` = 各市场**当前实测**美元规模；null 表示该市场当前取不到 ⇒ 该日规模列为 null
  * （**不做任何替代**：宁可这一行整段"未取到"，也不拿价格变动冒充规模）。
  */
 export function buildCurve(input: {
@@ -494,8 +636,14 @@ export function buildCurve(input: {
   window?: number
 }): FlowPoint[] {
   const window = input.window ?? FLOW_CURVE_WINDOW
-  // 轴 = 各市场交易日 ∪ 快照日（快照日可能落在周末/节假日，不并进来就会丢掉那一天的实测值）
-  const { days, closes } = alignSeries(input.chartSeries, window, [...input.observed.keys()])
+  // 轴 = 各市场交易日 ∪ 快照日（快照日可能落在周末/节假日，不并进来就会丢掉那一天的实测值）。
+  // ⚠ 多对齐 `FLOW_GREED_WINDOW` 天作为**热身窗口**：贪婪值要往前看 60 根，否则曲线最前面
+  //    约 60 天会因为没有足够样本而拿不到偏好分（那一段会整段空掉）。热身段只用于提供历史窗口，
+  //    不进输出 ⇒ 输出的点数仍然正好是 `window`。
+  const warmup = FLOW_GREED_WINDOW
+  const { days: allDays, closes } = alignSeries(input.chartSeries, window + warmup, [...input.observed.keys()])
+  const startIdx = Math.max(0, allDays.length - window)
+  const days = allDays.slice(startIdx)
   const anchors = input.chartSeries.map((s, i) => {
     const aum = input.anchors[i]
     if (aum === null || !(aum > 0)) return null
@@ -505,6 +653,9 @@ export function buildCurve(input: {
     if (!(lastClose > 0)) return null
     return { aum, lastClose }
   })
+  // 份额 = 偏好分归一化（无量纲：只看各市场自己的日线，不吃汇率、不吃规模）
+  const prefAll = preferenceScoresByDay(closes)
+  const prefByDay = prefAll.slice(startIdx)
   const points: FlowPoint[] = []
   for (let i = 0; i < days.length; i += 1) {
     const day = days[i]
@@ -512,21 +663,22 @@ export function buildCurve(input: {
     let aumUsd: Array<number | null>
     let origin: 'observed' | 'rebuilt'
     if (obs !== undefined) {
-      // 实测日：只用实测值。那次缺哪个市场就是缺哪个（**不拿重建值去补实测日的洞**）
+      // 实测日：规模用实测值。那次缺哪个市场就是缺哪个（**不拿重建值去补实测日的洞**）
       origin = 'observed'
       aumUsd = obs.aumNative.map((native, m) => toUsd(native, input.marketCurrency[m], obs.rates))
     } else {
       origin = 'rebuilt'
       aumUsd = anchors.map((a, m) => {
         if (a === null) return null
-        const c = closes[m][i]
+        const c = closes[m][i + startIdx]
         // 该市场在这一天还没有任何收盘价（序列比别的市场短）⇒ 该日这一行没有值
         if (c === null) return null
         return a.aum * (c / a.lastClose)
       })
     }
-    const share = sharesOf(aumUsd)
-    points.push({ day, origin, aumUsd, share, partial: aumUsd.some((v) => v === null) })
+    const pref = prefByDay[i] ?? closes.map(() => null)
+    const share = sharesFromScores(pref)
+    points.push({ day, origin, aumUsd, pref, share, partial: pref.some((v) => v === null) || aumUsd.some((v) => v === null) })
   }
   return points
 }
@@ -536,6 +688,9 @@ export function buildCurve(input: {
 export interface FlowSnapshotMarket {
   aumNative: number | null
   aumUsd: number | null
+  /** 该市场当日的**偏好分**（0–1；权重口径 v0.82.0 起：快照模式没有日线可算，必须存下来） */
+  pref?: number | null
+  /** 该市场当日的**偏好份额**（0–1，由偏好分归一化；不是规模占比） */
   share: number | null
   currency: 'USD' | 'CNY' | 'HKD'
   aumSource: string
@@ -889,7 +1044,7 @@ export async function marketRaws(): Promise<{ markets: MarketRaw[]; fx: FlowFxOu
       missing.push({
         what: `${def.name}规模（${def.etf}）折算`,
         why: 'transient',
-        note: `${def.name}规模是${def.currency === 'CNY' ? '人民币' : '港元'}（${FLOW_FX_LABEL[def.currency]} 换算），本次 ${def.currency === 'CNY' ? '美元/人民币' : '美元/港元'} 汇率未取到 ⇒ 不做美元折算、不进美元合计（口径不一致，不许静默混算）`,
+        note: `${def.name}规模是${def.currency === 'CNY' ? '人民币' : '港元'}（${FLOW_FX_LABEL[def.currency]} 换算），本次 ${def.currency === 'CNY' ? '美元/人民币' : '美元/港元'} 汇率未取到 ⇒ 这一行的"规模（美元）"不折算、不进美元合计（不许静默混算）；偏好份额不受影响（权重来自无量纲的偏好分，与汇率无关）`,
       })
     }
     const chart = await dailySeries(def.key, 'chart')
@@ -918,6 +1073,10 @@ export interface FlowMarketRow {
   /** 份额（0–1） */
   share: number | null
   sharePct: number | null
+  /** 该市场的**偏好分**（0–1；null = 样本不足 ⇒ 不进分母） */
+  pref: number | null
+  /** 偏好分的口径说明（悬停/口径行用；同一份文案给五条行共用） */
+  prefSource: string
   /** 与上一序列日的份额变化（百分点） */
   delta1Pp: number | null
   /** 与 5 个序列日前的份额变化（百分点） */
@@ -982,17 +1141,18 @@ export interface GlobalFlowPayload {
 
 /** 曲线/饼图/市场表共用的口径行（唯一来源；页面不许另写一份） */
 export const FLOW_NOTES = {
-  kpi: `规模 = 各市场宽基 ETF 规模；delta = 与 ${FLOW_ROTATION_WINDOW} 个序列日前的份额变化（百分点）`,
-  curve: `份额曲线可选 ${FLOW_CURVE_WINDOWS.join(' / ')} 个序列日：有实测快照的日期用实测规模，其余按「当前实测规模 × 该市场日线收盘价之比」重建（假定 ETF 份额数量不变 ⇒ 只反映价格驱动的相对规模变化，不反映申赎）`,
-  pie: `静态饼图（无动画、无自动播放）：份额 = 该市场规模 ÷ Σ 有值市场规模；缺值的市场不进分母，在该行如实显示「未取到 + 原因」`,
-  market: `份额合计恒为 100%（分母只含有值市场）；「未取到」= 该行本次没有数，不用 0 顶替；动量列 = 各市场自己的 ${FLOW_HORIZONS.join(' / ')} 个交易日收益率（样本不足的那一格显示「—」，不回填 0），且只反映最新交易日 —— 回放历史日时不重算`,
-  boundary: `A股净流入是「流量」，单列且不参与份额/规模计算；份额是「存量加权」，两者量纲不同，禁止相加`,
+  kpi: `权重口径 = 偏好分（非资产规模）：55% × 贪婪值（各市场自身 ${FLOW_GREED_WINDOW} 日区间分位）+ 30% × ${FLOW_PREF_MOM_WINDOWS[0]} 日动量分位 + 15% × ${FLOW_PREF_MOM_WINDOWS[1]} 日动量分位；份额 = 偏好分 ÷ 五者之和。规模列只作展示，不参与权重`,
+  curve: `份额曲线可选 ${FLOW_CURVE_WINDOWS.join(' / ')} 个序列日：每一天都按"那一天为止的窗口"重算偏好分（贪婪值 ${FLOW_GREED_WINDOW} 日区间分位 + ${FLOW_PREF_MOM_WINDOWS.join(' / ')} 日动量横截面分位）⇒ 曲线是价格序列的纯函数，不吃快照、不吃汇率、与规模无关`,
+  pie: `静态饼图（无动画、无自动播放）：分块 = 偏好份额（偏好分归一化，不是资产规模、不是跨境资金净流入）；某个市场偏好分算不出（样本不足）时不进分母，并在该行如实显示「未取到 + 原因」`,
+  market: `份额 = 偏好分归一化（合计恒为 100%，分母只含"能算出偏好分"的市场）；「未取到」= 该行本次没有数，不用 0 顶替；规模列（美元）只作展示、不参与权重，汇率只影响这一列；动量列 = 各市场自己的 ${FLOW_HORIZONS.join(' / ')} 个交易日收益率（样本不足的那一格显示「—」，不回填 0），且只反映最新交易日`,
+  boundary: `A股净流入是「流量」，单列且不参与份额/规模计算；权重是「偏好分」，规模是「存量事实」，三者量纲不同，禁止相加`,
 } as const
 
 export const FLOW_BOUNDARY: readonly string[] = [
   // ⚠ 与工具文件 `tools/cake.ts` 的边界声明**不许重复**（v0.73.0 前是 6+7 拼接，5 组近似重复，AUDIT-HY4-1 §8）：
   //   工具文件讲「这个模型是什么 / 不是什么」；这里只讲「具体的数字口径与数据源事实」。
-  '规模字段口径（成分 v2：A股 / 港股 / 美国 / 日本 / 韩国）：A股 取新浪 ETF 节点 nmc（510300，万元人民币）；港股 取腾讯 02800 盈富基金的「总市值」字段（亿港元）；美国 / 日本 取新浪 gb_* 的「总市值」（美元）；韩国 取腾讯 EWY 的股本（f71）× 最新价（美元）—— 新浪 gb_ewy 的「总市值」字段实测为 0，只能用这条推导值。每条都用第二条路径交叉校验，对不上时在该行说明里标出。',
+  '权重口径 = 偏好分归一化，非资产规模、非跨境资金净流入：每个市场先算"贪婪值"（自身 60 日收盘价区间分位）与 5 / 20 日动量的横截面分位，再按 55% / 30% / 15% 加权成偏好分，份额 = 偏好分 ÷ 五者之和。换口径的原因：资产规模里 SPY 比其余四家大两个数量级，会把曲线压成一条平线；偏好分是无量纲的，因此权重不依赖汇率，也不代表资金流入。',
+  '规模字段（只作展示、不参与权重）口径（成分 v2：A股 / 港股 / 美国 / 日本 / 韩国）：A股 取新浪 ETF 节点 nmc（510300，万元人民币）；港股 取腾讯 02800 盈富基金的「总市值」字段（亿港元）；美国 / 日本 取新浪 gb_* 的「总市值」（美元）；韩国 取腾讯 EWY 的股本（f71）× 最新价（美元）—— 新浪 gb_ewy 的「总市值」字段实测为 0，只能用这条推导值。每条都用第二条路径交叉校验，对不上时在该行说明里标出。',
   '汇率来源：新浪 fx_susdcny（美元/人民币，在岸）与 fx_susdhkd（美元/港元即期）最新价；缺值或明显错值（相对昨收 ≥ 5%）一律视为未取到 ⇒ 该币种的市场保持原币、不进美元合计。美 / 日 / 韩 用的是美股上市 ETF，天然美元。',
   '动量 = 各市场自己的 20 / 60 / 120 个交易日收益率，再做横截面名次（并列取最靠前）；轮动判定线 = 5 日份额变化 0.05 个百分点，低于它算「未见明确轮动」。A股 用沪深 300、港股 用恒生指数（hkHSI）、美国 用标普 500；日本 / 韩国 用对应 ETF 自身日线 —— KOSPI200 在腾讯与新浪都没有日线源（实测四个候选代码全 pv_none_match）。',
   '曲线固定 180 个序列日、滑块回放最近 30 个交易日；每日快照一天一条、保留 90 天，且带口径标识：成分一变，旧快照整份作废并留痕，不与新成分混用。回放只读本地快照，不发上游请求。',
@@ -1034,7 +1194,13 @@ async function buildLivePayload(now: number, day: string): Promise<GlobalFlowPay
   const { markets: raw, fx } = await marketRaws()
   const usdOf = (m: MarketRaw): number | null => toUsd(m.aumNative, m.currency, fx.rates)
   const aumUsd = raw.map(usdOf)
-  const shares = sharesOf(aumUsd)
+  // 曲线为空（所有日线都取不到）时的兜底：**现算当日偏好分**，绝不退回"规模占比"
+  const sharesFallback = (() => {
+    const aligned = alignSeries(raw.map((m) => m.chart), FLOW_GREED_WINDOW + 1, [])
+    const byDay = preferenceScoresByDay(aligned.closes)
+    return sharesFromScores(byDay.length > 0 ? byDay[byDay.length - 1] : raw.map(() => null))
+  })()
+  const shares = sharesFallback
   const mom = raw.map((m) => (m.momentum === null ? null : momentumOf(m.momentum)))
   const ranks = momentumRanks(mom)
 
@@ -1058,9 +1224,11 @@ async function buildLivePayload(now: number, day: string): Promise<GlobalFlowPay
   const rotation = rotationOf({ latest, previous: prevIdx >= 0 ? curve[prevIdx].share : null })
   const prev1 = curve.length - 2 >= 0 ? curve[curve.length - 2].share : null
 
+  const prefLatest: Array<number | null> = curve.length > 0 ? curve[curve.length - 1].pref : raw.map(() => null)
   const rows: FlowMarketRow[] = raw.map((m, i) => {
     const def = FLOW_MARKETS[i]
     const share = latest[i] ?? null
+    const pref = prefLatest[i] ?? null
     const delta1 = prev1 === null || share === null || prev1[i] === null ? null : (share - (prev1[i] as number)) * 100
     const delta5 = prevIdx < 0 || share === null || curve[prevIdx].share[i] === null ? null : (share - (curve[prevIdx].share[i] as number)) * 100
     const miss = m.missing.map((x) => x.note).join('；')
@@ -1074,6 +1242,8 @@ async function buildLivePayload(now: number, day: string): Promise<GlobalFlowPay
       benchmarkSource: def.benchmarkSource,
       aumNative: m.aumNative,
       aumUsd: aumUsd[i],
+      pref,
+      prefSource: `偏好分 = ${FLOW_PREF_WEIGHTS.greed} × 贪婪值（${FLOW_GREED_WINDOW} 日区间分位）+ ${FLOW_PREF_WEIGHTS.mom5} × ${FLOW_PREF_MOM_WINDOWS[0]} 日动量分位 + ${FLOW_PREF_WEIGHTS.mom20} × ${FLOW_PREF_MOM_WINDOWS[1]} 日动量分位`,
       share,
       sharePct: share === null ? null : share * 100,
       delta1Pp: delta1,
@@ -1166,11 +1336,14 @@ async function buildLivePayload(now: number, day: string): Promise<GlobalFlowPay
   // ⚠ 只在**至少有一个市场拿到规模**时写：全缺的那一天不是"观测"，写进去会让回放出现一个
   //    "那天五个市场都没数"的假历史日（实测日的洞必须是真的洞）。
   const hasAnyAum = aumUsd.some((v) => v !== null)
+  const prefForSnapshot: Array<number | null> = curve.length > 0 ? curve[curve.length - 1].pref : raw.map(() => null)
   const record: FlowSnapshotDay = {
     at: now,
     rates: fx.rates,
     scope: FLOW_SCOPE,
-    markets: Object.fromEntries(rows.map((r) => [r.key, { aumNative: r.aumNative, aumUsd: r.aumUsd, share: r.share, currency: r.currency, aumSource: r.aumSource }])) as Record<FlowMarketKey, FlowSnapshotMarket>,
+    markets: Object.fromEntries(
+      rows.map((r, i) => [r.key, { aumNative: r.aumNative, aumUsd: r.aumUsd, pref: prefForSnapshot[i] ?? null, share: r.share, currency: r.currency, aumSource: r.aumSource }]),
+    ) as Record<FlowMarketKey, FlowSnapshotMarket>,
     momentum: Object.fromEntries(rows.map((r, i) => [r.key, mom[i]])) as Record<FlowMarketKey, FlowMomentum | null>,
     ranks: Object.fromEntries(rows.map((r, i) => [r.key, ranks[i]])) as Record<FlowMarketKey, number | null>,
     totalUsd,
@@ -1231,7 +1404,9 @@ async function payloadFromSnapshot(
   const points: FlowPoint[] = keys.map((d) => {
     const rec = snap.days[d]
     const aumUsd = FLOW_MARKET_ORDER.map((k) => rec.markets?.[k]?.aumUsd ?? null)
-    return { day: d, origin: 'observed' as const, aumUsd, share: sharesOf(aumUsd), partial: aumUsd.some((v) => v === null) }
+    // 权重走**偏好分**（存进快照的那一份）：规模缺了不影响权重，只有偏好分缺才不进分母
+    const pref = FLOW_MARKET_ORDER.map((k) => rec.markets?.[k]?.pref ?? null)
+    return { day: d, origin: 'observed' as const, aumUsd, pref, share: sharesFromScores(pref), partial: pref.some((v) => v === null) }
   })
   const lastRec = keys.length > 0 ? snap.days[keys[keys.length - 1]] : null
   const lastPoint = points.length > 0 ? points[points.length - 1] : null
@@ -1243,8 +1418,11 @@ async function payloadFromSnapshot(
   const rows: FlowMarketRow[] = FLOW_MARKETS.map((def, i) => {
     const rec = lastRec?.markets?.[def.key]
     const share = latest[i] ?? null
+    const pref = lastPoint?.pref[i] ?? null
     const prev1 = points.length >= 2 ? points[points.length - 2].share[i] : null
     return {
+      pref,
+      prefSource: `偏好分 = ${FLOW_PREF_WEIGHTS.greed} × 贪婪值（${FLOW_GREED_WINDOW} 日区间分位）+ ${FLOW_PREF_WEIGHTS.mom5} × ${FLOW_PREF_MOM_WINDOWS[0]} 日动量分位 + ${FLOW_PREF_WEIGHTS.mom20} × ${FLOW_PREF_MOM_WINDOWS[1]} 日动量分位`,
       key: def.key,
       name: def.name,
       etf: def.etf,

@@ -66,18 +66,23 @@ test('E5 页面需要的标的**不因隐藏**被剔除（那一行仍要显示�
   assert.ok(ids.includes('1.000012'), '自选页里真的有这一行 ⇒ 必须继续取数（隐藏只作用于行情条卡片）')
 })
 
-test('E6 大盘页直接读的 6 个指数与 MarketPage 显示的指数名一一对应（漂移必须红）', () => {
-  const displayed = ['上证指数', '深证成指', '创业板指', '科创50', '沪深300', '中证500']
+test('E6 大盘页直接读的 2 个指数（上证/深证）：在 TW_ROWS 里存在，且被隐藏也断不了供', () => {
+  // v0.81.1：【指数行情】模块（原 6 个 A 股指数行）已删 ⇒ 大盘页只剩这两格的分量要用它们
+  const needed: Array<[string, string]> = [['上证指数', '1.000001'], ['深证成指', '0.399001']]
   const cards = TW_ROWS.flatMap((r) => (r.items as ReadonlyArray<{ secid: string; name: string }>))
-  const byName = displayed.map((name) => {
+  for (const [name, secid] of needed) {
     const hit = cards.find((i) => i.name === name)
-    assert.ok(hit !== undefined, `TW_ROWS 里找不到「${name}」：MarketPage 的 cnIndices 改了？回来核对 MARKET_PAGE_SECIDS`)
-    return hit.secid
-  })
-  assert.deepEqual([...MARKET_PAGE_SECIDS], byName)
-  assert.deepEqual(pageExtraIds({ page: 'market', watchIds: [], posIds: [] }), byName)
-  // 大盘页需要的这 6 个即使被用户隐藏，也必须继续取数（那一页真的在读它们）
-  const hiddenAll = byName
+    assert.ok(hit !== undefined, `TW_ROWS 里找不到「${name}」：MarketPage 改了要读的标的？回来核对 MARKET_PAGE_SECIDS`)
+    assert.equal(hit.secid, secid, `「${name}」的 secid 与 MARKET_PAGE_SECIDS 不一致（漂移必须红）`)
+  }
+  assert.deepEqual([...MARKET_PAGE_SECIDS], needed.map(([, id]) => id))
+  assert.deepEqual(pageExtraIds({ page: 'market', watchIds: [], posIds: [] }), needed.map(([, id]) => id))
+  // 大盘页要读的这 2 个即使被用户隐藏，也必须继续取数（那一页真的在读它们）
+  const hiddenAll = needed.map(([, id]) => id)
   const ids = quoteEngineIds(TW_ROWS, hiddenAll, pageExtraIds({ page: 'market', watchIds: [], posIds: [] }))
-  for (const secid of byName) assert.ok(ids.includes(secid), `${secid}：大盘页要读它 ⇒ 不能因为隐藏就断供`)
+  for (const [, secid] of needed) assert.ok(ids.includes(secid), `${secid}：大盘页要读它 ⇒ 不能因为隐藏就断供`)
+  // 已删掉的 6 行里，其余 4 个不再享受"隐藏也取数"的额外保证（它们只是行情条上的卡片）
+  for (const gone of ['0.399006', '1.000688', '1.000300', '1.000905']) {
+    assert.equal(MARKET_PAGE_SECIDS.includes(gone), false, `${gone} 不该再在 MARKET_PAGE_SECIDS 里（页面已不显示）`)
+  }
 })

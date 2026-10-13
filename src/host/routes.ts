@@ -18,6 +18,7 @@ import { YTD_MAX_IDS, computeYtds } from './ytd.ts'
 import { TONE_MAX_IDS, computeTones } from './tonesService.ts'
 import { BREADTH_MIN_DAYS, BREADTH_WINDOW, BreadthStore, breadthUsable, percentileOf, upRatio } from './breadth.ts'
 import { BREADTH_METHODOLOGY, BREADTH_COUNT_CALIBER, BREADTH_CLIST_MAX_PAGES, BREADTH_PAGE_SIZE, BreadthCountCache, resolveBreadthCount } from './breadthCount.ts'
+import * as extras from './marketExtras.ts'
 import { dayOf } from './time.ts'
 import { distributionBinsOf } from '../client/breadthView.ts'
 import { log, type PluginWebRoute } from './context.ts'
@@ -581,6 +582,36 @@ export function makeTradeRoutes(
                 }]),
             ],
           })
+        } catch (error) {
+          fail(res, error)
+        }
+      },
+    },
+    {
+      // 大盘页的**附加行情**（v0.81.2）：涨停/跌停家数、两融（双源交叉）、全天成交额预测。
+      // 全部是**只读镜像**：直接调 `marketExtras.ts` 的导出（不在此复刻任何宿主逻辑）。
+      //   · 成交额：由调用方把"自己已经显示的那个数"带过来（`?amount=`）——这里**不再抓一遍**，
+      //     避免复制 `/breadth` 的取数口径；非正数/缺省一律按"没取到"处理（**不当 0**）。
+      //   · 日期：`day=YYYY-MM-DD`（两融，缺省用北京自然日）；`date=YYYYMMDD`（涨停池，缺省今天）。
+      //   · 缺数据一律 null + 原因（在各段的 `missing[]` 里），与 quoteProvenance 同一口径。
+      kind: 'exact',
+      path: '/tradewatcher/market-extras',
+      handler: async (req, res) => {
+        if (!needGate(req, res)) return
+        try {
+          const p = queryOf(req)
+          const day = String(p.get('day') ?? '').trim()
+          const date = String(p.get('date') ?? '').trim()
+          if (day !== '' && !/^\d{4}-\d{2}-\d{2}$/.test(day)) throw new HttpError('day 非法（要 YYYY-MM-DD）', 400)
+          if (date !== '' && !/^\d{8}$/.test(date)) throw new HttpError('date 非法（要 YYYYMMDD）', 400)
+          const rawAmount = Number(p.get('amount'))
+          const current = Number.isFinite(rawAmount) && rawAmount > 0 ? rawAmount : null
+          const [limits, margin, forecast] = await Promise.all([
+            extras.limitCounts(date === '' ? undefined : date),
+            extras.marginCross(day === '' ? dayOf(Date.now()) : day),
+            extras.amountForecast(current),
+          ])
+          send(res, 200, { limits, margin, forecast, asOf: Date.now() })
         } catch (error) {
           fail(res, error)
         }

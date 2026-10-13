@@ -63,6 +63,8 @@ const FUNCTION_OWNED_PATHS = [
   '/tradewatcher/rescue',
   // v0.62.0：云图页不再消费 /board ⇒ 它现在是 market 行独占（core 必须交出去）
   '/tradewatcher/board',
+  // v0.81.2：大盘页的附加行情（涨停/两融/预测）—— 单一消费方 `MarketPage.tsx`（market 行）
+  '/tradewatcher/market-extras',
 ] as const
 
 // 隔离数据目录：**绝不能在测试里碰用户的 ~/.dsh**（store.init 会读写真实文件）
@@ -257,7 +259,7 @@ test('P3：market 行只注册独占前缀；/tradewatcher/industry 留在 core�
   apply(market.ctx, { row: 'market' })
   // market 独占的前缀都在该行；core 里一个都不许有
   // task-60 重定：/industries 与 /anomaly 改归 watchlist；**v0.62.0**：内建热力视图下线后 /board 移回 market
-  const owned = ['/tradewatcher/breadth', '/tradewatcher/rescue', '/tradewatcher/board']
+  const owned = ['/tradewatcher/breadth', '/tradewatcher/rescue', '/tradewatcher/board', '/tradewatcher/market-extras']
   for (const p of owned) {
     assert.equal(market.routes.includes(p), true, `market 行应注册 ${p}`)
     assert.equal(core.routes.includes(p), false, `core 不该再注册 ${p}（否则关不掉大盘）`)
@@ -315,7 +317,7 @@ test('P4：六个功能行（calendar/cloudmap/market/watchlist/portfolio/tools�
 const ROW_ROUTES_FOR_TEST: Record<string, readonly string[]> = {
   calendar: ['/tradewatcher/calendar'],
   cloudmap: [],
-  market: ['/tradewatcher/breadth', '/tradewatcher/rescue', '/tradewatcher/board'],
+  market: ['/tradewatcher/breadth', '/tradewatcher/rescue', '/tradewatcher/board', '/tradewatcher/market-extras'],
   watchlist: ['/tradewatcher/watch', '/tradewatcher/industries', '/tradewatcher/anomaly'],
   portfolio: ['/tradewatcher/portfolio', '/tradewatcher/ledger'],
   // 第 7 行（工具箱）：独占五市场蛋糕的数据路由（单一消费方 ⇒ 该行）
@@ -338,6 +340,8 @@ test('归属按**实测调用方所在行**（board=market / industries=watchlis
   //   /tradewatcher/anomaly    alerts.ts:69 ← 只被 WatchlistPage 引用（watchlist 行）
   const OWNER_BY_CALLERS: Record<string, string> = {
     '/tradewatcher/board': 'market',
+    // v0.81.2：`api.marketExtras(...)` 的唯一调用方是 `MarketPage.tsx`（market 行）
+    '/tradewatcher/market-extras': 'market',
     '/tradewatcher/industries': 'watchlist',
     '/tradewatcher/anomaly': 'watchlist',
   }
@@ -764,8 +768,8 @@ test('v0.62.0：/board 归 market 行（不在 core、也不在别的行）；�
   assert.deepEqual(boardOwnershipProblems(src), [], '真实源码：/board 必须只由 market 行持有')
   // 反例 ①：把 /board 从 market 撤掉 ⇒ 等于"回 core"（core 是"没人认领才兜底"的那一行）⇒ 必须非空
   const backToCore = src.replace(
-    "market: ['/tradewatcher/breadth', '/tradewatcher/rescue', '/tradewatcher/board']",
-    "market: ['/tradewatcher/breadth', '/tradewatcher/rescue']",
+    "market: ['/tradewatcher/breadth', '/tradewatcher/rescue', '/tradewatcher/board', '/tradewatcher/market-extras']",
+    "market: ['/tradewatcher/breadth', '/tradewatcher/rescue', '/tradewatcher/market-extras']",
   )
   const p1 = boardOwnershipProblems(backToCore)
   assert.notDeepEqual(p1, [], '⚠ 反例（/board 改回 core 的形态）必须被判据抓住')

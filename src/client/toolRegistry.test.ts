@@ -149,11 +149,15 @@ test('详情页骨架：五个区齐全且顺序固定（KPI 行 / 曲线区 / �
     ['KPI 行', '曲线区', '饼图区', '市场表', '边界声明'],
     '骨架区的顺序与标题就是详情页的渲染顺序（测试锁它）',
   )
-  assert.deepEqual(d.kpi.cells.map((c) => c.label), ['规模榜首', '五市场合计规模', '近五日轮动', '数据时刻'], 'KPI 格子标签是真的（数据源按这些标签填值）')
+  assert.deepEqual(
+    d.kpi.cells.map((c) => c.label),
+    ['偏好榜首', '五市场合计规模', '近五日轮动', '数据时刻'],
+    'KPI 磁贴标签是真的（口径 v0.82.0：份额是偏好分归一化 ⇒ 榜首叫「偏好榜首」而不是「规模榜首」）',
+  )
   assert.deepEqual(
     d.market.columns,
-    ['市场', '宽基标的', '规模', '份额', '份额变化', '动量（多周期）', '横截面排名'],
-    '市场表列头是真的（份额 + 变化是用户口径的硬要求）',
+    ['市场', '宽基标的', '规模', '偏好份额', '偏好分', '份额变化', '动量（多周期）', '横截面排名'],
+    '市场表列头是真的（规模仍是事实展示；份额改成「偏好份额」并加了「偏好分」列）',
   )
   assert.equal(d.backAction.trim() === '', false, '详情页必须有回目录的入口文案')
   assert.deepEqual(d.boundary.lines, [...cakeTool.boundary], '边界声明逐条来自工具文件（不许在页面里另写一份）')
@@ -266,7 +270,7 @@ test('④ 边界声明（无数据时也在）：含「风险偏好代理 ≠ �
 test('数据路径：给了 ToolData ⇒ 数值只来自数据；缺的格子仍是「未取到」+ value null', () => {
   const d = detailModel(cakeTool, {
     status: '数据时刻 2026-10-12 21:05（北京时间）',
-    kpi: { 规模榜首: { text: '美股 89.17%', value: 89.17, delta: '五日 +0.20pp' } },
+    kpi: { 偏好榜首: { text: '美国 34.90%', value: 34.9, delta: '五日 +0.20pp' } },
     curve: { days: ['2026-10-10', '2026-10-12'], series: [{ name: '美股', points: [89.16, 89.17] }] },
     pie: { slices: [{ label: '美股', text: '89.17%', value: 89.17, index: 0 }], center: '2026-10-12' },
     market: { rows: [['美股', 'SPY', '8222.73 亿美元', '89.17%', '+0.01pp', '+2.0% / +3.7% / +9.9%', '1 / 5']], rowNotes: [null] },
@@ -274,8 +278,8 @@ test('数据路径：给了 ToolData ⇒ 数值只来自数据；缺的格子仍
     replay: { days: ['2026-10-12'], selected: 0, note: '回放' },
     boundary: ['来自数据源的边界声明'],
   })
-  assert.equal(d.kpi.cells[0].text, '美股 89.17%', '有数据时 KPI 取数据里的文本')
-  assert.equal(d.kpi.cells[0].value, 89.17)
+  assert.equal(d.kpi.cells[0].text, '美国 34.90%', '有数据时 KPI 取数据里的文本')
+  assert.equal(d.kpi.cells[0].value, 34.9)
   assert.equal(d.kpi.cells[0].delta, '五日 +0.20pp')
   // 数据里没有的格子 ⇒ 仍然「未取到」+ null（不许因为"其他格子有数"就补 0）
   const missingCells = d.kpi.cells.slice(1)

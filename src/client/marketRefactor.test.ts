@@ -111,7 +111,9 @@ test('② 未取到的格子：常驻只写「未取到」，原因进 title/ari
     // v0.81.0 重排后，"未取到"由 `item()`（内联项）与 `legendRow()`（图例行）渲染 ⇒ 原因必须以
     // **调用点实参**的形式出现（`..., ${REASON})` 或 `note: ${REASON}`），不能靠通用兜底掩盖漏传。
     assert.ok(
-      new RegExp(`(?:,\\s*${reason}\\)|note:\\s*${reason}\\s*[,}])`).test(page),
+      // 形态一：`, REASON)`（item/legendRow 实参）；形态二：`note: REASON,`（图例对象）；
+      // 形态三：`? REASON`（v0.81.2 起涨停/跌停/预测全天走"有数据 ? 真值 : 未取到+原因"的三元回落）
+      new RegExp(`(?:,\\s*${reason}\\)|note:\\s*${reason}\\s*[,}]|\\?\\s*${reason}\\b)`).test(page),
       `${name}的原因必须由一条 item()/legendRow() 调用点实际传入`,
     )
     const uses = page.split(reason).length - 1
@@ -121,13 +123,14 @@ test('② 未取到的格子：常驻只写「未取到」，原因进 title/ari
   assert.ok(/'未取到'/.test(page), '未取到的常驻文本就是四个字')
   assert.equal(/'未取到'\s*\+/.test(page), false, '常驻里不许把原因拼在"未取到"后面')
   // 反例注入：把预测全天写成编的数 ⇒ 判据必须非空
-  const anchor = "item('预测全天', '未取到', 'tw-dim', FORECAST_REASON)"
-  assert.ok(page.includes(anchor), '反例锚点必须还在（预测全天那一项）')
-  const injected = page.replace(anchor, "item('预测全天', '1.23 万亿', 'tw-dim', FORECAST_REASON)")
+  // v0.81.2：预测全天接了真值 ⇒ "没数据时"的回落分支就是这里（`forecastCell` 的 else 分支）
+  const anchor = "{ value: '未取到', cls: 'tw-dim', note: FORECAST_REASON }"
+  assert.ok(page.includes(anchor), '反例锚点必须还在（预测全天没数据时的回落分支）')
+  const injected = page.replace(anchor, "{ value: '1.23 万亿', cls: 'tw-dim', note: FORECAST_REASON }")
   assert.notEqual(injected, page, '反例注入必须真改到源码')
   assert.ok(injected.includes("'1.23 万亿'"), '⚠ 反例（编一个预测数）必须能被识别出来')
   assert.throws(
-    () => assert.equal(injected.includes("item('预测全天', '未取到'"), true, '反例上"必须显示未取到"必须失败'),
+    () => assert.equal(injected.includes(anchor), true, '反例上"必须显示未取到"必须失败'),
     /反例上/,
     '⚠ 反例注入（给预测全天编数）必须让断言失败',
   )

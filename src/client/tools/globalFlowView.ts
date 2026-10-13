@@ -70,6 +70,12 @@ export function fmtMomentum(m: { d20: number | null; d60: number | null; d120: n
   return `${one(m.d20)} / ${one(m.d60)} / ${one(m.d120)}`
 }
 
+/** 偏好分：`0.71`（0–1，两位小数）；缺 ⇒ 「未取到」 */
+export function fmtPref(pref: number | null | undefined): string {
+  if (pref === undefined || pref === null || !Number.isFinite(pref)) return NOT_FETCHED
+  return pref.toFixed(2)
+}
+
 /** 排名：`1 / 5`（分母 = 能算出排名的市场数） */
 export function fmtRank(rank: number | null, total: number): string {
   if (rank === null || !Number.isFinite(rank)) return NOT_FETCHED
@@ -139,6 +145,7 @@ export function marketRowsAt(payload: GlobalFlowPayloadDto, step: number, isLate
       m.etf,
       fmtSizeCell(m.currency, aumNative, aumUsd, rateOf(payload, m.currency)),
       fmtSharePct(share === null ? null : share * 100),
+      fmtPref(m.pref),
       fmtPp(dPp),
       // 动量/排名只反映**最新交易日**：回放到历史日时如实标"不适用"，不重算（上游只留当下的横截面）
       isLatest ? fmtMomentum(m.momentum) : '不适用（回放日）',
@@ -203,7 +210,7 @@ export function rowReasonOf(m: Pick<GlobalFlowMarketDto, 'currency' | 'name' | '
   if (m.currency !== 'USD' && aumNative !== null && aumUsd === null) {
     const native = m.currency === 'CNY' ? fmtCnyYi(aumNative) : fmtHkdYi(aumNative)
     const pair = m.currency === 'CNY' ? '美元/人民币（新浪 fx_susdcny）' : '美元/港元（新浪 fx_susdhkd）'
-    return `${m.name} 规模 ${native}（${currencyLabel(m.currency)}）已取到，但本次汇率 ${pair} 未取到 ⇒ 不做美元折算、不进美元合计；其余市场照常（口径不一致，不许静默混算）`
+    return `${m.name} 规模 ${native}（${currencyLabel(m.currency)}）已取到，但本次汇率 ${pair} 未取到 ⇒ 这一行的"规模（美元）"不折算（其余照常）；偏好份额不受影响：权重来自无量纲的偏好分，与汇率无关`
   }
   return null
 }
@@ -301,7 +308,8 @@ export function globalFlowToolData(payload: GlobalFlowPayloadDto, step = 0, rang
         key: 'cake',
         label: '资金蛋糕',
         value: fmtUsd(payload.totalUsd),
-        note: live.length === 0 ? `${NOT_FETCHED}：没有有值市场` : top === null ? null : `${top.name} 占 ${fmtSharePct(topShare)}`,
+        // 值 = 五市场合计规模（事实展示）；状态词 = **偏好份额**榜首（权重口径，不是规模占比）
+        note: live.length === 0 ? `${NOT_FETCHED}：没有有值市场` : top === null ? null : `偏好份额榜首 ${top.name} ${fmtSharePct(topShare)}（规模只作展示，不进权重）`,
       },
       // 摘要卡 ②「当前偏好」：值 = 份额榜首（真实，取当前显示那天）
       {
@@ -321,9 +329,17 @@ export function globalFlowToolData(payload: GlobalFlowPayloadDto, step = 0, rang
       boundary: payload.notes.boundary,
     },
     kpi: {
-      '规模榜首': top === null
+      '偏好榜首': top === null
         ? { text: NOT_FETCHED, value: null, delta: null }
         : { text: `${top.name} ${fmtSharePct(topShare)}`, value: topShare, delta: isLatest ? `五日 ${fmtPp(top.delta5Pp)}` : `较前一序列日 ${fmtPp(topShare === null || prevShareOf(view, idx, payload.markets.indexOf(top)) === null ? null : topShare - (prevShareOf(view, idx, payload.markets.indexOf(top)) as number))}` },
+      // 偏好分本身（0–1）也放进磁贴 delta 里：读者能看出"份额是偏好分归一化的结果"
+      '偏好分（榜首）': top === null
+        ? { text: NOT_FETCHED, value: null, delta: null }
+        : {
+            text: fmtPref(top.pref),
+            value: top.pref,
+            delta: top.prefSource,
+          },
       '五市场合计规模': {
         text: fmtUsd(payload.totalUsd),
         value: payload.totalUsd,

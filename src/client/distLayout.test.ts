@@ -58,11 +58,14 @@ test('② 涨跌趋势：一行 5 个**内联**统计（不再渲染大磁贴）
   }
   // 一行 5 个内联统计：上涨/平盘/下跌/涨停/跌停
   for (const k of ['上涨', '平盘', '下跌', '涨停', '跌停']) {
-    assert.ok(trend.includes(`item('${k}'`), `内联项「${k}」必须在涨跌趋势段里`)
+    assert.ok(new RegExp(`item\\(\\s*'${k}'`).test(trend), `内联项「${k}」必须在涨跌趋势段里`)
   }
   // 只数**第一行**（后面的内联行是"上涨占比 + 样本/快照"那行小字，不属于这 5 个）
-  const firstRow = trend.slice(0, trend.indexOf('inline(', trend.indexOf('inline(') + 1))
-  assert.equal((firstRow.match(/item\('/g) ?? []).length, 5, '这一行恰好 5 个内联项')
+  // 第一行 = 从第一个 inline( 到第二个 inline( 之间（第二个是"上涨占比 + 样本/快照"那行小字）
+  const i1 = trend.indexOf('inline(')
+  const i2 = trend.indexOf('inline(', i1 + 1)
+  const firstRow = trend.slice(i1, i2)
+  assert.equal((firstRow.match(/item\(/g) ?? []).length, 5, '这一行恰好 5 个内联项（多行 item(...) 也算）')
   assert.ok(trend.includes("item('上涨占比'"), '上涨占比那行小字必须保留（用户决定）')
   // 反例注入：把内联行换回磁贴 ⇒ 判据必须非空
   const injected = src.slice(0, start) + trend.replace('inline(', "React.createElement('div', { className: 'tw-statrow' },") + src.slice(end)
@@ -82,9 +85,9 @@ test('②b 成交量：一行 4 个内联统计（当日/昨日/较昨日/预测
   const end = src.indexOf("seg('两融走势', 'margin'")
   const vol = src.slice(start, end)
   for (const k of ['当日成交额', '昨日成交', '较昨日变动', '预测全天']) {
-    assert.ok(vol.includes(`item('${k}'`), `内联项「${k}」必须在成交量段里`)
+    assert.ok(new RegExp(`item\\(\\s*'${k}'`).test(vol), `内联项「${k}」必须在成交量段里`)
   }
-  assert.equal((vol.match(/item\('/g) ?? []).length, 4, '这一行恰好 4 个内联项')
+  assert.equal((vol.match(/item\(/g) ?? []).length, 4, '这一行恰好 4 个内联项（预测全天已是行外预算，不再多一个）')
   assert.ok(/delta >= 0 \? \(redUp \? 'tw-up' : 'tw-down'\)/.test(vol), '「较昨日变动」必须按涨跌色（跟随 redUp）着色')
   assert.equal(vol.includes('tw-dist-kv'), false, '成交量不该再用"竖排列表"写法')
 })
@@ -95,10 +98,11 @@ test('③ 无源项：常驻只写「未取到」，原因进 title/aria（不�
   const src = strip(page())
   // 六处无源项（涨停/跌停/昨日成交/较昨日变动/预测全天/两融/日内），逐项要求"未取到 + 同调用点的原因"
   const expects: Array<[string, string]> = [
-    ["item('涨停', '未取到'", 'LIMIT_REASON'],
-    ["item('跌停', '未取到'", 'LIMIT_REASON'],
-    ["item('预测全天', '未取到'", 'FORECAST_REASON'],
-    ["value: '未取到', note: MARGIN_REASON", 'MARGIN_REASON'],
+    // v0.81.2：涨停/跌停/预测全天已接真值 ⇒ 判据改成"**缺数时**回落未取到 + 原因"
+    ["extras.limits.up.count === null ? '未取到'", 'LIMIT_REASON'],
+    ["extras.limits.down.count === null ? '未取到'", 'LIMIT_REASON'],
+    ["{ value: '未取到', cls: 'tw-dim', note: FORECAST_REASON }", 'FORECAST_REASON'],
+    ["{ value: '未取到', note: MARGIN_REASON }", 'MARGIN_REASON'],
     ["value: '未取到', note: INTRADAY_REASON", 'INTRADAY_REASON'],
   ]
   for (const [snippet, reason] of expects) {
@@ -110,8 +114,8 @@ test('③ 无源项：常驻只写「未取到」，原因进 title/aria（不�
   assert.ok(/item\('昨日成交', prevAmt === null \? '未取到'/.test(src), '昨日成交缺快照 ⇒ 未取到')
   assert.ok(/item\('较昨日变动', delta === null \? '未取到'/.test(src), '较昨日变动缺昨日 ⇒ 未取到')
   // 反例注入：把某一项渲染成 0 ⇒ 判据必须非空
-  const anchor = "item('预测全天', '未取到'"
-  const injected = src.replace(anchor, "item('预测全天', '0'")
+  const anchor = "{ value: '未取到', cls: 'tw-dim', note: FORECAST_REASON }"
+  const injected = src.replace(anchor, "{ value: '0', cls: 'tw-dim', note: FORECAST_REASON }")
   assert.notEqual(injected, src, '反例注入必须真改到源码')
   assert.equal(injected.includes(anchor), false, '⚠ 反例（渲染成 0）必须能被判据抓住')
   assert.throws(
@@ -151,61 +155,24 @@ test('④ 直方图：纵轴刻度与网格线必须渲染；值域按数据取�
 
 // ── ⑤ 指数表移出本模块（仍可达）────────────────────────────────────────────
 
-test('⑤ 指数表已移出【涨跌分布】模块：成为独立区块（自带标题）且页内仍可达；反例注入（删掉）必败', () => {
+test('⑤ 【指数行情】模块已整块删除：页内没有该标题/表格结构/数据取用；反例注入（加回）必败', () => {
   const src = strip(page())
-  assert.ok(src.includes("'data-role': 'index-table'"), '指数表必须是带 data-role 的独立区块')
-  // 它是**与模块同级**的 panel（缩进 4 空格），而不是嵌在模块里
-  const moduleCols = src.indexOf("'data-role': 'dist-cols'")
-  const tablePanel = src.indexOf("'data-role': 'index-table'")
-  assert.ok(moduleCols > 0 && tablePanel > moduleCols, '指数表必须排在模块之后')
-  assert.ok(/\n    React\.createElement\('div', \{ className: 'tw-panel', 'data-role': 'index-table' \}/.test(src),
-    '指数表区块必须与【涨跌分布】模块同级（同一层缩进的 tw-panel）')
-  // 自带标题
-  const panelSlice = src.slice(tablePanel, tablePanel + 600)
-  assert.ok(panelSlice.includes("'指数行情'"), '指数表区块必须自带标题')
-  // 功能不丢：表头六列 + 行点击仍打开详情
-  for (const th of ['指数', '现价', '涨跌', '幅度', '上涨/下跌', '成交额']) {
-    assert.ok(src.includes(`'${th}'`), `表头列「${th}」必须还在`)
+  // 只认**该块独有**的痕迹（`tw-table`/`幅度`/`成交额` 这类是板块/资金/ETF 表**共用**的，不能当依据）
+  for (const gone of ["'t' }, '指数行情'", 'index-table', 'cnIndices', '点行看详情', 'minWidth: 560']) {
+    assert.equal(src.includes(gone), false, `已删模块的独有痕迹必须清干净：${gone}`)
   }
-  assert.ok(/onClick: \(\) => openDetail\(it\.secid\)/.test(src), '点行看详情的接线必须还在')
-  // 反例注入：把整张表删掉（而不是移动）⇒ 判据必须非空
-  const injected = src.replace("React.createElement('table', { className: 'tw-table', style: { minWidth: 560 } }", 'null')
+  // 但"点行看详情"的通路不能跟着消失：板块/资金/ETF 表仍在用它
+  assert.ok(src.includes('openDetail'), 'openDetail 仍被板块/资金/ETF 表使用（不是这张表的专属接线）')
+  assert.ok(src.includes("'板块 / 资金 / ETF'"), '板块/资金/ETF 区块必须仍在')
+  // 反例注入：把已删模块加回 ⇒ 判据必须非空
+  const injected = src.replace("React.createElement(RescuePanel",
+    "React.createElement('div', { 'data-role': 'index-table' }, '指数行情'),\n    React.createElement(RescuePanel")
   assert.notEqual(injected, src, '反例注入必须真改到源码')
-  assert.equal(injected.includes("'成交额'"), true, '（其它表头字样仍在，靠下面这条判据抓）')
+  assert.ok(injected.includes('index-table'), '⚠ 反例（加回模块）必须能被判据抓住')
   assert.throws(
-    () => assert.equal(injected.includes("className: 'tw-table', style: { minWidth: 560 }"), true, '反例上"表必须还在"必须失败'),
+    () => assert.equal(injected.includes('index-table'), false, '反例上"不该有 index-table"必须失败'),
     /反例上/,
-    '⚠ 反例注入（删掉指数表而不是移动）必须让断言失败',
-  )
-})
-
-// ── ①b 上证/深成两张大卡：直接删除（用户决定），值仍在移出的指数表里 ──────
-
-test('①b 「上证/深成」两张大卡不再渲染（含数值与文案）；反例注入（加回）必败', () => {
-  const src = strip(page())
-  const start = src.indexOf("seg('涨跌趋势', 'trend'")
-  const end = src.indexOf("seg('成交量', 'volume'")
-  const trend = src.slice(start, end)
-  // 趋势段内不得再有 上证/深成 的内联项（"并入"也被用户否掉了）
-  assert.equal(trend.includes("item('上证'"), false, '「上证」大卡不得再渲染（用户决定：直接删除）')
-  assert.equal(trend.includes("item('深成'"), false, '「深成」大卡不得再渲染（用户决定：直接删除）')
-  // 全页范围内也不该再有这两张卡（磁贴/内联都不行）
-  for (const doomed of ["item('上证'", "item('深成'", 'tw-statrow']) {
-    assert.equal(src.includes(doomed), false, `全页不该再出现：${doomed}`)
-  }
-  // 事实不丢：这两个值在移出的「指数行情」表里仍可见（表里就有上证/深证行）
-  assert.ok(src.includes("'指数行情'"), '指数表区块的标题必须在')
-  assert.ok(src.includes('cnIndices.map'), '指数表仍按 cnIndices 渲染（上证/深证/创业板等行仍在）')
-  // 反例注入：把「上证」卡加回趋势段 ⇒ 判据必须非空
-  const card = "item('上证', fmtPrice(1), 'dir', 'x')"
-  const injected = src.replace("seg('涨跌趋势', 'trend'", `seg('涨跌趋势', 'trend', ${card}`)
-  assert.notEqual(injected, src, '反例注入必须真改到源码')
-  const injTrend = injected.slice(injected.indexOf("seg('涨跌趋势', 'trend'"), injected.indexOf("seg('成交量', 'volume'"))
-  assert.ok(injTrend.includes("item('上证'"), '⚠ 反例（加回大卡）必须能被判据抓住')
-  assert.throws(
-    () => assert.equal(injTrend.includes("item('上证'"), false, '反例上"不该有大卡"必须失败'),
-    /反例上/,
-    '⚠ 反例注入（加回两张大卡）必须让断言失败',
+    '⚠ 反例注入（加回指数表）必须让断言失败',
   )
 })
 
@@ -231,5 +198,36 @@ test('⑥ 重排用到的样式类都在 styles.ts 里（标记与样式不许�
     () => assert.equal(/\\.tw-dist-axis[\\s{,.:]/.test(injected), true, '反例上"必须有样式"必须失败'),
     /反例上/,
     '⚠ 反例注入（删掉纵轴样式）必须让断言失败',
+  )
+})
+
+// ── ①b 上证/深成两张大卡：直接删除（用户决定），且**不再以任何形式回填** ────
+
+test('①b 「上证/深成」两张大卡不再渲染，页内也不得再出现这两个值；反例注入（加回）必败', () => {
+  const src = strip(page())
+  const start = src.indexOf("seg('涨跌趋势', 'trend'")
+  const end = src.indexOf("seg('成交量', 'volume'")
+  const trend = src.slice(start, end)
+  // 趋势段内不得再有 上证/深成 的内联项（"并入"也被用户否掉了）
+  assert.equal(trend.includes("item('上证'"), false, '「上证」卡不得再渲染（用户决定：直接删除）')
+  assert.equal(trend.includes("item('深成'"), false, '「深成」卡不得再渲染（用户决定：直接删除）')
+  // 全页范围内也不该再有这两张卡（磁贴/内联都不行）
+  for (const doomed of ["item('上证'", "item('深成'", 'tw-statrow']) {
+    assert.equal(src.includes(doomed), false, `全页不该再出现：${doomed}`)
+  }
+  // v0.81.1：原来"值在指数表里仍可见"这条退路也没了（【指数行情】模块已删）⇒
+  // 这两个值在页内**彻底不再出现** —— 这正是用户要的结果，**不许**回填（见 ⑤）
+  assert.equal(src.includes('1.000001'), true, '（1.000001 仍被 breadthCells 用着，是另一件事）')
+  assert.equal(/item\(['"]上证指数['"]/.test(src), false, '不得以"上证指数"为名回填这一格')
+  // 反例注入：把「上证」卡加回趋势段 ⇒ 判据必须非空
+  const card = "item('上证', fmtPrice(1), 'dir', 'x')"
+  const injected = src.replace("seg('涨跌趋势', 'trend'", `seg('涨跌趋势', 'trend', ${card}`)
+  assert.notEqual(injected, src, '反例注入必须真改到源码')
+  const injTrend = injected.slice(injected.indexOf("seg('涨跌趋势', 'trend'"), injected.indexOf("seg('成交量', 'volume'"))
+  assert.ok(injTrend.includes("item('上证'"), '⚠ 反例（加回大卡）必须能被判据抓住')
+  assert.throws(
+    () => assert.equal(injTrend.includes("item('上证'"), false, '反例上"不该有大卡"必须失败'),
+    /反例上/,
+    '⚠ 反例注入（加回两张大卡）必须让断言失败',
   )
 })

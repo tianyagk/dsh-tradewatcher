@@ -67,6 +67,7 @@ function payloadFixture(opts: { hkMissing?: boolean } = {}): GlobalFlowPayloadDt
     share: number | null,
     missing: string | null,
     sizes: { native: number; usd: number; currency: 'USD' | 'CNY' | 'HKD' },
+    k = 0,
   ) => ({
     key,
     name,
@@ -77,6 +78,9 @@ function payloadFixture(opts: { hkMissing?: boolean } = {}): GlobalFlowPayloadDt
     benchmarkSource: '腾讯日线',
     aumNative: share === null ? null : sizes.native,
     aumUsd: share === null ? null : sizes.usd,
+    // 偏好分：与份额同源（夹具里给一个稳定值；真实载荷由宿主按 55/30/15 算出）
+    pref: share === null ? null : 0.5 + k * 0.05,
+    prefSource: '偏好分口径（夹具）',
     sharePct: share === null ? null : share * 100,
     delta1Pp: 0.01,
     delta5Pp: 0.2,
@@ -98,6 +102,7 @@ function payloadFixture(opts: { hkMissing?: boolean } = {}): GlobalFlowPayloadDt
         opts.hkMissing === true && key === 'hk' ? null : (lastPoint.share[k] as number),
         opts.hkMissing === true && key === 'hk' ? MISSING_TEXT : null,
         { native: NATIVE[k], usd: AUM_USD[k], currency: CUR[k] },
+        k,
       ),
     ),
     totalUsd: AUM_USD.reduce((acc, v) => acc + v, 0),
@@ -142,8 +147,8 @@ test('完整载荷 ⇒ KPI（含 delta）/ 曲线 / 饼图 / 市场表 / 净流�
   assert.ok((data.status ?? '').includes('北京时间'), `状态行要给数据时刻：${data.status}`)
   // 榜首 = 份额最大的那个（按夹具算，避免写死"某个市场一定第一"）
   const topIdx = payload.markets.reduce((best, m, i) => ((m.sharePct ?? -1) > (payload.markets[best].sharePct ?? -1) ? i : best), 0)
-  assert.equal(data.kpi?.['规模榜首']?.text, `${names[topIdx]} ${(payload.markets[topIdx].sharePct as number).toFixed(2)}%`)
-  assert.equal(data.kpi?.['规模榜首']?.delta, '五日 +0.20pp', 'KPI 行必须带 delta')
+  assert.equal(data.kpi?.['偏好榜首']?.text, `${names[topIdx]} ${(payload.markets[topIdx].sharePct as number).toFixed(2)}%`)
+  assert.equal(data.kpi?.['偏好榜首']?.delta, '五日 +0.20pp', 'KPI 行必须带 delta')
   assert.ok((data.kpi?.['五市场合计规模']?.text ?? '').includes('亿美元'))
   assert.equal(data.kpi?.['近五日轮动']?.text, payload.rotation.text, '轮动文案原样透传（视图不许改写口径）')
   assert.equal(data.curve?.series.length, 5, '五条份额曲线')
@@ -155,7 +160,8 @@ test('完整载荷 ⇒ KPI（含 delta）/ 曲线 / 饼图 / 市场表 / 净流�
   const prevShare = payload.curve.points[1].share[0] as number
   const nowShare = payload.curve.points[2].share[0] as number
   const dPp = (nowShare - prevShare) * 100
-  assert.equal(data.market?.rows[0][4], `${dPp > 0 ? '+' : ''}${dPp.toFixed(2)}pp`, '份额变化列 =（本日 − 前一序列日）× 100')
+  assert.equal(/^0\.\d{2}$/.test(data.market?.rows[0][4] ?? ''), true, `偏好分列必须是数值（如 0.50）：${data.market?.rows[0][4]}`)
+  assert.equal(data.market?.rows[0][5], `${dPp > 0 ? '+' : ''}${dPp.toFixed(2)}pp`, '份额变化列 =（本日 − 前一序列日）× 100')
   assert.ok((data.extras?.[0]?.title ?? '').includes('不参与份额计算'), 'A股净流入必须单列并写明不参与份额计算')
   assert.ok((data.extras?.[0]?.text ?? '').includes('15.56 亿元'))
   assert.deepEqual(data.boundary, ['数据源边界声明一'], '数据源附带的边界声明要透传')
@@ -245,7 +251,7 @@ test('② 时间范围三档：切片后曲线点数与窗口一致，且切档�
   const narrow = globalFlowToolData(payload, 0, 90)
   const wide = globalFlowToolData(payload, 0, 365)
   assert.equal(narrow.pie?.center, payload.curve.points[364].day, '窄窗口的饼图中心仍是最新一天')
-  assert.equal(narrow.kpi?.['规模榜首']?.text, wide.kpi?.['规模榜首']?.text, '同一天 ⇒ 榜首一致（切片不影响当天读数）')
+  assert.equal(narrow.kpi?.['偏好榜首']?.text, wide.kpi?.['偏好榜首']?.text, '同一天 ⇒ 榜首一致（切片不影响当天读数）')
 })
 
 test('④ 边界声明：含「风险偏好代理 ≠ 真实跨境资金净流入」，且条目不许重复', () => {
@@ -293,7 +299,7 @@ test('② 规模单元格：A股 同时显示人民币原值与折算值；缺�
   assert.equal(row[3], NOT_FETCHED, `缺汇率 ⇒ 份额「${NOT_FETCHED}」`)
   assert.notEqual(view.market?.rowNotes[0], null, '缺汇率时 A股 行必须有行级原因')
   assert.equal((view.market?.rowNotes[0] ?? '').includes('汇率'), true, `行级原因要说清是汇率：${view.market?.rowNotes[0]}`)
-  assert.equal((view.market?.rowNotes[0] ?? '').includes('不进美元合计'), true, `行级原因要说清后果：${view.market?.rowNotes[0]}`)
+  assert.equal((view.market?.rowNotes[0] ?? '').includes('偏好份额不受影响'), true, `行级原因要说清"权重不受影响"：${view.market?.rowNotes[0]}`)
 })
 
 test('回放：step 0 = 最新，越大越早；换帧只换本地视图（同一份载荷，纯函数）', () => {
@@ -307,7 +313,7 @@ test('回放：step 0 = 最新，越大越早；换帧只换本地视图（同�
   assert.equal(last.pie?.center, '2026-10-08', '换帧就是换那一天')
   assert.equal(first.market?.rows[0][3], `${((payload.curve.points[2].share[0] as number) * 100).toFixed(2)}%`)
   assert.equal(last.market?.rows[0][3], `${((payload.curve.points[0].share[0] as number) * 100).toFixed(2)}%`, '历史帧用历史份额')
-  assert.equal(last.market?.rows[0][5], '不适用（回放日）', '回放历史日不给动量（上游只留当下横截面）')
+  assert.equal(last.market?.rows[0][6], '不适用（回放日）', '回放历史日不给动量（上游只留当下横截面）')
   // 同一份载荷从没被改动（纯函数）——两张视图都在，且原载荷的曲线长度不变
   assert.equal(payload.curve.points.length, 3)
 
