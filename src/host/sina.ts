@@ -1,3 +1,4 @@
+import { withHostBreaker } from './breakerFetch.ts'
 /**
  */
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
@@ -142,10 +143,12 @@ export async function fetchSinaQuotes(secids: readonly string[]): Promise<Record
     const chunk = pairs.slice(i, i + CHUNK)
     const url = `https://hq.sinajs.cn/list=${chunk.map(([, s]) => s).join(',')}`
     try {
-      const res = await fetch(url, {
-        headers: { 'user-agent': UA, referer: 'https://finance.sina.com.cn/' },
-        signal: AbortSignal.timeout(10000),
-      })
+      const res = await withHostBreaker('hq.sinajs.cn', () =>
+        fetch(url, {
+          headers: { 'user-agent': UA, referer: 'https://finance.sina.com.cn/' },
+          signal: AbortSignal.timeout(10000),
+        }),
+      )
       if (!res.ok) throw new Error(`HTTP ${res.status} from hq.sinajs.cn`)
       const buf = await res.arrayBuffer()
       let text: string
@@ -216,10 +219,13 @@ export function parseSinaEtfRanking(payload: string, limit = 40): SinaEtfRow[] {
 
 /** 抓一段新浪文本（GBK 或 UTF-8），统一带 Referer（实测不带会被拒） */
 async function sinaText(url: string, opts: { gbk?: boolean; timeoutMs?: number } = {}): Promise<string> {
-  const res = await fetch(url, {
-    headers: { 'user-agent': UA, referer: 'https://finance.sina.com.cn/' },
-    signal: AbortSignal.timeout(opts.timeoutMs ?? 15000),
-  })
+  // H1：统一走 per-host 熔断（否则单台挂起时每次都付满超时，且降级横幅看不见它）
+  const res = await withHostBreaker(new URL(url).host, () =>
+    fetch(url, {
+      headers: { 'user-agent': UA, referer: 'https://finance.sina.com.cn/' },
+      signal: AbortSignal.timeout(opts.timeoutMs ?? 15000),
+    }),
+  )
   if (!res.ok) throw new Error(`HTTP ${res.status} from ${new URL(url).host}`)
   const buf = await res.arrayBuffer()
   try {
@@ -457,10 +463,12 @@ export async function fetchSinaEtfRanking(sort: 'pct' | 'amount' = 'amount', lim
   const url =
     'https://vip.stock.finance.sina.com.cn/quotes_service/api/json_v2.php/Market_Center.getHQNodeData' +
     `?page=1&num=${limit}&sort=${field}&asc=0&node=etf_hq_fund`
-  const res = await fetch(url, {
-    headers: { 'user-agent': UA, referer: 'https://finance.sina.com.cn/' },
-    signal: AbortSignal.timeout(12000),
-  })
+  const res = await withHostBreaker('vip.stock.finance.sina.com.cn', () =>
+    fetch(url, {
+      headers: { 'user-agent': UA, referer: 'https://finance.sina.com.cn/' },
+      signal: AbortSignal.timeout(12000),
+    }),
+  )
   if (!res.ok) throw new Error(`HTTP ${res.status} from vip.stock.finance.sina.com.cn`)
   const buf = await res.arrayBuffer()
   let text: string

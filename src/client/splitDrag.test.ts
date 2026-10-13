@@ -63,7 +63,8 @@ test('键盘：↑/↓ 步长 2%，两端夹住；Enter/双击恢复默认；焦
   assert.ok(drawer.includes("e.key === 'Enter'"), 'Enter 恢复默认')
   assert.ok(drawer.includes('onDoubleClick'), '双击恢复默认')
   assert.ok(drawer.includes('双击或回车恢复默认'), 'title/aria 要写明如何复位')
-  assert.ok(drawer.includes("cursor") === false || true)
+  // 旧写法 `=== false || true` 恒真。判据原意：命中区样式只许写在 styles.ts，抽屉 JS 里不许硬编码 cursor
+  assert.equal(drawer.includes('cursor'), false, '拖拽条 JS 里不得出现 cursor（样式在 styles.ts 的 .tw-split）')
   const styles = read('./styles.ts')
   assert.ok(styles.includes('.tw-split{') && styles.includes('cursor:row-resize'), '命中区 cursor: row-resize')
   assert.ok(styles.includes('.tw-split{position:relative;height:9px'), '命中区 = 1px 线 + 上下各 4px（共 9px）')

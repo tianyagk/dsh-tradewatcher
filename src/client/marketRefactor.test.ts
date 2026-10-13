@@ -108,8 +108,13 @@ test('② 未取到的格子：常驻只写「未取到」，原因进 title/ari
     const m = new RegExp(`const ${reason} = '([^']+)'`).exec(page)
     assert.ok(m !== null, `${name}的原因常量必须在（${reason}）`)
     assert.ok(m[1].length > 20, `${name}的原因必须说清而不是"未取到"三个字`)
-    assert.ok(page.includes(`title: ${reason}`) || page.includes(`title: reason`) || page.includes(`'aria-label': \`\${label} 未取到 —— \${reason}\``),
-      `${name}的原因必须挂在 title/aria 上（不是常驻正文）`)
+    // 旧写法含 `page.includes('title: reason')` —— 那是 kvRow/missRow **通用实现**里的兜底，与循环变量无关，
+    // 因此删掉某一行的原因也照样绿（INJ-5）。现在要求该常量**被某条 kvRow/missRow 调用点实际传入**。
+    assert.ok(
+      // 三种「未取到」渲染助手都算：kvRow / missRow / statMiss（都要求该常量作为实参传入）
+      new RegExp(`\\w*(?:Row|Miss)\\([^)]*,\\s*${reason}\\)`).test(page),
+      `${name}的原因必须由一条 kvRow/missRow 调用点实际传入（不能靠通用 title: reason 兜底）`,
+    )
   }
   // 常驻可见的只有「未取到」三个字（没有把原因铺成正文）
   assert.ok(page.includes("}, '未取到')"), '未取到的常驻文本就是三个字')

@@ -72,7 +72,9 @@ test('⑤ 面板口径：四字段可读 + 现价不可得显示"未取到"', as
   const api = readFileSync(join(here, '../client/api.ts'), 'utf8')
   for (const k of ['priceUsed', 'priceSource', 'fqt', 'priceScale']) {
     assert.ok(api.includes(k), `回包类型必须暴露 ${k}`)
-    assert.ok(panel.includes(k) || panel.includes('latestBarDate'), `面板口径必须能读出 ${k}`)
+    // 旧写法 `panel.includes(k) || panel.includes('latestBarDate')` 的第二个 disjunct 与循环变量无关且恒真
+    //（INJ-4 证明：把四个字段全改名后该断言仍全绿）。现在要求**点访问**某字段，即真的读到值。
+    assert.ok(new RegExp(`\\.${k}\\b`).test(panel), `面板必须真的读 ${k}（形如 d.${k}）`)
   }
   assert.ok(panel.includes("'未取到'"), '现价不可得 ⇒ 显示"未取到"')
   assert.equal(/v === null \? '—' : `\$\{v\.toFixed\(2\)\}%`/.test(panel), false, '盈利比例的空值不再用 —')

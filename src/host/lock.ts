@@ -39,6 +39,7 @@ import { randomBytes } from 'node:crypto'
 import { dirname } from 'node:path'
 import { log } from './context.ts'
 import { writeJsonAtomic } from './atomic.ts'
+import { AsyncLocalStorage } from 'node:async_hooks'
 
 /** 锁文件里记录的持有者信息（人可读：出事后能知道"当时是谁持的锁"） */
 export interface LockHolder {
@@ -384,21 +385,30 @@ function installExitHook(): void {
 }
 
 /**
+ * 当前 **async 上下文**真正持有的锁路径集合（H2）。
+ *
+ * 旧判据是"`held` 里有没有这条路径" —— 那是**进程级**的，分不清
+ * ①同一临界区里的嵌套调用（应当直接放行）与 ②同进程另一个并发任务的兄弟调用（必须排队）。
+ * 复核实测：A 持锁期间发起 B ⇒ 两者**同时**进入临界区，两次 `+1` 只剩 1 次（`n=1`，期望 2）。
+ * 现在用 `AsyncLocalStorage` 按调用者身份判定：`withFileLock` 取得锁后把它加进"我这个 async 链
+ * 持有的集合"里，只有**同一条链**的后继调用才算可重入（`store.commit` 依赖这条路径，不能改成无条件排队，
+ * 否则会自锁超时）。
+ */
+const heldByContext = new AsyncLocalStorage<ReadonlySet<string>>()
+
+/**
  * 在目标文件的跨进程锁内执行 `fn`。
  *
- * 可重入：同一进程已持有同一路径的锁时直接执行（不自锁、不重开锁文件）。
+ * 可重入：**同一 async 上下文**已持有同一路径的锁时直接执行（不自锁、不重开锁文件）；
+ * 同进程的**兄弟调用**不在同一条链上 ⇒ 正常排队（H2）。
  * 不同路径按调用方给的顺序获取 —— 多处加锁请用 `withFileLocks`（它按路径排序，杜绝死锁）。
  */
 export async function withFileLock<T>(target: string, fn: () => Promise<T> | T, opts: LockOptions = {}): Promise<T> {
   const lockPath = lockPathFor(target)
-  const mine = held.get(lockPath)
-  if (mine !== undefined) {
-    mine.depth += 1
-    try {
-      return await fn()
-    } finally {
-      mine.depth -= 1
-    }
+  const mine = heldByContext.getStore()
+  if (mine !== undefined && mine.has(lockPath)) {
+    // 真·可重入（同一条 async 链里的嵌套）
+    return await fn()
   }
   const prev = queues.get(lockPath) ?? Promise.resolve()
   let openGate: () => void = () => undefined
@@ -411,8 +421,11 @@ export async function withFileLock<T>(target: string, fn: () => Promise<T> | T, 
     await prev.catch(() => undefined) // 前一位持有者失败不该连坐我
     const lock = await acquireLock(lockPath, target, opts)
     held.set(lockPath, lock)
+    const next = new Set(mine ?? [])
+    next.add(lockPath)
     try {
-      return await fn()
+      // 只在**本 async 链**里标记"我持有它"（兄弟调用看不到 ⇒ 会排队）
+      return await heldByContext.run(next, async () => await fn())
     } finally {
       held.delete(lockPath)
       await lock.release()

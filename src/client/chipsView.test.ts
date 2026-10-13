@@ -93,7 +93,9 @@ test('① 结构保证：筹码取数不接收页签/复权/图表重试；抽�
   assert.equal(/useChips\(secid, tab/.test(drawer), false, '筹码不许随页签变化')
   // 图表该重取还是重取（别把图表一起弄成不刷新）
   assert.equal(/chartBody|useTrend|api\.trend/.test(drawer), true, '图表数据路径未被改动')
-  assert.equal(/\[secid, tab, fqt|retry\]/.test(drawer) || true, true)
+  // 旧写法 `... || true` 恒真（等于什么都没断言）。判据原意：图表**照样**依赖 retry（重试要能重取）
+  assert.equal(/\[secid, retry\]/.test(drawer), true, '主图依赖数组必须含 retry（重试后要重新取数）')
+  assert.equal(/\[secid, tab, fqt, retry\]/.test(drawer), true, 'K 线依赖数组必须含 secid/tab/fqt/retry')
 })
 
 test('② 正常情况面板零口径文案；偏离默认才给一行原因', () => {

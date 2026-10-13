@@ -229,7 +229,17 @@ test('回归：翻转 redUp 只改颜色、不改数值与文案（卡片内容�
   assert.deepEqual(lines, trendReadout({ points: pts, i: 1, session: SESSION_CN }), '重新计算也逐字相同')
   // K 线档同样：口径与配色无关
   const bars = [{ date: '2026-10-01', open: 1, close: 1, high: 1, low: 1, vol: null }, { date: '2026-10-02', open: 1, close: 2, high: 2, low: 1, vol: null }]
-  assert.deepEqual(klineReadout({ bars, i: 1, macd: null }), klineReadout({ bars, i: 1, macd: null }))
+  // 旧写法是**自己等于自己**（纯函数 ⇒ 恒真）。改成对着固定字面量断言（口径变了必须红）。
+  assert.deepEqual(klineReadout({ bars, i: 1, macd: null }), [
+    { label: '时间', value: '2026-10-02', tone: 'muted' },
+    { label: '收盘', value: '2.000', tone: 'up' },
+    { label: '涨跌幅', value: '▲100.00%', tone: 'up' },
+    { label: '开盘', value: '1.000' },
+    { label: '最高', value: '2.000' },
+    { label: '最低', value: '1.000' },
+    { label: '成交量', value: '—' },
+    { label: '成交额', value: '—' },
+  ])
 })
 
 test('K 线档口径**未被改动**：仍对前收盘；首根无前收盘 ⇒ —（不是 0）', () => {

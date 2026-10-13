@@ -126,7 +126,7 @@ test('apply 幂等：同进程 apply 三次，一次性副作用只跑一次', a
   await new Promise((r) => setTimeout(r, 50)) // 等 store.init() 落定
   assert.equal(__kernelStats.applies, 8, 'apply 共八次（core 两次 + 六个功能行各一次）')
   assert.equal(__kernelStats.inits, 1, 'store.init() 只跑一次')
-  assert.equal(__kernelStats.starts, 1, 'rescue.start() 只跑一次（采样器只有一个）')
+  assert.equal(coreKernel()?.starts, 1, 'rescue.start() 只跑一次（采样器只有一个）')
   // 幂等的范围就是"一次性副作用"：init/start 各一次、采样器一个。
   // （同一 row id 出现两条行属于配置错误：那种情况下路由会按 fiber 各自注册 —— Cordis 对重复 service 本身会报冲突）
   assert.ok(__kernelStats.routeRegs.includes('/tradewatcher/rows'), 'rows 端点必须已注册')
@@ -485,10 +485,30 @@ test('task-6：七行装载（manifest 驱动）—— 幂等各 1 次、每行�
     apply(c.ctx, { row })
   }
   // 等 init 真的落定（不是"睡够 50ms 就算落定"）
-  await waitFor(() => __kernelStats.starts === 1)
+  await waitFor(() => (coreKernel()?.starts ?? 0) === 1)
+  /**
+   * 再等一个**静默窗口**：`store.init()` 是真异步 IO，落定后可能还有排队的微任务/定时器。
+   * 判据用**本内核**的计数（`coreKernel().starts`），因此别的用例迟到的 init 不会算到这一拍头上
+   * （旧写法读模块级 `__kernelStats.starts` ⇒ 满负载时被污染成 11，见 FIX-3 中-⑤）。
+   * 强度不变：本内核真启动两次 ⇒ 稳定在 2 ⇒ 断言照样失败。
+   */
+  const settle = async (): Promise<void> => {
+    let last = coreKernel()?.starts ?? -1
+    let stable = 0
+    for (let i = 0; i < 25 && stable < 2; i += 1) {
+      await new Promise((r) => setTimeout(r, 20))
+      const now = coreKernel()?.starts ?? -1
+      if (now === last) stable += 1
+      else {
+        stable = 0
+        last = now
+      }
+    }
+  }
+  await settle()
   assert.equal(__kernelStats.applies, 8, 'apply 共八次（core 两次 + 六个功能行各一次）')
   assert.equal(__kernelStats.inits, 1, 'store.init() 只跑一次（七个 fiber 共用一个内核）')
-  assert.equal(__kernelStats.starts, 1, 'rescue.start() 只跑一次（采样器只能有一个）')
+  assert.equal(coreKernel()?.starts, 1, 'rescue.start() 只跑一次（采样器只能有一个）')
   assert.equal((coreKernel()?.rescue as unknown as { running?: boolean }).running, true, '采样器处于运行态')
 
   // —— ② 分工：manifest 声明的那七行，每行一条 fiber，一条不多一条不少 ——
@@ -501,9 +521,11 @@ test('task-6：七行装载（manifest 驱动）—— 幂等各 1 次、每行�
     perRow.push([row, c])
   }
   await tick()
+  await settle()
   assert.equal(__kernelStats.inits, 1, '再注册一轮也不许重跑 store.init()')
-  assert.equal(__kernelStats.starts, 1, '再注册一轮也不许再起采样器')
-  // 这一处是"不许再涨"，睡一小会儿即足够（涨了就是 bug，不该靠等待掩盖）
+  // ⚠ 用**本内核**的计数：模块级 `__kernelStats.starts` 跨内核累计，别的用例迟到的 init 会算到这里
+  //（FIX-3 中-⑤ 的 flake：`11 !== 1`）；强度不变 —— 本内核真起两次 ⇒ 2 ⇒ 照样失败。
+  assert.equal(coreKernel()?.starts, 1, '再注册一轮也不许再起采样器')
 
   const byRow = new Map(perRow)
   // —— ② 跨行零重复（**先查这个**：它是最根本的不变量，隔离性由它 + 每行前缀表共同保证）——

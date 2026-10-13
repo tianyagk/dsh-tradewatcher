@@ -9,6 +9,7 @@ import { MISSING_TIER_ADVICE } from '../shared/model.ts'
 import { writeJsonAtomic } from './atomic.ts'
 import { isFirstBoot, quarantineFile, ReadGuard, unreadableMissing } from './readGuard.ts'
 import { log } from './context.ts'
+import { withHostBreaker } from './breakerFetch.ts'
 
 const AUTO_SYNC_TTL = 6 * 3600_000
 /**
@@ -40,6 +41,13 @@ interface CalFile {
   /** 最近一次**成功**同步的时刻（epoch ms，0 = 从未成功）—— `asOf` 只认它 */
   syncedAt: number
   /**
+   * 最近一次同步的**逐源结果**（H4：必须落盘）。
+   *
+   * 旧实现只放在内存（`lastSources`）⇒ 进程重启后 `syncStatus()` 看到的是"没有源失败"，
+   * 于是**谎报一切正常**（`stale=false`、`missing=[]`），而这期间 UI/agent 读到的是旧事件。
+   */
+  lastSources?: CalSyncSourceResult[]
+  /**
    * 最近一次**尝试**同步的时刻（不论成败，0 = 从未尝试）。
    *
    * 为什么必须与 `syncedAt` 分开：此前每个自动源各自 `catch {}` 吞错，然后**无条件**
@@ -53,8 +61,11 @@ interface CalFile {
 export interface CalSyncSourceResult {
   key: 'ipo' | 'earnings' | 'dividend' | 'macro'
   label: string
-  /** ok=本次成功；failed=本次失败；skipped=本次未尝试（如没有自选 + 持仓标的时的财报/分红源） */
-  state: 'ok' | 'failed' | 'skipped'
+  /**
+   * ok=本次成功且有数据；failed=本次失败；skipped=本次未尝试（如没有自选 + 持仓标的时的财报/分红源）；
+   * **empty=回包正常但 0 条**（H4 单列一档：与"真的没有"分不开，不算成功）
+   */
+  state: 'ok' | 'failed' | 'skipped' | 'empty'
   /** 本次该源写入的自动事件数（ok 时有效） */
   count: number
   error?: string
@@ -110,10 +121,13 @@ function dayOf(v: unknown): string | null {
 async function fetchReport(reportName: string, params: Record<string, string>): Promise<Array<Record<string, unknown>>> {
   const q = new URLSearchParams({ reportName, columns: 'ALL', source: 'WEB', client: 'WEB', ...params })
   const url = `https://${DC_HOST}/api/data/v1/get?${q.toString()}`
-  const res = await fetch(url, {
-    headers: { 'user-agent': UA, referer: 'https://data.eastmoney.com/' },
-    signal: AbortSignal.timeout(12_000),
-  })
+  // H1：日历的数据中心主机此前是裸 fetch（不记账）⇒ 挂起时每次都付满超时、降级横幅也看不见
+  const res = await withHostBreaker(DC_HOST, () =>
+    fetch(url, {
+      headers: { 'user-agent': UA, referer: 'https://data.eastmoney.com/' },
+      signal: AbortSignal.timeout(12_000),
+    }),
+  )
   if (!res.ok) throw new Error(`HTTP ${res.status} from ${DC_HOST}`)
   const json = (await res.json()) as { result?: { data?: Array<Record<string, unknown>> } }
   const rows = json?.result?.data
@@ -255,10 +269,12 @@ async function fetchEconomicCalendar(start: string, end: string): Promise<EmCalR
     const q = new URLSearchParams({
       startDate: start, endDate: end, type: 'economics', pIndex: String(pIndex), pSize: String(MACRO_PAGE_SIZE),
     })
-    const res = await fetch(`https://${EMCAL_HOST}/dc/CJRL/GetIndexData?${q.toString()}`, {
-      headers: { 'user-agent': UA, referer: `https://${EMCAL_HOST}/dc/cjrl/index` },
-      signal: AbortSignal.timeout(Math.min(8000, budget)),
-    })
+    const res = await withHostBreaker(EMCAL_HOST, () =>
+      fetch(`https://${EMCAL_HOST}/dc/CJRL/GetIndexData?${q.toString()}`, {
+        headers: { 'user-agent': UA, referer: `https://${EMCAL_HOST}/dc/cjrl/index` },
+        signal: AbortSignal.timeout(Math.min(8000, budget)),
+      }),
+    )
     if (!res.ok) throw new Error(`HTTP ${res.status} from ${EMCAL_HOST}`)
     const text = await res.text()
     const groups = JSON.parse(text) as Array<{ Data?: EmCalRow[] }>
@@ -364,7 +380,10 @@ export class CalendarStore {
           syncedAt: typeof parsed.syncedAt === 'number' ? parsed.syncedAt : 0,
           // 旧文件没有该字段：当作"从未记录过尝试"，装载不因一个坏字段失败
           syncAttemptAt: typeof parsed.syncAttemptAt === 'number' ? parsed.syncAttemptAt : 0,
+          // H4：上次的逐源结果也要恢复 —— 否则重启即"洗白"成 stale=false / missing=[]
+          lastSources: Array.isArray(parsed.lastSources) ? (parsed.lastSources as CalSyncSourceResult[]) : [],
         }
+        this.lastSources = this.file.lastSources ?? []
       } catch (error) {
         // 「读到了但内容坏」与「读不到」不同：先隔离原件（保留原字节）再从容器的空库开始，
         // 与 store.ts 的 quarantine 同口径 —— 绝不静默覆盖用户数据
@@ -430,12 +449,21 @@ export class CalendarStore {
     const attempted = sources.filter((s) => s.state !== 'skipped')
     const failed = attempted.filter((s) => s.state === 'failed')
     const ok = attempted.filter((s) => s.state === 'ok')
+    /** 「200 但 0 条」单列一档（H4）：既不算成功也不算失败 —— 它与"真的没有"分不开 */
+    const empty = attempted.filter((s) => s.state === 'empty')
     const missing: MissingField[] = failed.map((s) => ({
       what: s.label,
       // 失败原因都是"这次没拿到"（上游超时/限流/不可达），稍后重试可恢复
       why: 'transient',
       note: `本次同步未取到（${s.error ?? '上游不可用'}）；该类别仍是上一次成功同步的事件（若有）—— ${MISSING_TIER_ADVICE.transient}`,
     }))
+    for (const s of empty) {
+      missing.push({
+        what: s.label,
+        why: 'no-source',
+        note: `本次回包正常但这一档 0 条（无法与"窗口内确实没有"区分，也可能是上游结构变化/筛选失效）—— 重试通常无用，必要时核对上游字段`,
+      })
+    }
     if (this.lastThrown !== null) {
       missing.push({
         what: '日历同步',
@@ -451,7 +479,12 @@ export class CalendarStore {
       attemptAt: this.file.syncAttemptAt > 0 ? this.file.syncAttemptAt : null,
       // 有源失败即视为降级（本次返回的事件里含上一次成功同步的旧值）；
       // 从未成功同步过也算降级 —— 那时根本没有可信的 asOf
-      stale: this.file.syncedAt <= 0 || failed.length > 0 || this.lastThrown !== null || this.readGuard.entries.length > 0,
+      stale:
+        this.file.syncedAt <= 0 ||
+        failed.length > 0 ||
+        empty.length > 0 ||
+        this.lastThrown !== null ||
+        this.readGuard.entries.length > 0,
       missing,
       sources,
       allFailed: sources.length > 0 && ok.length === 0,
@@ -532,7 +565,10 @@ export class CalendarStore {
         const before = auto.length
         try {
           await body()
-          results.push({ key, label, state: 'ok', count: auto.length - before })
+          const count = auto.length - before
+          // H4：**200 但 0 条**不许记成 ok —— 那与"真的没有"分不开（结构变化/筛选失效也会 0 条），
+          // 旧实现记 ok 并推进 syncedAt ⇒ 界面读到"刚刚同步过、没有降级"（上游改字段时尤其危险）
+          results.push({ key, label, state: count > 0 ? 'ok' : 'empty', count })
         } catch (error) {
           results.push({ key, label, state: 'failed', count: 0, error: error instanceof Error ? error.message : String(error) })
         }
@@ -637,9 +673,14 @@ export class CalendarStore {
       this.file.events = [...manual, ...keptAuto, ...withChangeHistory(this.file.events, fresh, Date.now())]
       // 「尝试」无条件记录，「成功」只在真有源成功时才推进 —— 全挂时 asOf 必须停留在上次成功时刻
       this.file.syncAttemptAt = Date.now()
-      const okCount = results.filter((r) => r.state === 'ok').length
-      if (okCount > 0) this.file.syncedAt = Date.now()
+      // H4：`asOf`（syncedAt）只在**所有被尝试的源都成功**时推进 ——
+      // 旧实现"任一源 ok 就推进"，于是四个源里挂一个也照样把数据时刻写成"现在"。
+      // ⚠ `skipped`（没自选/持仓时的财报/分红源）既不算成功也不算失败 ⇒ 不能拦住 asOf
+      const attempted = results.filter((r) => r.state !== 'skipped')
+      const allOk = attempted.length > 0 && attempted.every((r) => r.state === 'ok')
+      if (allOk) this.file.syncedAt = Date.now()
       this.lastSources = results
+      this.file.lastSources = results // 落盘：重启后仍能如实报告降级
       this.lastThrown = null
       await this.persist()
     })()

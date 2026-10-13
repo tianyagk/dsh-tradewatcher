@@ -16,6 +16,7 @@ import { buildBottomLane, calibrateAcross } from './bottom.ts'
 import { SingleFlight } from './singleflight.ts'
 import { dataHome } from './store.ts'
 import { mergeByKey, updateJsonLocked } from './lock.ts'
+import { withHostBreaker } from './breakerFetch.ts'
 
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
 // 主机组与取数实现都从 em.ts 复用（单一所有者）：本地再写一份只会让两边的退避与熔断语义漂移
@@ -741,9 +742,11 @@ async function fetchAvgAmount20(secid: string): Promise<{ avg: number; source: '
   try {
     const market = secid.startsWith('1.') ? 'sh' : 'sz'
     const code = secid.split('.')[1]
-    const res = await fetch(`https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param=${market}${code},day,,,25,qfq`, {
-      headers: { 'user-agent': UA }, signal: AbortSignal.timeout(12000),
-    })
+    const res = await withHostBreaker('web.ifzq.gtimg.cn', () =>
+      fetch(`https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param=${market}${code},day,,,25,qfq`, {
+        headers: { 'user-agent': UA }, signal: AbortSignal.timeout(12000),
+      }),
+    )
     if (!res.ok) throw new Error(`HTTP ${res.status}`)
     const j = (await res.json()) as { data?: Record<string, { qfqday?: string[][]; day?: string[][] }> }
     const d = j?.data?.[`${market}${code}`]
@@ -769,9 +772,11 @@ async function fetchProgressCurve(metas: RescueEtfMeta[]): Promise<{ curve: numb
     try {
       const market = meta.secid.startsWith('1.') ? 'sh' : 'sz'
       const code = meta.secid.split('.')[1]
-      const res = await fetch(`https://quotes.sina.cn/cn/api/json_v2.php/CN_MarketDataService.getKLineData?symbol=${market}${code}&scale=5&ma=no&datalen=1023`, {
-        headers: { 'user-agent': UA, referer: 'https://finance.sina.com.cn/' }, signal: AbortSignal.timeout(15000),
-      })
+      const res = await withHostBreaker('quotes.sina.cn', () =>
+        fetch(`https://quotes.sina.cn/cn/api/json_v2.php/CN_MarketDataService.getKLineData?symbol=${market}${code}&scale=5&ma=no&datalen=1023`, {
+          headers: { 'user-agent': UA, referer: 'https://finance.sina.com.cn/' }, signal: AbortSignal.timeout(15000),
+        }),
+      )
       if (!res.ok) continue
       const j = (await res.json()) as Array<{ day: string; volume: string }>
       const byDay = new Map<string, Array<{ day: string; volume: string }>>()
@@ -916,8 +921,12 @@ export type QuoteSource = 'em' | 'tencent'
  * 分单资金流只有东财给：`source !== 'em'` 的行**按 null 处理** —— 与"备用源没有分单资金流"的既有口径一致
  * （此前腾讯兜底时这些因子同样直接不可用），不许把来自备用源/旧值的数字当东财资金流用。
  */
-export async function fetchQuoteSource(secids: string[]): Promise<{ rows: Record<string, RescueQuoteRow>; source: QuoteSource }> {
-  const shared = await loadQuoteRowsShared(secids)
+export async function fetchQuoteSource(
+  secids: string[],
+  opts: { minReuseMs?: number } = {},
+): Promise<{ rows: Record<string, RescueQuoteRow>; source: QuoteSource }> {
+  // M5：采样器按**自己的 tick**复用槽（否则 30s/15s 的间隔每次都刚好撞上 12s 的槽 TTL ⇒ 命中率 0%）
+  const shared = await loadQuoteRowsShared(secids, { minReuseMs: opts.minReuseMs ?? 0 })
   const rows: Record<string, RescueQuoteRow> = {}
   let sawEm = false
   let live = 0
@@ -1214,7 +1223,12 @@ export class RescueMonitor {
     let quotes: Record<string, RescueQuoteRow>
     let source: QuoteSource = 'em'
     try {
-      const [got] = await Promise.all([fetchQuoteSource(secids), bootstrapWork])
+      const [got] = await Promise.all([
+        // 复用窗口 = 本拍间隔 − 余量（尾盘 15s ⇒ 11s；盘中 30s ⇒ 22s）：
+        // 宁可偶尔多打一次上游，也不让采样读到过旧的值
+        fetchQuoteSource(secids, { minReuseMs: Math.max(5_000, Math.round(this.activeIntervalSec() * 0.75 * 1000)) }),
+        bootstrapWork,
+      ])
       quotes = got.rows
       source = got.source
     } catch {

@@ -20,7 +20,8 @@ const okFetchers = (): CalSyncFetchers => ({
     }
     return [{ SECURITY_CODE: '600519', SECURITY_NAME_ABBR: '贵州茅台', EX_DIVIDEND_DATE: '2026-10-15', EQUITY_RECORD_DATE: '2026-10-14', IMPL_PLAN_PROFILE: '10派1元', REPORT_DATE: '2026-06-30' }]
   },
-  macroCal: async () => [],
+  // ⚠ H4 之后"200 但 0 条"记 `empty`（不算成功）—— 想表达"全源都 ok"就必须真的给一条
+  macroCal: async () => [{ FINNAME: '美国:CPI年率', STARTDATE: '2026/10/15 20:30', ENDDATE: '2026/10/15 20:30', FINCODE: 'USCPI' }],
 })
 
 const failFetchers = (): CalSyncFetchers => ({
@@ -61,6 +62,44 @@ test('日历：全部源失败时 syncedAt 保持不变、syncAttemptAt 推进�
   const raw = JSON.parse(readFileSync(join(d, 'calendar.json'), 'utf8')) as { syncedAt: number; syncAttemptAt: number }
   assert.equal(raw.syncedAt, syncedAtAfterOk)
   assert.ok(raw.syncAttemptAt > 0)
+})
+
+test('日历 H4：「回包正常但 0 条」必须单列一档（empty），不得记 ok / 不得推进 syncedAt', async () => {
+  const d = dir()
+  const store = new CalendarStore(d)
+  await store.init()
+  // 先来一次真·全成功（四个源里三个有数据、宏观给一条）
+  await store.sync(['600519'], true, okFetchers())
+  const okState = store.syncStatus()
+  assert.equal(okState.stale, false)
+  assert.notEqual(okState.syncedAt, null)
+  const syncedAt = okState.syncedAt
+
+  // 再来一次：所有源都回 200 但 0 条（模拟上游改字段/筛选失效）
+  const emptyFetchers: CalSyncFetchers = { report: async () => [], macroCal: async () => [] }
+  await store.sync(['600519'], true, emptyFetchers)
+  const st = store.syncStatus()
+  const byKey = new Map(st.sources.map((s) => [s.key, s]))
+  assert.equal(byKey.get('ipo')?.state, 'empty', '200 但 0 条必须记 empty（不是 ok）')
+  assert.equal(byKey.get('macro')?.state, 'empty')
+  assert.equal(st.stale, true, 'empty 必须算降级（旧实现报 stale=false ⇒ 谎报"一切正常"）')
+  assert.ok(
+    st.missing.some((m) => m.note.includes('0 条')),
+    `empty 档必须出现在 missing[] 里（实际 ${JSON.stringify(st.missing)}）`,
+  )
+  assert.equal(st.syncedAt, syncedAt, 'empty 不得推进 asOf（数据时刻只认全源成功）')
+
+  // 重启后仍必须如实报告降级（旧实现：lastSources 只在内存 ⇒ 重启即"洗白"）
+  const reopened = new CalendarStore(d)
+  await reopened.init()
+  const after = reopened.syncStatus()
+  assert.equal(after.stale, true, '重启后必须仍然算降级（落盘的逐源结果）')
+  assert.equal(after.sources.length, 4, '逐源明细必须从盘上恢复')
+  assert.equal(after.syncedAt, syncedAt, '重启不得改写数据时刻')
+  assert.ok(
+    after.missing.some((m) => m.note.includes('0 条')),
+    '重启后 missing[] 也必须如实（不许变成空数组）',
+  )
 })
 
 test('日历：从未成功同步过 → syncedAt 为 null 且 stale=true（不拿"现在"顶替）', async () => {

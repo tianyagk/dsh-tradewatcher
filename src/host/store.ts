@@ -270,6 +270,14 @@ export interface ReplayResult {
   state: TradeState
   /** 未应用的流水（含原因）；空数组 = 全部应用成功 */
   skipped: SkippedLedgerEntry[]
+  /**
+   * **实际被应用**的流水 id（H3）。
+   *
+   * 为什么要它：`portfolio.ts` 的"当日盈亏"原先是拿**原始**流水算的，
+   * 于是"被跳过的卖出"照样进 `dayPnl` —— 出现 `qty=0` 却 `dayPnl=-50` 的自相矛盾行。
+   * 判定源必须与 `qty/realized` 完全同源（同一份 replay 结果），否则两处口径会漂。
+   */
+  appliedIds: Set<string>
 }
 
 /**
@@ -285,6 +293,7 @@ export interface ReplayResult {
 export function replayPositionWithSkips(entries: readonly LedgerEntry[], posId: string): ReplayResult {
   const state: TradeState = { qty: 0, avgCost: 0, netCost: 0, realized: 0, fees: 0, turnover: 0, realizedUnknownQty: 0 }
   const skipped: SkippedLedgerEntry[] = []
+  const appliedIds = new Set<string>()
   for (const e of entries) {
     if (e.posId !== posId) continue
     if (e.verb !== 'buy' && e.verb !== 'sell' && e.verb !== 'adjust') continue
@@ -297,13 +306,14 @@ export function replayPositionWithSkips(entries: readonly LedgerEntry[], posId: 
     const fee = isFiniteNumber(e.fee) ? e.fee : 0
     try {
       applyTrade(state, e.verb, qty, price, fee)
+      appliedIds.add(e.id)
     } catch (error) {
       // Malformed/out-of-order history must never break the snapshot: keep
       // prior state (the entry remains visible in the ledger for audit).
       skipped.push({ id: e.id, verb: e.verb, reason: error instanceof Error ? error.message : String(error) })
     }
   }
-  return { state, skipped }
+  return { state, skipped, appliedIds }
 }
 
 /** Replay one position's whole ledger into accounting state（只要状态，忽略跳过明细） */

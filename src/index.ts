@@ -88,6 +88,15 @@ export interface CoreKernel {
   activeRows: Set<RowId>
   /** 一次性启动是否已完成（幂等标记） */
   started: boolean
+  /**
+   * **本内核**调用 `rescue.start()` 的次数（断言用）。
+   *
+   * 为什么不用模块级的 `__kernelStats.starts`：那是**跨内核累计**的 —— 上一个用例的
+   * `store.init()` 若在下一个用例跑起来之后才落定，它的 `.then` 会把计数加到新用例头上
+   * （FIX-3 中-⑤ 的 flake：`11 !== 1`）。per-kernel 计数只反映"这个内核启动了几次采样器"，
+   * 判据强度不变（真启动两次 ⇒ 2 ⇒ 照样失败）。
+   */
+  starts: number
 }
 
 /**
@@ -142,7 +151,7 @@ export function setKernel(value: CoreKernel | null): void {
 function applyCore(ctx: PluginContext, full = false): void {
   const first = kernel === null
   if (first) {
-    kernel = { store: new DataStore(), calendar: new CalendarStore(), rescue: new RescueMonitor(), activeRows: new Set<RowId>(['core']), started: false }
+    kernel = { store: new DataStore(), calendar: new CalendarStore(), rescue: new RescueMonitor(), activeRows: new Set<RowId>(['core']), started: false, starts: 0 }
   }
   const k = kernel as CoreKernel
   const provide = ctxSafe<(name: string, value: unknown) => void>(ctx, 'provide')
@@ -168,6 +177,7 @@ function applyCore(ctx: PluginContext, full = false): void {
       k.rescue.setConfig(k.store.getPrefs().rescue)
       // 采样器只允许一个：`started` 守卫 + 这个计数用于断言
       __kernelStats.starts += 1
+      k.starts += 1
       k.rescue.start()
       log('rescue monitor started', `interval ${k.store.getPrefs().rescue.intervalSec}s / tail ${k.store.getPrefs().rescue.tailIntervalSec}s`)
     }).catch((error) => {

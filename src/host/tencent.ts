@@ -1,6 +1,7 @@
 /**
  */
 import { parseMarketStamp } from './time.ts'
+import { withHostBreaker } from './breakerFetch.ts'
 
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
 
@@ -107,10 +108,12 @@ export interface TencentQuoteFull extends TencentQuote {
 /** 完整批量行情（含名称/开高低/量），供自选与持仓的行情链路兜底使用 */
 /** 拉 `qt.gtimg.cn` 原始文本（GBK） */
 async function tencentQuoteText(codes: string[]): Promise<string> {
-  const res = await fetch(`https://qt.gtimg.cn/q=${codes.join(',')}`, {
-    headers: { 'user-agent': UA, referer: 'https://gu.qq.com/' },
-    signal: AbortSignal.timeout(8000),
-  })
+  const res = await withHostBreaker('qt.gtimg.cn', () =>
+    fetch(`https://qt.gtimg.cn/q=${codes.join(',')}`, {
+      headers: { 'user-agent': UA, referer: 'https://gu.qq.com/' },
+      signal: AbortSignal.timeout(8000),
+    }),
+  )
   if (!res.ok) throw new Error(`HTTP ${res.status} from qt.gtimg.cn`)
   const buf = await res.arrayBuffer()
   try {
@@ -201,10 +204,12 @@ export async function fetchTencentDaily(secid: string, count = 320): Promise<Arr
   // 国际指数也走这里（实测 `fqkline?param=us.INX,day,,,10,qfq` 返回 `day` 数组，下面已有 `day` 兜底）
   const code = tencentQuoteCode(secid)
   if (code === null) return []
-  const res = await fetch(`https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param=${code},day,,,${count},qfq`, {
-    headers: { 'user-agent': UA, referer: 'https://gu.qq.com/' },
-    signal: AbortSignal.timeout(15000),
-  })
+  const res = await withHostBreaker('web.ifzq.gtimg.cn', () =>
+    fetch(`https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param=${code},day,,,${count},qfq`, {
+      headers: { 'user-agent': UA, referer: 'https://gu.qq.com/' },
+      signal: AbortSignal.timeout(15000),
+    }),
+  )
   if (!res.ok) throw new Error(`HTTP ${res.status} from web.ifzq.gtimg.cn`)
   const j = (await res.json()) as { data?: Record<string, { qfqday?: string[][]; day?: string[][] }> }
   const arr = j?.data?.[code]?.qfqday ?? j?.data?.[code]?.day ?? []
@@ -235,10 +240,12 @@ export interface TencentBoardRow {
  */
 export async function fetchTencentBoards(kind: 'industry' | 'concept', limit = 40): Promise<TencentBoardRow[]> {
   const t = kind === 'industry' ? '01/averatio' : '02/averatio'
-  const res = await fetch(`https://proxy.finance.qq.com/ifzqgtimg/appstock/app/mktHs/rank?l=${limit}&p=1&t=${t}&ordertype=&o=0`, {
-    headers: { 'user-agent': UA, referer: 'https://stockapp.finance.qq.com/' },
-    signal: AbortSignal.timeout(10000),
-  })
+  const res = await withHostBreaker('proxy.finance.qq.com', () =>
+    fetch(`https://proxy.finance.qq.com/ifzqgtimg/appstock/app/mktHs/rank?l=${limit}&p=1&t=${t}&ordertype=&o=0`, {
+      headers: { 'user-agent': UA, referer: 'https://stockapp.finance.qq.com/' },
+      signal: AbortSignal.timeout(10000),
+    }),
+  )
   if (!res.ok) throw new Error(`HTTP ${res.status} from proxy.finance.qq.com`)
   const j = (await res.json()) as { code?: number; data?: Array<Record<string, unknown>> }
   if (j?.code !== 0 || !Array.isArray(j.data)) return []
@@ -282,10 +289,12 @@ const SUGGEST_MARKET: Record<string, { secid: string; market: string }> = {
 export async function fetchTencentSuggest(query: string, limit = 10): Promise<TencentSuggestRow[]> {
   const q = query.trim()
   if (q === '') return []
-  const res = await fetch(`https://smartbox.gtimg.cn/s3/?v=2&q=${encodeURIComponent(q)}&t=all`, {
-    headers: { 'user-agent': UA, referer: 'https://stockapp.finance.qq.com/' },
-    signal: AbortSignal.timeout(8000),
-  })
+  const res = await withHostBreaker('smartbox.gtimg.cn', () =>
+    fetch(`https://smartbox.gtimg.cn/s3/?v=2&q=${encodeURIComponent(q)}&t=all`, {
+      headers: { 'user-agent': UA, referer: 'https://stockapp.finance.qq.com/' },
+      signal: AbortSignal.timeout(8000),
+    }),
+  )
   if (!res.ok) throw new Error(`HTTP ${res.status} from smartbox.gtimg.cn`)
   const buf = await res.arrayBuffer()
   let text: string
@@ -381,10 +390,12 @@ export interface TencentMinutePoint {
 export async function fetchTencentMinutes(secid: string): Promise<TencentMinutePoint[]> {
   const code = tencentCode(secid)
   if (code === null) return []
-  const res = await fetch(`https://web.ifzq.gtimg.cn/appstock/app/minute/query?code=${code}`, {
-    headers: { 'user-agent': UA, referer: 'https://gu.qq.com/' },
-    signal: AbortSignal.timeout(8000),
-  })
+  const res = await withHostBreaker('web.ifzq.gtimg.cn', () =>
+    fetch(`https://web.ifzq.gtimg.cn/appstock/app/minute/query?code=${code}`, {
+      headers: { 'user-agent': UA, referer: 'https://gu.qq.com/' },
+      signal: AbortSignal.timeout(8000),
+    }),
+  )
   if (!res.ok) throw new Error(`HTTP ${res.status} from web.ifzq.gtimg.cn`)
   const j = (await res.json()) as { data?: Record<string, { data?: { date?: string; data?: string[] } }> }
   const body = j?.data?.[code]?.data

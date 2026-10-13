@@ -77,7 +77,9 @@ test('金额遮罩：隐身只改显示，不改价格/涨跌与原始数值', (
     assert.equal(fmtMoneySigned(1234.5), '+¥••••')
     assert.equal(fmtRaw(1234.5), '¥••••')
     // 价格与成交量不是"金额"：点位/价格必须照常显示（否则整个行情条就没用了）
-    assert.equal(fmtPrice(1500.25), fmtPrice(1500.25))
+    // 旧写法是自己等于自己（恒真）。改成固定字面量：价格/点位照常显示，且**不是**遮罩占位
+    assert.equal(fmtPrice(1500.25), '1500.25')
+    assert.equal(fmtPrice(9.5), '9.500', '小于 10 的价格保留三位小数（口径未变）')
     assert.notEqual(fmtPrice(1500.25), '¥••••')
     assert.equal(fmtBig(12345), '1.2万')
 

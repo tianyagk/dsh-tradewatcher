@@ -59,7 +59,13 @@ interface LedgerSlice {
   start: TradeState
 }
 
-function slicePosition(entries: readonly LedgerEntry[], posId: string, dayStart: number): LedgerSlice {
+/**
+ * 当日切片。
+ *
+ * ⚠ H3：`dayTrades`/`dayFees` 只统计**实际被 replay 应用**的流水（`appliedIds`）——
+ * 旧实现拿原始流水算，于是被跳过的卖出照样进 `dayPnl`（`qty=0` + `dayPnl=-50` 自相矛盾）。
+ */
+function slicePosition(entries: readonly LedgerEntry[], posId: string, dayStart: number, appliedIds: ReadonlySet<string>): LedgerSlice {
   const slice: LedgerSlice = { entries: [], dayTrades: [], dayFees: 0, start: { qty: 0, avgCost: 0, netCost: 0, realized: 0, fees: 0, turnover: 0, realizedUnknownQty: 0 } }
   const pre: LedgerEntry[] = []
   for (const e of entries) {
@@ -69,6 +75,8 @@ function slicePosition(entries: readonly LedgerEntry[], posId: string, dayStart:
     if (e.ts < dayStart) {
       pre.push(e)
     } else if (e.verb === 'buy' || e.verb === 'sell') {
+      // 被跳过的流水既不算进 qty/realized，也不许算进当日盈亏/当日费用（同一行口径必须自洽）
+      if (!appliedIds.has(e.id)) continue
       if (typeof e.qty === 'number' && typeof e.price === 'number') {
         slice.dayTrades.push({ verb: e.verb, qty: e.qty, price: e.price, fee: typeof e.fee === 'number' ? e.fee : 0 })
         slice.dayFees += typeof e.fee === 'number' ? e.fee : 0
@@ -102,8 +110,8 @@ export function derivePosition(
   quote: QuoteRow | undefined,
   dayStart: number,
 ): PositionRow {
-  const { state: total, skipped } = replayPositionWithSkips(entries, pos.id)
-  const slice = slicePosition(entries, pos.id, dayStart)
+  const { state: total, skipped, appliedIds } = replayPositionWithSkips(entries, pos.id)
+  const slice = slicePosition(entries, pos.id, dayStart, appliedIds)
   const price = quote?.price ?? null
   const prev = quote?.prev ?? null
   const mv = price !== null ? round2(price * total.qty) : total.qty > 0 ? null : 0

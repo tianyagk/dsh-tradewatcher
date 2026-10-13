@@ -26,6 +26,9 @@ import { fetchTencentBoards, fetchTencentMinutes, fetchTencentQuoteRows, fetchTe
 import { join } from 'node:path'
 import { dataHome } from './store.ts'
 import { hhmmOf, dayOf, inSession, isSettledOffline, shanghaiParts } from './time.ts'
+import { UpstreamCoolingError, withHostBreaker } from './breakerFetch.ts'
+
+export { UpstreamCoolingError }
 
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
 const REFERER = 'https://quote.eastmoney.com/'
@@ -445,7 +448,21 @@ export function summarizeQuoteProvenance(items: Record<string, QuoteRow>, now = 
     priced += 1
     const at = typeof row.at === 'number' && Number.isFinite(row.at) ? row.at : null
     if (at !== null && (asOf === null || at > asOf)) asOf = at
-    if (src === 'lkg' || at === null || now - at > QUOTE_STALE_MS) staleCount += 1
+    /**
+     * M6：**已定稿**的 A 股行不算 stale。
+     *
+     * `frozenOfflineSlot` 让休市后的槽被无限期复用（零回源，因为数据不会再变），
+     * 但这里的 `now - at > QUOTE_STALE_MS` 只认"多久没取过" ⇒ 15:20 时把 15:06 的**收盘定稿**
+     * 报成 `stale: true`（还被读成"限流/降级"），而 `cached` 跟着变 false ⇒ 界面从"已收盘（定稿）"
+     * 掉回"数据在延迟"。定稿的判据是"休市 + 观测时刻已越过最近收盘"，与"多久没取"无关。
+     */
+    const settledFinal = at !== null && frozenOfflineSlot(row.secid, at, now)
+    if (settledFinal) {
+      // 定稿（休市 + 观测时刻已越过最近收盘）：数据不会再变，**任何来源**都不算 stale
+      //（em 是"最后一次真取到"，lkg 是"这次没取到、用了盘后不会再变的旧值"—— 两者都已定稿）
+    } else if (src === 'lkg' || at === null || now - at > QUOTE_STALE_MS) {
+      staleCount += 1
+    }
   }
   // 定稿判定：休市 + 零兜底行 + 有价（盘中永远为 false；分钟级延迟的盘中数据不是"定稿"）
   const cached = !inSession(now) && staleCount === 0 && priced > 0
@@ -870,7 +887,7 @@ function normalizeQuoteList(secids: readonly string[]): string[] {
   return out.sort((a, b) => (a.toUpperCase() < b.toUpperCase() ? -1 : a.toUpperCase() > b.toUpperCase() ? 1 : 0))
 }
 
-async function loadQuotes(secids: string[]): Promise<Map<string, QuoteRow>> {
+async function loadQuotes(secids: string[], minReuseMs = 0): Promise<Map<string, QuoteRow>> {
   const list = normalizeQuoteList(secids)
   if (list.length === 0) return new Map()
   await loadLastGood()
@@ -882,6 +899,8 @@ async function loadQuotes(secids: string[]): Promise<Map<string, QuoteRow>> {
   /** 槽是否可直接复用：仍在有效期内，或（沪/深 + 已收盘定稿）不会再变 */
   const reusable = (secid: string, slot: { exp: number; at: number; row: QuoteRow } | undefined): boolean => {
     if (slot === undefined) return false
+    // 调用方自己的复用窗口（M5：护盘采样器按 tick 对齐，避免"每次刚过期"）
+    if (minReuseMs > 0 && now - slot.at <= minReuseMs) return true
     return now < slot.exp || frozenOfflineSlot(secid, slot.at, now)
   }
   for (const secid of list) {
@@ -991,8 +1010,20 @@ export async function fetchQuotes(secids: string[]): Promise<Record<string, Quot
  * 返回的行可能来自东财、备用源（腾讯/新浪）或 last-known-good —— 来源如实写在 `row.source` 里，
  * 分单资金流（`mainNet`/`superNet`）只有 `source === 'em'` 的行才有值。
  */
-export async function loadQuoteRowsShared(secids: string[]): Promise<Map<string, QuoteRow>> {
-  return loadQuotes(secids)
+/**
+ * 采样器/其它后台链路共用的行情入口。
+ *
+ * `minReuseMs`（M5）：**调用方自己的复用窗口**。
+ * 槽的默认 TTL = 客户端间隔 + 一档余量（默认 12s），而护盘采样器每 30s（尾盘 15s）才 tick 一次 ⇒
+ * 每次回来槽都刚好过期，**命中率 0%**（复核实测：间隔 20s 时第二次请求数仍 = 1）。
+ * 采样器传 `minReuseMs = tick*0.8` 后：窗口内直接复用同一条槽（值本身仍由行情条的轮询更新），
+ * 既不额外打上游，也不会让界面看到更旧的数据（界面走的是自己的 `/quotes` 路径）。
+ */
+export async function loadQuoteRowsShared(
+  secids: string[],
+  opts: { minReuseMs?: number } = {},
+): Promise<Map<string, QuoteRow>> {
+  return loadQuotes(secids, opts.minReuseMs ?? 0)
 }
 
 /** Detail card for one stock/ETF (extra fundamentals; indices return what the feed has). */
@@ -1394,10 +1425,12 @@ interface MinuteBar {
 /** 新浪 5 分钟 K 线（一次可取多个交易日，用于「五日」视图）。 */
 async function fetchSina5Min(sym: string, datalen: number): Promise<MinuteBar[]> {
   const url = `https://quotes.sina.cn/cn/api/json_v2.php/CN_MarketDataService.getKLineData?symbol=${sym}&scale=5&ma=no&datalen=${datalen}`
-  const res = await fetch(url, {
-    headers: { 'user-agent': UA, referer: 'https://finance.sina.com.cn' },
-    signal: AbortSignal.timeout(9000),
-  })
+  const res = await withHostBreaker('quotes.sina.cn', () =>
+    fetch(url, {
+      headers: { 'user-agent': UA, referer: 'https://finance.sina.com.cn' },
+      signal: AbortSignal.timeout(9000),
+    }),
+  )
   if (!res.ok) throw new Error(`HTTP ${res.status} from sina`)
   const rows = (await res.json()) as Array<{ day?: unknown; close?: unknown; volume?: unknown }>
   if (!Array.isArray(rows)) return []
@@ -1416,7 +1449,7 @@ async function fetchSina5Min(sym: string, datalen: number): Promise<MinuteBar[]>
 /** 腾讯 5 分钟 K 线（新浪失败时的兜底，仅 A股/ETF）。 */
 async function fetchTencent5Min(sym: string, lmt: number): Promise<MinuteBar[]> {
   const path = `/ifzqgtimg/appstock/app/kline/mkline?param=${sym},m5,,${lmt}`
-  const json = (await fetchFromHost('proxy.finance.qq.com', path, 9000)) as {
+  const json = (await fetchHostThroughBreaker('proxy.finance.qq.com', path, 9000)) as {
     data?: Record<string, { m5?: unknown }>
   }
   const rows = json?.data?.[sym]?.m5
@@ -1959,7 +1992,8 @@ async function requestKlineFromTencent(secid: string, klt: number, lmt: number, 
   const fq = fqt === 1 ? 'qfq' : fqt === 2 ? 'hfq' : ''
   const path = `/appstock/app/fqkline/get?param=${sym},${period},,,${Math.min(1000, Math.max(5, lmt))},${fq}`
   try {
-    const json = (await fetchFromHost('web.ifzq.gtimg.cn', path, 9000)) as {
+    // H1：腾讯 fqkline 是 K 线的**首选**源 —— 此前不过熔断器 ⇒ 单台挂起时每次 /kline 付满 9 秒
+    const json = (await fetchHostThroughBreaker('web.ifzq.gtimg.cn', path, 9000)) as {
       data?: Record<string, Record<string, unknown>>
     }
     const node = json?.data?.[sym]
@@ -2001,13 +2035,6 @@ async function requestKlineFromTencent(secid: string, klt: number, lmt: number, 
  * "本轮没发请求、稍后自动重试"，不能说成"上游可达但没数据、重试无效"。
  * 冷却期内每次调用都是本地快速失败（0 上游请求），代价可忽略。
  */
-class UpstreamCoolingError extends Error {
-  constructor(message: string) {
-    super(message)
-    this.name = 'UpstreamCoolingError'
-  }
-}
-
 /**
  * 单主机取数，**过熔断器**：放行判定、半开探针名额、成功/失败记账与释放，与 `fetchAny` 同源。
  *
@@ -2018,24 +2045,8 @@ class UpstreamCoolingError extends Error {
  * （AUDIT-CACHE-2 §3.2 / C2，两份审计独立命中）。
  */
 async function fetchHostThroughBreaker(host: string, pathAndQuery: string, timeoutMs: number): Promise<unknown> {
-  const breaker = breakerFor(host)
-  if (!breaker.allow()) {
-    throw new UpstreamCoolingError(`上游熔断冷却中（约 ${minutesToRecover([host])} 分钟后自动重试）`)
-  }
-  // 半开期只放行一个探针（与 fetchAny 同语义）：抢不到名额就当"这次没发请求"，不计失败
-  if (!breaker.claimProbe()) {
-    throw new UpstreamCoolingError(`上游熔断半开探测中（约 ${minutesToRecover([host])} 分钟后重试）`)
-  }
-  try {
-    const json = await fetchFromHost(host, pathAndQuery, timeoutMs)
-    breaker.recordSuccess()
-    return json
-  } catch (error) {
-    breaker.recordFailure(error)
-    throw error
-  } finally {
-    breaker.releaseProbe()
-  }
+  // H1：统一走 `breakerFetch.withHostBreaker`（与新浪/腾讯/日历那些站点同一份实现）
+  return withHostBreaker(host, () => fetchFromHost(host, pathAndQuery, timeoutMs))
 }
 
 /** 单主机取 K 线；空数组视为失败（push2delay/push2 会返回 200 + 空）。优先腾讯。 */

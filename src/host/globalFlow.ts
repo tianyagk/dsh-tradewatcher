@@ -740,9 +740,13 @@ async function dailySeries(key: FlowMarketKey, which: 'chart' | 'momentum'): Pro
     // 缓存键按 **(来源, 符号)** 而不是 (市场, 用途)：欧股/日股/新兴的"规模序列"与"动量序列"
     // 就是同一条 ETF 日线，键带上用途会让同一份 500KB 的日线被拉两遍（实测冷启动 17 次请求）。
     const points = await cached(`series:${def.via}:${def.symbol}`, FLOW_SERIES_TTL_MS, async () => {
-      if (def.via === 'sina-us') return barsToSeries(await fetchSinaUsDaily(def.symbol))
-      const bars = await fetchTencentDaily(def.symbol, 260)
-      return barsToSeries(bars)
+      // ⚠ M8（与 R2 同一原则）：「**成功但空**」不算成功。
+      // 日线源在缺字段/解析不到时会 `return []`（不抛）—— 旧实现把它当成功值写进 **12 小时**正缓存，
+      // 于是"这次空包"被锁半天，还按 `no-source` 报给用户（"重试无用"）。
+      // 现在空/过短一律抛，由上层记成本次失败（不写正缓存，下次会重试）。
+      const series = def.via === 'sina-us' ? barsToSeries(await fetchSinaUsDaily(def.symbol)) : barsToSeries(await fetchTencentDaily(def.symbol, 260))
+      if (series.length < 2) throw new Error(`日线源回了 ${series.length} 个点（空包/过短 ⇒ 不写正缓存）`)
+      return series
     })
     if (points.length < 2) {
       return { points: null, missing: { what, why: 'no-source', note: `上游这次没有返回可用的日线序列（${def.via === 'sina-us' ? '新浪美股日线' : '腾讯 fqkline'}，${def.symbol}）—— 重试仍可能失败，需核对上游字段` } }
