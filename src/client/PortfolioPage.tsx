@@ -27,6 +27,7 @@ import { PORT_SORT_HINT, PORT_SORT_KEYS, PORT_SORT_LABEL, normalizeSortState, so
 import { useYtd } from './useYtd.ts'
 import { ytdText, ytdTooltip } from './ytdView.ts'
 import { isUsableBaseline } from './trendView.ts'
+import { shClockText, shToday } from './marketTime.ts'
 
 // 与宿主共用一份（shared/model.ts）——此前两边各写一份逐字相同的映射
 const VERB_LABEL: Record<LedgerEntry['verb'], string> = LEDGER_VERB_LABEL
@@ -334,7 +335,7 @@ export function PortfolioPage(props: {
         ? React.createElement(Btn, { onClick: () => setShowArchived((v) => !v) }, `已归档 ${archivedGroups.length}`)
         : null,
       React.createElement('span', { className: 'tw-muted', style: { flex: 1, textAlign: 'right' } },
-        new Date(view.generatedAt).toLocaleTimeString('zh-CN', { hour12: false }),
+        shClockText(view.generatedAt),
       ),
     ),
     ytd.error !== null
@@ -591,7 +592,7 @@ function BackupModal(props: { onClose: () => void; notify?: (text: string) => vo
         const url = URL.createObjectURL(blob)
         const a = document.createElement('a')
         a.href = url
-        a.download = `dsh-tradewatcher-backup-${new Date().toISOString().slice(0, 10)}.json`
+        a.download = `dsh-tradewatcher-backup-${shToday()}.json`
         document.body.appendChild(a)
         a.click()
         a.remove()

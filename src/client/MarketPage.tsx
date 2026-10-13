@@ -6,7 +6,7 @@ import type { BoardRow, QuoteRow, StockDetail, TrendData } from '../shared/model
 import { api } from './api.ts'
 import { UPDOWN_MISSING_NOTE, breadthCells, pickBreadthCounts, upDownPair } from './breadthView.ts'
 import { dirClass, fmtAmt, fmtBig, fmtPct, fmtPrice, fmtSigned } from './format.ts'
-import { CN_PHASE_LABEL, cnSessionState } from './marketTime.ts'
+import { CN_PHASE_LABEL, cnSessionState, shClockText } from './marketTime.ts'
 import { useNow } from './useNow.ts'
 import { Btn, ErrorNote, Modal } from './ui.tsx'
 import { Sparkline } from './charts.tsx'
@@ -16,11 +16,9 @@ import { isUsableBaseline } from './trendView.ts'
 
 type Scope = 'industry' | 'concept' | 'etf'
 
-/** 时刻一律 `HH:mm:ss`（用词表：页面级"数据时刻"；禁用 toLocaleString 的默认输出） */
+/** 时刻一律 `HH:mm:ss`（用词表：页面级"数据时刻"；固定北京时间，禁用 toLocaleString 的默认输出与本地 getHours） */
 function hhmmssOf(ts: number): string {
-  const d = new Date(ts)
-  const p = (n: number): string => String(n).padStart(2, '0')
-  return `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`
+  return shClockText(ts)
 }
 type Sort = 'pct' | 'money' | 'amount'
 
@@ -444,7 +442,7 @@ export function MarketPage(props: {
       },
         React.createElement('span', { className: 'tw-badge', style: { marginRight: 6 } },
           cnSession.settled ? '定稿' : CN_PHASE_LABEL[cnSession.phase]),
-        `数据时刻 ${boardMeta?.asOf !== undefined ? new Date(boardMeta.asOf).toLocaleTimeString('zh-CN', { hour12: false }) : '—'}` +
+        `数据时刻 ${boardMeta?.asOf !== undefined ? shClockText(boardMeta.asOf) : '—'}` +
         ` · 来源 ${boardMeta?.source ?? 'em'}${boardMeta?.stale === true ? '（上次成功结果）' : ''}` +
         // 口径常显会占掉一行（≈90 字）：压成「口径 ⓘ」，全文进 title（R1）——但下面这句**必须常显**（K9：
         // 删了会把"本页 40 条内重排"读成全市场排行）
@@ -455,7 +453,7 @@ export function MarketPage(props: {
         ? React.createElement('div', { className: 'tw-hint', style: { padding: '2px 2px 4px' } },
             boardMeta.source === 'tencent' || boardMeta.source === 'sina'
               ? `东财行情接口暂不可用，${boardMeta.source === 'sina' ? 'ETF 排行来自新浪备用源' : '板块涨跌来自腾讯备用源'}；`
-              : `东财行情接口暂不可用，显示上次成功数据（${boardMeta.asOf !== undefined ? new Date(boardMeta.asOf).toLocaleTimeString('zh-CN', { hour12: false }).slice(0, 5) : '—'}）；`,
+              : `东财行情接口暂不可用，显示上次成功数据（${boardMeta.asOf !== undefined ? shClockText(boardMeta.asOf).slice(0, 5) : '—'}）；`,
             scope === 'etf' ? 'ETF 排行的备用源不含资金流。' : '「主力净流入」仅东财提供，备用源下显示为 —。',
           )
         : null,

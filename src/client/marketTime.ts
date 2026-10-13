@@ -49,6 +49,62 @@ export function cnSessionState(now: number = Date.now()): CnSessionState {
   return { phase: 'closed', inSession: false, settled: true, hhmm, weekday }
 }
 
+/** 固定北京时间的格式化器（`timeZone` 写死 ⇒ 与浏览器时区无关） */
+let shFmt: Intl.DateTimeFormat | null = null
+function shFormatter(): Intl.DateTimeFormat {
+  if (shFmt === null) {
+    shFmt = new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'Asia/Shanghai',
+      hourCycle: 'h23',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+    })
+  }
+  return shFmt
+}
+
+function shParts(ts: number): (type: string) => string {
+  const parts = shFormatter().formatToParts(new Date(ts))
+  return (type) => parts.find((x) => x.type === type)?.value ?? ''
+}
+
+/**
+ * 北京时间的 `YYYY-MM-DD HH:mm:ss`。
+ *
+ * ⚠ 这是**市场数据时刻**的唯一出口：所有"数据时刻"族展示都必须走这里。
+ * 直接用 `toLocaleString('zh-CN')` / `getHours()` 会按**浏览器时区**渲染 ——
+ * 复核里同一 epoch 在 UTC 下显示 01:42、纽约 21:42、悉尼 12:42（用户看到的"数据时刻"与市场无关）。
+ */
+export function shDateTimeText(ts: number): string {
+  const g = shParts(ts)
+  const hh = g('hour') === '24' ? '00' : g('hour')
+  return `${g('year')}-${g('month')}-${g('day')} ${hh}:${g('minute')}:${g('second')}`
+}
+
+/** 北京时间的 `HH:mm:ss` */
+export function shClockText(ts: number): string {
+  return shDateTimeText(ts).slice(11)
+}
+
+/** 北京时间的 `MM-DD HH:mm` */
+export function shStampText(ts: number): string {
+  return shDateTimeText(ts).slice(5, 16)
+}
+
+/** 北京时间某时刻所在的自然日 `YYYY-MM-DD` */
+export function shDayText(ts: number): string {
+  return shDateTimeText(ts).slice(0, 10)
+}
+
+/** 北京时间的今天 `YYYY-MM-DD`（日历"今天"高亮 / 即将发生用它，不用浏览器本地日） */
+export function shToday(now: number = Date.now()): string {
+  return shDayText(now)
+}
+
 export const CN_PHASE_LABEL: Record<CnSessionPhase, string> = {
   pre: '开盘前',
   am: '上午盘中',

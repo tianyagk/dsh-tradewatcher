@@ -13,6 +13,7 @@ import { SortBar } from './SortBar.tsx'
 import { WATCH_SORT_HINT, WATCH_SORT_KEYS, WATCH_SORT_LABEL, normalizeSortState, sortWatch, type WatchSortKey } from './sort.ts'
 import { useYtd } from './useYtd.ts'
 import { ytdText, ytdTooltip } from './ytdView.ts'
+import { shClockText } from './marketTime.ts'
 
 type ModalState =
   | { kind: 'addGroup' }
@@ -198,7 +199,7 @@ export function WatchlistPage(props: {
           React.createElement('div', { className: 'tw-sub-h' }, '异动队列',
             React.createElement('span', { style: { flex: 1 } }),
             React.createElement('span', { className: 'tw-muted', style: { fontSize: 10.5 } },
-              alerts.asOf === null ? '尚未判定' : `数据时刻 ${new Date(alerts.asOf).toLocaleTimeString('zh-CN', { hour12: false })} · 静默窗口 ${SILENCE_MS / 60000} 分钟`),
+              alerts.asOf === null ? '尚未判定' : `数据时刻 ${shClockText(alerts.asOf)} · 静默窗口 ${SILENCE_MS / 60000} 分钟`),
           ),
           alerts.alerts.length === 0 && alerts.suppressed.length === 0
             ? React.createElement('div', { className: 'tw-hint', style: { margin: 0 } },

@@ -29,6 +29,7 @@ import {
 import { RESCUE_CALIBRATION } from './rescue-thresholds.ts'
 import { TW_ALL_SECIDS, TW_ROWS, rescueUniverseMeta } from '../shared/model.ts'
 import type { DailyBarLite, QuoteRow, RescueEtfView, RescueSnapshot } from '../shared/model.ts'
+import { dayOf } from './time.ts'
 
 let failures = 0
 const ok = (cond: boolean, msg: string): void => {
@@ -722,7 +723,8 @@ async function main(): Promise<void> {
     // 上游不可用时的当日复盘兜底：不再让标的卡整块消失
     {
       const fbDir = mkdtempSync(join(tmpdir(), 'tw-fb-'))
-      const today = new Date().toISOString().slice(0, 10)
+      // ⚠ 与 RescueMonitor 的日键口径一致（北京自然日）—— 用 UTC 日期会在北京 00:30 前后取不到同一天
+      const today = dayOf(Date.now())
       const peaks = { '1.510300': -0.011, '1.510050': 0.245, '1.510500': 0.094, '1.512100': -0.001, '1.588000': 0.003, '0.159915': 0.004 }
       writeFileSync(join(fbDir, 'rescue-log.json'), JSON.stringify({
         v: 1, baselines: {}, selfSamples: {}, lastSnapshot: null, updatedAt: Date.now(),

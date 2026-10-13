@@ -40,6 +40,7 @@ import { SPLIT_DEFAULT, klineHeightsOf, normalizeSplitRatio, splitDragRatio, spl
 import { SPLIT_HIT_PX, CHIPS_MARGIN_TOP_PX } from './chipsView.ts'
 import { NoteIcon } from './NoteIcon.tsx'
 import { useChips } from './useChips.ts'
+import { shDayText, shStampText } from './marketTime.ts'
 
 function useContainerWidth(): [React.RefObject<HTMLDivElement>, number] {
   const ref = useRef<HTMLDivElement | null>(null)
@@ -388,7 +389,7 @@ export function QuoteDrawer(props: {
     const bars = payload.kline.days.map((d) => ({ date: d.date, open: d.open, close: d.close, high: d.high, low: d.low, vol: d.vol }))
     const klineMarkers: CandleMarker[] = trades
       .filter((tr) => bars.length > 0 && tr.ts >= Date.parse(`${bars[0].date}T00:00:00`) - 86_400_000 * 8)
-      .map((tr) => ({ date: new Date(tr.ts).toISOString().slice(0, 10), kind: tr.verb, qty: tr.qty, price: tr.price }))
+      .map((tr) => ({ date: shDayText(tr.ts), kind: tr.verb, qty: tr.qty, price: tr.price }))
     return React.createElement(KlineChart, {
       key: tab,
       bars,
@@ -462,7 +463,7 @@ export function QuoteDrawer(props: {
     // —— 两者都是"这份数据是什么时候成功取到的"，不是"现在几点"。
     const ts = typeof t.staleAt === 'number' && t.staleAt > 0 ? t.staleAt : null
     if (ts !== null) {
-      return new Date(ts).toLocaleString('zh-CN', { hour12: false, month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
+      return shStampText(ts)
     }
     const lastPoint = t.points[t.points.length - 1]
     return lastPoint === undefined ? null : lastPoint.label.slice(5, 16)
@@ -510,7 +511,7 @@ export function QuoteDrawer(props: {
     const plan = KLINE_PLAN[payload.tab]
     const last = k.days[k.days.length - 1]
     const at = typeof k.asOf === 'number' && k.asOf > 0
-      ? new Date(k.asOf).toLocaleString('zh-CN', { hour12: false, month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
+      ? shStampText(k.asOf)
       : '—'
     const mode = TAB_LABEL[payload.tab]
     const fq = k.fqSupported === false ? '不复权（该标的不适用）' : FQ_LABEL[(k.fqt ?? fqt) as FqMode]

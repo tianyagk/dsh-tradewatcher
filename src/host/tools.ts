@@ -16,6 +16,7 @@ import { WriteJournal } from './writeLog.ts'
 import { POSITION_WINDOW, positionOfBars } from './position.ts'
 import { forwardOf } from './signalForward.ts'
 import { dayTradesOf } from './dayTrade.ts'
+import { shDateTimeText } from './time.ts'
 import { unreadableMissing } from './readGuard.ts'
 import { rankOf, returnBucketOf, textPercentile } from './groupRank.ts'
 import { computeTones } from './tonesService.ts'
@@ -66,7 +67,7 @@ function provenanceLine(p: DataProvenance | undefined): string {
   // 滞后告警（P1-9）：有才带；没超阈值时这一整段不出现（不许恒输出）
   const alert = p.lagAlert === undefined ? [] : [p.lagAlert]
   const parts: string[] = []
-  parts.push(p.asOf === null ? '数据时刻：未取到' : `数据时刻 ${new Date(p.asOf).toLocaleString('zh-CN', { hour12: false })}`)
+  parts.push(p.asOf === null ? '数据时刻：未取到' : `数据时刻 ${shDateTimeText(p.asOf)}`)
   parts.push(`来源 ${p.source}`)
   if (p.sources !== undefined && Object.keys(p.sources).length > 0) {
     parts.push(Object.entries(p.sources).map(([k, n]) => `${k}×${n}`).join('+'))
@@ -413,7 +414,7 @@ export function makeAgentTools(
         const rows = v.entries ?? []
         if (rows.length === 0) return textBlock([`暂无流水记录。`, provenanceLine(v.provenance)].filter((x) => x !== '').join('\n'))
         const lines = rows.map((r) => {
-          const ts = new Date(Number(r.ts)).toLocaleString('zh-CN', { hour12: false })
+          const ts = shDateTimeText(Number(r.ts))
           const where = [r.groupName ?? null, r.posName ?? null].filter(Boolean).join(' / ')
           const qty = r.qty !== undefined ? ` ${r.qty}` : ''
           const price = r.price !== undefined && r.price !== null ? `@${fmtNum(r.price as number)}` : ''
@@ -695,7 +696,7 @@ export function makeAgentTools(
           ? null
           : `本次同步失败源：${failed.map((s) => `${s.label}（${s.error ?? '上游不可用'}）`).join('、')}` +
             `；这些类别仍是上一次成功同步的事件，稍后自动重试（尝试于 ${
-              v.syncAttemptAt == null ? '—' : new Date(v.syncAttemptAt).toLocaleString('zh-CN', { hour12: false })}）`
+              v.syncAttemptAt == null ? '—' : shDateTimeText(v.syncAttemptAt)}）`
         if (rows.length === 0) {
           return textBlock(['该区间暂无事件。', syncLine, provenanceLine(v.provenance), ...missingLines(v.provenance)].filter((x) => x !== null && x !== '').join('\n'))
         }
@@ -887,7 +888,7 @@ export function makeAgentTools(
         if (v.pending !== undefined) {
           out.push(`可撤销的写入（${v.pending.length} 条，最新在前）：`)
           for (const p of v.pending) {
-            out.push(`  ${p.id} · ${new Date(p.ts).toLocaleString('zh-CN', { hour12: false })} · ${p.tool} · ${p.summary} · by ${p.by}`)
+            out.push(`  ${p.id} · ${shDateTimeText(p.ts)} · ${p.tool} · ${p.summary} · by ${p.by}`)
           }
         }
         return textBlock(out.join('\n'))
@@ -1375,7 +1376,7 @@ export function makeAgentTools(
                 ? [{
                     what: '最近一次采样',
                     why: 'transient' as const,
-                    note: `采样失败于 ${new Date(snapshot.lastFailTs).toLocaleString('zh-CN', { hour12: false })}；上方数据为上一次成功采样结果`,
+                    note: `采样失败于 ${shDateTimeText(snapshot.lastFailTs)}；上方数据为上一次成功采样结果`,
                   }]
                 : []),
             ],

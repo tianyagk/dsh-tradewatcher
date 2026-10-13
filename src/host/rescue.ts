@@ -11,7 +11,7 @@ import { RESCUE_CALIBRATION } from './rescue-thresholds.ts'
 import { hostsAllowed } from './breaker.ts'
 import { QUOTE_HOSTS as EM_QUOTE_HOSTS, HISTORY_HOSTS as EM_HISTORY_HOSTS, fetchAny as fetchAnyJson, loadQuoteRowsShared } from './em.ts'
 import { fetchTencentDaily, fetchTencentMinutes } from './tencent.ts'
-import { dayOf as shDayOf, hhmmOf as shHhmmOf, weekdayOf as shWeekdayOf } from './time.ts'
+import { dayOf as shDayOf, hhmmOf as shHhmmOf, parseMarketStamp, weekdayOf as shWeekdayOf } from './time.ts'
 import { buildBottomLane, calibrateAcross } from './bottom.ts'
 import { SingleFlight } from './singleflight.ts'
 import { dataHome } from './store.ts'
@@ -832,10 +832,16 @@ export interface MinuteFlowPoint {
   mainNet: number | null
 }
 
-/**解析 "YYYY-MM-DD HH:mm" → epoch ms（本地时区，与趋势接口一致） */
+/**
+ * 解析 "YYYY-MM-DD HH:mm" → epoch ms。
+ *
+ * ⚠ 上游给的是**北京墙上时间**，必须显式 `+08:00`（走 `host/time.ts` 的 `parseMarketStamp`）：
+ * 旧实现是无偏移的 `Date.parse`，在 `TZ=UTC` 宿主下整批时间戳偏 8 小时 ⇒
+ * `bootstrapOne` 的 `p.ts > newest` 回填判定把北京盘中所有点当"未来"，
+ * `hhmmOf/sessionElapsed/inTradingWindow` 全部失准（复核实测 0/330 命中）。
+ */
 function parseMinuteStamp(text: string): number {
-  const t = Date.parse(`${text.slice(0, 10)}T${text.slice(11, 16)}:00`)
-  return Number.isFinite(t) ? t : NaN
+  return parseMarketStamp(text)
 }
 
 export async function fetchMinuteSeries(secid: string): Promise<MinuteFlowPoint[]> {

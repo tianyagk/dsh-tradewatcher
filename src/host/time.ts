@@ -77,6 +77,67 @@ export function weekdayOf(ts: number): number {
   return new Date(Date.UTC(y, m - 1, d)).getUTCDay()
 }
 
+/**
+ * 解析**市场时钟字符串**（上游给的是北京墙上时间，如 `"2026-10-12 09:31"`）。
+ *
+ * ⚠ 必须显式写 `+08:00`：`Date.parse('2026-10-12T09:31:00')` **按宿主时区**解释 ——
+ * 在 `TZ=UTC` 的 Docker/云主机上，北京 09:31 被读成 09:31Z = 北京 17:31，整整偏 8 小时
+ * （复核实测：腾讯分时兜底刻度变成 17:30–23:00、护盘采样回填环整批"未来"点、`inTradingWindow` 命中 0/330）。
+ *
+ * 上游时间戳一律走这里；本模块以外**不得**再出现无偏移的 `Date.parse` 模板（见 FIX-2-TIMEZONE 排查表）。
+ */
+export function parseMarketStamp(text: string): number {
+  const t = text.trim()
+  if (t === '') return Number.NaN
+  // 已带明确偏移（Z / ±hh:mm）⇒ 原样交给 Date.parse，不存在宿主时区歧义
+  if (/[zZ]$|[+-]\d{2}:?\d{2}$/.test(t)) {
+    const iso = Date.parse(t)
+    return Number.isFinite(iso) ? iso : Number.NaN
+  }
+  const m = /^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})(?::(\d{2}))?$/.exec(t)
+  if (m !== null) return Date.parse(`${m[1]}-${m[2]}-${m[3]}T${m[4]}:${m[5]}:${m[6] ?? '00'}+08:00`)
+  // 兼容 "YYYYMMDDHHmm[ss]" 紧凑写法
+  const c = /^(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})?$/.exec(t)
+  if (c === null) return Number.NaN
+  return Date.parse(`${c[1]}-${c[2]}-${c[3]}T${c[4]}:${c[5]}:${c[6] ?? '00'}+08:00`)
+}
+
+/** 固定北京时间（`Asia/Shanghai`）的日期时间格式化器 —— 不受宿主时区影响 */
+let stampFmt: Intl.DateTimeFormat | null = null
+function zipFormatter(): Intl.DateTimeFormat {
+  if (stampFmt === null) {
+    stampFmt = new Intl.DateTimeFormat('en-CA', {
+      timeZone: SH_TZ,
+      hourCycle: 'h23',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+    })
+  }
+  return stampFmt
+}
+
+/** 北京时间的 `YYYY-MM-DD HH:mm:ss`（**与宿主时区无关**；工具回包里的"数据时刻"一律用它） */
+export function shDateTimeText(ts: number): string {
+  const p = zipFormatter().formatToParts(new Date(ts))
+  const get = (type: string): string => p.find((x) => x.type === type)?.value ?? ''
+  const hh = get('hour') === '24' ? '00' : get('hour')
+  return `${get('year')}-${get('month')}-${get('day')} ${hh}:${get('minute')}:${get('second')}`
+}
+
+/** 北京时间的 `HH:mm:ss` */
+export function shClockText(ts: number): string {
+  return shDateTimeText(ts).slice(11)
+}
+
+/** 北京时间的 `MM-DD HH:mm` */
+export function shStampText(ts: number): string {
+  return shDateTimeText(ts).slice(5, 16)
+}
+
 /** 北京时间某日 00:00 对应的 epoch ms */
 export function shanghaiDayStart(ts: number): number {
   // 北京无夏令时，固定 +08:00 —— 与 Intl 口径一致且更快

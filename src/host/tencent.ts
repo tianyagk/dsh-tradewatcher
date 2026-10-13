@@ -1,5 +1,7 @@
 /**
  */
+import { parseMarketStamp } from './time.ts'
+
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
 
 /**
@@ -398,7 +400,8 @@ export async function fetchTencentMinutes(secid: string): Promise<TencentMinuteP
     if (hhmm < '0930' || hhmm > '1500') continue
     const amount = num(parts[3]) // 累计成交额（不是每分钟增量）
     if (amount === null || !(amount > 0)) continue
-    const t = Date.parse(`${day}T${hhmm.slice(0, 2)}:${hhmm.slice(2, 4)}:00`)
+    // ⚠ 北京墙上时间 ⇒ 显式 +08:00（无偏移的 Date.parse 在 TZ=UTC 宿主要偏 8 小时）
+    const t = parseMarketStamp(`${day} ${hhmm.slice(0, 2)}:${hhmm.slice(2, 4)}`)
     if (Number.isFinite(t)) points.push({ ts: t, amount, price: num(parts[1]), cumVol: num(parts[2]) })
   }
   return points

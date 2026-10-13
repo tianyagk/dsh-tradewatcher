@@ -11,6 +11,7 @@ import { hasVolumeSeries, isUsableAvg, isUsableBaseline, plausibleAvgs, trendDay
 import { sessionAxis, type SessionDef } from './sessionAxis.ts'
 import { klineReadout, nearestIndex, tipPlacement, toneClass, trendReadout, upDownColors, type TipLine } from './chartCursor.ts'
 import { trendDayCount } from '../shared/model.ts'
+import { shToday } from './marketTime.ts'
 
 const PAD_X = 8
 const PAD_TOP = 8
@@ -925,7 +926,8 @@ function RangeSlider(props: {
 
   const quick = (days: number | null): void => {
     if (days === null) { props.onChange([0, total]); return }
-    const cutoff = new Date(Date.now() - days * 86_400_000).toISOString().slice(0, 10)
+    // 窗口起点是**北京自然日**（用 UTC 日期在北京 00:00–08:00 会少/多一天）
+    const cutoff = shToday(Date.now() - days * 86_400_000)
     let idx = bars.findIndex((b) => b.date >= cutoff)
     if (idx < 0) idx = 0
     idx = Math.max(0, Math.min(idx, total - 8))

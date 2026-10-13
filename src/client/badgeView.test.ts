@@ -66,9 +66,11 @@ test('task-80：标签文案不许出现当日盈亏（也不许出现等价的�
   assert.equal(/当日盈亏/.test(text), false, '标签里不许出现「当日盈亏」')
   assert.equal(/[+-]\d+(\.\d+)?\s*%/.test(text), false, '标签里不许出现等价的盈亏百分比（那是徽标的活）')
   assert.equal(/[+-]?\d+\.\d\b/.test(text), false, '标签里不许出现盈亏数值')
-  const hhmmss = new Date(Date.parse('2026-10-12T09:42:52+08:00')).toLocaleTimeString('zh-CN', { hour12: false })
-  assert.equal(text, `盯盘 · 数据 ${hhmmss}`, `标签只留数据时刻（实际 ${text}）`)
-  assert.match(text, /^盯盘 · 数据 \d{2}:\d{2}:\d{2}$/, '标签形状：盯盘 · 数据 HH:mm:ss（由宿主 formatter 推导，避免时区耦合）')
+  // ⚠ 这里**必须**写死字面量（R5）：旧断言用同一个 toLocaleTimeString 推导期望值 ⇒ 任何时区都过，
+  // 等于把"数据时刻按浏览器时区渲染"这个缺陷锁成了契约（UTC 浏览器下它接受 01:42:52）。
+  // 现在期望值是**北京墙上时间**，在 TZ=UTC / TZ=America/New_York 轮里都必须一样。
+  assert.equal(text, '盯盘 · 数据 09:42:52', `标签只留数据时刻，且必须是北京时间（实际 ${text}）`)
+  assert.match(text, /^盯盘 · 数据 \d{2}:\d{2}:\d{2}$/, '标签形状：盯盘 · 数据 HH:mm:ss')
   // 徽标保留（紧凑、带色那一处）
   assert.equal(v.text, '-2.3%', '徽标直接给百分比，便于比较')
   assert.equal(v.tone, 'down', '徽标仍带色（下跌）')

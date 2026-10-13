@@ -11,6 +11,45 @@
 
 ---
 
+## v0.76.0 — 全仓审查红线批：时区 2 条（宿主偏 8 小时 + 客户端「数据时刻」按浏览器时区）
+
+报告 `docs/FIX-2-TIMEZONE.md`。
+
+### ④ 宿主：市场时钟按宿主时区解析（UTC 宿主下偏 8 小时）
+
+新增出口 `src/host/time.ts:89 parseMarketStamp`（`"YYYY-MM-DD HH:mm[:ss]"` 与 `"YYYYMMDDHHmm"` 一律按 `+08:00`；带 `Z`/`±hh:mm` 的原样认；垃圾 ⇒ NaN）+ `shDateTimeText/shClockText/shStampText`（`:124/132/137`，固定 `Asia/Shanghai`）。
+两处解析收口：`rescue.ts:843`（护盘 trends2 + fflow）、`tencent.ts:404`（腾讯分时兜底）⇒ 分时兜底刻度不再变成 **17:30–23:00**，护盘采样回填环不再偏 8 小时。
+同族**格式化**侧一并改：`tools.ts:70/417/699/891/1379`、`backup.ts:217/218`（原为无 `timeZone` 的 `toLocaleString`）。
+**顺带抓到自己的一个坑**：`selftest.ts:725` 用 **UTC 日期**当 `rescue-log` 的日键，而监控按**北京自然日**查 ⇒ 北京 00:30 前后自检会假红/假绿；已改 `dayOf(Date.now())`。
+
+### ⑤ 客户端：「数据时刻」族按浏览器时区（5 处）
+
+新增 `src/client/marketTime.ts:82/89/94/99/104`（`shDateTimeText/shClockText/shStampText/shDayText/shToday`，`timeZone` 写死）。
+5 处红线站点：侧栏徽标 `badgeView.ts:56`、行情卡 `title` `quoteState.ts:66`、K 线脚注 `chartNote.ts:41`（+`format.ts:92/110`）、日历「今天」`CalendarPage.tsx:46/187`、页面级数据时刻 `MarketPage.tsx:21/445/456`／`PortfolioPage.tsx:338`／`WatchlistPage.tsx:202`／`QuoteDrawer.tsx:466/514`／`RescuePanel.tsx:438/468/476/479`。
+排查另扫出三类同族并修掉：**用 UTC 日期当自然日**（备份文件名 `PortfolioPage.tsx:595`、CSV 名 `RescuePanel.tsx:101`、交易明细成交日 `QuoteDrawer.tsx:392`、K 线窗口起点 `kline.tsx:930`）。完整逐个结论见报告 §3（含两条白名单：`trendStitch.msToDay` 的日期串往返、测试子进程夹具）。
+
+### 两条**把缺陷当契约**的测试已改（报告 §4）
+
+- `src/client/badgeView.test.ts:69`：原来用同一个 `toLocaleTimeString` 推导期望值 ⇒ 任何时区都过（UTC 浏览器下它接受 `01:42:52`）。改为固定字面量 `'盯盘 · 数据 09:42:52'`。
+- `src/client/chartNote.test.ts:56`：`new Date(2026,9,9,9,5)` 本地构造 + 本地渲染 ⇒ 同样恒真。改为固定 epoch + 固定字面量，并加北京 `00:05` 跨日边。
+
+### 验证
+
+`npm run check` **EXIT=0**：**550 / 550 × 2 时区** + selftest + build（73 项）；`build.mjs` 零改动。
+新增 `src/host/marketClock.test.ts`（4 条，真 `fetchTencentMinutes`/`fetchMinuteSeries`，stub 上游）+ `src/client/marketTimeDisplay.test.ts`（5 条，含**全仓静态防线**：无 `timeZone` 的 `toLocale*`、`toISOString` 当日界、本地 `getHours` 一律零容忍）。全部断言在 `TZ=UTC` 轮通过；跨时区实跑 `TZ=UTC` 29/29、`TZ=America/New_York` 9/9。
+**4 组反例注入在 `TZ=UTC` 下全部必败**：R4-A（退回无偏移解析 ⇒ 证据里直接打出 "17:31"）、R5-A（退回浏览器时区 ⇒ 打出 "实际 数据 01:42:52"）、R5-B（脚注退回本地 `getHours`）、R5-C（新塞一处无 `timeZone` 调用 ⇒ 被静态防线抓到）。日志 `/tmp/fix2/inject/*.log`，md5 校验还原。
+
+### 一处 flake（如实记录）
+
+某轮 `npm run check` 里 `src/index.test.ts:491`「`rescue.start()` 只跑一次」出现一次 `11 !== 1`；单跑该文件 17/17 通过、整轮再跑两次 550/550 通过 ⇒ 判为**负载相关的计时器 flake**（该用例靠计时器计数），与本批改动无关（本批两个文件都不启动计时器）。**未动那条测试**；是否顺手加稳定性处理待定（已并入下一批）。
+
+### 未做（已记录）
+
+- 没有「跟随浏览器时区」的开关（按仓库既有规矩一律北京，写死是刻意的）。
+- 锁/隔离件命名保持 UTC（非市场时间）；非时间类 `toLocaleString`（金额千分位）保持。
+- 界面文案未加「（北京时间）」标注。
+- `sh*Text` 依赖 Node full-icu（当前环境成立，未做回退）。
+
 ## v0.75.0 — 全仓审查后的红线批：数据安全与编造数字（5 条）
 
 三路全仓审查（`docs/REVIEW-1-REDUNDANCY.md`、`REVIEW-2-CORRECTNESS.md`、`REVIEW-3-DOCS.md`）共发现 7 条红线。本版修前 5 条（数据安全与编造数字），时区 2 条留待下一批。报告 `docs/FIX-1-REDLINE.md`。

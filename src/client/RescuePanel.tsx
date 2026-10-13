@@ -18,6 +18,7 @@ import { api } from './api'
 import { Btn, ErrorNote, Field, Modal, Skeleton } from './ui'
 import { fmtStamp } from './format.ts'
 import { isUsableBaseline } from './trendView.ts'
+import { shClockText, shDayText } from './marketTime.ts'
 
 const LEVEL_COLOR: Record<RescueLevel, string> = {
   0: 'var(--tw-fg-dim, #8b93a7)',
@@ -97,7 +98,7 @@ function exportCsv(rows: RescueEtfView[], snap: RescueSnapshot): void {
   const url = URL.createObjectURL(blob)
   const a = document.createElement('a')
   a.href = url
-  a.download = `护盘信号_${new Date(snap.ts).toISOString().slice(0, 10)}.csv`
+  a.download = `护盘信号_${shDayText(snap.ts)}.csv`
   a.click()
   URL.revokeObjectURL(url)
 }
@@ -434,7 +435,7 @@ export function RescuePanel(props: {
             className: 'tw-badge',
             title: snapshot.note ?? (data as { staleNote?: string })?.staleNote ?? '',
             style: { color: LEVEL_COLOR[1], borderColor: LEVEL_COLOR[1] },
-          }, `上次数据 ${snapshot.lastSampleTs !== null ? new Date(snapshot.lastSampleTs).toLocaleTimeString('zh-CN', { hour12: false }).slice(0, 5) : ''}`)
+          }, `上次数据 ${snapshot.lastSampleTs !== null ? shClockText(snapshot.lastSampleTs).slice(0, 5) : ''}`)
         : null,
       snapshot !== null && (snapshot.completeness?.missing.length ?? 0) > 0
         ? React.createElement('span', {
@@ -464,7 +465,7 @@ export function RescuePanel(props: {
               ? `采样暂停 · 下次 ${snapshot.activeWindow?.nextLabel ?? '—'}（${pauseReason}）`
               : `采样中 · ${snapshot.activeIntervalSec}s`}` +
             // 「数据 HH:mm:ss」= 这份数据是几点拿到的（不是响应时刻、更不是失败时刻）
-            `${snapshot.lastSampleTs !== null ? ` · 数据 ${new Date(snapshot.lastSampleTs).toLocaleTimeString('zh-CN', { hour12: false })}` : ''}` +
+            `${snapshot.lastSampleTs !== null ? ` · 数据 ${shClockText(snapshot.lastSampleTs)}` : ''}` +
             `${snapshot.flowSource === 'tencent' ? ' · 腾讯源' : ''}` +
             // 两种"不新鲜"必须分开说：有失败时刻 = 采样失败；只有缺口标记 = 当日有过缺口
             //（磁盘上的旧快照、会话未采样等）；仅 stale（本会话未采样）由「上次数据」红标说明。
@@ -472,10 +473,10 @@ export function RescuePanel(props: {
             // 说成"缺口"会让人以为要处理；改为陈述"当日曾中断"。
             `${paused
               ? snapshot.lastFailTs !== null && snapshot.lastFailTs !== undefined
-                ? ` · 当日曾采样失败 ${new Date(snapshot.lastFailTs).toLocaleTimeString('zh-CN', { hour12: false })}`
+                ? ` · 当日曾采样失败 ${shClockText(snapshot.lastFailTs)}`
                 : snapshot.gap ? ' · 当日采样曾中断（非当前故障）' : ''
               : snapshot.gap && snapshot.lastFailTs !== null && snapshot.lastFailTs !== undefined
-                ? ` · ⚠ 采样失败 ${new Date(snapshot.lastFailTs).toLocaleTimeString('zh-CN', { hour12: false })}`
+                ? ` · ⚠ 采样失败 ${shClockText(snapshot.lastFailTs)}`
                 : snapshot.gap ? ' · ⚠ 当日有采样缺口' : ''}`,
           )
         : null,

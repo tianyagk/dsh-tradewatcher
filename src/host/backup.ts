@@ -4,6 +4,7 @@
 import { createHash } from 'node:crypto'
 import type { LedgerEntry, PortGroup, PortItem, PortPrefs, WatchGroup, WatchItem } from '../shared/model.ts'
 import { normalizeLedgerDetailed, normalizePortFile, normalizeWatchFile, replayPosition, sortLedger } from './store.ts'
+import { shDateTimeText } from './time.ts'
 
 /** 备份格式版本；结构不兼容时用它给出明确拒绝理由，而不是让字段静默丢失 */
 export const BACKUP_SCHEMA_VERSION = 1
@@ -213,8 +214,8 @@ export function describeConflicts(
   if (s.ledgerTo !== null) {
     out.push(
       current.ledgerTo === null
-        ? `流水最新时间：当前无流水 → 导入后 ${new Date(s.ledgerTo).toLocaleString('zh-CN', { hour12: false })}`
-        : `流水最新时间：当前 ${new Date(current.ledgerTo).toLocaleString('zh-CN', { hour12: false })} → 导入后 ${new Date(s.ledgerTo).toLocaleString('zh-CN', { hour12: false })}`,
+        ? `流水最新时间：当前无流水 → 导入后 ${shDateTimeText(s.ledgerTo)}`
+        : `流水最新时间：当前 ${shDateTimeText(current.ledgerTo)} → 导入后 ${shDateTimeText(s.ledgerTo)}`,
     )
   }
   return out

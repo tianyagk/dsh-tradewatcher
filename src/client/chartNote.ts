@@ -1,3 +1,4 @@
+import { shStampText } from './marketTime.ts'
 /**
  * 为什么日期不能省：K 线兜底那条以前只有 `· 显示上次成功数据（本次刷新失败）`，没有日期 ——
  */
@@ -34,14 +35,10 @@ export interface NotePayloadLike {
   kline?: NoteKlineLike
 }
 
-function pad(n: number): string {
-  return String(n).padStart(2, '0')
-}
 
-/** `MM-DD HH:mm`（本地时区；`ts` 为毫秒） */
+/** `MM-DD HH:mm`（**北京时间**，与浏览器时区无关；`ts` 为毫秒）——K 线脚注的"上次成功数据"用它 */
 export function stamp(ts: number): string {
-  const d = new Date(ts)
-  return `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
+  return shStampText(ts)
 }
 
 /** 这份数据自己带的时刻：分时取最后一个点的 label，K 线取最后一根的时间 */

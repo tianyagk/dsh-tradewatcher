@@ -14,6 +14,7 @@ import { api } from './api.ts'
 import { Btn, ErrorNote, Field, Modal, Skeleton } from './ui.tsx'
 import { MISSING_TIER_LABEL } from '../shared/model'
 import { fmtStamp } from './format.ts'
+import { shToday } from './marketTime.ts'
 
 const WEEKDAYS = ['一', '二', '三', '四', '五', '六', '日']
 
@@ -41,10 +42,10 @@ function addDays(d: Date, n: number): Date {
 }
 
 export function CalendarPage(_props: { prefs: PortPrefs }): React.ReactElement {
-  const today = iso(new Date())
-  const now = new Date()
-  const [year, setYear] = useState(now.getFullYear())
-  const [month0, setMonth0] = useState(now.getMonth())
+  // R5：日历的"今天"是**北京自然日**，不是浏览器本地日（UTC 浏览器在北京 11-01 00:30 会落在 10-31）
+  const today = shToday()
+  const [year, setYear] = useState(() => Number(today.slice(0, 4)))
+  const [month0, setMonth0] = useState(() => Number(today.slice(5, 7)) - 1)
   const [events, setEvents] = useState<CalEvent[]>([])
   const [syncedAt, setSyncedAt] = useState<number | null>(null)
   /**
@@ -182,9 +183,10 @@ export function CalendarPage(_props: { prefs: PortPrefs }): React.ReactElement {
         React.createElement('button', { className: 'tw-iconbtn', onClick: () => shiftMonth(1), 'aria-label': '下个月' }, '›'),
         React.createElement(Btn, {
           onClick: () => {
-            const d = new Date()
-            setYear(d.getFullYear())
-            setMonth0(d.getMonth())
+            // 同上：回到"今天"＝北京自然日所在的月份
+            const t = shToday()
+            setYear(Number(t.slice(0, 4)))
+            setMonth0(Number(t.slice(5, 7)) - 1)
           },
         }, '今天'),
         React.createElement('span', { style: { flex: 1 } }),
@@ -316,6 +318,8 @@ function DayModal(props: {
   onAdd: () => void
   mutate: (body: Record<string, unknown>) => void
 }): React.ReactElement {
+  // `props.date` 是"YYYY-MM-DD"自然日（非时刻）：按本地 00:00 构造它、再取星期，结果与该日历日一一对应
+  //（不经过任何时刻换算 ⇒ 与浏览器时区无关）
   const weekday = WEEKDAYS[(new Date(`${props.date}T00:00:00`).getDay() + 6) % 7]
  // 默认按**勾稽**排（持仓 → 自选 → 其他），组内按重要度与时刻。
   // 也可切成纯重要度排序 —— 有时只想看"今天最重要的事是什么"。

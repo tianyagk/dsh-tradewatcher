@@ -3,6 +3,7 @@
  * 不另起一套算法 —— 否则列表头汇总与逐卡颜色会互相矛盾。
  */
 import type { QuoteRow } from '../shared/model.ts'
+import { shClockText } from './marketTime.ts'
 export { QUOTE_STATE_COLOR } from './theme.ts'
 
 export type QuoteState = 'live' | 'delayed' | 'settled' | 'missing'
@@ -60,8 +61,9 @@ export function quoteStateTitle(
   row: QuoteRow | undefined,
   refreshSec: number,
 ): string {
+  // R5：行情卡 title 里的"数据时刻"固定北京时间（浏览器时区无关）
   const at = row !== undefined && typeof row.at === 'number' && Number.isFinite(row.at)
-    ? new Date(row.at).toLocaleTimeString('zh-CN', { hour12: false })
+    ? shClockText(row.at)
     : '—'
   const src = row?.source ?? 'em'
   const base = `状态：${QUOTE_STATE_LABEL[state]} · 来源 ${src} · 数据时刻 ${at}`

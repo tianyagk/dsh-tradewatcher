@@ -1,3 +1,5 @@
+import { shClockText, shStampText } from './marketTime.ts'
+
 /** Client-side formatting helpers (pure). */
 
 export function fmtPrice(n: number | null | undefined): string {
@@ -80,10 +82,14 @@ export function fmtBig(n: number | null | undefined): string {
   return String(Math.round(n))
 }
 
+/**
+ * 北京时间的 `HH:mm:ss`（**与浏览器时区无关**）。
+ *
+ * 旧实现用 `getHours()` 等本地取值 ⇒ 同一 epoch 在 UTC 浏览器显示 01:42、纽约 21:42，
+ * 而这些时刻全都是**市场时间**（R5 红线）。现在统一走 `marketTime.ts` 的固定时区出口。
+ */
 export function fmtClock(ts: number): string {
-  const d = new Date(ts)
-  const p = (x: number): string => String(x).padStart(2, '0')
-  return `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`
+  return shClockText(ts)
 }
 
 /** Direction class given redUp convention (CN red-up / international flipped). */
@@ -100,9 +106,8 @@ export function dirClass(n: number | null | undefined, redUp: boolean): string {
  */
 export function fmtStamp(ts: number | null | undefined): string {
   if (ts === null || ts === undefined || !Number.isFinite(ts)) return '—'
-  const d = new Date(ts)
-  const p = (n: number): string => String(n).padStart(2, '0')
-  return `${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`
+  // 同样是市场时间 ⇒ 固定北京时间（见 fmtClock 的说明）
+  return shStampText(ts)
 }
 
 /** 绝对日期 `YYYY-MM-DD`（文件名/日界用） */

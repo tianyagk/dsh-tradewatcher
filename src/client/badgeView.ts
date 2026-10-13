@@ -1,3 +1,4 @@
+import { shClockText } from './marketTime.ts'
 /**
  * 侧栏徽标的文案（纯函数，无 React 依赖）。
  *
@@ -51,7 +52,8 @@ function stamp(asOfText: string, settled: boolean): string {
 }
 
 export function badgeView(b: BadgeInput, masked: boolean): BadgeState {
-  const asOfText = b.asOf === null ? '—' : new Date(b.asOf).toLocaleTimeString('zh-CN', { hour12: false })
+  // R5：数据时刻固定北京时间（旧实现按浏览器时区渲染：UTC 下显示 01:42 而非 09:42）
+  const asOfText = b.asOf === null ? '—' : shClockText(b.asOf)
   // 护盘 ≥ 疑似护盘（level ≥ 2）优先：那是"今天市场有事"的信号，比个人盈亏更该被看到
   if (b.level >= 2) {
     return { text: '护', tone: 'rescue', detail: `护盘信号：${b.levelLabel ?? '—'}${tail(asOfText, b.settled)}`, stamp: stamp(asOfText, b.settled) }
