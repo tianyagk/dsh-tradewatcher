@@ -81,6 +81,13 @@ export interface ToolKpiDatum {
   text: string
   value: number | null
   delta: string | null
+  /**
+   * 色标：该磁贴对应的**曲线序列序号**（与曲线/图例同色）；`null`/缺省 ⇒ 中性色标
+   * （该格不对应任何一条序列，例如"五市场合计规模""数据时刻"）。
+   *
+   * 只影响颜色，不引入任何新数值 —— 无数据时它不出现（红线：整份模型零阿拉伯数字）。
+   */
+  swatch?: number | null
 }
 
 /** 曲线的一条序列（**数值是真的**；缺的点用 null，画断，不连成假线） */
@@ -230,7 +237,7 @@ export interface DetailModel {
   status: string
   /** 状态行的完整版（进 title/aria-label） */
   statusTitle: string
-  kpi: { title: string; note: string; cells: Array<{ label: string; text: string; value: number | null; delta: string | null }> }
+  kpi: { title: string; note: string; cells: Array<{ label: string; text: string; value: number | null; delta: string | null; swatch: number | null }> }
   curve: { title: string; note: string; days: string[]; series: ToolCurveSeries[]; marks: Array<{ index: number; label: string }>; empty: string }
   pie: { title: string; note: string; slices: ToolPieSlice[]; center: string | null; empty: string }
   market: { title: string; note: string; columns: string[]; rows: string[][]; rowNotes: Array<string | null>; footnotes: string[]; empty: string }
@@ -272,8 +279,8 @@ export function detailModel(entry: ToolEntry, data: ToolData | null = null): Det
   // KPI：标签来自工具文件（契约），值来自数据（取不到 ⇒ 未取到 + value null）
   const kpiCells = (kpi.cells ?? []).map((label) => {
     const datum = data?.kpi?.[label]
-    if (datum === undefined) return { label, text: NOT_FETCHED, value: null, delta: null }
-    return { label, text: datum.text, value: datum.value, delta: datum.delta }
+    if (datum === undefined) return { label, text: NOT_FETCHED, value: null, delta: null, swatch: null }
+    return { label, text: datum.text, value: datum.value, delta: datum.delta, swatch: datum.swatch ?? null }
   })
   const boundaryLines = data?.boundary === undefined ? [...entry.boundary] : [...entry.boundary, ...data.boundary]
   const ranges = [...(entry.ranges?.options ?? [])]

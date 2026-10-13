@@ -13,7 +13,7 @@ import type { GlobalFlowMarketDto, GlobalFlowPayloadDto } from '../api.ts'
 // ⚠ 占位文案从**叶子模块**拿，类型从注册表拿（type-only import 会被擦除）——
 // 否则 `toolRegistry → tools/cake → tools/globalFlowView → toolRegistry` 会成环（实测 TDZ 报错）。
 import { NOT_FETCHED } from '../toolText.ts'
-import type { ToolData, ToolPayload, ToolPieSlice } from '../toolRegistry.ts'
+import type { ToolCurveSeries, ToolData, ToolPayload, ToolPieSlice } from '../toolRegistry.ts'
 
 /** 五个市场的画图配色：全部走主题 token（明暗两套都有定义，源码里不写死颜色） */
 export const FLOW_SERIES_COLORS: readonly string[] = [
@@ -49,6 +49,19 @@ export function fmtCnyYi(n: number | null): string {
 export function fmtSharePct(n: number | null): string {
   if (n === null || !Number.isFinite(n)) return NOT_FETCHED
   return `${n.toFixed(2)}%`
+}
+
+/**
+ * 悬停提示框的行模型（**唯一来源**）：值直接取自曲线序列，页面不另算一份。
+ * 缺值 ⇒ `未取到`（**绝不写 0**：0.00% 会被读成"这个市场当时份额为零"）。
+ */
+export function hoverRowsOf(series: readonly ToolCurveSeries[], index: number | null): Array<{ name: string; text: string; value: number | null; swatch: number }> {
+  if (index === null || index < 0) return []
+  return series.map((s, i) => {
+    const raw = s.points[index]
+    const v = raw === undefined || raw === null || !Number.isFinite(raw) ? null : raw
+    return { name: s.name, text: v === null ? `${NOT_FETCHED}` : fmtSharePct(v), value: v, swatch: i }
+  })
 }
 
 /** 份额变化（百分点）：带符号 */
@@ -329,30 +342,36 @@ export function globalFlowToolData(payload: GlobalFlowPayloadDto, step = 0, rang
       boundary: payload.notes.boundary,
     },
     kpi: {
+      // 色标 = 该磁贴对应的曲线序列序号（与曲线/图例同色）；不对应任何序列的格子给 null ⇒ 中性色标
       '偏好榜首': top === null
-        ? { text: NOT_FETCHED, value: null, delta: null }
-        : { text: `${top.name} ${fmtSharePct(topShare)}`, value: topShare, delta: isLatest ? `五日 ${fmtPp(top.delta5Pp)}` : `较前一序列日 ${fmtPp(topShare === null || prevShareOf(view, idx, payload.markets.indexOf(top)) === null ? null : topShare - (prevShareOf(view, idx, payload.markets.indexOf(top)) as number))}` },
+        ? { text: NOT_FETCHED, value: null, delta: null, swatch: null }
+        : { text: `${top.name} ${fmtSharePct(topShare)}`, value: topShare, swatch: payload.markets.indexOf(top), delta: isLatest ? `五日 ${fmtPp(top.delta5Pp)}` : `较前一序列日 ${fmtPp(topShare === null || prevShareOf(view, idx, payload.markets.indexOf(top)) === null ? null : topShare - (prevShareOf(view, idx, payload.markets.indexOf(top)) as number))}` },
       // 偏好分本身（0–1）也放进磁贴 delta 里：读者能看出"份额是偏好分归一化的结果"
       '偏好分（榜首）': top === null
-        ? { text: NOT_FETCHED, value: null, delta: null }
+        ? { text: NOT_FETCHED, value: null, delta: null, swatch: null }
         : {
             text: fmtPref(top.pref),
             value: top.pref,
+            swatch: payload.markets.indexOf(top),
             delta: top.prefSource,
           },
       '五市场合计规模': {
         text: fmtUsd(payload.totalUsd),
         value: payload.totalUsd,
+        // 合计不对应任何一条序列 ⇒ 中性色标（不许拿某个市场的颜色冒充"合计"）
+        swatch: null,
         delta: payload.totalNote ?? rateSummary(payload),
       },
       '近五日轮动': {
         text: payload.rotation.text,
         value: payload.rotation.maxAbsPp,
+        swatch: null,
         delta: payload.rotation.kind === 'rotation' ? '明确轮动' : payload.rotation.kind === 'flat' ? '持平' : '判不了',
       },
       '数据时刻': {
         text: point === undefined ? NOT_FETCHED : `${point.day}（${point.origin === 'observed' ? '实测' : '重建'}）`,
         value: null,
+        swatch: null,
         delta: payload.snapshot.lastDay === null ? '本地快照尚未建立' : `快照至 ${payload.snapshot.lastDay}（${payload.snapshot.days} 天）`,
       },
     },

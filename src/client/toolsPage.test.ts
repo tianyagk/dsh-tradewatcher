@@ -20,6 +20,17 @@ import { fileURLToPath } from 'node:url'
 import { gateTabs, type TabLike } from './tabsGate.ts'
 import { catalogModel, detailModel, NOT_FETCHED, TOOL_ENTRIES } from './toolRegistry.ts'
 import { cakeTool } from './tools/cake.ts'
+import {
+  BACK_BTN_FOCUS_STYLE,
+  BACK_BTN_HOVER_STYLE,
+  BACK_BTN_PRESS_STYLE,
+  BACK_BTN_PROPS,
+  BACK_BTN_STYLE,
+  BACK_BTN_TAG,
+  BACK_BTN_TITLE,
+  backButtonInteractionProblems,
+  backButtonLayoutProblems,
+} from './toolBackButton.ts'
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..')
 const readSrc = (rel: string): string => readFileSync(join(ROOT, rel), 'utf8')
@@ -31,6 +42,16 @@ const readSrc = (rel: string): string => readFileSync(join(ROOT, rel), 'utf8')
  * 把注释算进去就等于禁止注释提到那个词 —— 那会逼着后续维护者把历史删掉（信息反而丢了）。
  * 规则与 `src/host/markdownScan.test.ts` 的 `stripComments` 同源（先块后行；`//` 前不能是 `:` 免得吃掉 URL）。
  */
+/**
+ * 剥掉 import/export 语句（**只用于"常量真的被用了"类断言**）。
+ *
+ * 为什么必须剥：`src.includes('LEGEND_ROW')` 会被**导入语句本身**满足 ⇒ 页面把常量用丢了、
+ * 断言照样绿。剥掉 import 后，剩下的出现才是"真的用在这段 JSX 里"。
+ */
+function stripImports(src: string): string {
+  return src.replace(/^import[\s\S]*?from '[^']+'\n/gm, '').replace(/^import '[^']+'\n/gm, '')
+}
+
 function stripComments(src: string): string {
   return src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/[^\n]*/g, '$1')
 }
@@ -226,8 +247,68 @@ export function renderWiringProblems(src: string): string[] {
   }
   need(/model\.market\.columns\.length/.test(src), '市场表空态必须跨全部列（colSpan 来自列数）')
   // 接数据后的接线点
-  need(/cell\.delta === null \? null : React\.createElement/.test(src), 'KPI 的 delta（变化）必须渲染（用户口径要求磁贴含 delta）')
   need(/type: 'range'/.test(src) && /io\.onStep/.test(src), '回放滑块必须渲染（最近 30 个交易日手动回放）')
+  // ③ 磁贴四件套：色标 + 标签 + 大号数值 +（右端）delta —— 缺一个都算磁贴没做全
+  need(/'data-role': 'tool-kpi-swatch'/.test(src) && /cell\.swatch/.test(src), '磁贴必须有色标元素且颜色来自模型的 swatch')
+  need(/'data-role': 'tool-kpi-delta'/.test(src) && /cell\.delta/.test(src), 'KPI 的 delta（较上日 ±x）必须渲染在右端')
+  need(/'data-role': 'tool-kpi-value'/.test(src) && /cell\.text/.test(src), 'KPI 的大号数值必须渲染（文本来自模型）')
+  need(/style: \{ \.\.\.SWATCH/.test(src) && /FLOW_SERIES_COLORS\[cell\.swatch/.test(src), '色标颜色必须取序列色（与曲线/图例同色）')
+  // 版式令牌（唯一来源在 toolDetailTheme.ts）：页面必须用同一批常量，而不是再写一份字面量
+  const used = stripImports(src)
+  for (const [token, label] of [
+    ['HERO_TYPE.title', 'Hero 大标题字号/字重'],
+    ['HERO_TYPE.kicker', 'kicker 大写宽字距'],
+    ['SUMMARY_TYPE.value', '摘要卡数值层级'],
+    ['CARD_SURFACE', '卡片细边框 + 大圆角 + 无重阴影'],
+    ['TILE_SURFACE', '磁贴表面'],
+    ['CHART_TYPE.cardTitle', '卡内标题 16–18px 粗'],
+    ['CHART_TYPE.asOf', 'AS OF 小号次要色'],
+    ['CHART_TYPE.tileLabel', '磁贴标签小号'],
+    ['CHART_TYPE.tileValue', '磁贴数值大号（20/700）'],
+    ['CHART_TYPE.tileDelta', '磁贴右端「较上日 ±x」小号'],
+    ['PLOT.minHeight', '绘图区高度下限'],
+    ['PLOT.aspectRatio', '绘图区高度来源（随宽度自适应）'],
+    ['LEGEND_ROW', '图例居中'],
+    ['LEGEND_DOT', '图例圆点'],
+    ['RANGE_BOX', '范围控件凹陷容器'],
+    ['RANGE_ON', '选中档浅底圆角块'],
+    ['TOOL_SPACE.sectionGap', '区块间距'],
+  ] as const) {
+    need(used.includes(token), `详情页必须**真的用上** toolDetailTheme 的 ${token}（${label}）—— 只 import 不算`)
+  }
+  need((src.match(/className: 'tw-tool-card'/g) ?? []).length >= 4, '详情页卡片必须走 .tw-tool-card（细边框 + 大圆角 + 无重阴影）')
+  // A 组：绘图区高度契约 + 真实像素画布 + reduced-motion 开关
+  need(/minHeight: PLOT\.minHeight/.test(src) && /aspectRatio: PLOT\.aspectRatio/.test(src), '绘图区必须同时给高度下限与高度来源（aspect-ratio）')
+  need(/plotHeightProblems\(boxStyle\)/.test(src), '绘图区必须自检高度契约（只写 flex 会塌成 1px）')
+  need(/new ResizeObserver\(/.test(src) && /usePlotSize\(boxRef\)/.test(src), '绘图区必须按容器真实像素绘制（填满卡片、随容器自适应）')
+  need(/'data-anim': props\.animOff \? 'off' : 'on'/.test(src) && /matchMedia\('\(prefers-reduced-motion: reduce\)'\)/.test(src), '动效必须有 reduced-motion 降级开关（matchMedia 驱动 data-anim）')
+  // A 组：图例在**图表上方**（顺序断言：curveChart 里 legend 锚点必须早于 svg 绘制锚点）
+  const curveBody = src.slice(src.indexOf('function curveChart('), src.indexOf('/** 静态饼图'))
+  const legendAt = curveBody.indexOf("'data-role': 'tool-chart-legend'")
+  const svgAt = curveBody.indexOf('viewBox: `0 0 ${W} ${H}`')
+  need(curveBody !== '' && legendAt >= 0 && svgAt >= 0, '找不到 curveChart 的图例/画布锚点（顺序断言会失效）')
+  need(legendAt >= 0 && svgAt >= 0 && legendAt < svgAt, `图例必须在图表**上方**（居中）：legend@${legendAt} 应早于 svg@${svgAt}`)
+  // 顺序的**唯一来源**是 CHART_STACK（页面必须照它渲染）——否则"源码位置"与"真实渲染顺序"会脱钩
+  need(/\.\.\.CHART_STACK\.map\(\(slot\) => \(slot === 'legend' \? legend : plotEl\)\),/.test(src), '主线图表卡必须按 CHART_STACK 渲染（图例在上、画布在下；顺序判据的唯一来源）')
+  // B 组：悬停十字线 + 提示框；切档淡入；回放平滑；不用任何第三方图表库
+  need(/'data-role': 'tool-crosshair'/.test(src) && /nearestIndex\(/.test(src), '悬停必须有十字线与取点（nearestIndex）')
+  need(/'data-role': 'tool-hover-tip'/.test(src) && /hoverRowsOf\(props\.series, hover\)/.test(src), '悬停提示框必须渲染（行模型来自 hoverRowsOf，页面不另算一份）')
+  need(/hoverRows\.map\(/.test(src) && /r\.text/.test(src), '提示框必须逐序列列出值（缺值走模型里的「未取到」）')
+  // ⚠ 用**剥注释**的正文：注释里也会写 `MOTION_STYLE.fadeIn`，拿 src 判会被注释满足（实测踩到）
+  need(/style: MOTION_STYLE\.fadeIn/.test(visible) && /key: `range-\$\{props\.days\.length\}`/.test(src), '切档必须有过渡动画（按窗口长度重挂载绘图组 ⇒ 重放淡入）')
+  need(/pathStyle\(/.test(src) && /key: `line-\$\{si\}`/.test(src), '回放平滑跟随：路径经 pathStyle 交给 CSS，且 key 不含回放步（不重建、不闪）')
+  need(/from 'recharts'|from 'chart\.js'|from 'echarts'|from 'd3'/.test(src) === false, '不许引入第三方图表库（只用 CSS/SVG）')
+  // ④ 口径降噪：sectionHead 的 note 只进 title/aria-label，**不再**作为常驻文本渲染（事实仍可读）
+  need(/'data-role': 'tool-section-title'/.test(src) && /title: note/.test(src) && /'aria-label': `\$\{title\}：\$\{note\}`/.test(src), '区块口径行必须降噪进 title/aria-label（事实不许丢）')
+  const headAt = src.indexOf('function sectionHead(')
+  // 只取**函数体**：从签名的 `): React.ReactElement {` 之后开始（跳过形参 `note`，也避开别的函数里的 `) {`）
+  const SIG = '): React.ReactElement {'
+  const sigAt = headAt < 0 ? -1 : src.indexOf(SIG, headAt)
+  const headBody = sigAt < 0 ? '' : src.slice(sigAt + SIG.length, src.indexOf('\n}', sigAt) + 2)
+  const noteUses = (headBody.match(/\bnote\b/g) ?? []).length
+  need(headBody !== '', '找不到 sectionHead 的函数体（降噪判据会失效）')
+  // 降噪的**可判定**形态：`note` 只允许出现在 title 与 aria-label 两处；多一处就是又变成常驻文本了
+  need(noteUses === 2, `区块口径行不许再作为常驻文本渲染（sectionHead 里 note 只允许出现在 title/aria-label；实得 ${noteUses} 处）`)
   need(/cell\.text/.test(src), 'KPI 的文本必须渲染')
   need(/model\.market\.rowNotes\[i\]/.test(src), '市场表的逐行原因必须渲染（缺数据行要显示「未取到 + 原因」）')
   need(/model\.extras\.map\(/.test(src), '附加块（A股净流入单列）必须渲染')
@@ -238,7 +319,7 @@ export function renderWiringProblems(src: string): string[] {
   // ④ 边界声明（含「不是真实跨境资金净流入」这条免责）与状态行**不许复用 tw-hint**：
   // 那个类在紧凑/隐身视图下 display:none（styles.ts:90-98）⇒ 复用等于把免责声明藏起来。
   need(/'data-role': 'tool-legal'/.test(src), '边界声明区块必须带 data-role="tool-legal"（可断言且可定位）')
-  for (const [role, label] of [['tool-legal-line', '边界声明的每一条'], ['tool-status', '状态行'], ['tool-row-note', '逐行缺口原因']] as const) {
+  for (const [role, label] of [['tool-legal-line', '边界声明的每一条'], ['tool-status', '状态行'], ['tool-row-note', '逐行缺口原因'], ['tool-pie-missing', '饼图缺块说明'], ['tool-market-total', '份额合计（分母口径）'], ['tool-marks-note', '实测/重建说明']] as const) {
     const at = src.indexOf(`'data-role': '${role}'`)
     need(at >= 0, `${label}必须带 data-role="${role}"（可断言且可定位）`)
     if (at >= 0) {
@@ -262,7 +343,7 @@ test('② 详情页三段式 + 时间范围控件 + 功能区接线齐全；十�
     { name: '卡片不再用 CARD_PROPS（键盘可达与 type=button 没了）', mutate: (s) => s.replace('...CARD_PROPS,\n                key: card.id,', 'key: card.id,'), hit: /CARD_PROPS|toolCardView/ },
     { name: '卡片不再用 CARD_STYLE（阴影/圆角没了）', mutate: (s) => s.replace('style: CARD_STYLE,', "style: { cursor: 'pointer' },"), hit: /CARD_STYLE|toolCardView/ },
     { name: '空数据时不再渲染占位文案', mutate: (s) => s.replace('model.pie.empty', "''"), hit: /model\.pie\.empty/ },
-    { name: 'KPI 的 delta 不渲染', mutate: (s) => s.replace('cell.delta === null ? null :', 'null ? null :'), hit: /delta/ },
+    { name: 'KPI 的 delta 不渲染', mutate: (s) => s.replace("'data-role': 'tool-kpi-delta'", "'data-role': 'tool-kpi-delta-x'"), hit: /delta/ },
     { name: '回放滑块改成固定文本', mutate: (s) => s.replace("type: 'range',", "type: 'hidden',"), hit: /回放滑块/ },
     // v0.81.0 新增：三段结构 / 范围控件 / 状态行压缩
     { name: 'Hero 整段删掉', mutate: (s) => s.replace("    heroView(model, io),\n", ''), hit: /三段式|Hero/ },
@@ -276,8 +357,8 @@ test('② 详情页三段式 + 时间范围控件 + 功能区接线齐全；十�
       name: 'KPI 口径行（缺数据原因）被丢掉',
       mutate: (s) =>
         s.replace(
-          "{ className: 't', 'data-role': 'tool-chart-title', title: `${model.kpi.title}｜${model.kpi.note}`, 'aria-label': `${model.kpi.title}：${model.kpi.note}` },",
-          "{ className: 't', 'data-role': 'tool-chart-title' },",
+          "{ 'data-role': 'tool-chart-title', style: CHART_TYPE.cardTitle, title: `${model.curve.title}｜${model.kpi.note}`, 'aria-label': `${model.curve.title}：${model.kpi.note}` },",
+          "{ 'data-role': 'tool-chart-title', style: CHART_TYPE.cardTitle },",
         ),
       hit: /KPI 口径行/,
     },
@@ -292,6 +373,34 @@ test('② 详情页三段式 + 时间范围控件 + 功能区接线齐全；十�
       mutate: (s) => s.replace("'data-role': 'tool-row-note', colSpan", "'data-role': 'tool-row-note', className: 'tw-hint', colSpan"),
       hit: /逐行缺口原因.*不许复用 tw-hint/,
     },
+    // ── 本批（对齐参考版 A/B 两组）：排版 / 卡片 / 磁贴 / 图例顺序 / 绘图区 / 动效 / 降噪 ──
+    { name: 'Hero 标题缩回 17px（回到对齐前）', mutate: (s) => s.replace('style: { margin: 0, ...HERO_TYPE.title }', 'style: { margin: 0, fontSize: 17, fontWeight: 600 }'), hit: /HERO_TYPE|标题字号/ },
+    { name: 'kicker 退回胶囊标签', mutate: (s) => s.replace("'data-role': 'tool-hero-kicker', style: HERO_TYPE.kicker", "'data-role': 'tool-hero-kicker', style: { fontSize: 10.5, borderRadius: 6, border: '1px solid var(--tw-border)', background: 'var(--tw-accent-soft)' }"), hit: /kicker/ },
+    { name: '摘要卡数值回到 16px（层级塌掉）', mutate: (s) => s.replace("style: { ...SUMMARY_TYPE.value, color: card.value", "style: { fontSize: 16, fontWeight: 600, color: card.value"), hit: /SUMMARY_TYPE|摘要卡/ },
+    {
+      name: '卡片改回 tw-panel（细边框/大圆角/无重阴影全丢）',
+      mutate: (s) => s.split("className: 'tw-tool-card'").join("className: 'tw-panel'").split('style: { ...CARD_SURFACE').join('style: {').split('style: CARD_SURFACE').join('style: {}'),
+      hit: /tw-tool-card|CARD_SURFACE/,
+    },
+    { name: '磁贴色标删掉（参考版每块都有色标）', mutate: (s) => s.replace("'data-role': 'tool-kpi-swatch'", "'data-role': 'tool-kpi-swatch-x'"), hit: /色标/ },
+    { name: '磁贴值不再用大号字（回到 12.5px）', mutate: (s) => s.replace("'data-role': 'tool-kpi-value', style: { ...CHART_TYPE.tileValue,", "'data-role': 'tool-kpi-value', style: { fontSize: 12.5,"), hit: /CHART_TYPE|磁贴/ },
+    { name: '图例挪到画布之后（顺序颠倒）', mutate: (s) => s.replace('...CHART_STACK.map((slot) => (slot === \'legend\' ? legend : plotEl)),', 'plotEl,\n    legend,'), hit: /图例|CHART_STACK/ },
+    { name: '图例不再居中（退回左对齐）', mutate: (s) => s.replace("{ 'data-role': 'tool-chart-legend', style: LEGEND_ROW }", "{ 'data-role': 'tool-chart-legend', style: { display: 'flex', gap: 10 } }"), hit: /LEGEND_ROW|图例/ },
+    { name: '绘图区写死 160px（用户点名的塌陷写法）', mutate: (s) => s.replace('minHeight: PLOT.minHeight', 'minHeight: 160'), hit: /高度|绘图区/ },
+    { name: '绘图区去掉高度来源（只剩 min-height，比例契约丢）', mutate: (s) => s.replace(', aspectRatio: PLOT.aspectRatio', ''), hit: /高度来源|绘图区/ },
+    { name: '绘图区不再按容器真实像素绘制（ResizeObserver 拿掉）', mutate: (s) => s.replace('const size = usePlotSize(boxRef)', 'const size = { w: 720, h: 180 }'), hit: /真实像素|绘图区/ },
+    { name: '悬停提示框删掉（看不见逐序列的值）', mutate: (s) => s.replace("'data-role': 'tool-hover-tip'", "'data-role': 'tool-hover-tip-x'"), hit: /提示框|悬停/ },
+    { name: '悬停十字线删掉', mutate: (s) => s.replace("'data-role': 'tool-crosshair'", "'data-role': 'tool-crosshair-x'"), hit: /十字线/ },
+    { name: '切档过渡动画删掉', mutate: (s) => s.replace('style: MOTION_STYLE.fadeIn', 'style: undefined'), hit: /切档|过渡|MOTION_STYLE/ },
+    { name: '回放平滑跟随删掉（路径不再交给 CSS）', mutate: (s) => s.replace('style: pathStyle(d.trim()),', ''), hit: /pathStyle|回放/ },
+    { name: 'reduced-motion 开关删掉（动效无法降级）', mutate: (s) => s.split("'data-anim': props.animOff ? 'off' : 'on',").join(''), hit: /reduced-motion|动效/ },
+    {
+      name: '区块口径行又变回常驻文本（噪声回来了）',
+      mutate: (s) => s.replace("React.createElement('span', { className: 't', 'data-role': 'tool-section-title', title: note,", "React.createElement('span', { className: 't', 'data-role': 'tool-section-title', children: note, title: note,"),
+      hit: /降噪|口径行|常驻/,
+    },
+    { name: '饼图缺块说明复用 tw-hint（紧凑档看不见缺了哪些）', mutate: (s) => s.replace("'data-role': 'tool-pie-missing', style:", "'data-role': 'tool-pie-missing', className: 'tw-hint', style:"), hit: /饼图缺块/ },
+    { name: '份额合计（分母口径）复用 tw-hint（紧凑档看不见分母）', mutate: (s) => s.replace("'data-role': 'tool-market-total',", "'data-role': 'tool-market-total', className: 'tw-hint',"), hit: /份额合计/ },
     {
       name: '状态行复用 tw-hint（数据来源/回退态会被藏掉）',
       mutate: (s) => s.replace("'data-role': 'tool-status',\n            title: model.statusTitle,", "'data-role': 'tool-status',\n            className: 'tw-hint',\n            title: model.statusTitle,"),
@@ -303,6 +412,118 @@ test('② 详情页三段式 + 时间范围控件 + 功能区接线齐全；十�
     assert.notEqual(mutated, src, `注入「${name}」必须真的改到了源码（否则这条证明无效）`)
     const fail = renderWiringProblems(mutated)
     assert.ok(fail.length > 0, `注入「${name}」必须被检查抓到（实际一条都没报 ⇒ 断言恒真）`)
+    assert.match(fail.join(' ／ '), hit, `注入「${name}」报的原因应是预期的：${JSON.stringify(fail)}`)
+  }
+})
+
+/**
+ * 回目录按钮（v0.82.0：移到左上角、改成圆角卡片按钮、Material 风格）的**接线检查**。
+ * 返回失败原因列表（空 = 通过）⇒ 同一份检查既跑真实源码，也跑下面的注入（证明断言非恒真）。
+ */
+export function backButtonWiringProblems(src: string): string[] {
+  const bad: string[] = []
+  const need = (cond: boolean, msg: string): void => {
+    if (!cond) bad.push(msg)
+  }
+  need(/'data-role': 'tool-back'/.test(src), '回目录按钮必须带 data-role="tool-back"（可断言且可定位）')
+  // 外观与判据的唯一来源：常量必须从 toolBackButton.ts 引入并使用
+  for (const token of ['BACK_BTN_TAG', 'BACK_BTN_PROPS', 'BACK_BTN_STYLE', 'BACK_BTN_HOVER_STYLE', 'BACK_BTN_PRESS_STYLE', 'BACK_BTN_FOCUS_STYLE', 'BACK_BTN_TITLE']) {
+    need(src.includes(token), `回目录按钮必须用 toolBackButton.ts 的 ${token}（外观/文案只有一份来源）`)
+  }
+  // 三态反馈 + 键盘可达（原生 button + type=button 由 BACK_BTN_PROPS 给）
+  for (const handler of ['onMouseEnter', 'onMouseLeave', 'onMouseDown', 'onMouseUp', 'onFocus', 'onBlur']) {
+    need(src.includes(handler), `回目录按钮缺少 ${handler}（悬停/按下/focus 三态反馈）`)
+  }
+  // 仍然是回目录的**唯一入口**：onClick 必须接到目录返回
+  // 唯一入口要**两端都接上**：调用点传 backToCatalog、组件内部把它接到 onClick
+  need(/React\.createElement\(BackToCatalog, \{ onClick: backToCatalog/.test(src), '回目录按钮的调用点必须接上 backToCatalog（它是回目录的唯一入口）')
+  need(/onClick: props\.onClick/.test(src), '按钮内部必须把 onClick 接到 props.onClick（否则点不动，回目录入口等于断了）')
+  // 无障碍名齐备
+  need(/title: BACK_BTN_TITLE/.test(src) && /'aria-label': BACK_BTN_TITLE/.test(src), 'title 与 aria-label 必须齐备（同一份文案）')
+  // 不许复用会被紧凑/隐身视图隐藏的 class（那个按钮只允许内联样式）
+  const at = src.indexOf("'data-role': 'tool-back'")
+  if (at >= 0) {
+    const block = src.slice(at, at + 700)
+    need(/className: 'tw-(hint|chartnote|drawer-foot|pop-hint)'/.test(block) === false, '回目录按钮不许复用会被紧凑/隐身视图隐藏的 class（tw-hint 一类）')
+    need(/style: \{/.test(block) && /BACK_BTN_STYLE/.test(block), '回目录按钮的外观必须来自 BACK_BTN_STYLE（内联样式）')
+  }
+  // 位置：仍在 Hero 之前（回目录入口在页顶左侧）
+  const body = detailViewBody(src)
+  const backAt = body.indexOf('BackToCatalog')
+  const heroAt = body.indexOf('heroView(model, io)')
+  need(backAt >= 0 && heroAt > backAt, '回目录按钮必须仍在 Hero 之前（且不许被挪到 Hero 里面/之后）')
+  return bad
+}
+
+test('④ 回目录按钮：左上角圆角卡片（Material）——常量判据 + 源码接线 + 五条注入必败', () => {
+  // ① 常量层：真实常量必须通过布局判据与交互判据
+  const layout = backButtonLayoutProblems(BACK_BTN_STYLE)
+  assert.deepEqual(layout, [], `回目录按钮布局判据未通过：${layout.join(' ／ ')}`)
+  const interaction = backButtonInteractionProblems({
+    tag: BACK_BTN_TAG,
+    props: BACK_BTN_PROPS,
+    hasHover: Object.keys(BACK_BTN_HOVER_STYLE).length > 0,
+    hasPress: Object.keys(BACK_BTN_PRESS_STYLE).length > 0,
+    hasFocus: Object.keys(BACK_BTN_FOCUS_STYLE).length > 0,
+    hasReturn: true,
+    title: BACK_BTN_TITLE,
+    ariaLabel: BACK_BTN_TITLE,
+  })
+  assert.deepEqual(interaction, [], `回目录按钮交互判据未通过：${interaction.join(' ／ ')}`)
+  assert.equal(BACK_BTN_STYLE.alignSelf, 'flex-start', '左上角对齐（不居中、不占整行）')
+  assert.equal(BACK_BTN_STYLE.width, 'auto', '按内容宽度排布（不占整行）')
+  assert.notEqual(String(BACK_BTN_STYLE.borderRadius), '0', '圆角非 0')
+  assert.equal(String(BACK_BTN_STYLE.boxShadow).includes('none'), false, '必须有阴影层级')
+
+  // ② 注入层：把每一项要求关掉 ⇒ 对应判据必须报错（每条都验"非恒真"）
+  const layoutInjections: Array<{ name: string; style: Record<string, unknown>; hit: RegExp }> = [
+    { name: '按钮居中/占整行', style: { ...BACK_BTN_STYLE, alignSelf: 'stretch', width: '100%' }, hit: /左上角对齐|不许占整行/ },
+    { name: '圆角改成 0', style: { ...BACK_BTN_STYLE, borderRadius: 0 }, hit: /圆角必须是 8–12px/ },
+    { name: '阴影去掉', style: { ...BACK_BTN_STYLE, boxShadow: 'none' }, hit: /必须有轻微阴影/ },
+    { name: '内边距/间距/字重不达 Material 度量', style: { ...BACK_BTN_STYLE, padding: '0', gap: 0, fontWeight: 400, fontSize: 18 }, hit: /内边距|间距|字重|字号/ },
+  ]
+  for (const { name, style, hit } of layoutInjections) {
+    const fail = backButtonLayoutProblems(style as never)
+    assert.ok(fail.length > 0, `注入「${name}」必须被布局判据抓到（一条都没报 ⇒ 断言恒真）`)
+    assert.match(fail.join(' ／ '), hit, `注入「${name}」报的原因应是预期的：${JSON.stringify(fail)}`)
+  }
+  const interactionInjections: Array<{ name: string; patch: Record<string, unknown>; hit: RegExp }> = [
+    { name: '键盘不可达（换成 div）', patch: { tag: 'div' }, hit: /原生 button/ },
+    { name: '没有悬停反馈', patch: { hasHover: false }, hit: /悬停反馈/ },
+    { name: '没有按下反馈', patch: { hasPress: false }, hit: /按下反馈/ },
+    { name: '没有 focus 可见环', patch: { hasFocus: false }, hit: /focus 可见环/ },
+    { name: '断掉回目录接线', patch: { hasReturn: false }, hit: /回到工具目录/ },
+    { name: '无障碍名缺失', patch: { title: '', ariaLabel: '' }, hit: /title 必须齐备|aria-label 必须齐备/ },
+  ]
+  const base = { tag: BACK_BTN_TAG, props: BACK_BTN_PROPS, hasHover: true, hasPress: true, hasFocus: true, hasReturn: true, title: BACK_BTN_TITLE, ariaLabel: BACK_BTN_TITLE }
+  for (const { name, patch, hit } of interactionInjections) {
+    const fail = backButtonInteractionProblems({ ...base, ...patch } as never)
+    assert.ok(fail.length > 0, `注入「${name}」必须被交互判据抓到（一条都没报 ⇒ 断言恒真）`)
+    assert.match(fail.join(' ／ '), hit, `注入「${name}」报的原因应是预期的：${JSON.stringify(fail)}`)
+  }
+
+  // ③ 源码接线层（含三条注入）
+  const src = FILES.page
+  const bad = backButtonWiringProblems(src)
+  assert.deepEqual(bad, [], `回目录按钮接线检查未通过：${bad.join(' ／ ')}`)
+  const srcInjections: Array<{ name: string; mutate: (s: string) => string; hit: RegExp }> = [
+    { name: '回目录按钮整块删掉', mutate: (s) => s.replace("    React.createElement(BackToCatalog, { onClick: backToCatalog, label: model.backAction }),\n", ''), hit: /回目录按钮必须带|必须仍在 Hero 之前/ },
+    { name: '接线断开（onClick 不接目录返回）', mutate: (s) => s.replace('onClick: props.onClick,', 'onClick: () => undefined,'), hit: /唯一入口|onClick/ },
+    { name: '复用会被隐藏的 class（tw-hint）', mutate: (s) => s.replace("'data-role': 'tool-back',", "'data-role': 'tool-back', className: 'tw-hint',"), hit: /不许复用/ },
+    {
+      name: '挪到 Hero 之后',
+      mutate: (s) => {
+        const line = '    React.createElement(BackToCatalog, { onClick: backToCatalog, label: model.backAction }),\n'
+        return s.replace(line, '').replace('    summaryCards(model),', `${line}    summaryCards(model),`)
+      },
+      hit: /Hero 之前/,
+    },
+  ]
+  for (const { name, mutate, hit } of srcInjections) {
+    const mutated = mutate(src)
+    assert.notEqual(mutated, src, `注入「${name}」必须真的改到了源码`)
+    const fail = backButtonWiringProblems(mutated)
+    assert.ok(fail.length > 0, `注入「${name}」必须被接线检查抓到（一条都没报 ⇒ 断言恒真）`)
     assert.match(fail.join(' ／ '), hit, `注入「${name}」报的原因应是预期的：${JSON.stringify(fail)}`)
   }
 })

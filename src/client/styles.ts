@@ -624,6 +624,33 @@ color-scheme:dark}
 .tw-chart-tip .tw-up{color:var(--tw-up)}
 .tw-chart-tip .tw-down{color:var(--tw-down)}
 .tw-chart-tip .tw-muted{color:var(--tw-muted)}
+
+/* ── 工具箱详情页：对齐 Arkvol 参考版（令牌与判据的唯一来源 = src/client/toolDetailTheme.ts） ──
+   这里只放**必须由 CSS 承担**的部分：纵向节奏、边框分层、磁贴网格、Hero 分栏、范围控件，
+   以及动效的 keyframes 与 reduced-motion 降级。尺寸/字号的数字都不写在这里（免得两处漂移）。 */
+.tw-tool-detail{display:flex;flex-direction:column;gap:22px;padding:12px 16px 24px} /* 间距/内边距由 toolDetailTheme.TOOL_SPACE 内联给（单一来源） */
+.tw-tool-card{border:1px solid var(--tw-border-strong);border-radius:14px;background:var(--tw-card);padding:18px;box-shadow:none}
+.tw-tool-hero{display:flex;align-items:flex-start;gap:16px;flex-wrap:wrap}
+.tw-tool-hero-main{display:flex;flex-direction:column;gap:10px;min-width:260px;flex:1}
+.tw-tool-range{display:inline-flex;align-items:center;gap:2px;padding:2px;border:1px solid var(--tw-border);border-radius:10px;background:var(--tw-bg2);flex-shrink:0}
+.tw-tool-range>button{padding:4px 10px;border-radius:8px;font-size:12.5px;color:var(--tw-muted);transition:background .15s,color .15s,border-color .15s}
+.tw-tool-range>button[data-on=true]{background:var(--tw-card);border:1px solid var(--tw-border-strong);color:var(--tw-text);font-weight:600}
+.tw-tool-tiles{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}
+.tw-tool-plot{position:relative;width:100%}
+.tw-tool-plot>svg{display:block;width:100%;height:100%}
+.tw-tool-plot .tw-tool-cross{pointer-events:none}
+@keyframes tw-tool-in{from{opacity:.35}to{opacity:1}}
+/* reduced-motion：系统偏好 ⇒ 关键帧动画与过渡全部停用（图与交互仍可用） */
+@media (prefers-reduced-motion:reduce){
+  .tw-tool-line,.tw-tool-fade{animation:none!important}
+  .tw-tool-plot *,.tw-tool-range>button{transition:none!important}
+}
+/* 页面开关（由 matchMedia 驱动）：与系统偏好等效，且**可断言** */
+.tw-tool-plot[data-anim=off] *,.tw-tool-range[data-anim=off]>button{animation:none!important;transition:none!important}
+@media (max-width:760px){
+  .tw-tool-hero{flex-direction:column}
+  .tw-tool-tiles{grid-template-columns:repeat(2,minmax(0,1fr))}
+}
 `
 
 let injected = false

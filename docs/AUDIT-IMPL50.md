@@ -260,3 +260,47 @@ AS OF = 2026-10-13
 | `tools` 行的装载 | 新页签/新路由仍需**重启** `dsh web` 才在运行实例里可见（沿用 `AUDIT-IMPL45.md` §8.1；本轮未重启） |
 | 视觉细节 | 纵轴已移到右侧、图例保留；参考版的其它装饰（渐变、圆角进度条等）未做 —— 用户只要求"视觉层级与分段向参考版靠拢"，未要求逐像素 |
 | 组件版本号 | 未动；构建产物仍是当前版本号（发布收口由 Lead 处理） |
+
+---
+
+## 7. 追加（v0.82.0）：`← 工具目录` 移到左上角，改圆角卡片按钮（Material 风格）
+
+**用户要求**：它原来在详情页**顶部中间**（大框、居中、占整行）；改为**左上角**、**圆角卡片按钮**、Material 风格
+（图标 + 文字 + 圆角 + 轻微阴影 + 悬停反馈 + 按下涟漪等效反馈）。第二件（整体排版贴近参考版）等规格落地，本轮**未动字号/颜色/间距**。
+
+### 7.1 改动点
+
+| 位置 | 改动 |
+| --- | --- |
+| **新增** `src/client/toolBackButton.ts` | 外观/交互常量与**判据**的唯一来源（纯模块，零 React 运行时不依赖 ⇒ 可被 node:test 直接读）：`BACK_BTN_TAG`/`BACK_BTN_PROPS`/`BACK_BTN_STYLE`/`BACK_BTN_HOVER_STYLE`/`BACK_BTN_PRESS_STYLE`/`BACK_BTN_FOCUS_STYLE`/`BACK_BTN_TITLE`，以及 `backButtonLayoutProblems()` 与 `backButtonInteractionProblems()` |
+| `ToolsPage.tsx` | 新增 `BackToCatalog` 组件：原生 `button` + `type='button'`、图标（内联 SVG）+ 文字、三态反馈用**内联样式 + React 状态**实现（悬停 → 阴影抬升一级；按下 → 下沉 1px + 强调色底的等效涟漪；focus → 2px 可见环）。原来的 `Btn` 调用换成这个组件（`Btn` 在本页已无其它用途 ⇒ 一并从 import 里去掉）。位置仍是 `detailView` **第一个**子元素 ⇒ 左上角 |
+| 度量（用户口径） | `padding: 8px 12px`｜`borderRadius: 10`（8–12）｜`gap: 8`｜`fontWeight: 500`｜`fontSize: 12.5`（≤14）｜`cursor: pointer`｜`boxShadow: var(--tw-shadow-sm)`（悬停提到 `--tw-shadow-lg`）｜`alignSelf: flex-start` + `display: inline-flex` + `width: auto` ⇒ **不居中、不占整行** |
+| 既有约束 | 仍是**回目录的唯一入口**（调用点 `onClick: backToCatalog` + 组件内 `onClick: props.onClick` 两端都断言）；`title` 与 `aria-label` 齐备（同一份 `BACK_BTN_TITLE`）；**只写内联样式**（不复用 `tw-hint` 一类会被紧凑/隐身隐藏的 class）；`styles.ts` / `ui.tsx` **均未改动** |
+
+### 7.2 断言与反例注入（`src/client/toolsPage.test.ts` 的 ④）
+
+- **常量层**：对真实常量跑 `backButtonLayoutProblems(BACK_BTN_STYLE)`（位置/尺寸/圆角/阴影/内边距/间距/字重/字号/光标）
+  与 `backButtonInteractionProblems(...)`（原生 button、`type='button'`、三态反馈、回目录接线、无障碍名）⇒ 必须为空。
+- **注入层（14 条，全部必败）**：
+  布局 4 条 —— 居中/占整行（`alignSelf: stretch` + `width: 100%`）｜圆角改 0｜阴影去掉｜度量不达标（padding 0 / gap 0 / weight 400 / size 18）；
+  交互 6 条 —— 换成 `div`（键盘不可达）｜无悬停反馈｜无按下反馈｜无 focus 环｜断掉回目录接线｜无障碍名缺失；
+  源码 4 条 —— 按钮整块删掉｜`onClick` 不再接 `props.onClick`（点不动）｜给按钮加 `className: 'tw-hint'`（会被视图档隐藏）｜把按钮挪到 Hero 之后。
+- 另外保留既有断言：回目录入口**仍在 Hero 之前**（§4.2 的顺序检查）。
+
+### 7.3 门禁
+
+```
+EXIT=0
+ℹ tests 612 / pass 612 / fail 0      （默认时区）
+ℹ tests 612 / pass 612 / fail 0      （TZ=UTC）
+ALL HOST CHECKS PASSED (live probes soft)
+built lib/index.js + lib/client.js （v0.82.0，客户端片段校验通过：73 项）
+```
+
+### 7.4 未做项
+
+| 项 | 说明 |
+| --- | --- |
+| 真实涟漪动画 | 用"下沉 1px + 强调色底 + 阴影回落"作为**等效反馈**（用户口径允许"涟漪或等效反馈"）；没有引入动画库或新增全局 CSS |
+| 无 DOM 环境 | 三态反馈是"状态驱动的内联样式"，断言覆盖"常量 + 接线 + 注入"；没有做渲染后的计算样式比对 |
+| 第二件（整体排版） | **未做**（等规格）：本轮没有动字号/颜色/间距，避免与规格冲突 |

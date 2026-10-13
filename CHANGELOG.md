@@ -11,6 +11,57 @@
 
 ---
 
+## v0.83.0 — 工具详情页对齐参考版：排版/字号/颜色 + 绘图区填满 + 动效；回目录按钮移到左上角
+
+规格与差异表：`docs/DESIGN-TOOL-PAGE-ALIGN.md`（262 行）。`npm run check` **622 / 622 × 2 时区** + build（73 片段全过）；`build.mjs` 零改动；**新增主题令牌 0 个**（全部复用既有 `--tw-*`）。
+
+### 一、回目录按钮：居中整行 → 左上角圆角 Material 按钮
+
+- 详情页**第一个子元素**（列向 flex + `alignSelf: flex-start` + `inline-flex` + `width: auto`）⇒ 贴左上、不居中、不占整行。
+- 圆角 10px、内边距 `8px 12px`、图标与文字间距 8、字重 500、字号 12.5px、手型光标；小阴影（悬停升一级、按下下沉 1px 加强调色底作等效涟漪、focus 有 2px 可见环）；`title`/`aria-label` 齐备。
+- 新增 `src/client/toolBackButton.ts`（外观与判据的唯一来源，纯模块）。**只用内联样式** ⇒ 紧凑/隐身档不会被隐藏。
+
+### 二、排版对齐（用户列的 8 条全部落地）
+
+| 部位 | 规格（可检查） |
+| --- | --- |
+| Hero 标题 | 40–60px、字重 ≥ 700 |
+| Kicker | 由胶囊标签改为纯文字小标（大写、宽字距） |
+| 摘要卡 | 标签 12–13px 在上，数值 32–40px 在下，**字号差 ≥ 18** |
+| 卡片 | 1px 主题边框 + 圆角 ≥ 12 + **`box-shadow: none`** + 内边距 16–20（暗底靠边框分层） |
+| KPI 磁贴 | 新增**彩色方块色标**（≥6×6、圆角）+ 小标签 + 大数值 + 右端 delta |
+| 图例 | **移到图表上方居中**；色标宽高相等、`borderRadius: 50%` |
+| 区块间距 | 20–28px |
+| 常驻口径噪声 | 各区口径行移入 `title`/`aria-label`（呈现方式变化，**事实一个未删**） |
+
+### 三、绘图区填满卡片（A 组 5 条）
+
+- 绘图区 `min-height ≥ 420px` **且必须有高度来源**（`aspect-ratio` + 按容器真实像素绘制，`ResizeObserver` 测量），消除"图与图例之间的大片空白带"。
+- 渲染顺序契约：**图例在上、画布在下**。
+- **历史事故防线**：`plotHeightProblems({flex: 1})`（`.tw-chips-plot` 塌成 1px 的形态）在单元断言里必败。
+
+### 四、动效（B 组 5 条）
+
+1. **悬停十字线 + 提示框**：逐序列列出五个市场的真实值；**缺值写「未取到」，绝不写 0**（浮层值直接取自曲线序列）。
+2. **切档过渡** 150–250ms。
+3. **回放滑块拖动时路径经 CSS 平滑跟随**（120–250ms）。
+4. **不新增依赖**（无图表库；用 CSS transition / SVG 路径动画）。
+5. **尊重 reduced-motion**：`@media (prefers-reduced-motion: reduce)` + `[data-anim="off"]` 双开关，降级为无动画但功能不变。
+
+### 验证
+
+`npm run check` **622 / 622 × 2 时区** + selftest + build（73 片段）。
+**15 组反例注入全部被抓**（真改工作区文件 → 跑断言 → 立刻还原 + sha256 校验；脚本 `/tmp/align-inject.py`）：A 组 4（写死 160px / 去掉 `aspect-ratio` / 拿掉真实像素测量 / 顺序颠倒）+ B 组 6（过渡 400ms / 关回放平滑 / 删 reduced-motion / 删 `data-anim` 开关 / 浮层缺项 / **浮层把缺值写成 0**）+ 排版组 5（标题缩回 17px / 摘要卡数值缩回 16px / 卡片改回重阴影 / 磁贴色标塌成 0 / 图例色标退回小矩形）。
+产物复核（`lib/client.js`）：`tw-tool-plot`、`tw-tool-tiles`、`tool-kpi-swatch`、`tool-hover-tip`、`tool-crosshair`、`tool-chart-legend`、`tool-legal-line`、`tool-pie-missing`、`tool-market-total`、`ResizeObserver`、`prefers-reduced-motion`、`data-anim`、`path("`、`AS OF` 全部命中。
+**红线遵守**：降级/陈旧/缺失原因与边界声明**仍默认可见**；本次还把饼图缺块说明与份额合计从 `tw-hint` 改为内联样式 ⇒ 紧凑/隐身档也不会被隐藏（6 条 `tool-*-` 锚点的负向断言）。数字与数据来源未变。
+
+### 未做（已记录）
+
+- 浏览器实机观感需用户看图确认（约束：不重启服务）。
+- CSS `d` 过渡仅在 Chrome / Firefox 97+ 生效；不支持时**行为不变**（逐帧切换、不闪）——设计内降级。
+- 悬停是鼠标交互；触屏与键盘用户可从市场表与 KPI 磁贴读到同样数值（浮层不独占信息）。
+- `tools/cake.ts` 未改（kicker 与说明段文案不变，排版全部由令牌承担；口径事实一个字未动）。
+
 ## v0.82.0 — 五市场权重改「偏好分」口径 + 大盘页新数据源接线 + 删除【指数行情】
 
 报告 `docs/AUDIT-IMPL53.md`、`docs/AUDIT-IMPL52.md`、`docs/AUDIT-IMPL51.md`。`npm run check` **611 / 611 × 2 时区** + build（73 片段全过）；`build.mjs` 零改动。
