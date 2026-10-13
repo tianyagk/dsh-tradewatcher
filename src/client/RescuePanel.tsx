@@ -542,6 +542,17 @@ export function RescuePanel(props: {
         badge.marker,
       )
     })(),
+    /**
+     * 交易日历告警（未更新到本月 / 文件损坏被隔离）——**必须在面板上可见**：
+     * 退回内置规则意味着"这个月可能有假期被当成交易日采样"，用户要能立刻看到并去补文件。
+     */
+    snapshot?.calendarStatus != null && snapshot.calendarStatus.warning != null
+      ? React.createElement('div', {
+          className: 'tw-muted',
+          style: { fontSize: 10.5, color: 'var(--tw-warn, #d97706)', padding: '2px 0' },
+          title: `交易日历文件：${snapshot.calendarStatus.path}`,
+        }, `⚠ ${snapshot.calendarStatus.warning}`)
+      : null,
     loading && data === null ? React.createElement(Skeleton, { lines: 3, height: 20 }) : null,
     snapshot !== null
       ? React.createElement('div', { className: 'tw-rescue-summary' },

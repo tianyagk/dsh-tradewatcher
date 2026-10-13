@@ -12,6 +12,7 @@ import { hostsAllowed } from './breaker.ts'
 import { QUOTE_HOSTS as EM_QUOTE_HOSTS, HISTORY_HOSTS as EM_HISTORY_HOSTS, fetchAny as fetchAnyJson, loadQuoteRowsShared } from './em.ts'
 import { fetchTencentDaily, fetchTencentMinutes } from './tencent.ts'
 import { dayOf as shDayOf, hhmmOf as shHhmmOf, parseMarketStamp, weekdayOf as shWeekdayOf } from './time.ts'
+import { externalCalendarStatus, externalClosureOf, loadTradingCalendar, monthCoveredByFile, type TradingCalendarStatus } from './tradingCalendar.ts'
 import { buildBottomLane, calibrateAcross } from './bottom.ts'
 import { SingleFlight } from './singleflight.ts'
 import { dataHome } from './store.ts'
@@ -631,18 +632,31 @@ export interface TradingDayState {
 export function tradingDayState(ts: number): TradingDayState {
   const dow = shWeekdayOf(ts)
   if (dow === 0 || dow === 6) return { trading: false, reason: 'weekend', label: null }
-  const hol = holidayOf(dayOf(ts))
+  const day = dayOf(ts)
+  /**
+   * 优先级：**外部覆盖文件 > 内置假日表 > 周末规则**（见 `tradingCalendar.ts` 文件头）。
+   *
+   * 外部文件是用户每月手工维护的（交易所公告抄一次），内置表是**退路**：文件缺失/损坏/未覆盖
+   * 当月时退回内置表；内置表也没命中 ⇒ 按交易日处理（失败方向 = 多采一天，不会漏采）。
+   * 退回这件事**必须可见** —— 状态由 `snapshot().calendarStatus` 与 agent 工具输出携带。
+   */
+  if (monthCoveredByFile(day.slice(0, 7))) {
+    // 覆盖当月 ⇒ **以文件为准**：文件说是休市就是休市；文件没写的就是交易日（内置表不参与）
+    return externalClosureOf(day)
+      ? { trading: false, reason: 'holiday', label: '外部日历（手工维护）' }
+      : { trading: true, reason: null, label: null }
+  }
+  const hol = holidayOf(day)
   if (hol !== null) return { trading: false, reason: 'holiday', label: hol.name }
   return { trading: true, reason: null, label: null }
 }
 
 /**是否处于采样时段（含开盘前 5 分钟与收盘后 5 分钟收口）；**非交易日一律 false** */
 export function inTradingWindow(ts: number): boolean {
-  // 星期也必须按北京时间（宿主时区下的星期会错位一天）
-  const dow = shWeekdayOf(ts)
-  if (dow === 0 || dow === 6) return false
-  // 法定假日：与周末同等处理（假日的"平稳"是假信号，不是平静）
-  if (holidayOf(dayOf(ts)) !== null) return false
+  // 是否交易日**只由 `tradingDayState` 判定**（周末 → 外部文件 → 内置表，一处实现）：
+  // 这里再写一遍星期/假日判断会让"外部文件覆盖当月"在这条快速路径上失效（实测：文件把 10-09
+  // 标成休市，但采样窗口仍把它当交易日 ⇒ 定时器照采）
+  if (tradingDayState(ts).trading !== true) return false
   const hhmm = hhmmOf(ts)
   return (hhmm >= '09:25' && hhmm <= '11:35') || (hhmm >= '12:55' && hhmm <= '15:05')
 }
@@ -1117,6 +1131,8 @@ export class RescueMonitor {
   }
 
   async init(): Promise<void> {
+    // 预热外部交易日历（用户改完文件按 mtime 失效；坏文件在这里隔离留痕）
+    await loadTradingCalendar({ quarantineBroken: true }).catch(() => undefined)
     if (this.loaded !== null) return this.loaded
     this.loaded = (async () => {
       await mkdir(this.dir, { recursive: true }).catch(() => undefined)
@@ -1841,9 +1857,14 @@ export class RescueMonitor {
     const inner = this.snapshotInner()
     const day = tradingDayState(Date.now())
     const lines = inner.levelLines ?? levelLines(inner.timeCoef ?? 1)
-    if (day.trading) return { ...inner, levelLines: lines, nonTrading: null }
+    // 交易日历状态随快照走：`warning` 必须能被面板/工具看见（不许静默退回内置规则）
+    const cal: TradingCalendarStatus | null = externalCalendarStatus()
+    const calWarn = cal?.warning ?? null
+    const withCal = (base: RescueSnapshot): RescueSnapshot =>
+      cal === null ? base : { ...base, calendarStatus: cal, summary: calWarn === null ? base.summary : `${base.summary}｜⚠ ${calWarn}` }
+    if (day.trading) return withCal({ ...inner, levelLines: lines, nonTrading: null })
     const what = day.reason === 'weekend' ? '周末休市' : `法定假日休市（${day.label ?? '节假日'}）`
-    return {
+    return withCal({
       ...inner,
       trading: false,
       level: null,
@@ -1851,7 +1872,7 @@ export class RescueMonitor {
       levelLines: lines,
       nonTrading: { reason: day.reason === 'holiday' ? 'holiday' : 'weekend', label: day.label },
       summary: `休市（非交易日）：${what} —— 今天不是交易日，不采样、不出等级、不写当日分`,
-    }
+    })
   }
 
   private snapshotInner(): RescueSnapshot {

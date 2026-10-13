@@ -1316,6 +1316,14 @@ export function makeAgentTools(
           levelLabel: snapshot.level === null ? '休市（非交易日）' : RESCUE_LEVEL_LABEL[snapshot.level],
           score: snapshot.score,
           summary: snapshot.summary,
+          // 交易日历状态：外部文件未覆盖当月/文件损坏时必须可见（不许静默退回内置规则）
+          tradingCalendar: snapshot.calendarStatus === undefined ? null : {
+            来源: snapshot.calendarStatus.source === 'external' ? '外部覆盖文件' : '内置假日表',
+            文件: snapshot.calendarStatus.path,
+            已覆盖月份: snapshot.calendarStatus.months,
+            当月已覆盖: snapshot.calendarStatus.coveredThisMonth,
+            告警: snapshot.calendarStatus.warning,
+          },
           indexPct: snapshot.indexPct,
           thresholdSource: snapshot.thresholdSource,
           selfSampleDays: snapshot.selfSampleDays,

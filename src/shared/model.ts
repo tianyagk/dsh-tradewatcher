@@ -1622,6 +1622,12 @@ export interface RescueSnapshot {
    * `reason`：周末 / 法定假日；`label`：假期名（如「国庆节」）。
    */
   nonTrading?: { reason: 'weekend' | 'holiday'; label: string | null } | null
+  /**
+   * 交易日历状态（**外部覆盖文件 > 内置表 > 周末规则**）。
+   *
+   * `warning` 非空时**必须在界面与工具输出里可见**（不许静默退回）：典型是"未更新到本月"。
+   */
+  calendarStatus?: TradingCalendarInfo
   /** 全池共振分层 */
   resonance: RescueResonance
   /** 当前脉冲时段与锚点 */
@@ -1674,6 +1680,30 @@ export interface RescueSnapshot {
 }
 
 /** 护盘采样窗口状态（非活跃时段必须显式说明"暂停"而不是沉默） */
+/**
+ * 交易日历状态（宿主 `tradingCalendar.ts` 的结构镜像；两端共用同一份字段）。
+ *
+ * 为什么放在 shared：面板与 agent 工具都要显示它（尤其 `warning`），而两者都不该 import 宿主模块。
+ */
+export interface TradingCalendarInfo {
+  /** external = 用户手工维护的覆盖文件；builtin = 内置假日表（退路） */
+  source: 'external' | 'builtin'
+  /** 文件位置（用户要照它去改） */
+  path: string
+  /** 文件里已覆盖的月份键 */
+  months: string[]
+  /** **当月**是否被文件覆盖（缺键 = 未覆盖；`[]` = 已覆盖且本月无法定休市） */
+  coveredThisMonth: boolean
+  closuresThisMonth: string[]
+  /** 被忽略的周末条目数（周末本来就休市，多写无害但要如实说） */
+  ignoredWeekends: number
+  /** 可见告警；`null` = 正常 */
+  warning: string | null
+  /** 文件损坏/不合法时的隔离去向与原因（留痕） */
+  invalid: { reason: string; quarantinePath: string | null } | null
+  fileExists: boolean
+}
+
 export interface RescueActiveWindow {
   /** 当前是否在采样时段内 */
   sampling: boolean
