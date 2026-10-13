@@ -9,13 +9,14 @@ import { ledgerTotal, assemblePortfolio, ledgerViews, verbLabel } from './portfo
 import { DataStore, dataHome } from './store.ts'
 import { CalendarStore, calToday, type CalSyncSourceResult } from './calendar.ts'
 import { RescueMonitor } from './rescue.ts'
-import { RESCUE_LEVEL_LABEL, realizedUnknownNote, realizedUnknownQtyOf, realizedUnknownRows } from '../shared/model.ts'
+import { RESCUE_LEVEL_LABEL, realizedUnknownNote, realizedUnknownQtyOf, unknownRealizedRows } from '../shared/model.ts'
 import { CAL_CATEGORY_LABEL } from '../shared/model.ts'
 import type { PluginContext, PluginToolDefinition, PluginToolExec, PluginToolRuntime, PluginSystemPrompt } from './context.ts'
 import { WriteJournal } from './writeLog.ts'
 import { POSITION_WINDOW, positionOfBars } from './position.ts'
 import { forwardOf } from './signalForward.ts'
 import { dayTradesOf } from './dayTrade.ts'
+import { unreadableMissing } from './readGuard.ts'
 import { rankOf, returnBucketOf, textPercentile } from './groupRank.ts'
 import { computeTones } from './tonesService.ts'
 
@@ -208,8 +209,8 @@ export function makeAgentTools(
       render: (_args, value) => {
         const v = value as {
           view?: {
-            grand: { totalMv: number; floatPnl: number; dilutedPnl?: number; dayPnl: number; realized: number }
-            groups: Array<{ id: string; name: string; totalMv: number; floatPnl: number; dayPnl: number; realized: number; archived?: boolean }>
+            grand: { totalMv: number; floatPnl: number; dilutedPnl?: number; dayPnl: number; realized: number | null; realizedUnknownCount?: number }
+            groups: Array<{ id: string; name: string; totalMv: number; floatPnl: number; dayPnl: number; realized: number | null; realizedUnknownCount?: number; archived?: boolean }>
             positions: Array<{
               posId: string; groupId: string; secid: string; name: string; qty: number; avgCost: number
               dilutedCost: number | null; realized: number | null; mv: number | null
@@ -222,6 +223,15 @@ export function makeAgentTools(
           provenance?: DataProvenance
           fxMode?: string
           unpriced?: Array<{ secid: string; name: string; why: string; note: string }>
+          /** R6：盈亏不可算的行（**含已清仓**；与聚合用的判定同源） */
+          unknownRealized?: Array<{
+            name: string
+            secid: string
+            qty: number
+            costUnknown: boolean
+            realizedUnknownQty: number
+            cleared: boolean
+          }>
           error?: string
         }
         if (v.error !== undefined) return textBlock(`错误：${v.error}`)
@@ -230,19 +240,32 @@ export function makeAgentTools(
         const g = view.grand
         // 成本未录入的持仓（P1-10）：盈亏是 null 且不计入合计 —— 必须写在总览行里，
         // 否则 agent 会把"合计少了这几只"读成"它们没有盈亏"
-        const costUnknown = view.positions.filter((p) => p.qty > 0 && p.costUnknown === true)
+        // R6：披露集合来自 execute 里**过滤之前**取的快照（`view.positions` 默认为 qty>0）
+        const unknownRows = v.unknownRealized ?? view.positions.map((p) => ({
+          name: p.name,
+          secid: p.secid,
+          qty: p.qty,
+          costUnknown: p.costUnknown === true,
+          realizedUnknownQty: p.realizedUnknownQty ?? 0,
+          cleared: p.qty === 0,
+        }))
+        const costUnknown = unknownRows.filter((p) => p.costUnknown)
         // P1-5：未应用的流水必须报出来（账本里有、快照没算进来）
         const skippedRows = view.positions.filter((p) => (p.skippedLedger ?? 0) > 0)
         // D1b：成本未知期间卖出的股数 —— 成本后来补录了、整仓不再"未录入"，
         // 但那几笔的已实现依旧算不出来，总览行里必须说清（否则 — 看起来像丢了数据）
         // 判定与股数都取自 shared/model.ts 的同一份函数（与面板级提示、行内提示同源）
-        const ruRows = realizedUnknownRows(view.positions)
+        const ruRows = unknownRows.filter((p) => p.realizedUnknownQty > 0 && !p.costUnknown)
         const ruQty = realizedUnknownQtyOf(ruRows)
         const skippedTotal = skippedRows.reduce((a, p) => a + (p.skippedLedger ?? 0), 0)
         const head =
           `【持仓总览】${pnlLine('总市值', g.totalMv)} | ${pnlLine('持仓盈亏(摊薄口径)', g.dilutedPnl ?? g.floatPnl)} | ` +
           `${pnlLine('浮动盈亏(均价口径)', g.floatPnl)} | ${pnlLine('当日盈亏', g.dayPnl)} | ${pnlLine('累计已实现', g.realized)}` +
           (v.stale && v.stale > 0 ? `（${v.stale} 只持仓行情未取到）` : '') +
+          (g.realized === null
+            // R6：合计不可算时必须说出来（含已清仓的行）—— 否则那一列看起来只是"0.00"
+            ? `（累计已实现：未取到 —— ${g.realizedUnknownCount ?? unknownRows.length} 行成本/已实现不可算${unknownRows.some((p) => p.cleared) ? '，含已清仓的行' : ''}）`
+            : '') +
           (costUnknown.length > 0
             ? `（${costUnknown.length} 只未录入成本，盈亏与已实现为 — 且未计入上述合计：${costUnknown.map((p) => p.name).join('、')}）`
             : '') +
@@ -302,6 +325,16 @@ export function makeAgentTools(
         // 做T（同日往返配对，P1-3）：放在持仓工具里而不是新开工具 —— 它是持仓的派生统计，
         // 与仓位/盈亏同屏读；新工具只多一个索引项与一次授权确认。
         const dayTradeView = dayTradesOf(store.ledgerEntries())
+        // R6：披露集合必须在**过滤之前**取（默认 includeEmpty=false 会把已清仓的行滤掉，
+        // 而那些行的"已实现不可算"同样必须报出来 —— 否则用户只看到 0.00）
+        const unknownRealized = unknownRealizedRows(view.positions).map((p) => ({
+          name: p.name,
+          secid: p.secid,
+          qty: p.qty,
+          costUnknown: p.costUnknown === true,
+          realizedUnknownQty: p.realizedUnknownQty ?? 0,
+          cleared: p.qty === 0,
+        }))
         if (args.includeEmpty !== true) {
           view.positions = view.positions.filter((p) => p.qty > 0)
         }
@@ -315,6 +348,8 @@ export function makeAgentTools(
           note: u.note,
         }))
  // 未应用的流水进 missing[]（agent 只看出处行也知道账没算平）
+        // R1：本地文件"读不到"必须写进出处行（否则 agent 会把"空"当成事实）
+        extra.push(...unreadableMissing(store.readFailures(), '本地数据文件'))
         const skippedCount = view.positions.reduce((a, p) => a + (p.skippedLedger ?? 0), 0)
         if (skippedCount > 0) {
           extra.push({
@@ -327,6 +362,8 @@ export function makeAgentTools(
         return {
           view,
           dayTrades: dayTradeView, stale, provenance,
+          // R6 披露（未过滤集合）：null 与 unknownRealizedRows 同源
+          unknownRealized,
           fxMode: view.fxMode ?? 'none',
           unpriced: view.unpriced ?? [],
           unpricedMv: view.unpricedMv ?? 0,

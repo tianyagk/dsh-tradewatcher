@@ -7,6 +7,8 @@ import { dataHome } from './store.ts'
 import { calToday as shCalToday } from './time.ts'
 import { MISSING_TIER_ADVICE } from '../shared/model.ts'
 import { writeJsonAtomic } from './atomic.ts'
+import { isFirstBoot, quarantineFile, ReadGuard, unreadableMissing } from './readGuard.ts'
+import { log } from './context.ts'
 
 const AUTO_SYNC_TTL = 6 * 3600_000
 /**
@@ -323,6 +325,12 @@ export class CalendarStore {
   /** 最近一次调用 `sync()` 时同步过程本身抛出的错误（非逐源失败） */
   private lastThrown: string | null = null
   private seq = 0
+  /**
+   * 「读不到」≠「空库」（R1）：本地 calendar.json 读失败（非 ENOENT）时**禁止写回** ——
+   * 否则自动同步拿到的"新库"会把用户手记的事件整份覆盖掉（实测：手记事件消失）。
+   * 键用完整路径。
+   */
+  private readonly readGuard = new ReadGuard()
 
   constructor(dir: string = dataHome()) {
     this.dir = dir
@@ -336,8 +344,18 @@ export class CalendarStore {
     if (this.loaded !== null) return this.loaded
     this.loaded = (async () => {
       await mkdir(this.dir, { recursive: true }).catch(() => undefined)
+      let raw: string
       try {
-        const raw = await readFile(this.path(), 'utf8')
+        raw = await readFile(this.path(), 'utf8')
+        this.readGuard.clear(this.path())
+      } catch (error) {
+        if (isFirstBoot(error)) return /* 首次：确实还没有这份文件 ⇒ 空库是真话 */
+        // ⚠ 读不到 ≠ 空库：本次启动拒绝写回（否则同步一落盘就把用户手记的事件抹掉）
+        const reason = this.readGuard.markUnreadable(this.path(), error)
+        log(`calendar read failed: ${reason} —— 读不到 ≠ 空库：本次启动拒绝写回 calendar.json（避免覆盖用户手记的事件）`)
+        return
+      }
+      try {
         const parsed = JSON.parse(raw) as Partial<CalFile>
         this.file = {
           v: 1,
@@ -347,8 +365,12 @@ export class CalendarStore {
           // 旧文件没有该字段：当作"从未记录过尝试"，装载不因一个坏字段失败
           syncAttemptAt: typeof parsed.syncAttemptAt === 'number' ? parsed.syncAttemptAt : 0,
         }
-      } catch {
-        /* 首次：空库 */
+      } catch (error) {
+        // 「读到了但内容坏」与「读不到」不同：先隔离原件（保留原字节）再从容器的空库开始，
+        // 与 store.ts 的 quarantine 同口径 —— 绝不静默覆盖用户数据
+        const kept = await quarantineFile(this.path())
+        log(`corrupt calendar.json (bad JSON) — ${kept === null ? '隔离失败，已改为不写回' : `已隔离为 ${kept}`}`, error instanceof Error ? error.message : String(error))
+        if (kept === null) this.readGuard.markUnreadable(this.path(), error)
       }
     })()
     return this.loaded
@@ -356,6 +378,8 @@ export class CalendarStore {
 
   private persist(): Promise<void> {
     const run = this.writeChain.then(async () => {
+      // 读不到过的本地文件一律拒绝整份覆写（R1）
+      this.readGuard.assertWritable(this.path(), '写回日历事件')
       // 原子替换：既避免写入中途被读到半截文件，也不再残留 .tmp（旧实现是双写）
       await writeJsonAtomic(this.path(), this.file)
     })
@@ -419,16 +443,24 @@ export class CalendarStore {
         note: `本次同步过程出错（${this.lastThrown}）；返回的是本地已有事件 + 手动事件 —— ${MISSING_TIER_ADVICE.transient}`,
       })
     }
+    // 本地文件读不到（R1）：必须在**同步状态**里说清楚 —— 此时返回的事件可能不含用户手记的那些，
+    // 而且本次启动不会写回（否则会把它们整份覆盖掉）
+    missing.push(...unreadableMissing(this.readGuard.entries, '本地日历文件'))
     return {
       syncedAt: this.file.syncedAt > 0 ? this.file.syncedAt : null,
       attemptAt: this.file.syncAttemptAt > 0 ? this.file.syncAttemptAt : null,
       // 有源失败即视为降级（本次返回的事件里含上一次成功同步的旧值）；
       // 从未成功同步过也算降级 —— 那时根本没有可信的 asOf
-      stale: this.file.syncedAt <= 0 || failed.length > 0 || this.lastThrown !== null,
+      stale: this.file.syncedAt <= 0 || failed.length > 0 || this.lastThrown !== null || this.readGuard.entries.length > 0,
       missing,
       sources,
       allFailed: sources.length > 0 && ok.length === 0,
     }
+  }
+
+  /** 本次启动"读不到"的本地文件与原因（R1 披露用） */
+  readFailures(): ReadonlyArray<{ file: string; reason: string }> {
+    return this.readGuard.entries
   }
 
   /** 手动事件 CRUD（自动事件只允许隐藏/恢复） */

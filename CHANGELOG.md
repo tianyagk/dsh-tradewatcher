@@ -11,6 +11,51 @@
 
 ---
 
+## v0.75.0 — 全仓审查后的红线批：数据安全与编造数字（5 条）
+
+三路全仓审查（`docs/REVIEW-1-REDUNDANCY.md`、`REVIEW-2-CORRECTNESS.md`、`REVIEW-3-DOCS.md`）共发现 7 条红线。本版修前 5 条（数据安全与编造数字），时区 2 条留待下一批。报告 `docs/FIX-1-REDLINE.md`。
+
+### R1 「读不到」≠「没有」⇒ 覆盖用户数据（3 处同族）
+
+新增 `src/host/readGuard.ts`：只有 `ENOENT` 算"本来就没有"，其它 errno 记入守卫并在**写回前**抛 `UnreadableFileError`（`store.ts:415/458/498`、`calendar.ts:352/382`、`globalFlow.ts:604-612/669`），重读成功自动解封；坏 JSON 一律**隔离原件**（原字节留档）；原因接进 `syncStatus().missing` / 工具 `provenance.missing` / portfolio 回包。
+断言 4 条（含"ENOENT 仍可写"的反面对照）；注入 3 组（`Missing expected rejection…` / `读不到时必须拒绝写回`）必失败。
+
+### R2 K 线失败进 1 小时正缓存 + 理由谎称"重试无效"
+
+失败**不进正缓存**（`em.ts:2315` 让 `ttlCache` 不写槽），只写 **10s 负缓存**；新增 `klineLastAttempt()` 记录"本轮到底发没发请求"，`klineMissingReason`（`:2253-2266`）按事实给 `transient`（"本轮没有向上游发请求"）或 `no-source`（"确实请求过"）。
+断言：窗口内不发请求但理由如实 + **+11s 后必须重新回源**；注入（空数组当成功值缓存）必失败。
+
+### R3 做T 缺价按 0 价 ⇒ 编造盈亏
+
+`dayTrade.ts:73-78` 缺价流水**不进配对**、进 `unmatched`；`:145-156` 有未计价流水时 `netPnl/avgNet/winRate` **一律 null** + `unpricedCount`。
+断言：`rounds=0`/`netPnl=null`/`unmatched.price=null`，且**价格齐全仍算出 1000**（防修过头）；注入（退回 `price ?? 0`）⇒ 旧实现按 0 价配出一次往返、`grossPnl=−10000`，必失败。
+
+### R6 已清仓且成本未知 ⇒ 合计按 0 + 披露被 `qty>0` 门控
+
+三处 gate 收敛到 `model.ts:1146 unknownRealizedRows()`（**不看 `qty`**）；合计不再把 null 当 0（`portfolio.ts:291/302/310/319`，分组 `:335`、总览 `:347-369` 有未知行即 **null** + `realizedUnknownCount`）；工具在 `includeEmpty` 过滤**之前**取披露（`tools.ts:330/366`）并写"累计已实现：未取到（含已清仓的行）"；面板同样去门控。
+断言用真 `assemblePortfolio` + 真工具 `execute`/`output.render`；注入 ⇒ `累计已实现必须是 null（实际 200）`，必失败。
+
+### R7 组合构成 1:1 混币种
+
+`composition.ts` 输入新增**必填** `mvCny`（人民币口径），分母与权重只用它，原币种 `mv` 照旧展示，新增 `excludedNonCny` 标注；`portfolio.ts:374-383` 与 `grand.totalMv` **同一份**折算规则。
+断言：真路径 `composition.totalMv === grand.totalMv === 1100`（旧 69300）、港股 `weightPct=null` 但 `mv=64000`、`excludedNonCny=2`；注入（三者 1:1 相加）必失败。
+
+### 连带改动（类型必须同步，否则门禁红）
+
+`src/client/api.ts`（`netPnl: number | null` + `unpricedCount`）、`src/client/PortfolioPage.tsx`（净盈亏 null 时显示「未取到（N 笔缺成交价）」；`costUnknownRows` 去 `qty>0` 门控 + 合计 null 提示）。
+
+### 验证
+
+`npm run check` **EXIT=0**：**541 / 541 × 2 时区** + selftest + build（73 项）；`build.mjs` 零改动。
+每条断言锚真实实现；每条配反例注入并贴证据后恢复（注入日志 `/tmp/fix1/inject/`，全部 md5 校验还原）。**未手工改 `~/.dsh` 任何文件。**
+
+### 未做（已记录）
+
+- `missing[].why` 缺"本地故障"档（枚举只有 `transient`/`no-source`）⇒ R1 用 `transient` + 明确 note 承载「不会自动重试、修好权限后重启恢复」；要真正加档需改 `shared/model.ts` + 两端渲染（跨端，未做）。
+- R2 同型的 M8（`globalFlow.ts` 的"成功但空"日线进 12h 正缓存）属"中"档，未动。
+- U7（归档分组与 `grand` 口径不一致）意图不明，未裁决。
+- 客户端组合构成渲染今日不渲染（复核 0 命中），本批只改数据层与类型，未加界面。
+
 ## v0.74.0 — 市场成分改为 A股/港股/美国/日本/韩国；工具箱目录页三项界面改动
 
 ### 一、口径变更：五市场成分 v2（用户指定，与需求 T-5 一致）

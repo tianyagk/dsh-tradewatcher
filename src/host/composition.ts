@@ -16,8 +16,17 @@ export interface CompositionInput {
   secid: string
   market: string
   qty: number
-  /**现价；缺失 ⇒ 不参与权重 */
+  /**现价（原币种）；缺失 ⇒ 不参与权重。仅用于逐行展示 */
   price: number | null
+  /**
+   * **人民币口径**的市值（R7）。必须由调用方按与 `grand.totalMv` **完全相同**的折算规则给出：
+   *   - A股（或已按固定汇率折算）⇒ 数值；
+   *   - 缺价、非人民币且未折算/折不了 ⇒ `null`（**不进权重分母**）；
+   *   - 缺省（`undefined`）一律按"不可折算"处理 —— 宁可少算一项，也不把港元/美元按 1:1
+   *     加进人民币总额（复核实测：100×11(CNY) + 200×320(HKD) + 10×420(USD) 被直接相加成 69300，
+   *     让"港股 92.4%"这种看着正常的错权重发出去）。
+   */
+  mvCny?: number | null
   /**本地已有的行业/主题标签（分组名）。没有就 null */
   groupName: string | null
 }
@@ -27,7 +36,10 @@ export interface CompositionRow {
   name: string
   secid: string
   market: string
+  /** 原币种市值（展示用） */
   mv: number | null
+  /** 人民币口径市值（R7；权重与分母都用它）；不可折算 ⇒ null */
+  mvCny: number | null
   weightPct: number | null
   /**行业/主题：只来自本地分组名；拿不到是 null（界面写 —） */
   sector: string | null
@@ -41,10 +53,12 @@ export interface CompositionSlice {
 
 export interface Composition {
   rows: CompositionRow[]
-  /**可计价总市值 */
+  /**可计价总市值（**人民币口径**，与 `grand.totalMv` 同一折算规则） */
   totalMv: number
-  /**缺价条数（未计入权重分母） */
+  /**未能计入权重分母的条数（缺价 或 非人民币且折不了） */
   unpriced: number
+  /**其中"有原币种市值、但折不成人民币"的条数（R7 披露：分母口径是人民币） */
+  excludedNonCny: number
   sectors: CompositionSlice[]
   markets: CompositionSlice[]
   concentration: {
@@ -91,15 +105,23 @@ const sliceOf = (rows: readonly CompositionRow[], keyOf: (r: CompositionRow) => 
     .sort((a, b) => b.weightPct - a.weightPct)
 }
 
+/** 该行的人民币口径市值（R7）：未给口径一律视为"折不了"，不退回原币种 */
+function mvCnyOf(it: CompositionInput): number | null {
+  const v = it.mvCny
+  if (v === undefined || v === null || !Number.isFinite(v)) return null
+  return v
+}
+
 /**主入口 */
 export function compositionOf(items: readonly CompositionInput[]): Composition {
-  const priced = items.filter((it) => it.price !== null && Number.isFinite(it.price) && it.price !== null)
-  const totalMv = priced.reduce((n, it) => n + it.qty * (it.price as number), 0)
+  const priced = items.filter((it) => mvCnyOf(it) !== null)
+  const totalMv = priced.reduce((n, it) => n + (mvCnyOf(it) as number), 0)
   const rows: CompositionRow[] = items.map((it) => {
     const mv = it.price === null || !Number.isFinite(it.price) ? null : it.qty * it.price
+    const mvCny = mvCnyOf(it)
     // 百分比（与 shared 的 `weightOf` 的分数不同单位，故此处单列一个换算）
-    const weightPct = mv === null || totalMv <= 0 ? null : weightPctOf(mv, totalMv)
-    return { id: it.id, name: it.name, secid: it.secid, market: marketLabelOf(it.market), mv, weightPct, sector: it.groupName }
+    const weightPct = mvCny === null || totalMv <= 0 ? null : weightPctOf(mvCny, totalMv)
+    return { id: it.id, name: it.name, secid: it.secid, market: marketLabelOf(it.market), mv, mvCny, weightPct, sector: it.groupName }
   })
   const weights = rows.map((r) => r.weightPct).filter((w): w is number => w !== null).sort((a, b) => b - a)
   const n = weights.length
@@ -108,6 +130,7 @@ export function compositionOf(items: readonly CompositionInput[]): Composition {
     rows,
     totalMv,
     unpriced: items.length - priced.length,
+    excludedNonCny: rows.filter((r) => r.mvCny === null && r.mv !== null).length,
     // 行业切片只统计有标签的行（拿不到的行进不了任何切片，也不编"未知"）
     sectors: sliceOf(rows, (r) => r.sector),
     markets: sliceOf(rows, (r) => r.market),

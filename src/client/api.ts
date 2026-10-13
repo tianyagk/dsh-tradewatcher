@@ -63,7 +63,7 @@ export interface DayTradeView {
     netPnl: number
   }>
   unmatched: Array<{ day: string; verb: string; qty: number; price: number | null; note: string }>
-  summary: { count: number; winRate: number | null; netPnl: number; avgNet: number | null; days: number }
+  summary: { count: number; winRate: number | null; netPnl: number | null; avgNet: number | null; days: number; unpricedCount?: number }
   methodology: string
 }
 

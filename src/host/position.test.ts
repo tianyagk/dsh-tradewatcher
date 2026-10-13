@@ -77,10 +77,11 @@ test('红线：现价缺失 / 样本不足 ⇒ 全部 null + 原因（不是 0% 
 })
 
 test('组合构成：权重合计 100%±0.01，行业拿不到是 —（不许猜）', () => {
+  // ⚠ R7 之后 `mvCny` 是**必填口径**：权重分母只认人民币口径（港股已按 0.92 折算）
   const rows = [
-    { id: 'p1', name: 'A', secid: '1.600519', market: marketOf('1.600519'), qty: 100, price: 10, groupName: '白酒' },
-    { id: 'p2', name: 'B', secid: '0.300750', market: marketOf('0.300750'), qty: 200, price: 20, groupName: null },
-    { id: 'p3', name: 'C', secid: '116.00700', market: marketOf('116.00700'), qty: 50, price: 4, groupName: null },
+    { id: 'p1', name: 'A', secid: '1.600519', market: marketOf('1.600519'), qty: 100, price: 10, mvCny: 1000, groupName: '白酒' },
+    { id: 'p2', name: 'B', secid: '0.300750', market: marketOf('0.300750'), qty: 200, price: 20, mvCny: 4000, groupName: null },
+    { id: 'p3', name: 'C', secid: '116.00700', market: marketOf('116.00700'), qty: 50, price: 4, mvCny: 184, groupName: null },
   ]
   const c = compositionOf(rows)
   const sum = c.rows.reduce((n, r) => n + (r.weightPct ?? 0), 0)
@@ -92,12 +93,34 @@ test('组合构成：权重合计 100%±0.01，行业拿不到是 —（不许�
   assert.equal(c.markets.length, 2, '按 shared marketOf 的粒度：A股（沪+深）一片、港股一片')
   assert.ok(c.concentration.hhi > 0 && c.concentration.top1 > 0, '集中度：HHI 与第一大权重')
   // 价格缺失 ⇒ 不参与权重，且如实标注
-  const withMissing = compositionOf([...rows, { id: 'p4', name: 'D', secid: '105.TLT', market: marketOf('105.TLT'), qty: 10, price: null, groupName: null }])
+  const withMissing = compositionOf([...rows, { id: 'p4', name: 'D', secid: '105.TLT', market: marketOf('105.TLT'), qty: 10, price: null, mvCny: null, groupName: null }])
   assert.equal(withMissing.rows.length, 4)
   assert.equal(withMissing.rows[3].weightPct, null, '缺价 ⇒ 权重 —（不计入分母）')
   const sum2 = withMissing.rows.reduce((n, r) => n + (r.weightPct ?? 0), 0)
   assert.ok(Math.abs(sum2 - 100) <= 0.01, '缺价的行不进分母，合计仍是 100%±0.01')
   assert.equal(withMissing.unpriced, 1, '缺价条数要如实报')
+})
+
+test('R7 组合构成：非人民币折不了 ⇒ 显式排除并标注（绝不按 1:1 相加）', () => {
+  const c = compositionOf([
+    { id: 'a', name: 'A', secid: '1.600519', market: marketOf('1.600519'), qty: 100, price: 11, mvCny: 1100, groupName: null },
+    { id: 'b', name: 'B', secid: '116.00700', market: marketOf('116.00700'), qty: 200, price: 320, mvCny: null, groupName: null },
+    { id: 'c', name: 'C', secid: '105.TLT', market: marketOf('105.TLT'), qty: 10, price: 420, mvCny: null, groupName: null },
+  ])
+  assert.equal(c.totalMv, 1100, '分母必须只含人民币口径（复核里旧实现把 100×11 + 200×320 + 10×420 = 69300 直接相加）')
+  assert.equal(c.rows[0].weightPct, 100, '折得了的那条独占 100%')
+  assert.equal(c.rows[1].weightPct, null, '折不了 ⇒ 权重 null（不是按 1:1 算出来的 92.4%）')
+  assert.equal(c.rows[1].mv, 64000, '原币种市值照样展示（事实不隐藏）')
+  assert.equal(c.excludedNonCny, 2, '被排除的非人民币条数必须如实标注')
+  assert.deepEqual(c.markets.map((m) => m.key), ['A股'], '市场切片只统计进了分母的行')
+  // 折得了的港股：走人民币口径，权重合计仍 100%
+  const withFx = compositionOf([
+    { id: 'a', name: 'A', secid: '1.600519', market: marketOf('1.600519'), qty: 100, price: 11, mvCny: 1100, groupName: null },
+    { id: 'b', name: 'B', secid: '116.00700', market: marketOf('116.00700'), qty: 200, price: 320, mvCny: 58880, groupName: null },
+  ])
+  assert.equal(withFx.totalMv, 59980, '折算后按人民币相加')
+  const sum = withFx.rows.reduce((n, r) => n + (r.weightPct ?? 0), 0)
+  assert.ok(Math.abs(sum - 100) <= 0.01, `折算后权重合计仍是 100%±0.01（实际 ${sum}）`)
 })
 
 test('市场映射：复用 shared 的确定性映射（沪/深同属 A股，期货与商品同组）', () => {

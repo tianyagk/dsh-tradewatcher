@@ -44,11 +44,18 @@ export interface DayTradeResult {
   summary: {
     /**往返次数（同日两轮计 2） */
     count: number
-    /**胜率（净盈亏 > 0 的次数占比，%）；0 次 ⇒ null */
+    /**胜率（净盈亏 > 0 的次数占比，%）；0 次 ⇒ null；有未计价流水时也 ⇒ null（不能被"已知那部分"的胜率冒充） */
     winRate: number | null
-    netPnl: number
+    /**
+     * 净盈亏（元）。**有缺价流水时为 `null`** —— 缺价 = 未取到，不是 0：
+     * 旧实现用 `price ?? 0` 参与计算，会编出"净 −10,011.00、胜率 0%"这种看着正常的错数（R3）。
+     */
+    netPnl: number | null
+    /** 平均每次净盈亏；`netPnl` 为 null 时同样为 null */
     avgNet: number | null
     days: number
+    /** 因缺成交价而**没能**进盈亏计算的流水条数（>0 时 count 只覆盖已计价部分，netPnl 为 null） */
+    unpricedCount: number
   }
   methodology: string
 }
@@ -60,8 +67,17 @@ const round2 = (n: number): number => Math.round(n * 100) / 100
  * 同日多笔按时间顺序 FIFO 配对；一笔被拆成多段时，各段分别计一次往返（这正是"按次数"的含义）。
  */
 export function dayTradesOf(entries: readonly LedgerEntry[]): DayTradeResult {
-  const isTrade = (e: LedgerEntry): boolean => (e.verb === 'buy' || e.verb === 'sell') && typeof e.qty === 'number' && e.qty > 0
+  // R3：**缺成交价的流水不是 0 价成交**。旧实现只校验 qty，`mkRound` 里用 `price ?? 0`
+  // 参与 `(卖价 − 买价) × 数量` ⇒ 编造出"净 −10,011.00、胜率 0%"这类错数。
+  // 现在缺价的流水直接进 `unmatched`（那里的 `price: number | null` 本就诚实），且让 summary 如实为 null。
+  const hasPrice = (e: LedgerEntry): boolean => typeof e.price === 'number' && Number.isFinite(e.price)
+  const isTrade = (e: LedgerEntry): boolean =>
+    (e.verb === 'buy' || e.verb === 'sell') && typeof e.qty === 'number' && e.qty > 0 && hasPrice(e)
   const trades = entries.filter(isTrade).slice().sort((a, b) => a.ts - b.ts || (a.id < b.id ? -1 : 1))
+  // 缺价的买卖流水（数量>0）：如实列进 unmatched，并计入 unpricedCount
+  const unpriced = entries.filter(
+    (e) => (e.verb === 'buy' || e.verb === 'sell') && typeof e.qty === 'number' && e.qty > 0 && !hasPrice(e),
+  )
   const byDay = new Map<string, LedgerEntry[]>()
   for (const e of trades) {
     const day = new Date(e.ts).toLocaleDateString('sv-SE', { timeZone: 'Asia/Shanghai' })
@@ -71,7 +87,15 @@ export function dayTradesOf(entries: readonly LedgerEntry[]): DayTradeResult {
     byDay.set(key, list)
   }
   const rounds: DayTradeRound[] = []
-  const unmatched: DayTradeUnmatched[] = []
+  const unmatched: DayTradeUnmatched[] = unpriced.map((e) => ({
+    day: new Date(e.ts).toLocaleDateString('sv-SE', { timeZone: 'Asia/Shanghai' }),
+    posId: e.posId,
+    id: e.id,
+    verb: e.verb,
+    qty: e.qty as number,
+    price: null,
+    note: '这条流水没有成交价（未取到）⇒ 不参与做T盈亏计算，也不按 0 价凑数',
+  }))
   for (const [key, list] of [...byDay.entries()].sort((a, b) => (a[0] < b[0] ? -1 : 1))) {
     const [posId, day] = key.split('|')
     type Open = { e: LedgerEntry; left: number; feeLeft: number }
@@ -117,20 +141,24 @@ export function dayTradesOf(entries: readonly LedgerEntry[]): DayTradeResult {
   const net = rounds.reduce((n, r) => n + r.netPnl, 0)
   const wins = rounds.filter((r) => r.netPnl > 0).length
   const days = new Set(rounds.map((r) => r.day)).size
+  // 有缺价流水 ⇒ 盈亏不可算：**不许**拿"已计价那部分的合计"冒充总额（R3）
+  const complete = unpriced.length === 0
   return {
     rounds,
     unmatched,
     summary: {
       count: rounds.length,
-      winRate: rounds.length === 0 ? null : (wins / rounds.length) * 100,
-      netPnl: round2(net),
-      avgNet: rounds.length === 0 ? null : round2(net / rounds.length),
+      winRate: complete && rounds.length > 0 ? (wins / rounds.length) * 100 : null,
+      netPnl: complete ? round2(net) : null,
+      avgNet: complete && rounds.length > 0 ? round2(net / rounds.length) : null,
       days,
+      unpricedCount: unpriced.length,
     },
     methodology:
       '同日往返配对：同一持仓、同一交易日的买入与卖出按时间 FIFO 配对，按次数统计（同日两轮计 2 次）；' +
       '方向保留时序（buy-first 先买后卖＝正 T，sell-first 先卖后买＝反 T）；费用按配对数量比例分摊；' +
-      '净盈亏 = (卖价 − 买价) × 数量 − 分摊费用；配不上的部分列在 unmatched，不硬凑。',
+      '净盈亏 = (卖价 − 买价) × 数量 − 分摊费用；配不上的部分列在 unmatched，不硬凑；' +
+      '缺成交价的流水不参与计算（不是 0 价）—— 存在这类流水时净盈亏/胜率一律显示「未取到」。',
   }
 }
 

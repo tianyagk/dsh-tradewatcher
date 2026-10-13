@@ -283,9 +283,14 @@ export function assemblePortfolio(
     let dilutedPnl = 0
     let dayPnl = 0
     let realized = 0
+    /** 未能计入 realized 合计的行数（R6）：realized 为 null，或非人民币且折不了 */
+    let realizedUnknown = 0
     let valued = 0
     for (const r of rows) {
-      if (r.mv === null && r.qty > 0) continue // no quote yet
+      if (r.mv === null && r.qty > 0) {
+        if (r.realized !== null) realizedUnknown += 1
+        continue // no quote yet
+      }
       // 总额口径（P0-1/P1-11）：A股直接计；非 A股**只有在能折算时**才计。
       // 按 1:1 加进去会让总额"看起来完整、其实错了"—— 错的口径比缺的口径更危险
       // （用户不会去质疑一个看起来正常的数）。折算不了的一律进 unpriced，
@@ -293,19 +298,26 @@ export function assemblePortfolio(
       const cn = marketOf(r.secid) === 'cn'
       if (!cn) {
         const fxMv = toCny(r.mv ?? 0, r.secid, fx)
-        if (fxMv.value === null) continue
+        if (fxMv.value === null) {
+          if (r.realized !== null) realizedUnknown += 1
+          continue
+        }
         totalMv = add(totalMv, fxMv.value)
         floatPnl = add(floatPnl, (toCny(r.floatPnl, r.secid, fx).value ?? 0))
         dilutedPnl = add(dilutedPnl, (toCny(r.dilutedPnl ?? 0, r.secid, fx).value ?? 0))
         if (r.dayPnl !== null) dayPnl = add(dayPnl, (toCny(r.dayPnl, r.secid, fx).value ?? 0))
-        realized = add(realized, (toCny(r.realized, r.secid, fx).value ?? 0))
+        const fxRealized = toCny(r.realized, r.secid, fx)
+        if (fxRealized.value === null) realizedUnknown += 1
+        else realized = add(realized, fxRealized.value)
         continue
       }
       totalMv = add(totalMv, r.mv ?? 0)
       floatPnl = add(floatPnl, r.floatPnl)
       dilutedPnl = add(dilutedPnl, r.dilutedPnl ?? 0)
       if (r.dayPnl !== null) dayPnl = add(dayPnl, r.dayPnl)
-      realized = add(realized, r.realized)
+      // ⚠ R6：realized 为 null 表示**不可算**（成本未知），绝不能 `add(…, null)` 静默当 0
+      if (r.realized === null) realizedUnknown += 1
+      else realized = add(realized, r.realized)
       valued += 1
     }
     return {
@@ -319,7 +331,9 @@ export function assemblePortfolio(
       floatPnl: round2(floatPnl),
       dilutedPnl: round2(dilutedPnl),
       dayPnl: round2(dayPnl),
-      realized: round2(realized),
+      // 有不可算的行 ⇒ 合计如实为 null（不显示"看着正常的 0.00"）
+      realized: realizedUnknown > 0 ? null : round2(realized),
+      realizedUnknownCount: realizedUnknown,
       count: rows.length,
     }
   })
@@ -330,13 +344,16 @@ export function assemblePortfolio(
   let grandDiluted = 0
   let grandDay = 0
   let grandRealized = 0
+  let grandRealizedUnknown = 0
   for (const g of groupRows) {
     if (g.archived === true) continue
     grandMv += g.totalMv
     grandFloat += g.floatPnl
     grandDiluted += g.dilutedPnl
     grandDay += g.dayPnl
-    grandRealized += g.realized
+    // R6：任一分组不可算 ⇒ 总览也不可算（不能只把"算得出来的那些"加起来当总额）
+    if (g.realized === null) grandRealizedUnknown += g.realizedUnknownCount ?? 1
+    else grandRealized += g.realized
   }
 
   const view: PortfolioView = {
@@ -348,7 +365,8 @@ export function assemblePortfolio(
       floatPnl: round2(grandFloat),
       dilutedPnl: round2(grandDiluted),
       dayPnl: round2(grandDay),
-      realized: round2(grandRealized),
+      realized: grandRealizedUnknown > 0 ? null : round2(grandRealized),
+      realizedUnknownCount: grandRealizedUnknown,
     },
     // 组合构成（P0-11）：权重/行业·主题/市场分布/集中度。
     // 行业**只**用本地已有数据（分组名）—— 拿不到就是 null（界面 —），绝不按 secid 猜行业。
@@ -356,16 +374,23 @@ export function assemblePortfolio(
       const groupName = new Map(groups.map((g) => [g.id, g.name]))
       const inputs = positions
         .filter((p) => p.qty > 0)
-        .map((p) => ({
-          id: p.posId,
-          name: p.name,
-          secid: p.secid,
-          market: marketOf(p.secid),
-          qty: p.qty,
-          price: p.price,
-          // 本地标签：分组名（用户自己写的主题/行业）；没有分组就没有行业标签
-          groupName: p.groupId === undefined ? null : (groupName.get(p.groupId) ?? null),
-        }))
+        .map((p) => {
+          const cn = marketOf(p.secid) === 'cn'
+          // R7：与 grand.totalMv **同一份**折算规则 —— A股直接计；非 A股只有折得出来才算，
+          // 折不了 ⇒ null（不进权重分母）。按 1:1 相加会产出"港股 92.4%"这种看着正常的错权重。
+          const mvCny = p.mv === null ? null : cn ? p.mv : toCny(p.mv, p.secid, fx).value
+          return {
+            id: p.posId,
+            name: p.name,
+            secid: p.secid,
+            market: marketOf(p.secid),
+            qty: p.qty,
+            price: p.price,
+            mvCny,
+            // 本地标签：分组名（用户自己写的主题/行业）；没有分组就没有行业标签
+            groupName: p.groupId === undefined ? null : (groupName.get(p.groupId) ?? null),
+          }
+        })
       return compositionOf(inputs)
     })(),
   }

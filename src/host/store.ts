@@ -32,6 +32,7 @@ import { log } from './context.ts'
 import { bulkBatchMatches, numOrNull } from '../shared/model.ts'
 import { shanghaiDayStart } from './time.ts'
 import { writeJsonAtomic } from './atomic.ts'
+import { isFirstBoot, ReadGuard } from './readGuard.ts'
 import { withFileLocks } from './lock.ts'
 import { normalizeChipPrefs } from './chips.ts'
 import { normalizeSplitRatio } from '../client/splitDrag.ts'
@@ -383,6 +384,11 @@ export class DataStore {
   private loaded: Promise<void> | null = null
   private writeChain: Promise<void> = Promise.resolve()
   private seq = 0
+  /**
+   * 「读不到」≠「没有」（R1）：读失败（非 ENOENT）的文件本次启动**禁止整份覆写**。
+   * 键是文件名（与 `persist(file, …)` 同一个口径）。
+   */
+  private readonly readGuard = new ReadGuard()
 
   constructor(dir: string = dataHome()) {
     this.dir = dir
@@ -403,9 +409,13 @@ export class DataStore {
     let text: string
     try {
       text = await readFile(join(this.dir, file), 'utf8')
+      // 读到 ⇒ 解除上一次的封锁（临时故障自愈，不必重启进程）
+      this.readGuard.clear(file)
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return fallback
-      log(`store read failed ${file}:`, String(error))
+      if (isFirstBoot(error)) return fallback
+      // ⚠ 读不到 ≠ 空数据：返回 fallback 只为让界面还能跑，**写回被 persist() 拦下**
+      const reason = this.readGuard.markUnreadable(file, error)
+      log(`store read failed ${file}: ${reason} —— 读不到 ≠ 空数据：本次启动拒绝写回该文件（避免整份覆写覆盖用户数据）`)
       return fallback
     }
     let parsed: unknown
@@ -443,9 +453,12 @@ export class DataStore {
     let text: string
     try {
       text = await readFile(join(this.dir, 'ledger.json'), 'utf8')
+      this.readGuard.clear('ledger.json')
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { v: 1, entries: [] }
-      log('ledger read failed:', String(error))
+      if (isFirstBoot(error)) return { v: 1, entries: [] }
+      // 账本是用户唯一的交易记录：读不到 ⇒ 绝不允许拿"空账本"去整份覆写
+      const reason = this.readGuard.markUnreadable('ledger.json', error)
+      log(`ledger read failed: ${reason} —— 读不到 ≠ 空账本：本次启动拒绝写回 ledger.json`)
       return { v: 1, entries: [] }
     }
     let parsed: unknown
@@ -481,7 +494,17 @@ export class DataStore {
   }
 
   private async persist(file: string, value: unknown): Promise<void> {
+    // 读不到过的文件一律拒绝整份覆写（R1）；这里也是所有变更的唯一落盘点
+    this.readGuard.assertWritable(file, `写回 ${file}`)
     await writeJsonAtomic(join(this.dir, file), value)
+  }
+
+  /**
+   * 本次启动"读不到"的文件与原因（R1 对外披露用）。
+   * 空数组 = 要么读到了、要么本来就还没有该文件。
+   */
+  readFailures(): ReadonlyArray<{ file: string; reason: string }> {
+    return this.readGuard.entries
   }
 
   /**

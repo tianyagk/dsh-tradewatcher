@@ -821,7 +821,13 @@ export interface GroupView {
   /** 摊薄口径的持仓盈亏合计（= floatPnl + realized） */
   dilutedPnl: number
   dayPnl: number
-  realized: number
+  /**
+   * 累计已实现合计。**有行不可算时一律 `null`**（R6：不许把"跳过 null"的合计当成 0.00 显示）。
+   * `null` 时看 `realizedUnknownCount` 知道少了几行。
+   */
+  realized: number | null
+  /** 未能计入 `realized` 的行数（realized 为 null，或非人民币且折不了）—— >0 时 `realized` 必为 null */
+  realizedUnknownCount?: number
   count: number
 }
 
@@ -829,7 +835,16 @@ export interface PortfolioView {
   generatedAt: number
   groups: GroupView[]
   positions: PositionRow[]
-  grand: { totalMv: number; floatPnl: number; dilutedPnl: number; dayPnl: number; realized: number }
+  grand: {
+    totalMv: number
+    floatPnl: number
+    dilutedPnl: number
+    dayPnl: number
+    /** 同 `GroupView.realized`：有不可算的行 ⇒ `null`（不拿 0.00 或"已算部分"冒充） */
+    realized: number | null
+    /** 未能计入 `realized` 的行数（R6 披露用） */
+    realizedUnknownCount?: number
+  }
   /** 跨市场折算口径（P0-1/P1-11）：none = 总额只含 A股；fixed = 按 fxRates 折算后计入 */
   fxMode?: FxMode
   /** 实际生效的固定汇率表（仅 fxMode='fixed' 时非空）—— 界面与工具据此说明"按什么汇率算的" */
@@ -844,9 +859,12 @@ export interface PortfolioView {
    * 行业只来自**本地已有数据**（分组名），拿不到就是 `null`（界面 `—`），不按代码猜。
    */
   composition?: {
+    /** 人民币口径的可计价总市值（与 `grand.totalMv` 同一折算规则，R7） */
     totalMv: number
     unpriced: number
-    rows: Array<{ id: string; name: string; secid: string; market: string; mv: number | null; weightPct: number | null; sector: string | null }>
+    /** 有原币种市值但折不成人民币的条数（R7：分母口径是人民币，被排除的必须标注） */
+    excludedNonCny: number
+    rows: Array<{ id: string; name: string; secid: string; market: string; mv: number | null; mvCny?: number | null; weightPct: number | null; sector: string | null }>
     sectors: Array<{ key: string; weightPct: number; count: number }>
     markets: Array<{ key: string; weightPct: number; count: number }>
     concentration: { top1: number; top3: number; hhi: number; n: number }
@@ -1134,6 +1152,22 @@ export function realizedUnknownRows<T extends { realizedUnknownQty?: number; cos
   rows: readonly T[],
 ): T[] {
   return rows.filter((r) => (r.realizedUnknownQty ?? 0) > 0 && r.costUnknown !== true)
+}
+
+/**
+ * 「已实现不可算」的行集合（R6）—— **不看 `qty`**。
+ *
+ * 旧实现三处 gate 都叠加了 `qty > 0`（`tools.ts` 的工具总览、面板 badge、以及工具默认的
+ * `includeEmpty=false` 过滤），于是**已清仓且成本未知**的行两处披露都被挡掉，用户只看到
+ * `累计已实现: 0.00` —— 一个看着正常的错数（复核复现：adjust 100@0 → sell 100@12.5 工具仍打 0.00）。
+ *
+ * 覆盖两类不可算：`costUnknown === true`（成本从未录入）与 `realizedUnknownQty > 0`
+ * （在成本录入前卖出过）。工具体、面板、行内提示共用这一个判定，别再各写一套。
+ */
+export function unknownRealizedRows<T extends { realizedUnknownQty?: number; costUnknown?: boolean }>(
+  rows: readonly T[],
+): T[] {
+  return rows.filter((r) => r.costUnknown === true || (r.realizedUnknownQty ?? 0) > 0)
 }
 
 /** 上述行里"成本录入前卖出"的股数合计（面板级"共 X 股"）—— 与判定同源，调用方不得自己 reduce */

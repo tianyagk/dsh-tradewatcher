@@ -1996,10 +1996,10 @@ async function requestKlineFromTencent(secid: string, klt: number, lmt: number, 
 /**
  * 熔断冷却中（一台可用主机都没有）：与"试过但失败"**必须分开**。
  *
- * 分开的意义在负缓存：`ttlCache` 连 `null` 也缓存（full 键 1 小时、incr 键 2 分钟），
- * 若把"熔断中"也写进负缓存，一次冷却就会把该标的的 K 线锁死一小时（而冷却通常 2–15 分钟就恢复了）。
- * 所以冷却时抛这个错误，由 `refreshKline` 识别后**不写缓存**，下次调用重新判断
- * （冷却期内每次都是本地快速失败，不会产生任何上游请求）。
+ * 分开的意义在**负缓存**：R2 之后失败一律不进正缓存（见 `KLINE_FAIL_TTL_MS`），
+ * 只写 10 秒的负缓存；而"熔断中"这一轮**根本没发请求** —— 理由函数要按事实说
+ * "本轮没发请求、稍后自动重试"，不能说成"上游可达但没数据、重试无效"。
+ * 冷却期内每次调用都是本地快速失败（0 上游请求），代价可忽略。
  */
 class UpstreamCoolingError extends Error {
   constructor(message: string) {
@@ -2245,6 +2245,25 @@ export function klineMissingReason(
     }
     return `本地有该周期的缓存（${c.fileBars} 根），但可用部分不足 ${c.minBars} 根的样本下限`
   })()
+  // **按事实下结论**（R2）：只看"本轮到底发没发上游请求"。
+  // 旧实现在失败被写进 1 小时正缓存后，会输出「都可达但没有返回 —— 重试无效」，
+  // 而那句话建立在"最近一小时我们根本没发过请求"之上 —— 会把 agent 引向"别重试了"。
+  const attempt = klineAttempts.get(secid)
+  const fresh = attempt !== undefined && Date.now() - attempt.at < 120_000
+  if (fresh && attempt.requested) {
+    return {
+      what: label,
+      why: 'no-source',
+      note: `${cacheClause}；本轮确实请求过上游（${attempt.note}），腾讯与东财都没给该标的的 K 线 —— ${MISSING_TIER_ADVICE['no-source']}`,
+    }
+  }
+  if (fresh && !attempt.requested) {
+    return {
+      what: label,
+      why: 'transient',
+      note: `${cacheClause}；本轮没有向上游发请求（${attempt.note}）—— 等这轮窗口过去会自动重试，不是「上游没有这份数据」`,
+    }
+  }
   if (down) {
     return {
       what: label,
@@ -2278,21 +2297,76 @@ export function detailMissingReason(opts: { emDown?: boolean } = {}): UpstreamRe
 }
 
 /**
+ * **失败不进正缓存**（R2，docs/REVIEW-2-CORRECTNESS.md §R2）。
+ *
+ * 旧实现把 `requestKlineRaw` 的 `null`（全 5xx/超时，或"200 但 klines 为空"）也交给 `ttlCache`，
+ * 于是**失败**会占住 full 键 **1 小时**：这一小时内一次上游请求都不发，`klineMissingReason`
+ * 还会把"最近一小时我们根本没发过请求"说成「腾讯与东财当前都可达但没有返回 —— 重试无效」。
+ * 现在：
+ *   - 失败**不写正缓存**（loader 抛内部信号，`ttlCache` 只在成功时写槽）；
+ *   - 只写这个 **10 秒**的负缓存（同一秒内的重复调用不必再打上游，又不至于把失败锁一小时）；
+ *   - 记下"本轮到底发没发上游请求"（`klineAttempts`），供理由函数**按事实**而不是按时间窗下结论。
+ */
+const KLINE_FAIL_TTL_MS = 10_000
+const klineFailUntil = new Map<string, number>()
+const klineAttempts = new Map<string, { at: number; requested: boolean; note: string }>()
+
+/** 内部信号：上游真的被请求过、但没给出可用 K 线 ⇒ 不写正缓存，由调用方转成 null */
+class KlineEmptySignal extends Error {
+  constructor() {
+    super('kline upstream returned no rows')
+    this.name = 'KlineEmptySignal'
+  }
+}
+
+function noteKlineAttempt(secid: string, requested: boolean, note: string): void {
+  klineAttempts.set(secid, { at: Date.now(), requested, note })
+  if (klineAttempts.size > 500) {
+    const oldest = klineAttempts.keys().next().value
+    if (oldest !== undefined) klineAttempts.delete(oldest)
+  }
+}
+
+/** 最近一次 K 线取数的事实（`requested` = 真的发出过上游请求）；供理由函数与断言读取 */
+export function klineLastAttempt(secid: string): { at: number; requested: boolean; note: string } | null {
+  return klineAttempts.get(secid) ?? null
+}
+
+/**
  * 增量回源 + 落盘。返回 true 表示"上游失败、这次给的是旧缓存"。
  * 拆成独立函数是为了让 fetchKline 的三个分支（定稿免回源 / 失败 / 成功）各只有一条出口。
  */
 async function refreshKline(secid: string, baseKlt: number, fqt: FqMode, entry: KlineEntry, needFull: boolean): Promise<boolean> {
   const key = `kline:${secid}:${baseKlt}:${fqt}:${needFull ? 'full' : 'incr'}`
-  let fetched: DayBar[] | null
-  try {
-    fetched = await ttlCache<DayBar[] | null>(key, needFull ? 3600_000 : 120_000, () =>
-      requestKlineRaw(secid, baseKlt, needFull ? KLINE_FULL_LMT[baseKlt] : KLINE_RECENT_LMT[baseKlt], fqt),
-    )
-  } catch (error) {
-    if (!(error instanceof UpstreamCoolingError)) throw error
-    // 熔断冷却中（一台可用主机都没有）：**不写负缓存** —— 否则一次冷却会把该标的锁到 1 小时后，
-    // 而熔断通常 2–15 分钟就恢复。冷却期内每次调用都是本地快速失败（0 上游请求），代价可忽略。
-    fetched = null
+  let fetched: DayBar[] | null = null
+  const failUntil = klineFailUntil.get(key)
+  if (failUntil !== undefined && Date.now() < failUntil) {
+    // 刚失败过（≤10s）：本轮**不发上游请求**，并如实记下"没发"（理由函数据此给 transient，而不是"重试无效"）
+    noteKlineAttempt(secid, false, `刚失败过，${Math.max(1, Math.ceil((failUntil - Date.now()) / 1000))}s 内不重复回源`)
+  } else {
+    try {
+      fetched = await ttlCache<DayBar[]>(key, needFull ? 3600_000 : 120_000, async () => {
+        const got = await requestKlineRaw(secid, baseKlt, needFull ? KLINE_FULL_LMT[baseKlt] : KLINE_RECENT_LMT[baseKlt], fqt)
+        // 没拿到 ⇒ 抛信号，让 ttlCache **不写槽**（这正是 R2：失败不许进正缓存）
+        if (got === null || got.length === 0) throw new KlineEmptySignal()
+        return got
+      })
+      klineFailUntil.delete(key)
+      noteKlineAttempt(secid, true, `上游返回 ${fetched.length} 根`)
+    } catch (error) {
+      if (error instanceof UpstreamCoolingError) {
+        // 熔断冷却中（一台可用主机都没有）：**本轮没发请求**。
+        // 负缓存也写：冷却期内重复调用是本地快速失败（0 上游请求），10s 的负缓存只是省掉重复判断；
+        // 熔断通常 2–15 分钟恢复，恢复后第一次调用就会重新回源（负缓存窗口早已过）。
+        klineFailUntil.set(key, Date.now() + KLINE_FAIL_TTL_MS)
+        noteKlineAttempt(secid, false, '主机熔断冷却中（未发出上游请求）')
+      } else if (error instanceof KlineEmptySignal) {
+        klineFailUntil.set(key, Date.now() + KLINE_FAIL_TTL_MS)
+        noteKlineAttempt(secid, true, '上游可达但没有返回该标的的 K 线（真的请求过）')
+      } else {
+        throw error
+      }
+    }
   }
   if (fetched !== null && fetched.length > 0) {
     const before = entry.bars.length

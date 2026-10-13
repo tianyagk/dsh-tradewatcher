@@ -12,7 +12,7 @@ import type {
   SuggestItem,
   YtdRow,
 } from '../shared/model.ts'
-import { LEDGER_VERB_LABEL, DEFAULT_PREFS, realizedUnknownNote, realizedUnknownQtyOf, realizedUnknownRows, realizedUnknownShort } from '../shared/model.ts'
+import { LEDGER_VERB_LABEL, DEFAULT_PREFS, realizedUnknownNote, realizedUnknownQtyOf, realizedUnknownRows, realizedUnknownShort, unknownRealizedRows } from '../shared/model.ts'
 import { availableLockNote, feeShareNote, ytdBaseNote } from './portfolioMeta.ts'
 import { api } from './api.ts'
 import type { DayTradeView } from './api.ts'
@@ -195,10 +195,11 @@ export function PortfolioPage(props: {
   // 未计入总额的持仓（口径问题/无价），来自 host 的 assemblePortfolio（P0-1）
   const unpriced = view?.unpriced ?? []
   /**
-   * 未录入成本的持仓（P1-10）：市值照算，但盈亏与盈亏率是 `—`，且**不计入**分组/总览的盈亏合计
-   * （宿主侧对 null 盈亏按"跳过"处理）。这种事必须写在界面上，否则总额看起来完整、其实缺一块。
+   * 未录入成本的持仓（P1-10）：市值照算，但盈亏与盈亏率是 `—`，且**不计入**分组/总览的盈亏合计。
+   * R6：**不再用 `qty > 0` 门控** —— 已清仓但成本未知的行，其"已实现"同样不可算，
+   * 旧门控会让它们既不披露、又把合计带成"看着正常的 0.00"。
    */
-  const costUnknownRows = view.positions.filter((p) => p.costUnknown === true && p.qty > 0)
+  const costUnknownRows = unknownRealizedRows(view.positions).filter((p) => p.costUnknown === true)
   /**
    * 「累计已实现」少算的那些行（N1）：只数与股数都取自 `shared/model.ts` 的**同一份判定**
    * （与行内提示、`tradewatcher_portfolio` 同源），面板不自己 filter/reduce 一套 ——
@@ -370,6 +371,17 @@ export function PortfolioPage(props: {
           'aria-label': `累计已实现不含 ${ruRows.length} 只（${ruRows.map((p) => p.name).join('、')}）：${realizedUnknownNote(ruQty)}`,
         },
           `累计已实现不含 ${ruRows.length} 只（${ruRows.map((p) => p.name).join('、')}）：${realizedUnknownNote(ruQty)}`,
+        )
+      : null,
+    grand.realized === null
+      ? React.createElement('div', {
+          className: 'tw-hint',
+          style: { padding: '2px 2px 0', color: 'var(--tw-muted)' },
+          tabIndex: 0,
+          role: 'note',
+          'aria-label': `累计已实现 ${grand.realizedUnknownCount ?? 0} 行不可算 ⇒ 显示未取到（不拿 0.00 或"已算部分"冒充）`,
+        },
+          `累计已实现：未取到（${grand.realizedUnknownCount ?? 0} 行成本/已实现不可算，含已清仓的行）—— 不以 0 顶替`,
         )
       : null,
     skippedTotal > 0
@@ -1265,7 +1277,10 @@ function PortfolioReview(props: {
             'aria-expanded': open,
             'aria-label': `做T ${dt.summary.count} 次，展开明细`,
             disabled: dt.rounds.length === 0,
-          }, `做T ${dt.summary.count} 次 · 净 ${fmtMoneySigned(dt.summary.netPnl)} · 胜率 ${dt.summary.winRate === null ? '—' : `${Math.round(dt.summary.winRate)}%`}`),
+          }, dt.summary.netPnl === null
+            // R3：缺价流水被排除后**不许**再显示"净 ±X"（那会是"已知那部分"冒充总额）
+            ? `做T ${dt.summary.count} 次 · 净 未取到（${dt.summary.unpricedCount ?? 0} 笔流水缺成交价）`
+            : `做T ${dt.summary.count} 次 · 净 ${fmtMoneySigned(dt.summary.netPnl)} · 胜率 ${dt.summary.winRate === null ? '—' : `${Math.round(dt.summary.winRate)}%`}`),
           open
             ? React.createElement('table', { className: 'tw-daytrade-table' },
                 React.createElement('thead', null, React.createElement('tr', null,

@@ -51,6 +51,7 @@ import { join } from 'node:path'
 import type { MissingField } from '../shared/model.ts'
 import { writeJsonAtomic } from './atomic.ts'
 import { log } from './context.ts'
+import { isFirstBoot, quarantineFile, ReadGuard } from './readGuard.ts'
 import { dataHome } from './store.ts'
 import { fetchTencentDaily, fetchTencentRawQuotes } from './tencent.ts'
 import { dayOf } from './time.ts'
@@ -578,6 +579,18 @@ export function flowSnapshotPurged(): readonly FlowSnapshotPurged[] {
 }
 
 /**
+ * 「读不到」≠「空快照」（R1）：global-flow.json 读失败（非 ENOENT）时**禁止写回** ——
+ * 否则 `writeFlowSnapshot()` 会拿"空 days"整份覆写，90 天历史当场消失（实测复现）。
+ * 键用完整路径（同一个进程里不同 DSH_HOME 互不影响）。
+ */
+const flowReadGuard = new ReadGuard()
+
+/** 本次启动"读不到"的快照文件与原因（R1 披露/断言用） */
+export function flowReadFailures(): ReadonlyArray<{ file: string; reason: string }> {
+  return flowReadGuard.entries
+}
+
+/**
  * 读快照文件。
  *
  * **口径隔离（v0.74.0）**：文件级 `scope`（或任何一天的 `scope`）与当前 `FLOW_SCOPE` 不一致 ⇒
@@ -585,8 +598,22 @@ export function flowSnapshotPurged(): readonly FlowSnapshotPurged[] {
  * 并逐条记进 `purged`（留痕、不删数据），由下一次落盘写回文件。
  */
 export async function readFlowSnapshot(): Promise<FlowSnapshotFile> {
+  let raw: string
   try {
-    const raw = await readFile(flowSnapshotPath(), 'utf8')
+    raw = await readFile(flowSnapshotPath(), 'utf8')
+    flowReadGuard.clear(flowSnapshotPath())
+  } catch (error) {
+    if (isFirstBoot(error)) {
+      purgedFromOldScope = []
+      return { v: 2, scope: FLOW_SCOPE, days: {} }
+    }
+    // ⚠ 读不到 ≠ 空快照：本次启动拒绝写回（writeFlowSnapshot 会检查同一个守卫）
+    const reason = flowReadGuard.markUnreadable(flowSnapshotPath(), error)
+    purgedFromOldScope = []
+    log(`global-flow：快照读不到（${reason}）—— 读不到 ≠ 空快照：本次启动拒绝写回 global-flow.json（避免抹掉历史 days）`)
+    return { v: 2, scope: FLOW_SCOPE, days: {} }
+  }
+  try {
     const parsed = JSON.parse(raw) as Partial<FlowSnapshotFile> & { v?: number; days?: Record<string, FlowSnapshotDay>; purged?: FlowSnapshotPurged[] }
     if (parsed === null || typeof parsed !== 'object' || parsed.days === null || typeof parsed.days !== 'object') {
       purgedFromOldScope = Array.isArray(parsed?.purged) ? parsed.purged : []
@@ -615,7 +642,12 @@ export async function readFlowSnapshot(): Promise<FlowSnapshotFile> {
     purgedFromOldScope = [...keepPurged, ...purged]
     if (days.length > 0) log(`global-flow：口径变更 ⇒ 作废 ${days.length} 天的旧快照（${days.join(',')}），留痕 purged`)
     return { v: 2, scope: FLOW_SCOPE, days: {}, purged: purgedFromOldScope }
-  } catch {
+  } catch (error) {
+    // 「读到了但内容坏」：先隔离原件（保留原字节）再从容器的空快照开始 —— 与 store.ts 同口径。
+    // 隔离成功 ⇒ 原数据已保住，写回是安全的；隔离失败 ⇒ 当成"读不到"，禁止写回。
+    const kept = await quarantineFile(flowSnapshotPath())
+    log(`global-flow：快照内容坏（${error instanceof Error ? error.message : String(error)}）—— ${kept === null ? '隔离失败，已改为不写回' : `已隔离为 ${kept}`}`)
+    if (kept === null) flowReadGuard.markUnreadable(flowSnapshotPath(), error)
     purgedFromOldScope = []
     return { v: 2, scope: FLOW_SCOPE, days: {} }
   }
@@ -633,6 +665,13 @@ export function trimSnapshotDays(days: Record<string, FlowSnapshotDay>, keep = F
 let lastSnapshotWriteAt = 0
 
 export async function writeFlowSnapshot(day: string, record: FlowSnapshotDay): Promise<{ written: boolean; reason?: string }> {
+  // 读不到过 ⇒ 绝不用"空 days"整份覆写（R1）
+  if (flowReadGuard.isBlocked(flowSnapshotPath())) {
+    return {
+      written: false,
+      reason: `本地快照本次读不到（${flowReadGuard.reasonOf(flowSnapshotPath()) ?? '未知'}）⇒ 拒绝写回，避免覆盖已有历史（读不到 ≠ 空数据）`,
+    }
+  }
   const now = Date.now()
   const file = await readFlowSnapshot()
   const isNewDay = file.days[day] === undefined

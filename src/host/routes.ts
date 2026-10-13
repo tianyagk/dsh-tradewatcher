@@ -956,7 +956,16 @@ export function makeTradeRoutes(
               actions = []
             }
             // 做T（同日往返配对，P1-3）：客户端要显示收起态一行；纯派生自账本，无新逻辑
-            send(res, 200, { ok: true, view, stale, corporateActions: actions, dayTrades: dayTradesOf(store.ledgerEntries()) })
+            // R1：本地文件读不到时，把原因一并回传（界面/agent 才可能知道"空"与"读不到"的区别）
+            const readFailures = store.readFailures()
+            send(res, 200, {
+              ok: true,
+              view,
+              stale,
+              corporateActions: actions,
+              dayTrades: dayTradesOf(store.ledgerEntries()),
+              ...(readFailures.length > 0 ? { readFailures } : {}),
+            })
             return
           }
           if (req.method === 'POST') {
