@@ -202,7 +202,7 @@ color-scheme:dark}
 .tw-body::-webkit-scrollbar-thumb{background:var(--tw-border-strong);border-radius:4px}
 .tw-body::-webkit-scrollbar-thumb:hover{background:var(--tw-muted)}
 .tw-body::-webkit-scrollbar-track{background:transparent}
-.tw-muted{color:var(--tw-muted)} .tw-dim{color:var(--tw-dim)} .tw-right{text-align:right}
+.tw-muted{color:var(--tw-muted)} .tw-dim{color:var(--tw-dim)}
 .tw-panel{background:var(--tw-card);border:1px solid var(--tw-border);border-radius:10px;padding:10px 12px}
 .tw-panel-h{display:flex;align-items:center;gap:8px;padding-bottom:7px;min-height:24px}
 .tw-panel-h .t{font-weight:600;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;letter-spacing:-0.2px}
@@ -347,8 +347,6 @@ color-scheme:dark}
 /* internal scroll + sticky header for long tables */
 .tw-tablewrap{max-height:46vh;overflow:auto}
 .tw-tablewrap .tw-table th{position:sticky;top:0;background:var(--tw-card);z-index:2;box-shadow:inset 0 -1px 0 var(--tw-border)}
-/* stat group divider */
-.tw-stat-sep{flex:none;width:1px;align-self:stretch;background:var(--tw-border);margin:2px 6px}
 /* inline code chip next to a watch name */
 /* 非行情数字，豁免（不登记进模糊清单）：代码/ID 不是行情数字 */
 .tw-code{color:var(--tw-muted);font-family:var(--tw-mono);font-size:11px;margin-left:6px}
@@ -481,7 +479,6 @@ color-scheme:dark}
 .tw-chips-off{color:var(--tw-muted);font-size:11.5px;padding:4px 2px}
 .tw-chips-head{display:flex;align-items:center;gap:8px;font-size:11.5px;flex-wrap:wrap;flex:none}
 .tw-chips-toggle{background:transparent;border:0;color:var(--tw-text);font-size:11.5px;cursor:pointer;padding:0}
-.tw-chips-decay{font-size:11px}
 .tw-chips-nums{display:flex;align-items:center;gap:6px;font-family:var(--tw-mono);font-size:11px;white-space:nowrap}
 .tw-chips-sep{width:1px;height:10px;background:var(--tw-border-strong);display:inline-block}
 .tw-chips-narrow{font-size:11px;color:var(--tw-muted);padding:2px 0;flex:none}
@@ -494,8 +491,7 @@ color-scheme:dark}
    于是条列宽度不会随价格位数（如 5.47 vs 1553.40）抖动。 */
 .tw-chips-axis{display:flex;flex-direction:column;justify-content:space-between;font-size:11px;color:var(--tw-muted);
   font-family:var(--tw-mono);min-width:34px;max-width:60px;flex:none;text-align:right;line-height:1;overflow-wrap:anywhere}
-/* 条列（旧名 .tw-chips-bars，已无节点使用）：条宽的 % 分母必须是"确定性的可用宽度" */
-.tw-chips-bars{display:flex;flex-direction:column;gap:1px;overflow:hidden;flex:1 1 auto;min-width:0}
+/* 条列：条宽的 % 分母必须是"确定性的可用宽度"（旧名 .tw-chips-bars 已删，现名见下方 .tw-chips-plot） */
 .tw-chips-xaxis{display:flex;justify-content:space-between;font-size:11px;color:var(--tw-muted);font-family:var(--tw-mono);padding-left:38px;flex:none}
 /* 条列：**唯一的伸缩项**（flex:1）+ min-width:0（内容不许参与最小宽度计算）。
    这两条合起来保证：条列宽度 = 容器 − 左轴 − 间隙，与条宽写成多少 % 无关。

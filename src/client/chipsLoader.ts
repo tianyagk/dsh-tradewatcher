@@ -26,11 +26,6 @@ export function resetChipsCache(): void {
   cache.clear()
 }
 
-export function invalidateChips(secid?: string): void {
-  if (secid === undefined) cache.clear()
-  else cache.delete(secid)
-}
-
 /**
  * 取筹码：命中缓存（TTL 内）直接返回；同一 secid 的并发调用合并；否则发一次请求。
  * **入参只有 secid** —— 这条本身就是"切页签不刷新"的结构保证。

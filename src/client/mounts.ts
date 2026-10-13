@@ -23,11 +23,6 @@ export function mountCounts(): MountCounts {
   return { ...counts }
 }
 
-export function resetMountCounts(): void {
-  counts.drawer = 0
-  counts.chips = 0
-}
-
 // 挂到全局便于装机后人工复核（无副作用：仅赋值一个函数）
 declare const window: { __twMounts?: () => MountCounts } | undefined
 if (typeof window !== 'undefined') window.__twMounts = mountCounts

@@ -11,8 +11,6 @@
  */
 import type { LedgerEntry } from '../shared/model.ts'
 
-export type PasteDelimiter = '|' | '｜' | '\t' | ','
-
 export interface BulkRow {
   /** 行号（从 1 开始，报错时说"第 N 行"） */
   line: number

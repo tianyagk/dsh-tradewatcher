@@ -37,4 +37,3 @@ export const CHIPS_LINE_TOKENS = {
   grid: 'var(--tw-chips-grid)',
 } as const
 
-export type ChipsLineKind = 'avg' | 'resistance' | 'support'

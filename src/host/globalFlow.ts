@@ -224,11 +224,6 @@ async function cached<T>(key: string, ttlMs: number, loader: () => Promise<T>): 
   return (await started) as T
 }
 
-/** 上游是否在飞（自检/断言用） */
-export function flowInflightKeys(): string[] {
-  return [...flowInflight.keys()]
-}
-
 // ── 纯计算：规模 → 份额、动量、横截面排名、轮动、曲线 ─────────────────────────
 
 export interface FlowSeriesPoint {

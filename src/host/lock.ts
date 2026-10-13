@@ -148,11 +148,6 @@ const held = new Map<string, HeldLock>()
 const queues = new Map<string, Promise<void>>()
 let exitHookInstalled = false
 
-/** 本进程当前持有的锁文件路径（自检/诊断用） */
-export function heldLocks(): string[] {
-  return [...held.keys()]
-}
-
 function pidAlive(pid: number): boolean {
   if (!Number.isInteger(pid) || pid <= 0) return false
   try {
@@ -566,11 +561,3 @@ export function mergeByKey<T>(a: readonly T[], b: readonly T[], key: (item: T) =
   })
 }
 
-/** 同步清理（仅供退出钩子与测试使用）：删除给定路径的锁文件 */
-export function removeLockFileSync(lockPath: string): void {
-  try {
-    unlinkSync(lockPath)
-  } catch {
-    /* 不存在即目标达成 */
-  }
-}

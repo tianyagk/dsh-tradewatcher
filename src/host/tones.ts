@@ -107,8 +107,14 @@ export function zOf(x: number, sample: readonly number[]): number | null {
   return ms === null ? null : (x - ms.mean) / ms.sd
 }
 
-/**分位（0–100）：`当前值` 在样本里的秩百分位（小于它的比例） */
-export function percentileOf(sample: readonly number[], current: number): number | null {
+/**
+ * 分位（0–100）：`当前值` 在样本里的秩百分位 —— 口径是「**小于**它的比例」（并列不计入）。
+ *
+ * ⚠ 与 `breadth.ts` 的同名同签名 `percentileOf` **并列处理不同**：那边用 `<=`（"和今天一样也
+ * 算不比今天更极端"）。两处刻意**不合并**（各自口径都有断言锁定），故这里改名为
+ * `rankPctExclusive`，避免同名同签名却语义不同的陷阱（REVIEW-1 §3-⑦）。
+ */
+export function rankPctExclusive(sample: readonly number[], current: number): number | null {
   if (sample.length === 0) return null
   let below = 0
   for (const x of sample) if (x < current) below += 1
@@ -202,7 +208,7 @@ export function toneOfBars(
       continue
     }
     const cur = 0.6 * zr + 0.4 * zm
-    const pct = percentileOf(scores, cur)
+    const pct = rankPctExclusive(scores, cur)
     if (pct === null) {
       last = { ...EMPTY(n, '分档基准不足（0 个历史样本）', true), window: Math.min(w, n) }
       continue

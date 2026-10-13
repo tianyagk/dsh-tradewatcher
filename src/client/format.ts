@@ -26,8 +26,8 @@ export function pctArrow(n: number | null | undefined): string {
  *  arrow, color by the theme semantic tokens). */
 export function fmtPct(n: number | null | undefined): string {
   if (n === null || n === undefined || !Number.isFinite(n)) return '—'
-  const arrow = n === 0 ? '' : n > 0 ? '▲' : '▼'
-  return `${arrow}${Math.abs(n).toFixed(2)}%`
+  // 与 `pctArrow` 同源（同一套方向语义只许有一份实现）
+  return `${pctArrow(n)}${Math.abs(n).toFixed(2)}%`
 }
 
 /**

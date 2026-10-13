@@ -8,7 +8,7 @@
  *     绝不按 secid 前缀猜行业（那会把"看起来合理"的错数发给用户）；
  *  ③ 市场按 secid 前缀做确定性映射（交易所/品种边界清晰，不属于猜测）。
  */
-import { marketOf as sharedMarketOf, weightOf, type FqMode } from '../shared/model.ts'
+import { marketOf as sharedMarketOf, weightOf } from '../shared/model.ts'
 
 export interface CompositionInput {
   id: string
@@ -152,9 +152,3 @@ export function weightPctOf(mv: number | null, totalMv: number): number | null {
   return fraction === null ? null : fraction * 100
 }
 
-/**前复权口径提示（位置/组合里凡涉及"跨期比较"的地方都该带上） */
-export const FQ_NOTE: Record<FqMode, string> = {
-  0: '不复权',
-  1: '前复权',
-  2: '后复权',
-}

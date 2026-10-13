@@ -1244,14 +1244,12 @@ export interface DataProvenance {
    * 市场开闭市状态（P0-4）：解释"为什么数字不动"。
    * `open` 交易中；`closed` 休市中（含午休）；`unknown` 判断不了（无时刻/无交易日历）。
    */
-  marketState?: 'open' | 'closed' | 'unknown'
   /** 滞后自动告警（P1-9）：超阈值才有一行；不超时**没有这个字段**（不许恒输出） */
   lagAlert?: string
   /**
    * 降级时**现在显示的到底是什么**（P1-10）：如「行情源暂时不可用，当前显示 15:00 快照」。
    * 只有真降级（stale/兜底/本地快照）时才给。
    */
-  showing?: string
 }
 
 /**

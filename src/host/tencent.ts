@@ -1,4 +1,23 @@
 /**
+ * 腾讯行情备用源（东财限流/被封锁时的兜底；也是 K 线首选源）。
+ *
+ * 用途：东财行情主机（push2 系列与 push2his）对本机 IP 限流/封锁时，至少保住
+ * **量能、脉冲与价格**这三项可观测指标；「超大单净流入」只有东财提供，无替代，
+ * 因此备用源下该字段为 null，并在快照里标注数据来源，评分相应降级。
+ *
+ * 接口（免费、无需鉴权）：
+ *  - 批量快照：https://qt.gtimg.cn/q=sh510300,sz159915  （GBK 文本，按 ~ 分隔）
+ *  - 当日分钟：https://web.ifzq.gtimg.cn/appstock/app/minute/query?code=sh510300
+ *    （每行 `HHmm 价 累计量(手) 累计额(元)` —— 第 4 字段是**累计成交额**，
+ *      实测末行 1530 = 全天成交额，与批量快照的成交额一致）
+ *  - 日线（复权）：https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param=sh510300,day,,,N,qfq
+ *  - 板块排行：https://proxy.finance.qq.com/ifzqgtimg/appstock/app/mktHs/rank
+ *  - 搜索建议：https://smartbox.gtimg.cn/s3/
+ *
+ * ⚠ 国际指数没有腾讯兜底：新浪 `int_*` 因"陈旧快照 + 无时间戳"被整体停用（见 `sina.ts` 文件头）
+ * ⇒ 取不到时如实标"无兜底源"，不许拿旧值顶替。
+ *
+ * 所有请求都过 `breakerFetch.withHostBreaker`（按主机熔断记账）。
  */
 import { parseMarketStamp } from './time.ts'
 import { withHostBreaker } from './breakerFetch.ts'

@@ -1,6 +1,24 @@
-import { withHostBreaker } from './breakerFetch.ts'
 /**
+ * 新浪备用源：ETF 排行 / 批量行情 / 全球市场原语（东财不可用时的兜底与交叉校验）。
+ *
+ * 接口（均为 2026-10 本机实测形状，原始回包见 `docs/AUDIT-IMPL45.md` §2）：
+ *  - ETF 排行：`vip.stock.finance.sina.com.cn/quotes_service/api/json_v2.php/Market_Center.getHQNodeData`
+ *    （node=etf_hq_fund，沪深 ETF 全量；sort=amount 或 changepercent；**GBK** 编码的 JSON 数组）
+ *  - 批量行情：`hq.sinajs.cn/list=sh510300,sz159915`（**必须带 Referer**，否则被拒）
+ *  - 规模原语：`hq.sinajs.cn/list=gb_spy` 下标 12 =「总市值」（美元，与 price×股本 交叉校验一致）；
+ *    A 股规模走 ETF 节点的 `nmc`（万元）—— **不是 `mktcap`**
+ *  - 美股 ETF 日线：`stock.finance.sina.com.cn/usstock/api/jsonp_v2.php/.../US_MinKService.getDailyK?symbol=vgk`
+ *    （jsonp 形态、含全历史；腾讯 `usVGK` 实测只回 1 根 ⇒ 美股 ETF 日线只能走这条）
+ *  - 资金流：`MoneyFlow.ssl_qsfx_zjlrqs?daima=sh510300`（逐日 `netamount`，元）
+ *  - 汇率：`hq.sinajs.cn/list=fx_susdcny`（下标 8 = 最新，下标 3 = 昨收）
+ *
+ * ⚠ 新浪 `int_*`（国际指数）整族**停用**：实测是陈旧快照且无时间戳，无法判定新鲜度 ——
+ * 任何调用方都不许再拿它当国际指数来源（`tencent.ts`/`em.ts` 的相关注释指向这里）。
+ *
+ * 所有请求都过 `breakerFetch.withHostBreaker`（按主机熔断记账）。
  */
+
+import { withHostBreaker } from './breakerFetch.ts'
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
 
 export interface SinaEtfRow {

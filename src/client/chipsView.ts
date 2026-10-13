@@ -2,12 +2,6 @@
  * 筹码区块的**纯**视图逻辑（不 import react ⇒ 能在 node 里断言）。
  */
 import { dirClass } from './format.ts'
-export interface ChipsViewState {
-  data: unknown
-  error: string | null
-  loading: boolean
-}
-
 /**
  * 日期滑杆索引的边界收敛：0 / N−1 / 越界都收敛到 `[0, N−1]`；空序列 ⇒ −1（界面据此不渲染滑杆）。
  */

@@ -7,7 +7,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import type { DayBar } from '../shared/model.ts'
-import { TONE_LEVELS, momentumAt, percentileOf, returnAt, toneLevelOfPct, toneOfBars } from './tones.ts'
+import { TONE_LEVELS, momentumAt, rankPctExclusive, returnAt, toneLevelOfPct, toneOfBars } from './tones.ts'
 
 const bars = (closes: readonly number[]): DayBar[] =>
   closes.map((c, i) => ({
@@ -91,7 +91,7 @@ test('收益率类先取负：同一条上行收益率必须落在"冷"侧，价
   assert.equal((asYield.r30 ?? 0) < 0, true)
 })
 
-test('纯函数分层：returnAt / momentumAt / percentileOf 的边界', () => {
+test('纯函数分层：returnAt / momentumAt / rankPctExclusive 的边界', () => {
   const c = [100, 100, 100, 100, 100, 110]   // i=5: P/P_{i-5}-1 = 10%
   assert.equal(returnAt(c, 5, 5), 110 / 100 - 1)
   assert.equal(returnAt(c, 4, 5), null, '下标越界 ⇒ null（不拿 0 顶替）')
@@ -102,10 +102,10 @@ test('纯函数分层：returnAt / momentumAt / percentileOf 的边界', () => {
   const long = Array.from({ length: 31 }, (_, i) => 100 + i)
   const mom = momentumAt(long, 30)
   assert.ok(mom !== null && mom < 0, '匀速上行时"近 5 日"弱于"近 20 日" ⇒ 动量为负')
-  assert.equal(percentileOf([1, 2, 3, 4], 2.5), 50)
-  assert.equal(percentileOf([1, 2, 3, 4], 0), 0, '最小 ⇒ 分位 0（不是 null）')
-  assert.equal(percentileOf([1, 2, 3, 4], 9), 100)
-  assert.equal(percentileOf([], 1), null, '空样本 ⇒ null')
+  assert.equal(rankPctExclusive([1, 2, 3, 4], 2.5), 50)
+  assert.equal(rankPctExclusive([1, 2, 3, 4], 0), 0, '最小 ⇒ 分位 0（不是 null）')
+  assert.equal(rankPctExclusive([1, 2, 3, 4], 9), 100)
+  assert.equal(rankPctExclusive([], 1), null, '空样本 ⇒ null')
 })
 
 test('红线：无日线 / 空序列 ⇒ 无 badge（不是「适中」）', () => {

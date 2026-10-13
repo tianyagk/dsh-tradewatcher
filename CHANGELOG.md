@@ -11,6 +11,38 @@
 
 ---
 
+## v0.78.0 — 全仓审查第四批：冗余清理与文档更正（收尾）
+
+报告 `docs/FIX-4-REDUNDANCY-DOCS.md`。`npm run check` **563 / 563 × 2 时区** + selftest + build（73 项锁定片段全过）；`build.mjs` 与 `package.json` 零改动。
+
+### 文档更正
+
+- README「大盘云图」自绘整节（描述的是 **v0.62.0 已删除**的功能）→ 改为「只保留第三方站点」；删除 `:422` 的 `client/treemap.ts` 条目。
+- **六行 → 七行**：`README.md:344/:346` + `DESIGN-SUBPLUGINS.md:3/:56/:113/:162`（补 `tools`、`core + 6 = 7`、七条 Loader）。
+- **失效行号**：`cordis.patch.yml:38-56` → **`:53-75`**，6 处全改。
+- `CHANGELOG.md:191`（v0.71.0 的 C1 声明）**更正而非删除**：加「⚠ 更正（v0.78.0 文档批）」，说明原句与事实不符、本批补做，**历史条目不改写**。
+- 权威性收敛到 4 处（行清单=manifest、行归属=`ROW_ROUTES`、阈值=`rescue-thresholds`、历史=CHANGELOG），README 只留指针；报告 §8 列对照表。
+- 三条新约定写入 `docs/DECISIONS.md`：熔断出口 `withHostBreaker`（含「HTTP 非 2xx 也算失败」与低层 helper 豁免条件）、行归属按调用方推导、断言强度扫描（`assertStrength.test.ts`）。
+- 顺手：README 页签「五个→六个」、行情条「三行→四行」并补国债行、预设组统一含 `bond`、标定数字改 `1.19/1.57/1.92`。
+
+### 安全删除（删前逐个 `grep -c <name> build.mjs` = 0；删后 73 条锁定片段全过）
+
+- **9 个真死导出**（`PasteDelimiter` / `invalidateChips` / `ChipsViewState` / `resetMountCounts` / `ChipsLineKind` / `FQ_NOTE` / `flowInflightKeys` / `heldLocks` / `removeLockFileSync`，后者的"说谎注释"随之消失）+ `scripts/rescue-thresholds.json`。
+- `model.ts` 死字段 `marketState`/`showing` + `styles.ts` 4 条死 CSS（`.tw-chips-bars` 的说明搬到 `.tw-chips-plot`）。
+- **阈值先核实再改**：标定 `f1 = {1.19, 1.57, 1.92}`（pooled p75/p90/p95）是对的；面板那个 **`1.63` 是更早一次标定的 P90**，而它用于**极端档**（`LEVEL_COLOR[3]`）配色 ⇒ 改为 `RESCUE_F1_EXTREME = 1.92`，并新增 `src/client/rescuePanel.test.ts` 跨文件同步断言（不许回退 1.63）。
+
+### 谨慎处理
+
+- 9 簇重复逻辑：**只合并 2 簇**（删死表 `FQ_NOTE`；`fmtPct` 内联箭头改调 `pctArrow`）+ 1 处零行为改名（`tones.percentileOf` → `rankPctExclusive`，与 `breadth.ts` 同名不同义；测试数值未动）。
+- 空文件头：补回**被别处引用的 3 个**（`marketTime.ts`、`sina.ts`、`tencent.ts`），内容按 git 创建提交复原**并更新到当前事实**；摆正 `sina.ts` 的 import 顺序。
+- 过期注释逐条修正（`index.ts` 5 处失效行号改指函数/调用点、`DESIGN-CHIPS.md:52` 行号 `:123`→`:142`、`STE-REVIEW-UI.md` 抬头加「已执行完毕、勿逐条照做」）。
+
+### 未做（已记录）
+
+- 其余 6 簇重复（懒加载骨架 ×4、Tab 陷阱 ×2、北京时格式化 ×3、裸 `toLocaleTimeString` ×10、筹码线型类型、`fmtAmt`/`fmtBig`）—— 按「有风险的不动」；其中裸 `toLocaleTimeString` 改的是**显示行为**（非 UTC+8 浏览器会变）。
+- 其余 26 个空文件头（可复原，但需逐个核对是否仍成立；**空块是"丢过文档"的可见信号**，未删）。
+- `CHANGELOG` C2–C7；`DESIGN-DASHBOARD.md` 归 archive；`escapeUpper()` 冗余分支与 `'后复权'` 弱锁（都要动 `build.mjs`，本轮硬约束零改动）。
+
 ## v0.77.0 — 全仓审查第三批：高 4 + 中 5（熔断收口、锁重入、假断言、行归属…）
 
 报告 `docs/FIX-3-HIGHMED.md`。`npm run check` **562 / 562 × 2 时区** + selftest + build（73 项）；`build.mjs` 零改动。
@@ -305,7 +337,8 @@
 
 - 蛋糕工具的数据层与详情页数据（本批只有结构骨架，KPI/曲线/饼图/市场表全部「未取到」）。
 - 浏览器实机验证（需构建 + 重启 `dsh web`）。
-- 版本号 / README / `docs/DESIGN-SUBPLUGINS.md` §2.1 表格：本轮已在本次发布中一并更新。
+- 版本号 / `docs/DESIGN-SUBPLUGINS.md` §2.1 表格：本轮已在本次发布中一并更新。
+  - ⚠ **更正（v0.78.0 文档批）**：本条原写「README / DESIGN-SUBPLUGINS 已一并更新」，**与事实不符** —— 当时两份文档仍写「六行 / `cordis.patch.yml:38-56`」（第 7 行 `tools` 已入 manifest，文档未跟）。已在 v0.78.0 的文档批补做（行数与行号引用一次性改正）；本行按历史事实保留并标注更正，不再声称当时已更新。
 
 ## v0.70.0 — 移除自选页常驻提示块（降级事实移入悬停）+ 修一处时区缺陷
 

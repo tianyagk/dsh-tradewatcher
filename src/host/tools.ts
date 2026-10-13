@@ -495,7 +495,7 @@ export function makeAgentTools(
   defs.push({
     name: `${PREFIX}quotes`,
     description:
-      '批量实时行情（免费延迟源，经 tradewatcher 主机中继）。支持预设组：cn（A股六大指数）/ intl（国际指数）/ commodity（大宗商品）/ all；' +
+      '批量实时行情（免费延迟源，经 tradewatcher 主机中继）。支持预设组：cn（A股六大指数）/ intl（国际指数）/ commodity（大宗商品）/ bond（国债收益率）/ all；' +
       '或逗号分隔的任意东财代码（如 1.600519 贵州茅台、0.300750、116.00700 港股、1.510300 ETF、100.KOSPI200）。' +
       'Triggers: 查行情/股价/指数/期货/商品价格, 今天涨了多少, 自选行情, 报价.',
     parameters: {

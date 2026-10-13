@@ -1696,3 +1696,25 @@
 - `pending`：需要**能观测到后台任务在跑**（例如同步任务的队列状态）。当前没有这种可观测点 ⇒ 不许用"后台更新中"替一次普通的失败兜底（那正是评测报告里 Arkvolt 的反面教材）。
 
 启用时两种态都必须**同时**满足：① 有可判别的证据来源；② 有对应的界面/工具文案与断言。
+
+## 三条新约定（v0.78.0 记，来自 REVIEW-2 的第三批修复）
+
+**1. 上游请求必须走熔断出口。** 任何新增的主机请求（不论 JSON/text/GBK/二进制）都必须包在
+`src/host/breakerFetch.ts` 的 `withHostBreaker(host, run)` 里，或复用 `em.ts` 的 `fetchAny`/`fetchHostThroughBreaker`。
+理由：2026-10 的复核发现 14 处裸 `fetch` 既不 `allow()` 也不 `recordFailure()` —— 单台挂起时每次调用都付满超时
+（实测腾讯 K 线首选源挂起 ⇒ 每次 `/kline` 9 秒），而 `breakerSummary()` 的降级横幅看不见它们。
+两条细则：① **HTTP 非 2xx 也算失败**（`withHostBreaker` 内部已按响应状态记账 —— 调用方普遍把 `if (!res.ok) throw`
+写在包装之外，只看"没抛异常"会让 5xx 永远不进账）；② 低层 helper（`em.ts:fetchFromHost`）允许保持裸 fetch，
+但它的**所有调用方**必须已记账，并在注释里写明（`src/host/fix3Highmed.test.ts` 有全仓回归防线守着这两条）。
+
+**2. 行归属按"实际调用方"推导，不许写死映射表。** 判断某条路由/工具属于哪一行（core/calendar/…/tools）时，
+一律用 `src/rowOwnership.test.ts` 的 `deriveRouteOwners()`：从 `api.ts` 的函数→路由、客户端**调用点**（先剥注释）、
+本地 import 图反向可达性推出"消费行"，再与 `src/index.ts` 的 `ROW_ROUTES` 对齐（消费行必须**恰好**等于声明行）。
+理由：旧断言对比的是"硬编码的归属表"与"实现表的副本"，从不看谁在调用 —— 反向注入（往 core 外壳加一个 market
+路由的消费者）后 532 条断言依旧全绿，而真实后果是"关掉 market 行会让 core 打 404"。
+
+**3. 断言强度有全仓防线。** `src/assertStrength.test.ts` 扫描所有 `*.test.ts`，禁止三类"恒真/自比较"形状：
+① 断言实参里的 `|| true/1/'…'` 恒真兜底；② `assert.ok(true)` / `assert.equal(true,true)`；③ 自比较
+（`assert.equal(f(x), f(x))`，按顶层逗号切分实参、括号与引号感知）。判据文件自带**双向对照**用例（坏样本必中、
+好样本不误报）—— 判据本身也要能证明不是恒真。理由：复核在 3096 条断言里抓出 6 条恒真/自比较（`|| true` ×2、
+循环不变量 OR ×2、自比较 ×2），其中一条甚至掩盖了"面板读不出回包字段"的真实缺陷（INJ-4）。

@@ -20,6 +20,9 @@ import { fmtStamp } from './format.ts'
 import { isUsableBaseline } from './trendView.ts'
 import { shClockText, shDayText } from './marketTime.ts'
 
+/** 「同时点量能」的极端档阈值（= 标定 f1.extreme = P95 = 1.92x；见上方注释的同步断言） */
+const RESCUE_F1_EXTREME = 1.92
+
 const LEVEL_COLOR: Record<RescueLevel, string> = {
   0: 'var(--tw-fg-dim, #8b93a7)',
   1: '#5da5ff',
@@ -216,7 +219,10 @@ function EtfCard(props: { etf: RescueEtfView; redUp: boolean }): React.ReactElem
       React.createElement('span', { className: 'k' }, '量比'),
       React.createElement('span', { className: 'v' }, etf.volRatio === null ? '—' : etf.volRatio.toFixed(2)),
       React.createElement('span', { className: 'k' }, '同时点量能'),
-      React.createElement('span', { className: 'v', style: { color: (etf.timeAdjMult ?? 0) >= 1.63 ? LEVEL_COLOR[3] : undefined } }, fmtX(etf.timeAdjMult)),
+      // 「同时点量能」达到**极端档**时用极端档配色。阈值取标定值 f1.extreme（= P95 = 1.92x），
+      // 与 `src/host/rescue-thresholds.ts` 的 `RESCUE_CALIBRATION.f1` 同源；两处一致性由
+      // `src/client/rescuePanel.test.ts` 的同步断言守着（旧值 1.63 是更早一次标定的 P90，早已失效）。
+      React.createElement('span', { className: 'v', style: { color: (etf.timeAdjMult ?? 0) >= RESCUE_F1_EXTREME ? LEVEL_COLOR[3] : undefined } }, fmtX(etf.timeAdjMult)),
       React.createElement('span', { className: 'k' }, '超大单净额'),
       React.createElement('span', { className: 'v', style: { color: pctColor(etf.superNet, redUp) } }, fmtYi(etf.superNet)),
       React.createElement('span', { className: 'k' }, '占成交额'),

@@ -9,7 +9,7 @@
  *  ② 内核实例走**模块级单例**并按 `provide('tradewatcher.core')` 暴露 ⇒ **功能行不许自己 new DataStore()**；
  *  ③ 功能行只注册自己那一段路由/工具（行未激活 ⇒ 三者都不注册，路由天然 404）。
  *
- * 老 profile（无 `config.row`）⇒ row = **`all`（全量；不是 `core`）** ⇒ 与拆分前逐字一致（**全部**路由/工具都注册）；显式 `row: core` 才是"只要内核那一段" —— 缺省给 `core` 会把自选/持仓/大盘/日历的路由一起 404（v0.45.1 实测踩到）。口径见 `rowOf`（本文件 :104-111）。
+ * 老 profile（无 `config.row`）⇒ row = **`all`（全量；不是 `core`）** ⇒ 与拆分前逐字一致（**全部**路由/工具都注册）；显式 `row: core` 才是"只要内核那一段" —— 缺省给 `core` 会把自选/持仓/大盘/日历的路由一起 404（v0.45.1 实测踩到）。口径见本文件的 `rowOf`（**不再写死行号** —— 行号会漂）。
  */
 import { makeTradeRoutes } from './host/routes.ts'
 import { makeAgentTools, servicesOf } from './host/tools.ts'
@@ -32,7 +32,7 @@ export type RowId = 'core' | 'calendar' | 'watchlist' | 'portfolio' | 'market' |
 const ROW_ROUTES: Record<Exclude<RowId, 'core'>, readonly string[]> = {
   calendar: ['/tradewatcher/calendar'],
   // watchlist 行（P4 复核后的准确清单）：只有自选页用的 `/watch`（GET+POST 同路径）。
-  // ⚠ `/tradewatcher/trades` 移到 core：**详情抽屉**（core）在用它（QuoteDrawer.tsx:79）⇒ 跨行共享留 core；
+  // ⚠ `/tradewatcher/trades` 移到 core：**详情抽屉**（core）在用它（`QuoteDrawer.tsx` 的 `api.trades(secid)`）⇒ 跨行共享留 core；
   // ⚠ `/tradewatcher/ledger` 移到 portfolio 行：只有持仓页的流水弹窗用它。
   watchlist: ['/tradewatcher/watch', '/tradewatcher/industries', '/tradewatcher/anomaly'],
   // portfolio 行：持仓视图（GET+POST 同路径）+ 流水查询（持仓页的流水弹窗）
@@ -40,12 +40,12 @@ const ROW_ROUTES: Record<Exclude<RowId, 'core'>, readonly string[]> = {
   // market 行**独占**（P3 初判 + task-60 按实测调用方重定 + **v0.62.0 再定 board**，见 docs/DESIGN-SUBPLUGINS.md §2.1）：
   //   /tradewatcher/breadth     涨跌家数（只有大盘页用 —— 已 grep 查证）
   //   /tradewatcher/rescue      护盘信号（只有大盘页/护盘面板用）
-  //   /tradewatcher/board       板块行情（只有 MarketPage.tsx:84 用 —— 见下）
+  //   /tradewatcher/board       板块行情（只有 `MarketPage.tsx` 的 `api.board(...)` 用 —— 见下）
   // ⚠ 判据：**按实测调用方定归属；被 ≥2 个行消费 ⇒ core；单一消费方 ⇒ 该行**。据此调整了四条：
-  //   · /tradewatcher/board      **v0.62.0**：云图页的内建热力视图下线后，唯一调用方只剩 MarketPage.tsx:84
+  //   · /tradewatcher/board      **v0.62.0**：云图页的内建热力视图下线后，唯一调用方只剩 `MarketPage.tsx` 的 `api.board(...)`
   //                              ⇒ 由 core 改归 **market**（此前因"大盘行 + 云图行两行消费"留在 core）
-  //   · /tradewatcher/industries 只有 WatchlistPage.tsx:89 用 ⇒ 归 **watchlist**
-  //   · /tradewatcher/anomaly    调用链 alerts.ts:69 ← 只被 WatchlistPage 引用 ⇒ 归 **watchlist**
+  //   · /tradewatcher/industries 只有 `WatchlistPage.tsx` 的 `api.industries(...)` 用 ⇒ 归 **watchlist**
+  //   · /tradewatcher/anomaly    调用链 `alerts.ts` 的 `api.anomaly(...)` ← 只被 `WatchlistPage` 引用 ⇒ 归 **watchlist**
   //   · /tradewatcher/industry   （单 secid 行业查询）详情抽屉（core）在用 ⇒ 留 core
   market: ['/tradewatcher/breadth', '/tradewatcher/rescue', '/tradewatcher/board'],
   cloudmap: [],
