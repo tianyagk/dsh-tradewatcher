@@ -266,8 +266,9 @@ export function renderWiringProblems(src: string): string[] {
     ['CHART_TYPE.tileLabel', '磁贴标签小号'],
     ['CHART_TYPE.tileValue', '磁贴数值大号（20/700）'],
     ['CHART_TYPE.tileDelta', '磁贴右端「较上日 ±x」小号'],
-    ['PLOT.minHeight', '绘图区高度下限'],
-    ['PLOT.aspectRatio', '绘图区高度来源（随宽度自适应）'],
+    ['PLOT.heightCss', '绘图区有界高度（clamp 280–380）'],
+    ['PIE.sizeCss', '饼图有界直径（clamp 220–320）'],
+    ['CHART_SPLIT', '两列顺序契约（折线在左、饼在右）'],
     ['LEGEND_ROW', '图例居中'],
     ['LEGEND_DOT', '图例圆点'],
     ['RANGE_BOX', '范围控件凹陷容器'],
@@ -278,8 +279,19 @@ export function renderWiringProblems(src: string): string[] {
   }
   need((src.match(/className: 'tw-tool-card'/g) ?? []).length >= 4, '详情页卡片必须走 .tw-tool-card（细边框 + 大圆角 + 无重阴影）')
   // A 组：绘图区高度契约 + 真实像素画布 + reduced-motion 开关
-  need(/minHeight: PLOT\.minHeight/.test(src) && /aspectRatio: PLOT\.aspectRatio/.test(src), '绘图区必须同时给高度下限与高度来源（aspect-ratio）')
-  need(/plotHeightProblems\(boxStyle\)/.test(src), '绘图区必须自检高度契约（只写 flex 会塌成 1px）')
+  need(/height: PLOT\.heightCss/.test(src), '绘图区高度必须走 PLOT.heightCss（有界 clamp；不许由整卡 aspect-ratio 决定）')
+  need(/plotHeightProblems\(boxStyle\)/.test(src), '绘图区必须自检高度契约（写死 160px / 回到 16-7 都要能拦住）')
+  // ④ 两列：折线在左、饼在右；顺序来自 CHART_SPLIT；饼图尺寸走 PIE.sizeCss + pieProblems 自检
+  need(/\.\.\.CHART_SPLIT\.map\(\(slot\) =>\s*\n?\s*slot === 'plot'/.test(src), '两列必须按 CHART_SPLIT 渲染（折线在左、饼在右；顺序判据的唯一来源）')
+  need(/'data-role': 'tool-split-left'/.test(src) && /'data-role': 'tool-split-right'/.test(src), '两列必须有结构锚点（tool-split-left / tool-split-right）')
+  need(/width: PIE\.sizeCss, height: PIE\.sizeCss/.test(src) && /pieProblems\(box\)/.test(src), '饼图尺寸必须走 PIE.sizeCss（有界）并自检')
+  // 图例在饼**下方**：右列里"饼图组件调用"必须早于"饼图例容器"
+  // ⚠ 比的是**渲染点**（`React.createElement(pieChart`），不是 pieChart 函数体里的 svg 锚点
+  //   —— 函数定义在文件后面，直接比 svg 的源码位置会得出相反结论（实测踩到）。
+  need(/'data-role': 'tool-pie'/.test(src), '饼图 svg 必须带结构锚点 tool-pie')
+  const pieAt = src.indexOf('React.createElement(pieChart,')
+  const pieLegendAt = src.indexOf("'data-role': 'tool-pie-legend'")
+  need(pieAt >= 0 && pieLegendAt >= 0 && pieAt < pieLegendAt, `饼图图例必须在饼**下方**（渲染点 pie@${pieAt} 应早于 legend@${pieLegendAt}）`)
   need(/new ResizeObserver\(/.test(src) && /usePlotSize\(boxRef\)/.test(src), '绘图区必须按容器真实像素绘制（填满卡片、随容器自适应）')
   need(/'data-anim': props\.animOff \? 'off' : 'on'/.test(src) && /matchMedia\('\(prefers-reduced-motion: reduce\)'\)/.test(src), '动效必须有 reduced-motion 降级开关（matchMedia 驱动 data-anim）')
   // A 组：图例在**图表上方**（顺序断言：curveChart 里 legend 锚点必须早于 svg 绘制锚点）
@@ -386,8 +398,12 @@ test('② 详情页三段式 + 时间范围控件 + 功能区接线齐全；十�
     { name: '磁贴值不再用大号字（回到 12.5px）', mutate: (s) => s.replace("'data-role': 'tool-kpi-value', style: { ...CHART_TYPE.tileValue,", "'data-role': 'tool-kpi-value', style: { fontSize: 12.5,"), hit: /CHART_TYPE|磁贴/ },
     { name: '图例挪到画布之后（顺序颠倒）', mutate: (s) => s.replace('...CHART_STACK.map((slot) => (slot === \'legend\' ? legend : plotEl)),', 'plotEl,\n    legend,'), hit: /图例|CHART_STACK/ },
     { name: '图例不再居中（退回左对齐）', mutate: (s) => s.replace("{ 'data-role': 'tool-chart-legend', style: LEGEND_ROW }", "{ 'data-role': 'tool-chart-legend', style: { display: 'flex', gap: 10 } }"), hit: /LEGEND_ROW|图例/ },
-    { name: '绘图区写死 160px（用户点名的塌陷写法）', mutate: (s) => s.replace('minHeight: PLOT.minHeight', 'minHeight: 160'), hit: /高度|绘图区/ },
-    { name: '绘图区去掉高度来源（只剩 min-height，比例契约丢）', mutate: (s) => s.replace(', aspectRatio: PLOT.aspectRatio', ''), hit: /高度来源|绘图区/ },
+    { name: '绘图区写死 160px（用户点名的塌陷写法）', mutate: (s) => s.replace('height: PLOT.heightCss', "height: '160px'"), hit: /高度|绘图区/ },
+    { name: '绘图区回到整卡 aspect-ratio（上一版病根）', mutate: (s) => s.replace('height: PLOT.heightCss }', "aspectRatio: '16 / 7' }"), hit: /高度|绘图区/ },
+    { name: '两列顺序颠倒（饼在左、折线在右）', mutate: (s) => s.replace("slot === 'plot'", "slot === 'pie'"), hit: /两列|CHART_SPLIT|顺序/ },
+    { name: '两列改回单列（整块只剩折线图）', mutate: (s) => s.split('...CHART_SPLIT.map((slot) =>').join('...["plot"].map((slot) =>'), hit: /两列|CHART_SPLIT/ },
+    { name: '饼图尺寸改成 80px（参考版尺寸丢）', mutate: (s) => s.replace('width: PIE.sizeCss, height: PIE.sizeCss', "width: '80px', height: '80px'"), hit: /饼图|PIE\.sizeCss/ },
+    { name: '饼图图例删掉（看不出每块是谁）', mutate: (s) => s.replace("'data-role': 'tool-pie-legend'", "'data-role': 'tool-pie-legend-x'"), hit: /饼图图例|tool-pie-legend/ },
     { name: '绘图区不再按容器真实像素绘制（ResizeObserver 拿掉）', mutate: (s) => s.replace('const size = usePlotSize(boxRef)', 'const size = { w: 720, h: 180 }'), hit: /真实像素|绘图区/ },
     { name: '悬停提示框删掉（看不见逐序列的值）', mutate: (s) => s.replace("'data-role': 'tool-hover-tip'", "'data-role': 'tool-hover-tip-x'"), hit: /提示框|悬停/ },
     { name: '悬停十字线删掉', mutate: (s) => s.replace("'data-role': 'tool-crosshair'", "'data-role': 'tool-crosshair-x'"), hit: /十字线/ },

@@ -647,6 +647,13 @@ color-scheme:dark}
 }
 /* 页面开关（由 matchMedia 驱动）：与系统偏好等效，且**可断言** */
 .tw-tool-plot[data-anim=off] *,.tw-tool-range[data-anim=off]>button{animation:none!important;transition:none!important}
+/* 图表卡两列（用户第四批）：左 = 折线图，右 = 饼图 + 回放滑块。
+   窄屏（移动/窄面板）回落为**上下堆叠**：单列时右列自然落到折线图下方。 */
+.tw-tool-split{display:grid;grid-template-columns:minmax(0,1.9fr) minmax(220px,1fr);align-items:start}
+.tw-tool-pie-legend{display:flex;justify-content:center;flex-wrap:wrap;gap:6px 12px}
+@media (max-width:900px){
+  .tw-tool-split{grid-template-columns:minmax(0,1fr)}
+}
 @media (max-width:760px){
   .tw-tool-hero{flex-direction:column}
   .tw-tool-tiles{grid-template-columns:repeat(2,minmax(0,1fr))}

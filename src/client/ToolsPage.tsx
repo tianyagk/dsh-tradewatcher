@@ -35,12 +35,14 @@ import {
 import { CARD_PROPS, CARD_STYLE, CARD_TAG } from './toolCardView.ts'
 import {
   CARD_SURFACE,
+  CHART_SPLIT,
   CHART_TYPE,
   HERO_TYPE,
   LEGEND_DOT,
   LEGEND_ROW,
   CHART_STACK,
   MOTION_STYLE,
+  PIE,
   PLOT,
   RANGE_BOX,
   RANGE_OFF,
@@ -52,6 +54,7 @@ import {
   TOOL_SPACE,
   nearestIndex,
   pathStyle,
+  pieProblems,
   plotHeightProblems,
   plotX,
 } from './toolDetailTheme.ts'
@@ -95,7 +98,7 @@ function useReducedMotion(): boolean {
  * ——于是"高度下限"在**任何**情形下都成立（历史事故：只写 `flex:1` ⇒ 塌成 1px）。
  */
 function usePlotSize(ref: React.RefObject<HTMLElement | null>): { w: number; h: number } {
-  const [size, setSize] = React.useState<{ w: number; h: number }>({ w: PLOT.fallbackWidth, h: PLOT.minHeight })
+  const [size, setSize] = React.useState<{ w: number; h: number }>({ w: PLOT.fallbackWidth, h: PLOT.fallbackHeight })
   useEffect(() => {
     const el = ref.current
     if (el === null || typeof ResizeObserver === 'undefined') return
@@ -103,7 +106,7 @@ function usePlotSize(ref: React.RefObject<HTMLElement | null>): { w: number; h: 
       const box = entries[0]?.contentRect
       if (box === undefined) return
       const w = Math.max(240, Math.round(box.width))
-      const h = Math.max(PLOT.minHeight, Math.round(box.height))
+      const h = Math.max(PLOT.heightMin, Math.round(box.height))
       setSize((prev) => (prev.w === w && prev.h === h ? prev : { w, h }))
     })
     ro.observe(el)
@@ -114,6 +117,18 @@ function usePlotSize(ref: React.RefObject<HTMLElement | null>): { w: number; h: 
 
 /** 一次性告警标记：同一会话只提醒一次（不刷屏，也不影响渲染） */
 let plotContractWarned = false
+let pieContractWarned = false
+
+/** 饼图尺寸契约被破坏时的一次性告警（判据与强制点在 toolDetailTheme.pieProblems + 测试） */
+function warnPieContractOnce(problems: readonly string[]): void {
+  if (problems.length === 0 || pieContractWarned) return
+  pieContractWarned = true
+  try {
+    console.warn(`[dsh-tradewatcher] 饼图尺寸契约被破坏：${problems.join('；')}`)
+  } catch {
+    /* console 不可用 */
+  }
+}
 
 /** 绘图区高度契约被破坏时的一次性告警（判据与强制点在 toolDetailTheme.plotHeightProblems + 测试） */
 function warnPlotContractOnce(problems: readonly string[]): void {
@@ -403,7 +418,32 @@ function BackToCatalog(props: { onClick: () => void; label: string }): React.Rea
   )
 }
 
-/** 详情页：三段式（Hero → 摘要卡 → 图表卡）+ 饼图 / 市场表 / 附加块 / 边界声明 */
+/** 回放滑块（右列底部）：本地切换展示的那一天，不发请求；拖动时线条由 `pathStyle` 平滑跟随 */
+function replayEl(model: DetailModel, io: { step: number; maxStep: number; onStep: (n: number) => void }): React.ReactElement {
+  return React.createElement(
+    'div',
+    { 'data-role': 'tool-replay', style: { display: 'flex', flexDirection: 'column', gap: 4 } },
+    React.createElement(
+      'div',
+      { style: { display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' } },
+      React.createElement('span', { style: { fontSize: 12, color: 'var(--tw-muted)' } }, '回放'),
+      React.createElement('span', { style: { fontSize: 12, color: 'var(--tw-muted)' } }, `第 ${io.step + 1} / ${Math.max(1, io.maxStep + 1)} 个交易日`),
+      React.createElement('span', { style: { fontSize: 12.5, fontVariantNumeric: 'tabular-nums', marginLeft: 'auto' } }, (model.replay?.days[Math.min(io.step, (model.replay?.days.length ?? 1) - 1)] ?? '—')),
+    ),
+    React.createElement('input', {
+      type: 'range',
+      min: 0,
+      max: Math.max(0, io.maxStep),
+      step: 1,
+      value: Math.min(io.step, Math.max(0, io.maxStep)),
+      'aria-label': '回放最近三十个交易日',
+      onChange: (e: React.ChangeEvent<HTMLInputElement>) => io.onStep(Number(e.target.value)),
+      style: { width: '100%' },
+    }),
+  )
+}
+
+/** 详情页：三段式（Hero → 摘要卡 → 图表卡）+ 市场表 / 附加块 / 边界声明 */
 function detailView(
   model: DetailModel,
   backToCatalog: () => void,
@@ -478,62 +518,58 @@ function detailView(
           ),
         ),
       ),
-      // 回放滑块（本地切换：只换展示的那一天，不发请求）；线条平滑跟随见 curveChart 的 MOTION_STYLE
-      model.replay === null
-        ? null
-        : React.createElement(
-            'div',
-            { 'data-role': 'tool-replay', style: { display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' } },
-            React.createElement('span', { style: { fontSize: 12, color: 'var(--tw-muted)' } }, '回放'),
-            React.createElement('input', {
-              type: 'range',
-              min: 0,
-              max: Math.max(0, io.maxStep),
-              step: 1,
-              value: Math.min(io.step, Math.max(0, io.maxStep)),
-              'aria-label': '回放最近三十个交易日',
-              onChange: (e: React.ChangeEvent<HTMLInputElement>) => io.onStep(Number(e.target.value)),
-              style: { flex: 1, minWidth: 160, maxWidth: 320 },
-            }),
-            React.createElement('span', { style: { fontSize: 12, color: 'var(--tw-muted)' } }, `第 ${io.step + 1} / ${Math.max(1, io.maxStep + 1)} 个交易日`),
-            React.createElement('span', { style: { fontSize: 12.5, fontVariantNumeric: 'tabular-nums' } }, model.replay.days[Math.min(io.step, model.replay.days.length - 1)] ?? '—'),
-          ),
-      hasCurve
-        ? React.createElement(curveChart, { days: model.curve.days, series: model.curve.series, marks: model.curve.marks, animOff: io.animOff })
-        : React.createElement('div', { style: PLACEHOLDER_BOX }, model.curve.empty),
-    ),
-    React.createElement(
-      'div',
-      { className: 'tw-tool-card', style: CARD_SURFACE },
-      sectionHead(model.pie.title, model.pie.note),
-      hasPie
-        ? React.createElement(
-            'div',
-            { style: { display: 'flex', gap: 14, alignItems: 'center', flexWrap: 'wrap' } },
-            React.createElement(pieChart, { slices: model.pie.slices, center: model.pie.center }),
-            React.createElement(
-              'div',
-              { style: { display: 'flex', flexDirection: 'column', gap: 4, minWidth: 180 } },
-              model.pie.slices.map((slice) =>
-                React.createElement(
-                  'div',
-                  { key: slice.label, style: { display: 'flex', alignItems: 'center', gap: 6, fontSize: 11.5 } },
-                  React.createElement('span', { style: { width: 10, height: 10, borderRadius: 2, background: FLOW_SERIES_COLORS[(slice.index ?? 0) % FLOW_SERIES_COLORS.length] } }),
-                  React.createElement('span', null, slice.label),
-                  React.createElement('span', { className: 'tw-hint', style: { margin: 0 } }, slice.text),
-                ),
+      // ③ 两列（参考版口径）：左 = 折线图；右 = 饼图 + 回放滑块。窄屏由 `.tw-tool-split` 的媒体查询回落为上下堆叠。
+      //    顺序的唯一来源 = CHART_SPLIT（判据 toolDetailTheme.chartSplitProblems：折线在左、饼在右）
+      React.createElement(
+        'div',
+        { 'data-role': 'tool-split', className: 'tw-tool-split', style: { gap: TOOL_SPACE.cardHeadGap } },
+        ...CHART_SPLIT.map((slot) =>
+          slot === 'plot'
+            ? React.createElement(
+                'div',
+                { key: 'plot', 'data-role': 'tool-split-left', style: { display: 'flex', flexDirection: 'column', gap: 8, minWidth: 0 } },
+                hasCurve
+                  ? React.createElement(curveChart, { days: model.curve.days, series: model.curve.series, marks: model.curve.marks, animOff: io.animOff })
+                  : React.createElement('div', { style: PLACEHOLDER_BOX }, model.curve.empty),
+              )
+            : React.createElement(
+                'div',
+                { key: 'pie', 'data-role': 'tool-split-right', style: { display: 'flex', flexDirection: 'column', gap: 8, minWidth: 0, alignItems: 'stretch' } },
+                sectionHead(model.pie.title, model.pie.note),
+                hasPie
+                  ? React.createElement(
+                      'div',
+                      { style: { display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4 } },
+                      React.createElement(pieChart, { slices: model.pie.slices, center: model.pie.center }),
+                      // 图例在饼**下方**、居中；色标与折线图同一套（FLOW_SERIES_COLORS + LEGEND_DOT）
+                      React.createElement(
+                        'div',
+                        { 'data-role': 'tool-pie-legend', className: 'tw-tool-pie-legend' },
+                        model.pie.slices.map((slice) =>
+                          React.createElement(
+                            'span',
+                            { key: slice.label, style: { display: 'inline-flex', alignItems: 'center', gap: 5, ...CHART_TYPE.legend } },
+                            React.createElement('span', { style: { ...LEGEND_DOT, width: 7, height: 7, background: FLOW_SERIES_COLORS[(slice.index ?? 0) % FLOW_SERIES_COLORS.length] } }),
+                            slice.label,
+                            React.createElement('span', { style: { color: 'var(--tw-muted)', fontVariantNumeric: 'tabular-nums' } }, slice.text),
+                          ),
+                        ),
+                      ),
+                    )
+                  : React.createElement('div', { style: PLACEHOLDER_BOX }, model.pie.empty),
+                model.pie.slices.length === 0 || model.pie.slices.length === model.market.rows.length
+                  ? null
+                  : React.createElement(
+                      'div',
+                      // ⚠ A 档事实（缺数据的出口）：**不用 `tw-hint`**（紧凑/隐身档会隐藏）⇒ 内联样式常驻可见
+                      { 'data-role': 'tool-pie-missing', style: { margin: 0, fontSize: 11.5, lineHeight: 1.55, color: 'var(--tw-muted)' } },
+                      `${NOT_FETCHED} 的市场未进饼图（原因见下表逐行说明）`,
+                    ),
+                // 回放滑块（本地切换：只换展示的那一天，不发请求）；线条平滑跟随见 curveChart 的 MOTION_STYLE
+                model.replay === null ? null : replayEl(model, io),
               ),
-            ),
-          )
-        : React.createElement('div', { style: PLACEHOLDER_BOX }, model.pie.empty),
-      model.pie.slices.length === 0 || model.pie.slices.length === model.market.rows.length
-        ? null
-        : React.createElement(
-            'div',
-            // ⚠ A 档事实（缺数据的出口）：**不用 `tw-hint`**（紧凑/隐身档会隐藏）⇒ 内联样式常驻可见
-            { 'data-role': 'tool-pie-missing', style: { margin: '8px 0 0', fontSize: 11.5, lineHeight: 1.55, color: 'var(--tw-muted)' } },
-            `${NOT_FETCHED} 的市场未进饼图（原因见下表逐行说明）`,
-          ),
+        ),
+      ),
     ),
     React.createElement(
       'div',
@@ -656,7 +692,7 @@ function sectionHead(title: string, note: string): React.ReactElement {
 /**
  * 份额曲线（页面内联 SVG）。
  *
- * A 组（填满卡片）：绘图区高度 = `PLOT.minHeight`（下限 420px）+ `PLOT.aspectRatio`（随卡片宽度自适应），
+ * A 组（**有界高度**）：绘图区高度 = `PLOT.heightCss`（`clamp(280px, 26vh, 380px)`：既有下限、又有上限），
  *   并用 ResizeObserver 量到的**真实像素**当 viewBox ⇒ 线宽/圆点/文字都不缩放、SVG 100% 填满容器，
  *   **图例紧贴在画布上方**（不再有"图与图例之间的大片空白"）。
  * B 组（动效，全部 CSS/SVG，无依赖）：
@@ -673,8 +709,11 @@ function curveChart(props: { days: string[]; series: Array<{ name: string; point
   const [hover, setHover] = useState<number | null>(null)
   const W = size.w
   const H = size.h
-  /** 绘图区高度契约（判据在 toolDetailTheme.plotHeightProblems；测试会断言它非空 ⇒ 不许塌陷） */
-  const boxStyle: React.CSSProperties = { position: 'relative', width: '100%', minHeight: PLOT.minHeight, aspectRatio: PLOT.aspectRatio }
+  /**
+   * 绘图区尺寸契约：宽度 100%（由两列布局决定），高度 = `PLOT.heightCss`（有界 clamp）。
+   * ⚠ 高度**不再**由 `aspect-ratio` 承担 —— 整卡宽度会把它算成几百像素高（上一版的病根）。
+   */
+  const boxStyle: React.CSSProperties = { position: 'relative', width: '100%', height: PLOT.heightCss }
   // 自检：高度契约缺一不可（min-height + 高度来源）。
   // ⚠ 这里**只告警、不抛错**：判据的强制点在测试（注入必败），展示层配置写坏不该把整块面板打崩。
   warnPlotContractOnce(plotHeightProblems(boxStyle))
@@ -870,10 +909,18 @@ function curveChart(props: { days: string[]; series: Array<{ name: string; point
   )
 }
 
-/** 静态饼图（无动画、无自动播放）：缺份额的市场不进饼图，说明由模型给出 */
+/**
+ * 静态饼图（无动画、无自动播放；缺份额的市场不进饼图，说明由模型给出）。
+ *
+ * 尺寸（用户第四批）：直径 `clamp(220px, 22vh, 320px)`、**居中**；饼在 100×100 的 viewBox 里作画
+ * （半径 = `PIE.radiusRatio × 100`）⇒ 画面直径 = 尺寸契约 × 2 × radiusRatio，落在 [202, 294]。
+ * 不随整列宽度拉伸（判据 `pieProblems` 拒 `width: 100%`）。
+ */
 function pieChart(props: { slices: Array<{ label: string; text: string; value: number | null; index?: number }>; center: string | null }): React.ReactElement {
-  const SIZE = 168
-  const R = 78
+  const box = { width: PIE.sizeCss, height: PIE.sizeCss }
+  warnPieContractOnce(pieProblems(box))
+  const SIZE = 100
+  const R = PIE.radiusRatio * SIZE
   const CX = SIZE / 2
   const CY = SIZE / 2
   const total = props.slices.reduce((s, x) => s + (x.value ?? 0), 0)
@@ -897,16 +944,22 @@ function pieChart(props: { slices: Array<{ label: string; text: string; value: n
         d: `M ${CX} ${CY} L ${x1.toFixed(2)} ${y1.toFixed(2)} A ${R} ${R} 0 ${large} 1 ${x2.toFixed(2)} ${y2.toFixed(2)} Z`,
         fill: FLOW_SERIES_COLORS[(slice.index ?? i) % FLOW_SERIES_COLORS.length],
         stroke: 'var(--tw-card)',
-        strokeWidth: 1,
+        strokeWidth: 0.6,
       }),
     )
   })
   return React.createElement(
     'svg',
-    { viewBox: `0 0 ${SIZE} ${SIZE}`, width: SIZE, height: SIZE, role: 'img', 'aria-label': `份额饼图${props.center === null ? '' : `（${props.center}）`}` },
+    {
+      'data-role': 'tool-pie',
+      viewBox: `0 0 ${SIZE} ${SIZE}`,
+      style: { ...box, display: 'block', margin: '0 auto' },
+      role: 'img',
+      'aria-label': `份额饼图${props.center === null ? '' : `（${props.center}）`}`,
+    },
     arcs,
     // 中心留白（放选中的那一天；饼图本身是静态的，不做动画/自动播放）
-    React.createElement('circle', { cx: CX, cy: CY, r: 30, fill: 'var(--tw-card)' }),
-    React.createElement('text', { x: CX, y: CY + 3, fontSize: 10.5, fill: 'var(--tw-muted)', textAnchor: 'middle' }, props.center ?? ''),
+    React.createElement('circle', { cx: CX, cy: CY, r: R * 0.42, fill: 'var(--tw-card)' }),
+    React.createElement('text', { x: CX, y: CY + 2.4, fontSize: 6.5, fill: 'var(--tw-muted)', textAnchor: 'middle' }, props.center ?? ''),
   )
 }

@@ -139,23 +139,48 @@ export const RANGE_OFF: CSSProperties = { background: 'transparent', border: '1p
 /* ────────────────────────────── 4. 绘图区令牌 ────────────────────────────── */
 
 /**
- * 绘图区（用户 A 组要求：绘图区必须**填满卡片**、有高度下限、消除空白带）。
+ * 绘图区（**有界高度**：`clamp(280px, 26vh, 380px)`）。
  *
- * 历史事故的教训（`.tw-chips-plot` 只写 `flex:1` ⇒ 塌成 1px）：**光有 flex 没有高度契约会塌**。
- * 因此这里同时给出 ① 下限 `minHeight` ② 高度来源（`aspectRatio`，随卡片宽度自适应）。
+ * 演进（两次教训都写在这里，免得第三个人再踩）：
+ *  ① `.tw-chips-plot` 只写 `flex:1` ⇒ 塌成 1px ⇒ 必须有**高度下限**；
+ *  ② 上一版用 `aspect-ratio: 16 / 7` ⇒ 在整卡宽度（约 2000px）下算出约 875px 高 ⇒ **图过高、把饼图挤到下方**
+ *     ⇒ **高度不许再由卡片宽度单独决定**，必须有上下界。
+ * ⇒ 现在：`clamp()` 同时给出下限与上限（用户口径 [280, 420]，取 280 / 380），
+ *    两列布局的左列宽度只影响**画布宽度**（ResizeObserver 量真实像素），不再影响高度。
  */
 export const PLOT = {
-  /** 高度下限（px）—— 参考版目视 480–620，取 420 作为"明显比现在高"的硬下限 */
-  minHeight: 420,
-  /** 测量失败/未挂载时的回退宽高（保证首帧就有合理画布，不塌成 0） */
+  /** 高度契约（CSS）：下限 280、上限 380（都落在用户给的 [280,420] 内） */
+  heightCss: 'clamp(280px, 26vh, 380px)',
+  /** 判定用的上下界（与 heightCss 必须一致，`plotHeightProblems` 会核对） */
+  heightMin: 280,
+  heightMax: 380,
+  /** 测量失败/未挂载时的回退画布（保证首帧就有合理画布，不塌成 0） */
   fallbackWidth: 960,
-  /** 宽高比契约（高度随宽度自适应） */
-  aspectRatio: '16 / 7',
+  fallbackHeight: 320,
   /** 内边距（px）：右侧留给纵轴刻度 */
   pad: { left: 12, right: 58, top: 16, bottom: 26 },
   /** 悬停取点带宽（px）：命中该列即选中该点 */
   hoverBand: 20,
 } as const
+
+/** 解析 `clamp(min, …, max)` / `Npx` / `N` 得到 [下限, 上限]（纯函数，判据与断言共用） */
+export function heightBoundsOf(value: unknown): { lo: number; hi: number } | null {
+  if (typeof value === 'number' && Number.isFinite(value)) return { lo: value, hi: value }
+  if (typeof value !== 'string') return null
+  const text = value.trim()
+  const clamp = /^clamp\(\s*([\d.]+)px\s*,[^,]+,\s*([\d.]+)px\s*\)$/.exec(text)
+  if (clamp !== null) {
+    const lo = Number.parseFloat(clamp[1])
+    const hi = Number.parseFloat(clamp[2])
+    return Number.isFinite(lo) && Number.isFinite(hi) ? { lo, hi } : null
+  }
+  const px = /^([\d.]+)px$/.exec(text)
+  if (px !== null) {
+    const v = Number.parseFloat(px[1])
+    return Number.isFinite(v) ? { lo: v, hi: v } : null
+  }
+  return null
+}
 
 /**
  * 绘图区横坐标（纯函数）：第 i 个点在这块画布上的 x（像素）。
@@ -184,15 +209,83 @@ export function nearestIndex(px: number, count: number, w: number): number | nul
   return Math.min(count - 1, Math.max(0, Math.round(t * (count - 1))))
 }
 
-/** 绘图区高度判据（唯一实现）：必须有下限 + 必须有高度来源；只写 flex 不算 */
-export function plotHeightProblems(box: { minHeight?: unknown; aspectRatio?: unknown; height?: unknown; flex?: unknown }): string[] {
+/**
+ * 绘图区高度判据（唯一实现）：**高度必须是有界的**，且落在用户口径 [280, 420] 内。
+ *
+ * 三种必须被拒的形态（各自都是踩过的坑）：
+ *   · 只写 `flex: 1`（历史事故 `.tw-chips-plot` ⇒ 塌成 1px）；
+ *   · 只用 `aspect-ratio`（上一版：整卡 2000px 宽 ⇒ 约 875px 高，图过高、饼图被挤下去）；
+ *   · 写死一个越界的 px（如 160px 太小、600px 太高）。
+ */
+export function plotHeightProblems(box: { height?: unknown; minHeight?: unknown; maxHeight?: unknown; aspectRatio?: unknown; flex?: unknown }): string[] {
   const bad: string[] = []
-  const min = num(box.minHeight)
-  if (min === null || min < 420) bad.push(`绘图区必须有高度下限（min-height ≥ 420px；实得 ${JSON.stringify(box.minHeight)}）`)
-  const hasAspect = typeof box.aspectRatio === 'string' && box.aspectRatio.trim() !== ''
   const hasHeight = box.height !== undefined && box.height !== null && box.height !== 'auto' && box.height !== 0
-  if (!hasAspect && !hasHeight) bad.push('绘图区必须给出高度来源（aspect-ratio 或 height）—— 只写 flex:1 会塌成 1px（历史事故 .tw-chips-plot）')
-  if (box.flex !== undefined && !hasAspect && !hasHeight) bad.push('只写 flex 不足以撑起绘图区（必须有 min-height + 高度来源）')
+  const hasAspect = typeof box.aspectRatio === 'string' && box.aspectRatio.trim() !== ''
+  if (!hasHeight) {
+    if (hasAspect) bad.push('绘图区高度不许由 aspect-ratio 单独决定（整卡宽度会把它算得过高：上一版 16/7 在 2000px 宽下约 875px）')
+    else bad.push('绘图区必须有高度契约（height: clamp(...)）—— 只写 flex:1 会塌成 1px（历史事故 .tw-chips-plot）')
+  }
+  const bounds = hasHeight ? heightBoundsOf(box.height) : null
+  if (hasHeight && bounds === null) bad.push(`绘图区高度契约无法解析（只认 clamp(min,…,max) 或 Npx；实得 ${JSON.stringify(box.height)}）`)
+  if (bounds !== null) {
+    if (bounds.lo < 280) bad.push(`绘图区高度下限必须 ≥ 280px（实得 ${bounds.lo}）`)
+    if (bounds.hi > 420) bad.push(`绘图区高度上限必须 ≤ 420px（实得 ${bounds.hi}）`)
+    if (bounds.lo > bounds.hi) bad.push(`绘图区高度上下界颠倒（实得 ${JSON.stringify(bounds)}）`)
+  }
+  // 与 PLOT.heightCss 自洽（防止有人只改常量里的注释/数字之一）
+  if (hasHeight && box.height === PLOT.heightCss) {
+    if (PLOT.heightMin < 280 || PLOT.heightMax > 420 || PLOT.heightMin > PLOT.heightMax) {
+      bad.push(`PLOT.heightMin/heightMax 越界（实得 ${PLOT.heightMin}/${PLOT.heightMax}，口径 [280,420]）`)
+    }
+  }
+  return bad
+}
+
+/* ────────────────────────────── 4b. 两列布局与饼图令牌（用户第四批：尺寸对齐） ────────────────────────────── */
+
+/**
+ * 图表卡内的**两列**：左 = 折线图，右 = 饼图 + 回放滑块（参考版口径）。
+ * 与 `CHART_STACK` 同理：顺序即渲染顺序，做成常量后断言直接比数组。
+ */
+export const CHART_SPLIT = ['plot', 'pie'] as const
+
+/** 两列顺序判据（唯一实现）：折线在左、饼图在右 */
+export function chartSplitProblems(split: readonly string[]): string[] {
+  const bad: string[] = []
+  const plot = split.indexOf('plot')
+  const pie = split.indexOf('pie')
+  if (plot < 0 || pie < 0) bad.push(`图表卡必须同时渲染折线图与饼图两列（实得 ${JSON.stringify(split)}）`)
+  else if (plot > pie) bad.push(`折线图必须在左、饼图在右（实得 ${JSON.stringify(split)}）`)
+  return bad
+}
+
+/**
+ * 饼图（右列）：直径 `clamp(220px, 22vh, 320px)`、居中；图例在饼**下方**（色标与折线图一致）。
+ *
+ * `radiusRatio` 是饼在 100×100 viewBox 里的半径比例 ⇒ **画面直径 = 尺寸契约 × 2 × radiusRatio**，
+ * 因此"实际画出来的饼"也在 [202, 294] 内（参考版的 260–300 量级）。
+ */
+export const PIE = {
+  sizeCss: 'clamp(220px, 22vh, 320px)',
+  sizeMin: 220,
+  sizeMax: 320,
+  radiusRatio: 0.46,
+  fallbackSize: 260,
+} as const
+
+/** 饼图尺寸判据（唯一实现）：直径在 [220, 320]，不许撑满整列、不许无界 */
+export function pieProblems(style: { width?: unknown; height?: unknown }): string[] {
+  const bad: string[] = []
+  const bounds = heightBoundsOf(style.width)
+  if (bounds === null) bad.push(`饼图尺寸必须是有界契约（clamp(min,…,max) 或 Npx；实得 ${JSON.stringify(style.width)}）`)
+  else {
+    if (bounds.lo < 220) bad.push(`饼图直径下限必须 ≥ 220px（实得 ${bounds.lo}）`)
+    if (bounds.hi > 320) bad.push(`饼图直径上限必须 ≤ 320px（实得 ${bounds.hi}）`)
+    const drawn = { lo: bounds.lo * 2 * PIE.radiusRatio, hi: bounds.hi * 2 * PIE.radiusRatio }
+    if (drawn.lo < 200 || drawn.hi > 320) bad.push(`实际画面直径（尺寸 × 2 × radiusRatio）必须落在 [200,320]（实得 ${drawn.lo.toFixed(1)}–${drawn.hi.toFixed(1)}）`)
+  }
+  if (style.height !== style.width) bad.push(`饼图必须是正方形（宽高同一条契约；实得 ${JSON.stringify([style.width, style.height])}）`)
+  if (PIE.sizeMin < 220 || PIE.sizeMax > 320) bad.push(`PIE.sizeMin/sizeMax 越界（实得 ${PIE.sizeMin}/${PIE.sizeMax}）`)
   return bad
 }
 
