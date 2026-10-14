@@ -21,6 +21,8 @@ export interface ToolSectionSpec {
   key: ToolSectionKey
   /** 区块标题 */
   title: string
+  /** **可见副标题**（用户口径：段标题下面那一句导航说明）；与 `note` 不同，它默认可见 */
+  subtitle?: string
   /**
    * 标题右侧的口径/来源说明。**可省略** ⇒ 取 `PENDING_WHY`（"数据源下一批接入"）。
    * 省略是刻意的：工具文件不该为了写占位原因而回引注册表（那会形成运行时循环 import）。
@@ -53,6 +55,11 @@ export interface ToolEntry {
   ranges?: { options: readonly number[]; initial: number }
   /** 详情页各区（顺序即渲染顺序） */
   sections: readonly ToolSectionSpec[]
+  /**
+   * 「当前偏好怎么判断」那一段散文的句子（用户口径：方法归方法、边界归边界）。
+   * 与 `boundary` 的分工只是**叙事位置**不同，事实一条都不许少（测试会核对并集）。
+   */
+  method?: readonly string[]
   /** 边界声明（详情页最后一区的正文，逐条）。**不许含阿拉伯数字**（红线：无数据时整份模型零数字） */
   boundary: readonly string[]
   /**
@@ -90,6 +97,30 @@ export interface ToolKpiDatum {
   swatch?: number | null
 }
 
+/**
+ * 市场横条行（用户口径：五个市场各一条横条，而不是八列表格）。
+ *
+ * **诚实信息不许丢**：原来表格里的规模 / 偏好分 / 动量 / 横截面排名全部进 `detail`
+ * （悬停 + 行内小字都能读到）；缺数据的行仍有 `note`（`未取到` + 原因）。
+ */
+export interface ToolBarRow {
+  name: string
+  /** 当前相对份额的显示文本（缺 ⇒ `未取到`） */
+  shareText: string
+  /** 份额（百分点 0–100）：条长按它画；null ⇒ 不画条（缺数据） */
+  sharePct: number | null
+  /** 是否「当前最多」（该日份额榜首） */
+  top: boolean
+  /** 条右侧的「近5日」说明（升/降温 × 个百分点；判不了就如实说） */
+  deltaText: string
+  /** 上面那句的语义（页面据此配色；`unknown` ⇒ 中性色） */
+  deltaKind: 'warm' | 'cool' | 'flat' | 'unknown'
+  /** 悬停/行内小字：规模 ｜ 偏好分 ｜ 动量 ｜ 横截面排名（回放日写「不适用（回放日）」） */
+  detail: string
+  /** 该行缺什么 + 原因（null = 全齐） */
+  note: string | null
+}
+
 /** 曲线的一条序列（**数值是真的**；缺的点用 null，画断，不连成假线） */
 export interface ToolCurveSeries {
   name: string
@@ -120,15 +151,22 @@ export interface ToolData {
   summary?: Array<{ key: string; label: string; value: string; note: string | null }>
   /** 整份数据缺失时的原因（分区里单点缺失各自写在 notes/missing 里） */
   why?: string | null
+  /** 方法段的可覆写句子（缺省 = 工具文件里的 `method`；例如"这一屏用的是快照"） */
+  method?: readonly string[]
   /** 各区可覆写的口径行（缺省 = 结构声明里的文案） */
   notes?: Partial<Record<ToolSectionKey, string>>
   /** KPI：按**格子标签**取值（标签是工具文件的契约；取不到就显示未取到 + 原因） */
   kpi?: Record<string, ToolKpiDatum>
   curve?: { days: string[]; series: ToolCurveSeries[]; marks?: Array<{ index: number; label: string }> }
   pie?: { slices: ToolPieSlice[]; center?: string | null; note?: string | null }
-  market?: { rows: string[][]; rowNotes?: Array<string | null>; footnotes?: string[] }
+  market?: { rows: string[][]; rowNotes?: Array<string | null>; footnotes?: string[]; bars?: ToolBarRow[] }
   /** 附加块（例如"单列、不参与份额计算"的 A股净流入） */
   extras?: Array<{ title: string; text: string }>
+  /**
+   * 段末**一行结论**（用户口径：`→ 近5日资金偏好显示：…`）。
+   * 与 KPI 磁贴里的简短版并存：磁贴给读数，这一行给结论。
+   */
+  conclusion?: string | null
   /** 回放（最近 N 个交易日的本地回放） */
   replay?: { days: string[]; selected: number; note: string }
   /** 来自数据源的附加边界声明（可能含数字口径） */
@@ -141,7 +179,9 @@ export interface ToolData {
  * 这里**原样再导出**，调用方与断言仍然只从 `toolRegistry` 拿。
  */
 export {
+  BOUNDARY_TITLE,
   DETAIL_BACK_ACTION,
+  METHOD_TITLE,
   NO_DATA_WHY,
   NO_MATCH,
   NOT_FETCHED,
@@ -150,6 +190,7 @@ export {
 } from './toolText.ts'
 import {
   DETAIL_BACK_ACTION,
+  METHOD_TITLE,
   NO_DATA_WHY,
   NO_MATCH,
   NOT_FETCHED,
@@ -240,8 +281,12 @@ export interface DetailModel {
   kpi: { title: string; note: string; cells: Array<{ label: string; text: string; value: number | null; delta: string | null; swatch: number | null }> }
   curve: { title: string; note: string; days: string[]; series: ToolCurveSeries[]; marks: Array<{ index: number; label: string }>; empty: string }
   pie: { title: string; note: string; slices: ToolPieSlice[]; center: string | null; empty: string }
-  market: { title: string; note: string; columns: string[]; rows: string[][]; rowNotes: Array<string | null>; footnotes: string[]; empty: string }
+  market: { title: string; subtitle: string | null; note: string; columns: string[]; rows: string[][]; rowNotes: Array<string | null>; footnotes: string[]; empty: string; bars: ToolBarRow[] }
   boundary: { title: string; note: string; lines: string[] }
+  /** 「当前偏好怎么判断」那一段（标题 + 句子） */
+  method: { title: string; lines: string[] }
+  /** 段末一行结论（`→ 近5日资金偏好显示：…`）；判不了时也如实给一句 */
+  conclusion: string | null
   extras: Array<{ title: string; text: string }>
   replay: { days: string[]; selected: number; note: string } | null
 }
@@ -266,12 +311,16 @@ function noteOf(spec: ToolSectionSpec, data: ToolData | null, key: ToolSectionKe
  * 详情页模型。`data` 省略 ⇒ 保持"结构骨架 + 未取到占位"（本批之前的行为，红线断言照旧）。
  */
 export function detailModel(entry: ToolEntry, data: ToolData | null = null): DetailModel {
+  // 兜底标题（工具文件漏写 `title` 时用）：**必须是用户可读文案**。
+  // ⚠ 曾经这里放的是内部区名（`KPI 行`/`曲线区`/`饼图区`/`市场表`/`边界声明`）——
+  //   蛋糕工具自己给了新标题 ⇒ 今天不显示，但任何工具只要漏写 `title` 就会把内部名端给用户。
+  //   断言：这五个兜底标题里不许出现内部区名（见 toolRegistry.test.ts「兜底标题」）。
   const sec = (key: ToolSectionKey, title: string): ToolSectionSpec => sectionOf(entry, key) ?? { key, title, note: PENDING_WHY }
-  const kpi = sec('kpi', 'KPI 行')
-  const curve = sec('curve', '曲线区')
-  const pie = sec('pie', '饼图区')
-  const market = sec('market', '市场表')
-  const boundary = sec('boundary', '边界声明')
+  const kpi = sec('kpi', '关键指标')
+  const curve = sec('curve', '份额曲线')
+  const pie = sec('pie', '最近三十个交易日')
+  const market = sec('market', '市场构成')
+  const boundary = sec('boundary', '数据边界')
   // "没有数据"的原因分三种（不许含糊）：工具无数据源 / 这一屏没取到 / 这一区没有
   const fallback = data === null ? (entry.load === undefined ? PENDING_WHY : NO_DATA_WHY) : SECTION_EMPTY_WHY
   const why = data === null ? fallback : (data.why ?? fallback)
@@ -318,8 +367,16 @@ export function detailModel(entry: ToolEntry, data: ToolData | null = null): Det
       center: data?.pie?.center ?? null,
       empty: data?.pie?.note ?? emptyOf(),
     },
+    method: {
+      title: METHOD_TITLE,
+      // 数据侧可以覆写（例如"这一屏用的是快照"），缺省用工具文件里的方法段
+      lines: [...(data?.method ?? entry.method ?? [])],
+    },
+    conclusion: data?.conclusion ?? null,
     market: {
       title: market.title,
+      subtitle: market.subtitle ?? null,
+      bars: data?.market?.bars ?? [],
       note: noteOf(market, data, 'market', fallback),
       columns: [...(market.columns ?? [])],
       rows: data?.market?.rows ?? [],

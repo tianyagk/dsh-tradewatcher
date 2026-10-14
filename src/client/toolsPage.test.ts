@@ -242,10 +242,53 @@ export function renderWiringProblems(src: string): string[] {
   need(/'data-role': 'tool-range-option'/.test(src) && /io\.onRange\(n\)/.test(src), '范围档位必须可点（onRange 改本地状态）')
   need(/model\.ranges\.selected === n/.test(src), '当前档必须有选中态')
   // 详情页其余五个功能区
-  for (const field of ['model.curve.empty', 'model.pie.empty', 'model.market.columns.map(', 'model.boundary.lines.map(']) {
+  for (const field of ['model.curve.empty', 'model.pie.empty', 'model.market.columns.map(', 'model.boundary.lines']) {
     need(src.includes(field), `详情页功能区未渲染：${field}`)
   }
   need(/model\.market\.columns\.length/.test(src), '市场表空态必须跨全部列（colSpan 来自列数）')
+  // ③ 市场段主视图 = 五行**横条**（表格只作载荷缺 bars 时的回退）
+  need(
+    /model\.market\.bars\.length > 0/.test(src) && /'data-role': 'tool-flow-bars'/.test(src) && /model\.market\.bars\.map\(barRow\)/.test(src),
+    '市场段必须渲染横条（按 model.market.bars 的长度分支 + 逐行 barRow）',
+  )
+  need(/'data-role': 'tool-bar-badge'/.test(src) && /bar\.top/.test(src), '横条必须渲染「当前最多」徽标（按模型的 top 标记）')
+  need(/'data-role': 'tool-bar-track'/.test(src) && /bar\.sharePct/.test(src), '横条必须按 sharePct 画长条')
+  need(/'data-role': 'tool-bar-delta'/.test(src) && /bar\.deltaText/.test(src), '横条右端必须渲染「近5日 升温/降温」')
+  need(/'data-role': 'tool-bar-detail'/.test(src) && /bar\.detail/.test(src), '横条必须把规模/偏好分/动量/排名的诚实信息渲染到行内小字（并进 title 悬停）')
+  need(/bar\.note === null/.test(src), '横条里缺数据的行仍必须给原因（未取到：…）')
+  need(/model\.market\.rows\.flatMap\(/.test(src), '载荷没给 bars 时必须回退到表格（诚实信息一处不少）')
+  // ⑤ 段末一行结论
+  need(/'data-role': 'tool-conclusion'/.test(src) && /model\.conclusion/.test(src), '段末必须渲染一行结论（→ 近5日资金偏好显示：…）')
+  // ④ 底部两段散文 + 逐句渲染（事实不删）+ 不再用项目符号列表
+  need(/proseSection\(model\.method\.title, model\.method\.lines, 'tool-method', 'tool-method-line'\)/.test(src), '方法段必须由 proseSection 渲染（匿名口径 → 散文）')
+  need(/proseSection\(model\.boundary\.title, model\.boundary\.lines, 'tool-legal', 'tool-legal-line'\)/.test(src), '边界段必须由 proseSection 渲染（两段散文）')
+  need(/lines\.map\(\(line, i\) =>/.test(src), '散文段必须逐句渲染（不许摘要/截断：事实一条不删）')
+  need(/React\.createElement\('li'/.test(src) === false, '边界声明不许再渲染成项目符号列表')
+  // ② 饼图实心 + 回放播放/暂停 + N/30
+  need(/M \$\{CX\} \$\{CY\} L/.test(src), '饼图必须是实心扇形（从圆心起画）')
+  // ⚠ 用剥注释的正文：注释里会写"这里没有 tool-pie-center"（拿 src 判会被自己的注释判红，实测踩到）
+  need(/tool-pie-center/.test(visible) === false, '饼图不许再挖中心孔（实心饼；日期改到饼上方小字）')
+  need(/'data-role': 'tool-pie-day'/.test(src), '饼图上方必须仍显示当前日期（信息不丢）')
+  need(/'data-role': 'tool-replay-toggle'/.test(src) && /onTogglePlay/.test(src), '回放必须有播放/暂停按钮')
+  need(/'data-role': 'tool-replay-count'/.test(src) && /replayCountText\(/.test(src), '回放必须有 N/30 计数（唯一来源 replayCountText）')
+  need(/REPLAY\.tickMs/.test(src) && /setPlaying/.test(src), '播放必须是本地步进（REPLAY.tickMs；不发请求）')
+  // ① 段标题是用户语：可见副标题必须渲染（标题文案本身由 toolRegistry 的模型断言锁住）
+  need(/'data-role': 'tool-section-subtitle'/.test(src) && /model\.market\.subtitle/.test(src), '段标题下必须渲染可见副标题（model.market.subtitle）')
+  // 副标题必须**默认可见**（不许只进 title；也不许复用 tw-hint）
+  const subAt = src.indexOf("'data-role': 'tool-section-subtitle'")
+  need(subAt >= 0 && /className: 'tw-hint'/.test(src.slice(subAt, subAt + 240)) === false, '副标题不许复用 tw-hint（紧凑/隐身档会把它藏掉）')
+  // ③′ 横条几何走 BAR 令牌（条高/圆角/行距；不许在页面里写死像素）
+  need(/BAR\.trackHeight/.test(src) && /BAR\.radius/.test(src) && /BAR\.rowGap/.test(src) && /BAR\.barGap/.test(src), '横条的条高/圆角/行距必须走 BAR 令牌（判据见 toolDetailTheme.barProblems）')
+  need(/bar\.deltaKind === 'warm' \? BAR\.warm/.test(src), '升温/降温的颜色必须走 BAR 的语义色（warm/cool/flat）')
+  // ⑥ 播放语义：默认暂停、点击才步进、到最新即停、不循环、不发请求
+  need(/const \[playing, setPlaying\] = useState\(false\)/.test(src), '播放必须默认暂停（不许加载即自动播放）')
+  const playAt = src.indexOf('const [playing, setPlaying] = useState(false)')
+  const playBlock = playAt < 0 ? '' : src.slice(playAt, src.indexOf('// 选中档', playAt))
+  need(playBlock !== '', '找不到播放状态的 useEffect 区块（播放语义判据会失效）')
+  need(/if \(step >= replayMax\) \{[\s\S]{0,120}?setPlaying\(false\)/.test(playBlock), '走到最新一步必须自动停下（不循环播放）')
+  need(/window\.setTimeout\(\(\) => setStep/.test(playBlock), '播放步进必须走本地 setStep（不重新取数）')
+  need(/api\.|fetch\(|reload\(/.test(playBlock) === false, '播放步进不许发请求（本地切片）')
+  need(/'aria-label': io\.playing \? '暂停回放' : '播放回放'/.test(src), '播放按钮的 aria-label 必须随状态变化（可读屏操作）')
   // 接数据后的接线点
   need(/type: 'range'/.test(src) && /io\.onStep/.test(src), '回放滑块必须渲染（最近 30 个交易日手动回放）')
   // ③ 磁贴四件套：色标 + 标签 + 大号数值 +（右端）delta —— 缺一个都算磁贴没做全
@@ -330,17 +373,25 @@ export function renderWiringProblems(src: string): string[] {
   need(/title: model\.statusTitle/.test(src) && /'aria-label': model\.statusTitle/.test(src), '状态行的完整版必须进 title 与 aria-label（长文案不占版面但仍可读）')
   // ④ 边界声明（含「不是真实跨境资金净流入」这条免责）与状态行**不许复用 tw-hint**：
   // 那个类在紧凑/隐身视图下 display:none（styles.ts:90-98）⇒ 复用等于把免责声明藏起来。
-  need(/'data-role': 'tool-legal'/.test(src), '边界声明区块必须带 data-role="tool-legal"（可断言且可定位）')
-  for (const [role, label] of [['tool-legal-line', '边界声明的每一条'], ['tool-status', '状态行'], ['tool-row-note', '逐行缺口原因'], ['tool-pie-missing', '饼图缺块说明'], ['tool-market-total', '份额合计（分母口径）'], ['tool-marks-note', '实测/重建说明']] as const) {
-    const at = src.indexOf(`'data-role': '${role}'`)
+  need(/'tool-legal'/.test(src) && /'tool-legal-line'/.test(src), '边界散文段必须带 tool-legal / tool-legal-line 锚点（可断言且可定位）')
+  for (const [role, label] of [['tool-status', '状态行'], ['tool-row-note', '逐行缺口原因'], ['tool-pie-missing', '饼图缺块说明'], ['tool-market-total', '份额合计（分母口径）'], ['tool-marks-note', '实测/重建说明'], ['tool-bar-detail', '横条里的诚实信息']] as const) {
+    // ⚠ 扫**每一处**出现（不只第一处）：同一个锚点可能在横条与表格回退里各有一份，
+    //    只看第一处的话，给另一处挂上 tw-hint 就抓不到了（实测踩到）。
+    let at = src.indexOf(`'data-role': '${role}'`)
     need(at >= 0, `${label}必须带 data-role="${role}"（可断言且可定位）`)
-    if (at >= 0) {
+    while (at >= 0) {
       // 只扫这个元素紧挨着的 props（前面的注释会提到 tw-hint，别把注释当成复用了它；
       // 窗口也刻意开小，免得把后面 curveChart 里的 tw-hint 算进来）
       const block = src.slice(at, at + 240)
       need(/className: 'tw-hint'/.test(block) === false, `${label}不许复用 tw-hint（紧凑/隐身视图会把它整块隐藏）`)
+      at = src.indexOf(`'data-role': '${role}'`, at + 1)
     }
   }
+  // 两段散文的渲染器本身也不许复用 tw-hint（它是整块免责/口径的载体）
+  const proseAt = src.indexOf('function proseSection(')
+  const proseBody = proseAt < 0 ? '' : src.slice(proseAt, src.indexOf('\n}', proseAt) + 2)
+  need(proseBody !== '', '找不到 proseSection 的函数体（可见性判据会失效）')
+  need(/className: 'tw-hint'/.test(proseBody) === false, '散文段不许复用 tw-hint（紧凑/隐身视图会把免责与口径整块藏掉）')
   return bad
 }
 
@@ -376,10 +427,24 @@ test('② 详情页三段式 + 时间范围控件 + 功能区接线齐全；十�
     },
     { name: '状态行不再把完整口径放进 title/aria-label', mutate: (s) => s.replace('title: model.statusTitle,', 'title: undefined,'), hit: /statusTitle|title/ },
     {
-      name: '边界声明复用 tw-hint（紧凑/隐身视图会把免责藏掉）',
-      mutate: (s) => s.replace("'data-role': 'tool-legal-line', style: { margin: 0, fontSize: 11, lineHeight: 1.65, color: 'var(--tw-muted)' }", "'data-role': 'tool-legal-line', className: 'tw-hint'"),
-      hit: /边界声明.*不许复用 tw-hint/,
+      name: '散文段复用 tw-hint（紧凑/隐身视图会把免责与口径藏掉）',
+      mutate: (s) => s.replace("{ 'data-role': lineRole, style: { margin: 0, fontSize: 11.5, lineHeight: 1.8, color: 'var(--tw-muted)' } }", "{ 'data-role': lineRole, className: 'tw-hint' }"),
+      hit: /散文段不许复用 tw-hint/,
     },
+    // ── v0.85.0（目标布局 5 条）：区名回填 / 饼图计数 / 播放按钮 / 中心孔 / 横条回表格 / 诚实信息 / 结论行 ──
+    { name: '饼图去掉 N/30 计数', mutate: (s) => s.replace("'data-role': 'tool-replay-count'", "'data-role': 'tool-replay-count-x'"), hit: /N\/30 计数|回放/ },
+    { name: '回放去掉播放/暂停按钮', mutate: (s) => s.replace("'data-role': 'tool-replay-toggle'", "'data-role': 'tool-replay-toggle-x'"), hit: /播放\/暂停|回放/ },
+    { name: '饼图挖回中心孔（改回圆环）', mutate: (s) => s.replace("    // ⚠ **实心饼**", "    React.createElement('circle', { 'data-role': 'tool-pie-center', cx: CX, cy: CY, r: R * 0.42, fill: 'var(--tw-card)' }),\n    // ⚠ **实心饼**"), hit: /中心孔|实心/ },
+    { name: '横条改回表格（bars 不渲染）', mutate: (s) => s.replace('model.market.bars.map(barRow)', '[]'), hit: /横条|bars/ },
+    { name: '横条丢掉诚实信息（规模/偏好分/动量/排名）', mutate: (s) => s.replace("{ 'data-role': 'tool-bar-detail', title: bar.detail, 'aria-label': bar.detail,", "{ 'data-role': 'tool-bar-detail-x', title: '', 'aria-label': '',"), hit: /诚实信息|横条/ },
+    { name: '段末结论行删掉', mutate: (s) => s.replace("'data-role': 'tool-conclusion'", "'data-role': 'tool-conclusion-x'"), hit: /结论/ },
+    { name: '回放改成加载即自动播放（违背"不做自动播放"）', mutate: (s) => s.replace('const [playing, setPlaying] = useState(false)', 'const [playing, setPlaying] = useState(true)'), hit: /默认暂停|自动播放|播放/ },
+    { name: '回放改成循环播放（到最新也不停）', mutate: (s) => s.replace('if (step >= replayMax) {', 'if (false) {'), hit: /自动停下|不循环|播放/ },
+    { name: '播放步进改去发请求（不再是本地切片）', mutate: (s) => s.replace('const timer = window.setTimeout(() => setStep((prev) => Math.min(replayMax, prev + 1)), REPLAY.tickMs)', 'const timer = window.setTimeout(() => { void api().then(() => setStep((prev) => Math.min(replayMax, prev + 1))) }, REPLAY.tickMs)'), hit: /不许发请求|本地|播放/ },
+    { name: '横条几何写死像素（不用 BAR 令牌）', mutate: (s) => s.replace('height: BAR.trackHeight, borderRadius: BAR.radius', 'height: 10, borderRadius: 5'), hit: /BAR 令牌|横条/ },
+    { name: '副标题复用 tw-hint（紧凑档看不见）', mutate: (s) => s.replace("'data-role': 'tool-section-subtitle', style:", "'data-role': 'tool-section-subtitle', className: 'tw-hint', style:"), hit: /副标题.*tw-hint/ },
+    { name: '可见副标题删掉', mutate: (s) => s.replace("'data-role': 'tool-section-subtitle'", "'data-role': 'tool-section-subtitle-x'"), hit: /副标题/ },
+    { name: '边界段改回项目符号列表', mutate: (s) => s.replace("proseSection(model.boundary.title, model.boundary.lines, 'tool-legal', 'tool-legal-line')", "React.createElement('ul', { 'data-role': 'tool-legal' }, React.createElement('li', { 'data-role': 'tool-legal-line' }, model.boundary.lines.join('；')))"), hit: /项目符号|散文段|边界/ },
     {
       name: '逐行缺口原因复用 tw-hint（紧凑档只剩「未取到」没有原因）',
       mutate: (s) => s.replace("'data-role': 'tool-row-note', colSpan", "'data-role': 'tool-row-note', className: 'tw-hint', colSpan"),

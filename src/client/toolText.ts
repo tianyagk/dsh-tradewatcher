@@ -36,6 +36,13 @@ export const SECTION_EMPTY_WHY = '本次这一区没有可用数据（逐行原�
 export const NO_MATCH = '没有匹配的工具'
 
 /**
+ * 详情页底部**两段散文**的标题（用户口径 v0.85.0）：方法一段、边界一段。
+ * 两段的正文都来自工具文件（`cake.ts` 的 `method` / `boundary`），页面只负责排版。
+ */
+export const METHOD_TITLE = '当前偏好怎么判断'
+export const BOUNDARY_TITLE = '这份数据的边界'
+
+/**
  * 红线判据（**唯一实现**）：一段文本是不是在把"没有数据"显示成 0。
  *
  * 为什么要有这个函数：v0.72.0 的断言里手写了一条 `/^0(\.0+)?/.test(footnote)` —— 脚注以

@@ -12,8 +12,10 @@ import assert from 'node:assert/strict'
 import type { GlobalFlowMarketDto, GlobalFlowPayloadDto } from '../api.ts'
 import { NOT_FETCHED, looksLikeZeroStandIn } from '../toolText.ts'
 import { cakeTool } from './cake.ts'
+import { factCoverageProblems } from '../toolFacts.ts'
 import { detailModel } from '../toolRegistry.ts'
 import {
+  flowBarsAt,
   fmtCnyYi,
   fmtMomentum,
   fmtPp,
@@ -258,7 +260,16 @@ test('④ 边界声明：含「风险偏好代理 ≠ 真实跨境资金净流�
   for (const [label, payload] of [['有数据', payloadFixture()], ['缺数据', payloadFixture({ hkMissing: true })]] as const) {
     const model = detailModel(cakeTool, globalFlowToolData(payload, 0))
     const lines = model.boundary.lines
-    assert.ok(lines.length >= 8, `${label}：边界声明应当足够长（实际 ${lines.length} 条）`)
+    // v0.85.0：底部改成**两段散文**（方法 + 边界）⇒ 判据从"条数"换成**事实并集**（见 toolFacts.ts）：
+    // 散文可以把两句话并成一句，所以条数不再是判据；少一条事实则主题关键词找不到 ⇒ 红。
+    // ⚠ 这个手工载荷的 `boundary` 只有一句（真正的口径数字在宿主 `FLOW_BOUNDARY` 里），
+    //    所以"事实并集"这条在这里只核对**工具文件那两段**；含宿主口径的完整核对在
+    //    `toolRegistry.test.ts`（那里把 FLOW_BOUNDARY 也拼进来，15/15 主题必须命中）。
+    const toolOwnFacts = [...(cakeTool.method ?? []), ...cakeTool.boundary]
+    assert.deepEqual(factCoverageProblems(toolOwnFacts.join('\n'), `${label}：工具文件的方法 + 边界`), [], `${label}：工具文件那两段不许少事实`)
+    const all = [...model.method.lines, ...model.boundary.lines]
+    assert.equal(all.length >= toolOwnFacts.length, true, `${label}：宿主口径行与工具两段都要出现在模型里`)
+    assert.ok(lines.length >= 3, `${label}：边界段本身也不许被掏空（实际 ${lines.length} 条）`)
     assert.equal(new Set(lines).size, lines.length, `${label}：边界声明不许有重复条目（工具声明 + 数据源声明要各讲各的）`)
     const disclaimer = lines.filter((l) => l.includes('跨境资金净流入'))
     assert.equal(disclaimer.length, 1, `${label}：必须**恰好一条**免责（风险偏好代理 ≠ 真实跨境资金净流入），实际 ${disclaimer.length} 条`)
@@ -333,4 +344,58 @@ test('取数失败（页面拿不到载荷）⇒ 原因是传入的原文，且�
     assert.equal(cell.value, null)
   }
   assert.ok(failed.curve.empty.includes('网络错误'), failed.curve.empty)
+})
+
+test('③ 市场横条：五行、当前最多的徽标、份额条、近5日升/降温 —— 且**诚实信息一条不丢**', () => {
+  const payload = payloadFixture()
+  const bars = flowBarsAt(payload, 0, true)
+  assert.equal(bars.length, 5, `五个市场各一条横条（实得 ${bars.length}）`)
+  assert.deepEqual(bars.map((b) => b.name), payload.markets.map((m) => m.name), '行序 = 载荷的市场顺序（展示顺序）')
+  // 「当前最多」恰好一条（该日份额榜首）
+  assert.equal(bars.filter((b) => b.top).length, 1, '「当前最多」徽标只能挂在份额最大的那一行')
+  const maxIdx = payload.markets.reduce((best, m, i) => ((m.sharePct ?? -1) > (payload.markets[best].sharePct ?? -1) ? i : best), 0)
+  assert.equal(bars[maxIdx].top, true, '最多徽标必须与载荷里的份额榜首一致')
+  // 份额条：条长来自 sharePct（百分点），文本与载荷一致
+  for (const [i, b] of bars.entries()) {
+    assert.equal(b.shareText, fmtSharePct(payload.markets[i].sharePct), '份额文本必须来自载荷（不重算）')
+    assert.equal(b.sharePct, payload.markets[i].sharePct)
+  }
+  // 近5日：宿主给了 delta5Pp ⇒ 用宿主值（升温/降温按符号）
+  const up = bars.find((b) => b.deltaKind === 'warm')
+  const down = bars.find((b) => b.deltaKind === 'cool')
+  assert.ok(up !== undefined || down !== undefined, '至少有一行给出升/降温语义（否则横条右端没有信息）')
+  for (const b of bars) assert.match(b.deltaText, /升温|降温|持平|未取到/, `右端文案必须可读：${b.deltaText}`)
+  // 诚实信息：规模 / 偏好分 / 动量 / 横截面排名 全部在线
+  for (const b of bars) {
+    for (const key of ['规模', '偏好分', '动量', '横截面排名']) {
+      assert.equal(b.detail.includes(key), true, `横条小字必须含「${key}」（表格里的信息不许丢）：${b.detail}`)
+    }
+    assert.equal(b.detail.includes('不适用（回放日）'), false, '最新交易日不该出现「不适用（回放日）」')
+  }
+})
+
+test('③′ 横条：回放历史日 must 如实标「不适用（回放日）」；缺数据的行照旧「未取到」+ 原因', () => {
+  const replay = flowBarsAt(payloadFixture(), 2, false)
+  for (const b of replay) {
+    assert.equal(b.detail.includes('不适用（回放日）'), true, `回放日的动量/排名必须标「不适用（回放日）」：${b.detail}`)
+  }
+  // 缺规模的市场（港股）⇒ 该行 note 非空；份额缺失时**不画条**且文本是「未取到」（绝不 0）
+  const missing = flowBarsAt(payloadFixture({ hkMissing: true }), 0, true).find((b) => b.name === '港股')
+  assert.ok(missing !== undefined)
+  assert.equal(missing.note !== null, true, '缺数据的行必须给原因')
+  for (const b of flowBarsAt(payloadFixture({ hkMissing: true }), 0, true)) {
+    if (b.sharePct === null) {
+      assert.equal(b.shareText, NOT_FETCHED, '缺份额必须写「未取到」')
+      assert.equal(looksLikeZeroStandIn(b.shareText), false, '⚠ 缺份额绝不许写成 0')
+    }
+  }
+})
+
+test('⑤ 段末结论：最新日用宿主轮动结论原样透传；回放日如实说明轮动只对最新日给出', () => {
+  const payload = payloadFixture()
+  const latest = globalFlowToolData(payload, 0).conclusion
+  assert.ok(latest !== null && latest.startsWith('→ 近5日资金偏好显示：'), `结论行必须以用户口径开头：${latest}`)
+  assert.equal(latest.includes(payload.rotation.text), true, '结论必须原样透传宿主的轮动文案（视图不许改写/重算）')
+  const replay = globalFlowToolData(payload, 2).conclusion
+  assert.ok(replay !== null && replay.includes('回放历史日'), `回放日的结论必须如实说明：${replay}`)
 })

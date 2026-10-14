@@ -271,6 +271,11 @@ export const PIE = {
   sizeMax: 320,
   radiusRatio: 0.46,
   fallbackSize: 260,
+  /**
+   * **实心饼**（用户口径）：扇形从圆心起画（`M CX CY L …A… Z`），中心不再挖孔放日期
+   * —— 日期改到饼上方的小字（`tool-pie-day`），信息不丢但不吃直径。
+   */
+  solid: true,
 } as const
 
 /** 饼图尺寸判据（唯一实现）：直径在 [220, 320]，不许撑满整列、不许无界 */
@@ -287,6 +292,64 @@ export function pieProblems(style: { width?: unknown; height?: unknown }): strin
   if (style.height !== style.width) bad.push(`饼图必须是正方形（宽高同一条契约；实得 ${JSON.stringify([style.width, style.height])}）`)
   if (PIE.sizeMin < 220 || PIE.sizeMax > 320) bad.push(`PIE.sizeMin/sizeMax 越界（实得 ${PIE.sizeMin}/${PIE.sizeMax}）`)
   return bad
+}
+
+/**
+ * 市场**横条**（用户口径：五个市场各一条横条）。
+ *
+ * 条色用**单一强调色**（不按升/降温改条色）：红绿在本插件里是涨跌语义，横条画的是"份额大小"，
+ * 用它做红绿会被读成涨跌；升/降温只由右端那句文字的颜色表达（`warm`/`cool`/`flat`）。
+ */
+export const BAR = {
+  trackHeight: 10,
+  radius: 5,
+  fill: 'var(--tw-accent)',
+  track: 'var(--tw-bg2)',
+  warm: 'var(--tw-up)',
+  cool: 'var(--tw-down)',
+  flat: 'var(--tw-muted)',
+  /** 行与行之间（px） */
+  rowGap: 12,
+  /** 行内：市场名那一行 */
+  headGap: 4,
+  /** 行内：长条 + 右端「近5日」那一行 */
+  barGap: 10,
+} as const
+
+/** 横条判据（唯一实现）：条高/圆角/颜色/行距都得成立 */
+export function barProblems(bar: { trackHeight?: unknown; radius?: unknown; fill?: unknown; track?: unknown; rowGap?: unknown; headGap?: unknown; barGap?: unknown }): string[] {
+  const bad: string[] = []
+  const h = num(bar.trackHeight)
+  if (h === null || h < 8) bad.push(`横条高度必须 ≥ 8px（实得 ${JSON.stringify(bar.trackHeight)}）`)
+  if (h !== null && h > 14) bad.push(`横条高度必须 ≤ 14px（实得 ${h}）`)
+  const r = num(bar.radius)
+  if (r === null || r < 4) bad.push(`横条圆角必须 ≥ 4px（实得 ${JSON.stringify(bar.radius)}）`)
+  if (r !== null && h !== null && r > h) bad.push(`横条圆角不许超过条高（圆角 ${r} > 条高 ${h}）`)
+  for (const [k, v] of [['fill', bar.fill], ['track', bar.track]] as const) {
+    if (typeof v !== 'string' || !v.startsWith('var(--tw-')) bad.push(`横条颜色 ${k} 必须走主题 token（实得 ${JSON.stringify(v)}）`)
+  }
+  // 条色**单色**：用涨跌色画"份额大小"会被读成涨跌（升/降温只由右端文字表达）
+  if (bar.fill === 'var(--tw-up)' || bar.fill === 'var(--tw-down)') {
+    bad.push(`横条填充色不许用涨跌色（fill = ${String(bar.fill)}）；升温/降温只由右端文字表达`)
+  }
+  const gaps: Array<[string, unknown, number, number]> = [
+    ['行距 rowGap', bar.rowGap, 8, 16],
+    ['行内 headGap', bar.headGap, 4, 12],
+    ['行内 barGap', bar.barGap, 4, 12],
+  ]
+  for (const [label, v, lo, hi] of gaps) {
+    const n = num(v)
+    if (n === null || n < lo || n > hi) bad.push(`${label} 必须在 [${lo}, ${hi}]px（实得 ${JSON.stringify(v)}）`)
+  }
+  return bad
+}
+
+/** 回放（播放/暂停）：自动步进间隔（ms） */
+export const REPLAY = { tickMs: 700 } as const
+
+/** 统计区间里的步数文案（`N/30`）：页面与断言共用同一个格式 */
+export function replayCountText(step: number, maxStep: number): string {
+  return `${Math.max(0, step) + 1}/${Math.max(1, maxStep + 1)}`
 }
 
 /* ────────────────────────────── 5. 动效令牌 ────────────────────────────── */

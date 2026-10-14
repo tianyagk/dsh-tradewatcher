@@ -13,7 +13,7 @@ import type { GlobalFlowMarketDto, GlobalFlowPayloadDto } from '../api.ts'
 // ⚠ 占位文案从**叶子模块**拿，类型从注册表拿（type-only import 会被擦除）——
 // 否则 `toolRegistry → tools/cake → tools/globalFlowView → toolRegistry` 会成环（实测 TDZ 报错）。
 import { NOT_FETCHED } from '../toolText.ts'
-import type { ToolCurveSeries, ToolData, ToolPayload, ToolPieSlice } from '../toolRegistry.ts'
+import type { ToolBarRow, ToolCurveSeries, ToolData, ToolPayload, ToolPieSlice } from '../toolRegistry.ts'
 
 /** 五个市场的画图配色：全部走主题 token（明暗两套都有定义，源码里不写死颜色） */
 export const FLOW_SERIES_COLORS: readonly string[] = [
@@ -136,6 +136,56 @@ export function pieSlicesAt(payload: GlobalFlowPayloadDto, step: number): { slic
     ? null
     : `${dropped.join('、')} 当日没有美元规模 ⇒ 不进饼图、也不进份额分母（分母只含有值市场，因此剩余各块合计仍为 100%）；逐行原因见市场表下方说明`
   return { slices, center: point.day, note }
+}
+
+/**
+ * 近 5 个序列日的份额变化（百分点）。
+ *
+ * 两个来源，**同一口径**：最新交易日用宿主算好的 `delta5Pp`；回放历史日由曲线的两个点现算
+ * （同一份载荷、同一段序列，不引入新数字）。序列不足 5 个点 ⇒ `null`（如实说"判不了"，不写 0）。
+ */
+function delta5Of(payload: GlobalFlowPayloadDto, idx: number, i: number, isLatest: boolean): number | null {
+  const m = payload.markets[i]
+  if (isLatest && m.delta5Pp !== null && Number.isFinite(m.delta5Pp)) return m.delta5Pp
+  const cur = payload.curve.points[idx]?.share[i]
+  const prev = idx >= 5 ? payload.curve.points[idx - 5]?.share[i] : null
+  if (cur === null || cur === undefined || prev === null || prev === undefined) return null
+  return (cur - prev) * 100
+}
+
+/**
+ * 市场**横条行**（用户口径：五行横条，不是八列表格）。
+ *
+ * 表格里原来的诚实信息（规模 / 偏好分 / 动量 / 横截面排名）全部进 `detail`（悬停 + 行内小字可读）；
+ * 缺数据的行仍有 `note`（`未取到` + 原因）。条长 = 当前相对份额（百分点）。
+ */
+export function flowBarsAt(payload: GlobalFlowPayloadDto, step: number, isLatest: boolean): ToolBarRow[] {
+  const idx = pointIndexAt(payload.curve.points.length, step)
+  const point = payload.curve.points[idx]
+  const rankedTotal = payload.markets.filter((m) => m.rank !== null).length
+  const shares = payload.markets.map((_, i) => point?.share[i] ?? null)
+  const maxShare = shares.reduce<number | null>((best, v) => (v === null ? best : best === null || v > best ? v : best), null)
+  return payload.markets.map((m, i) => {
+    const share = shares[i]
+    const aumUsd = point?.aumUsd[i] ?? null
+    const aumNative = nativeAtDay(payload, idx, i, aumUsd)
+    const d = delta5Of(payload, idx, i, isLatest)
+    const deltaKind: ToolBarRow['deltaKind'] = d === null ? 'unknown' : Math.abs(d) < 0.05 ? 'flat' : d > 0 ? 'warm' : 'cool'
+    const deltaText = d === null
+      ? '近5日变化未取到（序列不足 5 个交易日 ⇒ 判不了）'
+      : `${deltaKind === 'flat' ? '持平' : deltaKind === 'warm' ? '升温' : '降温'} ${fmtPp(d)} 个百分点`
+    return {
+      name: m.name,
+      shareText: fmtSharePct(share === null ? null : share * 100),
+      sharePct: share === null ? null : share * 100,
+      top: share !== null && maxShare !== null && share === maxShare,
+      deltaText,
+      deltaKind,
+      // 规模 / 偏好分 / 动量 / 排名 —— 一个都不许丢（回放日如实写「不适用（回放日）」）
+      detail: `规模 ${fmtSizeCell(m.currency, aumNative, aumUsd, rateOf(payload, m.currency))}｜偏好分 ${fmtPref(m.pref)}｜动量 ${isLatest ? fmtMomentum(m.momentum) : '不适用（回放日）'}｜横截面排名 ${isLatest ? fmtRank(m.rank, rankedTotal === 0 ? payload.markets.length : rankedTotal) : '不适用（回放日）'}`,
+      note: rowReasonOf(m, aumNative, aumUsd),
+    }
+  })
 }
 
 /** 某一步的市场表（份额 + 变化；缺数据 → 「未取到」+ 该行的原因说明） */
@@ -390,6 +440,7 @@ export function globalFlowToolData(payload: GlobalFlowPayloadDto, step = 0, rang
     market: {
       rows: market.rows,
       rowNotes: market.rowNotes,
+      bars: flowBarsAt(view, step, isLatest),
       footnotes: [
         // ⚠ 分母里一个市场都没有值（整轮全缺）时**不许给 0.00%**：那是"把没有值求和成 0"，
         // 正是红线禁止的 0 顶替（v0.73.0 修，对照见 AUDIT-IMPL46 §1）
@@ -407,6 +458,10 @@ export function globalFlowToolData(payload: GlobalFlowPayloadDto, step = 0, rang
           : `近 ${payload.netFlow.days} 个交易日累计 ${fmtCnyYi(payload.netFlow.sumCny)}（${payload.netFlow.basis}）`,
       },
     ],
+    // 段末一行结论（用户口径）：最新日用宿主的轮动结论；回放历史日如实说明轮动只对最新交易日给出
+    conclusion: isLatest
+      ? `→ 近5日资金偏好显示：${payload.rotation.text}`
+      : '→ 回放历史日：显示那一天的份额榜首；近5日轮动只对最新交易日给出',
     replay: {
       days: [...payload.replay.days].reverse(),
       selected: Math.max(0, Math.round(step)),

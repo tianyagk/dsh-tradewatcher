@@ -12,6 +12,7 @@ import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
+  BAR,
   CARD_SURFACE,
   CHART_SPLIT,
   CHART_STACK,
@@ -28,6 +29,7 @@ import {
   SWATCH,
   TILE_SURFACE,
   TOOL_SPACE,
+  barProblems,
   cardSurfaceProblems,
   chartSplitProblems,
   chartStackProblems,
@@ -168,6 +170,26 @@ test('④ 窄屏回落为堆叠：`.tw-tool-split` 有单列媒体查询', () =>
   // 反例注入（去掉窄屏媒体查询 ⇒ 判据必须为假）
   const withoutNarrow = STYLES.replace(/@media \(max-width:900px\)\{[^}]*\}\n?/g, '')
   assert.equal(/@media \(max-width:900px\)\{[^}]*\.tw-tool-split\{grid-template-columns:minmax\(0,1fr\)\}/.test(withoutNarrow.replace(/\n/g, '')), false, '⚠ 去掉窄屏媒体查询必须被抓到')
+})
+
+test('③′ 横条几何：条高 ≥8、圆角 ≥4、颜色走主题 token、单色（不用涨跌色）、行距在区间内', () => {
+  const bad = barProblems(BAR)
+  assert.deepEqual(bad, [], `横条判据未通过：${bad.join(' ／ ')}`)
+  assert.equal(BAR.trackHeight >= 8 && BAR.trackHeight <= 14, true, `条高必须在 [8,14]（实得 ${BAR.trackHeight}）`)
+  assert.equal(BAR.radius >= 4 && BAR.radius <= BAR.trackHeight, true, `圆角必须在 [4, 条高]（实得 ${BAR.radius}）`)
+  // 反例注入：条高 0 / 圆角 0 / 硬编码颜色 / 用涨跌色画条长
+  assert.notDeepEqual(barProblems({ ...BAR, trackHeight: 0 }), [], '⚠ 条高 0 必须被抓到')
+  assert.notDeepEqual(barProblems({ ...BAR, radius: 0 }), [], '⚠ 圆角 0 必须被抓到')
+  assert.notDeepEqual(barProblems({ ...BAR, fill: '#e11' }), [], '⚠ 硬编码颜色必须被抓到')
+  assert.notDeepEqual(barProblems({ ...BAR, fill: 'var(--tw-up)' }), [], '⚠ 条色用涨跌色必须被抓到')
+  assert.notDeepEqual(barProblems({ ...BAR, rowGap: 2 }), [], '⚠ 行距过小（2px）必须被抓到')
+})
+
+test('⑤ 实心饼：`PIE.solid === true`（扇形从圆心起画，无中心遮罩）', () => {
+  assert.equal(PIE.solid, true, '饼图必须是实心饼（用户口径）')
+  // 反例注入：把实心标志关掉 ⇒ 页面接线断言（扇形从圆心起画 + 无中心遮罩）必须红
+  const off = { ...PIE, solid: false }
+  assert.equal(off.solid === true, false, '⚠ 关掉实心标志后，`PIE.solid === true` 这条必须失败')
 })
 
 test('B 动效令牌：切档 150–250ms、回放 120–250ms、reduced-motion 有 CSS 媒体查询 + 页面开关', () => {

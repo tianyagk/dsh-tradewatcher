@@ -29,11 +29,13 @@ import {
   detailModel,
   toolById,
   type DetailModel,
+  type ToolBarRow,
   type ToolData,
   type ToolPayload,
 } from './toolRegistry.ts'
 import { CARD_PROPS, CARD_STYLE, CARD_TAG } from './toolCardView.ts'
 import {
+  BAR,
   CARD_SURFACE,
   CHART_SPLIT,
   CHART_TYPE,
@@ -45,9 +47,11 @@ import {
   PIE,
   PLOT,
   RANGE_BOX,
+  REPLAY,
   RANGE_OFF,
   RANGE_ON,
   RANGE_TYPE,
+  replayCountText,
   SUMMARY_TYPE,
   SWATCH,
   TILE_SURFACE,
@@ -171,6 +175,8 @@ export function ToolsPage(): React.ReactElement {
   const [step, setStep] = useState(0)
   /** 曲线窗口档位；null = 用工具声明的默认档（本地切片，不发请求） */
   const [rangeDays, setRangeDays] = useState<number | null>(null)
+  /** 回放是否在自动播放（本地步进：只换展示的那一天，不发请求） */
+  const [playing, setPlaying] = useState(false)
 
   /** 系统「减少动画」偏好 ⇒ 详情页所有动效降级（图与交互仍在） */
   const reduced = useReducedMotion()
@@ -183,6 +189,7 @@ export function ToolsPage(): React.ReactElement {
     setLoadError(null)
     setStep(0)
     setRangeDays(null)
+    setPlaying(false)
     if (loader === undefined) return
     let alive = true
     loader()
@@ -196,6 +203,18 @@ export function ToolsPage(): React.ReactElement {
       alive = false
     }
   }, [loader])
+
+  // 自动播放：每 REPLAY.tickMs 前进一步，走到最新一步就停下（不循环、不发请求）
+  const replayMax = payload === null ? 0 : payload.replayMax
+  useEffect(() => {
+    if (!playing) return
+    if (step >= replayMax) {
+      setPlaying(false)
+      return
+    }
+    const timer = window.setTimeout(() => setStep((prev) => Math.min(replayMax, prev + 1)), REPLAY.tickMs)
+    return () => window.clearTimeout(timer)
+  }, [playing, step, replayMax])
 
   // 选中档 = 用户选过的档，否则工具声明的默认档
   const selectedRange = rangeDays ?? entry?.ranges?.initial ?? null
@@ -218,6 +237,8 @@ export function ToolsPage(): React.ReactElement {
           onStep: setStep,
           onRange: setRangeDays,
           animOff: reduced,
+          playing,
+          onTogglePlay: () => setPlaying((prev) => !prev),
         }),
   )
 }
@@ -418,17 +439,48 @@ function BackToCatalog(props: { onClick: () => void; label: string }): React.Rea
   )
 }
 
-/** 回放滑块（右列底部）：本地切换展示的那一天，不发请求；拖动时线条由 `pathStyle` 平滑跟随 */
-function replayEl(model: DetailModel, io: { step: number; maxStep: number; onStep: (n: number) => void }): React.ReactElement {
+/**
+ * 回放控件（右列底部，用户口径）：**播放/暂停按钮 + 滑块 + `N/30` 计数**（+ 当前显示日）。
+ *
+ * 播放是**本地步进**（每 `REPLAY.tickMs` 前进一步，走到最新一步停下），不发任何请求；
+ * 拖动滑块时折线由 `pathStyle` 平滑跟随。计数文本由 `replayCountText` 统一生成（唯一来源）。
+ */
+function replayEl(model: DetailModel, io: { step: number; maxStep: number; onStep: (n: number) => void; playing: boolean; onTogglePlay: () => void }): React.ReactElement {
   return React.createElement(
     'div',
-    { 'data-role': 'tool-replay', style: { display: 'flex', flexDirection: 'column', gap: 4 } },
+    { 'data-role': 'tool-replay', style: { display: 'flex', flexDirection: 'column', gap: 6 } },
     React.createElement(
       'div',
-      { style: { display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' } },
-      React.createElement('span', { style: { fontSize: 12, color: 'var(--tw-muted)' } }, '回放'),
-      React.createElement('span', { style: { fontSize: 12, color: 'var(--tw-muted)' } }, `第 ${io.step + 1} / ${Math.max(1, io.maxStep + 1)} 个交易日`),
-      React.createElement('span', { style: { fontSize: 12.5, fontVariantNumeric: 'tabular-nums', marginLeft: 'auto' } }, (model.replay?.days[Math.min(io.step, (model.replay?.days.length ?? 1) - 1)] ?? '—')),
+      { style: { display: 'flex', alignItems: 'center', gap: 8 } },
+      React.createElement(
+        'button',
+        {
+          'data-role': 'tool-replay-toggle',
+          type: 'button',
+          'aria-label': io.playing ? '暂停回放' : '播放回放',
+          title: io.playing ? '暂停回放（本地切换，不发请求）' : '播放最近三十个交易日（本地切换，不发请求）',
+          onClick: io.onTogglePlay,
+          style: {
+            flexShrink: 0,
+            width: 26,
+            height: 26,
+            borderRadius: 8,
+            border: '1px solid var(--tw-border-strong)',
+            background: 'var(--tw-card)',
+            color: 'var(--tw-text)',
+            fontSize: 12,
+            lineHeight: '24px',
+            cursor: 'pointer',
+          },
+        },
+        io.playing ? '⏸' : '▶',
+      ),
+      React.createElement('span', { 'data-role': 'tool-replay-count', style: { fontSize: 12, fontVariantNumeric: 'tabular-nums', color: 'var(--tw-muted)' } }, replayCountText(io.step, io.maxStep)),
+      React.createElement(
+        'span',
+        { style: { fontSize: 12.5, fontVariantNumeric: 'tabular-nums', marginLeft: 'auto' } },
+        model.replay?.days[Math.min(io.step, (model.replay?.days.length ?? 1) - 1)] ?? '—',
+      ),
     ),
     React.createElement('input', {
       type: 'range',
@@ -447,7 +499,16 @@ function replayEl(model: DetailModel, io: { step: number; maxStep: number; onSte
 function detailView(
   model: DetailModel,
   backToCatalog: () => void,
-  io: { loading: boolean; step: number; maxStep: number; onStep: (n: number) => void; onRange: (n: number) => void; animOff: boolean },
+  io: {
+    loading: boolean
+    step: number
+    maxStep: number
+    onStep: (n: number) => void
+    onRange: (n: number) => void
+    animOff: boolean
+    playing: boolean
+    onTogglePlay: () => void
+  },
 ): React.ReactElement {
   const hasCurve = model.curve.series.length > 0 && model.curve.days.length > 0
   const hasPie = model.pie.slices.length > 0
@@ -540,6 +601,10 @@ function detailView(
                   ? React.createElement(
                       'div',
                       { style: { display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4 } },
+                      // 实心饼：日期不再挖孔放中心，改为饼**上方**的小字（信息不丢、不吃直径）
+                      model.pie.center === null
+                        ? null
+                        : React.createElement('div', { 'data-role': 'tool-pie-day', style: { fontSize: 11.5, color: 'var(--tw-muted)', fontVariantNumeric: 'tabular-nums' } }, model.pie.center),
                       React.createElement(pieChart, { slices: model.pie.slices, center: model.pie.center }),
                       // 图例在饼**下方**、居中；色标与折线图同一套（FLOW_SERIES_COLORS + LEGEND_DOT）
                       React.createElement(
@@ -566,7 +631,7 @@ function detailView(
                       `${NOT_FETCHED} 的市场未进饼图（原因见下表逐行说明）`,
                     ),
                 // 回放滑块（本地切换：只换展示的那一天，不发请求）；线条平滑跟随见 curveChart 的 MOTION_STYLE
-                model.replay === null ? null : replayEl(model, io),
+                model.replay === null ? null : replayEl(model, { step: io.step, maxStep: io.maxStep, onStep: io.onStep, playing: io.playing, onTogglePlay: io.onTogglePlay }),
               ),
         ),
       ),
@@ -574,8 +639,11 @@ function detailView(
     React.createElement(
       'div',
       { className: 'tw-tool-card', style: CARD_SURFACE },
-      sectionHead(model.market.title, model.market.note),
-      React.createElement(
+      sectionHead(model.market.title, model.market.note, model.market.subtitle),
+      // 主视图 = 五行**横条**（用户口径）；载荷没给 bars 时回退到表格（诚实信息一处不少）
+      model.market.bars.length > 0
+        ? React.createElement('div', { 'data-role': 'tool-flow-bars', style: { display: 'flex', flexDirection: 'column', gap: BAR.rowGap } }, model.market.bars.map(barRow))
+        : React.createElement(
         'table',
         { style: { width: '100%', borderCollapse: 'collapse', fontSize: 11.5 } },
         React.createElement(
@@ -632,6 +700,14 @@ function detailView(
               ),
         ),
       ),
+      // 段末**一行结论**（用户口径：`→ 近5日资金偏好显示：…`；KPI 磁贴仍保留简短版）
+      model.conclusion === null
+        ? null
+        : React.createElement(
+            'div',
+            { 'data-role': 'tool-conclusion', style: { marginTop: 10, fontSize: 12.5, lineHeight: 1.6, color: 'var(--tw-text)' } },
+            model.conclusion,
+          ),
       model.market.footnotes.length === 0
         ? null
         : React.createElement(
@@ -656,20 +732,86 @@ function detailView(
         React.createElement('div', { style: { fontSize: 11.5, lineHeight: 1.6 } }, extra.text),
       ),
     ),
+    // 底部**两段散文**（用户口径）：方法一段、边界一段。
+    // ⚠ `proseSection` 用内联样式、**不复用 `tw-hint`** ⇒ 紧凑/隐身档下两段都默认可见（红线）。
     React.createElement(
       'div',
-      { className: 'tw-tool-card', style: CARD_SURFACE },
-      sectionHead(model.boundary.title, model.boundary.note),
+      { className: 'tw-tool-card', style: { ...CARD_SURFACE, display: 'flex', flexDirection: 'column', gap: TOOL_SPACE.cardHeadGap } },
+      proseSection(model.method.title, model.method.lines, 'tool-method', 'tool-method-line'),
+      proseSection(model.boundary.title, model.boundary.lines, 'tool-legal', 'tool-legal-line'),
+    ),
+  )
+}
+
+/**
+ * 一行市场**横条**（用户口径）：市场名 +（当前最多的徽标）→ 当前相对份额 → 长条 → 右端「近5日 升温/降温」。
+ *
+ * 诚实信息（规模 / 偏好分 / 动量 / 横截面排名）在条下方的小字里（同时进 `title`/`aria-label`，悬停可读）；
+ * 缺数据的行仍有 `未取到 + 原因`（**不用 `tw-hint`**：紧凑/隐身档会隐藏）。
+ */
+function barRow(bar: ToolBarRow): React.ReactElement {
+  const deltaColor = bar.deltaKind === 'warm' ? BAR.warm : bar.deltaKind === 'cool' ? BAR.cool : BAR.flat
+  return React.createElement(
+    'div',
+    { key: bar.name, 'data-role': 'tool-flow-bar', 'data-top': bar.top ? '1' : '0', style: { display: 'flex', flexDirection: 'column', gap: BAR.headGap, minWidth: 0 } },
+    React.createElement(
+      'div',
+      { style: { display: 'flex', alignItems: 'baseline', gap: 8, minWidth: 0 } },
+      React.createElement('span', { style: { fontWeight: 600, fontSize: 13 } }, bar.name),
+      bar.top
+        ? React.createElement(
+            'span',
+            {
+              'data-role': 'tool-bar-badge',
+              style: { flexShrink: 0, fontSize: 10.5, lineHeight: '16px', padding: '0 6px', borderRadius: 6, border: '1px solid var(--tw-border)', background: 'var(--tw-accent-soft)', color: 'var(--tw-accent)' },
+            },
+            '当前最多',
+          )
+        : null,
+      React.createElement('span', { style: { marginLeft: 'auto', fontSize: 12.5, color: 'var(--tw-muted)', whiteSpace: 'nowrap' } }, `当前相对份额 ${bar.shareText}`),
+    ),
+    React.createElement(
+      'div',
+      { style: { display: 'flex', alignItems: 'center', gap: BAR.barGap, minWidth: 0 } },
       React.createElement(
-        'ul',
-        { 'data-role': 'tool-legal', style: { margin: 0, paddingLeft: 18, display: 'flex', flexDirection: 'column', gap: 4 } },
-        // ⚠ 边界声明（含「不是真实跨境资金净流入」这条免责）**不许用 `tw-hint`**：
-        // 那个类在紧凑/隐身视图下 display:none（styles.ts:90-98），会把免责声明整块藏掉。
-        // 这里改用等价的内联样式 ⇒ 任何视图档下都默认可见（AUDIT-IMPL46 §4）。
-        model.boundary.lines.map((line) =>
-          React.createElement('li', { key: line, 'data-role': 'tool-legal-line', style: { margin: 0, fontSize: 11, lineHeight: 1.65, color: 'var(--tw-muted)' } }, line),
-        ),
+        'div',
+        { 'data-role': 'tool-bar-track', style: { flex: 1, minWidth: 0, height: BAR.trackHeight, borderRadius: BAR.radius, background: BAR.track, overflow: 'hidden' } },
+        bar.sharePct === null
+          ? null
+          : React.createElement('div', {
+              'data-role': 'tool-bar-fill',
+              style: { width: `${Math.max(0, Math.min(100, bar.sharePct))}%`, height: '100%', borderRadius: BAR.radius, background: BAR.fill },
+            }),
       ),
+      React.createElement('span', { 'data-role': 'tool-bar-delta', style: { flexShrink: 0, fontSize: 11.5, color: deltaColor, whiteSpace: 'nowrap' } }, `近5日 ${bar.deltaText}`),
+    ),
+    React.createElement(
+      'div',
+      { 'data-role': 'tool-bar-detail', title: bar.detail, 'aria-label': bar.detail, style: { fontSize: 11, lineHeight: 1.5, color: 'var(--tw-muted)' } },
+      bar.detail,
+    ),
+    bar.note === null
+      ? null
+      : React.createElement('div', { 'data-role': 'tool-row-note', style: { fontSize: 10.5, lineHeight: 1.5, color: 'var(--tw-muted)' } }, `${NOT_FETCHED}：${bar.note}`),
+  )
+}
+
+/**
+ * **散文段**（用户口径：底部两段散文 `当前偏好怎么判断` / `这份数据的边界`）。
+ *
+ * ⚠ 事实一条不许少：每段把该组的句子**逐句**渲染（不是摘要），且**不用 `tw-hint`**
+ * （那个类在紧凑/隐身档 `display:none`，会把免责与口径整块藏掉）。
+ */
+function proseSection(title: string, lines: readonly string[], role: 'tool-method' | 'tool-legal', lineRole: 'tool-method-line' | 'tool-legal-line'): React.ReactElement {
+  return React.createElement(
+    'section',
+    { 'data-role': role, style: { display: 'flex', flexDirection: 'column', gap: 6 } },
+    React.createElement('h3', { 'data-role': `${role}-title`, style: { margin: 0, ...CHART_TYPE.cardTitle } }, title),
+    // 逐句渲染成一段连续散文（句号/分号分隔），每句都带 data-role ⇒ 断言可以核对"一条都没删"
+    React.createElement(
+      'p',
+      { 'data-role': lineRole, style: { margin: 0, fontSize: 11.5, lineHeight: 1.8, color: 'var(--tw-muted)' } },
+      lines.map((line, i) => React.createElement('span', { key: i, style: { marginRight: 2 } }, line)),
     ),
   )
 }
@@ -681,11 +823,18 @@ function detailView(
  *
  * 反例（测试里会注入）：把 note 直接当可见文本渲染回来 ⇒ 判据非空。
  */
-function sectionHead(title: string, note: string): React.ReactElement {
+function sectionHead(title: string, note: string, subtitle: string | null = null): React.ReactElement {
   return React.createElement(
     'div',
-    { className: 'tw-panel-h', style: { paddingBottom: TOOL_SPACE.cardHeadGap } },
-    React.createElement('span', { className: 't', 'data-role': 'tool-section-title', title: note, 'aria-label': `${title}：${note}`, style: CHART_TYPE.cardTitle }, title),
+    { className: 'tw-panel-h', style: { paddingBottom: TOOL_SPACE.cardHeadGap, flexDirection: 'column', alignItems: 'flex-start', gap: 4 } },
+    React.createElement('span', { className: 't', 'data-role': 'tool-section-title', title: note, 'aria-label': `${title}：${note}`, style: { ...CHART_TYPE.cardTitle, flex: 'none', whiteSpace: 'normal' } }, title),
+    subtitle === null
+      ? null
+      : React.createElement(
+          'span',
+          { 'data-role': 'tool-section-subtitle', style: { margin: 0, fontSize: 12, lineHeight: 1.55, color: 'var(--tw-muted)' } },
+          subtitle,
+        ),
   )
 }
 
@@ -958,8 +1107,7 @@ function pieChart(props: { slices: Array<{ label: string; text: string; value: n
       'aria-label': `份额饼图${props.center === null ? '' : `（${props.center}）`}`,
     },
     arcs,
-    // 中心留白（放选中的那一天；饼图本身是静态的，不做动画/自动播放）
-    React.createElement('circle', { cx: CX, cy: CY, r: R * 0.42, fill: 'var(--tw-card)' }),
-    React.createElement('text', { x: CX, y: CY + 2.4, fontSize: 6.5, fill: 'var(--tw-muted)', textAnchor: 'middle' }, props.center ?? ''),
+    // ⚠ **实心饼**（用户口径）：不再挖中心孔、也不在中心写字 —— 选中日改到饼上方的小字
+    //（`data-role="tool-pie-day"`，见右列渲染处）。断言会检查这里**没有** tool-pie-center。
   )
 }

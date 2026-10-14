@@ -32,8 +32,9 @@ import {
 import * as ToolReg from './toolRegistry.ts'
 import * as ToolText from './toolText.ts'
 import { cakeTool } from './tools/cake.ts'
+import { FACT_TOPICS, factCoverageProblems, missingFactTopics, topicInLine } from './toolFacts.ts'
 // ⚠ 从宿主读窗口集合：工具档位必须与宿主允许的窗口一致（两处漂移是"切档拿到不存在的窗口"的根因）
-import { FLOW_CURVE_WINDOWS } from '../host/globalFlow.ts'
+import { FLOW_BOUNDARY, FLOW_CURVE_WINDOWS } from '../host/globalFlow.ts'
 
 /** 断言用的固定条目（不碰真实注册表；`sections: []` 时 detailModel 走"缺区"回退） */
 function fixture(id: string, name: string, blurb: string, chip: string, category: string): ToolEntry {
@@ -142,13 +143,28 @@ test('注册表第一个条目 = 蛋糕工具；toolById 认它、认不出给 n
   assert.equal(toolById('nope'), null, '认不出的 id 必须给 null（调用方回目录页，而不是渲染半个空页）')
 })
 
-test('详情页骨架：五个区齐全且顺序固定（KPI 行 / 曲线区 / 饼图区 / 市场表 / 边界声明）', () => {
+test('① 详情页骨架：五个区齐全、顺序固定，且标题是**用户语**（不许内部区名）', () => {
   const d = detailModel(cakeTool)
+  const titles = [d.kpi.title, d.curve.title, d.pie.title, d.market.title, d.boundary.title]
   assert.deepEqual(
-    [d.kpi.title, d.curve.title, d.pie.title, d.market.title, d.boundary.title],
-    ['KPI 行', '曲线区', '饼图区', '市场表', '边界声明'],
-    '骨架区的顺序与标题就是详情页的渲染顺序（测试锁它）',
+    titles,
+    ['四个读数', '蛋糕构成与份额曲线', '最近三十个交易日', '钱现在更偏向哪里', '这份数据的边界'],
+    '骨架区的顺序与标题就是详情页的渲染顺序（测试锁用户语标题）',
   )
+  // 兜底标题（工具文件漏写 `title` 时用）也必须是用户可读文案：绝不出现内部区名
+  const bare = detailModel({ ...cakeTool, sections: [] })
+  const fallbacks = [bare.kpi.title, bare.curve.title, bare.pie.title, bare.market.title, bare.boundary.title]
+  for (const internal of ['KPI 行', '曲线区', '饼图区', '市场表', '边界声明']) {
+    assert.equal(fallbacks.includes(internal), false, `兜底标题不许是内部名「${internal}」（实得 ${JSON.stringify(fallbacks)}）`)
+  }
+  assert.deepEqual(fallbacks, ['关键指标', '份额曲线', '最近三十个交易日', '市场构成', '数据边界'], '兜底标题必须是用户可读文案')
+  // 反例注入（用户点名的回归形态）：内部区名回填 ⇒ 必败
+  for (const internal of ['曲线区', '饼图区', '市场表', 'KPI 行']) {
+    assert.equal(titles.includes(internal), false, `区标题不许是内部名「${internal}」`)
+    assert.throws(() => assert.deepEqual([...titles], [...titles.slice().fill(internal)], '反例上必须失败'), /反例上/, `⚠ 回填「${internal}」必须让上面的断言失败`)
+  }
+  // 市场段的**可见副标题**（用户给的原文）
+  assert.equal(d.market.subtitle, '曲线展示五个市场的相对份额变化；横条越长，当前资金偏好越强', '市场段必须有用户给的副标题')
   assert.deepEqual(
     d.kpi.cells.map((c) => c.label),
     ['偏好榜首', '五市场合计规模', '近五日轮动', '数据时刻'],
@@ -179,8 +195,16 @@ test('⑥ 三段式骨架（v0.81.0）：Hero / 摘要卡 / AS OF / 时间范围
   assert.deepEqual(d.ranges.options, [90, 180, 365], '时间范围必须是 90 / 180 / 365 三档')
   assert.deepEqual([...FLOW_CURVE_WINDOWS], [90, 180, 365], '工具声明的三档必须与宿主 FLOW_CURVE_WINDOWS 一致（否则切档会拿到不存在的窗口）')
   assert.deepEqual(cakeTool.ranges?.options, [...FLOW_CURVE_WINDOWS], '工具档位 = 宿主窗口集合（同一份口径）')
-  assert.equal(d.ranges.selected, 180, '默认档必须是 180（与改动前的行为一致）')
-  assert.equal(cakeTool.ranges?.initial, 180, '工具文件里的默认档也必须是 180')
+  // 用户口径（v0.85.0 收口）：默认档改成 365（目标布局"默认 365 日"）；曲线本就是 365 点本地切片 ⇒ 不新增请求
+  assert.equal(d.ranges.selected, 365, '默认档必须是 365')
+  assert.equal(cakeTool.ranges?.initial, 365, '工具文件里的默认档也必须是 365')
+  // 页面不许写死默认档：模型里的 selected 必须来自工具声明（把声明改掉 ⇒ selected 跟着变）
+  assert.equal(detailModel({ ...cakeTool, ranges: { options: cakeTool.ranges?.options ?? [], initial: 90 } }).ranges.selected, 90, '默认档必须来自工具声明（页面不许写死）')
+  assert.throws(
+    () => assert.equal(detailModel({ ...cakeTool, ranges: { options: cakeTool.ranges?.options ?? [], initial: 90 } }).ranges.selected, 180),
+    /Expected values to be strictly equal/,
+    '⚠ 反例（页面写死 180）必须让断言失败',
+  )
   // 反例注入：把档位写死成一档 ⇒ 上面两条必败（证明断言不是从实现里读出来的）
   const fixed = { ...d, ranges: { options: [180], selected: 180 } }
   assert.throws(() => assert.deepEqual(fixed.ranges.options, [90, 180, 365], '反例上必须失败'), /反例上/, '⚠ 反例（把范围写死一档）必须让断言失败')
@@ -204,6 +228,33 @@ test('⑥ 摘要卡/AS OF/范围选中值都来自 ToolData（页面不造数）
   // 数据里没有的格子仍是「未取到」+ null（不许因为别的字段有数就补 0）
   assert.equal(d.kpi.cells[1].text, NOT_FETCHED)
   assert.equal(d.kpi.cells[1].value, null)
+})
+
+/**
+ * 「方法 / 边界」两段的**事实清单**（v0.85.0）。
+ *
+ * 用户口径：底部改成两段散文（`当前偏好怎么判断` / `这份数据的边界`），但**事实一条不得删**。
+ * 这里用"关键事实标记 + 条数"把它钉住：谁把某条删掉/合并掉，标记就找不到了（反例注入已验证）。
+ */
+test('④ 两段散文（方法 + 边界）：标题、以及**15 条事实主题一条不少**（少一条 ⇒ 红）', () => {
+  const d = detailModel(cakeTool)
+  assert.equal(d.method.title, '当前偏好怎么判断')
+  assert.equal(d.boundary.title, '这份数据的边界')
+  assert.equal(d.method.lines.length > 0 && d.boundary.lines.length > 0, true, '两段都不许为空')
+  // 并集 = 工具方法段 + 工具边界段 + 宿主 FLOW_BOUNDARY（口径数字在宿主那边，有数据时才出现）
+  // 并集里必须有**宿主的数字口径**（FLOW_BOUNDARY）：它是"有数据才出现"的那一段，
+  // 因此这里用最小数据面（只给 boundary）而不是造一整个载荷 —— 断言只关心"事实在不在"。
+  const model = detailModel(cakeTool, { status: '（只读事实用）', boundary: [...FLOW_BOUNDARY] })
+  const union = [...model.method.lines, ...model.boundary.lines].join('\n')
+  assert.equal(FACT_TOPICS.length, 15, '事实主题清单必须锁在 15 条')
+  assert.deepEqual(missingFactTopics(union), [], `事实主题缺了：${missingFactTopics(union).join('、')} —— 散文可以改句式，但不许删事实`)
+  assert.deepEqual(factCoverageProblems(union), [], '事实覆盖判据必须为空')
+  // 逐主题**删除式注入**：把承载该主题的句子删掉 ⇒ 必须报出这一条（15/15）
+  for (const topic of FACT_TOPICS) {
+    const kept = [...model.method.lines, ...model.boundary.lines].filter((l) => !topicInLine(topic, l))
+    const dropped = missingFactTopics(kept.join('\n'))
+    assert.equal(dropped.includes(topic.id), true, `⚠ 删掉「${topic.label}」后必须报出主题 #${topic.id}（实得 ${JSON.stringify(dropped)}）`)
+  }
 })
 
 test('红线：无数据时必须「未取到」占位 + 给原因，且骨架里不许出现任何数字', () => {
@@ -232,8 +283,14 @@ test('红线：无数据时必须「未取到」占位 + 给原因，且骨架�
   //    不是"看起来像数"的编造值 —— 它被单独钉死（见 ⑥：必须等于 [90,180,365] 且与宿主窗口集合一致）。
   //    因此这里把 ranges 归一化后再扫全文，例外面被上面那条断言收紧了。
   assert.deepEqual(d.ranges.options, [90, 180, 365], '范围档位只有这三档（例外面必须被钉死，否则例外会变成洞）')
+  //    口径散文（`method` / `boundary`）**不在这条红线的扫描范围内**：那些句子本来就该写出
+  //    权重与窗口（「55% × 贪婪值 + 30% × …」「60 日区间分位」是口径文句，不是数据格）。
+  //    把它们算进来的话，这条红线会变成"不许解释口径"——那不是它的本意（本意是"不许编数据"）。
+  //    口径数字（55%/30%/15%/60 日）**留在宿主 `FLOW_BOUNDARY`**：有数据时才随口径行出现；
+  //    工具文件的方法段与区标题改成不含阿拉伯数字（「按固定比例加权」「最近三十个交易日」）
+  //    ⇒ 白名单不需要扩大（仍只有 ranges 的 90/180/365）。
   const text = JSON.stringify({ ...d, ranges: { options: [], selected: null } })
-  assert.equal(/\d/.test(text), false, `详情页骨架里出现了数字（可能是编造的默认值）：${text.slice(0, 200)}`)
+  assert.equal(/\d/.test(text), false, `详情页骨架里出现了数字（可能是编造的默认值）：${text.slice(0, 240)}`)
 })
 
 test('红线（结构先行工具，没有 loader）：占位原因用 PENDING_WHY，且同样零数字', () => {
