@@ -115,7 +115,7 @@
 | --- | --- | --- | --- |
 | 1 | README：「宿主侧只需 `webServer` + `webRuntime` 两个服务」 | `src/index.ts:26` `export const inject = ['webServer', 'webRuntime']` | ✅ 一致 |
 | 2 | README：「不依赖任何第三方侧边栏插件」 | 全仓 grep `betterSidebar` = 0 命中；`package.json` `dependencies = {}`（仅 devDeps：esbuild / typescript / @types） | ✅ 一致 |
-| 3 | README：「数据都在 `~/.dsh/dsh-tradewatcher/*.json`（明文）」+ 数据文件表 | 表里**漏了 3 个真实落盘文件**：`trading-calendar.json`、`global-flow.json`、`market-extras.json`（本批发现 ⇒ **改文案**：已补 3 行）+ 新增断言"表必须覆盖宿主代码里的每个 `*.json` 字面量" | ⚠️ **发现不一致 ⇒ 已修**（文案侧） |
+| 3 | README：「数据都在 `~/.dsh/dsh-tradewatcher/*.json`（明文）」+ 数据文件表 | 表里**漏了 3 个真实落盘文件**：`trading-calendar.json`、`global-flow.json`、`market-extras.json`（本批发现 ⇒ **改文案**：已补 3 行）+ 新增断言"表必须覆盖宿主代码里的每个 `*.json` 字面量"。⚠️ **2026-10-15 追记（REVIEW-4-RISK I09）**：这条断言起初只扫**硬编码的 8 个 host 文件**、且只匹配单引号小写字面量 ⇒ 把新文件写到别的文件里仍全绿，属"断言能力被夸大"。现改为**扫描生成**：遍历 `src/host/**/*.ts`（排除测试）取全部 `.json` 字面量，逐条要求被 README 数据文件表覆盖（模式行 `<YYYY-MM-DD>/<secid>/<周期>/<口径>` 按**有语义**的占位符匹配；未识别占位符一律算未覆盖；排除项只能来自显式的 `NOT_DATA` 表并有理由） | ⚠️ **发现不一致 ⇒ 已修**（文案侧）+ ⚠️ **断言已加强** |
 | 4 | README：「数量与成本**不落盘**，全部由流水推导」 | `positions.json` 只存 `{id,groupId,secid,name,note?,createdAt}`；数量/成本由 `ledger.json` 核算（`src/host/portfolio.ts`） | ✅ 一致 |
 | 5 | README：「（金额遮罩）**只影响显示**，取数、告警、agent 工具返回完全不受影响」 | 遮罩/模糊全部在客户端（`.tw-root[data-view]` / `[data-blur=1]`），主机半区无任何遮罩分支 | ✅ 一致 |
 | 6 | README：「（不透明度/模糊）只作用于本插件面板」 | 不透明度挂在 `.tw-root` 的 `style.opacity`（`src/client/index.tsx`），模糊选择器全部以 `.tw-root[data-blur=1]` 开头 | ✅ 一致 |

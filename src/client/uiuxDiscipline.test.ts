@@ -13,7 +13,7 @@
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
+import { readdirSync, readFileSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
@@ -43,9 +43,11 @@ function readSrc(rel: string): string {
   return readFileSync(join(ROOT, 'src/client', rel), 'utf8')
 }
 
+/** 读一个宿主源文件（相对 `src/host`）；⑥ 的 README 覆盖扫描现在自己 walk `src/host/**`（不再硬编码文件表） */
 function readHost(rel: string): string {
   return readFileSync(join(ROOT, 'src/host', rel), 'utf8')
 }
+void readHost
 
 /** 剥注释（只留代码与字符串）：注释里会写反例说明，不能当成违规 */
 function stripComments(src: string): string {
@@ -157,23 +159,75 @@ test('⑥ 文案与行为一致：README 数据文件表必须覆盖宿主真正
   const end = readme.indexOf('\n### ', start + 5)
   assert.equal(start >= 0 && end > start, true, 'README 必须有「数据文件」小节（否则这条断言是空跑）')
   const table = readme.slice(start, end)
-  // 宿主代码里出现的 `xxx.json` 字面量 = 我们真正会落盘/读取的文件名
-  const hosts = ['store.ts', 'globalFlow.ts', 'marketExtras.ts', 'rescue.ts', 'breadth.ts', 'calendar.ts', 'fetchDedupe.ts', 'em.ts']
-  const names = new Set<string>()
-  for (const f of hosts) {
-    let src = ''
-    try {
-      src = readHost(f)
-    } catch {
-      continue
+  // ⚠ REVIEW-4-RISK I09：此前是**硬编码 8 个 host 文件**，且只匹配单引号小写字面量 ⇒
+  // 往别的文件里加一个新落盘文件也全绿（"必须覆盖每个 .json"是夸大的）。
+  // 现在改成**扫描生成**：遍历 `src/host/**/*.ts`（排除测试与 .child.ts），
+  // 匹配单/双引号与反引号里的 `.json` 文件名（含 `xxx-*.json` 这类通配写法按前缀归一）。
+  const hostFiles: string[] = []
+  const walk = (dir: string): void => {
+    for (const name of readdirSync(dir)) {
+      const p = join(dir, name)
+      if (statSync(p).isDirectory()) {
+        walk(p)
+      } else if (p.endsWith('.ts') && !p.endsWith('.test.ts') && !p.endsWith('.child.ts')) {
+        hostFiles.push(p)
+      }
     }
-    for (const m of src.matchAll(/'([a-z0-9-]+\.json)'/g)) names.add(m[1])
   }
-  // 只核对数据目录下的文件：排除明显是测试夹具/样例的日期文件名
-  const real = [...names].filter((n) => !/^\d{4}-\d{2}-\d{2}\.json$/.test(n) && n !== 'state.json' && n !== 'h2-counter.json')
+  walk(join(ROOT, 'src/host'))
+  assert.equal(hostFiles.length >= 10, true, `应当扫到至少 10 个宿主源文件（实得 ${hostFiles.length}）`)
+  const names = new Set<string>()
+  for (const p of hostFiles) {
+    const src = readFileSync(p, 'utf8')
+    for (const m of src.matchAll(/['"`]([A-Za-z0-9_.-]+\.json)['"`]/g)) names.add(m[1])
+  }
+  /** 非"数据目录文件"的排除项（每个都要有理由，不许默默略过） */
+  const NOT_DATA: Record<string, string> = {
+    'package.json': '包清单（不是插件落盘的数据文件）',
+    'tsconfig.json': 'TS 配置',
+    'state.json': '测试夹具（H1 的计数器之类）',
+    'h2-counter.json': '测试夹具（H2 锁用例的计数器）',
+  }
+  const real = [...names].filter((n) => !/^\d{4}-\d{2}-\d{2}\.json$/.test(n) && NOT_DATA[n] === undefined)
   assert.equal(real.length >= 8, true, `应当扫到至少 8 个数据文件（实得 ${real.length}：${real.join('、')}）`)
+  assert.equal(real.length, names.size - Object.keys(NOT_DATA).filter((k) => names.has(k)).length - [...names].filter((n) => /^\d{4}-\d{2}-\d{2}\.json$/.test(n)).length, '排除项只能来自 NOT_DATA 与日期夹具（不许有别的静默排除）')
+  /**
+   * 覆盖判定 = 字面命中 **或** 命中按 `<占位符>` 生成的模式行（例如 README 写
+   * `klines/<secid>_<周期>_<口径>.json`，而代码里出现的是 `1.601872_101_1.json`）——两者都算覆盖。
+   */
+  const tableTokens = [...table.matchAll(/[^\s|`()]*\.json/g)]
+    .map((m) => m[0])
+    // 取 basename：README 里写的是 `klines/<secid>_<周期>_<口径>.json` 这种带目录与中文占位符的模式行
+    .map((t) => t.split('/').pop() as string)
+  /**
+   * ⚠ 占位符必须**有语义**（不能一律换成 `[^/]+`）：`<YYYY-MM-DD>.json` 若换成"任意名"，
+   * 就会把 `brand-new-cache.json` 也算成"被模式行覆盖" ⇒ 覆盖检查形同虚设（I09 的第二个坑）。
+   * 未知占位符一律**不算覆盖**（宁可报缺，也不放过）。
+   */
+  const PLACEHOLDER: Record<string, string> = {
+    '<YYYY-MM-DD>': '\\d{4}-\\d{2}-\\d{2}',
+    '<secid>': '[^_/]+',
+    '<周期>': '[A-Za-z0-9]+',
+    '<口径>': '[A-Za-z0-9]+',
+  }
+  const patternFor = (token: string): RegExp | null => {
+    let out = token.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    for (const [ph, rx] of Object.entries(PLACEHOLDER)) out = out.split(ph).join(rx)
+    if (/<[^>]*>/.test(out)) return null // 未知占位符 ⇒ 不参与覆盖
+    return new RegExp(`^${out}$`)
+  }
   for (const n of real) {
-    assert.equal(table.includes(n), true, `README 的数据文件表漏了 ${n}（文案必须与实际落盘一致）`)
+    // 代码里可能**原样**写着占位名（例如 `YYYY-MM-DD.json`）⇒ 归一成 `<YYYY-MM-DD>` 再比
+    const normalized = n.replace(/YYYY-MM-DD/g, '<YYYY-MM-DD>')
+    // 先比字面（含归一后的占位名），再比"按占位符生成的模式行"
+    const literalHit = tableTokens.some((t) => t === n || t === normalized)
+    const patternHit = tableTokens.some((t) => {
+      if (!t.includes('<')) return false
+      const rx = patternFor(t)
+      return rx !== null && (rx.test(n) || rx.test(normalized))
+    })
+    const covered = literalHit || patternHit
+    assert.equal(covered, true, `README 的数据文件表漏了 ${n}（文案必须与实际落盘一致；表里的模式行：${tableTokens.filter((t) => t.includes('<')).join('、')}）`)
   }
   // 反例注入：把某一行从 README 表里删掉 ⇒ 覆盖检查必须报出来
   for (const n of ['global-flow.json', 'market-extras.json', 'trading-calendar.json']) {

@@ -252,6 +252,8 @@ export function lastGoodPurged(): ReadonlyArray<{ secid: string; price: number |
  *  <dataHome>/quotes-lkg.json so a feed drop-window right after a host
  *  restart can never blank the UI (values survive the process). */
 const lastGood = new Map<string, QuoteRow>()
+/** 本次装载时"没有出处"的行数（REVIEW-4-RISK §P2：真机 46/130；清零说明标注已写回文件） */
+let lkgSourceUnknown = 0
 let lkgLoaded: Promise<void> | null = null
 let lkgDirty = false
 let lkgLastWrite = 0
@@ -277,9 +279,25 @@ async function loadLastGood(): Promise<void> {
           lkgPurged.push({ secid: row.secid, price: row.price, at: typeof row.at === 'number' ? row.at : null, reason: retired })
           continue
         }
+        /**
+         * 出处账（REVIEW-4-RISK §P2）：老版本落盘的行没有 `source` ⇒ 加载时**如实标注"未记录"**，
+         * 而不是让它以"有值但无出处"的形态继续存在（真机实测 46/130 行如此）。
+         * 标注本身也算一次改动 ⇒ 置 dirty，下一次落盘会把标注写回文件。
+         */
+        const hadSource = typeof (row as { source?: unknown }).source === 'string' && (row as { source?: string }).source !== ''
+        // `'lkg'` 是**准确的**：这个值确实是从本地兜底库读出来的（与 line ~508 服务兜底值时同一语义），
+        // 而不是编一个具体上游（em/tencent/sina 才是编）
+        const withSource: QuoteRow = hadSource ? row : { ...row, source: 'lkg' }
+        if (!hadSource) {
+          lkgDirty = true
+          lkgSourceUnknown += 1
+        }
         // 键用大小写无关形式：库里可能存着历史写入的大写 secid（如 114.LHM），
         // 而新请求是小写（114.lhm）—— 按原样做键会让这些标的丢掉兜底价
-        lastGood.set(row.secid.toUpperCase(), typeof row.at === 'number' ? row : { ...row, at: fileTs })
+        lastGood.set(withSource.secid.toUpperCase(), typeof withSource.at === 'number' ? withSource : { ...withSource, at: fileTs })
+      }
+      if (lkgSourceUnknown > 0) {
+        console.warn(`[tradewatcher] quotes-lkg：${lkgSourceUnknown} 行没有 origin（旧版落盘）⇒ 已按事实标注 source=lkg（值来自本地兜底库）并在下次落盘写回`)
       }
       if (lkgPurged.length > 0) {
         console.warn(
@@ -1089,6 +1107,30 @@ let trendLkgDirty = false
 let trendLkgLastWrite = 0
 const TREND_LKG_PERSIST_MS = 5000
 const TREND_LKG_MAX = 400
+/**
+ * 体积/条数上限（REVIEW-4-RISK §P2）：真机实测这份文件 **5.19MB / 111 条**，
+ * 且每 5 秒**整份重写**（写放大）。两道闸：
+ *   · `TREND_LKG_MAX_BYTES`：序列化后超限 ⇒ 按 `at` 从旧到新淘汰，直到压到上限的 80%；
+ *   · **内容未变则不写**：与上次落盘的载荷逐字节比较（这份文件大，字符串比较远比写盘便宜）。
+ */
+const TREND_LKG_MAX_BYTES = 4 * 1024 * 1024
+let trendLkgLastPayloadHash: number | null = null
+/** 便宜的内容指纹（字符串长度 + 一段抽样；不做加密级摘要，够用且零依赖） */
+export function payloadFingerprint(text: string): number {
+  let h = 2166136261
+  // 短文本**逐字符**（判别性优先：小改动也要变）；长文本（>400KB）才抽样，避免每次落盘扫全量
+  const stride = text.length > 400_000 ? 97 : 1
+  for (let i = 0; i < text.length; i += stride) {
+    h ^= text.charCodeAt(i)
+    h = Math.imul(h, 16777619)
+  }
+  // 末尾 4KB 再密扫一遍：`ts` 与"最新分时"都在尾部，抽样最容易漏掉这里的改动
+  for (let i = Math.max(0, text.length - 4096); i < text.length; i += 1) {
+    h ^= text.charCodeAt(i)
+    h = Math.imul(h, 16777619)
+  }
+  return (h ^ text.length) >>> 0
+}
 
 function trendKey(secid: string, ndays: number): string {
   return `${secid}|${ndays}`
@@ -1113,6 +1155,48 @@ async function loadTrendLkg(): Promise<void> {
   return trendLkgLoaded
 }
 
+/**
+ * 体积上限（**纯函数**，可测）：超限时按 `at` 新 → 旧保留，压到上限的 80% 留余量。
+ * 返回 `{ text, kept, dropped }`；`dropped` 供调用方清掉内存里的对应条目。
+ */
+export function trimTrendPayload(
+  entries: Array<{ key: string; at: number; trend: unknown }>,
+  maxBytes = TREND_LKG_MAX_BYTES,
+): { text: string; kept: Array<{ key: string; at: number; trend: unknown }>; dropped: string[] } {
+  const full = JSON.stringify({ ts: Date.now(), entries })
+  if (full.length <= maxBytes) return { text: full, kept: entries, dropped: [] }
+  const target = Math.floor(maxBytes * 0.8)
+  const sorted = [...entries].sort((a, b) => b.at - a.at)
+  const kept: Array<{ key: string; at: number; trend: unknown }> = []
+  let size = 0
+  for (const e of sorted) {
+    const len = JSON.stringify(e).length + 1
+    if (size + len > target) continue
+    kept.push(e)
+    size += len
+  }
+  const keptKeys = new Set(kept.map((k) => k.key))
+  return { text: JSON.stringify({ ts: Date.now(), entries: kept }), kept, dropped: entries.filter((e) => !keptKeys.has(e.key)).map((e) => e.key) }
+}
+
+/**
+ * **要不要落盘**（纯函数，可测）：① 不 dirty ⇒ 不写；② 距上次不足节流窗口 ⇒ 不写；
+ * ③ **内容指纹没变 ⇒ 不写**（写放大就在这一条上：真机 5.19MB × 每 5 秒整份重写）。
+ */
+export function trendWriteDecision(input: {
+  dirty: boolean
+  now: number
+  lastWrite: number
+  payload: string
+  lastFingerprint: number | null
+}): { write: boolean; fingerprint: number; reason: string } {
+  const fingerprint = payloadFingerprint(input.payload)
+  if (!input.dirty) return { write: false, fingerprint, reason: '不 dirty' }
+  if (input.now - input.lastWrite < TREND_LKG_PERSIST_MS) return { write: false, fingerprint, reason: '节流窗口内' }
+  if (fingerprint === input.lastFingerprint) return { write: false, fingerprint, reason: '内容未变（跳过整份重写）' }
+  return { write: true, fingerprint, reason: '有变化' }
+}
+
 function persistTrendLkg(): void {
   if (!trendLkgDirty) return
   const now = Date.now()
@@ -1128,10 +1212,19 @@ function persistTrendLkg(): void {
     }
   }
   const entries = [...trendLkg.entries()].map(([key, v]) => ({ key, at: v.at, trend: v.trend }))
+  const trimmed = trimTrendPayload(entries)
+  if (trimmed.dropped.length > 0) {
+    console.warn(`[tradewatcher] trends-lkg 超过体积上限（>${(TREND_LKG_MAX_BYTES / 1024 / 1024).toFixed(1)}MB）：保留最近 ${trimmed.kept.length}/${entries.length} 条`)
+    for (const key of trimmed.dropped) trendLkg.delete(key)
+  }
+  const decision = trendWriteDecision({ dirty: trendLkgDirty, now, lastWrite: trendLkgLastWrite, payload: trimmed.text, lastFingerprint: trendLkgLastPayloadHash })
+  if (!decision.write) return // 不 dirty / 节流 / **内容未变** ⇒ 一律不写
+  trendLkgLastPayloadHash = decision.fingerprint
+  const text = trimmed.text
   void (async () => {
     try {
       // 原子写（同上：4MB 级的文件更容易被读者撞上"半截"）
-      await writeFileAtomic(join(dataHome(), 'trends-lkg.json'), JSON.stringify({ ts: Date.now(), entries }))
+      await writeFileAtomic(join(dataHome(), 'trends-lkg.json'), text)
     } catch (error) {
       console.warn('[tradewatcher] persist trends-lkg failed:', String(error))
     }

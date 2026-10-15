@@ -60,6 +60,53 @@ test('③ 每主机预算：5 次/小时，第 6 次必须被拦住（计数可�
   assert.equal(Object.keys(new HostBudget(budget.snapshot()).snapshot()).includes(host), true, '落盘再读回来仍能继续计数')
 })
 
+test('③b `$` 锚点必须是**判别性**的：`/private$` 拦 `/private` 但不拦 `/private/x`', () => {
+  // ⚠ 上一版用例只测 `/api/*.csv$` vs 带查询串的路径 —— 两种实现下都返回 false ⇒ 靠巧合通过（REVIEW-4-RISK I15）
+  assert.equal(robotsPatternMatch('/private$', '/private'), true, '带 $ 的规则必须拦住等长路径本身')
+  assert.equal(robotsPatternMatch('/private$', '/private/x'), false, '带 $ 的规则不许顺带拦住子路径')
+  assert.equal(robotsPatternMatch('/private', '/private/x'), true, '不带 $ 的规则是前缀匹配（子路径也拦）')
+  const rules = [{ allow: false, pattern: '/private$' }]
+  assert.equal(robotsAllows(rules, '/private').allowed, false, '`/private` 必须被拦')
+  assert.equal(robotsAllows(rules, '/private/x').allowed, true, '`/private/x` 不该被这条规则拦')
+  assert.equal(robotsPatternMatch('/api/*.csv$', '/api/v3/x.csv?rows=2'), false, '带查询串不算命中（保留原用例）')
+})
+
+test('③c 成功一次请求 ⇒ 该主机 `req` 计数 +1；超限后 ⇒ 零请求且原因可见（I14 的守门断言）', async () => {
+  // ⚠ REVIEW-4-RISK I14：此前**没有任何**断言检查"成功请求会让计数 +1" ⇒ 把 spend 删掉也全绿
+  const { gatedFetch } = await import('./robotsGate.ts')
+  const { __resetRobotsCache } = await import('./robotsGate.ts')
+  __resetRobotsCache()
+  const original = globalThis.fetch
+  const calls: string[] = []
+  const reply = (text: string): Response =>
+    ({ ok: true, status: 200, text: async () => text, json: async () => ({}), arrayBuffer: async () => new ArrayBuffer(0) }) as unknown as Response
+  globalThis.fetch = (async (input: unknown) => {
+    const url = typeof input === 'string' ? input : String((input as { url?: string })?.url ?? '')
+    calls.push(url)
+    if (url.includes('/robots.txt')) return reply('User-agent: *\nAllow: /\n')
+    return reply('ok')
+  }) as typeof fetch
+  try {
+    const budget = new HostBudget()
+    const host = 'ledger.test'
+    const before = budget.used(host)
+    const first = await gatedFetch('https://ledger.test/data/a.csv', { budget, host })
+    assert.equal(first.ok, true, '第一次请求应当成功')
+    assert.equal(budget.used(host), before + 1, '⚠ 成功一次必须让该主机计数 +1（删掉 spend 就会红）')
+    assert.equal(budget.snapshot()[host]?.length, 1, '落盘快照里也要看得见这一次')
+    // 用满后：第 6 次零请求 + 原因可见
+    for (let i = 1; i < HOST_BUDGET_MAX; i += 1) await gatedFetch(`https://ledger.test/data/${i}.csv`, { budget, host })
+    assert.equal(budget.used(host), HOST_BUDGET_MAX, `用满 ${HOST_BUDGET_MAX} 次`)
+    const dataCalls = calls.filter((u) => u.includes('/data/')).length
+    const sixth = await gatedFetch('https://ledger.test/data/6th.csv', { budget, host })
+    assert.equal(sixth.ok, false, '第 6 次必须被拦住')
+    assert.ok(sixth.ok === false && sixth.note.includes('预算'), `原因必须写清是预算：${sixth.ok === false ? sixth.note : ''}`)
+    assert.equal(calls.filter((u) => u.includes('/data/')).length, dataCalls, '超限之后**零请求**（连 robots 都不该再打数据路径）')
+  } finally {
+    globalThis.fetch = original
+  }
+})
+
 test('④ 反例（判据不是恒真）：超预算 / 被 Disallow 都必须能被判出来', () => {
   const budget = new HostBudget({ 'x.test': [Date.now(), Date.now(), Date.now(), Date.now(), Date.now()] })
   assert.equal(budget.canSpend('x.test'), false, '反例：满额时必须拦住')

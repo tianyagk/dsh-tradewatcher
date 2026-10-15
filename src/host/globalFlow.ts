@@ -51,7 +51,6 @@ import { join } from 'node:path'
 import type { MissingField } from '../shared/model.ts'
 import { writeJsonAtomic } from './atomic.ts'
 import { updateJsonLocked } from './lock.ts'
-import { withHostBreaker } from './breakerFetch.ts'
 import { gatedFetch, HostBudget } from './robotsGate.ts'
 import { log } from './context.ts'
 import { isFirstBoot, quarantineFile, ReadGuard } from './readGuard.ts'
@@ -1337,17 +1336,22 @@ export function macroHistory(days: Record<string, { dxy: number | null; us10y: n
   return vals.slice(Math.max(0, vals.length - keep))
 }
 
-/** 新浪两条（GBK）：`globalbd_us10yt` 与 `DINIW`；返回解析后的现值与行情时间 */
-async function fetchSinaMacro(): Promise<{ us10y: { value: number; at: number | null } | null; dxy: { value: number; at: number | null } | null }> {
-  // H1：走 per-host 熔断记账。**用独立的熔断键**（`hq.sinajs.cn/macro`）：
-  // 宏观两档是次要读数，它失败**不许牵连主路径**（汇率/规模用的是 `hq.sinajs.cn` 那把锁）。
-  const res = await withHostBreaker('hq.sinajs.cn/macro', () =>
-    fetch('https://hq.sinajs.cn/list=globalbd_us10yt,DINIW', {
-      headers: { referer: 'https://finance.sina.com.cn/', 'user-agent': 'Mozilla/5.0' },
-      signal: AbortSignal.timeout(9000),
-    }),
-  )
-  if (!res.ok) throw new Error(`HTTP ${res.status} from hq.sinajs.cn`)
+/**
+ * 新浪两条（GBK）：`globalbd_us10yt` 与 `DINIW`；返回解析后的现值与行情时间。
+ *
+ * ⚠ v0.90.0 修（REVIEW-4-RISK §1.2）：这条**实时主源**此前只有熔断、没有 robots 与预算 ⇒ 属于"门禁没覆盖全部链路"。
+ * 现在与其它宏观链路一样走 `gatedFetch`（robots 先读、`Disallow` 零请求、≤5 次/小时）；熔断键仍是
+ * `${host}${pathname}`（与主路径的报价取数分开 ⇒ 宏观失败不牵连汇率/规模）。
+ */
+async function fetchSinaMacro(budget: HostBudget): Promise<{ us10y: { value: number; at: number | null } | null; dxy: { value: number; at: number | null } | null }> {
+  const got = await gatedFetch('https://hq.sinajs.cn/list=globalbd_us10yt,DINIW', {
+    budget,
+    host: 'hq.sinajs.cn',
+    headers: { referer: 'https://finance.sina.com.cn/', 'user-agent': 'Mozilla/5.0' },
+    timeoutMs: 9000,
+  })
+  if (!got.ok) throw new Error(got.note)
+  const res = got.res
   const text = new TextDecoder('gbk').decode(new Uint8Array(await res.arrayBuffer()))
   const pick = (symbol: string): string[] | null => {
     const m = new RegExp(`var hq_str_${symbol}="([^"]*)"`).exec(text)
@@ -1450,19 +1454,23 @@ async function fetchEcbEurUsd(budget: HostBudget): Promise<{ day: string; value:
   return series.length === 0 ? null : (series[series.length - 1] as { day: string; value: number })
 }
 
-/** 东财交叉核对（**仅核对**：失败只记说明，不参与取值） */
-async function crossCheckEastMoney(): Promise<{ ok: boolean; note: string }> {
+/**
+ * 东财交叉核对（**仅核对**：失败只记说明，不参与取值）。
+ * ⚠ v0.90.0 修：此前是裸 `fetch`（只有熔断、没有 robots/预算）⇒ 统一改走 `gatedFetch`。
+ */
+async function crossCheckEastMoney(budget: HostBudget): Promise<{ ok: boolean; note: string }> {
   try {
-    const res = await withHostBreaker('push2delay.eastmoney.com/macro', () =>
-      fetch('https://push2delay.eastmoney.com/api/qt/ulist.np/get?secids=171.US10Y,100.UDI&fltt=2&invt=2&fields=f2,f12', {
-        headers: { referer: 'https://quote.eastmoney.com/', 'user-agent': 'Mozilla/5.0' },
-        signal: AbortSignal.timeout(MACRO_CROSS_TIMEOUT_MS),
-      }),
-    )
-    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    const got = await gatedFetch('https://push2delay.eastmoney.com/api/qt/ulist.np/get?secids=171.US10Y,100.UDI&fltt=2&invt=2&fields=f2,f12', {
+      budget,
+      host: 'push2delay.eastmoney.com',
+      headers: { referer: 'https://quote.eastmoney.com/', 'user-agent': 'Mozilla/5.0' },
+      timeoutMs: MACRO_CROSS_TIMEOUT_MS,
+    })
+    if (!got.ok) throw new Error(got.note)
+    const res = got.res
     const body = (await res.json()) as { data?: { diff?: Array<{ f12?: string; f2?: number }> } }
-    const got = (body.data?.diff ?? []).map((x) => x.f12).filter((x): x is string => typeof x === 'string')
-    return { ok: got.length >= 2, note: got.length >= 2 ? '东财交叉源可用（数值一致）' : '东财交叉源返回字段不完整' }
+    const seen = (body.data?.diff ?? []).map((x) => x.f12).filter((x): x is string => typeof x === 'string')
+    return { ok: seen.length >= 2, note: seen.length >= 2 ? '东财交叉源可用（数值一致）' : '东财交叉源返回字段不完整' }
   } catch (error) {
     return { ok: false, note: `东财交叉源本次不可达（${String(error).slice(0, 80)}）⇒ 仅新浪单源，未做交叉核对` }
   }
@@ -1534,7 +1542,7 @@ export async function macroRaws(): Promise<FlowMacroOut> {
 
   const [sina, treasury, ecb, cross] = await Promise.all([
     // 主源：新浪（实时/24 小时）
-    fetchSinaMacro().catch((error): { us10y: null; dxy: null } => {
+    fetchSinaMacro(budget).catch((error): { us10y: null; dxy: null } => {
       notes.push({ what: '新浪宏观行情（globalbd_us10yt / DINIW）', why: 'transient', note: `本次取数失败（${String(error).slice(0, 120)}）⇒ 稍后重试即可；这一格不用 0 顶替` })
       record('新浪 globalbd_us10yt / DINIW（实时）', false, `失败：${String(error).slice(0, 110)}`, null, null)
       return { us10y: null, dxy: null }
@@ -1544,7 +1552,7 @@ export async function macroRaws(): Promise<FlowMacroOut> {
     // 第三源（官方、免密钥）：ECB 欧元/美元 ⇒ 美元指数的**同向**参考（非同一口径）
     safe('ECB Data API（欧元/美元参考汇率）', () => fetchEcbEurUsd(budget)),
     // 东财（境内源）：尽力而为的交叉核对
-    crossCheckEastMoney().catch(() => ({ ok: false, note: '东财交叉源异常' })),
+    crossCheckEastMoney(budget).catch(() => ({ ok: false, note: '东财交叉源异常' })),
   ])
   if (sina.us10y !== null) record('新浪 globalbd_us10yt（实时）', true, '主源可用', sina.us10y.value, day)
   if (sina.dxy !== null) record('新浪 DINIW（实时）', true, '主源可用', sina.dxy.value, day)

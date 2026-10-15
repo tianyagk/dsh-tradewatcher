@@ -149,10 +149,14 @@ export class HostBudget {
 }
 
 /**
- * 过门禁的 GET（**宏观取数唯一入口**）：
+ * 过门禁的 GET（**宏观链路四条全走它**：新浪 `globalbd_us10yt/DINIW`、美国财政部日频收益率曲线、
+ * ECB 欧元/美元、东财交叉核对 —— 缺一条就等于门禁没覆盖）：
  *   ① 读 robots ⇒ 被 Disallow 的路径**零请求**，直接返回原因；
  *   ② 查预算 ⇒ 超 5 次/小时**零请求**，直接返回原因；
- *   ③ 通过 ⇒ 走该主机的熔断键取数。
+ *   ③ 通过 ⇒ `budget.spend(host)` 记账后走该主机的熔断键取数。
+ *
+ * ⚠ 断言（`globalFlow.test.ts` ⑧/⑨）：宏观块里**不许出现任何裸 `fetch(`**（结构检查，不是字符串包含），
+ * 四条主机的 URL 必须各自出现在 `gatedFetch(` 调用里；成功一次 ⇒ `req` 计数 +1（REVIEW-4-RISK I14/I16/I17）。
  */
 export async function gatedFetch(url: string, opts: { budget: HostBudget; headers?: Record<string, string>; timeoutMs?: number; host?: string }): Promise<
   | { ok: true; res: Response; note: string }

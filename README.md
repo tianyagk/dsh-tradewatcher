@@ -208,7 +208,7 @@ bash scripts/install.sh
 | `~/.dsh/dsh-tradewatcher/market-extras.json` | 大宗商品/债券等扩展行情缓存（last-known-good；上游失败时回退上次成功结果并标注时间） |
 | `~/.dsh/dsh-tradewatcher/rescue-log.json` | 护盘信号：每日信号事件、5 分钟抽样、20 日均额基准、自建样本、出分日志（60 天滚动） |
 | `~/.dsh/dsh-tradewatcher/macro-archive.json` | 宏观**后台归档**（`npm run macro:archive`）：BIS 等官方长期序列（单次约 25 秒 ⇒ **只允许后台跑，不进交互路径**），带抓取时间与来源；同样走 `robots.txt` 门禁与「每主机 ≤5 次/小时」预算 |
-| `~/.dsh/dsh-tradewatcher/write-log.json` | 写操作日志：每次写入的 `by`（会话 id）/反向操作/是否已撤销。撤销不删历史（撤销本身也留痕），保留最近 500 条 |
+| `~/.dsh/dsh-tradewatcher/write-log.json` | 写操作日志（**目前只覆盖插件代写的日历事件新增**：`tradewatcher_calendar_add` 这类；持仓/流水的写入由侧边栏自己维护、不经这里）：每条记 `by`（会话 id）/反向操作/是否已撤销。撤销不删历史（撤销本身也留痕），保留最近 500 条。真机上若从未用工具写过日历，这个文件**不会存在**（不是漏了） |
 | `~/.dsh/dsh-tradewatcher/*.json.bak` | 导入备份前自动留下的原文件副本，用于人工回滚 |
 
 - `verb`：`buy`买入 / `sell`卖出 / `adjust`调整 / `add`新建持仓 / `remove`移除持仓 / `gcreate`新建分组 / `grename`改名 / `gdelete`归档 / `grestore`还原 / `gmove`移动或编辑 / `pnote`备注

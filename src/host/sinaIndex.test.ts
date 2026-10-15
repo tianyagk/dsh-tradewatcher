@@ -94,6 +94,10 @@ test('③ 已落盘的错值：载入 last-known-good 时作废 + 留痕，且�
     assert.equal(after.rows.some((r) => r.secid === '100.N225'), false, '落盘文件里不得再留着 100.N225 的错值')
     assert.equal(after.v, 2, '落盘 schema 必须标 v2（国际指数不再接受新浪 int_* 值）')
     assert.ok((after.purged ?? []).some((p) => p.secid === '100.SPX'), '作废必须留痕在文件里（purged）')
+    // P2（REVIEW-4-RISK §P2）：旧行没有 origin ⇒ 加载时按事实标注 source=lkg，并**写回文件**
+    // （真机实测 46/130 行缺 source；不写回的话下次装载又要重新标注、出处账永远不完整）
+    const legacyRow = (after.rows as Array<{ secid: string; source?: string }>).find((r) => r.secid === '100.FCHI')
+    assert.equal(legacyRow?.source, 'lkg', `旧行缺 origin ⇒ 加载时标注 lkg 并写回（实得 ${String(legacyRow?.source)}）`)
   } finally {
     globalThis.fetch = realFetch
   }

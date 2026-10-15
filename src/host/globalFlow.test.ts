@@ -1302,8 +1302,6 @@ test('视图：五个市场全缺 ⇒ 每一格都是「未取到」+ 原因（�
 
 test('⑤ 宏观两档：新浪双源真值 + 自采样给"较上日/5 日变化" + 缺数据给原因（不写 0）', async () => {
   freshHome()
-  // 上游可达的用例必须先在隔离的起点上复位熔断（前面若有用例把新浪打挂，这里会以"熔断中"开局）
-  for (const host of ['hq.sinajs.cn', 'hq.sinajs.cn/macro', 'push2delay.eastmoney.com/macro']) breakerFor(host).recordSuccess()
   const stub = stubFetch()
   try {
     const { macroRaws, macroLogPath, readMacroLog, writeMacroSample } = await import('./globalFlow.ts')
@@ -1312,6 +1310,9 @@ test('⑤ 宏观两档：新浪双源真值 + 自采样给"较上日/5 日变化
       for (const key of [
         'hq.sinajs.cn',
         'hq.sinajs.cn/macro',
+        // ⚠ 门禁的熔断键 = `${host}${pathname}`（查询串不算）⇒ 新浪宏观这条要写完整 pathname
+        'hq.sinajs.cn/list=globalbd_us10yt,DINIW',
+        'push2delay.eastmoney.com/api/qt/ulist.np/get',
         'home.treasury.gov/robots',
         'home.treasury.gov/resource-center/data-chart-center/interest-rates/daily-treasury-rates.csv/2026/all',
         'data-api.ecb.europa.eu/robots',
@@ -1319,6 +1320,8 @@ test('⑤ 宏观两档：新浪双源真值 + 自采样给"较上日/5 日变化
         'push2delay.eastmoney.com/macro',
       ]) breakerFor(key).recordSuccess()
     }
+    // 上游可达的用例必须先在隔离的起点上复位熔断（前面若有用例把新浪/门禁打挂，这里会以"熔断中"开局）
+    resetMacroBreakers()
     /** 每主机预算**落盘**（5 次/小时）⇒ 同一用例里连续多打几次会把预算用掉：每个场景前先清零 */
     const freshBudget = async (): Promise<void> => {
       await writeMacroSample('2026-10-15', { dxy: null, us10y: null, at: Date.now(), req: {} })
@@ -1428,35 +1431,83 @@ test('⑤ 宏观两档：新浪双源真值 + 自采样给"较上日/5 日变化
   }
 })
 
-test('⑥ 源纪律（代码层扫描）：禁用的源不得接回；BIS 不得进交互路径；门禁与预算必须在链路上', () => {
+test('⑥ 源纪律（**结构性**检查）：宏观块不许裸 fetch；四条主机各自必须出现在 gatedFetch 调用里；BIS 不进交互路径', () => {
   const src = readFileSync(new URL('./globalFlow.ts', import.meta.url), 'utf8')
   const macroBlock = src.slice(src.indexOf('宏观两档：美国 10Y'), src.indexOf('export async function macroRaws'))
-  // ① 禁用源：Yahoo（403 + 服务条款禁止自动化）、FRED（链路未确认）
+  // ① 禁用源：Yahoo（403 + 条款禁自动化）、FRED（链路未确认）
   for (const banned of ['query1.finance.yahoo.com', 'fred.stlouisfed.org']) {
     assert.equal(src.includes(banned), false, `已停用的源不许出现在代码里：${banned}`)
   }
-  // ② BIS 慢（~25s）⇒ 只允许后台归档（scripts/macro-archive.mts），交互路径零引用
+  // ② BIS 慢（~25s）⇒ 只允许后台归档，交互路径零引用
   assert.equal(src.includes('stats.bis.org'), false, 'BIS 只允许后台归档，不许进交互路径')
   const archive = readFileSync(new URL('../../scripts/macro-archive.mts', import.meta.url), 'utf8')
   assert.ok(archive.includes('stats.bis.org'), 'BIS 应当在后台归档脚本里')
   assert.ok(archive.includes('gatedFetch') && archive.includes('HostBudget'), '归档脚本同样要走 robots 门禁与预算')
-  // ③ 门禁与预算必须在宏观取数链路上（拿掉就会变红：注入 K17/K18）
-  assert.ok(macroBlock.includes('gatedFetch('), '宏观取数必须走 gatedFetch（robots 门禁 + 预算）')
-  assert.ok(src.includes("from './robotsGate.ts'"), '门禁实现必须来自 robotsGate.ts（唯一实现，不许各写一份）')
-  // ④ 与用户说的三条源一致：新浪 + 美国财政部 + ECB
+  // ③ **结构检查（不是字符串包含）**：宏观链路里不许出现任何"裸 fetch"
+  //    —— REVIEW-4-RISK I16/I17：原先只查 `includes('gatedFetch(')` ⇒ 摘掉任一条链路仍全绿
+  const rawFetches: string[] = []
+  src.split('\n').forEach((line, i) => {
+    if (/(?<![\w.])fetch\(/.test(line)) rawFetches.push(`${i + 1}: ${line.trim().slice(0, 90)}`)
+  })
+  assert.deepEqual(rawFetches, [], `宏观链路只许走 gatedFetch，不许有裸 fetch：\n${rawFetches.join('\n')}`)
+  // ④ 四条主机**各自**必须由某个 `gatedFetch(` 调用取数 —— 解析调用点的**第一个实参**：
+  //    · 直接是字面量 URL ⇒ 取它的 host；· 是变量 ⇒ 回溯该变量的赋值（`const url = \`https://…\`）再取 host。
+  //    这样"把某条链路摘掉门禁"（改回裸 fetch / 换成别的取数函数）必然少一个 host ⇒ 红。
+  // 变量 → host 的**按出现位置**记录（同一个变量名会被多个函数复用 ⇒ 必须取"调用点之前最近的一次赋值"）
+  const varHosts: Array<{ name: string; host: string; index: number }> = []
+  for (const m of src.matchAll(/(?:const|let)\s+([A-Za-z0-9_]+)\s*=\s*[`'"]([^`'"]*https:\/\/([A-Za-z0-9.\-]+)[^`'"]*)[`'"]/g)) {
+    varHosts.push({ name: m[1] as string, host: m[3] as string, index: m.index ?? 0 })
+  }
+  const gateHosts = new Set<string>()
+  let cursor = src.indexOf('gatedFetch(')
+  let gateCalls = 0
+  while (cursor >= 0) {
+    gateCalls += 1
+    const rest = src.slice(cursor + 'gatedFetch('.length)
+    const firstArg = rest.slice(0, Math.max(0, rest.search(/,\s*\{/)))
+    const literal = /https:\/\/([A-Za-z0-9.\-]+)/.exec(firstArg)
+    if (literal !== null) gateHosts.add(literal[1] as string)
+    else {
+      const ident = firstArg.trim().match(/^([A-Za-z0-9_]+)/)
+      const name = ident === null ? null : (ident[1] as string)
+      const nearest = name === null ? undefined : varHosts.filter((v) => v.name === name && v.index < cursor).sort((a, b) => b.index - a.index)[0]
+      if (nearest !== undefined) gateHosts.add(nearest.host)
+    }
+    cursor = src.indexOf('gatedFetch(', cursor + 1)
+  }
+  assert.ok(gateCalls >= 4, `至少四条 gatedFetch 调用（实得 ${gateCalls}）`)
+  const HOSTS = ['hq.sinajs.cn', 'home.treasury.gov', 'data-api.ecb.europa.eu', 'push2delay.eastmoney.com']
+  for (const host of HOSTS) {
+    assert.equal(gateHosts.has(host), true, `主机 ${host} 必须由某个 gatedFetch 调用取数（实得 ${[...gateHosts].join('、')}）`)
+  }
+  // ⑤ 宏观块里出现的**每个 URL 主机**都必须落在这四条里（新增源不许绕过门禁）
+  // ⚠ 排除 `Referer` 头（`referer: 'https://finance.sina.com.cn/'` 是协议头，不是取数目标）
+  const macroHosts = [...macroBlock.matchAll(/https:\/\/([A-Za-z0-9.\-]+)/g)]
+    .filter((m) => {
+      const line = macroBlock.slice(0, m.index ?? 0).split('\n').pop() ?? ''
+      return !/referer/i.test(line)
+    })
+    .map((m) => m[1] as string)
+  const unexpected = [...new Set(macroHosts)].filter((h) => !HOSTS.includes(h))
+  assert.deepEqual(unexpected, [], `宏观块里出现了未接门禁的主机：${unexpected.join('、')}`)
+  // ⑥ 与用户说的三条源一致
   for (const need of ['hq.sinajs.cn/list=globalbd_us10yt,DINIW', 'home.treasury.gov', 'data-api.ecb.europa.eu']) {
     assert.ok(src.includes(need), `应当接入：${need}`)
   }
+  assert.ok(src.includes("from './robotsGate.ts'"), '门禁实现必须来自 robotsGate.ts（唯一实现，不许各写一份）')
 })
 
-/** 回填用例的熔断复位（与 ⑤ 里那份等价，单独放这里免得作用域纠缠） */
+/** 宏观链路的熔断复位（键 = `${host}${pathname}`，查询串不算 ⇒ 必须写完整 pathname） */
 function resetMacroBreakersForBackfill(): void {
   for (const key of [
-    'hq.sinajs.cn', 'hq.sinajs.cn/macro',
+    'hq.sinajs.cn',
+    'hq.sinajs.cn/list=globalbd_us10yt,DINIW',
     'home.treasury.gov/robots',
     'home.treasury.gov/resource-center/data-chart-center/interest-rates/daily-treasury-rates.csv/2026/all',
     'data-api.ecb.europa.eu/robots',
     'data-api.ecb.europa.eu/service/data/EXR/D.USD.EUR.SP00.A',
+    'push2delay.eastmoney.com/macro',
+    'push2delay.eastmoney.com/api/qt/ulist.np/get',
   ]) breakerFor(key).recordSuccess()
 }
 
@@ -1499,6 +1550,29 @@ test('⑦ 历史回填：官方日频补历史 ⇒ 当日/5 日变化立刻可�
       assert.ok(m2.notes.some((n) => n.what.includes('美国 10 年期国债收益率')), '全缺时必须给原因')
     }
     stubDown.restore()
+  } finally {
+    stub.restore()
+  }
+})
+
+test('⑧ 门禁覆盖**四条链路**：跑一次宏观取数 ⇒ req 账本里必须出现四家主机（含新浪与东财）', async () => {
+  freshHome()
+  resetMacroBreakersForBackfill()
+  const { __resetRobotsCache } = await import('./robotsGate.ts')
+  __resetRobotsCache()
+  const { macroRaws, readMacroLog, writeMacroSample } = await import('./globalFlow.ts')
+  const stub = stubFetch()
+  try {
+    await writeMacroSample('2026-10-15', { dxy: null, us10y: null, at: Date.now(), req: {} })
+    await macroRaws()
+    await new Promise((r) => setTimeout(r, 200))
+    const log = await readMacroLog()
+    const hosts = Object.keys(log.req ?? {})
+    // REVIEW-4-RISK §1.2：改前 req 里**只有** treasury 与 ecb（新浪/东财是裸 fetch）
+    for (const host of ['hq.sinajs.cn', 'home.treasury.gov', 'data-api.ecb.europa.eu', 'push2delay.eastmoney.com']) {
+      assert.equal(hosts.includes(host), true, `四条链路都要过门禁 ⇒ req 里必须有 ${host}（实得 ${hosts.join('、')}）`)
+      assert.equal((log.req?.[host]?.length ?? 0) >= 1, true, `${host} 至少记一次`)
+    }
   } finally {
     stub.restore()
   }

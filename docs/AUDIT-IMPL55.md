@@ -1,3 +1,8 @@
+# AUDIT-IMPL55
+
+> **本文件按批次累积**：每节里的测试数/版本号是**当时**的快照（历史记录，不追改）。
+> **最新状态见最后一节（§批 5）**：`npm run check` = **666 测试 × 两时区**、build 73 项片段、**v0.90.0**。
+
 # AUDIT-IMPL55 —— 蛋糕模型详情页：作废提示移入悬停 + 宏观四块磁贴（两项落地记录）
 
 **一行结论**：①「旧口径快照已作废」不再常驻（事实移入状态行的悬停详情，含天数与日期示例）；②四个 KPI 磁贴换成
@@ -221,7 +226,7 @@ curl -sS "https://data-api.ecb.europa.eu/service/data/EXR/D.USD.EUR.SP00.A?forma
 - **变化量**：一律**自采样**（`macro-log.json`），不用任何来源的"昨收/前值"字段；不足 ⇒ 「未取到 + 原因」。
 - **24 小时/日频品种**：不套 A 股休市冻结（宿主层无 `inSession`/`tradingDayState`；周六载荷照给真值）。
 - **独立熔断键**：`hq.sinajs.cn/macro`、`home.treasury.gov/…/daily-treasury-rates.csv/2026/all`、`data-api.ecb.europa.eu/…`、`push2delay.eastmoney.com/macro` ⇒ 宏观失败**不牵连**汇率/规模。
-- **门禁**（`src/host/robotsGate.ts`，宏观请求的唯一入口 `gatedFetch`）：
+- **门禁**（`src/host/robotsGate.ts`；**四条宏观链路全走它** —— 新浪 `globalbd_us10yt/DINIW`、美国财政部日频、ECB 欧元/美元、东财交叉核对；v0.90.0 修正：此前新浪与东财是裸 `fetch`，只有熔断没门禁，见 §批 5）：
   ① 先读 `robots.txt`（24 小时缓存；`User-agent` 分组、`Allow`/`Disallow`、`*` 通配、`$` 锚点、**最长模式优先**）⇒ `Disallow` 路径**零请求**并记录原因；
   ② **每主机 ≤5 次/小时**（`HOST_BUDGET_MAX`），超限零请求并说明 ⇒ 计数**落盘**在 `macro-log.json.req`，进程重启不会把预算重置回 5；
   ③ `robots.txt` 取不到（404/网络失败）⇒ 视为无声明限制，但把这件事写进 `diag`（不假装读过规则）。
@@ -308,3 +313,95 @@ req = {home.treasury.gov: 1, data-api.ecb.europa.eu: 1}      # 预算按小时�
 ```
 
 ⇒ 三条源在**真机进程内**全部可用；`backfill` 段此时为空（那次构建跑的是已提交的 v0.89.0 ⇒ 本批的回填要等宿主再热重载一次才会落盘，重载后「较上日/5 日变化」立刻有值）。
+
+---
+
+# 批 5：按 `REVIEW-4-RISK.md` 修四组 P0（+ P1 文案 + P2 数据卫生）
+
+**一行结论**：`REVIEW-4-RISK` 证伪的四条**全部修掉并各自配了会红的注入** —— ① 新浪实时主源与东财交叉核对**改走 `gatedFetch`**（四条宏观链路现在真的都过 robots 与 ≤5 次/小时预算，`req` 账本里能看到四家主机）；
+② 加断言「成功一次 ⇒ 该主机 `req` +1；超限 ⇒ 零请求且原因可见」；③ 加**判别性**输入 `/private$` ⇒ `$` 锚点失效必红；④ 把「字符串包含」换成**结构性检查**（宏观链路不许有裸 `fetch`、四条主机必须各自出现在 `gatedFetch` 调用点里、宏观块里的每个 URL 主机都要落在这四条内）＋ README 覆盖扫描改成**扫描生成**。
+`npm run check` **EXIT=0：666 测试 × 两时区 + 宿主自检 + build 73 项片段（v0.90.0）**；注入 **7/7 全抓**（含 REVIEW 的 5 条逃逸 + 我新加 2 条 P2）；`build.mjs` 零改动；未 commit/装/profile/**未重启服务**；实验隔离 `/tmp/risk-*`、`/tmp/kpi4-*`；**没有手工写 `~/.dsh`**。
+
+## P0-1｜门禁没覆盖全部宏观链路（已修）
+
+| 链路 | 改前 | 改后 |
+|---|---|---|
+| 新浪 `globalbd_us10yt,DINIW`（**实时主源**） | 裸 `fetch`（只包熔断） | `gatedFetch({ host:'hq.sinajs.cn' })` |
+| 东财 `171.US10Y / 100.UDI`（交叉核对） | 裸 `fetch`（只包熔断） | `gatedFetch({ host:'push2delay.eastmoney.com' })` |
+| 美国财政部日频收益率曲线 | `gatedFetch` ✓ | 不变 |
+| ECB `EXR/D.USD.EUR.SO00.A` | `gatedFetch` ✓ | 不变 |
+
+- **证据（改后）**：`globalFlow.test.ts ⑧` 跑一次 `macroRaws()` 后断言 `macro-log.json.req` 里**四家主机都在**且各 ≥1 次：
+  ```
+  四条链路都要过门禁 ⇒ req 里必须有 hq.sinajs.cn / home.treasury.gov / data-api.ecb.europa.eu / push2delay.eastmoney.com
+  ```
+  真机上一份 `macro-log.json` 是 v0.89.0 写的（只有 treasury + ecb）⇒ **宿主下次热重载后**再写就会是四家（我不重启服务）。
+- 措辞修正：`robotsGate.ts` 的「宏观取数唯一入口」→「**宏观链路四条全走它**（缺一条就等于门禁没覆盖）」，并列出四条；`docs/AUDIT-IMPL55.md` 同段落地说明同步改成事实。
+- 注入：**I16**（ECB 摘门禁换裸 `fetch`）与 **I17**（新增一条不过门禁的宏观源）改后**必红**（改前全绿，见 REVIEW-4-RISK §2.2）。
+
+## P0-2｜预算可静默失效（已修）
+
+- 新增 `robotsGate.test.ts ③c`：**一次成功的 `gatedFetch` ⇒ 该主机 `req` 计数 +1**（落盘快照里也看得见）；用满 5 次后第 6 次 ⇒ `ok:false`、原因含「预算」、且 `/data/` 请求数**不再增加**（零请求）。
+- 注入 **I14**（删掉 `opts.budget.spend(host)`）改后必红：
+  ```
+  AssertionError: 四条链路都要过门禁 ⇒ req 里必须有 hq.sinajs.cn（实得 ）   ← 计数根本没涨
+  ```
+
+## P0-3｜`$` 锚点可被静默废掉（已修）
+
+- 原用例只测 `/api/*.csv$` vs 带查询串的路径 —— **两种实现下都返回 false** ⇒ 靠巧合通过。
+- 新增 `③b` 判别性输入：`/private$` vs `/private` ⇒ **true**（拦）；`/private$` vs `/private/x` ⇒ **false**（不拦子路径）；不带 `$` 的 `/private` vs `/private/x` ⇒ true（前缀匹配）；并断言 `robotsAllows` 对两条路径给出**不同**结论。
+- 注入 **I15**（`const anchored = false`）改后必红：`带 $ 的规则必须拦住等长路径本身`。
+
+## P0-4｜断言形状（字符串包含 → 结构性检查）
+
+- `globalFlow.test.ts ⑥` 重写为**结构检查**：
+  1. **`globalFlow.ts` 里不许出现任何裸 `fetch(`**（正则 `(?<![\w.])fetch\(` 逐行扫；`gatedFetch(`/`fetchSinaG*`/`fetchTencent*` 这类不算）；
+  2. **四条主机各自必须由某个 `gatedFetch(` 调用取数** —— 解析调用点**第一个实参**：字面量直接取 host；变量则**回溯该变量在调用点之前最近的赋值**（`const url = \`https://…\``）再取 host；
+  3. 宏观块里出现的**每个 URL 主机**（排除 `Referer` 头）都必须落在这四条内 ⇒ 新增源也别想绕过。
+- README 覆盖扫描（`uiuxDiscipline.test.ts ⑥`）从**硬编码 8 个文件**改成**扫描生成**：walk `src/host/**/*.ts`（排除测试）取全部 `.json` 字面量 → 逐条要求被 README 数据文件表覆盖（模式行 `<YYYY-MM-DD>/<secid>/<周期>/<口径>` 按**有语义**的占位符匹配；未识别占位符**不算覆盖**）；排除项只能来自显式 `NOT_DATA` 表并写明理由。
+  - 途中抓到两个"看起来像守、实际没守"的坑：① 占位符一律换成 `[^/]+` 会把 `brand-new-cache.json` 也算成"被模式行覆盖" ⇒ 覆盖检查形同虚设；② 代码里原样写着 `YYYY-MM-DD.json` 时，必须先归一再比（否则误报）。
+- 注入：**I17** 必红（`宏观链路只许走 gatedFetch，不许有裸 fetch`）、**I16** 必红、**I09** 必红（`README 的数据文件表漏了 brand-new-cache.json`）。
+
+## P1｜文档与真机不符（逐条改）
+
+| 位置 | 改法 |
+|---|---|
+| `README.md`（`write-log.json` 行） | 原文写「每次写入」⇒ 与实现不符（只有 `tradewatcher_calendar_add` 这类**插件代写的日历新增**经 `writeLog`；持仓/流水由侧边栏自己维护）。改成事实并补一句：真机从未用工具写过日历 ⇒ **该文件不会存在（不是漏了）** |
+| `docs/DESIGN-UIUX-ADOPT.md:118` | 加 2026-10-15 追记：如实写明这条断言起初只扫硬编码 8 文件、I09 可绕过，现已改成扫描生成 + 有语义占位符 |
+| `docs/AUDIT-IMPL55.md` | 文件头加「**本文件按批次累积**；每节测试数/版本是当时快照；**最新 = 批 5：666 测试 / v0.90.0**」 |
+
+## P2｜数据卫生（已做）
+
+| 项 | 改法 | 断言/注入 |
+|---|---|---|
+| `quotes-lkg.json` 46/130 行缺 `source` | 装载时对缺 origin 的行按事实标注 **`source: 'lkg'`**（值确实来自本地兜底库；**不编**具体上游），并置 dirty 让标注**写回文件**；日志报出条数 | `sinaIndex.test.ts ③` 追加：写回后文件里 `100.FCHI.source === 'lkg'`；注入 **I23** 必红 |
+| `trends-lkg.json` 5.19MB / 无上限 / 每 5 秒整份重写 | 抽出两个**纯函数**：`trimTrendPayload`（超 4MB ⇒ 按 `at` 新→旧保留、压到 80%）与 `trendWriteDecision`（不 dirty / 节流窗口内 / **内容指纹未变** ⇒ 不写）；指纹 = 短文本逐字符 + 长文本抽样 + **末尾 4KB 密扫** + 长度（保证小改动也会变） | 新增 `trendLkgHygiene.test.ts` ②条（裁剪上限与保留最新；三条不写路径 + 指纹判别性）；注入 **I22**（删掉"内容未变跳过"）必红 |
+
+## 注入复现读数（REVIEW 的 5 条 + P2 的 2 条）
+
+| 注入 | 改前 | 改后（本次实测） |
+|---|---|---|
+| I14 成功请求不记账 | 全绿（REVIEW §2.2） | ✅ 红：`四条链路都要过门禁 ⇒ req 里必须有 hq.sinajs.cn（实得 ）` |
+| I15 `$` 锚点失效 | 全绿 | ✅ 红：`带 $ 的规则必须拦住等长路径本身` |
+| I16 ECB 摘门禁（裸 fetch） | 全绿 | ✅ 红：`回填后 history 必须非空（实得 0）`（ECB 不再取数 ⇒ 代理历史为空） |
+| I17 新增不过门禁的宏观源 | 全绿 | ✅ 红：`宏观链路只许走 gatedFetch，不许有裸 fetch：…` |
+| I09 README 覆盖范围硬编码 | 全绿 | ✅ 红：`README 的数据文件表漏了 brand-new-cache.json` |
+| I22（新）内容未变也整份重写 | —— | ✅ 红：`内容指纹一致 ⇒ 必须跳过整份重写` |
+| I23（新）旧行缺 origin 不标注 | —— | ✅ 红：`旧行缺 origin ⇒ 加载时标注 lkg 并写回（实得 undefined）` |
+
+## 未做 / 交回
+
+| 项 | 说明 |
+|---|---|
+| **宿主插件热重载** | 不由我做（不重启服务约束）⇒ 真机 `macro-log.json.req` 要等宿主重载本批代码后才会出现四家主机（代码侧证据已由 ⑧ 提供） |
+| REVIEW 里其余未列项（I01–I13、I18–I21 等） | 本批只按你点名的四组 P0 + P1 + P2 动手；其余注入的处置权在你 |
+| `writeLog` 的覆盖范围 | 现只覆盖插件代写的日历新增；要不要把"持仓/流水/分组"也纳入撤销账本属**产品口径**，需你定 |
+| trends-lkg 的历史体积 | 本批只加了**上限与跳过**；真机那份 5.19MB 会在下一次落盘时被裁到 4MB 以内（不手工删文件） |
+
+### 已知边界（本批引入，供你决策）
+
+- **预算与载荷缓存的相互作用**：载荷缓存 10 分钟 ⇒ 一小时最多约 6 次宏观取数 ⇒ 每主机 5 次/小时的预算**在一小时的第 6 次会被用满**，
+  那一次的四块磁贴会如实显示「未取到 + 原因（预算用尽，等窗口重置）」。这是纪律的**预期行为**，不是 bug；
+  若你希望常年不触发，可选：把宏观取数缓存拉长到 ≥12 分钟、或把上限调到 6（都属口径变更，需你定，我没擅自改）。
+- 新浪 `hq.sinajs.cn/robots.txt` 实测 **404** ⇒ 门禁按"无声明限制"处理并把这件事记进 `robotsGate` 的 note（不假装读过规则）。
