@@ -416,8 +416,13 @@ function macroTiles(payload: GlobalFlowPayloadDto, idx: number, points: Array<Gl
   const macro = payload.macro ?? null
   const us = macro?.us10y ?? null
   const dxy = macro?.dxy ?? null
-  const usWhy = macro?.notes.find((n) => n.what.includes('10 年期'))?.note ?? '本次没有取到美国 10 年期国债收益率的现值'
-  const dxyWhy = macro?.notes.find((n) => n.what.includes('美元指数'))?.note ?? '本次没有取到广义美元指数的现值'
+  /**
+   * 载荷里**根本没有 `macro` 字段** ⇒ 宿主模块比客户端旧（宿主插件还没重载）：
+   * 这时给出的原因必须可操作，不能含糊成"上游失败"（现场诊断：真机曾整块缺字段）。
+   */
+  const noField = '宿主载荷里没有宏观两档字段（宿主插件尚未重载到本版）⇒ 稍后重试或重载宿主插件；此刻不显示数值，也不用 0 顶替'
+  const usWhy = macro === null ? noField : (macro.notes.find((n) => n.what.includes('10 年期'))?.note ?? '本次没有取到美国 10 年期国债收益率的现值')
+  const dxyWhy = macro === null ? noField : (macro.notes.find((n) => n.what.includes('美元指数'))?.note ?? '本次没有取到广义美元指数的现值')
 
   const changeOf = (point: { value: number; history: number[] }, span: number): { change: number | null; span: number } => {
     const h = point.history ?? []
@@ -439,7 +444,7 @@ function macroTiles(payload: GlobalFlowPayloadDto, idx: number, points: Array<Gl
         value: us.value,
         delta: usCh === null || usCh.change === null ? `较上日 —（自采样不足一条）` : `较上日 ${usCh.change >= 0 ? '+' : ''}${(usCh.change * 100).toFixed(1)}bp（${spanNote(usCh.span)}）`,
         swatch: null,
-        source: `${us.source}｜口径：24 小时品种，不套 A 股休市冻结（任何时刻都给最新真实读数）｜自采样 ${us.samples} 条`,
+        source: `${us.source}｜口径：24 小时品种，不套 A 股休市冻结（任何时刻都给最新真实读数）｜自采样 ${us.samples} 条｜交叉核对：${us.crossCheck ?? '未做'}｜变化量口径：自采样（不用来源不明的"昨收"字段）`,
       }
   out['广义美元指数'] = dxy === null
     ? nullTile(`未取到：${dxyWhy}`)
@@ -448,7 +453,7 @@ function macroTiles(payload: GlobalFlowPayloadDto, idx: number, points: Array<Gl
         value: dxy.value,
         delta: dxyCh === null || dxyCh.change === null ? `较上日 —（自采样不足一条）` : `较上日 ${dxyCh.change >= 0 ? '+' : ''}${dxyCh.change.toFixed(2)}（${spanNote(dxyCh.span)}）`,
         swatch: null,
-        source: `${dxy.source}｜口径：24 小时品种，不套 A 股休市冻结｜自采样 ${dxy.samples} 条`,
+        source: `${dxy.source}｜口径：24 小时品种，不套 A 股休市冻结｜自采样 ${dxy.samples} 条｜交叉核对：${dxy.crossCheck ?? '未做'}｜变化量口径：自采样（不用来源不明的"昨收"字段）`,
       }
 
   // ── 流动性支持度（自定口径）+ 压力是否已传导 ─────────────────────────────────────
@@ -555,7 +560,11 @@ export function globalFlowToolData(payload: GlobalFlowPayloadDto, step = 0, rang
         label: '资金蛋糕',
         value: fmtUsd(payload.totalUsd),
         // 值 = 五市场合计规模（事实展示）；状态词 = **偏好份额**榜首（权重口径，不是规模占比）
-        note: live.length === 0 ? `${NOT_FETCHED}：没有有值市场` : top === null ? null : `偏好份额榜首 ${top.name} ${fmtSharePct(topShare)}（规模只作展示，不进权重）`,
+        // 常驻只留短句（用户口径：「规模只作展示，不进权重」不占常驻行）⇒ 该事实进 noteTitle（悬停/读屏）
+        note: live.length === 0 ? `${NOT_FETCHED}：没有有值市场` : top === null ? null : `偏好份额榜首 ${top.name} ${fmtSharePct(topShare)}`,
+        noteTitle: live.length === 0
+          ? `${NOT_FETCHED}：这一天没有一个市场拿到规模 ⇒ 合计无从谈起`
+          : `值 = 五市场合计规模（事实展示，美元计价）；规模只作展示，不进权重 —— 权重用的是偏好分（55% × 各自 60 日区间分位 + 30% × 5 日动量分位 + 15% × 20 日动量分位）；「蛋糕温度」与「流动性支持度」是我们自定的公式（参考版未公开口径），与参考版数值不可比`,
       },
       // 摘要卡 ②「当前偏好」：值 = 份额榜首（真实，取当前显示那天）
       {

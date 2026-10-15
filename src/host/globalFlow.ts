@@ -50,7 +50,9 @@ import { readFile, stat } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { MissingField } from '../shared/model.ts'
 import { writeJsonAtomic } from './atomic.ts'
+import { updateJsonLocked } from './lock.ts'
 import { withHostBreaker } from './breakerFetch.ts'
+import { gatedFetch, HostBudget } from './robotsGate.ts'
 import { log } from './context.ts'
 import { isFirstBoot, quarantineFile, ReadGuard } from './readGuard.ts'
 import { dataHome } from './store.ts'
@@ -1188,6 +1190,13 @@ export interface FlowMacroPoint {
   samples: number
   /** 数据来源（进悬停；含代码与"24 小时品种"口径） */
   source: string
+  /**
+   * 交叉核对结论（**两源不一致必须如实标注**，绝不静默取一个）：
+   * 例「两源一致：新浪 5.156% / FRED 5.090%（2026-10-14 收盘），差 6.6bp」或
+   *    「两源不一致：新浪 5.156% vs FRED 4.980%（2026-10-08 收盘），差 176bp —— 口径/时点不同，两值都列出」
+   * 取不到第二源 ⇒ 「仅单源（FRED 不可达：…）」。
+   */
+  crossCheck: string
 }
 
 export interface FlowMacroOut {
@@ -1195,12 +1204,20 @@ export interface FlowMacroOut {
   dxy: FlowMacroPoint | null
   /** 缺什么 + 为什么（`no-source` / `transient`） */
   notes: MissingField[]
+  /**
+   * 诊断留痕（**落进 `macro-log.json`**）：本次每个源的状态 + 时间 + 自采样文件路径。
+   * 用途：真机出问题时能从盘上读到"是哪一源、什么原因"，不必猜（现场证据）。
+   */
+  diag: { at: number; day: string; sources: Array<{ name: string; ok: boolean; note: string; value: number | null; day: string | null }>; mismatch: string[] }
+  logPath: string
 }
 
 interface MacroLogFile {
   v: 1
   /** 每交易日一条（本插件自采样；不写 0，取不到就那天没有这条） */
-  days: Record<string, { dxy: number | null; us10y: number | null; at: number }>
+  days: Record<string, { dxy: number | null; us10y: number | null; at: number; diag?: FlowMacroOut['diag'] }>
+  /** 每主机请求时间戳（≤5 次/小时；**落盘** ⇒ 重启不重置预算） */
+  req?: Record<string, number[]>
   updatedAt?: number
 }
 
@@ -1221,7 +1238,7 @@ export async function readMacroLog(): Promise<MacroLogFile> {
     macroGuard.clear(macroLogPath())
     const parsed = JSON.parse(raw) as MacroLogFile
     if (parsed === null || typeof parsed !== 'object' || typeof parsed.days !== 'object' || parsed.days === null) return { v: 1, days: {} }
-    return { v: 1, days: parsed.days, updatedAt: parsed.updatedAt }
+    return { v: 1, days: parsed.days, req: parsed.req, updatedAt: parsed.updatedAt }
   } catch (error) {
     if (isFirstBoot(error)) return { v: 1, days: {} }
     macroGuard.markUnreadable(macroLogPath(), error)
@@ -1230,21 +1247,32 @@ export async function readMacroLog(): Promise<MacroLogFile> {
 }
 
 /** 只保留最近 `keep` 天（按 day 字符串排序） */
-export function trimMacroDays(days: Record<string, { dxy: number | null; us10y: number | null; at: number }>, keep = FLOW_MACRO_KEEP_DAYS): Record<string, { dxy: number | null; us10y: number | null; at: number }> {
+export function trimMacroDays(days: Record<string, { dxy: number | null; us10y: number | null; at: number; diag?: FlowMacroOut['diag'] }>, keep = FLOW_MACRO_KEEP_DAYS): Record<string, { dxy: number | null; us10y: number | null; at: number; diag?: FlowMacroOut['diag'] }> {
   const keys = Object.keys(days).sort()
   if (keys.length <= keep) return days
-  const out: Record<string, { dxy: number | null; us10y: number | null; at: number }> = {}
+  const out: Record<string, { dxy: number | null; us10y: number | null; at: number; diag?: FlowMacroOut['diag'] }> = {}
   for (const k of keys.slice(keys.length - keep)) out[k] = days[k]
   return out
 }
 
 /** 写一次自采样（同一天覆盖；读不到文件时**拒绝写回**，与快照同纪律） */
-export async function writeMacroSample(day: string, sample: { dxy: number | null; us10y: number | null; at: number }): Promise<{ written: boolean; reason: string | null }> {
+export async function writeMacroSample(day: string, sample: { dxy: number | null; us10y: number | null; at: number; diag?: FlowMacroOut['diag']; req?: Record<string, number[]> }): Promise<{ written: boolean; reason: string | null }> {
   if (macroGuard.entries.some((e) => e.file === macroLogPath())) return { written: false, reason: '本进程读不到 macro-log.json ⇒ 拒绝写回（避免用一份空文件覆盖历史）' }
-  const file = await readMacroLog()
-  const days = trimMacroDays({ ...file.days, [day]: sample })
+  /**
+   * ⚠ **读-改-写必须在文件锁里做**：`macroRaws()` 里的自采样写是"尽力而为、不阻塞载荷"的（fire-and-forget），
+   * 与其它写者（同一进程的其它 tick / 归档脚本）并发时会互相覆盖 —— 实测过一次"历史被空 days 覆盖"。
+   * 计数（`req`）也一并走同一把锁，避免预算被旧快照写回。
+   */
   try {
-    await writeJsonAtomic(macroLogPath(), { v: 1, days, updatedAt: Date.now() })
+    await updateJsonLocked(
+      macroLogPath(),
+      (disk) => {
+        const file = (disk ?? { v: 1, days: {} }) as MacroLogFile
+        const days = trimMacroDays({ ...(file.days ?? {}), [day]: sample })
+        return { v: 1, days, req: sample.req ?? file.req, updatedAt: Date.now() }
+      },
+      { onCorrupt: 'null' },
+    )
     return { written: true, reason: null }
   } catch (error) {
     return { written: false, reason: `落盘失败：${String(error).slice(0, 120)}` }
@@ -1305,6 +1333,60 @@ async function fetchSinaMacro(): Promise<{ us10y: { value: number; at: number | 
   return { us10y, dxy }
 }
 
+/**
+ * **美国财政部**（官方口径，免密钥）：日频国债收益率曲线 CSV。
+ *   `https://home.treasury.gov/resource-center/data-chart-center/interest-rates/daily-treasury-rates.csv/<年>/all?type=daily_treasury_yield_curve&field_tdr_date_value=<年>&_format=csv`
+ * 取 `Date` + `10 Yr` 两列（行序是**新 → 旧**，解析时按日期排序）；robots：该站 `Allow: /`（实测）。
+ * 用途：美债 10Y 的**官方日频**口径（与新浪的实时盘中值交叉核对，标注各自日期/时点）。
+ */
+async function fetchTreasuryYield10y(budget: HostBudget): Promise<{ day: string; value: number } | null> {
+  const year = new Date().getUTCFullYear()
+  const url = `https://home.treasury.gov/resource-center/data-chart-center/interest-rates/daily-treasury-rates.csv/${year}/all?type=daily_treasury_yield_curve&field_tdr_date_value=${year}&_format=csv`
+  const got = await gatedFetch(url, { budget, timeoutMs: 15000 })
+  if (!got.ok) throw new Error(got.note)
+  const text = await got.res.text()
+  const rows = text.trim().split('\n')
+  const header = rows[0]?.split(',').map((x) => x.replace(/"/g, '').trim()) ?? []
+  const idx = header.findIndex((x) => x === '10 Yr')
+  if (idx < 0) return null
+  let best: { day: string; value: number } | null = null
+  for (const row of rows.slice(1)) {
+    const cells = row.split(',').map((x) => x.replace(/"/g, '').trim())
+    const [mm, dd, yyyy] = (cells[0] ?? '').split('/')
+    const v = Number(cells[idx])
+    if (mm === undefined || dd === undefined || yyyy === undefined || !Number.isFinite(v)) continue
+    const day = `${yyyy}-${mm.padStart(2, '0')}-${dd.padStart(2, '0')}`
+    if (best === null || day > best.day) best = { day, value: v }
+  }
+  return best
+}
+
+/**
+ * **ECB Data API**（官方，免密钥，SDMX-CSV）：欧元/美元参考汇率。
+ *   `https://data-api.ecb.europa.eu/service/data/EXR/D.USD.EUR.SP00.A?format=csvdata&lastNObservations=2`
+ * 用途：美元指数的**同向**交叉参考（⚠ EUR/USD 与"广义美元指数"**不是同一口径** ⇒ 只并列参考，不做等价核对）。
+ */
+async function fetchEcbEurUsd(budget: HostBudget): Promise<{ day: string; value: number } | null> {
+  const url = 'https://data-api.ecb.europa.eu/service/data/EXR/D.USD.EUR.SP00.A?format=csvdata&lastNObservations=2'
+  const got = await gatedFetch(url, { budget, timeoutMs: 12000 })
+  if (!got.ok) throw new Error(got.note)
+  const text = await got.res.text()
+  const rows = text.trim().split('\n')
+  const header = rows[0]?.split(',') ?? []
+  const tIdx = header.indexOf('TIME_PERIOD')
+  const vIdx = header.indexOf('OBS_VALUE')
+  if (tIdx < 0 || vIdx < 0) return null
+  let best: { day: string; value: number } | null = null
+  for (const row of rows.slice(1)) {
+    const cells = row.split(',')
+    const day = (cells[tIdx] ?? '').trim()
+    const value = Number(cells[vIdx])
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(day) || !Number.isFinite(value)) continue
+    if (best === null || day > best.day) best = { day, value }
+  }
+  return best
+}
+
 /** 东财交叉核对（**仅核对**：失败只记说明，不参与取值） */
 async function crossCheckEastMoney(): Promise<{ ok: boolean; note: string }> {
   try {
@@ -1327,36 +1409,139 @@ async function crossCheckEastMoney(): Promise<{ ok: boolean; note: string }> {
 export async function macroRaws(): Promise<FlowMacroOut> {
   const notes: MissingField[] = []
   const day = dayOf(Date.now())
-  const [sina, cross] = await Promise.all([
+  const macroLog = await readMacroLog()
+  /** 每主机预算：**从盘上接着算**（进程重启不会把 5 次/小时重置） */
+  const budget = new HostBudget(macroLog.req ?? {})
+  /** 每源状态（落进 `macro-log.json` 的 diag ⇒ 真机出问题时能从盘上看到是哪一源、什么原因） */
+  const sources: FlowMacroOut['diag']['sources'] = []
+  const record = (name: string, ok: boolean, note: string, value: number | null, dayOfValue: string | null): void => {
+    sources.push({ name, ok, note, value, day: dayOfValue })
+  }
+
+  const safe = async <T>(name: string, fn: () => Promise<T | null>): Promise<T | null> => {
+    try {
+      const v = await fn()
+      if (v === null) record(name, false, '本次没有取到可用值（上游回包不含该字段）', null, null)
+      return v
+    } catch (error) {
+      record(name, false, `不可达/失败：${String(error).slice(0, 110)}`, null, null)
+      return null
+    }
+  }
+
+  const [sina, treasury, ecb, cross] = await Promise.all([
+    // 主源：新浪（实时/24 小时）
     fetchSinaMacro().catch((error): { us10y: null; dxy: null } => {
       notes.push({ what: '新浪宏观行情（globalbd_us10yt / DINIW）', why: 'transient', note: `本次取数失败（${String(error).slice(0, 120)}）⇒ 稍后重试即可；这一格不用 0 顶替` })
+      record('新浪 globalbd_us10yt / DINIW（实时）', false, `失败：${String(error).slice(0, 110)}`, null, null)
       return { us10y: null, dxy: null }
     }),
+    // 第二源（官方、免密钥）：美国财政部日频收益率曲线 ⇒ 美债 10Y
+    safe('美国财政部（日频收益率曲线 CSV）', () => fetchTreasuryYield10y(budget)),
+    // 第三源（官方、免密钥）：ECB 欧元/美元 ⇒ 美元指数的**同向**参考（非同一口径）
+    safe('ECB Data API（欧元/美元参考汇率）', () => fetchEcbEurUsd(budget)),
+    // 东财（境内源）：尽力而为的交叉核对
     crossCheckEastMoney().catch(() => ({ ok: false, note: '东财交叉源异常' })),
   ])
-  const macroLog = await readMacroLog()
+  if (sina.us10y !== null) record('新浪 globalbd_us10yt（实时）', true, '主源可用', sina.us10y.value, day)
+  if (sina.dxy !== null) record('新浪 DINIW（实时）', true, '主源可用', sina.dxy.value, day)
+  if (treasury !== null) record('美国财政部（日频收益率曲线 CSV）', true, `日频 ${treasury.day} 收盘`, treasury.value, treasury.day)
+  if (ecb !== null) record('ECB Data API（欧元/美元参考汇率）', true, `日频 ${ecb.day}`, ecb.value, ecb.day)
+  if (cross.ok) record('东财 171.US10Y / 100.UDI', true, cross.note, null, null)
+
   const sampleAt = Date.now()
   if (sina.us10y !== null || sina.dxy !== null) {
     // 自采样是**尽力而为**：不阻塞载荷，失败只记日志（不写 0）
-    void writeMacroSample(day, { dxy: sina.dxy?.value ?? null, us10y: sina.us10y?.value ?? null, at: sampleAt })
+    void writeMacroSample(day, { dxy: sina.dxy?.value ?? null, us10y: sina.us10y?.value ?? null, at: sampleAt, diag: { at: sampleAt, day, sources, mismatch: [] }, req: budget.snapshot() })
       .then((r) => {
         if (!r.written && r.reason !== null) log(`global-flow：macro-log 未落盘（${r.reason}）`)
       })
       .catch(() => undefined)
   }
-  const mk = (key: 'dxy' | 'us10y', value: { value: number; at: number | null } | null, source: string, what: string): FlowMacroPoint | null => {
-    if (value === null) {
-      if (!notes.some((n) => n.what === what)) notes.push({ what, why: 'transient', note: '主源本次没有给出可用现值 ⇒ 稍后重试即可；这一格不用 0 顶替' })
+
+  /**
+   * 交叉核对文案：**两源不一致必须如实标注**（两个数值 + 各自日期 + 差值），绝不静默取一个。
+   * 口径纪律：新浪 = 实时/盘中；财政部 = 官方日频（**par yield**，日期标注）；ECB = 欧元/美元（**同向参考，非同一口径**）。
+   */
+  const crossText = (
+    label: string,
+    primary: { value: number; at: number | null } | null,
+    second: { day: string; value: number } | null,
+    secondName: string,
+    tol: number,
+    digits: number,
+    sameCaliber: boolean,
+    extra?: string,
+  ): string => {
+    const parts: string[] = []
+    if (primary !== null) parts.push(`盘中 ${primary.value.toFixed(digits)}`)
+    if (second === null) parts.push(`${secondName} 未取到`)
+    if (primary !== null && second !== null) {
+      const diff = primary.value - second.value
+      const unit = digits === 3 ? `${(diff * 100).toFixed(1)}bp` : diff.toFixed(2)
+      if (!sameCaliber) {
+        parts.push(`${secondName} ${second.value.toFixed(digits)}（${second.day}）—— 与主源不是同一口径（只并列参考、不做等价核对）`)
+      } else if (Math.abs(diff) <= tol) {
+        parts.push(`${secondName} ${second.value.toFixed(digits)}（${second.day}）—— 两源一致，差 ${unit}`)
+      } else {
+        parts.push(`⚠ 两源不一致（时点/口径不同，两个值都列出）：${secondName} ${second.value.toFixed(digits)}（${second.day}），差 ${unit}`)
+      }
+    } else if (primary === null && second !== null) {
+      parts.push(`仅第二源 ${secondName} ${second.value.toFixed(digits)}（${second.day}）`)
+    }
+    if (extra !== undefined) parts.push(extra)
+    return `${label}：${parts.join('；')}`
+  }
+
+  const mk = (
+    key: 'dxy' | 'us10y',
+    spot: { value: number; at: number | null } | null,
+    second: { day: string; value: number } | null,
+    secondName: string,
+    what: string,
+    digits: number,
+    tol: number,
+    sameCaliber: boolean,
+    caliber: string,
+    extra?: string,
+  ): FlowMacroPoint | null => {
+    const chosen = spot !== null
+      ? { value: spot.value, at: spot.at, source: caliber }
+      : second !== null
+        ? { value: second.value, at: Date.parse(`${second.day}T00:00:00+08:00`) || null, source: `${secondName}（日频：值是 ${second.day} 的收盘/发布值，不是实时盘中值）` }
+        : null
+    if (chosen === null) {
+      if (!notes.some((n) => n.what === what)) notes.push({ what, why: 'transient', note: '所有已接入的源本次都没有给出可用现值 ⇒ 稍后重试即可；这一格不用 0 顶替' })
       return null
     }
     const history = macroHistory(macroLog.days, key, day)
     const samples = history.length + 1
-    return { value: value.value, at: value.at, history, samples, source }
+    return {
+      value: chosen.value,
+      at: chosen.at,
+      history,
+      samples,
+      source: chosen.source,
+      crossCheck: crossText(key === 'us10y' ? '美债 10Y' : '美元指数', spot, second, secondName, tol, digits, sameCaliber, extra),
+    }
   }
+
   const out: FlowMacroOut = {
-    us10y: mk('us10y', sina.us10y, '新浪 globalbd_us10yt（24 小时品种；GBK 源，需 Referer）', '美国 10 年期国债收益率（新浪 globalbd_us10yt）'),
-    dxy: mk('dxy', sina.dxy, '新浪 DINIW（24 小时品种）', '广义美元指数（新浪 DINIW）'),
+    us10y: mk(
+      'us10y', sina.us10y, treasury, '美国财政部（官方日频 par yield）',
+      '美国 10 年期国债收益率', 3, 0.15, true,
+      '新浪 globalbd_us10yt（24 小时品种；GBK 源，需 Referer）',
+      '变化量口径：自采样（不用任何来源的"昨收/前值"字段）',
+    ),
+    dxy: mk(
+      'dxy', sina.dxy, ecb, 'ECB 欧元/美元（同向参考）',
+      '广义美元指数', 2, 1.0, false,
+      '新浪 DINIW（24 小时品种）',
+      '变化量口径：自采样（不用任何来源的"昨收/前值"字段）',
+    ),
     notes,
+    diag: { at: sampleAt, day, sources, mismatch: [] },
+    logPath: macroLogPath(),
   }
   if (!cross.ok) out.notes.push({ what: '东财交叉核对（171.US10Y / 100.UDI）', why: 'transient', note: cross.note })
   else out.notes.push({ what: '东财交叉核对（171.US10Y / 100.UDI）', why: 'no-source', note: cross.note })
@@ -1698,6 +1883,8 @@ async function payloadFromSnapshot(
         { what: '美国 10 年期国债收益率（新浪 globalbd_us10yt）', why: 'transient', note: '本次只读本地快照（零上游请求）⇒ 24 小时品种的现值没有取到；切到实时模式即可' },
         { what: '广义美元指数（新浪 DINIW）', why: 'transient', note: '本次只读本地快照（零上游请求）⇒ 24 小时品种的现值没有取到；切到实时模式即可' },
       ],
+      diag: { at: Date.now(), day, sources: [], mismatch: ['只读本地快照模式：本次没有请求任何宏观源'] },
+      logPath: macroLogPath(),
     },
     notes: { ...FLOW_NOTES },
     boundary: [...FLOW_BOUNDARY],

@@ -149,6 +149,16 @@ interface StubOptions {
   fail?: string[]
   /** 宏观两档（`globalbd_us10yt` / `DINIW`）整体失败（模拟上游宕机） */
   macroOff?: boolean
+  /** 美国财政部日频源失败 */
+  treasuryOff?: boolean
+  /** 财政部 CSV 自定义行（夹不一致/缺测用） */
+  treasuryRows?: string[]
+  /** ECB 源失败 */
+  ecbOff?: boolean
+  /** robots.txt 禁止财政部那条路径（用来验证"Disallow 的路径零请求"） */
+  robotsDenyTreasury?: boolean
+  /** robots.txt 本身 404（⇒ 视为无声明限制） */
+  robotsGone?: boolean
   /** 规模口径：real = 各市场不同量级；equal = 五家一样大（用来构造"份额持平/无轮动"） */
   aumMode?: 'real' | 'equal'
   /** 动量形状：distinct = 各市场涨速不同；same = 完全一致（⇒ 名次并列、轮动为持平） */
@@ -306,6 +316,27 @@ function stubFetch(opts: StubOptions = {}): Stub {
           .join('\n'),
       )
     }
+    // ── 公开宏观源（v0.89.0）：robots 门禁 + 美国财政部日频 + ECB ────────────────
+    if (u.pathname === '/robots.txt') {
+      if (opts.robotsGone === true) {
+        return { ok: false, status: 404, text: async () => 'not found', json: async () => ({}), arrayBuffer: async () => new ArrayBuffer(0) } as unknown as Response
+      }
+      if (opts.robotsDenyTreasury === true && u.host === 'home.treasury.gov') return reply('User-agent: *\nDisallow: /resource-center/data-chart-center/\n')
+      return reply('User-agent: *\nAllow: /\n')
+    }
+    if (u.host === 'home.treasury.gov') {
+      if (opts.treasuryOff === true) throw new TypeError('fetch failed (fixture: treasury off)')
+      const rows = opts.treasuryRows ?? ['10/14/2026,4.53,4.82,4.92,5.00,5.19', '10/13/2026,4.50,4.80,4.90,4.98,5.15']
+      return reply(`Date,"1 Mo","2 Yr","5 Yr","7 Yr","10 Yr"\n${rows.join('\n')}\n`)
+    }
+    if (u.host === 'data-api.ecb.europa.eu') {
+      if (opts.ecbOff === true) throw new TypeError('fetch failed (fixture: ecb off)')
+      return reply('KEY,FREQ,CURRENCY,TIME_PERIOD,OBS_VALUE\nEXR.D.USD.EUR.SP00.A,D,USD,2026-10-14,1.1200\n')
+    }
+    // ⚠ 已停用的源：Yahoo（403 + 服务条款禁止自动化）、FRED（链路未确认）——
+    // 一旦代码里再接它们，夹具直接报错（注入 K15/K16 靠这条变红）
+    if (u.host === 'query1.finance.yahoo.com' || u.host === 'fred.stlouisfed.org') throw new TypeError(`fetch failed (fixture: 该源已停用 ${u.host})`)
+    if (u.host === 'stats.bis.org') throw new TypeError('fetch failed (fixture: BIS 只允许后台归档，不许进交互路径)')
     if (u.host === 'stock.finance.sina.com.cn') {
       const symbol = String(u.searchParams.get('symbol') ?? '')
       return reply(usDailyJsonp(symbol, opts))
@@ -1276,7 +1307,24 @@ test('⑤ 宏观两档：新浪双源真值 + 自采样给"较上日/5 日变化
   const stub = stubFetch()
   try {
     const { macroRaws, macroLogPath, readMacroLog, writeMacroSample } = await import('./globalFlow.ts')
+    /** 熔断键 = `${host}${pathname}`（查询串不算）⇒ 复位时要用**完整 pathname**，否则等于没复位 */
+    const resetMacroBreakers = (): void => {
+      for (const key of [
+        'hq.sinajs.cn',
+        'hq.sinajs.cn/macro',
+        'home.treasury.gov/robots',
+        'home.treasury.gov/resource-center/data-chart-center/interest-rates/daily-treasury-rates.csv/2026/all',
+        'data-api.ecb.europa.eu/robots',
+        'data-api.ecb.europa.eu/service/data/EXR/D.USD.EUR.SP00.A',
+        'push2delay.eastmoney.com/macro',
+      ]) breakerFor(key).recordSuccess()
+    }
+    /** 每主机预算**落盘**（5 次/小时）⇒ 同一用例里连续多打几次会把预算用掉：每个场景前先清零 */
+    const freshBudget = async (): Promise<void> => {
+      await writeMacroSample('2026-10-15', { dxy: null, us10y: null, at: Date.now(), req: {} })
+    }
     // 首次：没有自采样 ⇒ 现值有、history 空（"较上日"由界面如实说未取到）
+    await freshBudget()
     const first = await macroRaws()
     assert.equal(first.us10y?.value, 5.156, 'US10Y 现值必须来自真源解析（下标 1）')
     assert.equal(first.dxy?.value, 102.1343, '美元指数现值必须来自 DINIW（下标 8）')
@@ -1294,6 +1342,7 @@ test('⑤ 宏观两档：新浪双源真值 + 自采样给"较上日/5 日变化
     }
     const log = await readMacroLog()
     assert.equal(Object.keys(log.days).length >= 7, true, '自采样要能累积多天')
+    await freshBudget()
     const second = await macroRaws()
     assert.equal(second.us10y?.history.length, 7, `history 取最近 7 条（实得 ${second.us10y?.history.length}）`)
     const h = second.us10y?.history ?? []
@@ -1304,15 +1353,92 @@ test('⑤ 宏观两档：新浪双源真值 + 自采样给"较上日/5 日变化
     const src = readFileSync(new URL('./globalFlow.ts', import.meta.url), 'utf8')
     const block = src.slice(src.indexOf('宏观两档：美国 10Y'), src.indexOf('曲线/饼图/市场表共用的口径行'))
     assert.equal(/inSession|inTradingSession|tradingDayState|isTradingDay/.test(block), false, '宏观取数不许套 A 股休市/交易时段口径')
-    // 反例注入：上游整体失败 ⇒ 现值 null + 原因（不许 0 顶替）
+    assert.ok((second.us10y?.crossCheck ?? '').includes('美国财政部'), `交叉核对文案必须带第二个源（官方口径）：${second.us10y?.crossCheck}`)
+    assert.ok((second.us10y?.crossCheck ?? '').includes('两源一致'), `10Y 同口径两源一致时要写"两源一致"：${second.us10y?.crossCheck}`)
+    assert.ok((second.dxy?.crossCheck ?? '').includes('不是同一口径'), `美元指数两源口径不同 ⇒ 必须如实标注"不是同一口径"（不许说成数据冲突）：${second.dxy?.crossCheck}`)
+    // diag 留痕（现场证据）：每源状态 + 值 + 原因
+    assert.equal(second.diag.sources.some((x) => x.name.includes('美国财政部') && x.ok), true, 'diag 要记下每个源的状态（真机排障用）')
+    assert.equal(second.diag.sources.some((x) => x.name.includes('ECB') && x.ok), true, 'diag 要记下 ECB 的状态')
     stub.restore()
-    const stubDown = stubFetch({ macroOff: true })
-    const third = await macroRaws()
-    assert.equal(third.us10y, null, '上游失败 ⇒ 现值 null（不写 0）')
-    assert.equal(third.dxy, null, '上游失败 ⇒ 现值 null（不写 0）')
-    assert.ok(third.notes.some((n) => n.what.includes('新浪宏观行情') && n.why === 'transient'), `失败原因必须如实给出：${JSON.stringify(third.notes)}`)
-    stubDown.restore()
+
+    // ② 一源不可达 ⇒ **仍出值**（用另一源），并如实说明来源与日期
+    resetMacroBreakers()
+    resetMacroBreakers()
+    const stubSinaDown = stubFetch({ macroOff: true })
+    await freshBudget()
+    const sinaDown = await macroRaws()
+    assert.equal(sinaDown.us10y?.value, 5.19, `新浪不可达 ⇒ 用美国财政部日频值（实得 ${sinaDown.us10y?.value}）`)
+    assert.ok((sinaDown.us10y?.source ?? '').includes('美国财政部') && (sinaDown.us10y?.source ?? '').includes('日频'), `兜底来源必须写明官方日频口径：${sinaDown.us10y?.source}`)
+    // 变化量仍然**只来自自采样**（7 条手种样本照旧），不因为换了兜底源而冒出"昨收"字段
+    assert.equal(sinaDown.us10y?.history.length, 7, `兜底来源不许改变变化量口径（实得 ${sinaDown.us10y?.history.length}）`)
+    assert.equal(Math.round((sinaDown.us10y?.history[6] ?? 0) * 100) / 100, 5.07, '自采样历史必须原样使用')
+    stubSinaDown.restore()
+
+    // ③ 全不可达 ⇒ 「未取到 + 原因」（不许 0 顶替）
+    resetMacroBreakers()
+    const stubAllDown = stubFetch({ macroOff: true, treasuryOff: true, ecbOff: true })
+    await freshBudget()
+    const allDown = await macroRaws()
+    assert.equal(allDown.us10y, null, '三个源全不可达 ⇒ 现值 null（不写 0）')
+    assert.equal(allDown.dxy, null, '三个源全不可达 ⇒ 现值 null（不写 0）')
+    assert.ok(allDown.notes.some((n) => n.what.includes('新浪宏观行情') && n.why === 'transient'), `失败原因必须如实给出：${JSON.stringify(allDown.notes)}`)
+    assert.ok(allDown.notes.some((n) => n.what.includes('美国 10 年期国债收益率')), '必须给"这一格没值"的原因')
+    assert.equal(allDown.diag.sources.every((x) => !x.ok), true, 'diag 里每源都要记失败')
+    stubAllDown.restore()
+
+    // ④ 主源与官方日频源**不一致**时必须如实标注（两个值都列出），不许静默取一个
+    resetMacroBreakers()
+    const stubMismatch = stubFetch({ treasuryRows: ['10/14/2026,4.53,4.82,4.92,5.00,4.0000'] }) // 10 Yr = 4.00 ⇒ 与新浪 5.156 差 115.6bp
+    await freshBudget()
+    const mm = await macroRaws()
+    assert.ok((mm.us10y?.crossCheck ?? '').includes('两源不一致'), `不一致必须标注：${mm.us10y?.crossCheck}`)
+    assert.ok((mm.us10y?.crossCheck ?? '').includes('4.000'), `两个值都要列出：${mm.us10y?.crossCheck}`)
+    assert.equal(mm.us10y?.value, 5.156, '不一致时仍以实时主源为准（但必须标注）')
+    stubMismatch.restore()
+
+    // ⑤ robots.txt 禁止的路径 ⇒ **零请求**（并且原因写清楚）
+    resetMacroBreakers()
+    const { __resetRobotsCache } = await import('./robotsGate.ts')
+    __resetRobotsCache() // robots 缓存 24h（生产正确）⇒ 换一份 robots 必须先清
+    const stubRobots = stubFetch({ robotsDenyTreasury: true })
+    await freshBudget()
+    const denied = await macroRaws()
+    assert.equal(stubRobots.count('daily-treasury-rates.csv'), 0, `robots 禁止的路径必须零请求（实际发了 ${stubRobots.count('daily-treasury-rates.csv')} 次）`)
+    assert.equal(denied.diag.sources.some((x) => x.name.includes('财政部') && !x.ok && x.note.includes('robots')), true, `原因必须写明 robots 禁止：${JSON.stringify(denied.diag.sources)}`)
+    assert.equal(denied.us10y?.value, 5.156, '主源仍可用 ⇒ 照常出值')
+    stubRobots.restore()
+
+    // ⑥ 每主机 ≤5 次/小时：把预算用满后，第 6 次**零请求**并如实说明
+    resetMacroBreakers()
+    await writeMacroSample('2026-10-15', { dxy: null, us10y: null, at: Date.now(), req: { 'home.treasury.gov': [Date.now(), Date.now(), Date.now(), Date.now(), Date.now()] } })
+    __resetRobotsCache()
+    const stubBudget = stubFetch()
+    const capped = await macroRaws()
+    assert.equal(stubBudget.count('daily-treasury-rates.csv'), 0, '预算用满 ⇒ 不许再发请求')
+    assert.equal(capped.diag.sources.some((x) => x.name.includes('财政部') && x.note.includes('预算')), true, `原因必须写明预算用尽：${JSON.stringify(capped.diag.sources)}`)
+    stubBudget.restore()
   } finally {
     stub.restore()
+  }
+})
+
+test('⑥ 源纪律（代码层扫描）：禁用的源不得接回；BIS 不得进交互路径；门禁与预算必须在链路上', () => {
+  const src = readFileSync(new URL('./globalFlow.ts', import.meta.url), 'utf8')
+  const macroBlock = src.slice(src.indexOf('宏观两档：美国 10Y'), src.indexOf('export async function macroRaws'))
+  // ① 禁用源：Yahoo（403 + 服务条款禁止自动化）、FRED（链路未确认）
+  for (const banned of ['query1.finance.yahoo.com', 'fred.stlouisfed.org']) {
+    assert.equal(src.includes(banned), false, `已停用的源不许出现在代码里：${banned}`)
+  }
+  // ② BIS 慢（~25s）⇒ 只允许后台归档（scripts/macro-archive.mts），交互路径零引用
+  assert.equal(src.includes('stats.bis.org'), false, 'BIS 只允许后台归档，不许进交互路径')
+  const archive = readFileSync(new URL('../../scripts/macro-archive.mts', import.meta.url), 'utf8')
+  assert.ok(archive.includes('stats.bis.org'), 'BIS 应当在后台归档脚本里')
+  assert.ok(archive.includes('gatedFetch') && archive.includes('HostBudget'), '归档脚本同样要走 robots 门禁与预算')
+  // ③ 门禁与预算必须在宏观取数链路上（拿掉就会变红：注入 K17/K18）
+  assert.ok(macroBlock.includes('gatedFetch('), '宏观取数必须走 gatedFetch（robots 门禁 + 预算）')
+  assert.ok(src.includes("from './robotsGate.ts'"), '门禁实现必须来自 robotsGate.ts（唯一实现，不许各写一份）')
+  // ④ 与用户说的三条源一致：新浪 + 美国财政部 + ECB
+  for (const need of ['hq.sinajs.cn/list=globalbd_us10yt,DINIW', 'home.treasury.gov', 'data-api.ecb.europa.eu']) {
+    assert.ok(src.includes(need), `应当接入：${need}`)
   }
 })

@@ -153,7 +153,7 @@ export interface ToolData {
   rangeDays?: number
   rangeOptions?: number[]
   /** 摘要卡（Hero 下方的 1–2 张：值 + 状态词，值必须来自真实数据） */
-  summary?: Array<{ key: string; label: string; value: string; note: string | null }>
+  summary?: Array<{ key: string; label: string; value: string; note: string | null; noteTitle?: string | null }>
   /** 整份数据缺失时的原因（分区里单点缺失各自写在 notes/missing 里） */
   why?: string | null
   /** 方法段的可覆写句子（缺省 = 工具文件里的 `method`；例如"这一屏用的是快照"） */
@@ -274,7 +274,7 @@ export interface DetailModel {
   /** Hero：小标签 + 大标题 + 一段说明（标题 = 工具名） */
   hero: { kicker: string; title: string; note: string }
   /** 摘要卡（0–2 张；值来自数据，取不到 ⇒ 未取到） */
-  summary: Array<{ key: string; label: string; value: string; note: string | null }>
+  summary: Array<{ key: string; label: string; value: string; note: string | null; noteTitle?: string | null }>
   /** 图表卡右上角 `AS OF` */
   chartAsOf: string | null
   /** 时间范围分段控件（`options` 为空 ⇒ 不渲染） */
@@ -349,6 +349,7 @@ export function detailModel(entry: ToolEntry, data: ToolData | null = null): Det
       note: entry.hero?.note ?? entry.blurb,
     },
     summary: data?.summary ?? [],
+    // noteTitle 透传（缺省 undefined ⇒ 渲染层不加 title；缺数据时不出现 ⇒ 零数字红线不受影响）
     chartAsOf: data?.chartAsOf ?? null,
     ranges: {
       options: ranges,

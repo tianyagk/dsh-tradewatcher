@@ -551,3 +551,47 @@ test('⑧ 24 小时品种：休市/非交易时段也给最新真实读数（不
   const d3 = globalFlowToolData(zeroed as typeof payload, 0)
   assert.throws(() => assert.equal(d3.kpi?.['美国十年期国债收益率']?.value, null, '缺数据必须是 null'), /缺数据必须是 null/, '⚠ 反例（写 0）必须失败')
 })
+
+test('⑨ 两处常驻红框文案已删；事实必须留在悬停里（两处都删 ⇒ 必败）', () => {
+  const payload = payloadFixture()
+  const data = globalFlowToolData(payload, 0)
+  // ① 说明段（工具文件）不得再出现限定语
+  const hero = cakeTool.hero?.note ?? ''
+  assert.equal(hero.includes('自定'), false, `说明段常驻文案不许再写"自定"：${hero}`)
+  assert.equal(hero.includes('不可比'), false, `说明段常驻文案不许再写"不可比"：${hero}`)
+  // ② 摘要卡的常驻 note 不得再出现"规模只作展示 / 不进权重"
+  const cakeCard = (data.summary ?? []).find((x) => x.key === 'cake')
+  for (const banned of ['规模只作展示', '不进权重']) {
+    assert.equal((cakeCard?.note ?? '').includes(banned), false, `摘要卡常驻文案不许出现「${banned}」：${cakeCard?.note}`)
+  }
+  // ③ 但事实**不许丢**：悬停里必须能读到
+  const cardTitle = cakeCard?.noteTitle ?? ''
+  assert.ok(cardTitle.includes('不进权重'), `「规模不进权重」必须能在资金蛋糕卡的悬停里读到：${cardTitle}`)
+  assert.ok(cardTitle.includes('不可比'), `「与参考版不可比」必须能在资金蛋糕卡的悬停里读到：${cardTitle}`)
+  const tempSrc = data.kpi?.['蛋糕温度']?.source ?? ''
+  const liqSrc = data.kpi?.['流动性支持度']?.source ?? ''
+  for (const [name, src] of [['蛋糕温度', tempSrc], ['流动性支持度', liqSrc]] as const) {
+    assert.ok(src.includes('自定口径'), `${name} 磁贴悬停必须写明自定口径`)
+    assert.ok(src.includes('不可比'), `${name} 磁贴悬停必须写明与参考版不可比`)
+  }
+  // ④ 反例注入：把两处悬停都删掉 ⇒ 事实消失 ⇒ 断言必须失败
+  const stripped = { ...data, summary: (data.summary ?? []).map((x) => (x.key === 'cake' ? { ...x, noteTitle: null } : x)), kpi: { 蛋糕温度: { ...(data.kpi?.['蛋糕温度'] ?? { text: '', value: null, delta: null, swatch: null }), source: '偏好分均值' } } }
+  assert.throws(() => {
+    const c = (stripped.summary ?? []).find((x) => x.key === 'cake')
+    assert.ok((c?.noteTitle ?? '').includes('不进权重'), '资金蛋糕卡悬停要能读到')
+    assert.ok((stripped.kpi?.['蛋糕温度']?.source ?? '').includes('不可比'), '温度磁贴悬停要能读到')
+  }, /资金蛋糕卡悬停要能读到/, '⚠ 反例（两处悬停都删）必须失败')
+})
+
+test('⑩ 宏观缺字段（宿主未重载）时的原因必须可操作，且不写 0', () => {
+  const payload = payloadFixture()
+  const noField = { ...payload }
+  delete (noField as { macro?: unknown }).macro
+  const d = globalFlowToolData(noField as typeof payload, 0)
+  for (const label of ['美国十年期国债收益率', '广义美元指数', '流动性支持度']) {
+    const cell = d.kpi?.[label]
+    assert.equal(cell?.text, NOT_FETCHED, `${label} 缺字段 ⇒ 未取到`)
+    assert.equal(cell?.value, null, `${label} 缺字段 ⇒ null（不写 0）`)
+  }
+  assert.ok((d.kpi?.['美国十年期国债收益率']?.delta ?? '').includes('宿主载荷里没有宏观两档字段'), `原因必须指出"宿主载荷缺字段"（可操作）：${d.kpi?.['美国十年期国债收益率']?.delta}`)
+})

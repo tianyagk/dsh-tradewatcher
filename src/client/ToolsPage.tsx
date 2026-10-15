@@ -388,7 +388,12 @@ function summaryCards(model: DetailModel): React.ReactElement | null {
           },
           card.value,
         ),
-        card.note === null ? null : React.createElement('div', { 'data-role': 'tool-summary-note', style: SUMMARY_TYPE.note }, card.note),
+        card.note === null ? null : React.createElement('div', {
+          'data-role': 'tool-summary-note',
+          // 事实不丢：常驻行只留短句，完整口径进 title/aria-label（悬停/读屏都能读到）
+          ...(card.noteTitle === null || card.noteTitle === undefined ? {} : { title: card.noteTitle, 'aria-label': `${card.label} ${card.value}——${card.noteTitle}` }),
+          style: SUMMARY_TYPE.note,
+        }, card.note),
       ),
     ),
   )

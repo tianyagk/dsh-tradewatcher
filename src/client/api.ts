@@ -114,8 +114,8 @@ export interface GlobalFlowPayloadDto {
    * 快照模式（零上游请求）下为 `null` + 说明。
    */
   macro?: {
-    us10y: { value: number; at: number | null; history: number[]; samples: number; source: string } | null
-    dxy: { value: number; at: number | null; history: number[]; samples: number; source: string } | null
+    us10y: { value: number; at: number | null; history: number[]; samples: number; source: string; crossCheck?: string } | null
+    dxy: { value: number; at: number | null; history: number[]; samples: number; source: string; crossCheck?: string } | null
     notes: Array<{ what: string; why: string; note: string }>
   }
   markets: GlobalFlowMarketDto[]
