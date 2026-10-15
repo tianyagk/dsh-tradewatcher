@@ -390,7 +390,11 @@ export function stressVerdict(input: {
  */
 function macroTiles(payload: GlobalFlowPayloadDto, idx: number, points: Array<GlobalFlowPayloadDto['curve']['points'][number]>): Record<string, ToolKpiDatum> {
   const out: Record<string, ToolKpiDatum> = {}
-  const nullTile = (why: string): ToolKpiDatum => ({ text: NOT_FETCHED, value: null, delta: why, swatch: null, source: why })
+  /**
+   * 缺数据的磁贴：**常驻只留短标记**（`未取到` + 一个短标记），原因与口径全部进 `source`（悬停）。
+   * 用户口径 v0.90.0：整句原因不许常驻（常驻一屏只放读数与短标记）。
+   */
+  const nullTile = (why: string): ToolKpiDatum => ({ text: NOT_FETCHED, value: null, delta: '较上日 —', swatch: null, source: why })
 
   // ── 蛋糕温度（自定口径，与权重同源）──────────────────────────────────────────────
   const tempAt = (i: number): number | null => {
@@ -399,7 +403,8 @@ function macroTiles(payload: GlobalFlowPayloadDto, idx: number, points: Array<Gl
     return cakeTemperature(payload.markets.map((_, m) => p.pref?.[m] ?? null))
   }
   const temp = tempAt(idx)
-  const tempPrev = idx + 1 < points.length ? tempAt(idx + 1) : null
+  // ⚠ `points` 是**旧 → 新**（最后一天 = 最新）⇒ 上一序列日 = `idx - 1`（此前写成 `idx + 1` ⇒ 最新日永远算不出"较上日"）
+  const tempPrev = idx - 1 >= 0 ? tempAt(idx - 1) : null
   const tempLabel = temperatureLabel(temp)
   const tempSource = `自定口径：蛋糕温度 = 五市场偏好分均值 × 100（偏好分 = 55% × 各自 60 日区间分位 + 30% × 5 日动量分位 + 15% × 20 日动量分位，与权重同源）；状态词：≥${TEMP_HOT} 偏热 / ≤${TEMP_COLD} 偏冷 / 其间平衡；与参考版不可比（其公式未公开）`
   out['蛋糕温度'] = temp === null
@@ -407,9 +412,9 @@ function macroTiles(payload: GlobalFlowPayloadDto, idx: number, points: Array<Gl
     : {
         text: `${temp.toFixed(0)}（${tempLabel}）`,
         value: temp,
-        delta: tempPrev === null ? `较上日 —（曲线序列不足两步）` : `较上日 ${temp - tempPrev >= 0 ? '+' : ''}${(temp - tempPrev).toFixed(1)}`,
+        delta: tempPrev === null ? '较上日 —' : `较上日 ${temp - tempPrev >= 0 ? '+' : ''}${(temp - tempPrev).toFixed(1)}`,
         swatch: null,
-        source: tempSource,
+        source: tempPrev === null ? `${tempSource}｜本次「较上日」不可算：回放窗口只有一天（曲线序列不足两步）` : tempSource,
       }
 
   // ── 宏观两档（真实读数）──────────────────────────────────────────────────────────
@@ -442,18 +447,18 @@ function macroTiles(payload: GlobalFlowPayloadDto, idx: number, points: Array<Gl
     : {
         text: `${us.value.toFixed(3)}%`,
         value: us.value,
-        delta: usCh === null || usCh.change === null ? `较上日 —（自采样不足一条）` : `较上日 ${usCh.change >= 0 ? '+' : ''}${(usCh.change * 100).toFixed(1)}bp（${spanNote(usCh.span)}）`,
+        delta: usCh === null || usCh.change === null ? '较上日 —' : `较上日 ${usCh.change >= 0 ? '+' : ''}${(usCh.change * 100).toFixed(1)}bp`,
         swatch: null,
-        source: `${us.source}｜口径：24 小时品种，不套 A 股休市冻结（任何时刻都给最新真实读数）｜自采样 ${us.samples} 条｜交叉核对：${us.crossCheck ?? '未做'}｜变化量口径：自采样（不用来源不明的"昨收"字段）`,
+        source: `${us.source}｜口径：24 小时品种，不套 A 股休市冻结（任何时刻都给最新真实读数）｜变化量：${spanNote(usCh?.span ?? 0)}，历史来源 ${us.historySource ?? '自采样'}（变化量一律不用来源不明的"昨收"字段）｜自采样 ${us.samples} 条｜交叉核对：${us.crossCheck ?? '未做'}${usCh === null || usCh.change === null ? '｜本次「较上日」不可算：历史点不足一条（自采样与官方日频回填都还没有）' : ''}`,
       }
   out['广义美元指数'] = dxy === null
     ? nullTile(`未取到：${dxyWhy}`)
     : {
         text: dxy.value.toFixed(2),
         value: dxy.value,
-        delta: dxyCh === null || dxyCh.change === null ? `较上日 —（自采样不足一条）` : `较上日 ${dxyCh.change >= 0 ? '+' : ''}${dxyCh.change.toFixed(2)}（${spanNote(dxyCh.span)}）`,
+        delta: dxyCh === null || dxyCh.change === null ? '较上日 —' : `较上日 ${dxyCh.change >= 0 ? '+' : ''}${dxyCh.change.toFixed(2)}`,
         swatch: null,
-        source: `${dxy.source}｜口径：24 小时品种，不套 A 股休市冻结｜自采样 ${dxy.samples} 条｜交叉核对：${dxy.crossCheck ?? '未做'}｜变化量口径：自采样（不用来源不明的"昨收"字段）`,
+        source: `${dxy.source}｜口径：24 小时品种，不套 A 股休市冻结｜变化量：${spanNote(dxyCh?.span ?? 0)}，历史来源 ${dxy.historySource ?? '自采样'}${(dxy.historySource ?? '').includes('代理') ? '（代理口径：美元变化以 ECB 欧元/美元日频为代理，与 DXY 口径不同，仅用于方向判定 —— 代理值不是 DXY，不得当 DXY 用）' : ''}｜自采样 ${dxy.samples} 条｜交叉核对：${dxy.crossCheck ?? '未做'}${dxyCh === null || dxyCh.change === null ? '｜本次「较上日」不可算：历史点不足一条' : ''}`,
       }
 
   // ── 流动性支持度（自定口径）+ 压力是否已传导 ─────────────────────────────────────
@@ -467,7 +472,7 @@ function macroTiles(payload: GlobalFlowPayloadDto, idx: number, points: Array<Gl
   const supportPrev = usPrevDay === null || dxyPrevDay === null
     ? null
     : liquiditySupport({ dxyChange: dxyPrevDay.change, us10yChangePp: usPrevDay.change, span: Math.min(usPrevDay.span, dxyPrevDay.span) })
-  const tempChange = temp !== null && idx + LIQ_CHANGE_SPAN < points.length ? temp - (tempAt(idx + LIQ_CHANGE_SPAN) as number) : null
+  const tempChange = temp !== null && idx - LIQ_CHANGE_SPAN >= 0 ? temp - (tempAt(idx - LIQ_CHANGE_SPAN) as number) : null
   const verdict = stressVerdict({
     dxyChange: dxyCh?.change ?? null,
     us10yChangePp: usCh?.change ?? null,
@@ -475,13 +480,13 @@ function macroTiles(payload: GlobalFlowPayloadDto, idx: number, points: Array<Gl
   })
   const liqSource = `自定口径：流动性支持度 = 5 − 2.5 ×（clamp(Δ美元指数 / ${LIQ_SCALE.dxy}, −1, 1) + clamp(Δ美债10Y / ${LIQ_SCALE.us10yPp}pp, −1, 1)），0–10 越高越支持（压力越小）；变化量取 ${LIQ_CHANGE_SPAN} 个采样交易日、不足则退化为当日；输入=广义美元指数与美债 10Y 的变化方向；与参考版不可比（其公式未公开）｜压力是否已传导：美元与美债同步走强且蛋糕温度同期下降 ⇒ 传导，否则暂未传导，输入缺 ⇒ 数据不足`
   out['流动性支持度'] = support === null
-    ? nullTile(`未取到：${us === null ? usWhy : dxy === null ? dxyWhy : '美元指数或美债 10Y 的自采样历史不足一条 ⇒ 变化量算不出（不用 0 顶替）'}`)
+    ? nullTile(`未取到（不用 0 顶替）：${us === null ? usWhy : dxy === null ? dxyWhy : '美元指数或美债 10Y 的历史点不足一条 ⇒ 变化量算不出；两个源都没有可用的历史（自采样与官方回填都缺）'}`)
     : {
         text: `${support.score.toFixed(1)}（压力${verdict.verdict === '传导' ? '已传导' : verdict.verdict === '未传导' ? '暂未传导' : '数据不足'}）`,
         value: support.score,
-        delta: supportPrev === null ? '较上日 —（自采样不足两条）' : `较上日 ${support.score - supportPrev.score >= 0 ? '+' : ''}${(support.score - supportPrev.score).toFixed(1)}`,
+        delta: supportPrev === null ? '较上日 —' : `较上日 ${support.score - supportPrev.score >= 0 ? '+' : ''}${(support.score - supportPrev.score).toFixed(1)}`,
         swatch: null,
-        source: liqSource + (verdict.why === null ? '' : `｜本次判定：数据不足（${verdict.why}）`),
+        source: liqSource + (verdict.why === null ? '' : `｜本次判定：数据不足（${verdict.why}）`) + (supportPrev === null ? '｜本次「较上日」不可算：前一日的变化量不足两条历史点' : ''),
       }
   return out
 }

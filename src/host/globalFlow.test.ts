@@ -1328,7 +1328,10 @@ test('⑤ 宏观两档：新浪双源真值 + 自采样给"较上日/5 日变化
     const first = await macroRaws()
     assert.equal(first.us10y?.value, 5.156, 'US10Y 现值必须来自真源解析（下标 1）')
     assert.equal(first.dxy?.value, 102.1343, '美元指数现值必须来自 DINIW（下标 8）')
-    assert.deepEqual(first.us10y?.history, [], '第一次没有自采样 ⇒ history 为空（不许编一个昨收）')
+    // v0.90.0：**回填**让"较上日/5 日变化"立刻可算（不再等一周）⇒ history 来自官方日频，而不是"编一个昨收"
+    assert.equal((first.us10y?.history.length ?? 0) >= 1, true, `回填后 history 必须非空（实得 ${first.us10y?.history.length}）`)
+    assert.ok((first.us10y?.historySource ?? '').includes('美国财政部'), `历史来源必须写明官方日频回填：${first.us10y?.historySource}`)
+    assert.equal(first.us10y?.value, 5.156, '实时值仍来自新浪（回填**不得**覆盖实时值）')
     assert.ok((first.us10y?.source ?? '').includes('24 小时品种'), '来源口径必须写明 24 小时品种')
     // 交叉核对：本机东财不可达 ⇒ 必须**如实记一条**，但不影响主源读数
     assert.ok(first.notes.some((n) => n.what.includes('东财交叉核对')), '交叉源状态必须如实记进 missing（诚实披露）')
@@ -1346,8 +1349,10 @@ test('⑤ 宏观两档：新浪双源真值 + 自采样给"较上日/5 日变化
     const second = await macroRaws()
     assert.equal(second.us10y?.history.length, 7, `history 取最近 7 条（实得 ${second.us10y?.history.length}）`)
     const h = second.us10y?.history ?? []
-    assert.equal(h[0]! < h[6]!, true, `history 顺序 = 旧 → 新（实得 ${h.map((x) => x.toFixed(2)).join(',')}）`)
-    assert.equal(Math.round(h[6]! * 100) / 100, 5.07, 'history 末位 = 最近一个采样日（旧→新的"新"端）')
+    // v0.90.0：历史是"自采样 + 官方日频回填"合并（同一天以自采样为准）⇒ 末位 = **最近一个有值日**（回填的 10-14）
+    assert.equal(Math.round((h[h.length - 1] ?? 0) * 100) / 100, 5.19, `history 末位 = 最近一个有值日（官方回填 10-14）（实得 ${h[h.length - 1]}）`)
+    assert.equal(h.some((x) => Math.round(x * 100) / 100 === 5.07), true, `手种的自采样点必须在历史里（实得 ${h.map((x) => x.toFixed(2)).join(',')}）`)
+    assert.equal(h.length, 7, `历史长度 = 最近 7 个有值日（实得 ${h.length}）`)
     assert.equal(second.dxy?.samples, 8, '样本数 = 历史 + 今天')
     // 24 小时口径：宿主层**没有任何 A 股休市/交易时段判断**（这两个是 24 小时品种）
     const src = readFileSync(new URL('./globalFlow.ts', import.meta.url), 'utf8')
@@ -1369,9 +1374,10 @@ test('⑤ 宏观两档：新浪双源真值 + 自采样给"较上日/5 日变化
     const sinaDown = await macroRaws()
     assert.equal(sinaDown.us10y?.value, 5.19, `新浪不可达 ⇒ 用美国财政部日频值（实得 ${sinaDown.us10y?.value}）`)
     assert.ok((sinaDown.us10y?.source ?? '').includes('美国财政部') && (sinaDown.us10y?.source ?? '').includes('日频'), `兜底来源必须写明官方日频口径：${sinaDown.us10y?.source}`)
-    // 变化量仍然**只来自自采样**（7 条手种样本照旧），不因为换了兜底源而冒出"昨收"字段
+    // 变化量口径不变：历史仍是"自采样 + 官方日频回填"的合并（不因为主源不可达就冒出"昨收"字段）
     assert.equal(sinaDown.us10y?.history.length, 7, `兜底来源不许改变变化量口径（实得 ${sinaDown.us10y?.history.length}）`)
-    assert.equal(Math.round((sinaDown.us10y?.history[6] ?? 0) * 100) / 100, 5.07, '自采样历史必须原样使用')
+    assert.equal(Math.round((sinaDown.us10y?.history[sinaDown.us10y.history.length - 1] ?? 0) * 100) / 100, 5.19, '历史末位仍是最近一个有值日（官方回填）')
+    assert.equal(sinaDown.us10y?.history.some((x) => Math.round(x * 100) / 100 === 5.07), true, '自采样点必须仍在历史里')
     stubSinaDown.restore()
 
     // ③ 全不可达 ⇒ 「未取到 + 原因」（不许 0 顶替）
@@ -1440,5 +1446,60 @@ test('⑥ 源纪律（代码层扫描）：禁用的源不得接回；BIS 不得
   // ④ 与用户说的三条源一致：新浪 + 美国财政部 + ECB
   for (const need of ['hq.sinajs.cn/list=globalbd_us10yt,DINIW', 'home.treasury.gov', 'data-api.ecb.europa.eu']) {
     assert.ok(src.includes(need), `应当接入：${need}`)
+  }
+})
+
+/** 回填用例的熔断复位（与 ⑤ 里那份等价，单独放这里免得作用域纠缠） */
+function resetMacroBreakersForBackfill(): void {
+  for (const key of [
+    'hq.sinajs.cn', 'hq.sinajs.cn/macro',
+    'home.treasury.gov/robots',
+    'home.treasury.gov/resource-center/data-chart-center/interest-rates/daily-treasury-rates.csv/2026/all',
+    'data-api.ecb.europa.eu/robots',
+    'data-api.ecb.europa.eu/service/data/EXR/D.USD.EUR.SP00.A',
+  ]) breakerFor(key).recordSuccess()
+}
+
+test('⑦ 历史回填：官方日频补历史 ⇒ 当日/5 日变化立刻可算；代理必须标注；实时值不被覆盖；缺数据不写 0', async () => {
+  freshHome()
+  resetMacroBreakersForBackfill()
+  const { macroRaws, writeMacroSample, __resetRobotsCacheLocal } = await import('./globalFlow.ts').then(async (m) => {
+    const gate = await import('./robotsGate.ts')
+    return { ...m, __resetRobotsCacheLocal: gate.__resetRobotsCache }
+  })
+  __resetRobotsCacheLocal()
+  // 财政部夹具：给出 8 个交易日（新 → 旧，与真实回包同序）⇒ 回填后 5 日变化可算
+  const treasuryRows = ['10/14/2026,4.53,4.82,4.92,5.00,5.19', '10/13/2026,4.50,4.80,4.90,4.98,5.15',
+    '10/10/2026,4.49,4.78,4.88,4.97,5.12', '10/09/2026,4.48,4.76,4.86,4.96,5.09',
+    '10/08/2026,4.47,4.74,4.84,4.95,5.06', '10/07/2026,4.46,4.72,4.82,4.94,5.03']
+  const stub = stubFetch({ treasuryRows })
+  try {
+    await writeMacroSample('2026-10-15', { dxy: null, us10y: null, at: Date.now(), req: {} })
+    const m1 = await macroRaws()
+    assert.equal((m1.us10y?.history.length ?? 0) >= 5, true, `回填后至少 5 个历史点（实得 ${m1.us10y?.history.length}）⇒ 5 日变化可算`)
+    assert.ok((m1.us10y?.historySource ?? '').includes('美国财政部'), `历史来源写明官方日频：${m1.us10y?.historySource}`)
+    // ① 当日变化可算：实时 5.156 vs 回填里"昨收"（官方 10-14 = 5.19）⇒ 差值可算（不是"未取到"）
+    assert.equal(typeof m1.us10y?.value, 'number', '实时值必须在')
+    // ② 代理必须被标注（**不得**把 ECB 欧元/美元说成 DXY）
+    assert.ok((m1.dxy?.historySource ?? '').includes('代理'), `美元历史必须标注"代理"：${m1.dxy?.historySource}`)
+    assert.equal((m1.dxy?.historySource ?? '').includes('DINIW 日频回填'), false, '没有实测可得的 DXY 历史 ⇒ 不许声称用了 DINIW 日频')
+    assert.ok((m1.dxy?.historySource ?? '').includes('ECB'), '代理来源要写清是 ECB 欧元/美元')
+    // ③ 回填**不得**覆盖实时值（新浪 DINIW 102.13 ≠ ECB 1.12）
+    assert.equal(m1.dxy?.value, 102.1343, `实时值不许被回填替换（实得 ${m1.dxy?.value}）`)
+    assert.equal(m1.us10y?.value, 5.156, `实时值不许被回填替换（实得 ${m1.us10y?.value}）`)
+    // ④ 缺数据仍「未取到 + 原因」：把两个源都关掉 + 清掉回填 ⇒ null（不写 0）
+    stub.restore()
+    const stubDown = stubFetch({ macroOff: true, treasuryOff: true, ecbOff: true })
+    await writeMacroSample('2026-10-15', { dxy: null, us10y: null, at: Date.now(), req: {} })
+    const m2 = await macroRaws()
+    if (m2.us10y !== null) {
+      // 回填仍在（7 天 TTL 内）⇒ 允许用日频兜底，但来源必须写明日频且不是实时
+      assert.ok((m2.us10y.source ?? '').includes('日频'), `兜底来源必须写明日频：${m2.us10y.source}`)
+    } else {
+      assert.ok(m2.notes.some((n) => n.what.includes('美国 10 年期国债收益率')), '全缺时必须给原因')
+    }
+    stubDown.restore()
+  } finally {
+    stub.restore()
   }
 })

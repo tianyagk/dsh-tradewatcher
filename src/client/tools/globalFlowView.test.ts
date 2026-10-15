@@ -542,10 +542,13 @@ test('⑧ 24 小时品种：休市/非交易时段也给最新真实读数（不
   const us = d2.kpi?.['美国十年期国债收益率']
   assert.equal(us?.text, NOT_FETCHED, '缺数据 ⇒ 未取到')
   assert.equal(us?.value, null, '缺数据 ⇒ 值 null（不许 0 顶替）')
-  assert.ok((us?.delta ?? '').includes('未取到'), `缺数据必须给原因：${us?.delta}`)
+  // 常驻只留短标记（原因进悬停）——口径 v0.90.0
+  assert.equal(us?.delta, '较上日 —', `缺数据时常驻只留短标记：${us?.delta}`)
+  assert.ok((us?.source ?? '').includes('未取到'), `原因必须能在悬停里读到：${us?.source}`)
   const lq = d2.kpi?.['流动性支持度']
   assert.equal(lq?.value, null, '支持度缺输入 ⇒ null（不许拿单侧或 0 冒充）')
-  assert.ok((lq?.delta ?? '').includes('未取到'), `支持度缺输入要给原因：${lq?.delta}`)
+  assert.equal(lq?.delta, '较上日 —', `常驻只留短标记：${lq?.delta}`)
+  assert.ok((lq?.source ?? '').includes('未取到'), `支持度缺输入的原因必须进悬停：${lq?.source}`)
   // ⚠ 反例：把缺数据写成 0 ⇒ 判据必须挡住
   const zeroed = { ...noMacro, macro: { us10y: { value: 0, at: null, history: [], samples: 0, source: 'x' }, dxy: null, notes: [] } }
   const d3 = globalFlowToolData(zeroed as typeof payload, 0)
@@ -593,5 +596,55 @@ test('⑩ 宏观缺字段（宿主未重载）时的原因必须可操作，且�
     assert.equal(cell?.text, NOT_FETCHED, `${label} 缺字段 ⇒ 未取到`)
     assert.equal(cell?.value, null, `${label} 缺字段 ⇒ null（不写 0）`)
   }
-  assert.ok((d.kpi?.['美国十年期国债收益率']?.delta ?? '').includes('宿主载荷里没有宏观两档字段'), `原因必须指出"宿主载荷缺字段"（可操作）：${d.kpi?.['美国十年期国债收益率']?.delta}`)
+  assert.ok((d.kpi?.['美国十年期国债收益率']?.source ?? '').includes('宿主载荷里没有宏观两档字段'), `原因必须指出"宿主载荷缺字段"（可操作，且进悬停）：${d.kpi?.['美国十年期国债收益率']?.source}`)
+})
+
+const KPI_LABELS = ['蛋糕温度', '流动性支持度', '美国十年期国债收益率', '广义美元指数'] as const
+
+test('⑪ 常驻文案不得出现括号解释与整句原因；原因进悬停；口径事实与边界声明不得消失', () => {
+  const payload = payloadFixture()
+  const data = globalFlowToolData(payload, 0)
+  // ① 禁止出现的常驻片段（用户口径 v0.90.0）
+  const banned = ['曲线序列不足两步', '自采样不足一条', '自采样不足两条', '自采样不足 5 条', '未取到：', '⇒']
+  for (const label of KPI_LABELS) {
+    const cell = data.kpi?.[label]
+    assert.equal(cell !== undefined, true, `磁贴 ${label} 必须存在`)
+    for (const b of banned) {
+      assert.equal((cell?.delta ?? '').includes(b), false, `磁贴「${label}」常驻文案不许出现「${b}」：${cell?.delta}`)
+    }
+    // 常驻只允许：值 + 「较上日 <短标记>」（且不许括号）
+    if (cell?.delta !== null && cell?.delta !== undefined) {
+      assert.match(cell.delta, /^较上日 (—|[+-]?\d)/, `常驻 delta 只能是「较上日 + 短标记」：${label} → ${cell.delta}`)
+      assert.equal(cell.delta.includes('（'), false, `常驻 delta 不许带括号解释：${label} → ${cell.delta}`)
+    }
+  }
+  // ② 蛋糕温度：365 个序列日 ⇒ 「较上日」必须算得出来（不许显示 —）
+  const longCurve = { ...payload, curve: { ...payload.curve, points: [...Array(20)].flatMap((_, i) => [{ ...payload.curve.points[2], day: `2026-09-${String(i + 1).padStart(2, '0')}` }]) } }
+  const dLong = globalFlowToolData(longCurve as typeof payload, 0)
+  assert.match(dLong.kpi?.['蛋糕温度']?.delta ?? '', /^较上日 [+-]?\d/, `曲线有历史时「较上日」必须可算：${dLong.kpi?.['蛋糕温度']?.delta}`)
+  // ②b 回放窗口只有一天（曲线只有一个点）⇒ 常驻也只能是短标记「较上日 —」（不许带括号解释）
+  const onePoint = { ...payload, curve: { ...payload.curve, points: [payload.curve.points[2]], window: 1, windowOptions: [1] } }
+  const dOne = globalFlowToolData(onePoint as typeof payload, 0)
+  for (const label of KPI_LABELS) {
+    const cell = dOne.kpi?.[label]
+    if (cell?.delta === null || cell?.delta === undefined) continue
+    assert.match(cell.delta, /^较上日 (—|[+-]?\d)/, `单点曲线下常驻也只能是短标记：${label} → ${cell.delta}`)
+    assert.equal(cell.delta.includes('（'), false, `单点曲线下不许出现括号解释：${label} → ${cell.delta}`)
+  }
+  // ③ 缺数据的整句原因必须能在悬停里读到（不是删掉事实）
+  const noMacro = { ...payload }
+  delete (noMacro as { macro?: unknown }).macro
+  const dNo = globalFlowToolData(noMacro as typeof payload, 0)
+  const us = dNo.kpi?.['美国十年期国债收益率']
+  assert.equal(us?.delta, '较上日 —', '常驻只留短标记')
+  assert.ok((us?.source ?? '').includes('宿主载荷里没有宏观两档字段'), `原因必须进悬停：${us?.source}`)
+  // ④ 口径事实与边界声明不得消失
+  assert.equal((data.curve?.marks?.length ?? 0) > 0, true, '曲线口径标记（实测日/重建日）不得消失')
+  assert.ok((data.boundary ?? []).length > 0, '边界声明不得消失')
+  assert.ok((data.status ?? '').length > 0, '状态行（数据时刻/降级标记）不得消失')
+  // ⑤ 反例注入：把整句原因塞回常驻 ⇒ 断言必须失败
+  const injected = { ...dNo, kpi: { ...(dNo.kpi ?? {}), 美国十年期国债收益率: { ...(us as NonNullable<typeof us>), delta: '未取到：宿主载荷里没有宏观两档字段（宿主插件尚未重载到本版）⇒ 稍后重试' } } }
+  assert.throws(() => {
+    for (const b of ['未取到：', '⇒']) assert.equal((injected.kpi?.['美国十年期国债收益率']?.delta ?? '').includes(b), false, `常驻不许出现「${b}」`)
+  }, /常驻不许出现/, '⚠ 反例（整句原因回常驻）必须失败')
 })

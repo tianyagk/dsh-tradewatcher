@@ -1188,6 +1188,8 @@ export interface FlowMacroPoint {
   history: number[]
   /** 自采样样本数（含今天） */
   samples: number
+  /** 历史点的来源（自采样 / 官方日频回填 / ECB 代理）——**代理必须在这里写明** */
+  historySource: string
   /** 数据来源（进悬停；含代码与"24 小时品种"口径） */
   source: string
   /**
@@ -1208,7 +1210,7 @@ export interface FlowMacroOut {
    * 诊断留痕（**落进 `macro-log.json`**）：本次每个源的状态 + 时间 + 自采样文件路径。
    * 用途：真机出问题时能从盘上读到"是哪一源、什么原因"，不必猜（现场证据）。
    */
-  diag: { at: number; day: string; sources: Array<{ name: string; ok: boolean; note: string; value: number | null; day: string | null }>; mismatch: string[] }
+  diag: { at: number; day: string; sources: Array<{ name: string; ok: boolean; note: string; value: number | null; day: string | null }>; mismatch: string[]; backfill?: string }
   logPath: string
 }
 
@@ -1218,6 +1220,8 @@ interface MacroLogFile {
   days: Record<string, { dxy: number | null; us10y: number | null; at: number; diag?: FlowMacroOut['diag'] }>
   /** 每主机请求时间戳（≤5 次/小时；**落盘** ⇒ 重启不重置预算） */
   req?: Record<string, number[]>
+  /** 历史回填（官方日频 / 代理；**只补历史**，不替换实时值） */
+  backfill?: MacroBackfill
   updatedAt?: number
 }
 
@@ -1238,7 +1242,7 @@ export async function readMacroLog(): Promise<MacroLogFile> {
     macroGuard.clear(macroLogPath())
     const parsed = JSON.parse(raw) as MacroLogFile
     if (parsed === null || typeof parsed !== 'object' || typeof parsed.days !== 'object' || parsed.days === null) return { v: 1, days: {} }
-    return { v: 1, days: parsed.days, req: parsed.req, updatedAt: parsed.updatedAt }
+    return { v: 1, days: parsed.days, req: parsed.req, backfill: parsed.backfill, updatedAt: parsed.updatedAt }
   } catch (error) {
     if (isFirstBoot(error)) return { v: 1, days: {} }
     macroGuard.markUnreadable(macroLogPath(), error)
@@ -1256,7 +1260,7 @@ export function trimMacroDays(days: Record<string, { dxy: number | null; us10y: 
 }
 
 /** 写一次自采样（同一天覆盖；读不到文件时**拒绝写回**，与快照同纪律） */
-export async function writeMacroSample(day: string, sample: { dxy: number | null; us10y: number | null; at: number; diag?: FlowMacroOut['diag']; req?: Record<string, number[]> }): Promise<{ written: boolean; reason: string | null }> {
+export async function writeMacroSample(day: string, sample: { dxy: number | null; us10y: number | null; at: number; diag?: FlowMacroOut['diag']; req?: Record<string, number[]>; backfill?: MacroBackfill }): Promise<{ written: boolean; reason: string | null }> {
   if (macroGuard.entries.some((e) => e.file === macroLogPath())) return { written: false, reason: '本进程读不到 macro-log.json ⇒ 拒绝写回（避免用一份空文件覆盖历史）' }
   /**
    * ⚠ **读-改-写必须在文件锁里做**：`macroRaws()` 里的自采样写是"尽力而为、不阻塞载荷"的（fire-and-forget），
@@ -1269,7 +1273,7 @@ export async function writeMacroSample(day: string, sample: { dxy: number | null
       (disk) => {
         const file = (disk ?? { v: 1, days: {} }) as MacroLogFile
         const days = trimMacroDays({ ...(file.days ?? {}), [day]: sample })
-        return { v: 1, days, req: sample.req ?? file.req, updatedAt: Date.now() }
+        return { v: 1, days, req: sample.req ?? file.req, backfill: sample.backfill ?? file.backfill, updatedAt: Date.now() }
       },
       { onCorrupt: 'null' },
     )
@@ -1277,6 +1281,53 @@ export async function writeMacroSample(day: string, sample: { dxy: number | null
   } catch (error) {
     return { written: false, reason: `落盘失败：${String(error).slice(0, 120)}` }
   }
+}
+
+/**
+ * 历史回填（用户口径 v0.90.0）：**补历史，而不是等一周**。
+ *
+ * 用途：只提供"较上日 / 5 日变化"所需的历史点 ⇒ **不得替换实时值**（实时主源仍是新浪）。
+ *   · 美债 10Y：美国财政部官方日频 CSV（`"10 Yr"`，行序新→旧 ⇒ 统一按日期升序）；
+ *   · 美元：**没有实测可得的 DXY 日频历史**（东财 `push2his` 的 robots 禁止 `/` 且本机不可达、
+ *     新浪 `DINIW_D` 403、新浪外汇日线接口服务端报错）⇒ 用 **ECB 欧元/美元日频**当**方向代理**，
+ *     并在 `dxyNote` 里写明"与 DXY 口径不同，仅用于方向判定"（**不许把代理说成 DXY**）。
+ */
+export interface MacroBackfill {
+  at: number
+  /** 官方日频（财政部）：day → 10Y */
+  us10y: Record<string, number>
+  /** 美元：真实 DXY 或代理（看 `dxySource`） */
+  dxy: Record<string, number>
+  dxySource: 'DINIW-history' | 'ECB-EURUSD-proxy'
+  dxyNote: string
+  note: string
+}
+
+/** 回填后的历史（旧 → 新）：回填值打底，**同一天有自采样时以自采样为准**（自采样是当时的实时真值） */
+export function mergedMacroHistory(
+  days: Record<string, { dxy: number | null; us10y: number | null }>,
+  backfill: MacroBackfill | undefined,
+  key: 'dxy' | 'us10y',
+  excludeDay?: string,
+  keep = FLOW_MACRO_HISTORY,
+): { values: number[]; source: string } {
+  const map = new Map<string, number>()
+  const filled = backfill === undefined ? {} : backfill[key]
+  for (const [d, v] of Object.entries(filled ?? {})) if (Number.isFinite(v)) map.set(d, v)
+  for (const [d, rec] of Object.entries(days)) {
+    const v = rec[key]
+    if (v !== null && Number.isFinite(v)) map.set(d, v)
+  }
+  const list = [...map.entries()].filter(([d]) => d !== excludeDay).sort((a, b) => (a[0] < b[0] ? -1 : 1))
+  const values = list.slice(Math.max(0, list.length - keep)).map(([, v]) => v)
+  const src = backfill === undefined
+    ? '自采样'
+    : key === 'us10y'
+      ? `自采样 + 美国财政部官方日频回填（${Object.keys(backfill.us10y).length} 天）`
+      : backfill.dxySource === 'DINIW-history'
+        ? `自采样 + 新浪 DINIW 日频回填（${Object.keys(backfill.dxy).length} 天）`
+        : `自采样 + ECB 欧元/美元日频代理（${Object.keys(backfill.dxy).length} 天；与 DXY 口径不同，仅用于方向判定）`
+  return { values, source: src }
 }
 
 /** 自采样历史（旧 → 新，最多 `FLOW_MACRO_HISTORY` 条；排除今天） */
@@ -1339,7 +1390,7 @@ async function fetchSinaMacro(): Promise<{ us10y: { value: number; at: number | 
  * 取 `Date` + `10 Yr` 两列（行序是**新 → 旧**，解析时按日期排序）；robots：该站 `Allow: /`（实测）。
  * 用途：美债 10Y 的**官方日频**口径（与新浪的实时盘中值交叉核对，标注各自日期/时点）。
  */
-async function fetchTreasuryYield10y(budget: HostBudget): Promise<{ day: string; value: number } | null> {
+async function fetchTreasuryYieldSeries(budget: HostBudget): Promise<Array<{ day: string; value: number }>> {
   const year = new Date().getUTCFullYear()
   const url = `https://home.treasury.gov/resource-center/data-chart-center/interest-rates/daily-treasury-rates.csv/${year}/all?type=daily_treasury_yield_curve&field_tdr_date_value=${year}&_format=csv`
   const got = await gatedFetch(url, { budget, timeoutMs: 15000 })
@@ -1348,17 +1399,23 @@ async function fetchTreasuryYield10y(budget: HostBudget): Promise<{ day: string;
   const rows = text.trim().split('\n')
   const header = rows[0]?.split(',').map((x) => x.replace(/"/g, '').trim()) ?? []
   const idx = header.findIndex((x) => x === '10 Yr')
-  if (idx < 0) return null
-  let best: { day: string; value: number } | null = null
+  if (idx < 0) return []
+  const out: Array<{ day: string; value: number }> = []
   for (const row of rows.slice(1)) {
     const cells = row.split(',').map((x) => x.replace(/"/g, '').trim())
     const [mm, dd, yyyy] = (cells[0] ?? '').split('/')
     const v = Number(cells[idx])
     if (mm === undefined || dd === undefined || yyyy === undefined || !Number.isFinite(v)) continue
-    const day = `${yyyy}-${mm.padStart(2, '0')}-${dd.padStart(2, '0')}`
-    if (best === null || day > best.day) best = { day, value: v }
+    out.push({ day: `${yyyy}-${mm.padStart(2, '0')}-${dd.padStart(2, '0')}`, value: v })
   }
-  return best
+  // 真实回包是**新 → 旧** ⇒ 统一按日期升序返回
+  return out.sort((a, b) => (a.day < b.day ? -1 : a.day > b.day ? 1 : 0))
+}
+
+/** 最新一条（现值兜底/交叉核对用） */
+async function fetchTreasuryYield10y(budget: HostBudget): Promise<{ day: string; value: number } | null> {
+  const series = await fetchTreasuryYieldSeries(budget)
+  return series.length === 0 ? null : (series[series.length - 1] as { day: string; value: number })
 }
 
 /**
@@ -1366,25 +1423,31 @@ async function fetchTreasuryYield10y(budget: HostBudget): Promise<{ day: string;
  *   `https://data-api.ecb.europa.eu/service/data/EXR/D.USD.EUR.SP00.A?format=csvdata&lastNObservations=2`
  * 用途：美元指数的**同向**交叉参考（⚠ EUR/USD 与"广义美元指数"**不是同一口径** ⇒ 只并列参考，不做等价核对）。
  */
-async function fetchEcbEurUsd(budget: HostBudget): Promise<{ day: string; value: number } | null> {
-  const url = 'https://data-api.ecb.europa.eu/service/data/EXR/D.USD.EUR.SP00.A?format=csvdata&lastNObservations=2'
-  const got = await gatedFetch(url, { budget, timeoutMs: 12000 })
+async function fetchEcbEurUsdSeries(budget: HostBudget, startPeriod?: string): Promise<Array<{ day: string; value: number }>> {
+  const url = `https://data-api.ecb.europa.eu/service/data/EXR/D.USD.EUR.SP00.A?format=csvdata${startPeriod === undefined ? '&lastNObservations=2' : `&startPeriod=${startPeriod}`}`
+  const got = await gatedFetch(url, { budget, timeoutMs: 15000 })
   if (!got.ok) throw new Error(got.note)
   const text = await got.res.text()
   const rows = text.trim().split('\n')
   const header = rows[0]?.split(',') ?? []
   const tIdx = header.indexOf('TIME_PERIOD')
   const vIdx = header.indexOf('OBS_VALUE')
-  if (tIdx < 0 || vIdx < 0) return null
-  let best: { day: string; value: number } | null = null
+  if (tIdx < 0 || vIdx < 0) return []
+  const out: Array<{ day: string; value: number }> = []
   for (const row of rows.slice(1)) {
     const cells = row.split(',')
     const day = (cells[tIdx] ?? '').trim()
     const value = Number(cells[vIdx])
     if (!/^\d{4}-\d{2}-\d{2}$/.test(day) || !Number.isFinite(value)) continue
-    if (best === null || day > best.day) best = { day, value }
+    out.push({ day, value })
   }
-  return best
+  return out.sort((a, b) => (a.day < b.day ? -1 : a.day > b.day ? 1 : 0))
+}
+
+/** 最新一条（美元指数的**同向参考**） */
+async function fetchEcbEurUsd(budget: HostBudget): Promise<{ day: string; value: number } | null> {
+  const series = await fetchEcbEurUsdSeries(budget)
+  return series.length === 0 ? null : (series[series.length - 1] as { day: string; value: number })
 }
 
 /** 东财交叉核对（**仅核对**：失败只记说明，不参与取值） */
@@ -1416,6 +1479,46 @@ export async function macroRaws(): Promise<FlowMacroOut> {
   const sources: FlowMacroOut['diag']['sources'] = []
   const record = (name: string, ok: boolean, note: string, value: number | null, dayOfValue: string | null): void => {
     sources.push({ name, ok, note, value, day: dayOfValue })
+  }
+  /**
+   * 历史回填（用户口径 v0.90.0）：首次或超过 7 天刷新一次 ⇒ 当日/5 日变化**立刻可算**，不用等一周。
+   * 只写进自采样日志的 `backfill` 段：**不替换实时值**（实时主源仍是新浪）。
+   */
+  const BACKFILL_TTL_MS = 7 * 24 * 3600_000
+  let backfill = macroLog.backfill
+  let backfillNote = backfill === undefined ? '尚未回填' : `回填于 ${dayOf(backfill.at)}（美债 10Y ${Object.keys(backfill.us10y).length} 天；美元 ${Object.keys(backfill.dxy).length} 天，来源 ${backfill.dxySource}）`
+  if (backfill === undefined || Date.now() - backfill.at > BACKFILL_TTL_MS) {
+    try {
+      const startPeriod = dayOf(Date.now() - 400 * 24 * 3600_000)
+      const [usSeries, ecbSeries] = await Promise.all([
+        fetchTreasuryYieldSeries(budget).catch((error) => {
+          record('回填·美国财政部官方日频', false, `失败：${String(error).slice(0, 100)}`, null, null)
+          return [] as Array<{ day: string; value: number }>
+        }),
+        fetchEcbEurUsdSeries(budget, startPeriod).catch((error) => {
+          record('回填·ECB 欧元/美元日频（美元方向代理）', false, `失败：${String(error).slice(0, 100)}`, null, null)
+          return [] as Array<{ day: string; value: number }>
+        }),
+      ])
+      if (usSeries.length > 0 || ecbSeries.length > 0) {
+        backfill = {
+          at: Date.now(),
+          us10y: Object.fromEntries(usSeries.map((x) => [x.day, x.value])),
+          // 没有实测可得的 DXY 日频历史（见类型注释）⇒ 用 ECB 欧元/美元当**方向代理**
+          dxy: Object.fromEntries(ecbSeries.map((x) => [x.day, x.value])),
+          dxySource: 'ECB-EURUSD-proxy',
+          dxyNote: '美元变化以 ECB 欧元/美元日频为代理，与 DXY 口径不同，仅用于方向判定',
+          note: `美债 10Y 用美国财政部官方日频回填 ${usSeries.length} 天；美元用 ECB 欧元/美元日频代理 ${ecbSeries.length} 天（不做 DXY 等价）`,
+        }
+        backfillNote = backfill.note
+        record('回填·美国财政部官方日频', usSeries.length > 0, `回填 ${usSeries.length} 天（${usSeries[0]?.day ?? '—'} → ${usSeries[usSeries.length - 1]?.day ?? '—'}）`, null, null)
+        record('回填·ECB 欧元/美元日频（美元方向代理）', ecbSeries.length > 0, `回填 ${ecbSeries.length} 天（代理：与 DXY 口径不同，仅方向）`, null, null)
+      } else {
+        backfillNote = '回填本次没取到任何数据（原因见 diag）'
+      }
+    } catch (error) {
+      backfillNote = `回填失败：${String(error).slice(0, 120)}`
+    }
   }
 
   const safe = async <T>(name: string, fn: () => Promise<T | null>): Promise<T | null> => {
@@ -1452,7 +1555,7 @@ export async function macroRaws(): Promise<FlowMacroOut> {
   const sampleAt = Date.now()
   if (sina.us10y !== null || sina.dxy !== null) {
     // 自采样是**尽力而为**：不阻塞载荷，失败只记日志（不写 0）
-    void writeMacroSample(day, { dxy: sina.dxy?.value ?? null, us10y: sina.us10y?.value ?? null, at: sampleAt, diag: { at: sampleAt, day, sources, mismatch: [] }, req: budget.snapshot() })
+    void writeMacroSample(day, { dxy: sina.dxy?.value ?? null, us10y: sina.us10y?.value ?? null, at: sampleAt, diag: { at: sampleAt, day, sources, mismatch: [], backfill: backfillNote }, req: budget.snapshot(), backfill })
       .then((r) => {
         if (!r.written && r.reason !== null) log(`global-flow：macro-log 未落盘（${r.reason}）`)
       })
@@ -1514,13 +1617,15 @@ export async function macroRaws(): Promise<FlowMacroOut> {
       if (!notes.some((n) => n.what === what)) notes.push({ what, why: 'transient', note: '所有已接入的源本次都没有给出可用现值 ⇒ 稍后重试即可；这一格不用 0 顶替' })
       return null
     }
-    const history = macroHistory(macroLog.days, key, day)
+    const merged = mergedMacroHistory(macroLog.days, backfill, key, day)
+    const history = merged.values
     const samples = history.length + 1
     return {
       value: chosen.value,
       at: chosen.at,
       history,
       samples,
+      historySource: merged.source,
       source: chosen.source,
       crossCheck: crossText(key === 'us10y' ? '美债 10Y' : '美元指数', spot, second, secondName, tol, digits, sameCaliber, extra),
     }
@@ -1540,7 +1645,7 @@ export async function macroRaws(): Promise<FlowMacroOut> {
       '变化量口径：自采样（不用任何来源的"昨收/前值"字段）',
     ),
     notes,
-    diag: { at: sampleAt, day, sources, mismatch: [] },
+    diag: { at: sampleAt, day, sources, mismatch: [], backfill: backfillNote },
     logPath: macroLogPath(),
   }
   if (!cross.ok) out.notes.push({ what: '东财交叉核对（171.US10Y / 100.UDI）', why: 'transient', note: cross.note })
