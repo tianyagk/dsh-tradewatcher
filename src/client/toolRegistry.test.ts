@@ -167,7 +167,7 @@ test('① 详情页骨架：五个区齐全、顺序固定，且标题是**用�
   assert.equal(d.market.subtitle, '曲线展示五个市场的相对份额变化；横条越长，当前资金偏好越强', '市场段必须有用户给的副标题')
   assert.deepEqual(
     d.kpi.cells.map((c) => c.label),
-    ['偏好榜首', '五市场合计规模', '近五日轮动', '数据时刻'],
+    ['蛋糕温度', '流动性支持度', '美国十年期国债收益率', '广义美元指数'],
     'KPI 磁贴标签是真的（口径 v0.82.0：份额是偏好分归一化 ⇒ 榜首叫「偏好榜首」而不是「规模榜首」）',
   )
   assert.deepEqual(
@@ -219,7 +219,7 @@ test('⑥ 摘要卡/AS OF/范围选中值都来自 ToolData（页面不造数）
       { key: 'cake', label: '资金蛋糕', value: '9015.54 亿美元', note: '美国 占 91.14%' },
       { key: 'prefer', label: '当前偏好', value: '美国', note: '从 韩国 转向 美国' },
     ],
-    kpi: { 规模榜首: { text: '美国 91.14%', value: 91.14, delta: '五日 +0.20pp' } },
+    kpi: { 蛋糕温度: { text: '62（平衡）', value: 62, delta: '较上日 +1.0' } },
   })
   assert.equal(d.summary.length, 2, '摘要卡来自数据')
   assert.equal(d.summary[0].value, '9015.54 亿美元', '摘要卡的值必须原样来自数据')
@@ -327,7 +327,7 @@ test('④ 边界声明（无数据时也在）：含「风险偏好代理 ≠ �
 test('数据路径：给了 ToolData ⇒ 数值只来自数据；缺的格子仍是「未取到」+ value null', () => {
   const d = detailModel(cakeTool, {
     status: '数据时刻 2026-10-12 21:05（北京时间）',
-    kpi: { 偏好榜首: { text: '美国 34.90%', value: 34.9, delta: '五日 +0.20pp' } },
+    kpi: { 蛋糕温度: { text: '62（平衡）', value: 62, delta: '较上日 +1.0', source: '自定口径：蛋糕温度 = 五市场偏好分均值 × 100' } },
     curve: { days: ['2026-10-10', '2026-10-12'], series: [{ name: '美股', points: [89.16, 89.17] }] },
     pie: { slices: [{ label: '美股', text: '89.17%', value: 89.17, index: 0 }], center: '2026-10-12' },
     market: { rows: [['美股', 'SPY', '8222.73 亿美元', '89.17%', '+0.01pp', '+2.0% / +3.7% / +9.9%', '1 / 5']], rowNotes: [null] },
@@ -335,9 +335,10 @@ test('数据路径：给了 ToolData ⇒ 数值只来自数据；缺的格子仍
     replay: { days: ['2026-10-12'], selected: 0, note: '回放' },
     boundary: ['来自数据源的边界声明'],
   })
-  assert.equal(d.kpi.cells[0].text, '美国 34.90%', '有数据时 KPI 取数据里的文本')
-  assert.equal(d.kpi.cells[0].value, 34.9)
-  assert.equal(d.kpi.cells[0].delta, '五日 +0.20pp')
+  assert.equal(d.kpi.cells[0].text, '62（平衡）', '有数据时 KPI 取数据里的文本')
+  assert.equal(d.kpi.cells[0].source, '自定口径：蛋糕温度 = 五市场偏好分均值 × 100', '来源/口径必须透传到模型（悬停用）')
+  assert.equal(d.kpi.cells[0].value, 62)
+  assert.equal(d.kpi.cells[0].delta, '较上日 +1.0')
   // 数据里没有的格子 ⇒ 仍然「未取到」+ null（不许因为"其他格子有数"就补 0）
   const missingCells = d.kpi.cells.slice(1)
   assert.equal(missingCells.length, 3)

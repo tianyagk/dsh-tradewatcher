@@ -96,6 +96,8 @@ export interface GlobalFlowPointDto {
   day: string
   origin: 'observed' | 'rebuilt'
   aumUsd: Array<number | null>
+  /** 各市场**偏好分**（0–1；蛋糕温度 = 它的均值 × 100，与权重同源） */
+  pref?: Array<number | null>
   share: Array<number | null>
   partial: boolean
 }
@@ -107,6 +109,15 @@ export interface GlobalFlowPayloadDto {
   source: 'live' | 'snapshot' | 'fallback'
   fallbackDay: string | null
   fx: { usdCny: number | null; usdHkd: number | null; at: number | null; source: string; note: string | null }
+  /**
+   * 宏观两档（**24 小时品种**，不套 A 股休市冻结）：美国 10Y 国债收益率 / 广义美元指数。
+   * 快照模式（零上游请求）下为 `null` + 说明。
+   */
+  macro?: {
+    us10y: { value: number; at: number | null; history: number[]; samples: number; source: string } | null
+    dxy: { value: number; at: number | null; history: number[]; samples: number; source: string } | null
+    notes: Array<{ what: string; why: string; note: string }>
+  }
   markets: GlobalFlowMarketDto[]
   totalUsd: number | null
   totalNote: string | null

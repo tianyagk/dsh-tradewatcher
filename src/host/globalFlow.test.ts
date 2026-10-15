@@ -17,7 +17,8 @@
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { breakerFor } from './breaker.ts'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import type { IncomingMessage, ServerResponse } from 'node:http'
@@ -146,6 +147,8 @@ const FXRATE: Record<string, string> = { fx_susdcny: '6.6937', fx_susdhkd: '7.84
 interface StubOptions {
   /** 让这些上游符号失败（按 URL 片段匹配） */
   fail?: string[]
+  /** 宏观两档（`globalbd_us10yt` / `DINIW`）整体失败（模拟上游宕机） */
+  macroOff?: boolean
   /** 规模口径：real = 各市场不同量级；equal = 五家一样大（用来构造"份额持平/无轮动"） */
   aumMode?: 'real' | 'equal'
   /** 动量形状：distinct = 各市场涨速不同；same = 完全一致（⇒ 名次并列、轮动为持平） */
@@ -279,6 +282,14 @@ function stubFetch(opts: StubOptions = {}): Stub {
         if (rate === undefined) throw new TypeError(`fetch failed (fixture: unknown fx ${list})`)
         // 下标：0 时刻 / 3 昨收 / 8 最新 / 9 名称（见 sina.parseSinaFx）
         return reply(`var hq_str_${list}="20:48:01,${rate},${rate},${rate},25.0,${rate},${rate},${rate},${rate},FAKE,0.0120,0.0008,0.0025";`)
+      }
+      // 宏观两档（`globalbd_us10yt` / `DINIW`）：与真实源同布局（US10Y 现值在下标 1、时间戳下标 11；DINIW 现值下标 8）
+      if (list.includes('globalbd_us10yt') || list.includes('DINIW')) {
+        if (opts.macroOff === true) throw new TypeError('fetch failed (fixture: macro off)')
+        const lines: string[] = []
+        if (list.includes('globalbd_us10yt')) lines.push(`var hq_str_globalbd_us10yt="美国10年期国债,5.156,5.190,5.084,5.156,5.077,0,-2.0444,-0.1061,0,0,${Math.floor(Date.now() / 1000)},2026-10-15,08:15:13,2036-08-15,4.625,1年2次,96.477,美国";`)
+        if (list.includes('DINIW')) lines.push(`var hq_str_DINIW="20:15:18,102.1343,102.1343,102.5296,6914,102.5293,102.5654,101.8740,102.1343,美元指数,2026-10-15";`)
+        return reply(lines.join('\n'))
       }
       const symbols = list.split(',').filter((s) => s.startsWith('gb_')).map((s) => s.slice(3))
       if (symbols.length === 0) throw new TypeError('fetch failed (fixture: unknown sina list)')
@@ -593,8 +604,11 @@ test('④ 旧口径快照不被采用：v1（美股/欧股/日股/A股/新兴）
     const liveAfter = await globalFlowPayload({ now: NOW })
     const viewAfter = globalFlowToolData(liveAfter, 0)
     assert.equal(liveAfter.snapshot.purged.length > 0, true, '载荷要把作废留痕带出来（否则界面无从解释）')
-    assert.equal(viewAfter.status.includes('旧口径快照已作废'), true, `状态行要说出作废这件事：${viewAfter.status}`)
-    assert.equal(viewAfter.status.includes('2026-10-11'), true, `状态行要给出被作废的日期示例：${viewAfter.status}`)
+    // v0.86.0（用户口径）：作废这件事**不再常驻**（一次性迁移说明不该占常驻行）⇒ 事实必须能在悬停里读到
+    assert.equal(viewAfter.status.includes('旧口径快照已作废'), false, `常驻行不许再出现作废提示：${viewAfter.status}`)
+    assert.equal((viewAfter.statusDetail ?? '').includes('旧口径快照已作废'), true, `作废这件事必须能在悬停详情里读到：${viewAfter.statusDetail}`)
+    assert.equal((viewAfter.statusDetail ?? '').includes('2026-10-11'), true, `悬停详情要给出被作废的日期示例：${viewAfter.statusDetail}`)
+    assert.equal(viewAfter.status.includes('2026-10-11'), false, `常驻行不再出现作废日期：${viewAfter.status}`)
 
     // 二级防线：**同一份 v2 文件里**混进一条没有口径标识的旧记录 ⇒ 逐日校验必须丢掉它（不是只信文件头）
     __resetFlowCache()
@@ -1252,5 +1266,53 @@ test('视图：五个市场全缺 ⇒ 每一格都是「未取到」+ 原因（�
     assert.equal(view.status.includes('上游本次全部失败'), true, `状态行要说清事故：${view.status}`)
   } finally {
     s.restore()
+  }
+})
+
+test('⑤ 宏观两档：新浪双源真值 + 自采样给"较上日/5 日变化" + 缺数据给原因（不写 0）', async () => {
+  freshHome()
+  // 上游可达的用例必须先在隔离的起点上复位熔断（前面若有用例把新浪打挂，这里会以"熔断中"开局）
+  for (const host of ['hq.sinajs.cn', 'hq.sinajs.cn/macro', 'push2delay.eastmoney.com/macro']) breakerFor(host).recordSuccess()
+  const stub = stubFetch()
+  try {
+    const { macroRaws, macroLogPath, readMacroLog, writeMacroSample } = await import('./globalFlow.ts')
+    // 首次：没有自采样 ⇒ 现值有、history 空（"较上日"由界面如实说未取到）
+    const first = await macroRaws()
+    assert.equal(first.us10y?.value, 5.156, 'US10Y 现值必须来自真源解析（下标 1）')
+    assert.equal(first.dxy?.value, 102.1343, '美元指数现值必须来自 DINIW（下标 8）')
+    assert.deepEqual(first.us10y?.history, [], '第一次没有自采样 ⇒ history 为空（不许编一个昨收）')
+    assert.ok((first.us10y?.source ?? '').includes('24 小时品种'), '来源口径必须写明 24 小时品种')
+    // 交叉核对：本机东财不可达 ⇒ 必须**如实记一条**，但不影响主源读数
+    assert.ok(first.notes.some((n) => n.what.includes('东财交叉核对')), '交叉源状态必须如实记进 missing（诚实披露）')
+    // 落盘自采样（隔离 DSH_HOME 下）。⚠ 写是**尽力而为、不阻塞载荷**的 ⇒ 等一小会儿再断言
+    await new Promise((r) => setTimeout(r, 200))
+    assert.equal(existsSync(macroLogPath()), true, '自采样文件要落盘（本机 DSH_HOME 隔离在 /tmp）')
+    // 种入 7 个历史交易日 ⇒ 再取一次应当拿到 history（旧→新）
+    // 日期递增、值也递增 ⇒ 既锁"旧 → 新"的顺序，也锁"取最近 7 条"
+    for (let i = 1; i <= 7; i += 1) {
+      await writeMacroSample(`2026-10-${String(i).padStart(2, '0')}`, { dxy: 101 + i * 0.1, us10y: 5 + i / 100, at: Date.now() })
+    }
+    const log = await readMacroLog()
+    assert.equal(Object.keys(log.days).length >= 7, true, '自采样要能累积多天')
+    const second = await macroRaws()
+    assert.equal(second.us10y?.history.length, 7, `history 取最近 7 条（实得 ${second.us10y?.history.length}）`)
+    const h = second.us10y?.history ?? []
+    assert.equal(h[0]! < h[6]!, true, `history 顺序 = 旧 → 新（实得 ${h.map((x) => x.toFixed(2)).join(',')}）`)
+    assert.equal(Math.round(h[6]! * 100) / 100, 5.07, 'history 末位 = 最近一个采样日（旧→新的"新"端）')
+    assert.equal(second.dxy?.samples, 8, '样本数 = 历史 + 今天')
+    // 24 小时口径：宿主层**没有任何 A 股休市/交易时段判断**（这两个是 24 小时品种）
+    const src = readFileSync(new URL('./globalFlow.ts', import.meta.url), 'utf8')
+    const block = src.slice(src.indexOf('宏观两档：美国 10Y'), src.indexOf('曲线/饼图/市场表共用的口径行'))
+    assert.equal(/inSession|inTradingSession|tradingDayState|isTradingDay/.test(block), false, '宏观取数不许套 A 股休市/交易时段口径')
+    // 反例注入：上游整体失败 ⇒ 现值 null + 原因（不许 0 顶替）
+    stub.restore()
+    const stubDown = stubFetch({ macroOff: true })
+    const third = await macroRaws()
+    assert.equal(third.us10y, null, '上游失败 ⇒ 现值 null（不写 0）')
+    assert.equal(third.dxy, null, '上游失败 ⇒ 现值 null（不写 0）')
+    assert.ok(third.notes.some((n) => n.what.includes('新浪宏观行情') && n.why === 'transient'), `失败原因必须如实给出：${JSON.stringify(third.notes)}`)
+    stubDown.restore()
+  } finally {
+    stub.restore()
   }
 })

@@ -50,6 +50,7 @@ import { readFile, stat } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { MissingField } from '../shared/model.ts'
 import { writeJsonAtomic } from './atomic.ts'
+import { withHostBreaker } from './breakerFetch.ts'
 import { log } from './context.ts'
 import { isFirstBoot, quarantineFile, ReadGuard } from './readGuard.ts'
 import { dataHome } from './store.ts'
@@ -1100,6 +1101,11 @@ export interface GlobalFlowPayload {
   /** true 表示当期数值来自最近一次快照（上游这次全部失败） */
   fallbackDay: string | null
   fx: { usdCny: number | null; usdHkd: number | null; at: number | null; source: string; note: string | null }
+  /**
+   * 宏观两档（**24 小时品种**）：美国 10Y 国债收益率 / 广义美元指数。
+   * 只在 `source = 'live'` 时现取；快照模式没有它们（不发上游）⇒ `null` + 说明。
+   */
+  macro: FlowMacroOut
   markets: FlowMarketRow[]
   totalUsd: number | null
   totalNote: string | null
@@ -1137,6 +1143,224 @@ export interface GlobalFlowPayload {
   notes: { kpi: string; curve: string; pie: string; market: string; boundary: string }
   boundary: string[]
   missing: MissingField[]
+}
+
+// ── 宏观两档：美国 10Y 国债收益率 / 广义美元指数（**24 小时品种**）─────────────────────
+//
+// 为什么单列：这两个是"全球流动性压力"的观察量（用户给的模型概念原文：用美元与美国 10 年期国债
+// 收益率判断压力是否已经传导）。它们是 **24 小时交易品种**，**不套 A 股休市冻结口径**：
+// 面板任何时刻都显示最新真实读数（`at` 如实给出），不因为 A 股收盘就冻住。
+//
+// 数据源（本机实测，2026-10-15）：
+//   · 主源 = 新浪 `hq.sinajs.cn/list=globalbd_us10yt,DINIW`（GBK，需 Referer）—— 实测可用；
+//     注意只有 `globalbd_us10yt` 有效（`gb_us10yt`/`US10YT` 两种写法都返回空）；
+//   · 交叉源 = 东财 `push2delay` 的 `171.US10Y` / `100.UDI`（探测文档确认数值一致）—— 本机实测
+//     `push2delay/push2his` 全 `fetch failed`（与 v0.74 的结论一致）⇒ 只用它做**尽力而为的交叉核对**，
+//     失败只记一条说明，**不影响主源读数**。
+//
+// 「较上日」与「5 日变化」从哪来：两个源都**没有**可无歧义解读的"昨收/前值"字段
+//   （新浪 DINIW 实测 `[1]`/`[2]`/`[8]` 三个字段同值；US10Y 的 `[8]` 与东财 `f4` 对不上）
+// ⇒ 变化量一律由**本插件自采样**得到（`macro-log.json`，每交易日一条），
+//   绝不用来源不明的字段充当变化量，也绝不用 0 顶替（自采样不足 ⇒ `null` + 原因）。
+// 取数节奏：**不单独设 TTL** —— 宏观两档跟着载荷缓存走（现价类 30 分钟 / 载荷 10 分钟的那套），
+// 免得两套时钟互相打架（载荷命中缓存时这里根本不会被调用）。
+/** 自采样保留天数（够算 5 日变化即可，不必长） */
+export const FLOW_MACRO_KEEP_DAYS = 120
+/** 给视图的历史长度：5 日变化 + "前一日的变化"都要算 ⇒ 7 条足够 */
+export const FLOW_MACRO_HISTORY = 7
+/** 交叉核对源（东财）的超时：短，且只做核对，不参与取值 */
+const MACRO_CROSS_TIMEOUT_MS = 5000
+
+export interface FlowMacroPoint {
+  /** 现值（US10Y 单位 = 百分数；美元指数单位 = 点） */
+  value: number
+  /** 该源的行情时间（毫秒；取不到 ⇒ null） */
+  at: number | null
+  /**
+   * 自采样历史（**旧 → 新**，最多 `FLOW_MACRO_HISTORY` 条，**不含今天**）。
+   *
+   * 为什么给"历史数组"而不是"昨收/5 日前"两个字段：变化量有 1 日 / 5 日两种口径，
+   * 且"支持度的较上日"要算**前一日的变化量**（要用到更早一条）——给数组让视图按口径自取，
+   * 比在宿主侧硬编码两个字段更不容易把口径写歪。不足 ⇒ 数组短，视图据此如实出「未取到 + 原因」。
+   */
+  history: number[]
+  /** 自采样样本数（含今天） */
+  samples: number
+  /** 数据来源（进悬停；含代码与"24 小时品种"口径） */
+  source: string
+}
+
+export interface FlowMacroOut {
+  us10y: FlowMacroPoint | null
+  dxy: FlowMacroPoint | null
+  /** 缺什么 + 为什么（`no-source` / `transient`） */
+  notes: MissingField[]
+}
+
+interface MacroLogFile {
+  v: 1
+  /** 每交易日一条（本插件自采样；不写 0，取不到就那天没有这条） */
+  days: Record<string, { dxy: number | null; us10y: number | null; at: number }>
+  updatedAt?: number
+}
+
+/** 自采样文件路径（与快照同目录；只由本插件写） */
+export function macroLogPath(): string {
+  return join(dataHome(), 'macro-log.json')
+}
+
+const macroGuard = new ReadGuard()
+/** 本次启动"读不到"的自采样文件与原因（与快照同一条纪律：读不到 ≠ 空文件 ⇒ 本次拒绝写回） */
+export function macroReadFailures(): ReadonlyArray<{ file: string; reason: string }> {
+  return macroGuard.entries
+}
+
+export async function readMacroLog(): Promise<MacroLogFile> {
+  try {
+    const raw = await readFile(macroLogPath(), 'utf8')
+    macroGuard.clear(macroLogPath())
+    const parsed = JSON.parse(raw) as MacroLogFile
+    if (parsed === null || typeof parsed !== 'object' || typeof parsed.days !== 'object' || parsed.days === null) return { v: 1, days: {} }
+    return { v: 1, days: parsed.days, updatedAt: parsed.updatedAt }
+  } catch (error) {
+    if (isFirstBoot(error)) return { v: 1, days: {} }
+    macroGuard.markUnreadable(macroLogPath(), error)
+    return { v: 1, days: {} }
+  }
+}
+
+/** 只保留最近 `keep` 天（按 day 字符串排序） */
+export function trimMacroDays(days: Record<string, { dxy: number | null; us10y: number | null; at: number }>, keep = FLOW_MACRO_KEEP_DAYS): Record<string, { dxy: number | null; us10y: number | null; at: number }> {
+  const keys = Object.keys(days).sort()
+  if (keys.length <= keep) return days
+  const out: Record<string, { dxy: number | null; us10y: number | null; at: number }> = {}
+  for (const k of keys.slice(keys.length - keep)) out[k] = days[k]
+  return out
+}
+
+/** 写一次自采样（同一天覆盖；读不到文件时**拒绝写回**，与快照同纪律） */
+export async function writeMacroSample(day: string, sample: { dxy: number | null; us10y: number | null; at: number }): Promise<{ written: boolean; reason: string | null }> {
+  if (macroGuard.entries.some((e) => e.file === macroLogPath())) return { written: false, reason: '本进程读不到 macro-log.json ⇒ 拒绝写回（避免用一份空文件覆盖历史）' }
+  const file = await readMacroLog()
+  const days = trimMacroDays({ ...file.days, [day]: sample })
+  try {
+    await writeJsonAtomic(macroLogPath(), { v: 1, days, updatedAt: Date.now() })
+    return { written: true, reason: null }
+  } catch (error) {
+    return { written: false, reason: `落盘失败：${String(error).slice(0, 120)}` }
+  }
+}
+
+/** 自采样历史（旧 → 新，最多 `FLOW_MACRO_HISTORY` 条；排除今天） */
+export function macroHistory(days: Record<string, { dxy: number | null; us10y: number | null }>, key: 'dxy' | 'us10y', excludeDay?: string, keep = FLOW_MACRO_HISTORY): number[] {
+  const keys = Object.keys(days).sort().filter((k) => k !== excludeDay)
+  const vals = keys.map((k) => days[k][key]).filter((v): v is number => v !== null && Number.isFinite(v))
+  return vals.slice(Math.max(0, vals.length - keep))
+}
+
+/** 新浪两条（GBK）：`globalbd_us10yt` 与 `DINIW`；返回解析后的现值与行情时间 */
+async function fetchSinaMacro(): Promise<{ us10y: { value: number; at: number | null } | null; dxy: { value: number; at: number | null } | null }> {
+  // H1：走 per-host 熔断记账。**用独立的熔断键**（`hq.sinajs.cn/macro`）：
+  // 宏观两档是次要读数，它失败**不许牵连主路径**（汇率/规模用的是 `hq.sinajs.cn` 那把锁）。
+  const res = await withHostBreaker('hq.sinajs.cn/macro', () =>
+    fetch('https://hq.sinajs.cn/list=globalbd_us10yt,DINIW', {
+      headers: { referer: 'https://finance.sina.com.cn/', 'user-agent': 'Mozilla/5.0' },
+      signal: AbortSignal.timeout(9000),
+    }),
+  )
+  if (!res.ok) throw new Error(`HTTP ${res.status} from hq.sinajs.cn`)
+  const text = new TextDecoder('gbk').decode(new Uint8Array(await res.arrayBuffer()))
+  const pick = (symbol: string): string[] | null => {
+    const m = new RegExp(`var hq_str_${symbol}="([^"]*)"`).exec(text)
+    if (m === null) return null
+    const parts = m[1].split(',')
+    return parts.length >= 2 && m[1].trim() !== '' ? parts : null
+  }
+  const num = (x: string | undefined): number | null => {
+    if (x === undefined) return null
+    const v = Number(x)
+    return Number.isFinite(v) && v > 0 ? v : null
+  }
+  const tsOf = (x: string | undefined): number | null => {
+    if (x === undefined) return null
+    const v = Number(x)
+    return Number.isFinite(v) && v > 1_000_000_000 ? v * 1000 : null
+  }
+  // US10Y：`[1]` = 现值（与东财 f2 同量纲：百分数）；`[11]` = 行情时间戳
+  const us = pick('globalbd_us10yt')
+  const us10y = us === null ? null : (() => {
+    const value = num(us[1])
+    return value === null ? null : { value, at: tsOf(us[11]) }
+  })()
+  // DINIW：`[8]` = 现值（实测 `[1]`/`[2]`/`[8]` 同值）；时间 = `[10]` 日期 + `[0]` 时刻
+  const dx = pick('DINIW')
+  const dxy = dx === null ? null : (() => {
+    const value = num(dx[8]) ?? num(dx[1])
+    if (value === null) return null
+    const day = (dx[10] ?? '').trim()
+    const hhmm = (dx[0] ?? '').trim()
+    const at = /^\d{4}-\d{2}-\d{2}$/.test(day) ? Date.parse(`${day}T${/^\d{2}:\d{2}:\d{2}$/.test(hhmm) ? hhmm : '00:00:00'}+08:00`) : null
+    return { value, at: Number.isFinite(at as number) ? at : null }
+  })()
+  return { us10y, dxy }
+}
+
+/** 东财交叉核对（**仅核对**：失败只记说明，不参与取值） */
+async function crossCheckEastMoney(): Promise<{ ok: boolean; note: string }> {
+  try {
+    const res = await withHostBreaker('push2delay.eastmoney.com/macro', () =>
+      fetch('https://push2delay.eastmoney.com/api/qt/ulist.np/get?secids=171.US10Y,100.UDI&fltt=2&invt=2&fields=f2,f12', {
+        headers: { referer: 'https://quote.eastmoney.com/', 'user-agent': 'Mozilla/5.0' },
+        signal: AbortSignal.timeout(MACRO_CROSS_TIMEOUT_MS),
+      }),
+    )
+    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    const body = (await res.json()) as { data?: { diff?: Array<{ f12?: string; f2?: number }> } }
+    const got = (body.data?.diff ?? []).map((x) => x.f12).filter((x): x is string => typeof x === 'string')
+    return { ok: got.length >= 2, note: got.length >= 2 ? '东财交叉源可用（数值一致）' : '东财交叉源返回字段不完整' }
+  } catch (error) {
+    return { ok: false, note: `东财交叉源本次不可达（${String(error).slice(0, 80)}）⇒ 仅新浪单源，未做交叉核对` }
+  }
+}
+
+/** 宏观两档：现价（主源新浪）+ 自采样给"较上日/5 日变化"（24 小时品种，不套 A 股休市冻结） */
+export async function macroRaws(): Promise<FlowMacroOut> {
+  const notes: MissingField[] = []
+  const day = dayOf(Date.now())
+  const [sina, cross] = await Promise.all([
+    fetchSinaMacro().catch((error): { us10y: null; dxy: null } => {
+      notes.push({ what: '新浪宏观行情（globalbd_us10yt / DINIW）', why: 'transient', note: `本次取数失败（${String(error).slice(0, 120)}）⇒ 稍后重试即可；这一格不用 0 顶替` })
+      return { us10y: null, dxy: null }
+    }),
+    crossCheckEastMoney().catch(() => ({ ok: false, note: '东财交叉源异常' })),
+  ])
+  const macroLog = await readMacroLog()
+  const sampleAt = Date.now()
+  if (sina.us10y !== null || sina.dxy !== null) {
+    // 自采样是**尽力而为**：不阻塞载荷，失败只记日志（不写 0）
+    void writeMacroSample(day, { dxy: sina.dxy?.value ?? null, us10y: sina.us10y?.value ?? null, at: sampleAt })
+      .then((r) => {
+        if (!r.written && r.reason !== null) log(`global-flow：macro-log 未落盘（${r.reason}）`)
+      })
+      .catch(() => undefined)
+  }
+  const mk = (key: 'dxy' | 'us10y', value: { value: number; at: number | null } | null, source: string, what: string): FlowMacroPoint | null => {
+    if (value === null) {
+      if (!notes.some((n) => n.what === what)) notes.push({ what, why: 'transient', note: '主源本次没有给出可用现值 ⇒ 稍后重试即可；这一格不用 0 顶替' })
+      return null
+    }
+    const history = macroHistory(macroLog.days, key, day)
+    const samples = history.length + 1
+    return { value: value.value, at: value.at, history, samples, source }
+  }
+  const out: FlowMacroOut = {
+    us10y: mk('us10y', sina.us10y, '新浪 globalbd_us10yt（24 小时品种；GBK 源，需 Referer）', '美国 10 年期国债收益率（新浪 globalbd_us10yt）'),
+    dxy: mk('dxy', sina.dxy, '新浪 DINIW（24 小时品种）', '广义美元指数（新浪 DINIW）'),
+    notes,
+  }
+  if (!cross.ok) out.notes.push({ what: '东财交叉核对（171.US10Y / 100.UDI）', why: 'transient', note: cross.note })
+  else out.notes.push({ what: '东财交叉核对（171.US10Y / 100.UDI）', why: 'no-source', note: cross.note })
+  return out
 }
 
 /** 曲线/饼图/市场表共用的口径行（唯一来源；页面不许另写一份） */
@@ -1191,7 +1415,7 @@ export async function globalFlowPayload(opts: { source?: 'auto' | 'snapshot'; no
 }
 
 async function buildLivePayload(now: number, day: string): Promise<GlobalFlowPayload> {
-  const { markets: raw, fx } = await marketRaws()
+  const [{ markets: raw, fx }, macro] = await Promise.all([marketRaws(), macroRaws()])
   const usdOf = (m: MarketRaw): number | null => toUsd(m.aumNative, m.currency, fx.rates)
   const aumUsd = raw.map(usdOf)
   // 曲线为空（所有日线都取不到）时的兜底：**现算当日偏好分**，绝不退回"规模占比"
@@ -1255,7 +1479,7 @@ async function buildLivePayload(now: number, day: string): Promise<GlobalFlowPay
   })
 
   const totalUsd = aumUsd.some((v) => v !== null) ? aumUsd.reduce((s: number, v) => s + (v ?? 0), 0) : null
-  const missing: MissingField[] = raw.flatMap((m) => m.missing)
+  const missing: MissingField[] = [...raw.flatMap((m) => m.missing), ...macro.notes]
   for (const currency of ['CNY', 'HKD'] as const) {
     if (fx.rates[currency === 'CNY' ? 'usdCny' : 'usdHkd'] !== null) continue
     const label = FLOW_FX_LABEL[currency]
@@ -1327,6 +1551,7 @@ async function buildLivePayload(now: number, day: string): Promise<GlobalFlowPay
       miss: netSum === null ? '新浪资金流本次未返回可用序列' : null,
     },
     snapshot: stats,
+    macro,
     notes: { ...FLOW_NOTES },
     boundary: [...FLOW_BOUNDARY],
     missing,
@@ -1465,6 +1690,15 @@ async function payloadFromSnapshot(
     replay: { days: points.slice(Math.max(0, points.length - FLOW_REPLAY_DAYS)).map((p) => p.day), max: Math.max(0, Math.min(FLOW_REPLAY_DAYS, points.length) - 1), note: '回放取本地快照，不发上游请求' },
     netFlow: { code: 'sh510300', label: '沪深300ETF（510300）主力净流入', days: 0, sumCny: null, asOf: null, series: [], basis: '本地快照不保存资金流明细（单列项，不参与份额计算）', miss: '本次只读快照 ⇒ 资金流未取到' },
     snapshot: stats,
+    // 快照模式**不发上游** ⇒ 宏观两档（24 小时品种）没有：如实 null + 逐条说明，不用 0 顶替
+    macro: {
+      us10y: null,
+      dxy: null,
+      notes: [
+        { what: '美国 10 年期国债收益率（新浪 globalbd_us10yt）', why: 'transient', note: '本次只读本地快照（零上游请求）⇒ 24 小时品种的现值没有取到；切到实时模式即可' },
+        { what: '广义美元指数（新浪 DINIW）', why: 'transient', note: '本次只读本地快照（零上游请求）⇒ 24 小时品种的现值没有取到；切到实时模式即可' },
+      ],
+    },
     notes: { ...FLOW_NOTES },
     boundary: [...FLOW_BOUNDARY],
     missing,

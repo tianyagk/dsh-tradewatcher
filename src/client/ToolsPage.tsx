@@ -557,7 +557,13 @@ function detailView(
         model.kpi.cells.map((cell) =>
           React.createElement(
             'div',
-            { key: cell.label, 'data-role': 'tool-kpi-tile', style: { ...TILE_SURFACE, display: 'flex', flexDirection: 'column' } },
+            {
+              key: cell.label,
+              'data-role': 'tool-kpi-tile',
+              // 来源与口径（用户口径 v0.86.0）：进 title/aria-label，悬停/读屏都能读到；缺数据时不出现
+              ...(cell.source === null ? {} : { title: cell.source, 'aria-label': `${cell.label} ${cell.text}${cell.delta === null ? '' : `，${cell.delta}`}——${cell.source}` }),
+              style: { ...TILE_SURFACE, display: 'flex', flexDirection: 'column' },
+            },
             React.createElement(
               'div',
               { style: { display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 } },

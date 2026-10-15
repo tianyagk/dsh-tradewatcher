@@ -13,7 +13,7 @@ import type { GlobalFlowMarketDto, GlobalFlowPayloadDto } from '../api.ts'
 // ⚠ 占位文案从**叶子模块**拿，类型从注册表拿（type-only import 会被擦除）——
 // 否则 `toolRegistry → tools/cake → tools/globalFlowView → toolRegistry` 会成环（实测 TDZ 报错）。
 import { NOT_FETCHED } from '../toolText.ts'
-import type { ToolBarRow, ToolCurveSeries, ToolData, ToolPayload, ToolPieSlice } from '../toolRegistry.ts'
+import type { ToolBarRow, ToolCurveSeries, ToolData, ToolKpiDatum, ToolPayload, ToolPieSlice } from '../toolRegistry.ts'
 
 /** 五个市场的画图配色：全部走主题 token（明暗两套都有定义，源码里不写死颜色） */
 export const FLOW_SERIES_COLORS: readonly string[] = [
@@ -278,13 +278,6 @@ export function rowReasonOf(m: Pick<GlobalFlowMarketDto, 'currency' | 'name' | '
   return null
 }
 
-/** 前一序列日某市场的份额（百分点）；没有前一天或那天缺值 ⇒ null */
-function prevShareOf(payload: GlobalFlowPayloadDto, idx: number, marketIndex: number): number | null {
-  const prev = idx > 0 ? payload.curve.points[idx - 1] : undefined
-  const v = prev?.share[marketIndex]
-  return v === null || v === undefined ? null : v * 100
-}
-
 /** 汇率摘要（两条各自显示；缺的那条如实写"未取到"） */
 export function rateSummary(payload: GlobalFlowPayloadDto): string {
   const one = (v: number | null, label: string): string => (v === null ? `${label} 未取到` : `${label} ${v.toFixed(4)}`)
@@ -303,6 +296,191 @@ export function rateSummary(payload: GlobalFlowPayloadDto): string {
  * `rangeDays` = 曲线窗口（90 / 180 / 365 个序列日，见宿主 `FLOW_CURVE_WINDOWS`）：
  * 只在这里**从同一条曲线上切片**（宿主一次构建到最大档）⇒ 切档不发请求、不重算份额。
  */
+/**
+ * 两处**自定口径**（用户给的模型概念原文里没有公式；参考版公式未公开 ⇒ 我们自定并写明，
+ * 绝不声称与参考版数值可比）。两处都是**纯函数**，注释里的公式就是报告与界面悬停引用同一份。
+ *
+ * 概念原文：「把全球风险资金看成一块蛋糕……用美元与美国 10 年期国债收益率判断全球流动性压力是否已经传导。」
+ */
+
+/** 蛋糕温度的状态词阈值（写进悬停） */
+export const TEMP_HOT = 70
+export const TEMP_COLD = 30
+
+/**
+ * **蛋糕温度**（自定口径）= 五个市场**偏好分**（0–1）的均值 × 100，0–100。
+ *
+ * - 与"权重用的偏好分"**同一份**（55% × 各自 60 日区间分位 + 30% × 5 日动量分位 + 15% × 20 日动量分位）
+ *   ⇒ 不另算一份（断言锁这条）。
+ * - 只对有值的市场求均值；一个都没有 ⇒ `null`（不写 0）。
+ * - 状态词：≥ 70 偏热 / ≤ 30 偏冷 / 其间平衡（阈值 `TEMP_HOT`/`TEMP_COLD`）。
+ * - **不是**参考版的数值：它的公式未公开，两者不可比。
+ */
+export function cakeTemperature(prefs: ReadonlyArray<number | null>): number | null {
+  const vals = prefs.filter((p): p is number => p !== null && Number.isFinite(p))
+  if (vals.length === 0) return null
+  return (vals.reduce((a, b) => a + b, 0) / vals.length) * 100
+}
+
+/** 蛋糕温度的状态词（唯一实现；阈值同上） */
+export function temperatureLabel(temp: number | null): string | null {
+  if (temp === null || !Number.isFinite(temp)) return null
+  return temp >= TEMP_HOT ? '偏热' : temp <= TEMP_COLD ? '偏冷' : '平衡'
+}
+
+/** 流动性支持度的口径常量（写进悬停：变化量取 5 日，样本不足退化为当日） */
+export const LIQ_SCALE = { dxy: 1.5, us10yPp: 0.25 } as const
+export const LIQ_CHANGE_SPAN = 5
+
+/**
+ * **流动性支持度**（自定口径，0–10，越高越"支持"＝压力越小）。
+ *
+ * 公式（唯一实现）：
+ *   `支持度 = 5 − 2.5 × ( clamp(Δ美元指数 / 1.5, −1, 1) + clamp(Δ美债10Y(pp) / 0.25, −1, 1) )`
+ *
+ * - 输入 = 广义美元指数与美国 10Y 的**近期变化**：默认取 **5 个采样交易日**的变化；
+ *   自采样不足 5 条 ⇒ 退化为 **1 个交易日**（退化这件事在悬停里写明，不静默）。
+ * - 方向：美元走强 / 美债收益率上行 = 全球流动性压力上升 ⇒ 支持度下降；两者都走弱 ⇒ 支持度上升。
+ * - 任一侧变化取不到 ⇒ `null`（不写 0、不用单侧冒充双侧）。
+ * - **自定口径：与参考版不可比**（其公式未公开）。
+ */
+export function liquiditySupport(input: {
+  dxyChange: number | null
+  us10yChangePp: number | null
+  span: number
+}): { score: number; span: number } | null {
+  const { dxyChange, us10yChangePp, span } = input
+  if (dxyChange === null || us10yChangePp === null) return null
+  if (!Number.isFinite(dxyChange) || !Number.isFinite(us10yChangePp)) return null
+  const clamp = (x: number): number => Math.max(-1, Math.min(1, x))
+  const score = 5 - 2.5 * (clamp(dxyChange / LIQ_SCALE.dxy) + clamp(us10yChangePp / LIQ_SCALE.us10yPp))
+  return { score: Math.max(0, Math.min(10, score)), span }
+}
+
+/** 压力是否已传导（自定判定规则；写进悬停） */
+export type StressVerdict = '传导' | '未传导' | '数据不足'
+
+/**
+ * **压力是否已传导**（自定判定）：美元与美债**同步走强**（压力上升）**且**蛋糕温度**同期下降**
+ * ⇒ 「压力已传导」；两者都能算但不同时满足 ⇒ 「暂未传导」；任一输入缺 ⇒ 「数据不足」+ 原因。
+ */
+export function stressVerdict(input: {
+  dxyChange: number | null
+  us10yChangePp: number | null
+  tempChange: number | null
+}): { verdict: StressVerdict; why: string | null } {
+  const { dxyChange, us10yChangePp, tempChange } = input
+  if (dxyChange === null || us10yChangePp === null) return { verdict: '数据不足', why: '美元指数或美债 10Y 的近期变化未取到（自采样不足）' }
+  if (tempChange === null) return { verdict: '数据不足', why: '蛋糕温度的同期变化未取到（曲线序列不足）' }
+  const stressUp = dxyChange > 0 && us10yChangePp > 0
+  const tempDown = tempChange < 0
+  return stressUp && tempDown
+    ? { verdict: '传导', why: null }
+    : { verdict: '未传导', why: null }
+}
+
+/**
+ * 四个宏观 KPI 磁贴（用户口径 v0.86.0）。
+ *
+ * - **蛋糕温度**：五市场偏好分均值 × 100（与权重同源；见 `cakeTemperature`）
+ * - **流动性支持度**：美元指数 + 美债 10Y 的近期变化合成 0–10（见 `liquiditySupport`），并给「压力是否已传导」
+ * - **美国 10Y / 广义美元指数**：真实读数（新浪），**24 小时品种**（不套 A 股休市冻结）
+ *
+ * 四块都：`较上日` delta、来源与口径进 `source`（页面渲染成 title/aria-label）、缺数据 ⇒ 「未取到」+ 原因。
+ */
+function macroTiles(payload: GlobalFlowPayloadDto, idx: number, points: Array<GlobalFlowPayloadDto['curve']['points'][number]>): Record<string, ToolKpiDatum> {
+  const out: Record<string, ToolKpiDatum> = {}
+  const nullTile = (why: string): ToolKpiDatum => ({ text: NOT_FETCHED, value: null, delta: why, swatch: null, source: why })
+
+  // ── 蛋糕温度（自定口径，与权重同源）──────────────────────────────────────────────
+  const tempAt = (i: number): number | null => {
+    const p = points[i]
+    if (p === undefined) return null
+    return cakeTemperature(payload.markets.map((_, m) => p.pref?.[m] ?? null))
+  }
+  const temp = tempAt(idx)
+  const tempPrev = idx + 1 < points.length ? tempAt(idx + 1) : null
+  const tempLabel = temperatureLabel(temp)
+  const tempSource = `自定口径：蛋糕温度 = 五市场偏好分均值 × 100（偏好分 = 55% × 各自 60 日区间分位 + 30% × 5 日动量分位 + 15% × 20 日动量分位，与权重同源）；状态词：≥${TEMP_HOT} 偏热 / ≤${TEMP_COLD} 偏冷 / 其间平衡；与参考版不可比（其公式未公开）`
+  out['蛋糕温度'] = temp === null
+    ? nullTile(`未取到：这一天五个市场都算不出偏好分（样本不足或日线缺失）⇒ 温度无从谈起（不用 0 顶替）`)
+    : {
+        text: `${temp.toFixed(0)}（${tempLabel}）`,
+        value: temp,
+        delta: tempPrev === null ? `较上日 —（曲线序列不足两步）` : `较上日 ${temp - tempPrev >= 0 ? '+' : ''}${(temp - tempPrev).toFixed(1)}`,
+        swatch: null,
+        source: tempSource,
+      }
+
+  // ── 宏观两档（真实读数）──────────────────────────────────────────────────────────
+  const macro = payload.macro ?? null
+  const us = macro?.us10y ?? null
+  const dxy = macro?.dxy ?? null
+  const usWhy = macro?.notes.find((n) => n.what.includes('10 年期'))?.note ?? '本次没有取到美国 10 年期国债收益率的现值'
+  const dxyWhy = macro?.notes.find((n) => n.what.includes('美元指数'))?.note ?? '本次没有取到广义美元指数的现值'
+
+  const changeOf = (point: { value: number; history: number[] }, span: number): { change: number | null; span: number } => {
+    const h = point.history ?? []
+    if (h.length >= span) return { change: point.value - (h[h.length - span] as number), span }
+    if (h.length >= 1) return { change: point.value - (h[h.length - 1] as number), span: 1 }
+    return { change: null, span: 0 }
+  }
+  const usCh = us === null ? null : changeOf(us, LIQ_CHANGE_SPAN)
+  const dxyCh = dxy === null ? null : changeOf(dxy, LIQ_CHANGE_SPAN)
+  const usPrevDay = us === null ? null : changeOf({ value: us.history[us.history.length - 1] ?? us.value, history: us.history.slice(0, -1) }, LIQ_CHANGE_SPAN)
+  const dxyPrevDay = dxy === null ? null : changeOf({ value: dxy.history[dxy.history.length - 1] ?? dxy.value, history: dxy.history.slice(0, -1) }, LIQ_CHANGE_SPAN)
+
+  const spanNote = (span: number): string => (span >= LIQ_CHANGE_SPAN ? `${LIQ_CHANGE_SPAN} 个采样交易日` : span === 1 ? '当日变化（自采样不足 5 条 ⇒ 已退化为 1 日，不静默）' : '无变化可算')
+
+  out['美国十年期国债收益率'] = us === null
+    ? nullTile(`未取到：${usWhy}`)
+    : {
+        text: `${us.value.toFixed(3)}%`,
+        value: us.value,
+        delta: usCh === null || usCh.change === null ? `较上日 —（自采样不足一条）` : `较上日 ${usCh.change >= 0 ? '+' : ''}${(usCh.change * 100).toFixed(1)}bp（${spanNote(usCh.span)}）`,
+        swatch: null,
+        source: `${us.source}｜口径：24 小时品种，不套 A 股休市冻结（任何时刻都给最新真实读数）｜自采样 ${us.samples} 条`,
+      }
+  out['广义美元指数'] = dxy === null
+    ? nullTile(`未取到：${dxyWhy}`)
+    : {
+        text: dxy.value.toFixed(2),
+        value: dxy.value,
+        delta: dxyCh === null || dxyCh.change === null ? `较上日 —（自采样不足一条）` : `较上日 ${dxyCh.change >= 0 ? '+' : ''}${dxyCh.change.toFixed(2)}（${spanNote(dxyCh.span)}）`,
+        swatch: null,
+        source: `${dxy.source}｜口径：24 小时品种，不套 A 股休市冻结｜自采样 ${dxy.samples} 条`,
+      }
+
+  // ── 流动性支持度（自定口径）+ 压力是否已传导 ─────────────────────────────────────
+  const support = usCh === null || dxyCh === null
+    ? null
+    : liquiditySupport({
+        dxyChange: dxyCh.change,
+        us10yChangePp: usCh.change,
+        span: Math.min(dxyCh.span, usCh.span),
+      })
+  const supportPrev = usPrevDay === null || dxyPrevDay === null
+    ? null
+    : liquiditySupport({ dxyChange: dxyPrevDay.change, us10yChangePp: usPrevDay.change, span: Math.min(usPrevDay.span, dxyPrevDay.span) })
+  const tempChange = temp !== null && idx + LIQ_CHANGE_SPAN < points.length ? temp - (tempAt(idx + LIQ_CHANGE_SPAN) as number) : null
+  const verdict = stressVerdict({
+    dxyChange: dxyCh?.change ?? null,
+    us10yChangePp: usCh?.change ?? null,
+    tempChange,
+  })
+  const liqSource = `自定口径：流动性支持度 = 5 − 2.5 ×（clamp(Δ美元指数 / ${LIQ_SCALE.dxy}, −1, 1) + clamp(Δ美债10Y / ${LIQ_SCALE.us10yPp}pp, −1, 1)），0–10 越高越支持（压力越小）；变化量取 ${LIQ_CHANGE_SPAN} 个采样交易日、不足则退化为当日；输入=广义美元指数与美债 10Y 的变化方向；与参考版不可比（其公式未公开）｜压力是否已传导：美元与美债同步走强且蛋糕温度同期下降 ⇒ 传导，否则暂未传导，输入缺 ⇒ 数据不足`
+  out['流动性支持度'] = support === null
+    ? nullTile(`未取到：${us === null ? usWhy : dxy === null ? dxyWhy : '美元指数或美债 10Y 的自采样历史不足一条 ⇒ 变化量算不出（不用 0 顶替）'}`)
+    : {
+        text: `${support.score.toFixed(1)}（压力${verdict.verdict === '传导' ? '已传导' : verdict.verdict === '未传导' ? '暂未传导' : '数据不足'}）`,
+        value: support.score,
+        delta: supportPrev === null ? '较上日 —（自采样不足两条）' : `较上日 ${support.score - supportPrev.score >= 0 ? '+' : ''}${(support.score - supportPrev.score).toFixed(1)}`,
+        swatch: null,
+        source: liqSource + (verdict.why === null ? '' : `｜本次判定：数据不足（${verdict.why}）`),
+      }
+  return out
+}
+
 export function globalFlowToolData(payload: GlobalFlowPayloadDto, step = 0, rangeDays?: number): ToolData {
   const all = payload.curve.points
   const range = rangeDays === undefined ? all.length : Math.max(0, Math.round(rangeDays))
@@ -336,13 +514,16 @@ export function globalFlowToolData(payload: GlobalFlowPayloadDto, step = 0, rang
       : allMissing
         ? '⚠ 上游本次全部失败，且本地还没有任何快照 ⇒ 这一屏没有数据（逐行原因见下）'
         : null
+  /**
+   * 「另有 N 天旧口径快照已作废」：**不再常驻**（用户口径：一次性迁移说明不该占常驻行）。
+   * 事实不消失 ⇒ 只在状态行的 `title`/`aria-label`（`statusDetail`）里保留，见下面的 `purgeMark`。
+   */
   const purgeMark = purged.length === 0
     ? null
     : `⚠ 另有 ${purged.length} 天旧口径快照已作废（成分变更；留痕见快照文件，如 ${purged[purged.length - 1].day}）`
   const status = [
     `数据时刻 ${fmtBeijing(payload.asOf, payload.day)}（北京时间）`,
     degrade,
-    purgeMark,
   ].filter((x): x is string => x !== null).join('｜')
   // 细节（进 title/aria-label；缺数据时它就是原因）
   const statusDetail = [
@@ -355,6 +536,8 @@ export function globalFlowToolData(payload: GlobalFlowPayloadDto, step = 0, rang
           : '上游现取（宿主三层 TTL：现价类 30 分钟 / 日线 12 小时 / 载荷 10 分钟）',
     `曲线 ${points.length} 个序列日（实测 ${points.filter((p) => p.origin === 'observed').length} / 重建 ${points.filter((p) => p.origin === 'rebuilt').length}）`,
     `窗口 ${points.length} / 可选 ${(payload.curve.windowOptions ?? [payload.curve.window]).join(' / ')} 个序列日`,
+    // 旧四块（偏好榜首 / 五市场合计规模 / 近五日轮动 / 数据时刻）**不丢**：磁贴让位给宏观四块后，它们搬到这里
+    `旧四块（保留）：偏好榜首 ${top === null ? NOT_FETCHED : `${top.name} ${fmtSharePct(topShare)}`}｜五市场合计规模 ${fmtUsd(payload.totalUsd)}｜近五日轮动 ${payload.rotation.text}｜数据时刻 ${fmtBeijing(payload.asOf, payload.day)}`,
     ...(purged.length === 0 ? [] : [purgeMark as string]),
   ].join('｜')
 
@@ -392,38 +575,10 @@ export function globalFlowToolData(payload: GlobalFlowPayloadDto, step = 0, rang
       boundary: payload.notes.boundary,
     },
     kpi: {
-      // 色标 = 该磁贴对应的曲线序列序号（与曲线/图例同色）；不对应任何序列的格子给 null ⇒ 中性色标
-      '偏好榜首': top === null
-        ? { text: NOT_FETCHED, value: null, delta: null, swatch: null }
-        : { text: `${top.name} ${fmtSharePct(topShare)}`, value: topShare, swatch: payload.markets.indexOf(top), delta: isLatest ? `五日 ${fmtPp(top.delta5Pp)}` : `较前一序列日 ${fmtPp(topShare === null || prevShareOf(view, idx, payload.markets.indexOf(top)) === null ? null : topShare - (prevShareOf(view, idx, payload.markets.indexOf(top)) as number))}` },
-      // 偏好分本身（0–1）也放进磁贴 delta 里：读者能看出"份额是偏好分归一化的结果"
-      '偏好分（榜首）': top === null
-        ? { text: NOT_FETCHED, value: null, delta: null, swatch: null }
-        : {
-            text: fmtPref(top.pref),
-            value: top.pref,
-            swatch: payload.markets.indexOf(top),
-            delta: top.prefSource,
-          },
-      '五市场合计规模': {
-        text: fmtUsd(payload.totalUsd),
-        value: payload.totalUsd,
-        // 合计不对应任何一条序列 ⇒ 中性色标（不许拿某个市场的颜色冒充"合计"）
-        swatch: null,
-        delta: payload.totalNote ?? rateSummary(payload),
-      },
-      '近五日轮动': {
-        text: payload.rotation.text,
-        value: payload.rotation.maxAbsPp,
-        swatch: null,
-        delta: payload.rotation.kind === 'rotation' ? '明确轮动' : payload.rotation.kind === 'flat' ? '持平' : '判不了',
-      },
-      '数据时刻': {
-        text: point === undefined ? NOT_FETCHED : `${point.day}（${point.origin === 'observed' ? '实测' : '重建'}）`,
-        value: null,
-        swatch: null,
-        delta: payload.snapshot.lastDay === null ? '本地快照尚未建立' : `快照至 ${payload.snapshot.lastDay}（${payload.snapshot.days} 天）`,
-      },
+      // 宏观四块（用户口径 v0.86.0）：蛋糕温度 / 流动性支持度 / 美国 10Y / 广义美元指数。
+      // 旧四块（偏好榜首 / 五市场合计规模 / 近五日轮动 / 数据时刻）**不丢**：搬进 `statusDetail`（状态行悬停）。
+      // 色标：四块都不对应某一条曲线序列 ⇒ 一律中性色标（不拿某个市场的颜色冒充）。
+      ...macroTiles(payload, idx, points),
     },
     curve: {
       days: points.map((p) => p.day),

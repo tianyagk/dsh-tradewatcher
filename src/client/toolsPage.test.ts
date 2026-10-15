@@ -200,6 +200,8 @@ export function renderWiringProblems(src: string): string[] {
   need(/payload\.at\(step, selectedRange \?\? undefined\)/.test(src), '回放/换窗口必须走载荷句柄的 at(step, range)（本地换帧，不许每帧发请求）')
   need(/entry\?\.load/.test(src), '数据必须来自工具自己的 load()（页面不许另写一份取数）')
   need(/entry\?\.ranges\?\.initial/.test(src), '默认窗口必须来自工具声明（页面不许写死 180）')
+  // v0.86.0：KPI 磁贴的**来源与口径**必须渲染成 title/aria-label（悬停/读屏都能读到；缺数据时不出现）
+  need(/cell\.source === null \? \{\} : \{ title: cell\.source/.test(src), 'KPI 磁贴必须把来源/口径渲染成 title/aria-label')
   // 目录页要素（v0.74.0 起：**没有**页标题/副标题；v0.81.0 起：**没有**返回控件与搜索框）
   need(/model\.categories\.map\(/.test(src), '分类标签行未渲染')
   need(/repeat\(3, minmax\(0, 1fr\)\)/.test(src), '卡片网格必须是三列（repeat(3, minmax(0, 1fr))）')
@@ -609,20 +611,94 @@ test('④ 回目录按钮：左上角圆角卡片（Material）——常量判�
   }
 })
 
-test('③ KPI 磁贴四块的值都来自模型（不是常量）：无数据 ⇒ 全是「未取到」+ null', () => {
+test('③ KPI 磁贴四块 = 宏观四块（对齐参考版）；无数据 ⇒ 全是「未取到」+ null；标签零阿拉伯数字', () => {
   const d = detailModel(cakeTool)
   assert.equal(d.kpi.cells.length, 4, `图表卡必须正好四块磁贴（实得 ${d.kpi.cells.length}）`)
   for (const cell of d.kpi.cells) {
     assert.equal(cell.text, NOT_FETCHED, `无数据时磁贴「${cell.label}」必须是「${NOT_FETCHED}」`)
     assert.equal(cell.value, null, `无数据时磁贴「${cell.label}」的值必须是 null（不许 0 顶替）`)
   }
-  // 磁贴的文案里**不许出现"蛋糕温度/流动性支持度"这类我们根本没有的口径**（严禁凑数编造）
   const labels = d.kpi.cells.map((c) => c.label)
-  for (const invented of ['温度', '流动性支持', '美元指数', '10Y']) {
-    assert.equal(labels.some((l) => l.includes(invented)), false, `KPI 磁贴不许出现没有数据来源的口径「${invented}」：${labels.join(' / ')}`)
+  assert.deepEqual(labels, ['蛋糕温度', '流动性支持度', '美国十年期国债收益率', '广义美元指数'], '四块磁贴 = 用户指定的宏观四块')
+  // 工具声明进的是"无数据"整份模型 ⇒ **标签必须零阿拉伯数字**（所以写「十年期」而不是「10Y」）
+  for (const l of labels) {
+    assert.equal(/\d/.test(l), false, `磁贴标签不许含阿拉伯数字（红线：无数据模型零数字）：${l}`)
   }
-  assert.deepEqual(labels, ['偏好榜首', '五市场合计规模', '近五日轮动', '数据时刻'], '四块磁贴 = 我们真有的四个指标（口径 v0.82.0：榜首叫「偏好榜首」）')
+  assert.equal(labels.some((l) => l.includes('10Y')), false, '「10Y」这种带数字的写法只允许出现在**有数据的**悬停口径里')
   // 反例注入：把某块磁贴改成常量（页面/模型里都不许出现"常量磁贴"）
   const fake = { ...d, kpi: { ...d.kpi, cells: d.kpi.cells.map((c, i) => (i === 0 ? { ...c, text: '蛋糕温度 42', value: 42 } : c)) } }
   assert.throws(() => assert.deepEqual(fake.kpi.cells.map((c) => c.text), [NOT_FETCHED, NOT_FETCHED, NOT_FETCHED, NOT_FETCHED], '反例上必须失败'), /反例上/, '⚠ 反例（塞一个常量磁贴）必须让断言失败')
+})
+
+test('④ 回目录按钮：左上角圆角卡片（Material）——常量判据 + 源码接线 + 五条注入必败', () => {
+  // ① 常量层：真实常量必须通过布局判据与交互判据
+  const layout = backButtonLayoutProblems(BACK_BTN_STYLE)
+  assert.deepEqual(layout, [], `回目录按钮布局判据未通过：${layout.join(' ／ ')}`)
+  const interaction = backButtonInteractionProblems({
+    tag: BACK_BTN_TAG,
+    props: BACK_BTN_PROPS,
+    hasHover: Object.keys(BACK_BTN_HOVER_STYLE).length > 0,
+    hasPress: Object.keys(BACK_BTN_PRESS_STYLE).length > 0,
+    hasFocus: Object.keys(BACK_BTN_FOCUS_STYLE).length > 0,
+    hasReturn: true,
+    title: BACK_BTN_TITLE,
+    ariaLabel: BACK_BTN_TITLE,
+  })
+  assert.deepEqual(interaction, [], `回目录按钮交互判据未通过：${interaction.join(' ／ ')}`)
+  assert.equal(BACK_BTN_STYLE.alignSelf, 'flex-start', '左上角对齐（不居中、不占整行）')
+  assert.equal(BACK_BTN_STYLE.width, 'auto', '按内容宽度排布（不占整行）')
+  assert.notEqual(String(BACK_BTN_STYLE.borderRadius), '0', '圆角非 0')
+  assert.equal(String(BACK_BTN_STYLE.boxShadow).includes('none'), false, '必须有阴影层级')
+
+  // ② 注入层：把每一项要求关掉 ⇒ 对应判据必须报错（每条都验"非恒真"）
+  const layoutInjections: Array<{ name: string; style: Record<string, unknown>; hit: RegExp }> = [
+    { name: '按钮居中/占整行', style: { ...BACK_BTN_STYLE, alignSelf: 'stretch', width: '100%' }, hit: /左上角对齐|不许占整行/ },
+    { name: '圆角改成 0', style: { ...BACK_BTN_STYLE, borderRadius: 0 }, hit: /圆角必须是 8–12px/ },
+    { name: '阴影去掉', style: { ...BACK_BTN_STYLE, boxShadow: 'none' }, hit: /必须有轻微阴影/ },
+    { name: '内边距/间距/字重不达 Material 度量', style: { ...BACK_BTN_STYLE, padding: '0', gap: 0, fontWeight: 400, fontSize: 18 }, hit: /内边距|间距|字重|字号/ },
+  ]
+  for (const { name, style, hit } of layoutInjections) {
+    const fail = backButtonLayoutProblems(style as never)
+    assert.ok(fail.length > 0, `注入「${name}」必须被布局判据抓到（一条都没报 ⇒ 断言恒真）`)
+    assert.match(fail.join(' ／ '), hit, `注入「${name}」报的原因应是预期的：${JSON.stringify(fail)}`)
+  }
+  const interactionInjections: Array<{ name: string; patch: Record<string, unknown>; hit: RegExp }> = [
+    { name: '键盘不可达（换成 div）', patch: { tag: 'div' }, hit: /原生 button/ },
+    { name: '没有悬停反馈', patch: { hasHover: false }, hit: /悬停反馈/ },
+    { name: '没有按下反馈', patch: { hasPress: false }, hit: /按下反馈/ },
+    { name: '没有 focus 可见环', patch: { hasFocus: false }, hit: /focus 可见环/ },
+    { name: '断掉回目录接线', patch: { hasReturn: false }, hit: /回到工具目录/ },
+    { name: '无障碍名缺失', patch: { title: '', ariaLabel: '' }, hit: /title 必须齐备|aria-label 必须齐备/ },
+  ]
+  const base = { tag: BACK_BTN_TAG, props: BACK_BTN_PROPS, hasHover: true, hasPress: true, hasFocus: true, hasReturn: true, title: BACK_BTN_TITLE, ariaLabel: BACK_BTN_TITLE }
+  for (const { name, patch, hit } of interactionInjections) {
+    const fail = backButtonInteractionProblems({ ...base, ...patch } as never)
+    assert.ok(fail.length > 0, `注入「${name}」必须被交互判据抓到（一条都没报 ⇒ 断言恒真）`)
+    assert.match(fail.join(' ／ '), hit, `注入「${name}」报的原因应是预期的：${JSON.stringify(fail)}`)
+  }
+
+  // ③ 源码接线层（含三条注入）
+  const src = FILES.page
+  const bad = backButtonWiringProblems(src)
+  assert.deepEqual(bad, [], `回目录按钮接线检查未通过：${bad.join(' ／ ')}`)
+  const srcInjections: Array<{ name: string; mutate: (s: string) => string; hit: RegExp }> = [
+    { name: '回目录按钮整块删掉', mutate: (s) => s.replace("    React.createElement(BackToCatalog, { onClick: backToCatalog, label: model.backAction }),\n", ''), hit: /回目录按钮必须带|必须仍在 Hero 之前/ },
+    { name: '接线断开（onClick 不接目录返回）', mutate: (s) => s.replace('onClick: props.onClick,', 'onClick: () => undefined,'), hit: /唯一入口|onClick/ },
+    { name: '复用会被隐藏的 class（tw-hint）', mutate: (s) => s.replace("'data-role': 'tool-back',", "'data-role': 'tool-back', className: 'tw-hint',"), hit: /不许复用/ },
+    {
+      name: '挪到 Hero 之后',
+      mutate: (s) => {
+        const line = '    React.createElement(BackToCatalog, { onClick: backToCatalog, label: model.backAction }),\n'
+        return s.replace(line, '').replace('    summaryCards(model),', `${line}    summaryCards(model),`)
+      },
+      hit: /Hero 之前/,
+    },
+  ]
+  for (const { name, mutate, hit } of srcInjections) {
+    const mutated = mutate(src)
+    assert.notEqual(mutated, src, `注入「${name}」必须真的改到了源码`)
+    const fail = backButtonWiringProblems(mutated)
+    assert.ok(fail.length > 0, `注入「${name}」必须被接线检查抓到（一条都没报 ⇒ 断言恒真）`)
+    assert.match(fail.join(' ／ '), hit, `注入「${name}」报的原因应是预期的：${JSON.stringify(fail)}`)
+  }
 })

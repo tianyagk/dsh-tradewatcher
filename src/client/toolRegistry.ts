@@ -89,6 +89,11 @@ export interface ToolKpiDatum {
   value: number | null
   delta: string | null
   /**
+   * 来源与口径（进磁贴的 `title`/`aria-label`；用户口径 v0.86.0：四块磁贴都要能悬停读到来源）。
+   * **自定口径必须写明"自定"+ 公式**，不许写成上游口径。无数据时不出现。
+   */
+  source?: string
+  /**
    * 色标：该磁贴对应的**曲线序列序号**（与曲线/图例同色）；`null`/缺省 ⇒ 中性色标
    * （该格不对应任何一条序列，例如"五市场合计规模""数据时刻"）。
    *
@@ -278,7 +283,7 @@ export interface DetailModel {
   status: string
   /** 状态行的完整版（进 title/aria-label） */
   statusTitle: string
-  kpi: { title: string; note: string; cells: Array<{ label: string; text: string; value: number | null; delta: string | null; swatch: number | null }> }
+  kpi: { title: string; note: string; cells: Array<{ label: string; text: string; value: number | null; delta: string | null; swatch: number | null; source: string | null }> }
   curve: { title: string; note: string; days: string[]; series: ToolCurveSeries[]; marks: Array<{ index: number; label: string }>; empty: string }
   pie: { title: string; note: string; slices: ToolPieSlice[]; center: string | null; empty: string }
   market: { title: string; subtitle: string | null; note: string; columns: string[]; rows: string[][]; rowNotes: Array<string | null>; footnotes: string[]; empty: string; bars: ToolBarRow[] }
@@ -328,8 +333,8 @@ export function detailModel(entry: ToolEntry, data: ToolData | null = null): Det
   // KPI：标签来自工具文件（契约），值来自数据（取不到 ⇒ 未取到 + value null）
   const kpiCells = (kpi.cells ?? []).map((label) => {
     const datum = data?.kpi?.[label]
-    if (datum === undefined) return { label, text: NOT_FETCHED, value: null, delta: null, swatch: null }
-    return { label, text: datum.text, value: datum.value, delta: datum.delta, swatch: datum.swatch ?? null }
+    if (datum === undefined) return { label, text: NOT_FETCHED, value: null, delta: null, swatch: null, source: null }
+    return { label, text: datum.text, value: datum.value, delta: datum.delta, swatch: datum.swatch ?? null, source: datum.source ?? null }
   })
   const boundaryLines = data?.boundary === undefined ? [...entry.boundary] : [...entry.boundary, ...data.boundary]
   const ranges = [...(entry.ranges?.options ?? [])]

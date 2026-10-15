@@ -15,9 +15,13 @@ import { cakeTool } from './cake.ts'
 import { factCoverageProblems } from '../toolFacts.ts'
 import { detailModel } from '../toolRegistry.ts'
 import {
+  cakeTemperature,
   flowBarsAt,
   fmtCnyYi,
   fmtMomentum,
+  liquiditySupport,
+  stressVerdict,
+  temperatureLabel,
   fmtPp,
   fmtRank,
   fmtSharePct,
@@ -39,6 +43,12 @@ function payloadFixture(opts: { hkMissing?: boolean } = {}): GlobalFlowPayloadDt
   const MISSING_TEXT = '港股规模（02800 盈富基金）：腾讯 hk02800 本次取数失败 ⇒ 稍后重试即可；这一行不参与份额分母'
   const days = ['2026-10-08', '2026-10-09', '2026-10-12']
   // 每日的价格因子（各市场不同 ⇒ 份额变化与动量方向都不同）
+  /** 每日五市场偏好分（夹具；真实载荷由宿主按 55/30/15 权重算出） */
+  const PREF = [
+    [0.40, 0.45, 0.50, 0.55, 0.60],
+    [0.42, 0.44, 0.52, 0.54, 0.58],
+    [0.44, 0.43, 0.54, 0.53, 0.56],
+  ]
   const FACTOR = [
     [1.02, 1.015, 1.0, 1.01, 1.007],
     [1.01, 1.008, 1.0, 1.005, 1.003],
@@ -57,6 +67,8 @@ function payloadFixture(opts: { hkMissing?: boolean } = {}): GlobalFlowPayloadDt
       day: days[i],
       origin: last ? ('observed' as const) : ('rebuilt' as const),
       aumUsd,
+      // 偏好分（0–1）：夹具给确定性值 —— 蛋糕温度 = 它的均值 × 100（与权重同源）
+      pref: PREF[i],
       share: normalize(aumUsd),
       partial: missingHk,
     }
@@ -109,6 +121,12 @@ function payloadFixture(opts: { hkMissing?: boolean } = {}): GlobalFlowPayloadDt
     ),
     totalUsd: AUM_USD.reduce((acc, v) => acc + v, 0),
     totalNote: null,
+    // 宏观两档（真实读数夹具）：7 条自采样历史 ⇒ 5 日变化/较上日/支持度/判定都能算
+    macro: {
+      us10y: { value: 5.156, at: Date.UTC(2026, 9, 12, 0, 15, 0), history: [4.98, 5.01, 5.04, 5.09, 5.12, 5.14, 5.15], samples: 8, source: '新浪 globalbd_us10yt（24 小时品种；GBK 源，需 Referer）' },
+      dxy: { value: 102.1343, at: Date.UTC(2026, 9, 12, 12, 15, 0), history: [101.9, 102.0, 101.95, 102.05, 102.1, 102.08, 102.12], samples: 8, source: '新浪 DINIW（24 小时品种）' },
+      notes: [],
+    },
     rotation: { kind: 'rotation', fromKey: 'cn', toKey: 'us', maxAbsPp: 0.2, comparable: 5, window: 5, text: '从 A股 转向 美国（5 日份额 -0.11pp → +0.20pp）' },
     curve: { points, window: 365, windowOptions: [90, 180, 365], observedDays: 1, rebuiltDays: 2, note: '曲线口径' },
     replay: { days, max: 2, note: '回放口径' },
@@ -147,12 +165,35 @@ test('完整载荷 ⇒ KPI（含 delta）/ 曲线 / 饼图 / 市场表 / 净流�
   const names = payload.markets.map((m) => m.name)
   assert.deepEqual(names, ['A股', '港股', '美国', '日本', '韩国'], '① 五市场名称与顺序逐字 = 需求 T-5')
   assert.ok((data.status ?? '').includes('北京时间'), `状态行要给数据时刻：${data.status}`)
-  // 榜首 = 份额最大的那个（按夹具算，避免写死"某个市场一定第一"）
-  const topIdx = payload.markets.reduce((best, m, i) => ((m.sharePct ?? -1) > (payload.markets[best].sharePct ?? -1) ? i : best), 0)
-  assert.equal(data.kpi?.['偏好榜首']?.text, `${names[topIdx]} ${(payload.markets[topIdx].sharePct as number).toFixed(2)}%`)
-  assert.equal(data.kpi?.['偏好榜首']?.delta, '五日 +0.20pp', 'KPI 行必须带 delta')
-  assert.ok((data.kpi?.['五市场合计规模']?.text ?? '').includes('亿美元'))
-  assert.equal(data.kpi?.['近五日轮动']?.text, payload.rotation.text, '轮动文案原样透传（视图不许改写口径）')
+  // ── 宏观四块（用户口径 v0.86.0）──────────────────────────────────────────────
+  const temp = data.kpi?.['蛋糕温度']
+  // 期望值直接由**载荷自己的偏好分**推出来 ⇒ 这条断言同时证明"温度与偏好分同源、没有另算一份"
+  const prefsNow = (payload.curve.points[2].pref ?? []).filter((v): v is number => v !== null)
+  const expectTemp = (prefsNow.reduce((a, b) => a + b, 0) / prefsNow.length) * 100
+  assert.equal(temp?.value, expectTemp, `蛋糕温度 = 五市场偏好分均值 × 100（实得 ${temp?.value}）`)
+  assert.equal(temp?.text, `${expectTemp.toFixed(0)}（平衡）`, '蛋糕温度带状态词')
+  assert.ok((temp?.source ?? '').includes('自定口径'), '自定口径必须写明「自定口径」')
+  assert.ok((temp?.source ?? '').includes('与参考版不可比'), '不得声称与参考版可比')
+  assert.ok((temp?.delta ?? '').includes('较上日'), `磁贴要带较上日 delta：${temp?.delta}`)
+  const liq = data.kpi?.['流动性支持度']
+  assert.ok((liq?.delta ?? '').includes('较上日'), `支持度要带较上日 delta：${liq?.delta}`)
+  assert.ok((liq?.source ?? '').includes('自定口径：流动性支持度 = 5 − 2.5'), '支持度公式必须写进悬停口径')
+  assert.ok((liq?.source ?? '').includes('美元指数与美债 10Y 的变化方向'), '支持度输入必须写清')
+  assert.ok((liq?.source ?? '').includes('压力是否已传导'), '判定规则必须写进悬停')
+  const us10 = data.kpi?.['美国十年期国债收益率']
+  assert.equal(us10?.value, 5.156, '美国 10Y = 真实读数（未取到才 null）')
+  assert.ok((us10?.delta ?? '').includes('bp'), `10Y 的较上日要以 bp 表示：${us10?.delta}`)
+  assert.ok((us10?.source ?? '').includes('新浪 globalbd_us10yt'), '来源必须进悬停')
+  assert.ok((us10?.source ?? '').includes('不套 A 股休市冻结'), '24 小时品种口径必须写进悬停')
+  const dxy = data.kpi?.['广义美元指数']
+  assert.equal(dxy?.value, 102.1343, '广义美元指数 = 真实读数')
+  assert.ok((dxy?.source ?? '').includes('新浪 DINIW'), '来源必须进悬停')
+  assert.ok((dxy?.source ?? '').includes('不套 A 股休市冻结'), '24 小时品种口径必须写进悬停')
+  // 旧四块**不许丢**：搬到状态行的悬停详情里
+  const detail = data.statusDetail ?? ''
+  for (const kept of ['旧四块（保留）', '偏好榜首', '五市场合计规模', '近五日轮动', '数据时刻']) {
+    assert.ok(detail.includes(kept), `旧四块的事实「${kept}」必须能在悬停里读到：${detail.slice(0, 120)}`)
+  }
   assert.equal(data.curve?.series.length, 5, '五条份额曲线')
   assert.deepEqual(data.curve?.series.map((s) => s.name), names, '⑥ 曲线序列 = 五市场集合（顺序一致）')
   assert.deepEqual(data.pie?.slices.map((s) => s.label), names, '⑥ 饼图分块 = 五市场集合')
@@ -398,4 +439,115 @@ test('⑤ 段末结论：最新日用宿主轮动结论原样透传；回放日�
   assert.equal(latest.includes(payload.rotation.text), true, '结论必须原样透传宿主的轮动文案（视图不许改写/重算）')
   const replay = globalFlowToolData(payload, 2).conclusion
   assert.ok(replay !== null && replay.includes('回放历史日'), `回放日的结论必须如实说明：${replay}`)
+})
+
+test('⑤ 作废留痕：常驻行不再出现；悬停详情必须能读到（两处都删 ⇒ 必败）+ 旧四块不丢', () => {
+  const payload = payloadFixture()
+  const withPurged = {
+    ...payload,
+    snapshot: { ...payload.snapshot, purged: [{ day: '2026-09-30', scope: 'v1', reason: '旧口径快照（成分变更）' }] },
+  }
+  const data = globalFlowToolData(withPurged, 0)
+  // ① 常驻行**不许**再出现这句（一次性迁移说明不该占常驻行）
+  assert.equal((data.status ?? '').includes('旧口径快照已作废'), false, `常驻行不许出现作废提示：${data.status}`)
+  assert.equal((data.status ?? '').includes('2026-09-30'), false, `常驻行不许出现作废日期：${data.status}`)
+  // ② 事实不消失：悬停详情里必须能读到（含天数与日期示例）
+  const detail = data.statusDetail ?? ''
+  assert.ok(detail.includes('旧口径快照已作废'), `悬停里必须能读到作废这件事：${detail}`)
+  assert.ok(detail.includes('2026-09-30'), `悬停里要给被作废的日期示例：${detail}`)
+  // ③ 反例注入：两处都删 ⇒ 断言必须失败（证明这条判据不是恒真）
+  const bothGone = { ...data, status: data.status.replace('旧口径快照已作废', ''), statusDetail: (data.statusDetail ?? '').replace('旧口径快照已作废', '') }
+  assert.throws(() => {
+    assert.equal((bothGone.status ?? '').includes('旧口径快照已作废'), false, '常驻行')
+    assert.equal((bothGone.statusDetail ?? '').includes('旧口径快照已作废'), true, '悬停里必须能读到')
+  }, /悬停里必须能读到/, '⚠ 反例（两处都删）必须让断言失败')
+  // ④ 旧四块不许丢（它们仍是有用事实）
+  for (const kept of ['偏好榜首', '五市场合计规模', '近五日轮动', '数据时刻']) {
+    assert.ok((data.statusDetail ?? '').includes(kept), `旧四块「${kept}」必须在状态行悬停里保留`)
+  }
+})
+
+test('⑥ 两块自定口径可追溯：公式/输入/阈值/判定规则都进悬停，且**不许**标成上游口径', () => {
+  const payload = payloadFixture()
+  const data = globalFlowToolData(payload, 0)
+  const temp = data.kpi?.['蛋糕温度']
+  const liq = data.kpi?.['流动性支持度']
+  // 蛋糕温度：公式 + 同源 + 阈值 + 不可比
+  const ts = temp?.source ?? ''
+  assert.ok(ts.includes('五市场偏好分均值'), `温度公式：${ts}`)
+  assert.ok(ts.includes('与权重同源'), '温度必须说明与权重同源')
+  assert.ok(ts.includes('偏热') && ts.includes('偏冷') && ts.includes('平衡'), '状态词阈值必须写进悬停')
+  assert.ok(ts.includes('不可比'), '不得声称与参考版可比')
+  // ⚠ 红线：自定口径**不许**标成上游口径（把"我们自定"说成"上游发布"就是编造来源）
+  const liqSrc = data.kpi?.['流动性支持度']?.source ?? ''
+  for (const src of [ts, liqSrc]) {
+    assert.equal(src.includes('上游口径'), false, `自定口径不许写成上游口径：${src.slice(0, 60)}`)
+    assert.equal(src.includes('上游发布'), false, `自定口径不许暗示上游发布：${src.slice(0, 60)}`)
+  }
+  // 流动性支持度：公式 + 输入 + 判定 + 不可比
+  const ls = liq?.source ?? ''
+  assert.ok(ls.includes('5 − 2.5'), `支持度公式：${ls}`)
+  assert.ok(ls.includes('美元指数') && ls.includes('10Y'), '支持度输入必须写清')
+  assert.ok(ls.includes('压力是否已传导'), '判定规则必须写进悬停')
+  assert.ok(ls.includes('不可比'), '不得声称与参考版可比')
+  // ⚠ 反例：把自定口径标成"上游口径" ⇒ 判据必须挡住
+  const claimed = { ...liq, source: (liq?.source ?? '').replace('自定口径', '上游口径') }
+  assert.throws(() => assert.ok((claimed.source ?? '').includes('自定口径'), '自定口径必须写明「自定口径」'), /自定口径必须写明/, '⚠ 反例（标成上游口径）必须失败')
+  // ⚠ 反例：把"蛋糕温度"写成上游符号（例如说成上游发布的指数）⇒ 判据必须挡住
+  const upstreamish = { ...temp, source: '上游口径：蛋糕温度指数（由上游发布）' }
+  assert.throws(() => assert.ok(!(upstreamish.source ?? '').includes('上游口径'), '自定口径不许写成上游口径'), /自定口径不许写成上游口径/, '⚠ 反例（写成上游符号）必须失败')
+})
+
+test('⑦ 两个自定口径的纯函数：方向/边界/缺数据（都不写 0）', () => {
+  assert.equal(cakeTemperature([0.4, 0.5, 0.6, null, null]), 50, '只对有值市场求均值 ⇒ 0.5 × 100')
+  assert.equal(cakeTemperature([null, null]), null, '一个都没有 ⇒ null（不写 0）')
+  assert.equal(temperatureLabel(70), '偏热')
+  assert.equal(temperatureLabel(30), '偏冷')
+  assert.equal(temperatureLabel(69.9), '平衡')
+  assert.equal(temperatureLabel(null), null)
+  // 支持度：美元/美债同向走强 ⇒ 支持度下降；都走弱 ⇒ 上升；缺一侧 ⇒ null
+  const up = liquiditySupport({ dxyChange: 1.0, us10yChangePp: 0.2, span: 5 })
+  const down = liquiditySupport({ dxyChange: -1.0, us10yChangePp: -0.2, span: 5 })
+  const flat = liquiditySupport({ dxyChange: 0, us10yChangePp: 0, span: 5 })
+  assert.ok((flat?.score ?? -1) === 5, `都平 ⇒ 5（实得 ${flat?.score}）`)
+  assert.ok((up?.score ?? 99) < 5 && (up?.score ?? 99) >= 0, `压力上升 ⇒ 支持度 < 5（实得 ${up?.score}）`)
+  assert.ok((down?.score ?? -1) > 5 && (down?.score ?? -1) <= 10, `压力下降 ⇒ 支持度 > 5（实得 ${down?.score}）`)
+  assert.equal(liquiditySupport({ dxyChange: null, us10yChangePp: 0.2, span: 5 }), null, '缺一侧 ⇒ null（不许单侧冒充）')
+  // 判定：美元与美债同步走强 + 温度同期下降 ⇒ 传导；否则未传导；缺 ⇒ 数据不足
+  assert.equal(stressVerdict({ dxyChange: 0.5, us10yChangePp: 0.2, tempChange: -3 }).verdict, '传导')
+  assert.equal(stressVerdict({ dxyChange: 0.5, us10yChangePp: 0.2, tempChange: 3 }).verdict, '未传导')
+  assert.equal(stressVerdict({ dxyChange: 0.5, us10yChangePp: -0.2, tempChange: -3 }).verdict, '未传导')
+  assert.equal(stressVerdict({ dxyChange: null, us10yChangePp: 0.2, tempChange: -3 }).verdict, '数据不足')
+  assert.equal(stressVerdict({ dxyChange: 0.5, us10yChangePp: 0.2, tempChange: null }).verdict, '数据不足')
+})
+
+test('⑧ 24 小时品种：休市/非交易时段也给最新真实读数（不套 A 股休市冻结）+ 缺数据不写 0', () => {
+  const payload = payloadFixture()
+  const data = globalFlowToolData(payload, 0)
+  // 夹具的 A股 那条是非交易时段（北京时间 21:00）⇒ 宏观两块照样出真值
+  for (const label of ['美国十年期国债收益率', '广义美元指数']) {
+    const cell = data.kpi?.[label]
+    assert.equal(typeof cell?.value, 'number', `${label} 必须给真实读数（不许因 A 股休市而冻结/置空）`)
+    assert.notEqual(cell?.value, 0, '真值不许被 0 顶替')
+  }
+  // ⚠ 非交易日（周六）也必须照样给真值：这两个是 24 小时品种，**不许套 A 股休市冻结**
+  const weekend = { ...payload, day: '2026-10-10', asOf: Date.UTC(2026, 9, 10, 13, 0, 0) }
+  const dw = globalFlowToolData(weekend, 0)
+  for (const label of ['美国十年期国债收益率', '广义美元指数']) {
+    assert.equal(typeof dw.kpi?.[label]?.value, 'number', `非交易日也要给 ${label} 的真值（24 小时品种，不套 A 股休市冻结）`)
+  }
+  // 缺数据（macro = null）⇒ 未取到 + 原因，值 null（不写 0）
+  const noMacro = { ...payload, macro: { us10y: null, dxy: null, notes: [{ what: '美国 10 年期国债收益率（新浪 globalbd_us10yt）', why: 'transient', note: '本次只读本地快照（零上游请求）⇒ 现值没有取到' }] } }
+  const d2 = globalFlowToolData(noMacro as typeof payload, 0)
+  const us = d2.kpi?.['美国十年期国债收益率']
+  assert.equal(us?.text, NOT_FETCHED, '缺数据 ⇒ 未取到')
+  assert.equal(us?.value, null, '缺数据 ⇒ 值 null（不许 0 顶替）')
+  assert.ok((us?.delta ?? '').includes('未取到'), `缺数据必须给原因：${us?.delta}`)
+  const lq = d2.kpi?.['流动性支持度']
+  assert.equal(lq?.value, null, '支持度缺输入 ⇒ null（不许拿单侧或 0 冒充）')
+  assert.ok((lq?.delta ?? '').includes('未取到'), `支持度缺输入要给原因：${lq?.delta}`)
+  // ⚠ 反例：把缺数据写成 0 ⇒ 判据必须挡住
+  const zeroed = { ...noMacro, macro: { us10y: { value: 0, at: null, history: [], samples: 0, source: 'x' }, dxy: null, notes: [] } }
+  const d3 = globalFlowToolData(zeroed as typeof payload, 0)
+  assert.throws(() => assert.equal(d3.kpi?.['美国十年期国债收益率']?.value, null, '缺数据必须是 null'), /缺数据必须是 null/, '⚠ 反例（写 0）必须失败')
 })
