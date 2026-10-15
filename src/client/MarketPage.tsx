@@ -9,7 +9,7 @@ import { distAxisOf, distBarPctOf, forecastCellOf, limitNoteOf, marginRowOf } fr
 import { dirClass, fmtAmt, fmtBig, fmtPct, fmtPrice, fmtSigned } from './format.ts'
 import { CN_PHASE_LABEL, cnSessionState, shClockText } from './marketTime.ts'
 import { useNow } from './useNow.ts'
-import { Btn, ErrorNote, Modal } from './ui.tsx'
+import { Btn, EmptyHint, ErrorNote, Modal } from './ui.tsx'
 import { Sparkline } from './charts.tsx'
 import { RescuePanel } from './RescuePanel.tsx'
 import type { PortPrefs, QuoteSource } from '../shared/model.ts'
@@ -266,6 +266,11 @@ export function MarketPage(props: {
   return React.createElement(
     'div',
     { className: 'tw-body' },
+    // 首次启动（行情引擎还没出第一批数据）时给一句能解释"为什么全是 —"的空态；
+    // 它**不是**缺失提示：缺失仍然走各面板的「未取到 + 原因」（红线不变）
+    Object.keys(quotes).length === 0
+      ? React.createElement(EmptyHint, null, '行情引擎正在取第一批数据（首次启动通常 5 秒内）。若长时间为空，看各面板的「未取到」原因。')
+      : null,
     React.createElement('div', { className: 'tw-panel' },
       React.createElement('div', { className: 'tw-panel-h' },
         React.createElement('span', { className: 't' }, '涨跌分布'),

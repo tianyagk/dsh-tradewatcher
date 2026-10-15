@@ -182,6 +182,10 @@ export function TopBar(props: {
   onOpenDetail?: (secid: string, name: string) => void
   /** 详情抽屉已打开时不再弹悬浮卡（否则遮住抽屉且与点击语义冲突） */
   popupDisabled?: boolean
+  /** 当前视图模式（v0.91.1：它以前只在快捷键里，现在行情条上有可见控件） */
+  viewMode: 'full' | 'compact' | 'incognito'
+  /** 切换视图模式（与 Alt+M 共用 index.tsx 里的**同一个**实现） */
+  onCycleViewMode: () => void
 }): React.ReactElement {
   const { quotes, missing, truncated, asOf, stale, staleCount, sources, cached, refreshing, onRefresh, prefs, setPrefs } = props
   // 新鲜度必须随墙上时钟重算（否则一张卡会永远停在"实时"直到下一次取数）
@@ -474,7 +478,7 @@ export function TopBar(props: {
               `本批 ${summary.total} 张卡片：实时 ${summary.live} · 延迟 ${summary.delayed} · 定稿复用 ${summary.settled} · 缺失 ${summary.missing}\n` +
               `最近一次成功行情 ${asOf === null ? '—' : fmtClock(asOf)}；来源明细：` +
               Object.entries(sources).map(([k, n]) => `${k} ${n}`).join(' / '),
-            style: { fontSize: 9.5, color: stale && staleCount > 0 ? '#e0a94a' : undefined },
+            style: { fontSize: 12, color: stale && staleCount > 0 ? '#e0a94a' : undefined },
           }, `${summary.live}/${summary.total} 实时${summary.delayed > 0 ? ` · ${summary.delayed} 延迟` : ''}${summary.settled > 0 ? ` · ${summary.settled} 定稿` : ''}${summary.missing > 0 ? ` · ${summary.missing} 缺失` : ''}`)
         : null,
       // 无任何源可用的标的数：不能与"本轮还没数据"混为一谈
@@ -484,11 +488,11 @@ export function TopBar(props: {
         return React.createElement('span', {
           className: 'tw-badge',
           title: `其中 ${n} 个${NO_SOURCE_LABEL}；这些卡片显示 —，明细见自选或持仓页\n${NO_SOURCE_TITLE}`,
-          style: { fontSize: 9.5, color: '#e0a94a' },
+          style: { fontSize: 12, color: '#e0a94a' },
         }, `无行情源 ${n}`)
       })(),
       truncated === true
-        ? React.createElement('span', { className: 'tw-badge', title: '一次最多请求 160 个标的，超出部分未请求；必须减少自选数量，或分页查看', style: { fontSize: 9.5, color: '#e0a94a' } }, '已截断 160')
+        ? React.createElement('span', { className: 'tw-badge', title: '一次最多请求 160 个标的，超出部分未请求；必须减少自选数量，或分页查看', style: { fontSize: 12, color: '#e0a94a' } }, '已截断 160')
         : null,
       // 东财行情不可用时部分标的走腾讯/新浪备用源：如实标注，避免误以为是东财数据
       (() => {
@@ -498,9 +502,17 @@ export function TopBar(props: {
           className: 'tw-badge',
           title: `其中 ${alt} 个标的来自备用源（腾讯 ${sources.tencent ?? 0} / 新浪 ${sources.sina ?? 0}）；` +
             '美股/国际指数/商品部分标的无备用源映射，仍显示最近一次成功数据',
-          style: { fontSize: 9.5 },
+          style: { fontSize: 12 },
         }, `备用源 ${alt}`)
       })(),
+      // 视图模式：**可见控件**（以前只有 Alt+M 快捷键 ⇒ 用户找不到隐身视图）。
+      // 文案 = 当前档位；鼠标与键盘两条路都写进悬停。
+      React.createElement('button', {
+        className: 'tw-iconbtn',
+        onClick: props.onCycleViewMode,
+        title: `视图：${{ full: '完整', compact: '紧凑', incognito: '隐身' }[props.viewMode]}（点击切换，快捷键 Alt+M）`,
+        'aria-label': `切换视图模式（当前 ${{ full: '完整', compact: '紧凑', incognito: '隐身' }[props.viewMode]}，快捷键 Alt+M）`,
+      }, `视图·${{ full: '完整', compact: '紧凑', incognito: '隐身' }[props.viewMode]}`),
       React.createElement('button', {
         ref: gearRef,
         className: 'tw-iconbtn',

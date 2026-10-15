@@ -113,3 +113,33 @@ test('④ 反例（判据不是恒真）：超预算 / 被 Disallow 都必须能
   const rules = [{ allow: false, pattern: '/data/' }]
   assert.equal(robotsAllows(rules, '/data/x').allowed, false, '反例：Disallow 必须拦住')
 })
+
+/**
+ * v0.91.1（用户裁决）：宏观取数缓存 TTL 必须与「每主机 ≤5 次/小时」预算对齐。
+ *
+ * 12 分钟不是拍的：`60 分钟 / HOST_BUDGET_MAX(=5)` = 12 分钟/次 ⇒ 一小时正好 5 次。
+ * TTL 短于这个值，一小时到点就会把预算用满，下一轮四块磁贴只能显示「未取到（预算用尽）」
+ * —— 那是**我们自己把预算打满**造成的假缺失，不是上游的问题。
+ */
+test('宏观载荷 TTL 与每主机预算对齐：一次请求至少摊到 12 分钟（比值不许 < 12 分钟/次）', async () => {
+  const { HOST_BUDGET_MAX } = await import('./robotsGate.ts')
+  const { FLOW_PAYLOAD_TTL_MS } = await import('./globalFlow.ts')
+  const perCallMinutes = FLOW_PAYLOAD_TTL_MS / 60_000
+  const floorMinutes = 60 / HOST_BUDGET_MAX
+  assert.equal(HOST_BUDGET_MAX, 5, '预算上限就是 5 次/小时（改了这条断言必须跟着重算）')
+  assert.equal(floorMinutes, 12, '12 分钟/次 是 60/5 算出来的下界')
+  assert.ok(
+    perCallMinutes >= floorMinutes,
+    `TTL 必须 ≥ ${floorMinutes} 分钟/次（实际 ${perCallMinutes} 分钟）—— 否则一小时会把预算用满`,
+  )
+  // 也别无限拉长：一小时 5 次是"最多"，正常应只占 1 次 ⇒ 给个上界防"缓存到看不见更新"
+  assert.ok(perCallMinutes <= 30, `TTL 也别长过 30 分钟（实际 ${perCallMinutes}）`)
+  // 反例注入：调回 10 分钟（= 每小时 6 次）⇒ 判据必须失败
+  const tenMin = 10 * 60_000 / 60_000
+  assert.ok(tenMin < floorMinutes, '⚠ 反例（10 分钟）确实低于下界')
+  assert.throws(
+    () => assert.ok(tenMin >= floorMinutes, `反例上"TTL 必须 ≥ ${floorMinutes} 分钟"必须失败`),
+    /反例上/,
+    '⚠ 反例注入（TTL 调回 10 分钟 ⇒ 每小时 6 次、预算必然用尽）必须让断言失败',
+  )
+})

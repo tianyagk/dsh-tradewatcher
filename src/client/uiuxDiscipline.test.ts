@@ -49,6 +49,21 @@ function readHost(rel: string): string {
 }
 void readHost
 
+/**
+ * 全客户端待扫文件清单（v0.91.1 起）：`src/client/**` 的 tsx/ts，排除 `*.test.ts`。
+ * 测试文件里的越格字号是**反例注入**，不属于产品界面。
+ */
+function walkClient(dir = join(ROOT, 'src/client'), out: string[] = []): string[] {
+  for (const name of readdirSync(dir)) {
+    const abs = join(dir, name)
+    if (statSync(abs).isDirectory()) walkClient(abs, out)
+    else if (/\.(tsx|ts)$/.test(name) && !/\.test\.ts$/.test(name)) {
+      out.push(abs.slice(join(ROOT, 'src/client').length + 1))
+    }
+  }
+  return out
+}
+
 /** 剥注释（只留代码与字符串）：注释里会写反例说明，不能当成违规 */
 function stripComments(src: string): string {
   return src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
@@ -64,22 +79,35 @@ function fontSizeValuesOf(src: string): number[] {
 test('① 密集字号阶梯：详情页所有 CSS 字号必须落在 12 / 12.5 / 13 / 13.5 / 14（≥15px 为展示级）', () => {
   assert.deepEqual([...TYPE_SCALE], [12, 12.5, 13, 13.5, 14], '阶梯本身就是契约（与 DESIGN-UIUX-ADOPT 一致）')
   assert.equal(DISPLAY_SIZE_MIN, 15, '展示级下界必须是 15px')
-  const files = ['ToolsPage.tsx', 'toolDetailTheme.ts']
-  for (const f of files) {
-    const sizes = fontSizeValuesOf(readSrc(f))
-    assert.equal(sizes.length > 0, true, `${f} 里应当有字号（否则这条断言是空跑）`)
+  // v0.91.1（用户要求）：扫描面从"只扫详情页那 2 个文件"扩到**全客户端**。
+  // 排除 `*.test.ts`：那里的 10/10.5/11.5px 是**反例注入**（故意越格去证明判据有效），必须保留。
+  const scanned = walkClient()
+  assert.ok(scanned.length >= 20, `扫描面必须覆盖全客户端（实际 ${scanned.length} 个文件）—— 否则这条断言会退化成空跑`)
+  let seen = 0
+  for (const rel of scanned) {
+    const sizes = fontSizeValuesOf(readSrc(rel))
+    seen += sizes.length
     for (const size of sizes) {
-      assert.deepEqual(typeScaleProblems(size, `${f} 的字号`), [], `字号越出阶梯：${f} 有 ${size}px`)
+      assert.deepEqual(typeScaleProblems(size, `${rel} 的字号`), [], `字号越出阶梯：${rel} 有 ${size}px`)
     }
   }
-  // 工具箱详情页那一段 CSS（`.tw-tool-*`）里的字号同样要落在阶梯里
-  const blockAt = TW_CSS.indexOf('/* ── 工具箱详情页')
-  assert.equal(blockAt >= 0, true, '必须能找到工具箱详情页的样式块（否则这条断言是空跑）')
-  const cssSizes = [...TW_CSS.slice(blockAt).matchAll(/font-size:\s*([0-9.]+)px/g)].map((m) => Number(m[1]))
-  assert.equal(cssSizes.length > 0, true, '详情页样式块里应当有字号')
+  assert.ok(seen >= 60, `全客户端应当扫到足够多的字号（实际 ${seen} 处）—— 防退化`)
+  // 同一份 CSS（`TW_CSS`）也全量扫：不只是工具箱详情页那一段
+  const cssSizes = [...TW_CSS.matchAll(/font-size:\s*([0-9.]+)px/g)].map((m) => Number(m[1]))
+  assert.ok(cssSizes.length >= 100, `CSS 里应当扫到足够多的字号（实际 ${cssSizes.length} 处）`)
   for (const size of cssSizes) {
-    assert.deepEqual(typeScaleProblems(size, '详情页 CSS 的字号'), [], `CSS 字号越出阶梯：${size}px`)
+    assert.deepEqual(typeScaleProblems(size, 'CSS 的字号'), [], `CSS 字号越出阶梯：${size}px`)
   }
+  // 反例注入（整份文档级）：往任意一个被扫文件里塞一个 11px ⇒ 判据必须非空
+  const injected = `${readSrc(scanned[0] as string)}\nconst bad = { fontSize: 11 }\n`
+  const injectedSizes = fontSizeValuesOf(injected)
+  const offLadder = injectedSizes.filter((n) => typeScaleProblems(n, '注入').length > 0)
+  assert.equal(offLadder.includes(11), true, '⚠ 反例（塞回一个 11px）必须能被扫出来')
+  assert.throws(
+    () => assert.deepEqual(offLadder, [], '反例上"全客户端 0 处阶梯外"必须失败'),
+    /反例上/,
+    '⚠ 反例注入（塞回 11px）必须让断言失败',
+  )
   // 反例注入：13.2px（阶梯外）/ 10.5px（低于下限）
   assert.notDeepEqual(typeScaleProblems(13.2, '注入'), [], '⚠ 阶梯外的 13.2px 必须被抓到')
   assert.notDeepEqual(typeScaleProblems(10.5, '注入'), [], '⚠ 低于下限的 10.5px 必须被抓到')

@@ -11,7 +11,7 @@ import {
   type PortPrefs,
 } from '../shared/model.ts'
 import { api } from './api.ts'
-import { Btn, ErrorNote, Field, Modal, Skeleton } from './ui.tsx'
+import { Btn, EmptyHint, ErrorNote, Field, Modal, Skeleton } from './ui.tsx'
 import { MISSING_TIER_LABEL } from '../shared/model'
 import { fmtStamp } from './format.ts'
 import { shToday } from './marketTime.ts'
@@ -167,7 +167,7 @@ export function CalendarPage(_props: { prefs: PortPrefs }): React.ReactElement {
         setDayOpen(e.date)
       },
     },
-      mark === '' ? null : React.createElement('span', { style: { marginRight: 3, opacity: 0.85 } }, mark),
+      mark === '' ? null : React.createElement('span', { style: { marginRight: 4, opacity: 0.85 } }, mark),
       compact ? e.title : `${e.title} · ${CAL_CATEGORY_LABEL[e.category]}`,
     )
   }
@@ -191,11 +191,11 @@ export function CalendarPage(_props: { prefs: PortPrefs }): React.ReactElement {
         }, '今天'),
         React.createElement('span', { style: { flex: 1 } }),
         syncedAt !== null
-          ? React.createElement('span', { className: 'tw-muted', style: { fontSize: 10.5 } },
+          ? React.createElement('span', { className: 'tw-muted', style: { fontSize: 12 } },
               `数据时刻 ${fmtStamp(syncedAt)}${syncInfo?.stale === true ? '（本次未全部成功）' : ''}`)
           : React.createElement('span', {
               className: 'tw-muted',
-              style: { fontSize: 10.5 },
+              style: { fontSize: 12 },
               tabIndex: 0,
               role: 'note',
               'aria-label': '日历尚未成功同步过，当前只显示本地手动事件',
@@ -230,9 +230,9 @@ export function CalendarPage(_props: { prefs: PortPrefs }): React.ReactElement {
           ),
         ),
         React.createElement('span', { style: { flex: 1 } }),
-        React.createElement('span', { className: 'tw-muted', style: { fontSize: 10.5 } }, '重要度：'),
+        React.createElement('span', { className: 'tw-muted', style: { fontSize: 12 } }, '重要度：'),
         ...([3, 2, 1] as CalImportance[]).map((i) =>
-          React.createElement('span', { key: i, style: { fontSize: 10.5, color: IMP_COLOR[i] } }, `● ${IMP_LABEL[i]}`),
+          React.createElement('span', { key: i, style: { fontSize: 12, color: IMP_COLOR[i] } }, `● ${IMP_LABEL[i]}`),
         ),
       ),
       loading
@@ -276,7 +276,7 @@ export function CalendarPage(_props: { prefs: PortPrefs }): React.ReactElement {
         ? React.createElement('div', { className: 'tw-muted', style: { padding: 10 } }, '本区间暂无未来事件（可切换月份或点「同步」拉取新股/财报/分红）')
         : upcoming.map((e) =>
             React.createElement('div', { key: e.id, className: 'tw-wrow', style: { cursor: 'pointer' }, onClick: () => setDayOpen(e.date) },
-              React.createElement('span', { className: 'tw-muted', style: { fontFamily: 'var(--tw-mono)', fontSize: 11 } }, e.date),
+              React.createElement('span', { className: 'tw-muted', style: { fontFamily: 'var(--tw-mono)', fontSize: 12 } }, e.date),
               React.createElement('div', { className: 'nm' },
                 React.createElement('b', { style: { color: IMP_COLOR[e.importance] } },
                   `${e.time !== undefined ? `${e.time} ` : ''}${e.title}`),
@@ -348,12 +348,13 @@ function DayModal(props: {
         )
       : null,
     props.events.length === 0
-      ? React.createElement('div', { className: 'tw-muted', style: { padding: 8 } }, '当天暂无事件记录。')
+      // 空态与"未取到"是两件事：这里是**用户自身状态**（这天就是没有事件），不是上游失败 ⇒ 用统一空态组件
+      ? React.createElement(EmptyHint, null, '当天没有事件记录。换一天看看，或用上面的「同步日历」拉一次数据。')
       : sorted.map((e) =>
           React.createElement('div', { key: e.id, className: 'tw-cal-card', style: { borderLeftColor: IMP_COLOR[e.importance] } },
             React.createElement('div', { style: { display: 'flex', alignItems: 'baseline', gap: 8, flexWrap: 'wrap' } },
               e.time !== undefined
-                ? React.createElement('span', { style: { fontFamily: 'var(--tw-mono)', fontSize: 11.5, color: 'var(--tw-fg-dim)' } }, e.time)
+                ? React.createElement('span', { style: { fontFamily: 'var(--tw-mono)', fontSize: 12, color: 'var(--tw-fg-dim)' } }, e.time)
                 : null,
               React.createElement('b', { style: { color: IMP_COLOR[e.importance], fontSize: 13 } }, e.title),
               React.createElement('span', { className: 'tw-badge' }, `${CAL_CATEGORY_LABEL[e.category]} · ${IMP_LABEL[e.importance]}`),
@@ -376,7 +377,7 @@ function DayModal(props: {
                       .join('\n'),
                   }, `可能变更 ×${e.changes.length}`)
                 : null,
-              e.symbol !== undefined ? React.createElement('span', { className: 'tw-muted', style: { fontSize: 11 } }, e.symbol) : null,
+              e.symbol !== undefined ? React.createElement('span', { className: 'tw-muted', style: { fontSize: 12 } }, e.symbol) : null,
             ),
             e.note !== undefined && e.note !== ''
               ? React.createElement('div', { className: 'tw-hint', style: { margin: '4px 0 0' } }, e.note)

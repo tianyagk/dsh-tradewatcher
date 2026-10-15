@@ -233,7 +233,7 @@ function EtfCard(props: { etf: RescueEtfView; redUp: boolean }): React.ReactElem
       React.createElement('span', { className: 'v' }, fmtX(etf.pulseMult)),
     ),
     React.createElement('div', { className: 'tw-rescue-card-f' },
-      React.createElement('span', { className: 'tw-muted', style: { fontSize: 10.5 } }, `活跃度 ${etf.activity}`),
+      React.createElement('span', { className: 'tw-muted', style: { fontSize: 12 } }, `活跃度 ${etf.activity}`),
       React.createElement(ScoreBar, { value: etf.activity, color: LEVEL_COLOR[etf.activity >= 60 ? 3 : etf.activity >= 35 ? 2 : 1], width: 90 }),
       etf.flowDirection === 'out'
         ? React.createElement('span', { className: 'tw-badge', title: '超大单净流出占成交额 ≥15%：不是「哑火」，是资金在撤', style: { color: 'var(--tw-down)', borderColor: 'var(--tw-down)' } }, `撤离 ${fmtYi(etf.superNet)}`)
@@ -269,7 +269,12 @@ function FactorTable(props: {
         React.createElement('th', null, '实测'),
         React.createElement('th', { style: { width: 46 } }, '得分'),
         React.createElement('th', { style: { width: 36 } }, '权重'),
-        hasContrib ? React.createElement('th', { style: { width: 52 }, title: '贡献 = 权重 × 得分 × 时点系数' }, '贡献') : null,
+        hasContrib
+          ? React.createElement('th', {
+              style: { width: 64 },
+              title: '贡献 = 权重 × 得分 × 时点系数；每行满分 = 权重 × 100（即该因子全部命中时的贡献）',
+            }, '贡献/满分')
+          : null,
         React.createElement('th', null, '阈值口径'),
       ),
     ),
@@ -282,16 +287,22 @@ function FactorTable(props: {
           React.createElement('td', null, React.createElement(ScoreBar, { value: f.score, width: 40, color: f.hit ? LEVEL_COLOR[2] : 'var(--tw-fg-dim)' })),
           React.createElement('td', { className: 'tw-muted' }, f.weight.toFixed(2)),
           hasContrib
-            ? React.createElement('td', { style: { fontFamily: 'var(--tw-mono)' }, title: `${f.weight.toFixed(2)} × ${f.score} × ${props.timeCoef ?? 1} = ${(c ?? 0).toFixed(1)}` }, (c ?? 0).toFixed(1))
+            ? React.createElement('td', {
+                style: { fontFamily: 'var(--tw-mono)' },
+                title: `${f.weight.toFixed(2)} × ${f.score} × ${props.timeCoef ?? 1} = ${(c ?? 0).toFixed(1)}；满分 ${Math.round(f.weight * 100)}（权重 × 100）`,
+              }, `${(c ?? 0).toFixed(1)}/${Math.round(f.weight * 100)}`)
             : null,
-          React.createElement('td', { className: 'tw-muted', style: { fontSize: 10.5 } }, f.threshold),
+          React.createElement('td', { className: 'tw-muted', style: { fontSize: 12 } }, f.threshold),
         )
       }),
       hasContrib
         ? React.createElement('tr', { key: '__sum' },
             React.createElement('td', { className: 'tw-muted', colSpan: 4 }, `合计（权×得分×时点系数 ${props.timeCoef ?? 1}）`),
-            React.createElement('td', { style: { fontFamily: 'var(--tw-mono)', fontWeight: 600 }, title: '与总分一致（差值仅来自四舍五入）' }, sum.toFixed(1)),
-            React.createElement('td', { className: 'tw-muted', style: { fontSize: 10.5 } }, `总分 ${props.total ?? Math.round(sum)}`),
+            React.createElement('td', {
+              style: { fontFamily: 'var(--tw-mono)', fontWeight: 600 },
+              title: '与总分一致（差值仅来自四舍五入）；满分 100',
+            }, `${sum.toFixed(1)}/100`),
+            React.createElement('td', { className: 'tw-muted', style: { fontSize: 12 } }, `总分 ${props.total ?? Math.round(sum)}`),
           )
         : null,
     ),
@@ -320,6 +331,14 @@ export function RescuePanel(props: {
 
   const config: RescueConfig = props.prefs.rescue
   const snapshot = data?.snapshot ?? null
+  /**
+   * 当日抽样峰值（**唯一实现**）：总分的"与最近相比"参照与下方"最高评分"那行共用它
+   * —— 两处各算一次迟早会漂移。契约里只有"当日抽样"（`intraday`），跨日分位不在快照里。
+   */
+  const peakToday = (snapshot?.intraday ?? []).reduce<null | (typeof snapshot.intraday)[number]>(
+    (a, p) => (a === null || p.score > a.score ? p : a),
+    null,
+  )
 
   const load = React.useCallback((force = false): void => {
     setLoading(true)
@@ -444,12 +463,21 @@ export function RescuePanel(props: {
       snapshot !== null
         ? React.createElement('span', {
             className: 'tw-muted',
-            style: { fontFamily: 'var(--tw-mono)', fontSize: 11 },
+            style: { fontFamily: 'var(--tw-mono)', fontSize: 12 },
  // 非采样时段分数位显示 —（不是把上一次的分数留在那里假装是当前分）
             title: paused
               ? `采样暂停（${pauseReason}）：分数位显示 —，因为当前没有在采样；下方与该分数相关的结论都是最近一次采样的结果`
-              : '本次快照评分（Σ 权×因子分×时点系数）',
-          }, paused ? '—' : `${snapshot.score}/100`)
+              : `本次快照评分（Σ 权×因子分×时点系数）；参照：当日抽样峰值 ${
+                  peakToday === null ? '—（当日还没有抽样点）' : `${peakToday.score} @${peakToday.hhmm}`
+                }${peakToday !== null && peakToday.score === snapshot.score ? '（当前就是当日峰值）' : ''}；阈值口径 ${
+                  snapshot.thresholdSource === 'self' ? `自建分位（${snapshot.selfSampleDays} 天）`
+                    : snapshot.thresholdSource === 'calibrated' ? '历史标定' : `经验锚点（自建样本 ${snapshot.selfSampleDays}/20 天）`
+                }。跨日分位（连续评分在近 ≤20 个交易日样本里的位置）宿主已算但**当前快照契约里没有带出来** ⇒ 界面不给，也不在客户端现算`,
+          },
+            // 可见部分保持紧凑：分数 + 一句**能用现有数据算出来**的参照（当日峰值）
+            paused
+              ? '—'
+              : `${snapshot.score}/100 · 当日峰 ${peakToday === null ? '—' : peakToday.score}`)
         : null,
       React.createElement('span', { style: { flex: 1 } }),
       snapshot !== null && (snapshot.stale === true || (data as { staleNote?: string })?.staleNote !== undefined)
@@ -474,7 +502,7 @@ export function RescuePanel(props: {
       snapshot !== null
         ? React.createElement('span', {
             className: 'tw-muted',
-            style: { fontSize: 10.5 },
+            style: { fontSize: 12 },
             title: [
               snapshot.lastSampleTs !== null ? `数据时刻 ${fmtStamp(snapshot.lastSampleTs)}（最近一次成功采样）` : '尚未成功采样',
               snapshot.lastFailTs !== null && snapshot.lastFailTs !== undefined ? `最近一次采样失败：${fmtStamp(snapshot.lastFailTs)}` : null,
@@ -558,7 +586,7 @@ export function RescuePanel(props: {
     snapshot?.calendarStatus != null && snapshot.calendarStatus.warning != null
       ? React.createElement('div', {
           className: 'tw-muted',
-          style: { fontSize: 10.5, color: 'var(--tw-warn, #d97706)', padding: '2px 0' },
+          style: { fontSize: 12, color: 'var(--tw-warn, #d97706)', padding: '2px 0' },
           title: `交易日历文件：${snapshot.calendarStatus.path}`,
         }, `⚠ ${snapshot.calendarStatus.warning}`)
       : null,
@@ -567,7 +595,7 @@ export function RescuePanel(props: {
       ? React.createElement('div', { className: 'tw-rescue-summary' },
           React.createElement('span', { style: { color: LEVEL_COLOR[level], fontWeight: 600, flex: 'none' } }, levelText),
           React.createElement('span', { className: 'tw-muted', style: { flex: 1, minWidth: 0 } }, snapshot.summary),
-          React.createElement('span', { className: 'tw-muted', style: { fontSize: 10.5, flex: 'none' } },
+          React.createElement('span', { className: 'tw-muted', style: { fontSize: 12, flex: 'none' } },
             `${snapshot.indexName} ${fmtPct(snapshot.indexPct)} · ${snapshot.pulseBand.label}${
               snapshot.pulseBand.phase === 'closed' ? '' : snapshot.pulseBand.isTail ? '（满分权重）' : '（脉冲打 0.6 折）'
             } · 阈值来源 ${
@@ -606,7 +634,7 @@ export function RescuePanel(props: {
           React.createElement('span', null, `采样 ${snapshot.sampleCount} 次`),
           React.createElement('span', null, `5 分钟抽样 ${snapshot.intraday.length} 点`),
           (() => {
-            const peak = snapshot.intraday.reduce<null | (typeof snapshot.intraday)[number]>((a, p) => (a === null || p.score > a.score ? p : a), null)
+            const peak = peakToday
             if (peak === null) return React.createElement('span', { className: 'tw-muted' }, '当日无抽样')
             return React.createElement('span', null,
               `最高评分 ${peak.score} @${peak.hhmm}（${RESCUE_LEVEL_LABEL[peak.level]}）`,
@@ -663,7 +691,7 @@ export function RescuePanel(props: {
                 trend, base: laneBase, curve: data?.calibration?.progressCurve ?? null, loading: trendLoading,
                 amountReason: trendAmountReason,
               }),
-              React.createElement('div', { className: 'tw-hint', style: { fontSize: 10.5 } },
+              React.createElement('div', { className: 'tw-hint', style: { fontSize: 12 } },
                 '柱＝每分钟成交额；虚线＝同时点基准（20日均额 × 标定的日内进度曲线）；红柱＝达同时点 2.5 倍以上的脉冲。',
               ),
             ),
@@ -678,14 +706,14 @@ export function RescuePanel(props: {
                     ? React.createElement('span', {
                         className: 'tw-badge',
                         title: '日线或校准样本暂时不可用，这里展示上一次成功计算的结果（位置/形态/概率都是慢变量，仍可参考）',
-                        style: { fontSize: 9.5, color: '#e0a94a' },
+                        style: { fontSize: 12, color: '#e0a94a' },
                       }, `上次结果${
                         typeof snapshot.bottom.computedAt === 'number'
                           ? ` · ${new Date(snapshot.bottom.computedAt).toTimeString().slice(0, 5)}`
                           : ''
                       }`)
                     : null,
-                  React.createElement('span', { className: 'tw-muted', style: { fontSize: 10.5 } }, snapshot.bottom.asOf),
+                  React.createElement('span', { className: 'tw-muted', style: { fontSize: 12 } }, snapshot.bottom.asOf),
                 ),
                 React.createElement('table', { className: 'tw-rescue-factor' },
                   React.createElement('thead', null, React.createElement('tr', null,
@@ -747,10 +775,10 @@ export function RescuePanel(props: {
                       React.createElement('span', null, `期间最大回撤中位数 ${snapshot.bottom.lanes[0].calibration.medianDrawdown === null ? '—' : (snapshot.bottom.lanes[0].calibration.medianDrawdown * 100).toFixed(2) + '%'}`),
                     )
                   : null,
-                React.createElement('div', { className: 'tw-hint', style: { fontSize: 10.5, marginTop: 4 } },
+                React.createElement('div', { className: 'tw-hint', style: { fontSize: 12, marginTop: 4 } },
                   snapshot.bottom.model,
                 ),
-                React.createElement('div', { className: 'tw-hint', style: { fontSize: 10.5 } },
+                React.createElement('div', { className: 'tw-hint', style: { fontSize: 12 } },
                   '口径说明：概率是「历史同类情形的频率」，不是预测；给出的 95% 区间是 Wilson 区间，样本越小区间越宽 —— 区间跨过基线时，这个差异不具备可辨识性。' +
                   '日内形态（回升/下影线/收回前低）没有可回算的历史分钟数据，因此「不参与概率校准」，只作实时修正参考。' +
                   '位置低 ≠ 见底：护盘也可能发生在下跌半程，请结合资金流与量价背离一起判断。',
@@ -770,11 +798,11 @@ export function RescuePanel(props: {
                         e.engine === undefined
                           ? React.createElement('span', { className: 'tw-badge', title: '该事件由更早的评分口径记录（因子构成与当前不同，仅作历史留痕）' }, '旧口径')
                           : null,
-                        React.createElement('span', { className: 'tw-muted', style: { fontSize: 10.5, flex: 1, minWidth: 0 } }, e.reason),
+                        React.createElement('span', { className: 'tw-muted', style: { fontSize: 12, flex: 1, minWidth: 0 } }, e.reason),
                       ),
                     ),
                   ),
-              React.createElement('div', { className: 'tw-hint', style: { fontSize: 10.5 } },
+              React.createElement('div', { className: 'tw-hint', style: { fontSize: 12 } },
                 '注：「旧口径」标记的事件是升级前记录的，其评分逻辑与当前不同（例如尾盘脉冲口径、时点系数未接入），不得与今天的信号比较。'),
               React.createElement('div', { className: 'tw-sub-h', style: { marginTop: 8 } }, `今日 5 分钟抽样（${snapshot.intraday.length}）`),
               snapshot.intraday.length === 0
@@ -796,11 +824,11 @@ export function RescuePanel(props: {
                 : React.createElement('div', { className: 'tw-rescue-history' },
                     ...(data?.history ?? []).map((h) =>
                       React.createElement('div', { key: h.day, className: 'tw-rescue-h-row', onClick: () => openHistory(h.day) },
-                        React.createElement('span', { style: { fontFamily: 'var(--tw-mono)', fontSize: 11 } }, h.day),
+                        React.createElement('span', { style: { fontFamily: 'var(--tw-mono)', fontSize: 12 } }, h.day),
                         React.createElement('span', { className: 'tw-badge', style: { color: LEVEL_COLOR[h.maxLevel], borderColor: LEVEL_COLOR[h.maxLevel] } }, RESCUE_LEVEL_LABEL[h.maxLevel]),
-                        React.createElement('span', { className: 'tw-muted', style: { fontSize: 10.5 } }, `峰值 ${h.maxScore}${h.peakHhmm !== null ? ` @${h.peakHhmm}` : ''}`),
+                        React.createElement('span', { className: 'tw-muted', style: { fontSize: 12 } }, `峰值 ${h.maxScore}${h.peakHhmm !== null ? ` @${h.peakHhmm}` : ''}`),
                         React.createElement('span', { style: { flex: 1 } }),
-                        React.createElement('span', { className: 'tw-muted', style: { fontSize: 10.5 } }, `触发 ${h.events} 次`),
+                        React.createElement('span', { className: 'tw-muted', style: { fontSize: 12 } }, `触发 ${h.events} 次`),
                       ),
                     ),
                   ),
@@ -818,7 +846,7 @@ export function RescuePanel(props: {
     openDay !== null
       ? React.createElement(DayModal, { day: openDay, detail: dayDetail, onClose: () => setOpenDay(null) })
       : null,
-    React.createElement('div', { className: 'tw-hint', style: { fontSize: 10.5, padding: '4px 10px 0' } },
+    React.createElement('div', { className: 'tw-hint', style: { fontSize: 12, padding: '4px 10px 0' } },
       '口径说明：识别的是「符合国家队历史行为模式的宽基 ETF 放量 + 超大单净流入」，' +
       '汇金/国新/诚通不披露日内成交，因此这是概率性信号而非身份确认；超大单为东财按单笔金额的分类口径，ETF 天量含做市与套利盘。',
     ),
@@ -909,7 +937,7 @@ function SettingsModal(props: {
             }, '移除'),
           ),
         ),
-        custom.length === 0 ? React.createElement('span', { className: 'tw-muted', style: { fontSize: 11 } }, '尚未添加自定义通道') : null,
+        custom.length === 0 ? React.createElement('span', { className: 'tw-muted', style: { fontSize: 12 } }, '尚未添加自定义通道') : null,
       ),
       React.createElement('div', { style: { display: 'flex', gap: 6, marginTop: 6, flexWrap: 'wrap' } },
         React.createElement('input', { className: 'tw-input', style: { width: 110 }, placeholder: '1.512480', value: newSecid, onChange: (e) => setNewSecid(e.target.value) }),
@@ -961,7 +989,7 @@ function DayModal(props: {
                 React.createElement('div', { key: `${e.ts}-${e.level}`, className: 'tw-rescue-tl-row' },
                   React.createElement('span', { style: { fontFamily: 'var(--tw-mono)', color: LEVEL_COLOR[e.level] } }, e.hhmm),
                   React.createElement('span', { className: 'tw-badge', style: { color: LEVEL_COLOR[e.level], borderColor: LEVEL_COLOR[e.level] } }, RESCUE_LEVEL_LABEL[e.level]),
-                  React.createElement('span', { className: 'tw-muted', style: { fontSize: 11, flex: 1, minWidth: 0 } }, `${e.score} 分 · ${e.reason}`),
+                  React.createElement('span', { className: 'tw-muted', style: { fontSize: 12, flex: 1, minWidth: 0 } }, `${e.score} 分 · ${e.reason}`),
                 ),
               ),
           React.createElement('div', { className: 'tw-sub-h', style: { marginTop: 10 } }, `5 分钟抽样（${d.intraday.length}）`),
@@ -970,11 +998,11 @@ function DayModal(props: {
             : React.createElement('div', { className: 'tw-rescue-history' },
                 ...d.intraday.map((p) =>
                   React.createElement('div', { key: p.hhmm, className: 'tw-rescue-h-row' },
-                    React.createElement('span', { style: { fontFamily: 'var(--tw-mono)', fontSize: 11 } }, p.hhmm),
+                    React.createElement('span', { style: { fontFamily: 'var(--tw-mono)', fontSize: 12 } }, p.hhmm),
                     React.createElement('span', { className: 'tw-badge', style: { color: LEVEL_COLOR[p.level], borderColor: LEVEL_COLOR[p.level] } }, RESCUE_LEVEL_LABEL[p.level]),
-                    React.createElement('span', { className: 'tw-muted', style: { fontSize: 10.5 } }, `评分 ${p.score}`),
+                    React.createElement('span', { className: 'tw-muted', style: { fontSize: 12 } }, `评分 ${p.score}`),
                     React.createElement('span', { style: { flex: 1 } }),
-                    React.createElement('span', { className: 'tw-muted', style: { fontSize: 10.5 } }, `量能 ${fmtX(p.timeAdjMult)} · 超大单比均额 ${fmtX(p.superVsAvg, 3)}`),
+                    React.createElement('span', { className: 'tw-muted', style: { fontSize: 12 } }, `量能 ${fmtX(p.timeAdjMult)} · 超大单比均额 ${fmtX(p.superVsAvg, 3)}`),
                   ),
                 ),
               ),

@@ -134,12 +134,12 @@ export function Sparkline(props: SparklineProps): React.ReactElement {
           x: mx,
           y: isBuy ? ty + 9 : ty - 2,
           textAnchor: 'middle',
-          style: { fill: mc, fontSize: 10, fontWeight: 700, paintOrder: 'stroke', stroke: 'var(--tw-card)', strokeWidth: 2.5 },
+          style: { fill: mc, fontSize: 12, fontWeight: 700, paintOrder: 'stroke', stroke: 'var(--tw-card)', strokeWidth: 2.5 },
         }, label),
       )
     }),
     timeLabels === true && points.length >= 2
-      ? React.createElement('g', { style: { fontSize: 9 } },
+      ? React.createElement('g', { style: { fontSize: 12 } },
           ...[0, 1].map((k) => {
             const idx = k === 0 ? 0 : points.length - 1
             const label = points[idx].label ?? ''

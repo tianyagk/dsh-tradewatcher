@@ -110,7 +110,7 @@ function yGrid(args: {
     out.push(React.createElement('text', {
       key: `gt${v}`,
       x: padX + innerW - 1, y: y - 2, textAnchor: 'end',
-      style: { fill: 'var(--tw-muted)', fontSize: 9 },
+      style: { fill: 'var(--tw-muted)', fontSize: 12 },
     }, `${fmtAxis(v)}${args.unit ?? ''}`))
     if (args.baseline !== null && args.baseline !== undefined && args.baseline !== 0) {
       const pct = ((v - args.baseline) / args.baseline) * 100
@@ -118,7 +118,7 @@ function yGrid(args: {
         key: `gp${v}`,
         x: padX + innerW + 3, y: y - 2, textAnchor: 'start',
         className: 'tw-chart-pct',
-        style: { fill: pct >= 0 ? 'var(--tw-up)' : 'var(--tw-down)', fontSize: 9 },
+        style: { fill: pct >= 0 ? 'var(--tw-up)' : 'var(--tw-down)', fontSize: 12 },
       }, `${pct >= 0 ? '+' : ''}${pct.toFixed(2)}%`))
     }
   }
@@ -143,7 +143,7 @@ function volumePane(args: {
   const baseY = top + height
   const out: React.ReactNode[] = [
     React.createElement('line', { key: 'vb', x1: padX, y1: baseY, x2: padX + innerW, y2: baseY, style: { stroke: 'var(--tw-border)' }, strokeWidth: 1 }),
-    React.createElement('text', { key: 'vt', x: padX, y: top + 9, style: { fill: 'var(--tw-muted)', fontSize: 9 } },
+    React.createElement('text', { key: 'vt', x: padX, y: top + 12, style: { fill: 'var(--tw-muted)', fontSize: 12 } },
       hasVol ? `成交量 ${fmtAxis(max)}` : '该市场不提供成交量'),
   ]
   vols.forEach((v, i) => {
@@ -180,14 +180,14 @@ function macdPane(args: {
   const { top, height, dif, dea, hist, xAt, barW, padX, innerW, upColor, downColor } = args
   const vals = [...dif, ...dea, ...hist].filter((v): v is number => v !== null)
   if (vals.length === 0) {
-    return [React.createElement('text', { key: 'mx', x: padX, y: top + 10, style: { fill: 'var(--tw-muted)', fontSize: 9 } }, 'MACD')]
+    return [React.createElement('text', { key: 'mx', x: padX, y: top + 13, style: { fill: 'var(--tw-muted)', fontSize: 12 } }, 'MACD')]
   }
   const maxAbs = Math.max(...vals.map((v) => Math.abs(v)), 1e-9)
   const mid = top + height / 2
   const yOf = (v: number): number => mid - (v / maxAbs) * (height / 2 - 4)
   const out: React.ReactNode[] = [
     React.createElement('line', { key: 'zero', x1: padX, y1: mid, x2: padX + innerW, y2: mid, style: { stroke: 'var(--tw-border)' }, strokeWidth: 1 }),
-    React.createElement('text', { key: 'mt', x: padX, y: top + 9, style: { fill: 'var(--tw-muted)', fontSize: 9 } }, 'MACD(12,26,9)'),
+    React.createElement('text', { key: 'mt', x: padX, y: top + 12, style: { fill: 'var(--tw-muted)', fontSize: 12 } }, 'MACD(12,26,9)'),
   ]
   hist.forEach((v, i) => {
     if (v === null) return
@@ -343,7 +343,7 @@ export function TrendChart(props: {
         mk.title !== undefined ? React.createElement('title', null, mk.title) : null),
       React.createElement('text', {
         x: mx, y: isBuy ? ty + 9 : ty - 2, textAnchor: 'middle',
-        style: { fill: color, fontSize: 10, fontWeight: 700, paintOrder: 'stroke', stroke: 'var(--tw-card)', strokeWidth: 2.5 },
+        style: { fill: color, fontSize: 12, fontWeight: 700, paintOrder: 'stroke', stroke: 'var(--tw-card)', strokeWidth: 2.5 },
       }, isBuy ? 'B' : 'S'),
     ))
   }
@@ -377,7 +377,7 @@ export function TrendChart(props: {
       if (g.label !== '') {
         children.push(React.createElement('text', {
           key: `sl${g.at.toFixed(4)}${g.label}`, x, y: axisLabelY, textAnchor: 'middle',
-          style: { fill: 'var(--tw-muted)', fontSize: 9 },
+          style: { fill: 'var(--tw-muted)', fontSize: 12 },
         }, g.label))
       }
     }
@@ -387,10 +387,10 @@ export function TrendChart(props: {
       const spans = props.session?.spans ?? []
       const close = spans.length > 0 ? spans[spans.length - 1].end : ''
       if (open !== '') children.push(React.createElement('text', {
-        key: 'sopen', x: PAD_X, y: axisLabelY, style: { fill: 'var(--tw-muted)', fontSize: 9 },
+        key: 'sopen', x: PAD_X, y: axisLabelY, style: { fill: 'var(--tw-muted)', fontSize: 12 },
       }, open))
       if (close !== '') children.push(React.createElement('text', {
-        key: 'sclose', x: PAD_X + innerW, y: axisLabelY, textAnchor: 'end', style: { fill: 'var(--tw-muted)', fontSize: 9 },
+        key: 'sclose', x: PAD_X + innerW, y: axisLabelY, textAnchor: 'end', style: { fill: 'var(--tw-muted)', fontSize: 12 },
       }, close))
     }
   }
@@ -410,15 +410,15 @@ export function TrendChart(props: {
       const x = (xAt(seg.startIndex) + xAt(seg.endIndex)) / 2
       children.push(React.createElement('text', {
         key: `day${seg.startIndex}`, x, y: axisLabelY, textAnchor: 'middle',
-        style: { fill: 'var(--tw-muted)', fontSize: 9 },
+        style: { fill: 'var(--tw-muted)', fontSize: 12 },
       }, seg.text))
     }
   } else if (ax === null) {
     children.push(React.createElement('text', {
-      key: 'x0', x: PAD_X, y: axisLabelY, style: { fill: 'var(--tw-muted)', fontSize: 9 },
+      key: 'x0', x: PAD_X, y: axisLabelY, style: { fill: 'var(--tw-muted)', fontSize: 12 },
     }, points[0].label.slice(5)))
     children.push(React.createElement('text', {
-      key: 'x1', x: PAD_X + innerW, y: axisLabelY, textAnchor: 'end', style: { fill: 'var(--tw-muted)', fontSize: 9 },
+      key: 'x1', x: PAD_X + innerW, y: axisLabelY, textAnchor: 'end', style: { fill: 'var(--tw-muted)', fontSize: 12 },
     }, points[lastIndex].label.slice(5, 16)))
   }
 
@@ -623,7 +623,7 @@ export function KlineChart(props: {
       children.push(React.createElement('g', { key: `mb${i}`, 'aria-label': buyText },
         React.createElement('title', null, buyText),
         React.createElement('line', { x1: x, y1: yOf(b.low), x2: x, y2: my - 4, style: { stroke: UP_COLOR }, strokeWidth: 1, opacity: 0.7 }),
-        React.createElement('text', { x, y: my, textAnchor: 'middle', style: { fill: UP_COLOR, fontSize: 9.5, fontWeight: 700, paintOrder: 'stroke', stroke: 'var(--tw-card)', strokeWidth: 2.5 } }, g.buys.length > 1 ? `B${g.buys.length}` : 'B'),
+        React.createElement('text', { x, y: my, textAnchor: 'middle', style: { fill: UP_COLOR, fontSize: 12, fontWeight: 700, paintOrder: 'stroke', stroke: 'var(--tw-card)', strokeWidth: 2.5 } }, g.buys.length > 1 ? `B${g.buys.length}` : 'B'),
       ))
     }
     if (g.sells.length > 0) {
@@ -632,7 +632,7 @@ export function KlineChart(props: {
       children.push(React.createElement('g', { key: `ms${i}`, 'aria-label': sellText },
         React.createElement('title', null, sellText),
         React.createElement('line', { x1: x, y1: yOf(b.high), x2: x, y2: my + 4, style: { stroke: DOWN_COLOR }, strokeWidth: 1, opacity: 0.7 }),
-        React.createElement('text', { x, y: my, textAnchor: 'middle', style: { fill: DOWN_COLOR, fontSize: 9.5, fontWeight: 700, paintOrder: 'stroke', stroke: 'var(--tw-card)', strokeWidth: 2.5 } }, g.sells.length > 1 ? `S${g.sells.length}` : 'S'),
+        React.createElement('text', { x, y: my, textAnchor: 'middle', style: { fill: DOWN_COLOR, fontSize: 12, fontWeight: 700, paintOrder: 'stroke', stroke: 'var(--tw-card)', strokeWidth: 2.5 } }, g.sells.length > 1 ? `S${g.sells.length}` : 'S'),
       ))
     }
   }
@@ -657,7 +657,7 @@ export function KlineChart(props: {
       x: k === 0 ? PAD_X : k === 2 ? PAD_X + innerW : xAt(i),
       y: height - 4,
       textAnchor: k === 0 ? 'start' : k === 2 ? 'end' : 'middle',
-      style: { fill: 'var(--tw-muted)', fontSize: 9 },
+      style: { fill: 'var(--tw-muted)', fontSize: 12 },
     }, bars[i].date))
   })
   // 十字光标：竖虚线 + 收盘处小圆点（画在最后 ⇒ 压在最上层）
@@ -690,7 +690,7 @@ export function KlineChart(props: {
     ? tipPlacement(xAt(cursor), yOf(bars[cursor].close), width, height, TIP_W, tipHeightOf(tipLines))
     : null
 
-  const legend = React.createElement('div', { className: 'tw-ma-legend', style: { display: 'flex', gap: 10, flexWrap: 'wrap', fontSize: 10, fontFamily: 'var(--tw-mono)', margin: '4px 0 0' } },
+  const legend = React.createElement('div', { className: 'tw-ma-legend', style: { display: 'flex', gap: 10, flexWrap: 'wrap', fontSize: 12, fontFamily: 'var(--tw-mono)', margin: '4px 0 0' } },
     ...mas.map((ser) => {
       let lastV: number | null = null
       for (let i = e - 1; i >= s; i -= 1) { if (ser.values[i] !== null) { lastV = ser.values[i] as number; break } }

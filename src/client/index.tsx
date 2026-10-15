@@ -172,7 +172,7 @@ function PanelIcon(props: { size?: number; active?: boolean }): React.ReactEleme
             borderRadius: 6,
             background: tone,
             color: '#fff',
-            fontSize: 8,
+            fontSize: 12,
             lineHeight: '11px',
             fontFamily: 'var(--tw-mono)',
             fontWeight: 600,
@@ -252,6 +252,25 @@ function Dashboard(): React.ReactElement {
   }, [viewMode])
 
   // Alt+M 轮换视图档位：不抢输入框（在输入控件里按 Alt+M 不该被吃掉）
+  /**
+   * 切换视图模式（**唯一实现**）：快捷键 `Alt+M` 与行情条上那个**可见**按钮共用它。
+   * v0.91.1 之前只有快捷键 ⇒ 一级功能（隐身视图）的唯一入口是隐藏快捷键，用户找不到。
+   */
+  const cycleViewMode = useCallback((): void => {
+    const cur = prefs?.viewMode ?? 'full'
+    const next = VIEW_MODES[(VIEW_MODES.indexOf(cur) + 1) % VIEW_MODES.length]
+    setPrefsState((prev) => ({ ...(prev ?? DEFAULT_PREFS), viewMode: next }))
+    api.setPrefs({ viewMode: next }).catch(() => undefined)
+    toast.show(
+        next === 'full'
+          ? '视图：完整（恢复说明文字与全部金额）'
+          : next === 'compact'
+            ? '视图：紧凑（已隐藏说明文字与脚注；Alt+M 继续切换）'
+            : // 隐身的两项"细化"（不透明度/数字模糊）在「▣ 截图」里，这里提示一句，否则没人知道还有这一层
+              '视图：隐身（金额已模糊为 ¥••••、涨跌色转灰阶）。若要连价格/百分比一起糊住，见行情条右侧「▣ 截图」里的数字模糊。Alt+M 继续切换',
+    )
+  }, [prefs?.viewMode, toast])
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
       if (!e.altKey || e.ctrlKey || e.metaKey) return
@@ -260,23 +279,11 @@ function Dashboard(): React.ReactElement {
       const tag = el?.tagName ?? ''
       if (tag === 'INPUT' || tag === 'TEXTAREA' || el?.isContentEditable === true) return
       e.preventDefault()
-      const cur = prefs?.viewMode ?? 'full'
-      const next = VIEW_MODES[(VIEW_MODES.indexOf(cur) + 1) % VIEW_MODES.length]
-      setPrefsState((prev) => ({ ...(prev ?? DEFAULT_PREFS), viewMode: next }))
-      api.setPrefs({ viewMode: next }).catch(() => undefined)
-      toast.show(
-        next === 'full'
-          ? '视图：完整（恢复说明文字与全部金额）'
-          : next === 'compact'
-            ? '视图：紧凑（已隐藏说明文字与脚注；Alt+M 继续切换）'
-            : // 隐身的两项"细化"（不透明度/数字模糊）在「▣ 截图」里，这里提示一句，否则没人知道还有这一层
-              '视图：隐身（金额已模糊为 ¥••••、涨跌色转灰阶）。若要连价格/百分比一起糊住，见行情条右侧「▣ 截图」里的数字模糊。Alt+M 继续切换',
-      )
+      cycleViewMode()
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-    // prefs?.viewMode 是读当前档位的唯一来源，必须进依赖
-  }, [prefs?.viewMode, toast])
+  }, [cycleViewMode])
 
  // 面板不透明度与数字模糊。两者都只作用于本面板（见 styles.ts 的说明）
   const panelOpacity = normalizePanelOpacity(prefs?.panelOpacity, 1)
@@ -428,6 +435,8 @@ function Dashboard(): React.ReactElement {
       setPrefs,
       onOpenDetail: openDetail,
       popupDisabled: detail !== null,
+      viewMode,
+      onCycleViewMode: cycleViewMode,
     }),
     engine.error !== null
       ? React.createElement('div', { className: 'tw-hint', style: { padding: '0 10px 2px' } }, `行情接口暂时不可用：${engine.error}`)

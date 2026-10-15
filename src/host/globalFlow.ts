@@ -165,8 +165,14 @@ const MOMENTUM_SYMBOL: Record<FlowMarketKey, { via: 'sina-us' | 'tencent'; symbo
 export const FLOW_QUOTE_TTL_MS = 30 * 60_000
 /** 日线类：12 小时。日线一天只更新一次，跨夜后自动过期 */
 export const FLOW_SERIES_TTL_MS = 12 * 60 * 60_000
-/** 最终载荷：全齐时 10 分钟；有缺项时 2 分钟（让恢复能很快被看见） */
-export const FLOW_PAYLOAD_TTL_MS = 10 * 60_000
+/**
+ * 最终载荷：全齐时 **12 分钟**；有缺项时 2 分钟（让恢复能很快被看见）。
+ *
+ * ⚠ 12 分钟是**按预算算出来的**，不是拍的（v0.91.1 用户裁决）：每主机预算 `HOST_BUDGET_MAX = 5 次/小时`
+ * ⇒ 一次请求至少要摊到 `60 / 5 = 12` 分钟，否则一小时到点会把预算用满、第 6 次那一轮四块磁贴
+ * 只能显示「未取到（预算用尽）」。**TTL 与预算的比值不许小于 12 分钟/次**（`globalFlow.test.ts` 钉住）。
+ */
+export const FLOW_PAYLOAD_TTL_MS = 12 * 60_000
 export const FLOW_PAYLOAD_TTL_PARTIAL_MS = 2 * 60_000
 /**
  * 曲线窗口（用户口径 v0.81.0）：**90 / 180 / 365 个序列日可切换**（分段控件在详情页 Hero 右上角）。

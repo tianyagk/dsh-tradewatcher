@@ -198,7 +198,7 @@ export function WatchlistPage(props: {
       ? React.createElement('div', { className: 'tw-panel', style: { padding: '6px 8px' } },
           React.createElement('div', { className: 'tw-sub-h' }, '异动队列',
             React.createElement('span', { style: { flex: 1 } }),
-            React.createElement('span', { className: 'tw-muted', style: { fontSize: 10.5 } },
+            React.createElement('span', { className: 'tw-muted', style: { fontSize: 12 } },
               alerts.asOf === null ? '尚未判定' : `数据时刻 ${shClockText(alerts.asOf)} · 静默窗口 ${SILENCE_MS / 60000} 分钟`),
           ),
           alerts.alerts.length === 0 && alerts.suppressed.length === 0
@@ -216,7 +216,7 @@ export function WatchlistPage(props: {
                 ),
                 ...alerts.suppressed.map((a) =>
                   React.createElement('div', { key: `s-${a.secid}`, className: 'tw-wrow', style: { borderTop: '1px solid var(--tw-border)', padding: '4px 2px', opacity: 0.6 } },
-                    React.createElement('div', { className: 'nm' }, React.createElement('b', null, a.name), ' ', React.createElement('span', { className: 'tw-muted', style: { fontSize: 10.5 } }, '静默中')),
+                    React.createElement('div', { className: 'nm' }, React.createElement('b', null, a.name), ' ', React.createElement('span', { className: 'tw-muted', style: { fontSize: 12 } }, '静默中')),
                     React.createElement('div', { className: 'tw-hint', style: { margin: 0, flex: 1 } }, a.reasons.join(' · ')),
                   ),
                 ),
@@ -281,7 +281,7 @@ export function WatchlistPage(props: {
             onClick: () => setCollapsed((s) => ({ ...s, [g.id]: !isCollapsed })),
           }, isCollapsed ? '▸ ' : '▾ '),
           React.createElement('span', { className: 'gname' }, g.name),
-          React.createElement('span', { className: 'tw-muted', style: { fontSize: 11 } }, `${items.length} 只`),
+          React.createElement('span', { className: 'tw-muted', style: { fontSize: 12 } }, `${items.length} 只`),
           React.createElement('span', { style: { flex: 1 } }),
           React.createElement(Btn, { onClick: () => setModal({ kind: 'addItem', groupId: g.id, groupName: g.name }) }, '添加证券'),
           React.createElement(MoreMenu, {
@@ -427,7 +427,7 @@ export function WatchlistPage(props: {
                           React.createElement('span', {
                             className: 'tw-badge',
                             title: NO_SOURCE_TITLE,
-                            style: { fontSize: 9.5, color: '#e0a94a' },
+                            style: { fontSize: 12, color: '#e0a94a' },
                             tabIndex: 0,
                             role: 'note',
                             'aria-label': NO_SOURCE_LABEL,

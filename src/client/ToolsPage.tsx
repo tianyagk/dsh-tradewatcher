@@ -182,6 +182,7 @@ export function ToolsPage(): React.ReactElement {
   /** 系统「减少动画」偏好 ⇒ 详情页所有动效降级（图与交互仍在） */
   const reduced = useReducedMotion()
   const model = useMemo(() => catalogModel(TOOL_ENTRIES, category, CATEGORY_TABS), [category])
+
   const entry = openId === null ? null : toolById(openId)
   const loader = entry?.load
 
@@ -264,6 +265,12 @@ function catalogView(
         ),
       ),
     ),
+    // 目录很小时的一句说明（v0.91.1，用户口径）：一页只有 1~2 张卡容易被读成"页面坏了"。
+    // 如实说明"会随新增工具变长"——**不是**占位数据，也不新增常驻长文案（一行小字）。
+    TOOL_ENTRIES.length <= 2 // 数据源在模块级：目录就是这个数组，渲染处就地判断（不跨组件传局部变量）
+      ? React.createElement('div', { className: 'tw-muted', style: { fontSize: 12 }, 'data-role': 'tool-catalog-sparse' },
+          `工具箱目前 ${TOOL_ENTRIES.length} 个工具；每接入一个工具，这个目录就会多一张卡（新工具走同一套详情页骨架）。`)
+      : null,
     model.empty === null
       ? React.createElement(
           'div',
@@ -625,7 +632,7 @@ function detailView(
                         model.pie.slices.map((slice) =>
                           React.createElement(
                             'span',
-                            { key: slice.label, style: { display: 'inline-flex', alignItems: 'center', gap: 5, ...CHART_TYPE.legend } },
+                            { key: slice.label, style: { display: 'inline-flex', alignItems: 'center', gap: 4, ...CHART_TYPE.legend } },
                             React.createElement('span', { style: { ...LEGEND_DOT, width: 7, height: 7, background: FLOW_SERIES_COLORS[(slice.index ?? 0) % FLOW_SERIES_COLORS.length] } }),
                             slice.label,
                             React.createElement('span', { style: { color: 'var(--tw-muted)', fontVariantNumeric: 'tabular-nums' } }, slice.text),
@@ -1052,7 +1059,7 @@ function curveChart(props: { days: string[]; series: Array<{ name: string; point
                 { key: r.name, className: 'tw-chart-tip-row' },
                 React.createElement(
                   'span',
-                  { className: 'tw-chart-tip-k', style: { display: 'inline-flex', alignItems: 'center', gap: 5 } },
+                  { className: 'tw-chart-tip-k', style: { display: 'inline-flex', alignItems: 'center', gap: 4 } },
                   React.createElement('span', { 'data-role': 'tool-tip-dot', style: { ...LEGEND_DOT, width: 7, height: 7, background: FLOW_SERIES_COLORS[r.swatch % FLOW_SERIES_COLORS.length] } }),
                   r.name,
                 ),

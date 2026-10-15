@@ -20,7 +20,7 @@ export function SortBar<K extends string>(props: {
       className: 'tw-sortbar',
       style: { display: 'flex', alignItems: 'center', gap: 6 },
     },
-    React.createElement('span', { className: 'tw-muted', style: { fontSize: 10.5 } }, '排序'),
+    React.createElement('span', { className: 'tw-muted', style: { fontSize: 12 } }, '排序'),
     React.createElement(
       'div',
       { className: 'tw-seg', role: 'group', 'aria-label': ariaLabel },

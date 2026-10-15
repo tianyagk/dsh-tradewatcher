@@ -424,7 +424,7 @@ export function PortfolioPage(props: {
           React.createElement('div', { className: 'tw-gh-row' },
             React.createElement('button', { className: 'gname', title: isCollapsed ? '展开' : '折叠', 'aria-label': `${isCollapsed ? '展开' : '折叠'}分组 ${grp.name}`, onClick: () => setCollapsed((s) => ({ ...s, [grp.id]: !isCollapsed })) }, isCollapsed ? '▸ ' : '▾ '),
             React.createElement('span', { className: 'gname' }, grp.name),
-            React.createElement('span', { className: 'tw-muted', style: { fontSize: 11 } }, `${rows.length} 只`),
+            React.createElement('span', { className: 'tw-muted', style: { fontSize: 12 } }, `${rows.length} 只`),
             React.createElement('span', { style: { flex: 1 } }),
             React.createElement(Btn, { onClick: () => setModal({ kind: 'addPos', groupId: grp.id, groupName: grp.name }) }, '+持仓'),
             React.createElement(MoreMenu, {
@@ -663,7 +663,7 @@ function BackupModal(props: { onClose: () => void; notify?: (text: string) => vo
           },
         }),
       ),
-      fileName !== '' ? React.createElement('span', { className: 'tw-muted', style: { fontSize: 11 } }, fileName) : null,
+      fileName !== '' ? React.createElement('span', { className: 'tw-muted', style: { fontSize: 12 } }, fileName) : null,
     ),
     check !== null
       ? React.createElement('div', { style: { marginTop: 10 } },
@@ -676,7 +676,7 @@ function BackupModal(props: { onClose: () => void; notify?: (text: string) => vo
             : null,
           check.conflicts.length > 0
             ? React.createElement('div', { style: { marginTop: 6 } },
-                React.createElement('div', { className: 'tw-muted', style: { fontSize: 11 } }, '覆盖前后差异预览：'),
+                React.createElement('div', { className: 'tw-muted', style: { fontSize: 12 } }, '覆盖前后差异预览：'),
                 React.createElement('ul', { className: 'tw-hint', style: { margin: '4px 0 0 16px' } },
                   ...check.conflicts.map((c, i) => React.createElement('li', { key: i }, c)),
                 ),
