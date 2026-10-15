@@ -26,6 +26,9 @@ export const TW_CSS = `
 --tw-mono:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;
 --tw-shadow-sm:0 1px 2px rgba(16,24,40,.05);
 --tw-shadow-lg:0 1px 2px rgba(16,24,40,.05),0 14px 36px rgba(16,24,40,.13);
+/* 玻璃浮层令牌（浅色档）：值与 toolDetailTheme.GLASS 一一对应（uiuxDiscipline.test.ts 核对） */
+--tw-glass-bg:rgba(255,255,255,.86);--tw-glass-border:rgba(15,23,42,.08);--tw-glass-blur:20px;--tw-glass-saturate:1.4;
+--tw-ease:cubic-bezier(.16,1,.3,1);
 color-scheme:light;background:var(--tw-bg);color:var(--tw-text);
 font:13px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI","Inter","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
 letter-spacing:-0.006em}
@@ -40,7 +43,12 @@ letter-spacing:-0.006em}
 --tw-mask:rgba(0,0,0,.55);
 --tw-shadow-sm:0 1px 0 rgba(255,255,255,.03);
 --tw-shadow-lg:0 1px 0 rgba(255,255,255,.03),0 16px 44px rgba(0,0,0,.55);
+/* 深色档 = 竞品「暗夜玻璃」实测值（rgba(13,17,25,.92) + blur(20px) saturate(1.5)），做法采纳、配色不抄 */
+--tw-glass-bg:rgba(13,17,25,.92);--tw-glass-border:rgba(255,255,255,.09);--tw-glass-blur:20px;--tw-glass-saturate:1.5;
+--tw-ease:cubic-bezier(.16,1,.3,1);
 color-scheme:dark}
+/* 页面切后台 ⇒ 根节点 data-idle=true：暂停全部动画（竞品 .ap-idle 约定；合成层不空跑） */
+.tw-root[data-idle=true] *{animation-play-state:paused!important}
 .tw-root *{box-sizing:border-box}
 .tw-root button{font:inherit;color:inherit;background:none;border:none;padding:0;cursor:pointer}
 .tw-root input,.tw-root select{font:inherit;color:var(--tw-text);background:var(--tw-card);border:1px solid var(--tw-border);border-radius:8px;padding:5px 9px;outline:none}
@@ -102,10 +110,13 @@ color-scheme:dark}
 .tw-caliber{flex:none;padding:5px 8px 4px;font-size:10.5px;color:var(--tw-dim);font-family:var(--tw-mono);border-bottom:1px dashed var(--tw-border);background:var(--tw-bg2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 /* 自选异动（P1-4）：呼吸高亮。用左边的竖条 + 缓慢呼吸的背景，
    而不是整行变红 —— 整行变红与"跌了"的语义冲突（红既是跌也是警示）。 */
-@keyframes tw-breathe{0%,100%{background:transparent}50%{background:color-mix(in srgb, var(--tw-up) 10%, transparent)}}
-.tw-wrow[data-alert]{box-shadow:inset 3px 0 0 var(--tw-up);animation:tw-breathe 2.6s ease-in-out infinite}
+/* 告警行的呼吸条：**只动 opacity**（原来动 background ⇒ 每帧 paint；纪律见 DESIGN-UIUX-ADOPT §3） */
+@keyframes tw-breathe{0%,100%{opacity:.3}50%{opacity:1}}
+.tw-wrow[data-alert]{box-shadow:inset 3px 0 0 var(--tw-up);position:relative}
+.tw-wrow[data-alert]::after{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--tw-up);pointer-events:none;animation:tw-breathe 2.6s ease-in-out infinite}
 .tw-wrow[data-alert][data-alert=price]{box-shadow:inset 3px 0 0 var(--tw-flat)}
-@media (prefers-reduced-motion:reduce){.tw-wrow[data-alert]{animation:none;background:color-mix(in srgb, var(--tw-up) 8%, transparent)}}
+.tw-wrow[data-alert][data-alert=price]::after{background:var(--tw-flat)}
+@media (prefers-reduced-motion:reduce){.tw-wrow[data-alert]::after{animation:none;opacity:.75}}
 
 /* 读屏专用文本（P2-3）：视觉上不可见，但读屏软件可朗读。
    用 clip 而不是 display:none —— 后者会让读屏软件也读不到。 */
@@ -635,7 +646,7 @@ color-scheme:dark}
 .tw-tool-range{display:inline-flex;align-items:center;gap:2px;padding:2px;border:1px solid var(--tw-border);border-radius:10px;background:var(--tw-bg2);flex-shrink:0}
 .tw-tool-range>button{padding:4px 10px;border-radius:8px;font-size:12.5px;color:var(--tw-muted);transition:background .15s,color .15s,border-color .15s}
 .tw-tool-range>button[data-on=true]{background:var(--tw-card);border:1px solid var(--tw-border-strong);color:var(--tw-text);font-weight:600}
-.tw-tool-tiles{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}
+.tw-tool-tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(148px,1fr));gap:10px}
 .tw-tool-plot{position:relative;width:100%}
 .tw-tool-plot>svg{display:block;width:100%;height:100%}
 .tw-tool-plot .tw-tool-cross{pointer-events:none}
@@ -656,7 +667,18 @@ color-scheme:dark}
 }
 @media (max-width:760px){
   .tw-tool-hero{flex-direction:column}
-  .tw-tool-tiles{grid-template-columns:repeat(2,minmax(0,1fr))}
+}
+/* ── 玻璃浮层（采纳竞品"半透明 + 背景模糊 + 饱和度"的做法；值来自本主题的 --tw-glass-*） ──
+   ⚠ 这段必须放在**样式表末尾**：.tw-glass 与 .tw-pop / .tw-chart-tip 同特异性，
+   靠"后写者胜"才能让玻璃的底/描边/模糊真正生效（判据见 toolDetailTheme.motionCssProblems + uiuxDiscipline.test.ts）。
+   ⚠ 注释里**不许出现反引号**：这里是模板字面量内部，反引号会提前结束 TW_CSS（实测把 TW_CSS 变成了字符串片段）。 */
+.tw-glass{background:var(--tw-glass-bg);border:1px solid var(--tw-glass-border);
+  backdrop-filter:blur(var(--tw-glass-blur)) saturate(var(--tw-glass-saturate));
+  -webkit-backdrop-filter:blur(var(--tw-glass-blur)) saturate(var(--tw-glass-saturate))}
+/* 关闭态：不占图层、不吃点击（竞品约定） */
+.tw-glass[data-open=false]{display:none}
+@media (prefers-reduced-motion:reduce){
+  .tw-glass,.tw-glass *{animation:none!important;transition:none!important}
 }
 `
 

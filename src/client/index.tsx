@@ -5,6 +5,7 @@ import { DEFAULT_PREFS, TW_ROWS, VIEW_MODES, normalizePanelOpacity, type PortPre
 import { api } from './api.ts'
 import { badgeView, type BadgeState } from './badgeView.ts'
 import { useQuoteEngine } from './useQuotes.ts'
+import { usePageIdle } from './usePageIdle.ts'
 import { pageExtraIds, quoteEngineIds } from './engineIds.ts'
 import { TopBar } from './TopBar.tsx'
 import { WatchlistPage } from './WatchlistPage.tsx'
@@ -314,6 +315,8 @@ function Dashboard(): React.ReactElement {
     [hiddenKey, extraIds],
   )
   const engine = useQuoteEngine(engineIds, refreshSec * 1000, visible)
+  // 页面切后台 / 面板不可见 ⇒ data-idle=true：CSS 一条规则暂停全部动画（不动数据、不触发取数）
+  const idle = usePageIdle(visible)
 
   const onWatchSymbols = useCallback((ids: string[]) => setWatchIds(ids), [])
   const onPortSymbols = useCallback((ids: string[]) => setPosIds(ids), [])
@@ -404,6 +407,7 @@ function Dashboard(): React.ReactElement {
       'data-theme': theme,
       'data-view': viewMode,
       'data-blur': blurDigits ? '1' : '0',
+      'data-idle': idle ? 'true' : 'false',
       style: {
         flex: 1, height: '100%', minHeight: 0, display: 'flex', flexDirection: 'column', minWidth: 0,
         // 不透明度只挂在本面板根节点：宿主其余界面不受影响

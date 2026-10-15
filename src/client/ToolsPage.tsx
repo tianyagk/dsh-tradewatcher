@@ -36,6 +36,7 @@ import {
 import { CARD_PROPS, CARD_STYLE, CARD_TAG } from './toolCardView.ts'
 import {
   BAR,
+  CARD_MIN_W,
   CARD_SURFACE,
   CHART_SPLIT,
   CHART_TYPE,
@@ -155,7 +156,7 @@ const PLACEHOLDER_BOX: React.CSSProperties = {
   borderRadius: 10,
   background: 'var(--tw-bg2)',
   color: 'var(--tw-muted)',
-  fontSize: 11.5,
+  fontSize: 12.5,
   padding: '10px 12px',
   textAlign: 'center',
 }
@@ -286,7 +287,7 @@ function catalogView(
                 {
                   style: {
                     alignSelf: 'flex-start',
-                    fontSize: 10.5,
+                    fontSize: 12,
                     lineHeight: '16px',
                     padding: '0 6px',
                     borderRadius: 6,
@@ -604,7 +605,7 @@ function detailView(
                       // 实心饼：日期不再挖孔放中心，改为饼**上方**的小字（信息不丢、不吃直径）
                       model.pie.center === null
                         ? null
-                        : React.createElement('div', { 'data-role': 'tool-pie-day', style: { fontSize: 11.5, color: 'var(--tw-muted)', fontVariantNumeric: 'tabular-nums' } }, model.pie.center),
+                        : React.createElement('div', { 'data-role': 'tool-pie-day', style: { fontSize: 12.5, color: 'var(--tw-muted)', fontVariantNumeric: 'tabular-nums' } }, model.pie.center),
                       React.createElement(pieChart, { slices: model.pie.slices, center: model.pie.center }),
                       // 图例在饼**下方**、居中；色标与折线图同一套（FLOW_SERIES_COLORS + LEGEND_DOT）
                       React.createElement(
@@ -627,7 +628,7 @@ function detailView(
                   : React.createElement(
                       'div',
                       // ⚠ A 档事实（缺数据的出口）：**不用 `tw-hint`**（紧凑/隐身档会隐藏）⇒ 内联样式常驻可见
-                      { 'data-role': 'tool-pie-missing', style: { margin: 0, fontSize: 11.5, lineHeight: 1.55, color: 'var(--tw-muted)' } },
+                      { 'data-role': 'tool-pie-missing', style: { margin: 0, fontSize: 12.5, lineHeight: 1.55, color: 'var(--tw-muted)' } },
                       `${NOT_FETCHED} 的市场未进饼图（原因见下表逐行说明）`,
                     ),
                 // 回放滑块（本地切换：只换展示的那一天，不发请求）；线条平滑跟随见 curveChart 的 MOTION_STYLE
@@ -645,7 +646,7 @@ function detailView(
         ? React.createElement('div', { 'data-role': 'tool-flow-bars', style: { display: 'flex', flexDirection: 'column', gap: BAR.rowGap } }, model.market.bars.map(barRow))
         : React.createElement(
         'table',
-        { style: { width: '100%', borderCollapse: 'collapse', fontSize: 11.5 } },
+        { style: { width: '100%', borderCollapse: 'collapse', fontSize: 12.5 } },
         React.createElement(
           'thead',
           null,
@@ -683,7 +684,7 @@ function detailView(
                     // 只有缺数据的行才有这行说明，正常情形零成本。
                     React.createElement(
                       'td',
-                      { 'data-role': 'tool-row-note', colSpan: Math.max(1, model.market.columns.length), style: { padding: '0 6px 6px', color: 'var(--tw-muted)', fontSize: 10.5, lineHeight: 1.5 } },
+                      { 'data-role': 'tool-row-note', colSpan: Math.max(1, model.market.columns.length), style: { padding: '0 6px 6px', color: 'var(--tw-muted)', fontSize: 12, lineHeight: 1.5 } },
                       `${NOT_FETCHED}：${note}`,
                     ),
                   ),
@@ -718,7 +719,7 @@ function detailView(
               'data-role': 'tool-market-total',
               title: model.market.footnotes.join('｜'),
               'aria-label': model.market.footnotes.join('；'),
-              style: { marginTop: 8, fontSize: 11.5, lineHeight: 1.55, color: 'var(--tw-muted)' },
+              style: { marginTop: 8, fontSize: 12.5, lineHeight: 1.55, color: 'var(--tw-muted)' },
             },
             model.market.footnotes[0],
           ),
@@ -729,7 +730,7 @@ function detailView(
         'div',
         { className: 'tw-tool-card', key: extra.title, style: CARD_SURFACE },
         sectionHead(extra.title, model.boundary.note),
-        React.createElement('div', { style: { fontSize: 11.5, lineHeight: 1.6 } }, extra.text),
+        React.createElement('div', { style: { fontSize: 12.5, lineHeight: 1.6 } }, extra.text),
       ),
     ),
     // 底部**两段散文**（用户口径）：方法一段、边界一段。
@@ -763,7 +764,7 @@ function barRow(bar: ToolBarRow): React.ReactElement {
             'span',
             {
               'data-role': 'tool-bar-badge',
-              style: { flexShrink: 0, fontSize: 10.5, lineHeight: '16px', padding: '0 6px', borderRadius: 6, border: '1px solid var(--tw-border)', background: 'var(--tw-accent-soft)', color: 'var(--tw-accent)' },
+              style: { flexShrink: 0, fontSize: 12, lineHeight: '16px', padding: '0 6px', borderRadius: 6, border: '1px solid var(--tw-border)', background: 'var(--tw-accent-soft)', color: 'var(--tw-accent)' },
             },
             '当前最多',
           )
@@ -783,16 +784,16 @@ function barRow(bar: ToolBarRow): React.ReactElement {
               style: { width: `${Math.max(0, Math.min(100, bar.sharePct))}%`, height: '100%', borderRadius: BAR.radius, background: BAR.fill },
             }),
       ),
-      React.createElement('span', { 'data-role': 'tool-bar-delta', style: { flexShrink: 0, fontSize: 11.5, color: deltaColor, whiteSpace: 'nowrap' } }, `近5日 ${bar.deltaText}`),
+      React.createElement('span', { 'data-role': 'tool-bar-delta', style: { flexShrink: 0, fontSize: 12.5, color: deltaColor, whiteSpace: 'nowrap' } }, `近5日 ${bar.deltaText}`),
     ),
     React.createElement(
       'div',
-      { 'data-role': 'tool-bar-detail', title: bar.detail, 'aria-label': bar.detail, style: { fontSize: 11, lineHeight: 1.5, color: 'var(--tw-muted)' } },
+      { 'data-role': 'tool-bar-detail', title: bar.detail, 'aria-label': bar.detail, style: { fontSize: 12, lineHeight: 1.5, color: 'var(--tw-muted)' } },
       bar.detail,
     ),
     bar.note === null
       ? null
-      : React.createElement('div', { 'data-role': 'tool-row-note', style: { fontSize: 10.5, lineHeight: 1.5, color: 'var(--tw-muted)' } }, `${NOT_FETCHED}：${bar.note}`),
+      : React.createElement('div', { 'data-role': 'tool-row-note', style: { fontSize: 12, lineHeight: 1.5, color: 'var(--tw-muted)' } }, `${NOT_FETCHED}：${bar.note}`),
   )
 }
 
@@ -810,7 +811,7 @@ function proseSection(title: string, lines: readonly string[], role: 'tool-metho
     // 逐句渲染成一段连续散文（句号/分号分隔），每句都带 data-role ⇒ 断言可以核对"一条都没删"
     React.createElement(
       'p',
-      { 'data-role': lineRole, style: { margin: 0, fontSize: 11.5, lineHeight: 1.8, color: 'var(--tw-muted)' } },
+      { 'data-role': lineRole, style: { margin: 0, fontSize: 12.5, lineHeight: 1.8, color: 'var(--tw-muted)' } },
       lines.map((line, i) => React.createElement('span', { key: i, style: { marginRight: 2 } }, line)),
     ),
   )
@@ -887,7 +888,7 @@ function curveChart(props: { days: string[]; series: Array<{ name: string; point
         {
           'data-role': 'tool-marks-note',
           // A 档事实（实测日 / 重建日的区分）：内联样式常驻可见，不用会被紧凑/隐身档隐藏的 class
-          style: { fontSize: 11.5, lineHeight: 1.55, color: 'var(--tw-muted)' },
+          style: { fontSize: 12.5, lineHeight: 1.55, color: 'var(--tw-muted)' },
         },
         `曲线上的圆点 = 实测日（${props.marks.map((m) => m.label.replace(' 实测', '')).slice(-3).join('、')}）；其余为重建日`,
       )
@@ -973,7 +974,7 @@ function curveChart(props: { days: string[]; series: Array<{ name: string; point
             'g',
             { key: `tick-${i}` },
             React.createElement('line', { x1: PLOT.pad.left, x2: W - PLOT.pad.right, y1: y(t), y2: y(t), stroke: 'var(--tw-border)', strokeWidth: 0.7, strokeDasharray: i === 1 ? '3 3' : undefined }),
-            React.createElement('text', { x: W - PLOT.pad.right + 6, y: y(t) + 3.5, fontSize: 11, fill: 'var(--tw-muted)' }, `${t.toFixed(1)}%`),
+            React.createElement('text', { x: W - PLOT.pad.right + 6, y: y(t) + 3.5, fontSize: 12, fill: 'var(--tw-muted)' }, `${t.toFixed(1)}%`),
           ),
         ),
         // 切档淡入：key 随窗口长度变化 ⇒ 只有换档才重放动画；回放拖动不改 key（不闪）
@@ -1020,15 +1021,15 @@ function curveChart(props: { days: string[]; series: Array<{ name: string; point
                 fill: FLOW_SERIES_COLORS[i % FLOW_SERIES_COLORS.length],
               })
             }),
-        React.createElement('text', { x: PLOT.pad.left, y: H - 6, fontSize: 11, fill: 'var(--tw-muted)' }, props.days[0]),
-        React.createElement('text', { x: W - PLOT.pad.right, y: H - 6, fontSize: 11, fill: 'var(--tw-muted)', textAnchor: 'end' }, props.days[props.days.length - 1]),
+        React.createElement('text', { x: PLOT.pad.left, y: H - 6, fontSize: 12, fill: 'var(--tw-muted)' }, props.days[0]),
+        React.createElement('text', { x: W - PLOT.pad.right, y: H - 6, fontSize: 12, fill: 'var(--tw-muted)', textAnchor: 'end' }, props.days[props.days.length - 1]),
       ),
       // 悬停提示框（复用既有 `.tw-chart-tip` 观感；**逐序列**列出五个市场的值，缺值 ⇒ 未取到）
       hover === null || hoverRows.length === 0
         ? null
         : React.createElement(
             'div',
-            { 'data-role': 'tool-hover-tip', className: 'tw-chart-tip', style: { left: tipLeft, top: 10, minWidth: 148 } },
+            { 'data-role': 'tool-hover-tip', className: 'tw-chart-tip tw-glass', 'data-open': 'true', style: { left: tipLeft, top: 10, minWidth: CARD_MIN_W } },
             React.createElement(
               'div',
               { className: 'tw-chart-tip-row' },

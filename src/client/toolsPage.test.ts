@@ -428,7 +428,7 @@ test('② 详情页三段式 + 时间范围控件 + 功能区接线齐全；十�
     { name: '状态行不再把完整口径放进 title/aria-label', mutate: (s) => s.replace('title: model.statusTitle,', 'title: undefined,'), hit: /statusTitle|title/ },
     {
       name: '散文段复用 tw-hint（紧凑/隐身视图会把免责与口径藏掉）',
-      mutate: (s) => s.replace("{ 'data-role': lineRole, style: { margin: 0, fontSize: 11.5, lineHeight: 1.8, color: 'var(--tw-muted)' } }", "{ 'data-role': lineRole, className: 'tw-hint' }"),
+      mutate: (s) => s.replace("{ 'data-role': lineRole, style: { margin: 0, fontSize: 12.5, lineHeight: 1.8, color: 'var(--tw-muted)' } }", "{ 'data-role': lineRole, className: 'tw-hint' }"),
       hit: /散文段不许复用 tw-hint/,
     },
     // ── v0.85.0（目标布局 5 条）：区名回填 / 饼图计数 / 播放按钮 / 中心孔 / 横条回表格 / 诚实信息 / 结论行 ──

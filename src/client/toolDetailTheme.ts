@@ -46,10 +46,10 @@ export const SUMMARY_TYPE: { label: TypeSpec; value: TypeSpec; note: TypeSpec } 
 /** 图表卡内部：卡标题 / 右上 AS OF / 磁贴三行 / 图例名称 */
 export const CHART_TYPE: { cardTitle: TypeSpec; asOf: TypeSpec; tileLabel: TypeSpec; tileValue: TypeSpec; tileDelta: TypeSpec; legend: TypeSpec } = {
   cardTitle: { fontSize: 17, fontWeight: 700, lineHeight: 1.3, color: 'var(--tw-text)' },
-  asOf: { fontSize: 11.5, fontWeight: 500, letterSpacing: '0.08em', color: 'var(--tw-muted)' },
+  asOf: { fontSize: 12, fontWeight: 500, letterSpacing: '0.08em', color: 'var(--tw-muted)' },
   tileLabel: { fontSize: 12, fontWeight: 400, lineHeight: 1.3, color: 'var(--tw-muted)' },
   tileValue: { fontSize: 20, fontWeight: 700, lineHeight: 1.2, color: 'var(--tw-text)' },
-  tileDelta: { fontSize: 11.5, fontWeight: 400, color: 'var(--tw-muted)' },
+  tileDelta: { fontSize: 12, fontWeight: 400, color: 'var(--tw-muted)' },
   legend: { fontSize: 12, fontWeight: 400, color: 'var(--tw-dim)' },
 }
 
@@ -502,5 +502,220 @@ export function rangeProblems(options: readonly number[], on: { background?: unk
   if (typeof on.border !== 'string' || on.border === '') bad.push('选中档必须有边框（浅底 + 细边框 = 块感）')
   const weight = num(on.fontWeight)
   if (weight === null || weight < 600) bad.push(`选中档字重必须 ≥ 600（实得 ${JSON.stringify(on.fontWeight)}）`)
+  return bad
+}
+
+/* ══════════════════ 6. UI/UX 纪律（参考竞品，采纳为**我们自己的**令牌与判据） ══════════════════ */
+
+/**
+ * **密集数据字号阶梯**（竞品实测：`12 / 12.5 / 13 / 13.5 / 14`）。
+ *
+ * 采纳理由：盯盘是信息密度优先的场景，0.5px 递增的阶梯比通用 8px 栅格更贴合；
+ * 下限 12px 是"可读性下限"（我们详情页原来用了 10.5 / 11 / 11.5 ⇒ 已收敛上来）。
+ * 展示级字号（≥ `DISPLAY_SIZE_MIN`，如 Hero 46 / 大数值 34）**不受**此阶梯约束。
+ */
+export const TYPE_SCALE = [12, 12.5, 13, 13.5, 14] as const
+/** 展示级字号的下界（落在这之上的字号属于"展示"，不参与密集阶梯） */
+export const DISPLAY_SIZE_MIN = 15
+
+/** 密集字号判据（唯一实现）：要么落在阶梯里，要么是展示级（≥ 15px） */
+export function typeScaleProblems(size: number, where = '字号'): string[] {
+  if (!Number.isFinite(size) || size <= 0) return [`${where} 必须是正数（实得 ${String(size)}）`]
+  if (size >= DISPLAY_SIZE_MIN) return []
+  if ((TYPE_SCALE as readonly number[]).includes(size)) return []
+  return [`${where} ${size}px 不在密集阶梯 [${TYPE_SCALE.join(' / ')}] 内（≥${DISPLAY_SIZE_MIN}px 视为展示级）`]
+}
+
+/**
+ * **间距刻度**：1px 粒度（竞品无中间刻度，全靠原子类；我们采纳"整数 px"这一条纪律）。
+ * 0.5px 级别的间距在密集布局里既看不出、又会把对齐算乱 ⇒ 一律拒绝非整数。
+ */
+export const SPACE_GRID = 1
+export function spaceScaleProblems(value: number, where = '间距'): string[] {
+  if (!Number.isFinite(value) || value < 0) return [`${where} 必须是非负数（实得 ${String(value)}）`]
+  if (!Number.isInteger(value / SPACE_GRID)) return [`${where} 必须落在 ${SPACE_GRID}px 刻度上（实得 ${value}）`]
+  return []
+}
+
+/** **自适应卡片最小宽**（竞品实测 `minmax(148px, 1fr)`）：窄侧栏也能自适应换列 */
+export const CARD_MIN_W = 148
+
+/** 卡片栅格判据（唯一实现）：必须是 `auto-fit/auto-fill minmax(148px, 1fr)` 形态 */
+export function cardGridProblems(template: string): string[] {
+  const t = template.replace(/\s+/g, '')
+  const bad: string[] = []
+  if (!/^repeat\((auto-fit|auto-fill),minmax\(\d+px,1fr\)\)$/.test(t)) {
+    bad.push(`卡片栅格必须是 repeat(auto-fit|auto-fill, minmax(148px, 1fr)) 形态（实得 ${JSON.stringify(template)}）`)
+    return bad
+  }
+  const m = /minmax\((\d+)px/.exec(t)
+  const min = m === null ? null : Number(m[1])
+  if (min !== CARD_MIN_W) bad.push(`卡片最小宽必须是 ${CARD_MIN_W}px（实得 ${String(min)}）`)
+  return bad
+}
+
+/**
+ * **玻璃浮层令牌**（竞品"暗夜玻璃"，做法采纳、值映射到我们的主题）。
+ *
+ * 竞品暗色档实测：`rgba(13,17,25,.92)` + `backdrop-filter: blur(20px) saturate(1.5)`。
+ * 我们**不硬编码它的配色**（涨跌色/暗底都不抄，见 DESIGN-UIUX-ADOPT §拒绝项），只采纳
+ * "半透明面板 + 背景模糊 + 饱和度"这个**做法**，并让两档主题各自给值：
+ *   · 深色档 = 竞品实测值（等价于我们原有的深底，写进来便于核对）；
+ *   · 浅色档 = 对应的浅色半透明值（我们自己定，写死会让浅色主题变脏）。
+ */
+export interface GlassSlots {
+  light: { bg: string; blur: string; saturate: string }
+  dark: { bg: string; blur: string; saturate: string }
+  border: { dark: string; light: string }
+  ease: string
+  durations: readonly number[]
+}
+
+export const GLASS = {
+  light: { bg: 'rgba(255, 255, 255, .86)', blur: '20px', saturate: '1.4' },
+  dark: { bg: 'rgba(13, 17, 25, .92)', blur: '20px', saturate: '1.5' },
+  /** 描边：深色档白 9%（竞品实测）；浅色档用深色 8%（同一对比度思路） */
+  border: { dark: 'rgba(255, 255, 255, .09)', light: 'rgba(15, 23, 42, .08)' },
+  /** 缓动（竞品实测 out 曲线）；时长档 0.15–0.28s */
+  ease: 'cubic-bezier(.16, 1, .3, 1)',
+  durations: [0.15, 0.18, 0.2, 0.24, 0.28] as const,
+} as const
+
+/** 玻璃令牌判据（唯一实现）：两档都要有值、三元组齐全、浅色档不许等于深色档（否则等于把深色写死） */
+export function glassProblems(g: GlassSlots = GLASS): string[] {
+  const bad: string[] = []
+  for (const slot of ['light', 'dark'] as const) {
+    const t = g[slot]
+    if (typeof t.bg !== 'string' || !/^rgba\(/.test(t.bg)) bad.push(`${slot} 档面板底必须是 rgba(…)（实得 ${JSON.stringify(t.bg)}）`)
+    if (typeof t.blur !== 'string' || !/px$/.test(t.blur)) bad.push(`${slot} 档 blur 必须是 px（实得 ${JSON.stringify(t.blur)}）`)
+    if (typeof t.saturate !== 'string' || Number.isNaN(Number(t.saturate))) bad.push(`${slot} 档 saturate 必须是数字（实得 ${JSON.stringify(t.saturate)}）`)
+  }
+  // ⚠ 用显式 string 变量比较：`as const` 会把两档的字面量类型分得很细，直接比较会被 TS 判为"无重叠"（实测）
+  const lightBg: string = g.light.bg
+  const darkBg: string = g.dark.bg
+  if (lightBg === darkBg) bad.push('浅色档面板底不许与深色档相同（等于把竞品的深色写死到浅色主题上）')
+  if (darkBg !== 'rgba(13, 17, 25, .92)') bad.push(`深色档必须记录竞品实测值 rgba(13, 17, 25, .92)（实得 ${JSON.stringify(g.dark.bg)}）`)
+  const darkBlur: string = g.dark.blur
+  const darkSat: string = g.dark.saturate
+  if (darkBlur !== '20px' || darkSat !== '1.5') bad.push('深色档 blur/saturate 必须记录竞品实测值 20px / 1.5')
+  return bad
+}
+
+/** 玻璃令牌 → CSS 变量（styles.ts 里的值必须与这里一致，由 uiuxDiscipline.test.ts 核对） */
+export function glassCssVars(slot: 'light' | 'dark'): Record<string, string> {
+  const t = GLASS[slot]
+  return {
+    '--tw-glass-bg': t.bg,
+    '--tw-glass-border': GLASS.border[slot],
+    '--tw-glass-blur': t.blur,
+    '--tw-glass-saturate': t.saturate,
+  }
+}
+
+/**
+ * **动效纪律**（竞品包内注释明写的性能约定，采纳为我们自己的红线）。
+ *
+ * ① 常驻/循环动画**只动 `transform` / `opacity`**（这两个属性走合成层，不触发 layout/paint）；
+ * ② 关闭态 `display:none`（不占图层，也不留透明层吃点击）；
+ * ③ 页面切后台 ⇒ `[data-idle=true]` 暂停全部动画；
+ * ④ 尊重 `prefers-reduced-motion`。
+ * 注意：**hover 变色**（`transition: background/color`）不是"动画"，是状态反馈，不在本纪律范围内。
+ */
+export const MOTION_RULES = {
+  /** 允许参与动画的属性（其余一律拒绝） */
+  animatable: ['transform', 'opacity'] as const,
+  /** 关闭态：不占图层 */
+  closedDisplay: 'none',
+  /** 后台暂停：根节点属性 */
+  idleAttr: 'data-idle',
+  idlePaused: true,
+  reducedMotion: 'css-media',
+} as const
+
+/**
+ * **反例样本**（只给断言用，不进页面）：一段动 `background` 的关键帧。
+ *
+ * 用途：证明 `keyframesProblems()` 不是恒真的 —— 把这段喂进去必须报出违规。
+ * 它同时是"我们踩过的那一版"（告警行呼吸条原来动的就是 `background`，每帧 paint）。
+ */
+export const ANIM_NOT_ALLOWED_SAMPLE = '@keyframes bad-sample{0%,100%{background:transparent}50%{background:rgba(0,0,0,.1)}}'
+
+/** 单个动画属性判据（唯一实现） */
+export function animationPropertyProblems(prop: string): string[] {
+  const p = prop.trim().toLowerCase()
+  if (p === '') return ['动画属性不许为空']
+  if ((MOTION_RULES.animatable as readonly string[]).includes(p)) return []
+  return [`动画只允许 transform / opacity（实得「${prop}」）—— 其余属性会触发 layout/paint`]
+}
+
+/**
+ * 从 CSS 文本的 `from` 位置起，取一个**花括号配对**完整块（嵌套也算）。
+ *
+ * 为什么必须配对：`@media (prefers-reduced-motion:reduce){ … }` 里的规则是嵌套的，
+ * 用"往后切 600 字符"这种近似法会把**后面另一个块**里的 `.tw-glass` 误算成本块的覆盖（实测踩到）。
+ */
+export function cssBlockAt(css: string, from: number): string | null {
+  const open = css.indexOf('{', from)
+  if (from < 0 || open < 0) return null
+  let depth = 0
+  for (let i = open; i < css.length; i += 1) {
+    if (css[i] === '{') depth += 1
+    else if (css[i] === '}') {
+      depth -= 1
+      if (depth === 0) return css.slice(from, i + 1)
+    }
+  }
+  return null
+}
+
+/** 从 CSS 文本里抽出一个 `@keyframes` 块（含嵌套花括号） */
+export function keyframeBlock(css: string, name: string): string | null {
+  const at = css.indexOf(`@keyframes ${name}`)
+  if (at < 0) return null
+  return cssBlockAt(css, at)
+}
+
+/** 扫一段 CSS：所有 `@keyframes` 块里出现的属性都必须能参与动画（transform/opacity） */
+export function keyframesProblems(css: string): string[] {
+  const bad: string[] = []
+  const names = [...css.matchAll(/@keyframes\s+([A-Za-z0-9_-]+)/g)].map((m) => m[1])
+  for (const name of names) {
+    const block = keyframeBlock(css, name)
+    if (block === null) continue
+    const body = block.slice(block.indexOf('{') + 1)
+    for (const decl of body.matchAll(/([a-z-]+)\s*:/g)) {
+      const prop = decl[1]
+      // 关键帧里的自定义属性/变量赋值不算动画属性
+      if (prop.startsWith('--')) continue
+      for (const p of animationPropertyProblems(prop)) bad.push(`@keyframes ${name}：${p}`)
+    }
+  }
+  return bad
+}
+
+/** 动效纪律的 CSS 判据（唯一实现）：关闭态 display:none + 后台暂停 + reduced-motion 覆盖 */
+export function motionCssProblems(css: string): string[] {
+  // ⚠ 统一在"剥注释 + 去空白"的版本上判：注释里会写反例说明；
+  //   而且 `@media (…)` 与 `@media(…)` 两种写法只差一个空格（实测踩到：漏空格 ⇒ 块扫描一个都匹配不上）。
+  const flat = css.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\s+/g, '')
+  const bad: string[] = [...keyframesProblems(css.replace(/\/\*[\s\S]*?\*\//g, ''))]
+  if (!/\.tw-glass\[data-open=false\]\{[^}]*display:none/.test(flat)) {
+    bad.push('玻璃浮层的关闭态必须是 display:none（不许留一个透明的层占图层/吃点击）')
+  }
+  if (!/\[data-idle=true\][^{]*\{[^}]*animation-play-state:paused/.test(flat)) {
+    bad.push('页面切后台必须能暂停动画（[data-idle=true] ⇒ animation-play-state:paused）')
+  }
+  if (!/@media\(prefers-reduced-motion:reduce\)/.test(flat)) {
+    bad.push('必须有 @media (prefers-reduced-motion: reduce) 降级')
+  }
+  // 降级必须**覆盖到动效载体本身**：只写别的组件的 reduce 规则，新增动画照样会动（实测踩到）
+  const starts = [...flat.matchAll(/@media\(prefers-reduced-motion:reduce\)\{/g)].map((m) => m.index ?? 0)
+  const covered = starts.some((at) => {
+    const block = cssBlockAt(flat, at) ?? ''
+    return block.includes('.tw-glass') || block.includes('*{') || block.includes('*::before') || block.includes('*::after')
+  })
+  if (starts.length > 0 && !covered) {
+    bad.push('reduced-motion 降级必须覆盖动效载体（.tw-glass 或通配符），只写别的组件不算')
+  }
   return bad
 }

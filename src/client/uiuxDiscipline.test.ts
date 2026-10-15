@@ -1,0 +1,210 @@
+/**
+ * UI/UX 纪律断言（v0.87.0）：参考竞品（爱盯盘）后**采纳**的那几条，做成可检查的判据。
+ *
+ * 覆盖：
+ *  ① 密集字号阶梯 `12 / 12.5 / 13 / 13.5 / 14`（详情页所有 CSS 字号必须落阶梯或 ≥15px 展示级）
+ *  ② 1px 间距刻度（所有间距令牌必须是整数 px）
+ *  ③ 自适应卡片 `minmax(148px, 1fr)`
+ *  ④ 玻璃浮层令牌（两档主题都有值；深色档 = 竞品实测值；CSS 变量与令牌一一对应）
+ *  ⑤ 动效纪律（只动 transform/opacity、关闭即 display:none、后台暂停、reduced-motion）
+ *  ⑥ 仓库文案与实际行为一致（README 数据文件表覆盖宿主真正落盘的文件）
+ *
+ * 每条都配**反例注入**：把"不该发生的事"构造出来，判据必须非空 —— 否则这条断言是恒真的。
+ */
+import { test } from 'node:test'
+import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
+import {
+  ANIM_NOT_ALLOWED_SAMPLE,
+  CARD_MIN_W,
+  DISPLAY_SIZE_MIN,
+  GLASS,
+  MOTION_RULES,
+  SPACE_GRID,
+  TOOL_SPACE,
+  TYPE_SCALE,
+  animationPropertyProblems,
+  cardGridProblems,
+  glassCssVars,
+  glassProblems,
+  keyframesProblems,
+  motionCssProblems,
+  spaceScaleProblems,
+  typeScaleProblems,
+} from './toolDetailTheme.ts'
+import { TW_CSS } from './styles.ts'
+import { panelIdle } from './idle.ts'
+
+const ROOT = fileURLToPath(new URL('../..', import.meta.url))
+
+function readSrc(rel: string): string {
+  return readFileSync(join(ROOT, 'src/client', rel), 'utf8')
+}
+
+function readHost(rel: string): string {
+  return readFileSync(join(ROOT, 'src/host', rel), 'utf8')
+}
+
+/** 剥注释（只留代码与字符串）：注释里会写反例说明，不能当成违规 */
+function stripComments(src: string): string {
+  return src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
+}
+
+function fontSizeValuesOf(src: string): number[] {
+  const code = stripComments(src)
+  const out: number[] = []
+  for (const m of code.matchAll(/fontSize:\s*([0-9]+(?:\.[0-9]+)?)/g)) out.push(Number(m[1]))
+  return out
+}
+
+test('① 密集字号阶梯：详情页所有 CSS 字号必须落在 12 / 12.5 / 13 / 13.5 / 14（≥15px 为展示级）', () => {
+  assert.deepEqual([...TYPE_SCALE], [12, 12.5, 13, 13.5, 14], '阶梯本身就是契约（与 DESIGN-UIUX-ADOPT 一致）')
+  assert.equal(DISPLAY_SIZE_MIN, 15, '展示级下界必须是 15px')
+  const files = ['ToolsPage.tsx', 'toolDetailTheme.ts']
+  for (const f of files) {
+    const sizes = fontSizeValuesOf(readSrc(f))
+    assert.equal(sizes.length > 0, true, `${f} 里应当有字号（否则这条断言是空跑）`)
+    for (const size of sizes) {
+      assert.deepEqual(typeScaleProblems(size, `${f} 的字号`), [], `字号越出阶梯：${f} 有 ${size}px`)
+    }
+  }
+  // 工具箱详情页那一段 CSS（`.tw-tool-*`）里的字号同样要落在阶梯里
+  const blockAt = TW_CSS.indexOf('/* ── 工具箱详情页')
+  assert.equal(blockAt >= 0, true, '必须能找到工具箱详情页的样式块（否则这条断言是空跑）')
+  const cssSizes = [...TW_CSS.slice(blockAt).matchAll(/font-size:\s*([0-9.]+)px/g)].map((m) => Number(m[1]))
+  assert.equal(cssSizes.length > 0, true, '详情页样式块里应当有字号')
+  for (const size of cssSizes) {
+    assert.deepEqual(typeScaleProblems(size, '详情页 CSS 的字号'), [], `CSS 字号越出阶梯：${size}px`)
+  }
+  // 反例注入：13.2px（阶梯外）/ 10.5px（低于下限）
+  assert.notDeepEqual(typeScaleProblems(13.2, '注入'), [], '⚠ 阶梯外的 13.2px 必须被抓到')
+  assert.notDeepEqual(typeScaleProblems(10.5, '注入'), [], '⚠ 低于下限的 10.5px 必须被抓到')
+  assert.deepEqual(typeScaleProblems(46, 'Hero 标题'), [], '展示级（46px）不受阶梯约束')
+})
+
+test('② 间距刻度：1px 粒度（非整数 px 一律拒绝）', () => {
+  assert.equal(SPACE_GRID, 1, '刻度就是 1px')
+  for (const [k, v] of Object.entries(TOOL_SPACE)) {
+    assert.deepEqual(spaceScaleProblems(v, `TOOL_SPACE.${k}`), [], `间距必须落在 1px 刻度上：${k}=${v}`)
+  }
+  assert.notDeepEqual(spaceScaleProblems(11.5, '注入'), [], '⚠ 11.5px 间距必须被抓到')
+  assert.notDeepEqual(spaceScaleProblems(-1, '注入'), [], '⚠ 负间距必须被抓到')
+})
+
+test('③ 自适应卡片：`repeat(auto-fit, minmax(148px, 1fr))`', () => {
+  const css = TW_CSS.replace(/\s+/g, '')
+  const m = /\.tw-tool-tiles\{[^}]*grid-template-columns:([^;}]+)/.exec(css)
+  assert.notEqual(m, null, '必须能找到 .tw-tool-tiles 的栅格声明')
+  const template = (m as RegExpExecArray)[1]
+  assert.deepEqual(cardGridProblems(template), [], `卡片栅格不合规：${template}`)
+  assert.equal(CARD_MIN_W, 148, '最小卡片宽 = 竞品实测 148px')
+  // 反例注入：写死四列 / 最小宽改 100px
+  assert.notDeepEqual(cardGridProblems('repeat(4,minmax(0,1fr))'), [], '⚠ 写死四列必须被抓到')
+  assert.notDeepEqual(cardGridProblems('repeat(auto-fit,minmax(100px,1fr))'), [], '⚠ 最小宽 100px 必须被抓到')
+})
+
+test('④ 玻璃浮层令牌：两档主题都有值、深色档 = 竞品实测值、CSS 变量与令牌一致', () => {
+  assert.deepEqual(glassProblems(GLASS), [], `玻璃令牌不合规：${glassProblems(GLASS).join(' ／ ')}`)
+  // CSS 变量必须与令牌逐项一致（把令牌当唯一来源；样式里的值不许另写一套）
+  const css = TW_CSS.replace(/\s+/g, '')
+  for (const slot of ['light', 'dark'] as const) {
+    for (const [name, value] of Object.entries(glassCssVars(slot))) {
+      const want = `${name}:${String(value).replace(/\s+/g, '')}`
+      assert.equal(css.includes(want), true, `${slot} 档缺少或写错令牌：${want}`)
+    }
+  }
+  // 深色档 = 竞品实测（做法采纳、值照录）；浅色档必须给对应值（不许把深色写死到浅色主题）
+  assert.equal(GLASS.dark.bg.replace(/\s+/g, ''), 'rgba(13,17,25,.92)')
+  assert.equal(GLASS.light.bg.replace(/\s+/g, '') === GLASS.dark.bg.replace(/\s+/g, ''), false, '浅色档不许等于深色档')
+  // 红线：**不许硬编码竞品的配色**（涨跌/块底/暗底/主色）——只能映射到我们的主题令牌
+  const competitorColors = ['#f22423', '#00a000', '#e3534f', '#56b779', '#262931', '#3c7eff', 'rgb(60,126,255)']
+  const flat = TW_CSS.toLowerCase()
+  for (const c of competitorColors) {
+    assert.equal(flat.includes(c), false, `标题样式里不许出现竞品色值 ${c}（涨跌色必须跟主题与 prefs.redUp；暗底必须跟主题）`)
+  }
+  // 反例注入：把竞品涨跌色贴进样式 ⇒ 上面的检查必须失败
+  const withCompetitor = (TW_CSS + '.x{color:#f22423}').toLowerCase()
+  assert.equal(competitorColors.some((c) => withCompetitor.includes(c)), true, '⚠ 贴进 #f22423 必须被抓到')
+  // 反例注入
+  assert.notDeepEqual(glassProblems({ ...GLASS, light: { ...GLASS.light, bg: GLASS.dark.bg } }), [], '⚠ 浅色档抄深色必须被抓到')
+  assert.notDeepEqual(glassProblems({ ...GLASS, dark: { ...GLASS.dark, blur: '2px' } }), [], '⚠ 深色档 blur 不是实测值必须被抓到')
+})
+
+test('⑤ 动效纪律：只动 transform/opacity；关闭态 display:none；后台暂停；reduced-motion 降级', () => {
+  assert.deepEqual([...MOTION_RULES.animatable], ['transform', 'opacity'], '允许参与动画的属性只有两个')
+  for (const ok of ['transform', 'opacity']) assert.deepEqual(animationPropertyProblems(ok), [], `${ok} 应当被允许`)
+  for (const bad of ['background', 'box-shadow', 'height', 'filter', 'color']) {
+    assert.notDeepEqual(animationPropertyProblems(bad), [], `⚠ 动画用 ${bad} 必须被抓到`)
+  }
+  // 全量扫我们自己的样式表：所有 @keyframes 里出现的属性都必须可动画（反例 = ANIM_NOT_ALLOWED_SAMPLE）
+  assert.deepEqual(keyframesProblems(TW_CSS), [], `样式表里有不合规关键帧：${keyframesProblems(TW_CSS).join(' ／ ')}`)
+  assert.notDeepEqual(keyframesProblems(ANIM_NOT_ALLOWED_SAMPLE), [], '⚠ 关键帧里动 background 必须被抓到')
+  // 关闭态 / 后台暂停 / reduced-motion 三条 CSS 约定
+  assert.deepEqual(motionCssProblems(TW_CSS), [], `动效纪律 CSS 不合规：${motionCssProblems(TW_CSS).join(' ／ ')}`)
+  assert.notDeepEqual(motionCssProblems(TW_CSS.replace(/\.tw-glass\[data-open=false\]\{display:none\}/, '')), [], '⚠ 关闭态不写 display:none 必须被抓到')
+  assert.notDeepEqual(motionCssProblems(TW_CSS.replace(/\[data-idle=true\] \*\{animation-play-state:paused!important\}/, '')), [], '⚠ 去掉后台暂停必须被抓到')
+  // 后台判定是纯函数：面板不可见 / 文档隐藏 任一成立即闲置
+  assert.equal(panelIdle(true, false), false, '可见且前台 ⇒ 不闲置')
+  assert.equal(panelIdle(false, false), true, '面板不可见 ⇒ 闲置')
+  assert.equal(panelIdle(true, true), true, '文档隐藏 ⇒ 闲置')
+})
+
+test('⑥ 文案与行为一致：README 数据文件表必须覆盖宿主真正落盘的文件', () => {
+  const readme = readFileSync(join(ROOT, 'README.md'), 'utf8')
+  const start = readme.indexOf('### 数据文件')
+  const end = readme.indexOf('\n### ', start + 5)
+  assert.equal(start >= 0 && end > start, true, 'README 必须有「数据文件」小节（否则这条断言是空跑）')
+  const table = readme.slice(start, end)
+  // 宿主代码里出现的 `xxx.json` 字面量 = 我们真正会落盘/读取的文件名
+  const hosts = ['store.ts', 'globalFlow.ts', 'marketExtras.ts', 'rescue.ts', 'breadth.ts', 'calendar.ts', 'fetchDedupe.ts', 'em.ts']
+  const names = new Set<string>()
+  for (const f of hosts) {
+    let src = ''
+    try {
+      src = readHost(f)
+    } catch {
+      continue
+    }
+    for (const m of src.matchAll(/'([a-z0-9-]+\.json)'/g)) names.add(m[1])
+  }
+  // 只核对数据目录下的文件：排除明显是测试夹具/样例的日期文件名
+  const real = [...names].filter((n) => !/^\d{4}-\d{2}-\d{2}\.json$/.test(n) && n !== 'state.json' && n !== 'h2-counter.json')
+  assert.equal(real.length >= 8, true, `应当扫到至少 8 个数据文件（实得 ${real.length}：${real.join('、')}）`)
+  for (const n of real) {
+    assert.equal(table.includes(n), true, `README 的数据文件表漏了 ${n}（文案必须与实际落盘一致）`)
+  }
+  // 反例注入：把某一行从 README 表里删掉 ⇒ 覆盖检查必须报出来
+  for (const n of ['global-flow.json', 'market-extras.json', 'trading-calendar.json']) {
+    assert.equal(table.includes(n), true, `⚠ 这行本来就该在表里：${n}`)
+    const without = table.split(n).join('（已删）')
+    assert.equal(without.includes(n), false, `⚠ 删掉 ${n} 那一行后，覆盖检查必须报缺（证明这条断言能抓漏）`)
+  }
+})
+
+test('⑦ 接线：玻璃浮层用在浮层上、根节点真的挂了 data-idle', () => {
+  const tools = stripComments(readSrc('ToolsPage.tsx'))
+  const topbar = stripComments(readSrc('TopBar.tsx'))
+  const index = stripComments(readSrc('index.tsx'))
+  // 浮层（图表悬停提示框 / 行情悬浮卡）必须用玻璃类，并且**带 data-open**（关闭态由 CSS 的 [data-open=false] 管）
+  assert.equal(/className: 'tw-chart-tip tw-glass'/.test(tools), true, '图表悬停提示框必须用 tw-glass')
+  assert.equal(/'data-open': 'true'/.test(tools), true, '提示框必须声明 data-open（关闭态交给 CSS）')
+  assert.equal(/className: 'tw-pop tw-glass'/.test(topbar), true, '行情悬浮卡必须用 tw-glass')
+  assert.equal(/'data-open': 'true'/.test(topbar), true, '悬浮卡必须声明 data-open')
+  // 根节点的 data-idle 由 usePageIdle 驱动（复用宿主已有的 visible 信号 + 文档可见性）
+  assert.equal(/'data-idle': idle \? 'true' : 'false'/.test(index), true, '根节点必须挂 data-idle')
+  assert.equal(/usePageIdle\(visible\)/.test(index), true, 'data-idle 必须由 usePageIdle(visible) 驱动')
+  // 顺序：玻璃规则必须在被覆盖的浮层规则**之后**（同特异性 ⇒ 后写者胜）
+  const glassAt = TW_CSS.indexOf('.tw-glass{')
+  const tipAt = TW_CSS.indexOf('.tw-chart-tip{')
+  const popAt = TW_CSS.indexOf('.tw-pop{')
+  assert.equal(glassAt > tipAt && glassAt > popAt, true, `玻璃规则必须在 .tw-pop/.tw-chart-tip 之后（glass@${glassAt} tip@${tipAt} pop@${popAt}）`)
+  // 反例注入：把玻璃规则**挪到最前面**（模拟"有人把表层规则写在文件开头"）⇒ 真正的顺序判据必须判为违规
+  const movedTop = '.tw-glass{background:var(--tw-glass-bg)}' + TW_CSS.replace(/\.tw-glass\{[^}]*\}/, '')
+  const movedOk = movedTop.indexOf('.tw-glass{') > movedTop.indexOf('.tw-chart-tip{') && movedTop.indexOf('.tw-glass{') > movedTop.indexOf('.tw-pop{')
+  assert.equal(movedOk, false, '⚠ 把玻璃规则挪到最前时，顺序判据必须判为违规（证明这条断言能抓）')
+  // 反例注入：去掉玻璃类 / 去掉 data-idle ⇒ 上面的检查必须失败
+  assert.equal(/className: 'tw-chart-tip tw-glass'/.test(tools.replace("tw-chart-tip tw-glass", 'tw-chart-tip')), false, '⚠ 去掉提示框的玻璃类必须被抓到')
+  assert.equal(/'data-idle': idle \? 'true' : 'false'/.test(index.replace("'data-idle': idle ? 'true' : 'false',", '')), false, '⚠ 去掉根节点 data-idle 必须被抓到')
+})

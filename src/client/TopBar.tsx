@@ -113,7 +113,8 @@ function HoverCard(props: {
     'div',
     {
       ref: popRef,
-      className: 'tw-pop',
+      className: 'tw-pop tw-glass',
+      'data-open': 'true',
       style: { left: 0, top: 0, visibility: 'hidden' },
       title: '点击查看详情（可切分时/五日/日K/周K/月K/年K）',
       role: 'button',

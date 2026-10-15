@@ -11,6 +11,64 @@
 
 ---
 
+## v0.87.0 — 参考竞品 UI/UX 纪律与令牌：采纳 5 / 改造 3 / 拒绝 4；修一处文案与实现不一致
+
+依据 `docs/RECON-52ETF.md`（只读侦察）与 `docs/DESIGN-UIUX-ADOPT.md`（采纳矩阵）。`npm run check` **646 / 646 × 2 时区** + build（73 片段全过）；`build.mjs` 零改动；**新增主题令牌仅 5 个**（4 玻璃 + 1 缓动），两档均有值。
+
+### 采纳 5
+
+1. **玻璃浮层做法**（半透明 + 背景模糊 + 饱和度）。
+2. **动效四条纪律**：只动 `transform`/`opacity`；关闭即 `display:none`；切后台暂停；尊重 `prefers-reduced-motion`。
+3. **1px 间距粒度**。
+4. **自适应卡片** `minmax(148px,1fr)`。
+5. **密集字号阶梯** `12 / 12.5 / 13 / 13.5 / 14`。
+
+### 改造采纳 3
+
+1. **字号阶梯收敛**：详情页 17 处 10.5/11/11.5px 全部抬到 ≥12px；并划出「≥15px = 展示级，不受阶梯约束」的边界。
+2. **玻璃令牌重命名 + 主题双档 + 单一来源**：`toolDetailTheme.GLASS` 是唯一来源，CSS 变量必须与它逐项一致。
+3. **多形态只采纳约定**（「同一份数据、不新增取数路径」），形态本身不做（见未做）。
+
+### 拒绝 4（含两条要点）
+
+1. **不接它的数据源**：东财 `robots.txt = Disallow: /` 是明确信号。
+2. **不硬编码它的涨跌色/暗底/主色**：涨跌色必须跟随主题与 `prefs.redUp`；样式表出现 `#f22423`/`#00a000`/`#e3534f`/`#56b779`/`#262931`/`#3c7eff` 任一 ⇒ 测试红（注入实测红）。
+3. 不抄它的窗口体系（需浏览器扩展能力，宿主没有这些权限）。
+4. 不引 ECharts / D3（零新增依赖红线）。
+
+### 令牌映射（我们的令牌 ← 竞品事实值）
+
+| 令牌 | 竞品事实 | 深色档 | 浅色档 |
+| --- | --- | --- | --- |
+| `--tw-glass-bg` | `rgba(13,17,25,.92)` | 照录 | `rgba(255,255,255,.86)`（自定；浅色档抄深色 ⇒ 断言红） |
+| `--tw-glass-blur` | `20px` | `20px` | `20px` |
+| `--tw-glass-saturate` | `1.5` | `1.5` | `1.4` |
+| `--tw-glass-border` | `rgba(255,255,255,.09)` | 照录 | `rgba(15,23,42,.08)` |
+| `--tw-ease` | `cubic-bezier(.16,1,.3,1)` | 照录 | 照录 |
+
+玻璃只用在**浮层**（图表悬停提示框、行情悬浮卡，均带 `data-open`）；规则放样式表末尾（同特异性靠后写者胜，有顺序断言）。
+
+### 动效纪律落地
+
+`@keyframes tw-breathe` 从动 `background`（每帧 paint）改为 `opacity .3→1`；`.tw-glass[data-open=false]{display:none}`；根节点 `data-idle`（复用宿主 `visible` + `document.visibilitychange`，纯函数三态可测）⇒ `[data-idle=true] * { animation-play-state: paused }`；`.tw-glass` 有专属 reduced-motion 块。**取数行为未动**。
+
+### 合规自查（竞品反面教材）
+
+竞品隐私说明与实际清单**不一致**（说明称仅 `activeTab`、不用本地存储、不要账号；实际要 6 个权限、11 个域名、泛域名脚本，且有账号体系与本地令牌）。
+我们对 9 条「README 文案 ↔ 代码行为」逐项核对，**发现并修掉 1 处不一致**：README 的「数据文件」表漏了 3 个真实落盘文件（`trading-calendar.json` / `global-flow.json` / `market-extras.json`）⇒ 补齐，并加**可持续断言**：宿主代码里每个 `*.json` 文件名必须出现在 README 表里（删行 ⇒ 测试红，已注入验证）。其余 8 条一致。
+
+### 验证
+
+`npm run check` **646 / 646 × 2 时区** + selftest + build。
+新增 `src/client/uiuxDiscipline.test.ts` 7 条（字号阶梯 / 间距刻度 / 自适应栅格 / 玻璃令牌 + 竞品色禁令 / 动效纪律 / 文案一致 / 接线），**文件级注入 16/16 全部被抓住**（真改源码 → 跑真测试 → 立即还原 + sha256 一致）。失败断言原文示例：`字号越出阶梯：ToolsPage.tsx 有 13.2px`、`TOOL_SPACE.sectionGap 必须落在 1px 刻度上`、`light 档缺少或写错令牌`、`@keyframes tw-breathe：动画只允许 transform / opacity（实得「background」）`、`玻璃浮层的关闭态必须是 display:none`、`页面切后台必须能暂停动画`、`README 的数据文件表漏了 global-flow.json`。
+
+### 未做（已记录）
+
+- **迷你窗 / 网页内玻璃浮窗形态不做**：需先确认宿主是否允许第二实例或浮层挂载点、状态同步走主机半区且不新增取数路径、整页开关归属；方案已写进 `DESIGN-UIUX-ADOPT.md` §4-1。
+- 竞品两套主题色板只用做法不用值（我们的主题已更完整）。
+- 玻璃观感的**像素级确认需用户看图**（浅色档 86% 透底是否够实）。
+- 字号阶梯本轮只收敛**详情页**；插件其余界面仍混用 9–11.5px（全站收敛影响面大，建议另开一批）。
+
 ## v0.86.0 — 护盘信号优化：删恒 0/不可用因子、删死等级、加交易时段闸门、连续评分
 
 依据 `docs/DESIGN-RESCUE-VALIDITY.md`（效度复核）与 `docs/DESIGN-RESCUE-OPTIMIZE.md`（9 条来源）；落地记录 `docs/AUDIT-IMPL54.md`。`npm run check` **639 / 639 × 2 时区** + selftest + build（73 片段全过）；`build.mjs` 零改动。
