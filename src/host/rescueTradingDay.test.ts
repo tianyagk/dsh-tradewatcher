@@ -107,19 +107,19 @@ test('⑤ 回归：交易日已收盘仍走「定稿」语义（不是休市）'
 // ───────────────────────── 早盘等级线 ─────────────────────────
 
 test('③ 等级线随时点系数缩放：同一输入在早盘更保守、尾盘更敏感（且 09:35 与 14:00 判定不同）', async () => {
-  const { levelLines, RESCUE_LEVEL_BASE } = await import('./rescue.ts')
+  const { levelLines, RESCUE_LEVEL_BASE, RESCUE_WEIGHT_SUM } = await import('./rescue.ts')
   const early = levelLines(0.4) // 09:35
   const late = levelLines(1.1) // 14:00
-  assert.deepEqual(RESCUE_LEVEL_BASE, [35, 55, 75])
+  assert.deepEqual([...RESCUE_LEVEL_BASE], [35, 55], '等级线基准 = 历史值 35/55（**不乘权重合计**，v0.15.0 决策 ②）')
+  assert.equal(RESCUE_WEIGHT_SUM, 0.717, '权重合计仍是 0.717（四项、不归一）—— 但线**不**随之缩放')
   assert.ok(early.t1 > late.t1, '早盘的线更高（更保守）')
   assert.ok(early.t2 > late.t2)
-  assert.ok(early.t3 > late.t3)
-  assert.equal(early.t1, 87.5)
+  assert.equal(Number(early.t1.toFixed(4)), Number((35 / 0.4).toFixed(4)))
   assert.equal(Number(late.t1.toFixed(4)), Number((35 / 1.1).toFixed(4)))
-  // 早盘的「疑似」线 > 100 ⇒ 满分也不可能上疑似（这正是"早盘不过早触发"的硬保证）
-  assert.ok(early.t2 > 100, `早盘疑似线必须 > 100（实际 ${early.t2}）`)
-  assert.ok(early.t3 > 100)
-  // 反证：尾盘的线必须**低于**基准（同一份数据在午后更容易出等级 —— 缩放是单向的）
+  // 早盘的「疑似」线 > 四项权重上限（71.7）⇒ 满分也不可能上疑似（这正是"早盘不过早触发"的硬保证）
+  const cap = RESCUE_WEIGHT_SUM * 100
+  assert.ok(early.t2 > cap, `早盘疑似线必须 > 权重上限 ${cap.toFixed(1)}（实际 ${early.t2.toFixed(2)}）`)
+  // 反证：尾盘的线必须**低于**基准线（同一份数据在午后更容易出等级 —— 缩放是单向的）
   assert.ok(late.t2 < RESCUE_LEVEL_BASE[1])
 })
 
@@ -135,6 +135,7 @@ test('③ 同一份早盘数据：改前（不缩放）会出等级、改后（�
   const early = scoreRescue(input as never)
   assert.ok(early.rawScore > 35, `前置：原始分要够高（实际 ${early.rawScore}）`)
   assert.equal(early.level, 0, `早盘（系数 0.4）不出等级：线 ${JSON.stringify(early.levelLines)}，原始分 ${early.rawScore}`)
+  // 早盘的线（0.717 缩放后）也必须真的挡住它
   // 同一份数据在尾盘（系数 1.1）必须出等级 ⇒ "09:35 与 14:00 判定不同"
   const late = scoreRescue({ ...input, timeCoef: 1.1 } as never)
   assert.ok(late.level >= 1, `同一输入在尾盘必须出等级（实际 ${late.level}）`)

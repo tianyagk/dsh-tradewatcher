@@ -1414,21 +1414,28 @@ export const RESCUE_PERIPHERAL_FLOW_DISCOUNT = 0.7
 /** 核心通道大额净流出阈值（超大单净额 ÷ 成交额）→ 封顶为「资金异动」 */
 export const RESCUE_CORE_OUTFLOW_VETO = -0.15
 
-/** 0 平静 · 1 资金异动 · 2 疑似护盘 · 3 强护盘信号 */
+/**
+ * 0 平静 · 1 资金异动 · 2 疑似护盘。
+ *
+ * ⚠ **3（强护盘信号）已从等级集删除**（v0.15.0，见 `docs/AUDIT-IMPL54.md`）：
+ * 剔除「超大单强度」因子后四项权重上限 = 71.7 < 它的历史判定线 75 ⇒ **数学上不可达**，
+ * 且效度复核判定它无可证明的区分度。类型仍保留 0–3（不动共享契约的形状），但**没有任何路径会产生 3**；
+ * 粒度由连续评分（0–100）+ 近 20 日分位承载。结构性断言见 `src/host/rescueWeights.test.ts` ③。
+ */
 export type RescueLevel = 0 | 1 | 2 | 3
 
 export const RESCUE_LEVEL_LABEL: Record<RescueLevel, string> = {
   0: '平静',
   1: '资金异动',
   2: '疑似护盘',
-  3: '强护盘信号',
+  3: '强护盘（已删除，不再出现）',
 }
 
 export const RESCUE_LEVEL_DESC: Record<RescueLevel, string> = {
   0: '宽基 ETF 量能与资金流均在常态区间',
   1: '出现放量或超大单流入，但尚不构成护盘特征',
   2: '量能放大 + 超大单净流入 + 指数承压，具备护盘特征',
-  3: '多通道共振的天量买入，符合历史上国家队护盘的行为模式',
+  3: '该等级已删除：它的判定线高于四项权重的可达上限（不可达），且无可证明的区分度',
 }
 
 /** 阈值来源：calibrated = 历史分位数标定；self = 自建样本分位；empirical = 经验值 */

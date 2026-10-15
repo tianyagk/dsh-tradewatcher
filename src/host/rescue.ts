@@ -25,14 +25,45 @@ const QUOTE_HOSTS = EM_QUOTE_HOSTS
 const KLINE_HOSTS = EM_HISTORY_HOSTS
 
 /**因子权重（合计 1.00） */
+/**
+ * 因子权重（**合计必须恰好 = 1**，有断言守着）。
+ *
+ * v0.80.0 变更：删除「全池共振」因子 —— 实测 302/302 个历史样本的因子分恒为 0
+ * （`rescue-log.json` 的 `scoreLog`），即它从未对任何一次评分产生过贡献；
+ * 剩下五项按各 /0.92 重新归一（0.239+0.283+0.196+0.130+0.152 = 1.000）。
+ * 「共振」本身没被删：它仍是**展示用**的通道命中信息（`snapshot.resonance`），只是不再进评分。
+ */
 export const RESCUE_WEIGHTS = {
-  volume: 0.22,
-  superflow: 0.26,
-  pulse: 0.18,
-  persistence: 0.12,
-  divergence: 0.14,
-  resonance: 0.08,
+  volume: 0.239,
+  pulse: 0.196,
+  persistence: 0.13,
+  divergence: 0.152,
 } as const
+
+/**
+ * 权重合计 —— **刻意不归一**（`AUDIT-IMPL54` 批 A′+B）。
+ *
+ * F2「超大单强度」已被剔除（宽基 ETF 的分单数据太稀疏：305 个历史样本里该因子分的 p90 = 1、
+ * max = 15，原始输入 p90 = 0.01×20 日均额 ⇒ 它几乎恒为 0，只占权重不参与判断）。
+ * 剔除后**保留其余四项的原始权重**，因此合计 = **0.717**（不是 1.000）。
+ *
+ * 为什么不归一：归一（或等价地"把等级线也乘 0.717"）会把剩余四项的贡献放大 1/0.717 ≈ 1.40 倍
+ * ⇒ 实测回放里 8 天有 5 天等级 +1、凭空多出 3 个「强护盘」（`AUDIT-IMPL54` §批 A′+B 回放给出同一结论）。
+ * 判定变量是**绝对 raw**（Σ w·f），等级线保持历史值 35/55/75 —— 因为 F2 历史上几乎恒为 0，
+ * `raw_new ≈ raw_old`，于是判据**逐样本不变**（差异只剩 F2 偶尔贡献的 0–4 分，方向只可能"更保守"）。
+ */
+export const RESCUE_WEIGHT_SUM = Number(Object.values(RESCUE_WEIGHTS).reduce((a, b) => a + b, 0).toFixed(3))
+
+/**
+ * **声明给用户的等级集**（唯一来源）：0 平静 / 1 资金异动 / 2 疑似护盘。
+ *
+ * ⚠ **3（强护盘）已从等级集删除**（v0.15.0，Lead 决策）：
+ *   · 剔除 F2 后四项权重上限 = `0.717 × 100 = 71.7`，而历史 L3 线是 **75** ⇒ 它**数学上不可达**；
+ *   · 效度复核（`docs/DESIGN-RESCUE-VALIDITY.md`）判定它**无可证明的区分度**（23 天日志 0 次触发）；
+ *   · 靠"把线降下来"迁就它等于人为降低门槛（伪信号），所以选择**删等级**、把粒度交给连续评分。
+ *   · 结构性断言：`RESCUE_LEVEL_BASE` 的每个线都必须 ≤ 可达上限（见 `rescueWeights.test.ts` ③）。
+ */
+export const RESCUE_LEVELS: readonly RescueLevel[] = [0, 1, 2]
 
 /**兜底脉冲锚点（标定数据缺失时才用；正常走 RESCUE_CALIBRATION.pulseBands） */
 export const PULSE_ANCHORS: [number, number, number] = [1.5, 2.5, 4]
@@ -91,7 +122,13 @@ export const SELF_SAMPLE_MIN_DAYS = 20
 const KEEP_DAYS = 60
 const SAMPLE_RING = 40
 /**写入事件记录的引擎版本（用于在面板上识别旧口径历史事件） */
-export const ENGINE_VERSION = '0.13.0'
+/**
+ * 评分引擎版本。**口径一改就必须升**（出分日志按它区分"当时用的是哪套权重与等级线"）。
+ * v0.14.0：剔除 F2「超大单强度」+ 四项权重不归一（0.717）+ 等级线曾按权重合计缩放（**已废弃**）+ 交易时段闸门
+ * v0.15.0：**等级集降为两级**（平静 / 资金异动 / 疑似护盘，线固定 35/55，**不缩放**）+ 连续评分/分位承载粒度
+ * ⇒ 旧条目按版本解读：0.13.0 = 五项权重 + 线 35/55/75 + 收盘后也出等级；0.14.0 = 剔 F2 但线 ×0.717（曾把等级整体上移 1 档）。
+ */
+export const ENGINE_VERSION = '0.15.0'
 const INDEX_SECID = '1.000300'
 const INDEX_NAME = '沪深300'
 
@@ -200,11 +237,15 @@ interface ScoreLogEntry {
   ts: number
   hhmm: string
   score: number
-  /**未乘时点系数的原始分 */
-  rawScore: number
-  /** 本次生效的等级线（= 基准线 ÷ 时点系数；供界面/报告显示"为什么是这个等级"） */
-  levelLines?: { t1: number; t2: number; t3: number }
-  timeCoef: number
+  /**未乘时点系数的原始分；非交易时段 ⇒ null */
+  rawScore: number | null
+  /** 本次生效的等级线（= 基准线 {35,55} ÷ 时点系数；供界面/报告显示"为什么是这个等级"） */
+  levelLines?: { t1: number; t2: number }
+  timeCoef: number | null
+  /** 连续评分（0–100 = raw ÷ 权重合计 × 100）；非交易时段 ⇒ null */
+  continuous?: number | null
+  /** 是否交易时段（false ⇒ 该样本不出等级、不计入当日最高等级） */
+  inSession?: boolean
   /**评分引擎版本：口径改动后旧条目仍能说明"当时用的是哪套权重" */
   engine: string
   factors: Array<{ id: string; score: number; weight: number; actual: string; threshold: string; hit: boolean }>
@@ -295,16 +336,54 @@ export function resonanceScore(count: number): number {
   return 0
 }
 
-/**等级线基准（平静 < t1 ≤ 资金异动 < t2 ≤ 疑似护盘 < t3 ≤ 强护盘）；**按时点系数缩放后**使用 */
-export const RESCUE_LEVEL_BASE = [35, 55, 75] as const
+/**等级线基准（平静 < t1 ≤ 资金异动 < t2 ≤ 疑似护盘）；**按时点系数缩放后**使用；强护盘已删除（两级） */
+/**
+ * 等级线基准（**历史值，不随权重合计缩放**）：`raw >= 35` ⇒ 资金异动，`raw >= 55` ⇒ 疑似护盘。
+ *
+ * 为什么不缩放（Lead 决策 ②）：剔除 F2 只影响 0.283 的权重，而 F2 历史 p90 = 1 分 ⇒ 等效门槛本来就没变；
+ * 把线乘 0.717 等于把剩下四项放大 1.40× ⇒ 回放实测 8 天有 5 天等级 +1（伪信号）。
+ * 与历史逐日一致（305 样本仅 1 个样本因 F2 偶发 0–4 分不同，见报告）。
+ */
+export const RESCUE_LEVEL_BASE = [35, 55] as const
 
 /**
  * 等级线（按时点系数缩放）。系数越大（越靠近尾盘）线越低 ⇒ 越容易出等级；
  * 系数越小（早盘）线越高 ⇒ 越保守（早盘成交量天然少，不设更严的线会被误读成"有资金托底"）。
  */
-export function levelLines(coef: number): { t1: number; t2: number; t3: number } {
+export function levelLines(coef: number): { t1: number; t2: number } {
   const c = Number.isFinite(coef) && coef > 0 ? coef : 1
-  return { t1: RESCUE_LEVEL_BASE[0] / c, t2: RESCUE_LEVEL_BASE[1] / c, t3: RESCUE_LEVEL_BASE[2] / c }
+  return { t1: RESCUE_LEVEL_BASE[0] / c, t2: RESCUE_LEVEL_BASE[1] / c }
+}
+
+/**
+ * **规则等级**（唯一入口，尚未施加防误报 caps）：`raw` 与缩放后的等级线比较。
+ *
+ * 抽成纯函数的理由：①断言与历史口径可以直接对拍（`rescueWeights.test.ts` 的等效性用例）；
+ * ②回放/注入只需要这一个判据，不会出现"两处各写一遍比较逻辑"。
+ */
+export function ruleLevel(raw: number, coef: number): RescueLevel {
+  const l = levelLines(coef)
+  return raw >= l.t2 ? 2 : raw >= l.t1 ? 1 : 0
+}
+
+/** 交易时段（09:30–11:30、13:00–15:00）：**采样闸门**的唯一判据（与 `sessionElapsed` 同源口径） */
+export function inTradingSession(hhmm: string): boolean {
+  const m = /^(\d{1,2}):(\d{2})$/.exec(hhmm.trim())
+  if (m === null) return false
+  const mins = Number(m[1]) * 60 + Number(m[2])
+  return (mins >= 570 && mins <= 690) || (mins >= 780 && mins <= 900)
+}
+
+/**
+ * 连续评分（0–100，可跨样本比较）：`raw ÷ 权重合计 × 100`。
+ *
+ * 为什么需要它：权重合计不再是 1.000 ⇒ `raw` 的绝对值不可跨口径比较，而"当前偏强还是偏弱"
+ * 需要一个稳定刻度。同时给「近 N 个样本的分位」——样本不足（< 5）时**如实返回 null**，不编。
+ */
+export function scorePercentile(value: number, history: readonly number[], minSamples = 5): { pct: number; n: number } | null {
+  const xs = history.filter((x) => Number.isFinite(x))
+  if (xs.length < minSamples) return null
+  return { pct: (xs.filter((x) => x <= value).length / xs.length) * 100, n: xs.length }
 }
 
 /**时点系数：午后与尾盘是护盘的典型时点，早盘天量多为情绪 */
@@ -337,6 +416,16 @@ export interface RescueFactorInput {
   coreWorstShare?: number | null
   /**分单资金流是否可得（腾讯备用源下为 false） */
   flowAvailable?: boolean
+  /**
+   * 是否在**交易时段**内（09:30–11:30 / 13:00–15:00）。
+   *
+   * `false` ⇒ 本次**不出等级**（`level` 恒 0、`timeCoef`/`rawScore`/`continuous`/`percentile` 全为 null，
+   * 归因写明「非交易时段」），调用方也不得把它写进事件与 5 分钟抽样、不得计入当日最高等级。
+   * 缺省 `true`：纯函数调用方（测试/回放）不受影响。
+   */
+  inSession?: boolean
+  /**近 N 个样本的连续评分（用于分位；样本 < 5 ⇒ 分位为 null）。由调用方从出分日志取 */
+  recentContinuous?: readonly number[]
   /**F2 锚点（可被自建分位数覆盖） */
   f2Anchors: [number, number, number]
   f2Source: RescueThresholdSource
@@ -370,15 +459,29 @@ export interface RescueScoreResult {
    * 界面必须能据此复算：只给总分不给系数时，"这一分是谁加的"永远答不上来。
    */
   timeCoef: number
-  /**Σ 贡献度（= 未乘时点系数的原始分）。与 score 的差全部来自 timeCoef 与四舍五入 */
-  rawScore: number
+  /**Σ 贡献度（= 未乘时点系数的原始分）。与 score 的差全部来自 timeCoef 与四舍五入；非交易时段 ⇒ null */
+  rawScore: number | null
   /**
    * 本次生效的**等级线**（= 基准线 {35,55,75} ÷ timeCoef）。
    *
    * 等级判据只认它（`raw ≥ line`），`score` 仅用于展示 —— 这样"时点调整"只有一处，
    * 不会出现"分数乘一次系数、阈值再乘一次"的双重计算。
    */
-  levelLines: { t1: number; t2: number; t3: number }
+  levelLines: { t1: number; t2: number }
+  /** 本次是否在交易时段内（false ⇒ 上面那些数字全为 null，且不出等级） */
+  inSession: boolean
+  /** 连续评分（0–100）：`raw ÷ 权重合计 × 100`；非交易时段 ⇒ null */
+  continuous: number | null
+  /** 连续评分在近 N 个样本里的分位（0–100）；样本不足 ⇒ null（不编） */
+  percentile: number | null
+  /**
+   * 内部矛盾标记（P6）：**只做展示与归因，不改分数、不改等级**（红线：不得用这类代理指标升级信号）。
+   *
+   * 用途：对"按单笔成交金额分档"这一资金流口径的已知缺陷给出**可检测代理** ——
+   * 量能显著放大却看不到超大单净流入，可能是拆单/算法单（TWAP/VWAP）或纯被动成交，
+   * 不能读作"有资金在托底"。
+   */
+  contradiction: string | null
 }
 
 const fmt = (v: number | null, unit: string, digits = 2): string => (v === null ? '—' : `${v.toFixed(digits)}${unit}`)
@@ -401,25 +504,15 @@ export function scoreRescue(input: RescueFactorInput): RescueScoreResult {
 
   const f1 = interpScore(input.timeAdjMult ?? 0, [RESCUE_CALIBRATION.f1.mid, RESCUE_CALIBRATION.f1.high, RESCUE_CALIBRATION.f1.extreme])
 
-  // F2：核心通道优先，且核心必须"真正参与"才不带折扣 ——
-  // 判据是核心净流入达到第一档锚点（f2Anchors[0]），而不是"大于 0"：
-  // 此前只要核心为正（哪怕 0.05x，几乎等于没买）就取 Math.max(core, peri)，
-  // 外围强度按原值计入，而标注却写「已折算」——文本与数值不一致
-  // （实测核心 0.05x + 外围 0.5x 被判 63 分，真按 0.7 折算应为 51）。
+  // F2「超大单强度」**已剔除**（AUDIT-IMPL54 批 A′+B）：宽基 ETF 的分单数据太稀疏 ——
+  // 305 个历史样本里该因子分 p90 = 1 / max = 15，原始输入 p90 = 0.01×20 日均额 ⇒ 恒 0，只占权重。
+  // 剔除后**保留原权重不归一**（合计 0.717），等级线保持历史值 35/55/75 ⇒ 判据逐样本等效。
+  // 这里只保留"符号事实"读数（核心优先、否则外围）：它仍被 L3 前置与内部矛盾标记使用，
+  // 但**不再参与打分**（也不做 0.7 折算 —— 那是 F2 的算法，已随因子一起删除）。
   const core = input.coreSuperVsAvg ?? null
   const peri = input.peripheralSuperVsAvg ?? null
-  const coreMeaningful = core !== null && core >= input.f2Anchors[0]
-  const f2Value = coreMeaningful
-    ? (peri !== null ? Math.max(core, peri) : core)
-    : peri !== null
-      ? Math.max(core ?? 0, peri * PERIPHERAL_FLOW_DISCOUNT)
-      : (core ?? 0)
-  const f2Basis = coreMeaningful
-    ? (peri !== null && peri > core ? '外围主导（核心已参与）' : '核心通道')
-    : peri !== null
-      ? '外围通道（核心未达参与档，外围打 0.7 折）'
-      : '核心通道（未达参与档）'
-  const f2 = interpScore(f2Value, input.f2Anchors)
+  /** 超大单读数（核心优先、否则外围）：> 0 表示"看得到净流入" */
+  const flowSign = core !== null ? core : peri
 
   // F3：脉冲。盘中打折，尾盘满分；命中线为该时段 P90
   const rawPulse = interpScore(input.pulseMult ?? 0, pulseAnchors)
@@ -431,9 +524,6 @@ export function scoreRescue(input: RescueFactorInput): RescueScoreResult {
   if (f4 > 0 && retrace !== null && retrace > 0.5) f4 = Math.round(f4 * 0.6)
 
   const f5 = divergenceScore(input.indexPct)
-  const f6 = resonanceScore(input.resonance)
-  const coreRes = input.coreResonance ?? 0
-  const periRes = input.peripheralResonance ?? 0
 
   const factors: RescueFactor[] = [
     {
@@ -441,12 +531,6 @@ export function scoreRescue(input: RescueFactorInput): RescueScoreResult {
       actual: fmt(input.timeAdjMult, 'x'),
       threshold: `同时点量能倍数（P75/P90/P95 ${RESCUE_CALIBRATION.f1.mid}/${RESCUE_CALIBRATION.f1.high}/${RESCUE_CALIBRATION.f1.extreme}x 历史标定）`,
       hit: f1 >= 40,
-    },
-    {
-      id: 'superflow', label: '超大单强度', score: f2, weight: RESCUE_WEIGHTS.superflow,
-      actual: `${fmt(f2Value, 'x')}（${f2Basis}）`,
-      threshold: `核心通道优先（核心净流入 ≥ ${input.f2Anchors[0]}x 才算参与）：超大单净额/20日均额（${input.f2Anchors[0]}/${input.f2Anchors[1]}/${input.f2Anchors[2]}x，来源 ${input.f2Source === 'self' ? '自建样本分位' : '经验锚点'}）；核心未达参与档或净流出时，外围强度打 0.7 折`,
-      hit: f2 >= 40,
     },
     {
       id: 'pulse', label: pulseFactorLabel(phase), score: f3, weight: RESCUE_WEIGHTS.pulse,
@@ -466,17 +550,19 @@ export function scoreRescue(input: RescueFactorInput): RescueScoreResult {
       threshold: `${INDEX_NAME} 跌 ≥1.0% 满分；上涨时封顶（追涨天量不是护盘）`,
       hit: f5 >= 60,
     },
-    {
-      id: 'resonance', label: '全池共振', score: f6, weight: RESCUE_WEIGHTS.resonance,
-      actual: `${input.resonance} 只（核心 ${coreRes} / 外围 ${periRes}）${(input.resonanceLanes ?? []).length > 0 ? `：${(input.resonanceLanes ?? []).join('、')}` : ''}`,
-      threshold: '同时触发的宽基通道数（按指数去重）；核心通道 = 沪深300/上证50',
-      hit: f6 >= 40,
-    },
   ]
 
   const raw = factors.reduce((a, f) => a + f.weight * f.score, 0)
   const coef = input.timeCoef ?? 1
   const score = Math.max(0, Math.min(100, Math.round(raw * coef)))
+  /**
+   * 连续评分（0–100）：`raw ÷ 权重合计 × 100`。
+   * 权重合计已不是 1.000（剔 F2 且不归一）⇒ 用比值把"当前偏强/偏弱"拉回稳定刻度，
+   * 并据此算近 N 个样本的分位（样本 < 5 ⇒ null，不编）。
+   */
+  // raw 的单位是"分×权重"（上限 = 权重合计 × 100 = 71.7）⇒ 除以权重合计即回到 0–100 的稳定刻度
+  const continuous = Math.max(0, Math.min(100, raw / RESCUE_WEIGHT_SUM))
+  const pct = scorePercentile(continuous, input.recentContinuous ?? [])
   /**
    * 等级线**按时点系数缩放**（唯一一处时点调整；`score` 只用于展示）。
    *
@@ -489,7 +575,41 @@ export function scoreRescue(input: RescueFactorInput): RescueScoreResult {
    * 与旧实现的差异只在取整边界（±1 分），方向唯一：早盘只会更保守、不会更激进。
    */
   const lines = levelLines(coef)
-  const scaled: RescueLevel = raw >= lines.t3 ? 3 : raw >= lines.t2 ? 2 : raw >= lines.t1 ? 1 : 0
+  const scaled: RescueLevel = ruleLevel(raw, coef)
+
+  /**
+   * **交易时段闸门**（AUDIT-IMPL54 批 A-1）：非交易时段（收盘后、午休、开盘前）**不出等级**。
+   *
+   * 为什么：时点系数假设"越晚越接近尾盘"（≥180min ⇒ 1.1，线最低），但收盘后这个假设失效 ——
+   * 实测日志里有 16:49 / 21:56 / 22:26 / 22:30 的采样点，它们会拿到**最宽松的线**去判等级。
+   * 现在：非交易时段 ⇒ `coef/raw/continuous/percentile` 全为 null、`level = 0`、归因写明原因；
+   * 调用方（采样子系统）不把它写进事件与 5 分钟抽样，也不计入当日最高等级。
+   */
+  const inSession = input.inSession !== false
+  if (!inSession) {
+    // 因子可用度照常如实统计（读数确实存在，只是这次不用它判等级）——不要写成"全缺"
+    const av: Array<[string, boolean]> = [
+      ['量能放大', input.timeAdjMult !== null],
+      ['脉冲', input.pulseMult !== null],
+      ['持续性', input.persistShare !== null],
+      ['量价背离', input.indexPct !== null],
+    ]
+    const miss = av.filter(([, ok]) => !ok).map(([label]) => label)
+    return {
+      score: 0,
+      level: 0,
+      factors,
+      summary: `非交易时段（${fmt(input.indexPct, '%')} 为当时指数读数）：本次不出等级、不计入当日最高等级；量能与资金读数仅供参考（样本保留为留痕）`,
+      completeness: { available: av.length - miss.length, total: av.length, missing: miss },
+      timeCoef: null,
+      rawScore: null,
+      levelLines: lines,
+      inSession: false,
+      continuous: null,
+      percentile: null,
+      contradiction: null,
+    }
+  }
 
   // 防误报约束（每条都写进归因，不做静默降级）
   const caps: string[] = []
@@ -517,34 +637,26 @@ export function scoreRescue(input: RescueFactorInput): RescueScoreResult {
       caps.push(`指数仍上涨 ${idx.toFixed(2)}%，量价背离不成立 → 封顶为疑似护盘`)
     }
   }
-  // 2) 强信号必须由核心通道参与
-  if (level === 3 && coreRes < 1) {
-    level = 2
-    caps.push('核心通道（沪深300/上证50）未参与共振 → 降为疑似护盘（外围单买不足以认定系统性护盘）')
-  }
-  // 3) 强信号必须有真实的超大单净流入
-  if (level === 3 && f2 < 70) {
-    level = 2
-    caps.push('超大单强度未达强信号门槛 → 降为疑似护盘')
-  }
-  // 4) 疑似信号至少要有量能或资金之一
-  if (level === 2 && f2 < 40 && f1 < 70) {
+  // 3)（原「强护盘」前置已删除：L3 不在等级集里）
+  /** 超大单符号是否为正（**说明项**：用于连续评分/分位与防误报降级，不再是等级前置） */
+  const flowPositive = flowSign !== null && flowSign > 0
+  // 4) 疑似信号至少要有量能或"看得见的净流入"之一
+  if (level === 2 && !flowPositive && f1 < 70) {
     level = 1
-    caps.push('量能与资金流入均未达中档 → 降为资金异动')
+    caps.push('量能未达中档且超大单读数为负/未取到 → 降为资金异动')
   }
-  if (f2 < 15 && f4 < 40 && level > 1) {
+  if (!flowPositive && f4 < 40 && level > 1) {
     level = 1
     caps.push('超大单无有效净流入且持续性不足 → 降为资金异动')
   }
 
   // 因子可用度：脉冲/持续性在冷启动回填失败时会缺，必须如实标注而不是假装完整
+  // 因子可用度：只统计**仍在评分里**的四个因子（F2 与"全池共振"已剔除，不再计入 total）
   const availability: Array<[string, boolean]> = [
     ['量能放大', input.timeAdjMult !== null],
-    ['超大单强度', core !== null || peri !== null],
     ['脉冲', input.pulseMult !== null],
     ['持续性', input.persistShare !== null],
     ['量价背离', input.indexPct !== null],
-    ['全池共振', true],
   ]
   const missing = availability.filter(([, ok]) => !ok).map(([label]) => label)
   const completeness: RescueCompleteness = { available: availability.length - missing.length, total: availability.length, missing }
@@ -552,8 +664,35 @@ export function scoreRescue(input: RescueFactorInput): RescueScoreResult {
   const hits = factors.filter((f) => f.hit).map((f) => `${f.label} ${f.actual}`).join(' · ')
   const base = level === 0 || hits === '' ? '宽基 ETF 量能与资金流均在常态区间（无异动）' : hits
   const incomplete = missing.length > 0 ? `；因子 ${completeness.available}/${completeness.total}（缺 ${missing.join('、')}，评分偏保守）` : ''
-  const summary = `${base}${caps.length > 0 ? ` —— ${caps.join('；')}` : ''}（评分 ${score}，时点系数 ${coef}${incomplete}）`
-  return { score, level, factors, summary, completeness, timeCoef: coef, rawScore: raw, levelLines: lines }
+  /**
+   * F2 剔除的**如实标注**（红线：缺数据说缺数据，不许用常数顶替）。
+   * 提示词里带上样本量与分位，读者能自己判断"剔除"是否合理。
+   */
+  const removedNote = '；已剔除「超大单强度」因子：宽基 ETF 分单数据稀疏（305 样本 p90 = 0.01×20 日均额），该因子不可用'
+  const contNote = `连续评分 ${continuous.toFixed(1)}/100（${pct === null ? '近 20 日分位 —（样本不足 5）' : `近 20 日分位 ${pct.pct.toFixed(0)}%，N=${pct.n}`}；时点系数 ${coef}）`
+  /**
+   * 两个**说明项**（Lead 决策：不再作为等级前置，只解释连续评分/分位）：
+   *   · 核心通道共振只数；· 超大单读数符号。等级只由 `raw` 与两条线（35/55）决定。
+   */
+  const advisory = `；说明项（不参与等级判定）：核心共振 ${input.coreResonance ?? 0} 只、超大单读数 ${flowSign === null ? '未取到' : `${flowSign.toFixed(3)}x（符号${flowSign > 0 ? '为正' : flowSign < 0 ? '为负' : '为零'}）`}`
+  /**
+   * P6 内部矛盾：量增（同时点量能倍数 ≥ 标定 P90）**但**超大单读数 ≤ 0。
+   *
+   * ⚠ 这条**不改分数、不改等级**（只进归因与展示）。阈值取标定值 `f1.high`（= P90 = 1.57x），
+   * 不用手调数字；超大单读数取"核心优先、否则外围"的口径（与 F2 同源，但不折外围的 0.7 折 ——
+   * 这里只判"有没有净流入"这一符号事实）。
+   */
+  const contradiction = input.timeAdjMult !== null && flowSign !== null && input.timeAdjMult >= RESCUE_CALIBRATION.f1.high && flowSign <= 0
+    ? `量能放大（同时点倍数 ${input.timeAdjMult.toFixed(2)}x ≥ P90 ${RESCUE_CALIBRATION.f1.high}x）但超大单读数 ≤ 0（${flowSign.toFixed(3)}x）⇒ 可能是拆单/算法单或纯被动成交，不能读作"有资金托底"`
+    : null
+  const contraNote = contradiction === null ? '' : `；⚠ 内部矛盾：${contradiction}`
+  const summary = `${base}${caps.length > 0 ? ` —— ${caps.join('；')}` : ''}（评分 ${score}，${contNote}${incomplete}${advisory}${removedNote}）${contraNote}`
+  return {
+    score, level, factors, summary, completeness,
+    timeCoef: coef, rawScore: raw, levelLines: lines,
+    inSession: true, continuous, percentile: pct === null ? null : pct.pct,
+    contradiction,
+  }
 }
 
 /**
@@ -1539,28 +1678,40 @@ export class RescueMonitor {
       // 时点系数此前没有传进来，运行时恒等于 1（早盘噪音最大的时段拿到满权重）
       timeCoef: timeCoefficient(elapsed),
       isTail: tail, pulseAnchors, bandLabel: pulseBandLabel(elapsed), phase,
+      // A-1 交易时段闸门：非交易时段不出等级（收盘后/午休/盘前），也不计入当日最高等级
+      inSession: inTradingSession(hhmmOf(ts)),
+      recentContinuous: this.recentContinuous(),
     })
     etfs.sort((a, b) => b.activity - a.activity)
-    // 事件去抖：仅记录等级升级，以及从有信号回落到平静（形成完整时间线）
-    if (scored.level > this.lastLevel || (scored.level === 0 && this.lastLevel > 0)) {
-      this.today.events.push({
-        ts, hhmm: hhmmOf(ts), level: scored.level, score: scored.score,
-        engine: ENGINE_VERSION,
-        reason: scored.level === 0 ? '信号回落：量能与超大单流入回到常态' : scored.summary,
-      })
-      if (this.today.events.length > 60) this.today.events.splice(0, this.today.events.length - 60)
-      this.lastLevel = scored.level
-      this.pushScoreLog(ts, scored)
-      await this.persist(true)
-    }
-    const minuteMark = Math.floor(elapsed / 5) * 5
-    if (minuteMark !== this.lastIntradayMin && elapsed > 0) {
-      this.lastIntradayMin = minuteMark
-      this.today.intraday.push({
-        hhmm: hhmmOf(ts), level: scored.level, score: scored.score,
-        timeAdjMult: maxMult, superVsAvg: coreSuperVsAvg ?? peripheralSuperVsAvg, persistShare: persistBest,
-      })
-      if (this.today.intraday.length > 120) this.today.intraday.splice(0, this.today.intraday.length - 120)
+    /**
+     * A-1 交易时段闸门（写入侧）：**非交易时段不进事件、不进 5 分钟抽样** ——
+     * 否则夜里/午休的样本会污染当日最高等级（`history()` 的 `maxLevel`）与时间线。
+     * 那次采样仍然留痕：`scoreLog` 里 rawScore/timeCoef 为 `null`（不是 0），一眼能看出"没有判据"。
+     */
+    if (scored.inSession) {
+      // 事件去抖：仅记录等级升级，以及从有信号回落到平静（形成完整时间线）
+      if (scored.level > this.lastLevel || (scored.level === 0 && this.lastLevel > 0)) {
+        this.today.events.push({
+          ts, hhmm: hhmmOf(ts), level: scored.level, score: scored.score,
+          engine: ENGINE_VERSION,
+          reason: scored.level === 0 ? '信号回落：量能与超大单流入回到常态' : scored.summary,
+        })
+        if (this.today.events.length > 60) this.today.events.splice(0, this.today.events.length - 60)
+        this.lastLevel = scored.level
+        this.pushScoreLog(ts, scored)
+        await this.persist(true)
+      }
+      const minuteMark = Math.floor(elapsed / 5) * 5
+      if (minuteMark !== this.lastIntradayMin && elapsed > 0) {
+        this.lastIntradayMin = minuteMark
+        this.today.intraday.push({
+          hhmm: hhmmOf(ts), level: scored.level, score: scored.score,
+          timeAdjMult: maxMult, superVsAvg: coreSuperVsAvg ?? peripheralSuperVsAvg, persistShare: persistBest,
+        })
+        if (this.today.intraday.length > 120) this.today.intraday.splice(0, this.today.intraday.length - 120)
+        this.pushScoreLog(ts, scored)
+      }
+    } else {
       this.pushScoreLog(ts, scored)
     }
     // 记住每通道最后一次成功值：上游中断/收盘后重启时，面板可据此复盘而不是空白
@@ -1573,8 +1724,13 @@ export class RescueMonitor {
     this.today.gap = false
     this.lastFailTs = null
     this.lastSnapshot = {
-      ts, trading: inTradingWindow(ts), level: scored.level, score: scored.score, summary: scored.summary,
-      factors: scored.factors, etfs, indexPct, indexName: INDEX_NAME, timeCoef: timeCoefficient(elapsed),
+      ts, trading: inTradingWindow(ts),
+      // 非交易时段：level 置空（契约允许 null，与"休市日不出等级"同一语义）、score/timeCoef 走 0 + 归因说明
+      level: scored.inSession ? scored.level : null,
+      score: scored.inSession ? scored.score : 0,
+      summary: scored.summary,
+      factors: scored.factors, etfs, indexPct, indexName: INDEX_NAME,
+      timeCoef: scored.inSession ? timeCoefficient(elapsed) : 0,
       resonance: {
         lanes: [...coreTriggered, ...peripheralTriggered],
         core: coreTriggered.length,
@@ -1832,8 +1988,11 @@ export class RescueMonitor {
       ts,
       hhmm: hhmmOf(ts),
       score: scored.score,
-      rawScore: Math.round(scored.rawScore * 100) / 100,
+      // ⚠ 非交易时段 rawScore/timeCoef 是 null：**不许**用 0 顶替（0 会被读成"评分 0 = 平静"）
+      rawScore: scored.rawScore === null ? null : Math.round(scored.rawScore * 100) / 100,
       timeCoef: scored.timeCoef,
+      continuous: scored.continuous === null ? null : Math.round(scored.continuous * 10) / 10,
+      inSession: scored.inSession,
       engine: ENGINE_VERSION,
       factors: scored.factors.map((f) => ({
         id: f.id, score: f.score, weight: f.weight, actual: f.actual, threshold: f.threshold, hit: f.hit,
@@ -1856,20 +2015,20 @@ export class RescueMonitor {
   snapshot(): RescueSnapshot {
     const inner = this.snapshotInner()
     const day = tradingDayState(Date.now())
-    const lines = inner.levelLines ?? levelLines(inner.timeCoef ?? 1)
+    void inner
     // 交易日历状态随快照走：`warning` 必须能被面板/工具看见（不许静默退回内置规则）
     const cal: TradingCalendarStatus | null = externalCalendarStatus()
     const calWarn = cal?.warning ?? null
     const withCal = (base: RescueSnapshot): RescueSnapshot =>
       cal === null ? base : { ...base, calendarStatus: cal, summary: calWarn === null ? base.summary : `${base.summary}｜⚠ ${calWarn}` }
-    if (day.trading) return withCal({ ...inner, levelLines: lines, nonTrading: null })
+    // 不再写 `levelLines`：等级只剩两级（35/55），"为什么是这个等级"由 summary 里的连续评分 + 线说明承担
+    if (day.trading) return withCal({ ...inner, nonTrading: null })
     const what = day.reason === 'weekend' ? '周末休市' : `法定假日休市（${day.label ?? '节假日'}）`
     return withCal({
       ...inner,
       trading: false,
       level: null,
       score: 0,
-      levelLines: lines,
       nonTrading: { reason: day.reason === 'holiday' ? 'holiday' : 'weekend', label: day.label },
       summary: `休市（非交易日）：${what} —— 今天不是交易日，不采样、不出等级、不写当日分`,
     })
@@ -2048,7 +2207,9 @@ export class RescueMonitor {
     for (const day of Object.keys(this.file.days).sort().reverse().slice(0, limit)) {
       const d = this.file.days[day]
       const maxScore = d.intraday.reduce((a, p) => Math.max(a, p.score), d.events.reduce((a, e) => Math.max(a, e.score), 0))
-      const maxLevel = d.intraday.reduce<RescueLevel>((a, p) => Math.max(a, p.level) as RescueLevel, d.events.reduce<RescueLevel>((a, e) => Math.max(a, e.level) as RescueLevel, 0))
+      // A-1：**跳过没有等级的样本**（非交易时段样本不进 intraday，但历史/外来日志里可能是 null）
+      const lv = (v: unknown): RescueLevel | null => (typeof v === 'number' && Number.isFinite(v) ? (v as RescueLevel) : null)
+      const maxLevel = d.intraday.reduce<RescueLevel>((a, p) => (lv(p.level) === null ? a : Math.max(a, p.level) as RescueLevel), d.events.reduce<RescueLevel>((a, e) => (lv(e.level) === null ? a : Math.max(a, e.level) as RescueLevel), 0))
       const peak = d.intraday.find((p) => p.score === maxScore) ?? null
       out.push({ day, maxLevel, maxScore, events: d.events.filter((e) => e.level >= 1).length, peakHhmm: peak?.hhmm ?? null })
     }
@@ -2057,6 +2218,25 @@ export class RescueMonitor {
 
   intradayOf(day: string): RescueIntradayPoint[] {
     return this.file.days[day]?.intraday ?? []
+  }
+
+  /**
+   * 近 `limitDays` 个自然日出分日志里的**连续评分**（用于分位）。
+   *
+   * 口径：只用已落盘的 `days[].scoreLog` 与当日内存里的 `today.scoreLog`（跳过 `file.days` 里的今天，避免重复计）。
+   * 样本不足由 `scorePercentile` 如实返回 null —— 这里**不做任何补齐/插值**。
+   */
+  private recentContinuous(limitDays = 20): number[] {
+    const out: number[] = []
+    for (const day of Object.keys(this.file.days).sort().filter((d) => d !== this.todayKey).slice(-limitDays)) {
+      for (const e of this.file.days[day]?.scoreLog ?? []) {
+        if (typeof e.continuous === 'number' && Number.isFinite(e.continuous)) out.push(e.continuous)
+      }
+    }
+    for (const e of this.today.scoreLog ?? []) {
+      if (typeof e.continuous === 'number' && Number.isFinite(e.continuous)) out.push(e.continuous)
+    }
+    return out.slice(-600)
   }
 
   /**出分日志（P0-7）：阈值漂移回溯用；不传 day 取当日 */

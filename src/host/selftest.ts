@@ -24,8 +24,8 @@ import {
   CORE_OUTFLOW_VETO, FLOW_WINDOW_MS, PERSIST_ANCHORS, PULSE_HIT_SCORE, divergenceScore, interpScore, isTailElapsed,
   pickPulseRef,
   progressAt, pulseAnchorsFor, pulseBandLabel, quantile, resonanceScore, scoreRescue, sessionElapsed,
-  phaseOf, pulseFactorLabel, timeCoefficient, windowFlowStats,
-} from './rescue.ts'
+  phaseOf, pulseFactorLabel, timeCoefficient, windowFlowStats, RESCUE_WEIGHT_SUM,
+  } from './rescue.ts'
 import { RESCUE_CALIBRATION } from './rescue-thresholds.ts'
 import { TW_ALL_SECIDS, TW_ROWS, rescueUniverseMeta } from '../shared/model.ts'
 import type { DailyBarLite, QuoteRow, RescueEtfView, RescueSnapshot } from '../shared/model.ts'
@@ -300,11 +300,14 @@ async function main(): Promise<void> {
       const calm = scoreRescue({ ...base, timeAdjMult: 0.9, coreSuperVsAvg: 0.05, peripheralSuperVsAvg: 0.04, pulseMult: 1, persistShare: 0.01, indexPct: 0.2, resonance: 0 })
       const typical = scoreRescue(strongInput)
       const capped = scoreRescue({ ...strongInput, indexPct: 2 })
-      const thin = scoreRescue({ ...strongInput, coreSuperVsAvg: 0.3, peripheralSuperVsAvg: 0.3, persistShare: 0.3, indexPct: -1.2 })
       ok(calm.level === 0, `平淡日 → 平静 (got ${calm.level}, ${calm.score} 分)`)
-      ok(typical.level === 3 && typical.score >= 75, `典型护盘日 → 强护盘信号 (got ${typical.level}, ${typical.score} 分)`)
+      ok(typical.level === 2 && typical.score >= 75, `典型护盘日 → 疑似护盘（声明集最高档；强护盘已删除）(got ${typical.level}, ${typical.score} 分)`)
       ok(capped.level === 1 && capped.summary.includes('追涨'), `指数+2% 的天量 → 封顶资金异动 (got ${capped.level})`)
-      ok(thin.level === 2, `超大单偏弱 → 降为疑似护盘 (got ${thin.level})`)
+      // L3 前置（B-2）= 核心参与共振 + 超大单**符号为正**（F2 的幅度阈值已删除）
+      const thinNeg0 = scoreRescue({ ...strongInput, coreSuperVsAvg: -0.3, peripheralSuperVsAvg: -0.3, persistShare: 0.3, indexPct: -1.2 })
+      ok(thinNeg0.level === 2 && thinNeg0.summary.includes('符号为负'), `超大单符号为负：等级仍由 raw 与线决定，符号只进说明项 (got ${thinNeg0.level})`)
+      const thinPos0 = scoreRescue({ ...strongInput, coreSuperVsAvg: 0.3, peripheralSuperVsAvg: 0.3, persistShare: 0.3, indexPct: -1.2 })
+      ok(thinPos0.level === 2 && thinPos0.summary.includes('符号为正'), `符号为正：等级不变（符号不再是前置）(got ${thinPos0.level})`)
 
       // P0-① 时点系数必须真正作用到评分（此前 tick 未传，运行时恒为 1）
       const sameButEarly = scoreRescue({ ...strongInput, timeCoef: 0.4 })
@@ -314,16 +317,12 @@ async function main(): Promise<void> {
       const veto = scoreRescue({ ...strongInput, coreWorstShare: -0.389 })
       ok(veto.level === 1 && veto.summary.includes('与托底特征相反'), `核心通道净流出 ${(CORE_OUTFLOW_VETO * 100).toFixed(0)}% 阈值 → 封顶资金异动 (got ${veto.level})`)
 
-      // P0-③ 强信号必须核心通道参与；④ 仅外围净流入时 F2 打折
+      // P0-③ 核心是否参与共振：v0.15.0 起只进说明项（等级集最高就是「疑似护盘」）
       const periOnly = scoreRescue({ ...strongInput, coreResonance: 0, resonanceLanes: ['科创50'], coreSuperVsAvg: -0.1, peripheralSuperVsAvg: 0.3 })
-      ok(periOnly.level <= 2 && periOnly.summary.includes('核心通道'), `核心未参与共振 → 至多疑似护盘 (got ${periOnly.level})`)
-      // 同样的 0.3x 幅度：核心通道得 50 分，仅外围净流入打 0.7 折后 → 0.21x ≈ 41 分
-      const coreSame = scoreRescue({ ...strongInput, coreSuperVsAvg: 0.3, peripheralSuperVsAvg: 0.3 })
-      const f2Core = coreSame.factors.find((f) => f.id === 'superflow')!
-      const f2Peri = periOnly.factors.find((f) => f.id === 'superflow')!
-      ok(f2Core.score > f2Peri.score + 5, `同样 0.3x：核心通道 ${f2Core.score} 分 > 仅外围 ${f2Peri.score} 分（打 0.7 折）`)
-      ok(typical.factors[0].id === 'volume' && typical.factors.length === 6 && Math.abs(typical.factors.reduce((a, f) => a + f.weight, 0) - 1) < 1e-9, '六因子权重合计 = 1')
-      ok(typical.factors[2].label === '尾盘突袭' && typical.factors[2].score > 0 && !!typical.factors[3].threshold.includes('窗口成交额'), 'F3 尾盘命名与 F4 窗口口径')
+      ok(periOnly.level === 2 && periOnly.summary.includes('核心共振 0 只'), `核心共振只数必须如实进说明项 (got ${periOnly.level})`)
+      // 剔除 F2 后：**四项**权重、合计 = RESCUE_WEIGHT_SUM（0.717，**刻意不归一**）
+      ok(typical.factors[0].id === 'volume' && typical.factors.length === 4 && Math.abs(typical.factors.reduce((a, f) => a + f.weight, 0) - RESCUE_WEIGHT_SUM) < 1e-9, `四因子权重合计 = ${RESCUE_WEIGHT_SUM}（不归一）`)
+      ok(typical.factors[1].label === '尾盘突袭' && typical.factors[1].score > 0 && !!typical.factors[2].threshold.includes('窗口成交额'), 'F3 尾盘命名与 F4 窗口口径')
       ok(PULSE_HIT_SCORE === 70 && PERSIST_ANCHORS[0] === 0.05, '脉冲命中线 = P90，持续性锚点以窗口成交额归一')
 
       // 阶段语义：收盘后不得再叫「尾盘突袭」，避免误读为刚发生
@@ -332,10 +331,10 @@ async function main(): Promise<void> {
 
       // 完整度：因子缺失如实标注（冷启动回填失败时会出现）
       const partial = scoreRescue({ ...strongInput, pulseMult: null, persistShare: null })
-      ok(partial.completeness.total === 6 && partial.completeness.available === 4, `脉冲与持续性缺失 → 因子 4/6（got ${partial.completeness.available}/${partial.completeness.total}）`)
+      ok(partial.completeness.total === 4 && partial.completeness.available === 2, `脉冲与持续性缺失 → 因子 2/4（got ${partial.completeness.available}/${partial.completeness.total}）`)
       ok(partial.completeness.missing.join(',') === '脉冲,持续性', `缺失项列出：${partial.completeness.missing.join('、')}`)
       ok(partial.summary.includes('评分偏保守'), '归因里注明因子不完整且评分偏保守')
-      ok(typical.completeness.available === 6 && typical.summary.includes('评分偏保守') === false, '因子齐全时不显示完整度说明')
+      ok(typical.completeness.available === 4 && typical.summary.includes('评分偏保守') === false, '因子齐全时不显示完整度说明')
 
       // F4 窗口统计（纯函数）：稳定净流入 / 无参考点 / 反复进出
       const t0 = 1_700_000_000_000
@@ -355,7 +354,8 @@ async function main(): Promise<void> {
       ok(choppyOut.retraceRatio !== null && choppyOut.retraceRatio > 0.5, `反复进出 → 回撤比 ${choppyOut.retraceRatio?.toFixed(2)} > 0.5（触发打折）`)
       const choppyScore = scoreRescue({ ...strongInput, persistShare: choppyOut.persistShare, retraceRatio: choppyOut.retraceRatio })
       const cleanScore = scoreRescue({ ...strongInput, persistShare: choppyOut.persistShare, retraceRatio: 0 })
-      ok(choppyScore.factors[3].score < cleanScore.factors[3].score, '回撤比 >0.5 时 F4 打折生效')
+      const persistOf = (r: { factors: Array<{ id: string; score: number }> }): number => r.factors.find((f) => f.id === 'persistence')!.score
+      ok(persistOf(choppyScore) < persistOf(cleanScore), '回撤比 >0.5 时 F4 打折生效（按 id 取因子，不写死下标）')
     }
 
     // 护盘快照 LKG：本会话没有数据时回落到落盘的上次成功快照
@@ -667,9 +667,9 @@ async function main(): Promise<void> {
       }
       const noFlow = scoreRescue({ ...strong, flowAvailable: false, coreSuperVsAvg: null, peripheralSuperVsAvg: null })
       ok(noFlow.level <= 1 && noFlow.summary.includes('分单资金流数据不可用'), `备用源下封顶为资金异动 (got ${noFlow.level})`)
-      ok(noFlow.completeness.missing.includes('超大单强度'), '资金流缺失计入因子完整度')
+      ok(noFlow.summary.includes('已剔除「超大单强度」因子'), 'F2 已剔除这件事必须常驻在归因里（不许静默消失）')
       const withFlow = scoreRescue({ ...strong, flowAvailable: true })
-      ok(withFlow.level === 3, '东财可用时不受该封顶影响')
+      ok(withFlow.level === 2, '东财可用时不受该封顶影响（最高档 = 疑似护盘）')
     }
 
     // 上游熔断：连续失败即停手（避免把限流推成封锁），成功即复位
@@ -966,27 +966,24 @@ async function main(): Promise<void> {
       ok(tailRef !== null && Math.abs(tailEval - tailRef.ref.ts - FLOW_WINDOW_MS) <= 30_000, '收盘口径：参考点相对序列末端前移 5 分钟')
     }
 
-    // F2 口径：标注与数值必须一致（核心未达参与档时外围真打 0.7 折）
+    // B-2：L3 前置（核心参与共振 + 超大单**符号为正**）在真实量级的输入上成立，且 F2 不再出分
     {
-      const anchors: [number, number, number] = [0.2, 0.6, 1.2]
       const common = {
-        flowAvailable: true, f2Anchors: anchors, f2Source: 'empirical' as const, coreWorstShare: 0.3,
-        coreResonance: 1, peripheralResonance: 1, resonanceLanes: ['沪深300'], isTail: true, timeCoef: 1,
-        retraceRatio: 0, timeAdjMult: 1, pulseMult: 1, persistShare: 0, indexPct: -1, resonance: 1,
+        flowAvailable: true, f2Anchors: [0.2, 0.6, 1.2] as [number, number, number], f2Source: 'empirical' as const,
+        coreWorstShare: 0.3, coreResonance: 1, peripheralResonance: 1, resonanceLanes: ['沪深300'],
+        isTail: true, timeCoef: 1, retraceRatio: 0, timeAdjMult: 3, pulseMult: 5, persistShare: 0.4,
+        indexPct: -1.4, resonance: 2,
       }
-      const shown = (f: { actual: string }): number => Number(String(f.actual).match(/^([\d.]+)x/)?.[1] ?? NaN)
-      const micro = scoreRescue({ ...common, coreSuperVsAvg: 0.05, peripheralSuperVsAvg: 0.5 } as never)
-      const f2micro = micro.factors.find((f) => f.id === 'superflow')!
-      ok(Math.abs(shown(f2micro) - 0.35) < 0.011, `核心微幅正时取折算后的 0.35x（实际显示 ${shown(f2micro)}）`)
-      ok(f2micro.actual.includes('打 0.7 折'), '标注写明"外围打 0.7 折"（与数值一致）')
-      ok(f2micro.score === interpScore(0.35, anchors), '因子分按折算后的值计算')
-      const meaningful = scoreRescue({ ...common, coreSuperVsAvg: 0.25, peripheralSuperVsAvg: 0.5 } as never)
-      const f2core = meaningful.factors.find((f) => f.id === 'superflow')!
-      ok(Math.abs(shown(f2core) - 0.5) < 0.011, `核心达标时取二者较强且不折算（实际显示 ${shown(f2core)}）`)
-      ok(f2core.actual.includes('核心已参与'), '核心达标时标注为"核心已参与"（不再声称已折算）')
-      const outflow = scoreRescue({ ...common, coreSuperVsAvg: -0.3, peripheralSuperVsAvg: 0.5 } as never)
-      const f2out = outflow.factors.find((f) => f.id === 'superflow')!
-      ok(Math.abs(shown(f2out) - 0.35) < 0.011, `核心净流出 + 外围在买 → 仍按折算后的 0.35x（实际 ${shown(f2out)}）`)
+      const pos = scoreRescue({ ...common, coreSuperVsAvg: 0.25, peripheralSuperVsAvg: 0.25 } as never)
+      ok(pos.level === 2, `强输入 ⇒ 声明集最高档（疑似护盘）(got ${pos.level})`)
+      ok(pos.summary.includes('符号为正'), '符号进说明项（正）')
+      const zero = scoreRescue({ ...common, coreSuperVsAvg: 0, peripheralSuperVsAvg: 0 } as never)
+      ok(zero.level === 2 && zero.summary.includes('符号为零'), `符号为 0 只改说明项、不改等级（got ${zero.level}）`)
+      const missing = scoreRescue({ ...common, coreSuperVsAvg: null, peripheralSuperVsAvg: null } as never)
+      ok(missing.level === 2 && missing.summary.includes('超大单读数 未取到'), `读数缺失 ⇒ 如实进说明项（got ${missing.level}）`)
+      ok(pos.factors.length === 4 && pos.factors.every((f) => f.id !== 'superflow'), '出分因子为四项（F2 已剔除）')
+      ok(pos.summary.includes('已剔除「超大单强度」因子') && pos.summary.includes('分单数据稀疏'), '归因注明 F2 已剔除与原因')
+      ok(typeof pos.continuous === 'number' && pos.continuous > 0 && pos.continuous <= 100, `连续评分在 0–100（got ${pos.continuous}）`)
     }
 
     // 分组备注契约（客户端备注模态此前绑错状态，保存无效）

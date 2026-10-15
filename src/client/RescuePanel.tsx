@@ -248,7 +248,7 @@ function EtfCard(props: { etf: RescueEtfView; redUp: boolean }): React.ReactElem
 /**
  * 因子表（P0-7）。
  *
- * 加了「贡献」列（权 × 得分 × 时点系数）与一行合计：此前只有总分与六因子分数，
+ * 加了「贡献」列（权 × 得分 × 时点系数）与一行合计：此前只有总分与各因子分数，
  * 看到 `评分 68` 而 `量能 ×2.1`、`超大单 ×0.3` 时无法判断这一分是谁加的 ——
  * 量能撑起来的和"跌出来的背离"撑起来的，操作含义完全相反。
  */
@@ -402,7 +402,12 @@ export function RescuePanel(props: {
    */
   const shut = snapshot?.nonTrading ?? null
   const level = snapshot?.level ?? 0
-  const levelText = shut !== null ? '休市（非交易日）' : RESCUE_LEVEL_LABEL[level]
+  /**
+   * `level === null` 有两种情形：①休市（`nonTrading` 有值）；②**非交易时段**（A-1 闸门，收盘后/午休/盘前）。
+   * 后者不能显示成「平静」—— 那不是"没事发生"，而是"这次没判"。
+   */
+  const offSession = shut === null && snapshot?.level === null
+  const levelText = shut !== null ? '休市（非交易日）' : offSession ? '非交易时段' : RESCUE_LEVEL_LABEL[level]
  // 采样窗口状态由宿主给出（含下次采样时刻）；老宿主没有该字段时不冒充"暂停"
   const win = snapshot?.activeWindow
   const paused = snapshot !== null && win !== undefined && win.sampling !== true
@@ -426,7 +431,11 @@ export function RescuePanel(props: {
   return React.createElement('div', { className: 'tw-panel tw-rescue' },
     React.createElement('div', { className: 'tw-panel-h' },
       React.createElement('span', {
-        className: 'tw-rescue-dot', style: { background: LEVEL_COLOR[level], boxShadow: level >= 2 ? `0 0 8px ${LEVEL_COLOR[level]}` : undefined },
+        className: 'tw-rescue-dot',
+        style: {
+          background: offSession ? 'var(--tw-muted)' : LEVEL_COLOR[level],
+          boxShadow: !offSession && level >= 2 ? `0 0 8px ${LEVEL_COLOR[level]}` : undefined,
+        },
       }),
       React.createElement('span', { className: 't' }, '护盘信号'),
       snapshot !== null
@@ -457,7 +466,7 @@ export function RescuePanel(props: {
             // 东财源下的缺因子才是"冷启动/采样满 5 分钟自动补齐"。此前一律写"5 分钟后自动补齐"，
             // 在备用源场景下是空头承诺。
             title: snapshot.flowSource === 'tencent'
-              ? `本次快照缺少因子：${snapshot.completeness?.missing.join('、')} —— 数据来自「腾讯备用源」，该源不含分单资金流（超大单/主力净额），因此「超大单强度」「持续性」无法计算，不是等几分钟就能补齐的；量能、脉冲、背离、共振仍为真实数据，评分偏保守。`
+              ? `本次快照缺少因子：${snapshot.completeness?.missing.join('、')} —— 数据来自「腾讯备用源」，该源不含分单资金流（超大单/主力净额），因此「持续性」无法计算，不是等几分钟就能补齐的；量能、脉冲、背离仍为真实数据，评分偏保守。（「超大单强度」已整体剔除：宽基 ETF 分单数据稀疏，不可用。）`
               : `本次快照缺少因子：${snapshot.completeness?.missing.join('、')}（评分偏保守；冷启动回填完成或盘中采样 5 分钟后自动补齐）`,
             style: { color: LEVEL_COLOR[2], borderColor: LEVEL_COLOR[2] },
           }, `因子 ${snapshot.completeness?.available}/${snapshot.completeness?.total}`)
