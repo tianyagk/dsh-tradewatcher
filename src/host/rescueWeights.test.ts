@@ -232,3 +232,38 @@ test('⑦ F2 被剔除是**如实标注**：归因写明原因，且它的读数
     assert.equal(bigFlow.summary.includes(must), true, `归因必须写清「${must}」：${bigFlow.summary}`)
   }
 })
+
+test('⑫ 快照契约：连续评分 + 跨日分位 + 样本数（分位与宿主算法逐点一致；样本不足 ⇒ null + 原因，不写 0）', async () => {
+  const { scoreRescue, scorePercentile, RESCUE_WEIGHT_SUM } = await import('./rescue.ts')
+  const base = {
+    timeAdjMult: 2.2, coreSuperVsAvg: 0.6, peripheralSuperVsAvg: null, pulseMult: 2.2, persistShare: 0.2,
+    retraceRatio: 0.2, indexPct: -1.2, resonance: 2, coreResonance: 1, peripheralResonance: 1,
+    f2Anchors: [0.5, 1, 2] as [number, number, number], timeCoef: 1.1,
+  }
+  // ① 有样本：分位 = 宿主 scorePercentile(连续评分, 历史) 的结果，样本数一致
+  const history = [12, 25, 38, 44, 51, 63, 70]
+  const r = scoreRescue({ ...base, recentContinuous: history } as never)
+  const continuous = r.continuous as number
+  const expect = scorePercentile(continuous, history)
+  assert.notEqual(expect, null, '前置：这批历史必须够算分位')
+  assert.equal(r.percentile, expect?.pct, '分位必须等于宿主的 scorePercentile 结果（逐点一致）')
+  assert.equal(r.percentileN, history.length, '样本数必须等于传入的历史长度')
+  assert.equal(r.percentileWhy, null, '能算出来 ⇒ 原因为 null')
+  assert.equal(Math.round((continuous * RESCUE_WEIGHT_SUM - (r.rawScore as number)) * 100) / 100, 0, '连续评分 = raw ÷ 权重合计（同一份口径）')
+  // ② 样本不足（<5）⇒ null + 原因，**不得 0 顶替**
+  const few = scoreRescue({ ...base, recentContinuous: [10, 20, 30] } as never)
+  assert.equal(few.percentile, null, '样本不足 ⇒ null（不许 0）')
+  assert.equal(few.percentileN, 3, '样本数照实给（3）')
+  assert.ok((few.percentileWhy ?? '').includes('不足'), `原因要写明样本不足：${few.percentileWhy}`)
+  // ③ 冷启动（0 条）⇒ null + 另一句原因
+  const none = scoreRescue({ ...base, recentContinuous: [] } as never)
+  assert.equal(none.percentile, null)
+  assert.equal(none.percentileN, 0)
+  assert.ok((none.percentileWhy ?? '').includes('还没有跨日样本'), `冷启动原因：${none.percentileWhy}`)
+  // ④ 非交易时段 ⇒ 连续评分与分位都置空 + 原因
+  const off = scoreRescue({ ...base, inSession: false, recentContinuous: history } as never)
+  assert.equal(off.continuous, null, '非交易时段没有连续评分')
+  assert.equal(off.percentile, null)
+  assert.equal(off.percentileN, 0)
+  assert.ok((off.percentileWhy ?? '').includes('非交易时段'), `非交易时段原因：${off.percentileWhy}`)
+})

@@ -126,9 +126,12 @@ const SAMPLE_RING = 40
  * 评分引擎版本。**口径一改就必须升**（出分日志按它区分"当时用的是哪套权重与等级线"）。
  * v0.14.0：剔除 F2「超大单强度」+ 四项权重不归一（0.717）+ 等级线曾按权重合计缩放（**已废弃**）+ 交易时段闸门
  * v0.15.0：**等级集降为两级**（平静 / 资金异动 / 疑似护盘，线固定 35/55，**不缩放**）+ 连续评分/分位承载粒度
+ * v0.16.0：**连续评分与它的跨日分位进快照契约**（`continuous`/`continuousPercentile`/`continuousPercentileN`/`continuousPercentileWhy`）
+ *   —— 此前分位只在宿主算、没进契约，界面拿不到（契约缺口）；v0.15.0 的旧快照没有这三个字段 ⇒
+ *   界面按"缺字段"处理：显示原因文案而不是凭空算一个（旧条目仍能说明当时用的是哪套权重与线）
  * ⇒ 旧条目按版本解读：0.13.0 = 五项权重 + 线 35/55/75 + 收盘后也出等级；0.14.0 = 剔 F2 但线 ×0.717（曾把等级整体上移 1 档）。
  */
-export const ENGINE_VERSION = '0.15.0'
+export const ENGINE_VERSION = '0.16.0'
 const INDEX_SECID = '1.000300'
 const INDEX_NAME = '沪深300'
 
@@ -150,6 +153,11 @@ interface PersistedSnapshot {
   indexPct: number | null
   indexName: string
   timeCoef: number
+  /** 连续评分与它的跨日分位（v0.16.0 起进契约；持久化也保留 ⇒ 重启后界面照样能显示） */
+  continuous?: RescueSnapshot['continuous']
+  continuousPercentile?: RescueSnapshot['continuousPercentile']
+  continuousPercentileN?: RescueSnapshot['continuousPercentileN']
+  continuousPercentileWhy?: RescueSnapshot['continuousPercentileWhy']
   resonance: RescueSnapshot['resonance']
   pulseBand: RescueSnapshot['pulseBand']
   completeness: RescueSnapshot['completeness']
@@ -167,8 +175,8 @@ interface PersistedSnapshot {
 export function stripSnapshot(s: RescueSnapshot): PersistedSnapshot {
   // flowSource / lastFailTs 也要落盘：收盘后重启时面板才能说明"这份数据来自备用源
   // （所以缺分单资金流因子）"与"最近一次采样失败于何时"，而不是只剩一个时间戳
-  const { ts, level, score, summary, factors, etfs, indexPct, indexName, timeCoef, resonance, pulseBand, completeness, thresholdSource, selfSampleDays, config, activeIntervalSec, flowSource, lastFailTs } = s
-  return { ts, level, score, summary, factors, etfs, indexPct, indexName, timeCoef, resonance, pulseBand, completeness, thresholdSource, selfSampleDays, config, activeIntervalSec, flowSource, lastFailTs }
+  const { ts, level, score, summary, factors, etfs, indexPct, indexName, timeCoef, continuous, continuousPercentile, continuousPercentileN, continuousPercentileWhy, resonance, pulseBand, completeness, thresholdSource, selfSampleDays, config, activeIntervalSec, flowSource, lastFailTs } = s
+  return { ts, level, score, summary, factors, etfs, indexPct, indexName, timeCoef, continuous, continuousPercentile, continuousPercentileN, continuousPercentileWhy, resonance, pulseBand, completeness, thresholdSource, selfSampleDays, config, activeIntervalSec, flowSource, lastFailTs }
 }
 
 /**
@@ -474,6 +482,10 @@ export interface RescueScoreResult {
   continuous: number | null
   /** 连续评分在近 N 个样本里的分位（0–100）；样本不足 ⇒ null（不编） */
   percentile: number | null
+  /** 分位的样本数（0 = 还没有跨日样本；与 `percentile` 同时给出，供界面写 N=…） */
+  percentileN: number
+  /** 分位算不出来的原因（样本不足/无历史）；算得出来时为 null */
+  percentileWhy: string | null
   /**
    * 内部矛盾标记（P6）：**只做展示与归因，不改分数、不改等级**（红线：不得用这类代理指标升级信号）。
    *
@@ -562,7 +574,9 @@ export function scoreRescue(input: RescueFactorInput): RescueScoreResult {
    */
   // raw 的单位是"分×权重"（上限 = 权重合计 × 100 = 71.7）⇒ 除以权重合计即回到 0–100 的稳定刻度
   const continuous = Math.max(0, Math.min(100, raw / RESCUE_WEIGHT_SUM))
-  const pct = scorePercentile(continuous, input.recentContinuous ?? [])
+  /** 跨日样本（宿主从出分日志取，最近 ≤20 条；客户端**不**参与计算） */
+  const pctHistory = (input.recentContinuous ?? []).filter((x) => Number.isFinite(x))
+  const pct = scorePercentile(continuous, pctHistory)
   /**
    * 等级线**按时点系数缩放**（唯一一处时点调整；`score` 只用于展示）。
    *
@@ -607,6 +621,8 @@ export function scoreRescue(input: RescueFactorInput): RescueScoreResult {
       inSession: false,
       continuous: null,
       percentile: null,
+      percentileN: 0,
+      percentileWhy: '非交易时段：这次不出等级、也不算连续评分与分位',
       contradiction: null,
     }
   }
@@ -691,7 +707,28 @@ export function scoreRescue(input: RescueFactorInput): RescueScoreResult {
     score, level, factors, summary, completeness,
     timeCoef: coef, rawScore: raw, levelLines: lines,
     inSession: true, continuous, percentile: pct === null ? null : pct.pct,
+    percentileN: pctHistory.length,
+    percentileWhy: pct === null
+      ? (pctHistory.length === 0
+        ? '还没有跨日样本（连续评分需要历史样本；冷启动当天为 0 条）'
+        : `跨日样本不足（${pctHistory.length} < 5）—— 不编分位，也不用 0 顶替`)
+      : null,
     contradiction,
+  }
+}
+
+/**
+ * 快照契约里与"连续评分 + 跨日分位"有关的那组字段（**唯一映射实现**，可单测）。
+ *
+ * 为什么单独抽出来：这段映射只有在"真的采到一次样"时才会跑到（而多数用例是离线/休市路径），
+ * 抽成纯函数后，"分位与宿主算法一致 / 样本不足给 null + 原因"这两条判据才**可能被守住**。
+ */
+export function snapshotContractFields(scored: RescueScoreResult): Pick<RescueSnapshot, 'continuous' | 'continuousPercentile' | 'continuousPercentileN' | 'continuousPercentileWhy'> {
+  return {
+    continuous: scored.continuous === null ? null : Math.round(scored.continuous * 10) / 10,
+    continuousPercentile: scored.percentile === null ? null : Math.round(scored.percentile * 10) / 10,
+    continuousPercentileN: scored.percentileN,
+    continuousPercentileWhy: scored.percentileWhy,
   }
 }
 
@@ -1731,6 +1768,8 @@ export class RescueMonitor {
       summary: scored.summary,
       factors: scored.factors, etfs, indexPct, indexName: INDEX_NAME,
       timeCoef: scored.inSession ? timeCoefficient(elapsed) : 0,
+      // 连续评分与它的跨日分位（客户端只显示，不自己算）——映射只有 `snapshotContractFields` 一处
+      ...snapshotContractFields(scored),
       resonance: {
         lanes: [...coreTriggered, ...peripheralTriggered],
         core: coreTriggered.length,
@@ -2042,6 +2081,11 @@ export class RescueMonitor {
         // 注意 gap 取当日真实缺口标记，而不是无条件 true：
         // "本会话还没采过样"与"采样失败"是两件事，用同一个标记会让面板误报"采样缺口"。
         ...p, trading: inTradingWindow(Date.now()), stale: true, lastSampleTs: p.ts, lastFailTs: this.lastFailTs, gap: this.today.gap,
+        // 老快照（v0.15.0 之前）没有这三个字段 ⇒ 显式补 null + 原因，别让界面拿到 undefined
+        continuous: p.continuous ?? null,
+        continuousPercentile: p.continuousPercentile ?? null,
+        continuousPercentileN: p.continuousPercentileN ?? 0,
+        continuousPercentileWhy: p.continuousPercentileWhy ?? '上次快照（旧版本）里没有跨日分位字段 ⇒ 本次显示原因而不是现算',
         today: [...this.today.events].reverse(), intraday: [...this.today.intraday],
         sampleCount: this.today.samples,
         note: `本会话尚未采样（如收盘后重启），显示上次成功采样（${hhmmOf(p.ts)}）的数据`,
@@ -2085,6 +2129,9 @@ export class RescueMonitor {
         config: this.getConfig(), activeIntervalSec: this.activeIntervalSec(),
         today: [...this.today.events].reverse(), intraday: [...this.today.intraday],
         sampleCount: this.today.samples, lastSampleTs: null, gap: true, stale: true,
+        // 契约字段：本次没有采样 ⇒ 连续评分与分位都是 null + 原因（**不许**在界面侧现算或顶 0）
+        continuous: null, continuousPercentile: null, continuousPercentileN: 0,
+        continuousPercentileWhy: '本次会话还没有采样（复盘兜底数据）⇒ 连续评分与跨日分位都无从谈起',
         // 复盘兜底也要如实标注"最近一次成功采样取自哪个源"（未采过样则不给结论）
         flowSource: this.quoteSource ?? undefined,
         note: fb.note, fallback: fb.meta,
@@ -2093,6 +2140,8 @@ export class RescueMonitor {
     return {
       ts: Date.now(), trading: inTradingWindow(Date.now()), level: 0, score: 0,
       summary: '尚未采样（打开页面后会自动开始）', factors: [], etfs: [], indexPct: null, indexName: INDEX_NAME,
+      continuous: null, continuousPercentile: null, continuousPercentileN: 0,
+      continuousPercentileWhy: '本次会话还没有采样 ⇒ 连续评分与跨日分位都还没有（打开页面后会自动开始采样）',
       timeCoef: timeCoefficient(sessionElapsed(hhmmOf(Date.now()))),
       resonance: { lanes: [], core: 0, peripheral: 0, intensity: 'none' },
       pulseBand: {

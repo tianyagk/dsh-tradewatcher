@@ -29,3 +29,24 @@ test('护盘面板的「同时点量能」极端档阈值 == 标定 f1.extreme�
   assert.notEqual(panelValue, 1.63, '1.63 是更早一次标定的 P90（已失效），不得回退')
   assert.equal(Number(calibMatch?.[1]), 1.19, '标定 mid 值（P75）变化时本用例应提醒同步 README 的 P75/P90/P95 文案')
 })
+
+test('⑥ 跨日分位来自快照契约：显示「分位 X%（N=…）」；缺数据 ⇒ 保留原因文案；**客户端不得现算**', () => {
+  const panel = readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'RescuePanel.tsx'), 'utf8')
+  // ① 只读契约字段，不自己算分位（现算会让"同一份数据两套口径"）
+  assert.equal(/scorePercentile/.test(panel), false, '客户端不许引用宿主的打分函数（那是宿主侧的实现）')
+  assert.equal(/percentile\s*=|filter\(.*<=\s*value/.test(panel), false, '客户端不许自己算分位（不许出现排序/计数式分位实现）')
+  for (const field of ['continuousPercentile', 'continuousPercentileN', 'continuousPercentileWhy']) {
+    assert.equal(panel.includes(field), true, `面板必须读契约字段 ${field}`)
+  }
+  // ② 可见部分：有分位 ⇒ 「分位 X%（N=…）」；没有 ⇒ 短标记「—」+ 原因进 title
+  assert.equal(/分位 \$\{/.test(panel) || panel.includes('分位 $'), true, '可见部分要显示分位')
+  assert.equal(panel.includes('N=${snapshot.continuousPercentileN ?? 0}'), true, '样本数要一起显示')
+  // ③ 缺数据时必须保留"原因"这句（而不是删掉事实）
+  assert.equal(panel.includes('snapshot.continuousPercentileWhy ??'), true, '缺数据 ⇒ 原因文案必须来自契约')
+  // ④ 反例注入：让客户端"自己算分位"⇒ 上面的扫描必须红
+  const injected = panel.replace('snapshot.continuousPercentile.toFixed(0)', 'scorePercentile(snapshot.continuous ?? 0, []).pct.toFixed(0)')
+  assert.notEqual(injected, panel, '⚠ 反例应能改动面板源码（若相等说明注入点已变）')
+  assert.throws(() => {
+    assert.equal(/scorePercentile/.test(injected), false, '客户端不许自己算分位')
+  }, /客户端不许自己算分位/, '⚠ 反例（客户端自算分位）必须失败')
+})

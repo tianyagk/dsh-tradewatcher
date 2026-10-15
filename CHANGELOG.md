@@ -11,6 +11,43 @@
 
 ---
 
+## v0.93.0 — 补齐快照契约缺口：连续评分跨日分位进契约（客户端不现算）
+
+报告 `docs/AUDIT-IMPL57.md`。`npm run check` **678 / 678 × 2 时区** + selftest + build（73 片段全过）；`build.mjs` 零改动。
+
+### 缺口与修法
+
+宿主**早已算出**「连续评分近 20 日分位」（`rescue.ts:693`），但**没进客户端快照契约** ⇒ 界面拿不到，客户端按「只许用宿主已算的」的规矩**既不现算也不顶替**，只能在悬停写明原因。
+
+现在契约含 **4 个字段**：
+
+| 字段 | 类型 | 含义 |
+| --- | --- | --- |
+| `continuous` | `number \| null` | 连续评分 0–100 = `raw ÷ 权重合计 × 100`；非交易时段 ⇒ null |
+| `continuousPercentile` | `number \| null` | 近 20 日分位；样本 < 5 ⇒ null |
+| `continuousPercentileN` | `number` | 样本数（0 = 还没有跨日样本） |
+| `continuousPercentileWhy` | `string \| null` | 算不出来的原因（样本不足 / 冷启动 / 非交易时段 / **旧快照缺字段**） |
+
+- 映射**只有一处**（纯函数 `snapshotContractFields(scored)`）；另三条非采样路径（尚未采样 / 复盘兜底 / 持久化兜底）也显式补齐 + 各自原因 ⇒ 冷启动拿到的是「样本不足」，**不是 `undefined`**。
+- 持久化保留这 4 个字段 ⇒ 收盘后重启仍能显示分位。
+
+### 客户端（同一批）
+
+可见行 = `${score}/100 · 当日峰 … · 分位 X%（N=…）`（缺数据显示 `分位 —`）；悬停写契约里的 `continuousPercentileWhy`；**不引用宿主 `scorePercentile`、无任何自算式分位**。
+
+### 验证
+
+`npm run check` **678 / 678 × 2 时区** + selftest + build。
+新增 `src/host/rescueSnapshotContract.test.ts`：① 纯函数映射与 `scorePercentile` **逐点一致**、N 与样本数一致、样本不足 ⇒ null + 原因、非交易时段 ⇒ null + 原因、**并断言采样路径必须展开该映射**；①b 端到端 `mon.sampleNow()` 快照带四字段；② 冷启动 ⇒ null + N=0 + 原因（**不得 0**）。另 `rescueWeights.test.ts ⑫` 与 `rescuePanel.test.ts ⑥`。
+**注入 5/5 全抓**：C1 映射删三字段（缺口复现）｜**C1b 采样路径不再展开映射（专堵「字段悄悄丢回缺口」）**｜C2 缺样本用 0 顶替｜C3 客户端自算分位｜C4 分位人为偏移 +1。
+**更新一条旧断言**：`productBatch.test.ts ②` 原要求面板写明「当前快照契约里没有带出来」（缺口时期的规定）⇒ 缺口补上后改为「必须读契约字段 + 仍不许现算 + 可见部分带短标记」。
+
+### 未做（已记录）
+
+- 「真采样 → 真分位」的完整上游夹具（本批用离线桩 + 纯函数映射覆盖）。
+- 工具输出结构未改（归因句里本来就带连续评分 / 分位 / N）。
+- 分位窗口定义未变（最近 ≤20 个有 `continuous` 的跨日样本，跳过今天）。
+
 ## v0.92.0 — 产品迭代批：字号与间距收敛（145 处 → 0）+ 护盘参照 + 可发现性
 
 依据 `docs/REVIEW-5-PRODUCT.md`；报告 `docs/AUDIT-IMPL56.md`。`npm run check` **673 / 673 × 2 时区** + build（73 片段全过）；`build.mjs` 零改动。

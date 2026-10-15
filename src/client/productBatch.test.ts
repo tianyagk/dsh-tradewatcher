@@ -24,9 +24,16 @@ test('② 护盘总分带"与最近相比"的参照，且峰值算法**只有一
   const uses = src.split('peakToday').length - 1
   assert.ok(uses >= 3, `峰值必须同源复用（声明 + ≥2 处使用；实际 ${uses} 次）`)
   assert.equal(/const peak = snapshot\.intraday\.reduce/.test(src), false, '旧的第二处峰值算法必须已删')
-  // 诚实性：跨日分位不在契约里 ⇒ 必须写明"不给、也不现算"，不许客户端造一个分位
-  assert.ok(src.includes('当前快照契约里没有带出来'), '必须写明跨日分位为什么没有')
+  /**
+   * 诚实性（**AUDIT-IMPL57 更新**）：跨日分位此前不在契约里 ⇒ 当时要求"写明为什么没有"；
+   * 现在契约已补上（`continuousPercentile` / `continuousPercentileN` / `continuousPercentileWhy`）⇒
+   * 面板改成**读契约**显示「分位 X%（N=…）」，缺数据时用契约里的原因文案；**仍然不许客户端现算**。
+   */
+  for (const field of ['continuousPercentile', 'continuousPercentileN', 'continuousPercentileWhy']) {
+    assert.ok(src.includes(field), `面板必须读契约字段 ${field}（分位由宿主算、界面只显示）`)
+  }
   assert.equal(/scorePercentile/.test(src), false, '客户端**不许**自己算分位（宿主算了才显示）')
+  assert.ok(/分位 \$\{/.test(src) || src.includes('分位 $'), '可见部分要带「分位 …」短标记')
   // 反例注入：拿掉可见参照 ⇒ 判据必须失败
   // 反例注入：去掉**可见那行**里的参照（词在别的句子/注释里也有 ⇒ 判据必须认"可见形态"而不是裸词）
   const visible = /\$\{snapshot\.score\}\/100 · 当日峰/

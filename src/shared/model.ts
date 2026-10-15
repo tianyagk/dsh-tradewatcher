@@ -1622,6 +1622,23 @@ export interface RescueSnapshot {
   indexName: string
   /** 时点系数（0.4 早盘 ~ 1.1 尾盘，已接入评分） */
   timeCoef: number
+  /**
+   * **连续评分**（0–100 = `raw ÷ 权重合计 × 100`）：等级只剩两级后，粒度由它承载。
+   * 非交易时段 ⇒ `null`（不出等级，也不给连续评分）。
+   */
+  continuous?: number | null
+  /**
+   * 连续评分的**近 20 日分位**（0–100）与**样本数**。
+   *
+   * 口径：宿主用 `scorePercentile(连续评分, 最近 ≤20 个跨日样本)` 算出来 —— **客户端不许自己再算**，
+   * 只负责显示（原因与样本数都来自本契约，避免两处口径漂移）。
+   * 样本 < 5 ⇒ `null` + `continuousPercentileWhy` 写明原因；**不得用 0 顶替**。
+   */
+  continuousPercentile?: number | null
+  /** 上面那个分位的样本数（`0` = 还没有跨日样本） */
+  continuousPercentileN?: number
+  /** 分位算不出来的原因；算得出来时为 `null` */
+  continuousPercentileWhy?: string | null
   /** 本次生效的等级线（= 基准 {35,55,75} ÷ 时点系数）；等级判据只认它 */
   levelLines?: { t1: number; t2: number; t3: number }
   /**

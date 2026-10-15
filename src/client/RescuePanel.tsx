@@ -472,12 +472,22 @@ export function RescuePanel(props: {
                 }${peakToday !== null && peakToday.score === snapshot.score ? '（当前就是当日峰值）' : ''}；阈值口径 ${
                   snapshot.thresholdSource === 'self' ? `自建分位（${snapshot.selfSampleDays} 天）`
                     : snapshot.thresholdSource === 'calibrated' ? '历史标定' : `经验锚点（自建样本 ${snapshot.selfSampleDays}/20 天）`
-                }。跨日分位（连续评分在近 ≤20 个交易日样本里的位置）宿主已算但**当前快照契约里没有带出来** ⇒ 界面不给，也不在客户端现算`,
+                }。${
+                  // v0.16.0：跨日分位**来自快照契约**（宿主算、界面只显示）——**不在客户端现算**
+                  typeof snapshot.continuousPercentile === 'number'
+                    ? `连续评分 ${snapshot.continuous === null || snapshot.continuous === undefined ? '—' : snapshot.continuous}/100 的近 20 日分位 ${snapshot.continuousPercentile.toFixed(0)}%（N=${snapshot.continuousPercentileN ?? 0}）`
+                    : `连续评分的近 20 日分位：${snapshot.continuousPercentileWhy ?? '未取到（快照里没有分位字段）'}`
+                }`,
           },
-            // 可见部分保持紧凑：分数 + 一句**能用现有数据算出来**的参照（当日峰值）
+            // 可见部分保持紧凑：分数 + 一句**能用现有数据算出来**的参照（当日峰值）+ 跨日分位
+            // （分位数与样本数都来自快照契约；缺数据时显示"分位 —"这个短标记，原因在 title 里）
             paused
               ? '—'
-              : `${snapshot.score}/100 · 当日峰 ${peakToday === null ? '—' : peakToday.score}`)
+              : `${snapshot.score}/100 · 当日峰 ${peakToday === null ? '—' : peakToday.score} · 分位 ${
+                  typeof snapshot.continuousPercentile === 'number'
+                    ? `${snapshot.continuousPercentile.toFixed(0)}%（N=${snapshot.continuousPercentileN ?? 0}）`
+                    : '—'
+                }`)
         : null,
       React.createElement('span', { style: { flex: 1 } }),
       snapshot !== null && (snapshot.stale === true || (data as { staleNote?: string })?.staleNote !== undefined)
