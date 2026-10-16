@@ -15,6 +15,11 @@
  * 另锁两条**用户明确抱怨过**的规则（README「开发」节的开发原则 1/2/6）：
  * 悬停提示会被拼在侧栏插件名后面，长了就被宿主截断成 `…` ——
  * 实测踩到过 `盯盘·持仓当日盈亏 +0.07%（+795.00 元…`（金额那截永远读不到）。
+ *
+ * **侧栏标签恒为「盯盘」**（用户 2026-10-16 明确要求，见 ⑥/⑦）：文本**恰为** `盯盘`，
+ * 不许带 `· 数据 HH:mm:ss`、也不许带 `· 已收盘`；这两类信息在**悬停 `title`**（= `detail`）与面板里
+ * —— 所以这条断言反转的是"标签要不要带后缀"，**不是**"要不要保留数据时刻"。
+ * ⚠ 与形状断言一样：把后缀加回标签 = 必须显式改这两条断言。
  */
 import { test } from 'node:test'
 import { createRequire } from 'node:module'
@@ -138,46 +143,89 @@ test('⑤ 源码：badgeView 不许再读护盘等级，涨跌幅短标记必须
   )
 })
 
-test('⑥ 源码：setBadge 必须把 stamp 也写回去（只比较不赋值 ⇒ 标签永远显示不出数据时刻）', () => {
+/**
+ * ⑥ 侧栏**标签**恒为「盯盘」（用户 2026-10-16 明确要求：**不要后缀**）。
+ *
+ * 改前的形态是 `盯盘 · 数据 15:05:56 · 已收盘` ⇒ 用户要求只保留 `盯盘`。
+ * 数据时刻与「已收盘」没有丢：悬停 `title`（= `detail`）里仍在，面板内本来也有（见 ⑦）。
+ *
+ * ⚠ 这条断言与 ⑦ 是**成对反转**的（上一批恰好相反）：谁要把后缀加回标签，必须显式改这里。
+ */
+test('⑥ 源码：侧栏标签必须是常量「盯盘」，不许再做任何字符串插值（后缀 = 不许回来）', () => {
   const { readFileSync } = require('node:fs') as { readFileSync: (p: string, enc: string) => string }
   const { fileURLToPath } = require('node:url') as { fileURLToPath: (u: string) => string }
   const { dirname, join } = require('node:path') as { dirname: (p: string) => string; join: (...p: string[]) => string }
   const src = readFileSync(join(dirname(fileURLToPath(import.meta.url)), './index.tsx'), 'utf8')
-  assert.ok(src.includes('badgeState.stamp = next.stamp'), 'stamp 必须在 setBadge 里被赋值（守卫拿它比较、label 读它）')
-  // 反例注入：删掉那一行 ⇒ 判据必败
-  const injected = src.replace('badgeState.stamp = next.stamp', '/* 删掉赋值 */')
-  assert.notEqual(injected, src, '反例注入必须真改到源码')
+  const code = stripComments(src)
+  assert.ok(code.includes("label: () => '盯盘'"), '真实接线必须是常量「盯盘」')
+  // 判据：`label: () => …` 那一行的**表达式里不许有模板插值 / 拼接**（那就是后缀）
+  const labelExpr = /label: \(\) => ([^,\n]*)/.exec(code)?.[1] ?? ''
+  assert.equal(labelExpr, "'盯盘'", `标签表达式必须恰是 '盯盘'（实际 ${labelExpr}）`)
+  const judge = (text: string): boolean => /label: \(\) => [^,\n]*\$\{/.test(text)
+  assert.equal(judge(code), false, '标签表达式里不许出现 `${…}`（数据时刻/已收盘都算后缀）')
+  // 反例注入 1：把时间戳后缀加回去 ⇒ 必败
+  const withStamp = code.replace("label: () => '盯盘'", 'label: () => `盯盘 · 数据 ${badgeState.stamp}`')
+  assert.notEqual(withStamp, code, '反例注入必须真改到源码')
   assert.throws(
-    () => assert.equal(injected.includes('badgeState.stamp = next.stamp'), true, 'stamp 必须被赋值'),
-    /stamp 必须被赋值/,
-    '⚠ 反例注入（只比较不赋值）必须让断言失败',
+    () => assert.equal(judge(withStamp), false, '标签里不许有后缀'),
+    /标签里不许有后缀/,
+    '⚠ 反例注入（`· 数据 HH:mm:ss` 加回标签）必须让断言失败',
+  )
+  // 反例注入 2：只加「已收盘」后缀（常量拼接也算）⇒ 必败
+  const withSettled = code.replace("label: () => '盯盘'", "label: () => `盯盘 · 已收盘`")
+  assert.throws(
+    () => assert.equal(/label: \(\) => ([^,\n]*)/.exec(withSettled)?.[1], "'盯盘'", '标签表达式必须恰是 \'盯盘\''),
+    /标签表达式必须恰是/,
+    '⚠ 反例注入（`· 已收盘` 加回标签）必须让断言失败',
+  )
+  // 反例注入 3：标签接回 detail（那是最容易"顺手"的写法：detail 里就带着数据时刻）⇒ 必败
+  const withDetail = code.replace("label: () => '盯盘'", 'label: () => `盯盘 · ${badgeState.detail}`')
+  assert.throws(
+    () => assert.equal(judge(withDetail), false, '标签里不许有后缀'),
+    /标签里不许有后缀/,
+    '⚠ 反例注入（标签接回 detail）必须让断言失败',
+  )
+})
+
+test('⑥b 结构：徽标状态里**没有**"标签专用"字段（stamp 已删 ⇒ 后缀无处可取）', () => {
+  const v = badgeView(base, false)
+  assert.deepEqual(Object.keys(v).sort(), ['detail', 'text', 'tone'], '徽标状态只有 text/tone/detail 三个字段')
+  // 反例注入：给状态加回一个 stamp 字段 ⇒ 判据必败（证明这条不是空跑）
+  const injected = { ...v, stamp: '数据 15:05:56 · 已收盘' }
+  assert.throws(
+    () => assert.deepEqual(Object.keys(injected).sort(), ['detail', 'text', 'tone'], '徽标状态不该再有 stamp'),
+    /徽标状态不该再有 stamp/,
+    '⚠ 反例注入（stamp 字段回来）必须让断言失败',
   )
 })
 
 // ── ③ 标签、tooltip、同口径同舍入 ───────────────────────────────────────────
 
-/** task-80：一个事实只留一处 —— 标签不再重复当日盈亏；徽标与 tooltip 同口径同舍入 */
-test('⑦ task-80：标签文案不许出现当日盈亏（也不许出现等价的盈亏数值写法），只留数据时刻', () => {
+/** task-80 反转：标签恒为「盯盘」；数据时刻与「已收盘」搬到悬停 title（信息不丢） */
+test('⑦ 标签恰为「盯盘」（不含 数据/已收盘/`·` 分隔后缀），信息落在悬停 title 里', () => {
   // ⚠ 断言必须锚在**真实接线**上：读 index.tsx 里真正的 label 表达式，而不是自己拼一个
-  const { readFileSync } = require('node:fs') as { readFileSync: (p: string) => string }
+  const { readFileSync } = require('node:fs') as { readFileSync: (p: string, enc: string) => string }
   const { fileURLToPath } = require('node:url') as { fileURLToPath: (u: string) => string }
   const { dirname, join } = require('node:path') as { dirname: (p: string) => string; join: (...p: string[]) => string }
-  const src = readFileSync(join(dirname(fileURLToPath(import.meta.url)), './index.tsx'))
-  // 用**子串**核对（别跟正则转义较劲）：真实接线必须是 stamp，不能是 detail
-  assert.ok(src.includes("label: () => (badgeState.stamp"), '真实接线必须是 stamp（标签只留数据时刻）')
-  assert.equal(src.includes("label: () => (badgeState.detail"), false, '标签不许再接 detail（那会把当日盈亏又带回标签）')
-  const label = (s: { stamp: string }): string => `盯盘 · ${s.stamp}`
+  const src = readFileSync(join(dirname(fileURLToPath(import.meta.url)), './index.tsx'), 'utf8')
+  // 判据 1：`label` 是常量「盯盘」——不许再接 stamp / detail（两者都会带出后缀）
+  assert.ok(src.includes("label: () => '盯盘'"), '真实接线必须是常量「盯盘」')
+  assert.equal(/label: \(\) => \(badgeState\./.test(src), false, '标签不许再接任何 badgeState 字段（那就是后缀）')
+  // 判据 2：**实际渲染的标签文本**恰为「盯盘」
+  const label = (): string => '盯盘'
+  const text = label()
+  assert.equal(text, '盯盘', `侧栏标签必须恰为「盯盘」（实际 ${JSON.stringify(text)}）`)
+  for (const forbidden of ['数据', '已收盘', '·', '%', '当日盈亏']) {
+    assert.equal(text.includes(forbidden), false, `标签里不许出现 ${JSON.stringify(forbidden)}`)
+  }
+  // 判据 3：**信息没丢** —— 数据时刻与「已收盘」必须在悬停 title（= detail）里
+  // ⚠ 期望值**必须**写死字面量（R5）：用同一个 toLocaleTimeString 推导 ⇒ 任何时区都过，
+  // 等于把"数据时刻按浏览器时区渲染"这个缺陷锁成契约（UTC 浏览器下它接受 01:42:52）。
   const v = badgeView({ indexPoint: 3000, indexName: '上证指数', dayPnlPct: -2.29, dayPnl: -2290, asOf: Date.parse('2026-10-12T09:42:52+08:00'), settled: false }, false)
-  const text = label(v)
-  assert.equal(/当日盈亏/.test(text), false, '标签里不许出现「当日盈亏」')
-  assert.equal(/[+-]\d+(\.\d+)?\s*%/.test(text), false, '标签里不许出现等价的盈亏百分比（那是徽标的活）')
-  assert.equal(/[+-]?\d+\.\d\b/.test(text), false, '标签里不许出现盈亏数值')
-  // ⚠ 这里**必须**写死字面量（R5）：旧断言用同一个 toLocaleTimeString 推导期望值 ⇒ 任何时区都过，
-  // 等于把"数据时刻按浏览器时区渲染"这个缺陷锁成了契约（UTC 浏览器下它接受 01:42:52）。
-  // 现在期望值是**北京墙上时间**，在 TZ=UTC / TZ=America/New_York 轮里都必须一样。
-  assert.equal(text, '盯盘 · 数据 09:42:52', `标签只留数据时刻，且必须是北京时间（实际 ${text}）`)
-  assert.match(text, /^盯盘 · 数据 \d{2}:\d{2}:\d{2}$/, '标签形状：盯盘 · 数据 HH:mm:ss')
-  // 徽标保留（紧凑、带色那一处）
+  assert.ok(v.detail.includes('· 数据 09:42:52'), `悬停里必须有北京数据时刻（实际 ${v.detail}）`)
+  assert.equal(v.detail, '当日盈亏 -2.3% · 数据 09:42:52', `悬停形状（实际 ${v.detail}）`)
+  assert.ok(badgeView({ ...base, settled: true }, false).detail.includes('· 已收盘'), '已收盘状态必须在悬停里（不许因为标签去掉后缀就把信息丢掉）')
+  // 判据 4：徽标（紧凑、带色那一处）不变
   assert.equal(v.text, '-2.3%', '徽标直接给百分比，便于比较')
   assert.equal(v.tone, 'down', '徽标仍带色（下跌）')
 })

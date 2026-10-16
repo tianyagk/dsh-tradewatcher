@@ -32,17 +32,14 @@ const PANEL_ID = 'tradewatcher'
  * 之间唯一不引入新依赖的通道；而且这样"徽标数据"只有一份，天然满足
  * 「徽标数字与面板顶部数字同源」的要求。
  */
-const badgeState: BadgeState = { text: '', tone: 'flat', detail: '', stamp: '' }
+const badgeState: BadgeState = { text: '', tone: 'flat', detail: '' }
 const badgeListeners = new Set<() => void>()
 
 function setBadge(next: BadgeState): void {
-  if (next.text === badgeState.text && next.tone === badgeState.tone && next.detail === badgeState.detail && next.stamp === badgeState.stamp) return
+  if (next.text === badgeState.text && next.tone === badgeState.tone && next.detail === badgeState.detail) return
   badgeState.text = next.text
   badgeState.tone = next.tone
   badgeState.detail = next.detail
-  // ⚠ `stamp` 必须一起写：它上面被比较、下面被 label 读（`盯盘 · 数据 HH:mm:ss`）。
-  // 只比较不赋值 ⇒ 守卫永远认为"变了"、而 label 永远拿到初值 ''（实测：标签一直只显示「盯盘」）。
-  badgeState.stamp = next.stamp
   for (const fn of badgeListeners) fn()
 }
 
@@ -126,8 +123,16 @@ export function apply(ctx: ClientContext): void {
         name: 'sidebar.panellist',
         id: PANEL_ID,
         order: 60,
-        // 展开态侧栏标题 / aria-label：图标放不下的完整语义（包括「已收盘」后缀）在这里
-        label: () => (badgeState.stamp === '' ? '盯盘' : `盯盘 · ${badgeState.stamp}`),
+        /**
+         * 展开态侧栏标题 / `aria-label`：**恒为「盯盘」**。
+         *
+         * ⚠ 用户 2026-10-16 明确要求：**不要后缀**（此前这里会拼成
+         * `盯盘 · 数据 15:05:56 · 已收盘`，太长、也太吵）。
+         * 数据时刻与「已收盘」没有丢，落点是：① 侧栏条目的**悬停 `title`**
+         * （= `badgeState.detail`，见 `PanelIcon`）；② **面板内**本来就有
+         * （页面级数据时刻、护盘面板收盘状态）。⇒ 这里**不许**再对它做字符串插值。
+         */
+        label: () => '盯盘',
       },
       PanelIcon,
     ),
@@ -169,6 +174,11 @@ function PanelIcon(props: { size?: number; active?: boolean }): React.ReactEleme
     'span',
     {
       style: { position: 'relative', display: 'inline-flex', width: size, height: size, alignItems: 'center', justifyContent: 'center' },
+      /**
+       * ⚠ 悬停 `title` 是**侧栏条目上唯一**的数据时刻/收盘状态出口（标签恒为「盯盘」，
+       * 见 apply() 里 label 的说明）—— `detail` 里带着 `· 数据 HH:mm:ss[ · 已收盘]`，
+       * **不要**把它挪回标签文本。
+       */
       title: badge.detail === '' ? '盯盘' : badge.detail,
     },
     React.createElement(

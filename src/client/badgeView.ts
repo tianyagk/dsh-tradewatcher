@@ -7,6 +7,15 @@ import { shClockText } from './marketTime.ts'
  * 徽标**只**表示「持仓当日涨跌幅」：短标记 `-2.3%`、带符号、按 `prefs.redUp` 着色
  * （着色在 `theme.ts` 的 `badgeToneColor`）；取不到时给原因、**绝不写 0 冒充**。
  *
+ * ## ⚠ 侧栏**标签**恒为「盯盘」（用户 2026-10-16 明确要求：不要后缀）
+ *
+ * 侧栏条目的标签文本**只有** `盯盘` 两个字 —— 不带 `· 数据 HH:mm:ss`、也不带 `· 已收盘`。
+ * 这两类信息**没有丢**，它们的落点：
+ *   · 侧栏条目的**悬停 `title`** = 本模块的 `detail`（`当日盈亏 -2.3% · 数据 15:05:56 · 已收盘`）；
+ *   · **面板内**本来就有（页面级数据时刻、护盘面板的收盘状态、`来源/降级` 行）。
+ * ⇒ 本模块**不再产出**任何"标签专用"的字符串（`BadgeState` 里没有 `stamp` 这种字段），
+ *   所以标签不可能被"顺手"加回后缀（结构性防线，与下面删掉 `level` 同一思路）。
+ *
  * ## ⚠ 这里**不得**再出现「护」或任何护盘等级文案
  *
  * `level` / `levelLabel` 已从入参里删掉（见 `BadgeInput`）—— 入参里没有等级，
@@ -24,7 +33,7 @@ import { shClockText } from './marketTime.ts'
  *
  * ## 文案与长度
  *
- * 这段文字会**直接拼在侧栏的插件名后面**当悬停提示，宽度很窄 ——
+ * `detail` 会**直接拼在侧栏的插件名后面**当悬停提示，宽度很窄 ——
  * 一句话长了就被宿主截断成"…"（实测踩过：`盯盘·持仓当日盈亏 +0.07%（+795.00 元…`），
  * 既啰嗦又读不出完整信息。按「开发原则」（README「开发」节第 1、2、6 条）：
  * **悬停提示只留一行、只写"影响什么 + 数据时刻"**，金额这类细节留在面板里（面板宽度够）。
@@ -42,10 +51,13 @@ export interface BadgeState {
    * 留一条现成的通道。
    */
   tone: 'up' | 'down' | 'flat'
-  /** 悬停提示：**只留一行**（含当日盈亏，供 tooltip 用） */
+  /**
+   * 悬停提示（`title`）：**只留一行**，当日盈亏 + `· 数据 HH:mm:ss[ · 已收盘]`。
+   *
+   * 注意这里是**侧栏条目唯一的**数据时刻/收盘状态出口（标签恒为「盯盘」，见文件头）；
+   * 长度上限 `BADGE_DETAIL_MAX` 就是为它设的。
+   */
   detail: string
-  /** 侧栏**标签**用的那一截：只有 `数据 HH:mm:ss[ · 已收盘]` —— 盈亏已在徽标里显示，标签不重复 */
-  stamp: string
 }
 
 /**
@@ -73,16 +85,6 @@ function tail(asOfText: string, settled: boolean): string {
 }
 
 /**
- * 侧栏标签只用**时间戳那一截**：`数据 HH:mm:ss[ · 已收盘]`。
- *
- * 为什么：标签与徽标是**同一处**的两种呈现，徽标已经带了带色的盈亏数值 ⇒
- * 标签再写一遍"当日盈亏 -2.29%"就是同一事实出现两次（用户明确要求过简洁）。
- */
-function stamp(asOfText: string, settled: boolean): string {
-  return `数据 ${asOfText}${settled ? ' · 已收盘' : ''}`
-}
-
-/**
  * 徽标视图。
  *
  * 分档顺序（**只有这些**，没有等级分支）：隐身视图 → 不可算 → 零 → 带符号涨跌幅。
@@ -98,15 +100,14 @@ export function badgeView(b: BadgeInput, masked: boolean): BadgeState {
       text: point === null ? '••' : String(point).slice(0, 4),
       tone: 'flat',
       detail: `隐身视图 · 点位 ${point ?? '—'}${tail(asOfText, b.settled)}`,
-      stamp: stamp(asOfText, b.settled),
     }
   }
   if (b.dayPnlPct === null) {
     // 不可算：给短原因，绝不写 0.00%（那是另一条信息）
-    return { text: '', tone: 'flat', detail: '当日盈亏 —（无持仓行情）', stamp: stamp(asOfText, b.settled) }
+    return { text: '', tone: 'flat', detail: '当日盈亏 —（无持仓行情）' }
   }
   if (b.dayPnlPct === 0) {
-    return { text: '0.0%', tone: 'flat', detail: `当日盈亏 0.0%${tail(asOfText, b.settled)}`, stamp: stamp(asOfText, b.settled) }
+    return { text: '0.0%', tone: 'flat', detail: `当日盈亏 0.0%${tail(asOfText, b.settled)}` }
   }
   const pct = b.dayPnlPct
   const sign = pct > 0 ? '+' : '-'
@@ -116,6 +117,5 @@ export function badgeView(b: BadgeInput, masked: boolean): BadgeState {
     text: `${sign}${mag >= 10 ? '10+' : mag.toFixed(1)}%`,
     tone: pct > 0 ? 'up' : 'down',
     detail: `当日盈亏 ${sign}${mag >= 10 ? '10+' : mag.toFixed(1)}%${tail(asOfText, b.settled)}`,
-    stamp: stamp(asOfText, b.settled),
   }
 }
