@@ -43,6 +43,10 @@ export function axisTicks(centers: readonly number[], max = 5): number[] {
 /**
  * 口径**是否偏离默认**（偏离才给一行原因；正常情况一个字都不显示）。
  * 默认 = A股/深沪 + 有 floatMv + 支持前复权 + 样本够 ⇒ 换手率衰减 k=1.5、三角形、近 45 日。
+ *
+ * `bucketNote`（档数被夹住的原因）**必须**并进这一行（v0.99.x 自适应档数）：
+ * 档数被上限夹住 = 价格分辨率比目标粗，这是"口径偏离"，**不许静默** ——
+ * 它优先于其它原因一起显示（不是二选一），所以这里是"拼接"而不是"提前 return"。
  */
 export function caliberDeviates(input: {
   decay: 'turnover' | 'half-life'
@@ -51,12 +55,39 @@ export function caliberDeviates(input: {
   why: string | null
   samples: number
   window: number
+  /** 档数规划给的夹取说明（未夹 ⇒ null/缺省） */
+  bucketNote?: string | null
+  /**
+   * 成交量量纲归一的标注（未归一 ⇒ null/缺省）：科创板日线在腾讯一侧是「股」，
+   * 插件按「手」算换手率 ⇒ 归一过就必须说出来（否则用户不知道"这份数字被换算过"）。
+   */
+  unitNote?: string | null
 }): string | null {
-  if (input.why !== null) return input.why
-  if (!input.fqSupported) return '该标的不支持前复权（指数/期货/板块）⇒ 不提供筹码分布'
-  if (input.decay !== 'turnover') return input.decayReason ?? '按固定半衰期 10 日衰减（经验口径）'
-  if (input.samples < input.window) return `只取到近 ${input.samples} 日（不足 ${input.window} 日）——历史越长越准`
-  return null
+  const base = ((): string | null => {
+    if (input.why !== null) return input.why
+    if (!input.fqSupported) return '该标的不支持前复权（指数/期货/板块）⇒ 不提供筹码分布'
+    if (input.decay !== 'turnover') return input.decayReason ?? '按固定半衰期 10 日衰减（经验口径）'
+    if (input.samples < input.window) return `只取到近 ${input.samples} 日（不足 ${input.window} 日）——历史越长越准`
+    return null
+  })()
+  const notes = [input.bucketNote, input.unitNote]
+    .filter((x): x is string => typeof x === 'string' && x.trim() !== '')
+  if (notes.length === 0) return base
+  const note = notes.join('；⚠ ')
+  return base === null ? note : `${base}；⚠ ${note}`
+}
+
+/**
+ * 档数口径的**一行元组**（用户要求：界面/悬停必须能读到「窗口 N 天 · 档数 M · 档宽 X 元」）。
+ *
+ * 为什么档宽必须露出来：档数固定时，窗口越长价格区间越宽 ⇒ 档宽越粗（45 天 1.25 元 → 805 天 6.10 元）。
+ * 只说"96 档"看不出分辨率；说"档宽 6.10 元"才看得出"这个分布已经粗到什么程度"。
+ */
+export function bucketCaliberOf(input: { window: number; bucketCount: number; bucketWidth?: number | null }): string {
+  const w = Number.isFinite(input.window) ? Math.round(input.window) : 0
+  const n = Number.isFinite(input.bucketCount) ? Math.round(input.bucketCount) : 0
+  const bw = typeof input.bucketWidth === 'number' && Number.isFinite(input.bucketWidth) && input.bucketWidth > 0 ? input.bucketWidth : null
+  return `窗口 ${w} 天 · 档数 ${n} · 档宽 ${bw === null ? '—' : `${bw.toFixed(4)} 元`}`
 }
 
 /**
@@ -289,6 +320,47 @@ export function chipsRowsOf(centers: readonly number[], buckets: readonly number
   const out: Array<{ center: number; weight: number }> = []
   for (let i = n - 1; i >= 0; i -= 1) out.push({ center: centers[i], weight: buckets[i] })
   return out
+}
+
+/**
+ * **按可画行数合并相邻档**（v0.99.x 自适应档数）。
+ *
+ * 为什么必须有它：档数自适应后，长窗口会有几百档（实测沪深300ETF@805 天 242 档、区间内 87 行；
+ * 贵州茅台@360 天 232 行），而筹码图绘图区只有 ~86px（按 1px/行）⇒ 行数超过可画行数时，
+ * `chipsRowsLayoutOf` 会被迫按 1px 画并**末行溢出被裁**（用户报过"可见柱只有 3-4 根"）。
+ * 与其静默裁掉下面一半价格区间的柱子，不如**如实合并**：权重相加（守恒）、
+ * 行的中心价取**权重加权的平均价**（这样"高于现价=套牢/低于=获利"的方向仍按同一口径判）。
+ *
+ * 合并只影响**显示**：`weight` 之和与合并前相等（不做归一化拉伸）；宿主的 P5/P95/均价/盈利比例
+ * 仍按全分辨率算，不受这里影响。
+ */
+export function mergeForRows(
+  centers: readonly number[],
+  buckets: readonly number[],
+  maxRows: number,
+): { centers: number[]; buckets: number[]; merged: number } {
+  const n = Math.min(centers.length, buckets.length)
+  const cap = Math.max(1, Math.floor(Number.isFinite(maxRows) && maxRows > 0 ? maxRows : 1))
+  if (n === 0 || cap >= n) {
+    return { centers: centers.slice(0, n), buckets: buckets.slice(0, n), merged: 1 }
+  }
+  const k = Math.ceil(n / cap)
+  const outC: number[] = []
+  const outB: number[] = []
+  for (let i = 0; i < n; i += k) {
+    const end = Math.min(n, i + k)
+    let w = 0
+    let weighted = 0
+    for (let j = i; j < end; j += 1) {
+      const wj = Number.isFinite(buckets[j]) ? buckets[j] : 0
+      w += wj
+      weighted += wj * centers[j]
+    }
+    outB.push(w)
+    // 权重为 0（空档）⇒ 取该段的**两端中点**，不写 0（0 会被读成一个真实价位）
+    outC.push(w > 0 ? weighted / w : (centers[i] + centers[end - 1]) / 2)
+  }
+  return { centers: outC, buckets: outB, merged: k }
 }
 
 /** 分布**轮廓**（柱端折线）：视觉引导，**不是新数据** —— 每个顶点都是同一个桶、经同一个 `widthOf` */

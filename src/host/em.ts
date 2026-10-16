@@ -27,6 +27,7 @@ import { join } from 'node:path'
 import { dataHome } from './store.ts'
 import { hhmmOf, dayOf, inSession, isSettledOffline, shanghaiParts } from './time.ts'
 import { UpstreamCoolingError, withHostBreaker } from './breakerFetch.ts'
+import { normalizeVolUnits, tencentVolToHands } from './klineUnits.ts'
 
 export { UpstreamCoolingError }
 
@@ -1718,6 +1719,11 @@ interface KlineEntry {
   degradedReason: string | null
   /** 采纳时是否丢掉了最后一根（未完成 bar / 旧 schema 下无法验证的那一根） */
   droppedLast: boolean
+  /**
+   * 量纲归一的**如实标注**（`src/host/klineUnits.ts`）：缓存里检出 ≈100× 的成交量断层、
+   * 或按同日报价校正过绝对量纲时给出；null = 没动过。界面与回包直接显示这句话。
+   */
+  unitNote: string | null
 }
 
 const klineMem = new Map<string, KlineEntry>()
@@ -1912,6 +1918,7 @@ async function loadKlineCache(secid: string, klt: number, fqt: FqMode): Promise<
   const entry: KlineEntry = hit ?? {
     bars: [], loaded: false, updatedAt: 0, partial: false,
     fileBars: 0, refusedReason: null, degradedReason: null, droppedLast: false,
+    unitNote: null,
   }
   const paths = klineCacheFileNames(secid, klt, fqt).map((name) => join(dataHome(), 'klines', name))
   for (const path of paths) {
@@ -1939,6 +1946,14 @@ async function loadKlineCache(secid: string, klt: number, fqt: FqMode): Promise<
       entry.updatedAt = typeof parsed.updatedAt === 'number' ? parsed.updatedAt : 0
       // 丢掉那根未完成 bar 之后，最后一根就是**已完成**的 ⇒ partial 必须跟着变成 false
       entry.partial = decision.dropLast ? false : parsed.partial === true
+      // 量纲归一（只改 vol）：缓存里"腾讯段（股）+ 东财段（手）"并存时会留下 ≈100× 的断层，
+      // 不修就会让筹码的换手率被放大 100× ⇒ 天天顶到 cap。判不了则丢较早那段并如实标注。
+      const unit = normalizeVolUnits(entry.bars)
+      if (unit.fixed) {
+        entry.bars = unit.bars
+        entry.unitNote = unit.reason
+        if (entry.bars.length > 0) void saveKlineCacheRepair(secid, klt, fqt, entry.bars, entry.updatedAt, entry.partial)
+      }
       break
     } catch {
       /* 该口径还没有缓存文件 */
@@ -1949,8 +1964,47 @@ async function loadKlineCache(secid: string, klt: number, fqt: FqMode): Promise<
   return entry
 }
 
-async function saveKlineCache(secid: string, klt: number, fqt: FqMode, bars: DayBar[]): Promise<void> {
+/**
+ * **量纲修复的落盘**（与常规 `saveKlineCache` 分开，两条理由都是硬要求）：
+ *
+ * 1. **不许伪造新鲜度**：修复没有产生新数据 ⇒ `updatedAt` 必须保持原值。若误用 `saveKlineCache`
+ *    （它把 `updatedAt` 写成 `Date.now()`），收盘后一次修复就会把该标的判成"休市定稿 ⇒ 免回源"，
+ *    当天那根新 bar 反而要等到第二天才补上。
+ * 2. **必须走锁**：与其它写入共用 `updateJsonLocked`（锁内"读磁盘最新 → 按日期合并 → 原子写回"），
+ *    避免与并发的增量取数互相覆盖；条数上限沿用 `KLINE_CAP`。
+ */
+async function saveKlineCacheRepair(
+  secid: string,
+  klt: number,
+  fqt: FqMode,
+  bars: DayBar[],
+  updatedAt: number,
+  partial: boolean,
+): Promise<void> {
   try {
+    await updateJsonLocked(
+      klineFile(secid, klt, fqt),
+      (disk) => {
+        const old = (disk !== null && typeof disk === 'object' ? (disk as { bars?: DayBar[] }).bars : undefined) ?? []
+        return {
+          v: KLINE_CACHE_V,
+          secid,
+          klt,
+          fqt,
+          updatedAt,
+          partial,
+          bars: mergeBars(old, bars, KLINE_CAP[klt] ?? Math.max(old.length, bars.length)),
+        }
+      },
+      { note: `kline-unit:${secid}:${klt}:${fqt}` },
+    )
+  } catch (error) {
+    // 落盘失败不影响本次读数（内存里已经是归一后的序列）；下次读会再试一次
+    console.warn('[tradewatcher] 保存K线量纲修复失败:', secid, String(error))
+  }
+}
+
+async function saveKlineCache(secid: string, klt: number, fqt: FqMode, bars: DayBar[]): Promise<void> {  try {
     await mkdir(join(dataHome(), 'klines'), { recursive: true })
     // 落盘时判定最后一根：盘中抓到的当日 bar 标 partial（读侧按 60s TTL 决定是否回源）
     const last = bars.length > 0 ? bars[bars.length - 1] : null
@@ -2110,7 +2164,9 @@ async function requestKlineFromTencent(secid: string, klt: number, lmt: number, 
         close,
         high: num(r[3]) ?? close,
         low: num(r[4]) ?? close,
-        vol: r.length > 5 ? num(r[5]) : null,
+        // 量纲归一的**入口**：腾讯科创板日线给的是「股」，本插件全链路按「手」
+        // （实测 sh688035 同日腾讯 4 653 193 ↔ 快照 46 532 手，恰好 ×100；主板/创业板/ETF 不动）
+        vol: r.length > 5 ? tencentVolToHands(secid, num(r[5])) : null,
         pct: null,
       })
     }
@@ -2234,11 +2290,16 @@ export async function fetchKline(
     droppedLast: entry.droppedLast,
     usableBars: entry.bars.length,
   })
+  // 量纲归一的标注：**独立字段**（agent/接口照读原样），同时并进 `staleReason` ——
+  // 后者是界面已有的"具体原因"槽位（降级时显示），并进去不新增第二行常驻文案。
+  const unitNote = entry.unitNote
+  const reason = unitNote === null ? staleReason : (staleReason === null ? unitNote : `${staleReason}；${unitNote}`)
   return {
     secid,
     days,
     stale,
-    ...(staleReason === null ? {} : { staleReason }),
+    ...(reason === null ? {} : { staleReason: reason }),
+    ...(unitNote === null ? {} : { unitNote }),
     fqt: mode,
     fqSupported: supported,
     // 口径条的"数据截至"= 本地最近一次成功取数时刻（定稿时就是收盘那一次）

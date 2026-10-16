@@ -4,32 +4,33 @@ import assert from 'node:assert/strict'
 import { CHIPS_BUCKETS, CHIPS_BUCKETS_MAX, CHIPS_BUCKETS_MIN, CHIPS_WINDOW, chipSeriesOf, normalizeBuckets } from './chips.ts'
 import { chipsLinesOf, chipsRowHeight, niceStep, ratioTicks, stepDecimals } from '../client/chipsView.ts'
 
-test('① 桶数默认 96（是 32 的 3 倍），越界夹取、非法回落并留痕，权重仍守恒', () => {
-  assert.equal(CHIPS_BUCKETS, 96, '默认桶数 = 96')
+test('① 显式档数：范围夹取、非法回落并留痕，权重仍守恒（默认已改为自适应，见 chips.adaptive.test.ts）', () => {
+  assert.equal(CHIPS_BUCKETS, 96, '历史默认值仍留在常量里（非自适应路径/老调用回落用）')
   assert.equal(CHIPS_BUCKETS / 32, 3, '与旧值 32 是 3× 关系（不是顺手改个数）')
   assert.equal(CHIPS_BUCKETS_MIN, 16)
-  assert.equal(CHIPS_BUCKETS_MAX, 160)
-  assert.deepEqual(normalizeBuckets(undefined), { buckets: 96, note: null }, '缺省 ⇒ 96（不报错）')
+  assert.equal(CHIPS_BUCKETS_MAX, 384, '上限放宽到自适应上限（显式 384 也要能跑）')
+  assert.deepEqual(normalizeBuckets(undefined), { buckets: 96, note: null }, '缺省 ⇒ 96（历史默认；`chipSeriesOf` 的**缺省**走自适应，不走这里）')
   assert.deepEqual(normalizeBuckets(48), { buckets: 48, note: null }, '范围内 ⇒ 原样')
   const hi = normalizeBuckets(999)
-  assert.equal(hi.buckets, CHIPS_BUCKETS_MAX, '越界上界 ⇒ 夹到 160')
+  assert.equal(hi.buckets, CHIPS_BUCKETS_MAX, `越界上界 ⇒ 夹到 ${CHIPS_BUCKETS_MAX}`)
   assert.ok(hi.note !== null && hi.note.includes('夹到'), '夹取要留痕')
   const lo = normalizeBuckets(3)
   assert.equal(lo.buckets, CHIPS_BUCKETS_MIN, '越界下界 ⇒ 夹到 16')
   const bad = normalizeBuckets('96')
   assert.equal(bad.buckets, 96, '非数字 ⇒ 回落默认')
   assert.ok(bad.note !== null, '非数字要留痕')
-  // 96 桶 × 360 根：守恒 + 根数（计算量 = 96 桶 × 360 次乘加 ≈ 3.5 万次/标的，可接受）
+  // 自适应默认：400 根 / 区间 7.8 元 ⇒ 档数由 planBuckets 定（不再恒为 96），权重守恒
   const bars = Array.from({ length: 400 }, (_, i) => ({ date: `d${i}`, close: 10 + (i % 40) * 0.2, low: 9.9 + (i % 40) * 0.2, high: 10.1 + (i % 40) * 0.2, vol: 100 }))
   const r = chipSeriesOf(bars, { fqSupported: true, floatMv: 1e9, window: CHIPS_WINDOW, display: 45, minSamples: 1 })
-  assert.equal(r.bucketCount, 96, '结果里的桶数 = 96')
-  assert.equal(r.latest?.buckets.length, 96, '权重向量长度 = 96')
+  assert.ok(r.bucketCount > 96, `缺省档数必须自适应（区间 7.8 元 ⇒ 比 96 多，实际 ${r.bucketCount}）`)
+  assert.equal(r.latest?.buckets.length, r.bucketCount, '权重向量长度 = 实际档数')
+  assert.ok(r.bucketWidth !== null && r.bucketWidth > 0, '档宽必须随结果给出（界面要显示）')
   // 显式给 32 也必须能跑（参数保留）
   const r32 = chipSeriesOf(bars, { fqSupported: true, floatMv: 1e9, window: CHIPS_WINDOW, display: 45, minSamples: 1, buckets: 32 })
   assert.equal(r32.bucketCount, 32, 'buckets 参数保留可用')
   for (const d of r.days.slice(0, 5)) {
     const sum = d.buckets.reduce((a, b) => a + b, 0)
-    assert.ok(Math.abs(sum - 1) < 1e-6, `96 桶后权重总和仍守恒（实际 ${sum}）`)
+    assert.ok(Math.abs(sum - 1) < 1e-6, `权重总和仍守恒（实际 ${sum}）`)
   }
 })
 

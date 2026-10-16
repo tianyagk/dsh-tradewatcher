@@ -100,7 +100,7 @@ test('H1 回归防线：`src/host` 里不得再出现"不过熔断器"的裸 fet
   const HERE = dirname(fileURLToPath(import.meta.url))
   /** 允许清单：低层 helper 自身（**它的所有调用方**都已过熔断器，见源码注释） */
   const ALLOW: Array<{ file: string; line: number; why: string }> = [
-    { file: 'em.ts', line: 88, why: '`fetchFromHost` 是低层单主机 helper：调用方只有 `fetchAny`（已 allow/probe/记账）与 `fetchHostThroughBreaker`（同一套）' },
+    { file: 'em.ts', line: 89, why: '`fetchFromHost` 是低层单主机 helper：调用方只有 `fetchAny`（已 allow/probe/记账）与 `fetchHostThroughBreaker`（同一套）' },
   ]
   const offenders: string[] = []
   const walk = (dir: string): void => {

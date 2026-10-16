@@ -3,7 +3,7 @@
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { CHIPS_BUCKETS, CHIPS_DECAY_DEFAULT, CHIPS_MIN_SAMPLES, allocate, allocateSpread, bucketCenters, chipSeriesOf, normalizeChipPrefs, percentilePrice } from './chips.ts'
+import { CHIPS_BUCKETS_AUTO_MAX, CHIPS_BUCKETS_AUTO_MIN, CHIPS_DECAY_DEFAULT, CHIPS_MIN_SAMPLES, allocate, allocateSpread, bucketCenters, chipSeriesOf, normalizeChipPrefs, percentilePrice } from './chips.ts'
 
 /** 手算用的 4 根序列：10 / 20 / 30 / 40（等量），桶数 4 ⇒ 中心 13.75 / 26.25 / 38.75 / 51.25 */
 const HAND = [
@@ -181,12 +181,14 @@ test('现价缺失 ⇒ 盈利比例 —，但平均成本仍给；现价给出 �
   assert.equal(withPrice.profitRatio === 0, false, '恰好相等的桶不算盈利（用 <）')
 })
 
-test('默认桶数与窗口：32 桶、45 根，不足时按实际根数', () => {
-  // 12 根（过 10 根下限）⇒ 正常出数，桶数默认 32
+test('默认档数自适应（档数由价格区间定）、45 根展示窗口，不足时按实际根数', () => {
+  // 12 根（过 10 根下限）⇒ 正常出数；档数由 planBuckets 按区间算（不再恒为 96）
   const twelve = Array.from({ length: 12 }, (_, i) => ({ date: `2026-03-${String(i + 1).padStart(2, '0')}`, close: 10 + i, vol: 100 }))
   const r = chipSeriesOf(twelve, { fqSupported: true })
-  assert.equal(r.bucketCount, CHIPS_BUCKETS)
-  assert.equal(r.latest?.buckets.length, CHIPS_BUCKETS)
+  assert.ok(r.bucketCount >= CHIPS_BUCKETS_AUTO_MIN && r.bucketCount <= CHIPS_BUCKETS_AUTO_MAX, `档数必须在 [${CHIPS_BUCKETS_AUTO_MIN}, ${CHIPS_BUCKETS_AUTO_MAX}]（实际 ${r.bucketCount}）`)
+  assert.equal(r.latest?.buckets.length, r.bucketCount)
+  assert.ok(r.bucketWidth !== null && r.bucketWidth > 0, '档宽随结果给出')
+  assert.ok(r.methodology.includes('档数') && r.methodology.includes('档宽'), '口径串必须写档数与档宽（分辨率可读）')
   assert.equal(r.samples, 12)
   assert.ok(r.methodology.includes('近 12 根'), '不足时要写"近 N 根"，不能假装 45 根')
   const short = chipSeriesOf(HAND, { fqSupported: true })

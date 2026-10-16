@@ -14,8 +14,8 @@ import { clampIndex } from './chipsView.ts'
 import { countMount } from './mounts.ts'
 import { CHIPS_LINE_TOKENS } from './theme.ts'
 import {
-  bucketCenterTicks, caliberDeviates, chipAxisOf, chipsLinesOf, chipsPlotHeightOf, chipsProfileOf,
-  chipProfitDirOf, chipsDayPriceOf, chipsRowsLayoutOf, chipsRowsOf, CHIPS_ROW_GAP_PX,
+  bucketCaliberOf, bucketCenterTicks, caliberDeviates, chipAxisOf, chipsLinesOf, chipsPlotHeightOf, chipsProfileOf,
+  chipProfitDirOf, chipsDayPriceOf, chipsRowsLayoutOf, chipsRowsOf, mergeForRows, CHIPS_ROW_GAP_PX,
 } from './chipsView.ts'
 import type { ChipsState } from './useChips.ts'
 
@@ -60,9 +60,15 @@ export function ChipsPanel(props: ChipsPanelProps): React.ReactElement | null {
   }
   const profitPct = day.profitRatio
   const hint0 = `${d.methodology}`
+  // 档数口径一行（用户要求）：窗口 N 天 · 档数 M · 档宽 X 元 —— 分辨率必须能读到，不能只说"96 档"
+  const bucketLine = bucketCaliberOf({ window: d.window, bucketCount: d.bucketCount, bucketWidth: d.bucketWidth ?? null })
   const deviate = caliberDeviates({
     decay: d.decay, decayReason: d.decayReason, fqSupported: props.fqSupported,
     why: d.why, samples: d.samples, window: d.window,
+    // 档数被夹住 = 分辨率比目标粗 ⇒ 必须出现在**可见**那一行（不许静默变粗）
+    bucketNote: d.bucketNote ?? null,
+    // 量纲被归一过 ⇒ 同样必须可见（只改 vol，但用户有权知道）
+    unitNote: d.unitNote ?? null,
   })
   // 价格轴裁到筹码密集区（覆盖 99% 质量）+ 横轴与条宽**同一来源**（axisOf）
   const axis = chipAxisOf(day.centers, day.buckets)
@@ -79,14 +85,23 @@ export function ChipsPanel(props: ChipsPanelProps): React.ReactElement | null {
     hasSlider: open && days.length > 1,
     extraLines: optionalLines,
   })
-  const maxRows = Math.max(1, win.rows)
-  const rowsLayout = chipsRowsLayoutOf(plotH, maxRows, CHIPS_ROW_GAP_PX)
+  /**
+   * **可画行数**（1px 行 + 1px 间隙）与按它做的**相邻档合并**（v0.99.x 自适应档数）。
+   *
+   * 为什么必须有：档数自适应后长窗口会有几百档（实测：沪深300ETF@805 天 242 档 ⇒ 区间内 87 行；
+   * 贵州茅台@360 天 232 行），而绘图区只有 ~86px ⇒ 不合并就会按 1px 硬画、**末行溢出被静默裁掉**
+   * （用户报过"可见柱只有 3-4 根"）。合并是**显示层**的：权重相加（守恒）、行中心取加权均价，
+   * 宿主的 P5/P95/均价/盈利比例仍按全分辨率算。
+   */
+  const rowCapacity = Math.max(1, Math.floor(plotH / (CHIPS_ROW_GAP_PX + 1)))
+  const merged = mergeForRows(viewCenters, viewBuckets, rowCapacity)
+  const rowsLayout = chipsRowsLayoutOf(plotH, Math.max(1, merged.centers.length), CHIPS_ROW_GAP_PX)
   const rowH = rowsLayout.rowH
   // task-78：刻度取**真实的桶中心价**（与行一一对应），不再按两端线性等分
-  const ticks = bucketCenterTicks(viewCenters)
+  const ticks = bucketCenterTicks(merged.centers)
   const xTicks = axis.ticks
   // 行序：**价格降序**（顶行 = 最高价）—— 与左轴刻度、三条语义线同向（见 chipsRowsOf 的说明）
-  const rowsDesc = chipsRowsOf(viewCenters, viewBuckets)
+  const rowsDesc = chipsRowsOf(merged.centers, merged.buckets)
   /**
    * 盈亏边界价：**按当前展示日取**（历史日 = 当日收盘价、最新日 = 现价），与宿主算 `profitRatio`
    * 用的是同一个价 ⇒ 柱色与该日「盈利比例」同源。缺失（老宿主）⇒ 回退顶层现价并留痕（进 tooltip）。
@@ -99,7 +114,10 @@ export function ChipsPanel(props: ChipsPanelProps): React.ReactElement | null {
     rowH, gap: rowsLayout.gap, plotH,
   })
   const lines = chipsLinesOf({ avgCost: day.avgCost, support: day.support, resistance: day.resistance })
-  const hint = `${hint0}\n显示区间按筹码质量覆盖裁剪：${(axis.window.covered * 100).toFixed(2)}% 的筹码在轴内，` +
+  const hint = `${hint0}\n${bucketLine}` +
+    (d.bucketNote === null || d.bucketNote === undefined ? '' : `\n⚠ ${d.bucketNote}`) +
+    (merged.merged > 1 ? `\n显示按 ${merged.merged} 档合并（可画行数 ${rowCapacity}，档数 ${d.bucketCount}）—— 权重相加、行中心取加权均价，统计口径未变` : '') + `\n` +
+    `显示区间按筹码质量覆盖裁剪：${(axis.window.covered * 100).toFixed(2)}% 的筹码在轴内，` +
     `${(axis.window.dropped * 100).toFixed(2)}% 在轴外（未显示，权重未改）\n` +
     `横轴自适应：轴顶 ${(axis.top * 100).toFixed(2)}%（当前展示日单桶峰值 ${(axis.peak * 100).toFixed(2)}%）\n${d.disclaimer}`
   const colorOf = (k: 'avg' | 'resistance' | 'support'): string =>

@@ -29,6 +29,26 @@ export interface ChipsPayload {
   /** 展示窗口（滑杆覆盖的天数） */
   displayWindow: number
   bucketCount: number
+  /**
+   * 实际档宽（元）与目标档宽（元）：档数自适应后**必须**让用户读到"这个分布的价格分辨率是多少"
+   * （档数固定时窗口越长档宽越粗：45 天 1.25 元 → 805 天 6.10 元）。
+   *
+   * ⚠ **可选**（老宿主不带）⇒ 客户端按 `—` 显示，不猜、不写 0。
+   */
+  bucketWidth?: number | null
+  bucketTarget?: number | null
+  /** 档数被哪道限制夹住（老宿主 ⇒ 缺省） */
+  bucketClamped?: 'min' | 'max' | 'payload' | null
+  /** 夹取说明（界面对应位置必须显示它；老宿主 ⇒ 缺省） */
+  bucketNote?: string | null
+  /**
+   * **成交量量纲归一**的如实标注（宿主 v0.101 起；老宿主缺省 = 没动过）。
+   *
+   * 为什么必须可见：科创板日线在腾讯一侧给的是「股」，插件按「手」算换手率 ⇒ 不归一就会
+   * 让 `t` 被放大 100×、天天顶到 cap、筹码退化成"只有两三天"。归一之后数字是对的，
+   * 但用户有权知道"这份序列的量纲被改过、只改了 vol"。走 `caliberDeviates` 那一行，不新增常驻文案。
+   */
+  unitNote?: string | null
   decay: 'turnover' | 'half-life'
   decayReason: string | null
   avgCost: number | null

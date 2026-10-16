@@ -24,6 +24,7 @@ import { distributionBinsOf } from '../client/breadthView.ts'
 import { log, type PluginWebRoute } from './context.ts'
 import { dayTradesOf } from './dayTrade.ts'
 import { CHIPS_DISPLAY, CHIPS_DISPLAY_MAX, CHIPS_MIN_SAMPLES, CHIPS_WINDOW, CHIPS_WINDOW_MAX, chipSeriesOf } from './chips.ts'
+import { alignVolUnitWithQuote } from './klineUnits.ts'
 import { globalFlowPayload } from './globalFlow.ts'
 
 /**
@@ -351,9 +352,19 @@ export function makeTradeRoutes(
           const priceForRatio = quotePrice ?? (lastFq1 !== null ? lastFq1.close / (priceScale || 1) : null)
           const priceSourceForRatio: 'quote' | 'close' = quotePrice !== null ? 'quote' : 'close'
           const bars = (k?.days ?? []).map((d) => ({ date: d.date, close: d.close, vol: d.vol }))
+          // **绝对**量纲校正（读侧最后一道闸）：`fetchKline` 的段内归一只能保证"自己一致"，
+          // 保证不了"自己是手"。同日报价（`amount ÷ (vol×100) ≈ price` 自洽，手口径）
+          // 是外部参照：缓存 bar 是盘中快照，物理上不该超过当日全量 ⇒ 相差 20× 以上即判量纲不对。
+          const unitRef = quote !== null && lastFq1 !== null && typeof quote.vol === 'number' && quote.vol > 0
+            ? { date: lastFq1.date, vol: quote.vol }
+            : null
+          const unitGuard = unitRef === null
+            ? { bars, dropped: 0, reason: null as string | null }
+            : alignVolUnitWithQuote(bars, unitRef)
+          const unitNote = [k?.unitNote ?? null, unitGuard.reason].filter((x): x is string => typeof x === 'string' && x !== '').join('；') || null
           // 口径来自 prefs（老 profile 缺键 ⇒ 默认 k=1.5 / triangle，由 store 的装载归一保证）
           const prefs = store.getPrefs()
-          const series = chipSeriesOf(bars, {
+          const series = chipSeriesOf(unitGuard.bars, {
             fqSupported: supported,
             isHk: secid.startsWith('116.'),
             floatMv: quote?.floatMv ?? null,
@@ -368,6 +379,8 @@ export function makeTradeRoutes(
           const missing: Array<{ what: string; why: string; note: string }> = []
           if (series.why !== null) missing.push({ what: secid, why: 'no-source', note: series.why })
           if (series.decayReason !== null) missing.push({ what: `${secid} 衰减口径`, why: 'no-source', note: series.decayReason })
+          // 量纲归一必须**可见**（用户看得到"这份数据被改过量纲"），不许静默
+          if (unitNote !== null) missing.push({ what: `${secid} 成交量量纲`, why: 'no-source', note: unitNote })
           send(res, 200, {
             secid,
             // 出处沿用既有读契约：stale = 日线走缓存 或 行情降级；source 说清用了哪两处数据
@@ -377,6 +390,8 @@ export function makeTradeRoutes(
             // 最后一根 bar 的元信息：partial=true 说明是盘中未完成 bar（数值会变，不可当最终值）
             lastBar: em.lastBarOfKline(secid, 101, 1),
             ...series,
+            // 量纲归一的如实标注（null = 没动过）；客户端把它并进"口径偏离"那一行
+            unitNote,
             missing,
           })
         } catch (error) {

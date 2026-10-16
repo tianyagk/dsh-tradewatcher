@@ -5,7 +5,7 @@
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { IncomingMessage, ServerResponse } from 'node:http'
@@ -16,6 +16,7 @@ import { RescueMonitor } from './rescue.ts'
 import { makeTradeRoutes } from './routes.ts'
 import { QUOTE_HOSTS, HISTORY_HOSTS } from './em.ts'
 import { breakerFor } from './breaker.ts'
+import { findVolUnitBreak } from './klineUnits.ts'
 
 /**
  * 测试隔离：`dataHome()` 每次调用都读 env，因此这里把它指到临时目录 ——
@@ -486,5 +487,50 @@ test('K 线复权：非法 fqt 按默认前复权处理，缺省也是前复权'
   } finally {
     unpin()
     h.close()
+  }
+})
+
+/**
+ * 筹码路由的**量纲归一**接线：缓存里有 100× 断层时，回包必须
+ * ① 给出 `unitNote`（如实标注，不许静默）② 在 `missing[]` 里也占一条（界面能看到）
+ * ③ 磁盘上的缓存被归一（走锁写回）④ 价格/日期一根不动。
+ *
+ * 缺口说明：本用例不覆盖"报价绝对量纲"那一道闸（`alignVolUnitWithQuote` 在路由里的调用）——
+ * 那条闸要真报价，而这里上游一律打桩失败（`quote === null` ⇒ 按设计跳过）。
+ * 判据本身的断言在 `src/host/klineUnits.test.ts` 的 ⑥⑦ 两条（含 lead 给的 `amount÷(vol×100)≈price` 原式）。
+ */
+test('筹码路由：缓存带 100× 量纲断层 ⇒ 归一 + unitNote/missing 可见 + 价格不动', async () => {
+  const h = await harness()
+  const realFetch = globalThis.fetch
+  const realNow = Date.now
+  const FAKE_NOW = Date.parse('2026-10-16T20:30:00+08:00')
+  Date.now = () => FAKE_NOW
+  globalThis.fetch = (() => Promise.reject(new Error('offline (test)'))) as typeof fetch
+  try {
+    const secid = '1.688035'
+    const dir = join(process.env.DSH_HOME as string, 'dsh-tradewatcher', 'klines')
+    mkdirSync(dir, { recursive: true })
+    const file = join(dir, `${secid}_101_1.json`)
+    const bars = [
+      ...Array.from({ length: 40 }, (_, i) => ({ date: `2026-01-${String(i + 1).padStart(2, '0')}`, open: 50, close: 50 + i / 10, high: 51, low: 49, vol: (100_000 + i * 100) * 100, pct: null })),
+      ...Array.from({ length: 20 }, (_, i) => ({ date: `2026-02-${String(i + 1).padStart(2, '0')}`, open: 50, close: 50 + i / 10, high: 51, low: 49, vol: 100_000 + i * 100, pct: null })),
+    ]
+    writeFileSync(file, JSON.stringify({ v: 3, secid, klt: 101, fqt: 1, updatedAt: FAKE_NOW, partial: false, bars }))
+    const r = await h.call('/tradewatcher/chips', `/tradewatcher/chips?secid=${secid}&days=60`)
+    assert.equal(r.code, 200)
+    const unitNote = r.body.unitNote
+    assert.ok(typeof unitNote === 'string' && unitNote.includes('量纲断层'), `回包必须带 unitNote（实际 ${String(unitNote)}）`)
+    const missing = r.body.missing as Array<{ what: string; note: string }>
+    assert.ok(missing.some((m) => m.what.includes('成交量量纲')), 'missing[] 里必须有一条量纲说明（界面可见）')
+    // 磁盘：已归一、价格未动
+    const onDisk = JSON.parse(readFileSync(file, 'utf8')) as { bars: typeof bars }
+    assert.equal(findVolUnitBreak(onDisk.bars), null, '磁盘缓存必须已被归一（走锁写回）')
+    assert.equal(onDisk.bars[0].vol, bars[0].vol / 100, '旧段必须恰好 ÷100')
+    assert.equal(onDisk.bars[0].close, bars[0].close, '价格不许被量纲修正碰到')
+    assert.equal(onDisk.bars[0].date, bars[0].date, '日期不许动')
+  } finally {
+    Date.now = realNow
+    globalThis.fetch = realFetch
+    await h.close()
   }
 })

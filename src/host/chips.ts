@@ -18,7 +18,40 @@
 export const CHIPS_BUCKETS = 96
 /** 桶数的合法范围（路由参数 `buckets`）：越界夹取，非法回落默认 */
 export const CHIPS_BUCKETS_MIN = 16
-export const CHIPS_BUCKETS_MAX = 160
+export const CHIPS_BUCKETS_MAX = 384
+/**
+ * **自适应档数**的上下限（`planBuckets`，2026-10-16）。
+ *
+ * 为什么要有它：档数固定 96 时，窗口从 45 天扩到 805 天会把价格区间拉宽 ⇒ 档宽从 1.25 元
+ * 粗到 6.10 元（贵州茅台实测 4.9×，"筹码覆盖变全"以"价格分辨变粗"为代价）。
+ *
+ * 下限 48：窗口很窄（低波动 / 短窗口）时不该把分布画成几根柱子 —— 48 根仍是可读的分布形状。
+ * 上限 384：见 `CHIPS_PAYLOAD_MAX_BYTES` 的推导（回包体积预算 ÷ 每「档·日」实测字节 ÷ 展示上限 60）。
+ */
+export const CHIPS_BUCKETS_AUTO_MIN = 48
+export const CHIPS_BUCKETS_AUTO_MAX = 384
+/**
+ * **目标档宽**（占窗口中间价的比例）：0.1%。
+ *
+ * 依据（实测，见 `docs/AUDIT-IMPL66.md` §2）：**现状默认**（45 天 / 96 档）在真实样本上的
+ * 档宽就是中间价的 0.096%–0.13%（茅台 1.247/1295 = 0.096%；沪深300ETF 0.0058/4.52 = 0.128%）。
+ * ⇒ 取 0.1% 作为目标 = "不要把分辨率做得比现状默认更粗"，而不是重新定一个更粗的尺子。
+ * （若按"价格的 0.3%–1%"取中值，现状默认视图会先粗 3–5×，那是新的回归。）
+ */
+export const CHIPS_WIDTH_TARGET_PCT = 0.001
+/** 档宽**允许带**（占中间价）：0.05%–0.2%；越带必须是被夹住且留痕（断言用） */
+export const CHIPS_WIDTH_BAND: readonly [number, number] = [0.0005, 0.002]
+/**
+ * 回包体积预算（字节）与每「档·日」的实测字节成本。
+ *
+ * 实测（`display=45`，`buckets + centers` 两个数组是回包主体）：13.3 B/档·日（沪深300ETF，
+ * 价格位数少）～22.5 B/档·日（贵州茅台，1170–1740 的 centers 串更长）。取 **24 B** 作最坏估计。
+ * 推导上限：`256 KB ÷ 24 B ÷ 60 天（display 上限） ≈ 182` ⇒ 但 `display` 默认 45 时是
+ * `256 KB ÷ 24 ÷ 45 ≈ 242`；而"能画出来的分辨率"另有上限（渲染行数），见 AUDIT §4。
+ * 两个上限同时生效：`min(384, 体积预算推出的档数)`，谁先撞上都要留痕。
+ */
+export const CHIPS_PAYLOAD_MAX_BYTES = 256 * 1024
+export const CHIPS_BYTES_PER_BUCKET_DAY = 24
 /** 累积窗口（逐日递推用到的历史长度）：360 个交易日 */
 export const CHIPS_WINDOW = 360
 /** 展示窗口（滑杆覆盖的天数）：45，上限 60 */
@@ -72,6 +105,90 @@ export function normalizeBuckets(raw: unknown): { buckets: number; note: string 
   return { buckets: n, note: null }
 }
 
+/**
+ * **档数规划**（纯函数，2026-10-16 自适应改造）。
+ *
+ * 规则（一句话）：让**每档宽度**尽量等于「窗口中间价 × `CHIPS_WIDTH_TARGET_PCT`」，
+ * 档数落在 `[CHIPS_BUCKETS_AUTO_MIN, CHIPS_BUCKETS_AUTO_MAX]`，且**回包体积**不超预算 ——
+ * 任何一道限制先撞上，都必须在 `note` 里写明（**不得静默变粗**，界面直接显示 `note`）。
+ *
+ * 为什么参考价取**区间中点**（不是现价、不是最高价）：档宽是"价格轴的分辨率"，
+ * 它的尺度应该跟着**被覆盖的那段价格**走；现价会在区间边缘（例如跌了 40% 之后的价格），
+ * 用它算出的档宽会让轴的一端明显更细/更粗。中点是对称的、与窗口端点同源（都是 low/high）。
+ */
+export interface BucketPlan {
+  buckets: number
+  /** 实际档宽（元）= 价格区间 ÷ 档数 */
+  width: number
+  /** 目标档宽（元）= 中间价 × 目标比例 */
+  target: number
+  /** 参考价（窗口价格区间的中点） */
+  mid: number
+  /** 实际档宽占中间价的比例 */
+  widthPct: number
+  /** 被哪一道限制夹住（`null` = 目标档宽直接达成） */
+  clamped: 'min' | 'max' | 'payload' | null
+  /** 夹取说明（未夹 ⇒ `null`）；**界面必须能读到它** */
+  note: string | null
+}
+
+export function planBuckets(input: {
+  low: number
+  high: number
+  /** 展示天数（体积预算按"每档·日"算，展示越长预算越紧） */
+  displayDays: number
+  /** 显式指定的档数（路由/工具参数）：给了就**不再自适应**，只做范围夹取 */
+  explicit?: number | null
+}): BucketPlan {
+  const r4 = (n: number): number => Math.round(n * 1e4) / 1e4
+  const low = Number.isFinite(input.low) ? input.low : 0
+  const high = Number.isFinite(input.high) ? input.high : 0
+  const span = Math.max(0, high - low)
+  const mid = (low + high) / 2
+  const target = mid > 0 ? mid * CHIPS_WIDTH_TARGET_PCT : 0
+  const days = Math.max(1, Math.round(Number.isFinite(input.displayDays) ? input.displayDays : 1))
+  /** 体积预算允许的档数（展示天数越多，允许的档数越少） */
+  const byPayload = Math.max(CHIPS_BUCKETS_AUTO_MIN, Math.floor(CHIPS_PAYLOAD_MAX_BYTES / (CHIPS_BYTES_PER_BUCKET_DAY * days)))
+  const finish = (buckets: number, clamped: BucketPlan['clamped'], note: string | null): BucketPlan => {
+    const width = buckets > 0 ? span / buckets : 0
+    const widthPct = mid > 0 ? width / mid : 0
+    return { buckets, width: r4(width), target: r4(target), mid: r4(mid), widthPct, clamped, note }
+  }
+
+  // 显式档数：既有的 `buckets` 参数语义不变（只在 [MIN, MAX] 里夹取，越界留痕）
+  if (input.explicit !== null && input.explicit !== undefined) {
+    const n = Math.round(input.explicit)
+    if (n < CHIPS_BUCKETS_MIN || n > CHIPS_BUCKETS_MAX) {
+      const clampedN = Math.min(CHIPS_BUCKETS_MAX, Math.max(CHIPS_BUCKETS_MIN, n))
+      return finish(clampedN, n > CHIPS_BUCKETS_MAX ? 'max' : 'min', `显式档数 ${n} 超出 [${CHIPS_BUCKETS_MIN}, ${CHIPS_BUCKETS_MAX}] ⇒ 夹到 ${clampedN}（显式指定 ⇒ 不做自适应）`)
+    }
+    return finish(n, null, null)
+  }
+
+  if (!(target > 0) || !(span > 0)) {
+    // 退化输入（区间为 0 / 中间价非正）：给下限，并留痕（不假装算出了目标档宽）
+    return finish(CHIPS_BUCKETS_AUTO_MIN, 'min', `价格区间 ${r4(span)} 元 / 中间价 ${r4(mid)} ⇒ 目标档宽不可算，按档数下限 ${CHIPS_BUCKETS_AUTO_MIN} 出分布`)
+  }
+  const want = Math.round(span / target)
+  let buckets = Math.min(CHIPS_BUCKETS_AUTO_MAX, Math.max(CHIPS_BUCKETS_AUTO_MIN, want))
+  let clamped: BucketPlan['clamped'] = want < CHIPS_BUCKETS_AUTO_MIN ? 'min' : want > CHIPS_BUCKETS_AUTO_MAX ? 'max' : null
+  let note: string | null = null
+  const ratio = (b: number): number => (span / b) / target
+  if (clamped === 'min') {
+    note = `目标档宽 ${r4(target)} 元（中间价 ${r4(mid)} 的 ${(CHIPS_WIDTH_TARGET_PCT * 100).toFixed(2)}%）只需 ${want} 档 < 下限 ${CHIPS_BUCKETS_AUTO_MIN} ⇒ 按下限出分布，实际档宽 ${r4(span / buckets)} 元（比目标细 ${ratio(buckets).toFixed(2)}×）`
+  } else if (clamped === 'max') {
+    note = `按目标档宽 ${r4(target)} 元需要 ${want} 档 > 上限 ${CHIPS_BUCKETS_AUTO_MAX} ⇒ 夹到 ${CHIPS_BUCKETS_AUTO_MAX}，实际档宽 ${r4(span / buckets)} 元（比目标粗 ${ratio(buckets).toFixed(2)}×；分辨率已到本模块上限）`
+  }
+  // 体积预算：展示天数多 / 价格位数长时先撞上（回包主体是 buckets + centers 两个数组）
+  if (buckets > byPayload) {
+    const before = buckets
+    buckets = byPayload
+    clamped = 'payload'
+    note = `回包体积预算 ${Math.round(CHIPS_PAYLOAD_MAX_BYTES / 1024)} KB（每档·日实测 ${CHIPS_BYTES_PER_BUCKET_DAY} B × 展示 ${days} 天）只允许 ${byPayload} 档 ⇒ 从 ${before} 档降到 ${byPayload}，实际档宽 ${r4(span / buckets)} 元（比目标 ${r4(target)} 元粗 ${ratio(buckets).toFixed(2)}×）`
+  }
+  return finish(buckets, clamped, note)
+}
+
 export interface ChipBar {
   date: string
   close: number
@@ -115,6 +232,19 @@ export interface ChipSeries {
   /** 展示窗口（`days` 里最后这么多天有状态；滑杆只覆盖这些天） */
   displayWindow: number
   bucketCount: number
+  /**
+   * **实际档宽**（元）= 价格区间 ÷ 档数；没有分布（不提供模块/样本不足/区间为 0）⇒ `null`。
+   *
+   * 为什么要单独给：档数不变时档宽会随窗口变粗（45 天 1.25 元 → 805 天 6.10 元，茅台实测 4.9×）。
+   * 界面必须能读到"这个分布的价格分辨率是多少"（`档宽 X 元`），而不是只看到"96 档"。
+   */
+  bucketWidth: number | null
+  /** 目标档宽（元）= 中间价 × `CHIPS_WIDTH_TARGET_PCT`；无分布 ⇒ `null` */
+  bucketTarget: number | null
+  /** 档数被哪一道限制夹住（`null` = 目标档宽直接达成；`min`/`max`/`payload` 见 `planBuckets`） */
+  bucketClamped: 'min' | 'max' | 'payload' | null
+  /** 夹取说明（未夹 ⇒ `null`）——**界面必须显示它**，否则"档数被上限夹住"就成了静默变粗 */
+  bucketNote: string | null
   decay: ChipDecay
   /** 回落原因（主口径可用时为 null；**必须如实写清**，界面直接显示） */
   decayReason: string | null
@@ -287,7 +417,11 @@ export interface ChipOptions {
 
 /** 逐日筹码分布（含每日的 avgCost / P5 / P95 / 盈利比例） */
 export function chipSeriesOf(bars: readonly ChipBar[], opts: ChipOptions = {}): ChipSeries {
-  const buckets = normalizeBuckets(opts.buckets).buckets
+  /**
+   * 档数：**不显式指定就自适应**（`planBuckets` 按价格区间定档宽）；显式指定仍走 `normalizeBuckets`
+   * （非数字回落默认 96 并留痕）—— 显式值不参与自适应，**几何口径仍由 `planBuckets` 统一计算**。
+   */
+  const nb = opts.buckets === undefined ? null : normalizeBuckets(opts.buckets)
   const window = opts.window ?? CHIPS_WINDOW
   const display = Math.min(CHIPS_DISPLAY_MAX, Math.max(1, Math.round(opts.display ?? CHIPS_DISPLAY)))
   const halfLife = opts.halfLife ?? CHIPS_HALF_LIFE
@@ -307,7 +441,12 @@ export function chipSeriesOf(bars: readonly ChipBar[], opts: ChipOptions = {}): 
   const base: Omit<ChipSeries, 'days' | 'latest'> = {
     window,
     displayWindow: display,
-    bucketCount: buckets,
+    // 没有分布时（不支持前复权/样本不足/区间为 0）不给假的档宽：档数写历史默认值，档宽与夹取说明为 null
+    bucketCount: nb?.buckets ?? CHIPS_BUCKETS,
+    bucketWidth: null,
+    bucketTarget: null,
+    bucketClamped: null,
+    bucketNote: null,
     decay: 'half-life',
     decayReason: null,
     avgCost: null,
@@ -340,6 +479,10 @@ export function chipSeriesOf(bars: readonly ChipBar[], opts: ChipOptions = {}): 
   if (!(high > low)) {
     return { ...base, days: [], latest: null, why: '窗口内价格没有变化（高=低）⇒ 分布无意义' }
   }
+  // 档数自适应（2026-10-16）：让档宽 ≈ 中间价 × 0.1%，并受 [48, 384] 与回包体积预算约束（夹住必留痕）
+  const plan = planBuckets({ low, high, displayDays: display, explicit: nb === null ? null : nb.buckets })
+  const buckets = plan.buckets
+  const bucketNote = plan.note ?? nb?.note ?? null
   const centers = bucketCenters(low, high, buckets)
   // 衰减口径：港股或缺 floatMv ⇒ 半衰期（并如实写原因）
   const useTurnover = opts.isHk !== true && typeof opts.floatMv === 'number' && opts.floatMv > 0
@@ -421,6 +564,11 @@ export function chipSeriesOf(bars: readonly ChipBar[], opts: ChipOptions = {}): 
     ...base,
     days,
     latest,
+    bucketCount: buckets,
+    bucketWidth: plan.width,
+    bucketTarget: plan.target,
+    bucketClamped: plan.clamped,
+    bucketNote,
     decay,
     decayReason,
     priceUsed: barAligns ? priceUsed : (latest !== null ? null : priceUsed),
@@ -444,6 +592,8 @@ export function chipSeriesOf(bars: readonly ChipBar[], opts: ChipOptions = {}): 
       `。新增筹码按${shape === 'triangle' ? '三角形分布（峰在当日均价 (high+low+close)/3）' : '均匀分布'}铺到当日 [low, high]` +
       `（均价均值 ${(peakSum / Math.max(1, win.length)).toFixed(4)}）；` +
       `窗口：用了近 ${samples} 根日线${samples < CHIPS_WINDOW ? `（不足累积窗口 ${CHIPS_WINDOW} 根 ⇒ 历史越短越不准，如实标注）` : ''}（fqt=1 前复权）；` +
-      `桶数 ${buckets}（显示区间裁剪：先按筹码质量 99% 覆盖，再隐去权重低于窗口峰值 20% 的稀疏行；被裁到轴外的权重不显示、也不参与四数统计口径）；支撑/压力 = 筹码累积分布的 P5/P95 价位；平均成本 = Σ(桶价×权重)/Σ权重；盈利比例 = Σ(桶价 < 现价 的权重)/Σ权重；价格空间：fqt=1 前复权（桶价与现价同一空间）；换算因子 ${scaleRaw}（1 = 恒等）；现价来源 ${priceSource ?? '未取到'}（原始价 ${priceRaw ?? '未取到'} × ${scaleRaw}）；"最新一根" = 递推窗口最后一根 ${latestBarDate ?? '—'}：最新一根用换算后的现价，展示日与它不一致时该展示日用当天收盘价，不混用。`,
+      `档数 ${buckets}（自适应：窗口价格区间 ${round(high - low, 4)} 元 ÷ ${buckets} = 档宽 ${plan.width} 元；目标 = 中间价 ${plan.mid} × ${(CHIPS_WIDTH_TARGET_PCT * 100).toFixed(2)}% = ${plan.target} 元；限制 [${CHIPS_BUCKETS_AUTO_MIN}, ${CHIPS_BUCKETS_AUTO_MAX}] 与回包体积预算 ${Math.round(CHIPS_PAYLOAD_MAX_BYTES / 1024)} KB）` +
+      (bucketNote === null ? '' : `；⚠ ${bucketNote}`) +
+      `（显示区间裁剪：先按筹码质量 99% 覆盖，再隐去权重低于窗口峰值 20% 的稀疏行；被裁到轴外的权重不显示、也不参与四数统计口径）；支撑/压力 = 筹码累积分布的 P5/P95 价位；平均成本 = Σ(桶价×权重)/Σ权重；盈利比例 = Σ(桶价 < 现价 的权重)/Σ权重；价格空间：fqt=1 前复权（桶价与现价同一空间）；换算因子 ${scaleRaw}（1 = 恒等）；现价来源 ${priceSource ?? '未取到'}（原始价 ${priceRaw ?? '未取到'} × ${scaleRaw}）；"最新一根" = 递推窗口最后一根 ${latestBarDate ?? '—'}：最新一根用换算后的现价，展示日与它不一致时该展示日用当天收盘价，不混用。`,
   }
 }

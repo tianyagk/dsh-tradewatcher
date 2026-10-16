@@ -21,6 +21,7 @@
  */
 import { parseMarketStamp } from './time.ts'
 import { withHostBreaker } from './breakerFetch.ts'
+import { tencentVolToHands } from './klineUnits.ts'
 
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
 
@@ -234,7 +235,9 @@ export async function fetchTencentDaily(secid: string, count = 320): Promise<Arr
   const arr = j?.data?.[code]?.qfqday ?? j?.data?.[code]?.day ?? []
   const out: Array<{ date: string; open: number; close: number; high: number; low: number; vol: number }> = []
   for (const r of arr) {
-    const bar = { date: String(r[0]), open: Number(r[1]), close: Number(r[2]), high: Number(r[3]), low: Number(r[4]), vol: Number(r[5]) }
+    // 量纲归一：腾讯科创板日线的成交量是「股」，本插件统一按「手」（见 src/host/klineUnits.ts 的实测表）
+    const vol = tencentVolToHands(secid, Number(r[5]))
+    const bar = { date: String(r[0]), open: Number(r[1]), close: Number(r[2]), high: Number(r[3]), low: Number(r[4]), vol: vol === null ? Number.NaN : vol }
     if (!Number.isFinite(bar.close) || !(bar.close > 0) || !(bar.vol > 0)) continue
     out.push(bar)
   }

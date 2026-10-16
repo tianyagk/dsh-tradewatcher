@@ -7,9 +7,7 @@ import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 import {
-  axisTicks, bucketCenterTicks, caliberDeviates, chipAxisOf, chipBarPxOf, chipProfitDirOf, chipsColumnsOf,
-  chipsDayPriceOf, chipsProfileOf, chipsRowsLayoutOf, chipsRowsOf, drawerFillOf,
-  CHIPS_AXIS_MIN_PX, CHIPS_CHART_GAP_PX, CHIPS_LABEL_RESERVE_PX,
+  axisTicks, bucketCenterTicks, caliberDeviates, chipAxisOf, chipBarPxOf, chipProfitDirOf, chipsColumnsOf, chipsDayPriceOf, chipsProfileOf, chipsRowsLayoutOf, chipsRowsOf, drawerFillOf, CHIPS_AXIS_MIN_PX, CHIPS_CHART_GAP_PX, CHIPS_LABEL_RESERVE_PX, mergeForRows,
 } from './chipsView.ts'
 import { loadChips, resetChipsCache } from './chipsLoader.ts'
 import { createRequire } from 'node:module'
@@ -620,5 +618,57 @@ test('⑤ 逐日边界价：切日 ⇒ 翻转点随之移动；与宿主 profitR
     () => assert.equal(brokenFlip(20), flips[0], '反例上"第 1 天翻转点 = 18"必须失败'),
     /反例上/,
     '⚠ 反例注入（统一用顶层 priceUsed）必须让"随日移动"这条断言失败',
+  )
+})
+
+/**
+ * 自适应档数（v0.99.x）：**渲染行数有上界** —— 行数超过可画行数时必须合并相邻档，
+ * 不许按 1px 硬画（那会末行溢出被静默裁掉；用户报过"可见柱只有 3-4 根"）。
+ *
+ * 权重守恒与"行中心 = 加权均价"是这条合并的**唯二**约束：只改显示粒度，不改任何权重。
+ */
+test('自适应档数：行数超可画行数时合并相邻档（守恒 + 行中心取加权均价 + 不静默）', () => {
+  const centers = [10, 11, 12, 13, 14, 15]
+  const buckets = [0.1, 0.2, 0.3, 0.1, 0.2, 0.1]
+  const cap = 3
+  const m = mergeForRows(centers, buckets, cap)
+  assert.equal(m.merged, 2, '6 档 / 可画 3 行 ⇒ 每 2 档并一行')
+  assert.equal(m.centers.length, 3, '合并后行数 ≤ 可画行数')
+  assert.ok(m.centers.length <= cap)
+  assert.ok(Math.abs(m.buckets.reduce((a, b) => a + b, 0) - 1) < 1e-12, '权重之和必须守恒（合并只改显示粒度）')
+  // 行中心 = 该段权重的加权均价（不是两端中点、不是第一档）
+  const seg0 = (10 * 0.1 + 11 * 0.2) / 0.3
+  assert.ok(Math.abs(m.centers[0] - seg0) < 1e-9, `行中心必须是加权均价（实际 ${m.centers[0]} vs ${seg0}）`)
+  // 空档段（权重 0）⇒ 取两端中点，不写 0（0 会被读成一个真实价位）
+  const zeroSeg = mergeForRows([10, 11, 12, 13], [0, 0, 0.5, 0.5], 1)
+  assert.equal(zeroSeg.merged, 4)
+  assert.ok(zeroSeg.centers[0] !== 0, '空档段的中心价不许是 0')
+  // 行数够时不合并（既有行为逐位不变 ⇒ 老图不动）
+  const noop = mergeForRows(centers, buckets, 6)
+  assert.equal(noop.merged, 1)
+  assert.deepEqual(noop.centers, centers)
+  assert.deepEqual(noop.buckets, buckets)
+  assert.equal(mergeForRows(centers, buckets, 99).merged, 1)
+  assert.deepEqual(mergeForRows([], [], 3), { centers: [], buckets: [], merged: 1 })
+  // 反例注入：不做合并（用原始区间行数）⇒ 行数必然超过可画行数
+  const judge = (rows: number): boolean => rows <= cap
+  assert.equal(judge(m.centers.length), true, '正例：合并后行数 ≤ 可画行数')
+  assert.equal(judge(centers.length), false, '⚠ 反例（不合并）行数确实超上限')
+  assert.throws(
+    () => assert.equal(judge(centers.length), true, `渲染行数必须 ≤ 可画行数 ${cap}`),
+    /渲染行数必须 ≤ 可画行数/,
+    '⚠ 反例注入（不合并 ⇒ 1px 硬画被裁）必须让断言失败',
+  )
+  // 接线：面板必须先算可画行数再合并（源码级 + 注入）
+  const panel = readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'ChipsPanel.tsx'), 'utf8')
+  assert.ok(/rowCapacity = Math\.max\(1, Math\.floor\(plotH \/ \(CHIPS_ROW_GAP_PX \+ 1\)\)\)/.test(panel), '可画行数必须由绘图区高度算')
+  assert.ok(panel.includes('mergeForRows(viewCenters, viewBuckets, rowCapacity)'), '面板必须按可画行数合并')
+  assert.ok(panel.includes('显示按 ${merged.merged} 档合并'), '合并必须留痕（进悬停，不静默）')
+  const cut = panel.replace('mergeForRows(viewCenters, viewBuckets, rowCapacity)', 'mergeForRows(viewCenters, viewBuckets, Number.MAX_SAFE_INTEGER)')
+  assert.notEqual(cut, panel, '反例注入必须真改到源码')
+  assert.throws(
+    () => assert.equal(cut.includes('mergeForRows(viewCenters, viewBuckets, rowCapacity)'), true, '面板必须按可画行数合并'),
+    /面板必须按可画行数合并/,
+    '⚠ 反例注入（面板不合并）必须让断言失败',
   )
 })
