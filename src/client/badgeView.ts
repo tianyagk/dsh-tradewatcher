@@ -2,7 +2,29 @@ import { shClockText } from './marketTime.ts'
 /**
  * 侧栏徽标的文案（纯函数，无 React 依赖）。
  *
- * 为什么单独成模块：这段文字会**直接拼在侧栏的插件名后面**当悬停提示，宽度很窄 ——
+ * ## 口径（用户要求，2026-10-16 定）
+ *
+ * 徽标**只**表示「持仓当日涨跌幅」：短标记 `-2.3%`、带符号、按 `prefs.redUp` 着色
+ * （着色在 `theme.ts` 的 `badgeToneColor`）；取不到时给原因、**绝不写 0 冒充**。
+ *
+ * ## ⚠ 这里**不得**再出现「护」或任何护盘等级文案
+ *
+ * `level` / `levelLabel` 已从入参里删掉（见 `BadgeInput`）—— 入参里没有等级，
+ * 就**不可能**再写出一条"等级优先"的分支，这是结构性的防线，不只是一句注释约定。
+ *
+ * 为什么删（追因证据见 `docs/AUDIT-IMPL64.md`）：
+ *   · `036b1a3`（v0.25.0）引入徽标时带了一条**等级优先分支**：护盘 ≥「疑似护盘」就显示「护」，
+ *     **顶掉**当日涨跌幅。用户 2026-10-16 报告"昨天是 `-2.3%`、今天是一个「护」字"，
+ *     并明确表示**没有要求过**这个改动。
+ *   · 徽标只有 18px、最多 4 个字形。同一个位置承载两种语义（我的盈亏 / 市场的护盘）时，
+ *     用户既分不清这个字是"我的"还是"市场的"，也分不清它为什么会变 —— 而"会自己变的角标"
+ *     比"没有角标"更糟。
+ *   · 护盘等级本来就有自己的位置（护盘面板 + `tradewatcher_rescue` 工具）。要把它放回侧栏
+ *     必须**另立入口**并先经用户/Lead 同意，不得占用这个徽标位。
+ *
+ * ## 文案与长度
+ *
+ * 这段文字会**直接拼在侧栏的插件名后面**当悬停提示，宽度很窄 ——
  * 一句话长了就被宿主截断成"…"（实测踩过：`盯盘·持仓当日盈亏 +0.07%（+795.00 元…`），
  * 既啰嗦又读不出完整信息。按「开发原则」（README「开发」节第 1、2、6 条）：
  * **悬停提示只留一行、只写"影响什么 + 数据时刻"**，金额这类细节留在面板里（面板宽度够）。
@@ -13,18 +35,27 @@ import { shClockText } from './marketTime.ts'
 
 export interface BadgeState {
   text: string
-  /** 徽标颜色键：rescue 等级 / 上涨 / 下跌 / 平静 */
-  tone: 'rescue' | 'up' | 'down' | 'flat'
+  /**
+   * 徽标颜色键：上涨 / 下跌 / 平静。
+   *
+   * **没有 `rescue`**：护盘等级不再进徽标（见文件头）；留着这个色键等于给"往徽标里塞护盘"
+   * 留一条现成的通道。
+   */
+  tone: 'up' | 'down' | 'flat'
   /** 悬停提示：**只留一行**（含当日盈亏，供 tooltip 用） */
   detail: string
   /** 侧栏**标签**用的那一截：只有 `数据 HH:mm:ss[ · 已收盘]` —— 盈亏已在徽标里显示，标签不重复 */
   stamp: string
 }
 
-/** 徽标取值需要的最小字段集（结构类型，便于测试构造，不依赖 api 模块） */
+/**
+ * 徽标取值需要的最小字段集（结构类型，便于测试构造，不依赖 api 模块）。
+ *
+ * 曾经的 `level` / `levelLabel`（护盘等级）随「护」分支一起删除（2026-10-16，见文件头）。
+ * `GET /tradewatcher/badge` 的回包**仍然**带这两个字段（宿主契约不变、别的消费方要用），
+ * 多出来的字段在这里被忽略 —— 客户端不读它，就画不出它。
+ */
 export interface BadgeInput {
-  level: number
-  levelLabel: string | null
   indexPoint: number | null
   indexName: string | null
   /** 持仓当日盈亏率；`null` = 没有持仓行情（不可算） */
@@ -51,13 +82,16 @@ function stamp(asOfText: string, settled: boolean): string {
   return `数据 ${asOfText}${settled ? ' · 已收盘' : ''}`
 }
 
+/**
+ * 徽标视图。
+ *
+ * 分档顺序（**只有这些**，没有等级分支）：隐身视图 → 不可算 → 零 → 带符号涨跌幅。
+ * 顺序本身是契约：`masked` 必须在盈亏之前（隐身档不许出现盈亏数字），
+ * `null`（不可算）必须在 `0` 之前（否则"算不出"会被说成"今天没赚没亏"）。
+ */
 export function badgeView(b: BadgeInput, masked: boolean): BadgeState {
   // R5：数据时刻固定北京时间（旧实现按浏览器时区渲染：UTC 下显示 01:42 而非 09:42）
   const asOfText = b.asOf === null ? '—' : shClockText(b.asOf)
-  // 护盘 ≥ 疑似护盘（level ≥ 2）优先：那是"今天市场有事"的信号，比个人盈亏更该被看到
-  if (b.level >= 2) {
-    return { text: '护', tone: 'rescue', detail: `护盘信号：${b.levelLabel ?? '—'}${tail(asOfText, b.settled)}`, stamp: stamp(asOfText, b.settled) }
-  }
   if (masked) {
     const point = b.indexPoint === null ? null : Math.round(b.indexPoint)
     return {

@@ -18,7 +18,7 @@ import { QuoteDrawer } from './QuoteDrawer.tsx'
 import { ensureCss } from './styles.ts'
 import { isMoneyMasked, setMoneyMask } from './format.ts'
 import { Toast, useToast } from './ui.tsx'
-import { BADGE_TONE_COLOR } from './theme.ts'
+import { badgeToneColor } from './theme.ts'
 import { gateTabs } from './tabsGate.ts'
 
 /** 侧栏图标与主面板共用的 id（`sidebar.panellist` 的 id == `main` 的 key）。 */
@@ -40,7 +40,27 @@ function setBadge(next: BadgeState): void {
   badgeState.text = next.text
   badgeState.tone = next.tone
   badgeState.detail = next.detail
+  // ⚠ `stamp` 必须一起写：它上面被比较、下面被 label 读（`盯盘 · 数据 HH:mm:ss`）。
+  // 只比较不赋值 ⇒ 守卫永远认为"变了"、而 label 永远拿到初值 ''（实测：标签一直只显示「盯盘」）。
+  badgeState.stamp = next.stamp
   for (const fn of badgeListeners) fn()
+}
+
+/**
+ * 涨跌色义（`prefs.redUp`）的模块级通道 —— 与金额遮罩（`setMoneyMask`）同一模式。
+ *
+ * 为什么不能从 props 拿：`PanelIcon` 由宿主渲染在**主题容器之外**（见 `theme.ts` 文件头），
+ * 与主面板之间没有共同的 React 祖先；面板读到 `prefs` 之后只能通过模块级状态把它送过来。
+ * 存**布尔**而不是整个对象：`useSyncExternalStore` 的快照按 `Object.is` 比较，布尔值的变化
+ * 一定能触发重渲染（存对象则要自己保证每次新建引用，踩过这个坑就会"改了色不生效"）。
+ */
+let badgeRedUp = true
+const badgeRedUpListeners = new Set<() => void>()
+
+function setBadgeRedUp(next: boolean): void {
+  if (next === badgeRedUp) return
+  badgeRedUp = next
+  for (const fn of badgeRedUpListeners) fn()
 }
 
 
@@ -123,6 +143,9 @@ export function apply(ctx: ClientContext): void {
  *
  * 不引 Harness 组件库（保持零依赖）；徽标数据走模块级订阅（见 badgeState 的说明），
  * 因为图标与主面板之间没有共同的 React 祖先。
+ *
+ * ⚠ 徽标内容**只有当日涨跌幅**（`badgeView` 的文件头写了为什么「护」被移除）：
+ * 这个 18px 的位置不许再承载第二种语义。颜色跟随 `prefs.redUp`（见 `badgeToneColor`）。
  */
 function PanelIcon(props: { size?: number; active?: boolean }): React.ReactElement {
   const size = props.size ?? 18
@@ -133,7 +156,15 @@ function PanelIcon(props: { size?: number; active?: boolean }): React.ReactEleme
     },
     () => badgeState,
   )
-  const tone = BADGE_TONE_COLOR[badge.tone]
+  // 色义单独订阅（布尔快照）：`prefs.redUp` 变化后必须**立刻**换色，不能等下一次 60s 轮询
+  const redUp = useSyncExternalStore(
+    (cb) => {
+      badgeRedUpListeners.add(cb)
+      return () => badgeRedUpListeners.delete(cb)
+    },
+    () => badgeRedUp,
+  )
+  const tone = badgeToneColor(badge.tone, redUp)
   return React.createElement(
     'span',
     {
@@ -184,7 +215,7 @@ function PanelIcon(props: { size?: number; active?: boolean }): React.ReactEleme
   )
 }
 
-/** 徽标底色：护盘用等级色系，盈亏用涨跌语义色（隐身视图下 tone 恒为 flat） */
+/** 徽标底色在 `theme.ts` 的 `badgeToneColor`（按 `redUp` 取涨跌色；隐身视图下 tone 恒为 flat） */
 
 type PageKey = 'watch' | 'portfolio' | 'market' | 'cloud' | 'calendar' | 'tools'
 
@@ -250,6 +281,12 @@ function Dashboard(): React.ReactElement {
     // 徽标字形随视图档位变化（隐身档只显示点位），必须立刻重取一次
     badgeRefresh?.()
   }, [viewMode])
+
+  // 徽标色义跟随 `prefs.redUp`：面板是唯一读得到偏好的地方，徽标渲染在主题容器之外（见 setBadgeRedUp）
+  const redUp = (prefs ?? DEFAULT_PREFS).redUp
+  useEffect(() => {
+    setBadgeRedUp(redUp !== false)
+  }, [redUp])
 
   // Alt+M 轮换视图档位：不抢输入框（在输入控件里按 Alt+M 不该被吃掉）
   /**

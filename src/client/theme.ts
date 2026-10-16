@@ -9,11 +9,28 @@
  * 集中到一处是为了**下轮改的时候只改一个地方**（审计 S6）。
  */
 export const BADGE_TONE_COLOR = {
-  rescue: '#d97706',
   up: '#ff5f6d',
   down: '#27a644',
   flat: '#6f7787',
 } as const
+
+/**
+ * 徽标底色：涨跌两档**跟随 `prefs.redUp`**，中性档与色义无关。
+ *
+ * 为什么要有这个函数而不是直接查表：徽标渲染在主题容器之外（拿不到 `--tw-up`/`--tw-down`），
+ * 只写死一套色就等于假设 `redUp === true` —— 用户把色义切成"绿涨红跌"时，徽标会把涨跌**画反**
+ * （面板里换得动、侧栏换不动，是最难被发现的那类不一致）。
+ *
+ * ⚠ 曾经还有一档 `rescue`（护盘橙，`#d97706`）：那是"护盘 ≥ 疑似就在徽标显示「护」"的残留，
+ * 2026-10-16 按用户要求删除（见 `badgeView.ts` 文件头）。**不要**为了给别的东西上色而复活它 ——
+ * 那等于把等级文案重新接回这个 18px 的位置。
+ */
+export function badgeToneColor(tone: 'up' | 'down' | 'flat', redUp: boolean): string {
+  if (tone === 'flat') return BADGE_TONE_COLOR.flat
+  const colorUp = redUp ? BADGE_TONE_COLOR.up : BADGE_TONE_COLOR.down
+  const colorDown = redUp ? BADGE_TONE_COLOR.down : BADGE_TONE_COLOR.up
+  return tone === 'up' ? colorUp : colorDown
+}
 
 /** 四态色点（与徽标同源同色） */
 export const QUOTE_STATE_COLOR = {

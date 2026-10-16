@@ -47,7 +47,7 @@ const row = (at: number): QuoteRow => ({
 
 test('R5-① 侧栏徽标标签：`数据 HH:mm:ss` 必须是北京时间（字面量断言，不是推导值）', () => {
   const v = badgeView(
-    { level: 0, levelLabel: null, indexPoint: 3000, indexName: '上证指数', dayPnlPct: -2.29, dayPnl: -2290, asOf: AT, settled: false },
+    { indexPoint: 3000, indexName: '上证指数', dayPnlPct: -2.29, dayPnl: -2290, asOf: AT, settled: false },
     false,
   )
   assert.equal(v.stamp, '数据 09:42:52', `侧栏标签必须是北京 09:42:52（UTC 浏览器下旧实现给 01:42:52；实际 ${v.stamp}）`)
