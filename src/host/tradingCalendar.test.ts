@@ -21,7 +21,7 @@ async function freshEnv(content: string | null, name: string): Promise<{ dir: st
   const path = join(dir, 'dsh-tradewatcher', 'trading-calendar.json')
   if (content !== null) writeFileSync(path, content, 'utf8')
   const cal = await import('./tradingCalendar.ts')
-  cal.resetTradingCalendarCache()
+  cal.__resetTradingCalendarCache()
   await cal.loadTradingCalendar({ quarantineBroken: true })
   return { dir, cal }
 }

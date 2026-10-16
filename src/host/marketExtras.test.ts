@@ -193,7 +193,7 @@ test('⑥ 较昨日变动：缺昨日记录 ⇒ delta=null + 原因（不得 0�
   assert.ok(before.missing.some((x) => x.note.includes('上一交易日')))
   // 落盘昨日（模拟"连续两天运行"）后再算
   await m.persistExtrasDay('2026-10-12', { limitUp: 50, limitDown: 3, amount: 1_500_000_000_000, final: true })
-  m.resetExtrasCache()
+  m.__resetExtrasCache()
   const after = await m.dayOverDay(day, { amount: 1_675_917_804_027, limitUp: 67, limitDown: 8 })
   assert.equal(after.amount.prevDay, '2026-10-12')
   assert.equal(after.amount.delta, 175_917_804_027)
@@ -204,11 +204,11 @@ test('⑥ 较昨日变动：缺昨日记录 ⇒ delta=null + 原因（不得 0�
 
 test('⑦ push2* 可用性日志：记时间戳/成功失败/耗时（诊断用）', async () => {
   const m = await import('./marketExtras.ts')
-  m.resetPush2Availability()
+  m.__resetPush2Availability()
   m.notePush2('push2ex.eastmoney.com', true, 120)
   m.notePush2('push2ex.eastmoney.com', false, 300, 'HTTP 503')
   m.notePush2('push2delay.eastmoney.com', true, 80)
-  const log = m.push2Availability()
+  const log = m.__push2Availability()
   assert.equal(log.probes, 3)
   assert.equal(log.ok, 2)
   assert.equal(log.hosts['push2ex.eastmoney.com']?.ok, 1)

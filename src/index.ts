@@ -28,8 +28,14 @@ export const inject = ['webServer', 'webRuntime']
 /** 行标识（配置里写 `config: { row: watchlist }`） */
 export type RowId = 'core' | 'calendar' | 'watchlist' | 'portfolio' | 'market' | 'cloudmap' | 'tools'
 
-/** 行 → 该行独占的路由前缀（core 注册**其余全部**；P2–P4 再把别的行兑现） */
-const ROW_ROUTES: Record<Exclude<RowId, 'core'>, readonly string[]> = {
+/**
+ * 行 → 该行独占的路由前缀（core 注册**其余全部**；P2–P4 再把别的行兑现）。
+ *
+ * ⚠ **这是路由/工具归属的唯一事实源**：`docs/DESIGN-SUBPLUGINS.md` §2.1 表、`cordis.patch.yml` 的行注释、
+ * `src/index.test.ts` 的期望副本都只是它的**镜像**；三处镜像由 `src/index.test.ts` 的
+ * 「归属表三处镜像必须与代码一致」用例逐项 `deepEqual` 守住（改这里 ⇒ 三处不同步就红）。
+ */
+export const ROW_ROUTES: Record<Exclude<RowId, 'core'>, readonly string[]> = {
   calendar: ['/tradewatcher/calendar'],
   // watchlist 行（P4 复核后的准确清单）：只有自选页用的 `/watch`（GET+POST 同路径）。
   // ⚠ `/tradewatcher/trades` 移到 core：**详情抽屉**（core）在用它（`QuoteDrawer.tsx` 的 `api.trades(secid)`）⇒ 跨行共享留 core；
@@ -63,8 +69,8 @@ const ROW_ROUTES: Record<Exclude<RowId, 'core'>, readonly string[]> = {
   tools: ['/tradewatcher/tools/global-flow'],
 }
 
-/** 行 → 该行独占的 agent 工具名（不含前缀） */
-const ROW_TOOLS: Record<Exclude<RowId, 'core'>, readonly string[]> = {
+/** 行 → 该行独占的 agent 工具名（不含前缀）；同为**唯一事实源**（见上） */
+export const ROW_TOOLS: Record<Exclude<RowId, 'core'>, readonly string[]> = {
   calendar: ['calendar', 'calendar_add'],
   watchlist: ['watchlist', 'group_rank'],
   portfolio: ['portfolio', 'ledger'],

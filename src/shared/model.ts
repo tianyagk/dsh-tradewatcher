@@ -1486,6 +1486,12 @@ export interface RescueEtfView {
   volRatio: number | null
   /** 同时点量能倍数 = 当日累计额 ÷ (20日均额 × 日内进度) */
   timeAdjMult: number | null
+  /**
+   * **同刻度 z**（v0.17.0）：`(当日累计额 ÷ 20日均额 − 同一 5 分钟 slot 的近 20 日历史均值) ÷ 该 slot 的 σ`。
+   * `null` ⇒ 该通道基线不足（< 20 日）或 σ 不可用 ⇒ 该通道**回落到时点系数**（归因里写明，不静默）。
+   * ⚠ 与 `timeAdjMult` 不是同一刻度，两者不可直接比。
+   */
+  volumeZ?: number | null
   /** 20 日均成交额（元） */
   avgAmt20: number | null
   /** 超大单净额 */
@@ -1709,7 +1715,7 @@ export interface RescueSnapshot {
  *
  * 为什么放在 shared：面板与 agent 工具都要显示它（尤其 `warning`），而两者都不该 import 宿主模块。
  */
-export interface TradingCalendarInfo {
+interface TradingCalendarInfo {
   /** external = 用户手工维护的覆盖文件；builtin = 内置假日表（退路） */
   source: 'external' | 'builtin'
   /** 文件位置（用户要照它去改） */

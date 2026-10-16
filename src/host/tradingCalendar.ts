@@ -32,7 +32,7 @@ import { join } from 'node:path'
 import { dataHome } from './store.ts'
 import { dayOf as shDayOf, weekdayOf as shWeekdayOf } from './time.ts'
 
-export const TRADING_CALENDAR_FILE = 'trading-calendar.json'
+const TRADING_CALENDAR_FILE = 'trading-calendar.json'
 
 export interface TradingCalendarFile {
   v: 1
@@ -74,7 +74,7 @@ interface Cache {
 
 let cache: Cache | null = null
 
-export function tradingCalendarPath(): string {
+function tradingCalendarPath(): string {
   return join(dataHome(), TRADING_CALENDAR_FILE)
 }
 
@@ -92,11 +92,11 @@ const MONTH_RE = /^\d{4}-\d{2}$/
  * 软提示（不隔离，如实计入 `ignoredWeekends`）：条目落在周末 —— 周末本来就休市，多写无害，
  *   但它通常意味着用户把整段假期（含周末）抄了下来，界面上要能看到"已忽略 N 条"。
  */
-export type CalendarValidation =
+type CalendarValidation =
   | { ok: true; data: TradingCalendarFile; ignoredWeekends: number }
   | { ok: false; reason: string }
 
-export function validateTradingCalendar(raw: unknown): CalendarValidation {
+function validateTradingCalendar(raw: unknown): CalendarValidation {
   if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return { ok: false, reason: '顶层必须是对象' }
   const obj = raw as Record<string, unknown>
   if (obj.v !== 1) return { ok: false, reason: `v 必须是 1（收到 ${JSON.stringify(obj.v)}）—— 版本不认识时不许猜` }
@@ -248,7 +248,7 @@ export function externalCalendarStatus(): TradingCalendarStatus | null {
 }
 
 /** 测试/CLI 用：丢掉缓存（改文件后立即生效） */
-export function resetTradingCalendarCache(): void {
+export function __resetTradingCalendarCache(): void {
   cache = null
 }
 

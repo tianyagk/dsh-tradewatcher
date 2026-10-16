@@ -20,7 +20,7 @@ export const HOST_BUDGET_MAX = 5
 /** 预算窗口 */
 export const HOST_BUDGET_WINDOW_MS = 60 * 60_000
 /** `robots.txt` 缓存时长（同一进程内） */
-export const ROBOTS_TTL_MS = 24 * 60 * 60_000
+const ROBOTS_TTL_MS = 24 * 60 * 60_000
 
 export interface RobotsRule {
   allow: boolean

@@ -335,7 +335,7 @@ export function percentileRanks(values: ReadonlyArray<number | null>): Array<num
 }
 
 /** 偏好分的三个分量；任一为 null ⇒ 偏好分 null（该市场不进分母） */
-export interface FlowPreferenceParts {
+interface FlowPreferenceParts {
   greed: number | null
   mom5: number | null
   mom20: number | null
@@ -1172,7 +1172,7 @@ export interface GlobalFlowPayload {
 // 取数节奏：**不单独设 TTL** —— 宏观两档跟着载荷缓存走（现价类 30 分钟 / 载荷 10 分钟的那套），
 // 免得两套时钟互相打架（载荷命中缓存时这里根本不会被调用）。
 /** 自采样保留天数（够算 5 日变化即可，不必长） */
-export const FLOW_MACRO_KEEP_DAYS = 120
+const FLOW_MACRO_KEEP_DAYS = 120
 /** 给视图的历史长度：5 日变化 + "前一日的变化"都要算 ⇒ 7 条足够 */
 export const FLOW_MACRO_HISTORY = 7
 /** 交叉核对源（东财）的超时：短，且只做核对，不参与取值 */
@@ -1236,10 +1236,6 @@ export function macroLogPath(): string {
 }
 
 const macroGuard = new ReadGuard()
-/** 本次启动"读不到"的自采样文件与原因（与快照同一条纪律：读不到 ≠ 空文件 ⇒ 本次拒绝写回） */
-export function macroReadFailures(): ReadonlyArray<{ file: string; reason: string }> {
-  return macroGuard.entries
-}
 
 export async function readMacroLog(): Promise<MacroLogFile> {
   try {
@@ -1256,7 +1252,7 @@ export async function readMacroLog(): Promise<MacroLogFile> {
 }
 
 /** 只保留最近 `keep` 天（按 day 字符串排序） */
-export function trimMacroDays(days: Record<string, { dxy: number | null; us10y: number | null; at: number; diag?: FlowMacroOut['diag'] }>, keep = FLOW_MACRO_KEEP_DAYS): Record<string, { dxy: number | null; us10y: number | null; at: number; diag?: FlowMacroOut['diag'] }> {
+function trimMacroDays(days: Record<string, { dxy: number | null; us10y: number | null; at: number; diag?: FlowMacroOut['diag'] }>, keep = FLOW_MACRO_KEEP_DAYS): Record<string, { dxy: number | null; us10y: number | null; at: number; diag?: FlowMacroOut['diag'] }> {
   const keys = Object.keys(days).sort()
   if (keys.length <= keep) return days
   const out: Record<string, { dxy: number | null; us10y: number | null; at: number; diag?: FlowMacroOut['diag'] }> = {}
@@ -1309,7 +1305,7 @@ export interface MacroBackfill {
 }
 
 /** 回填后的历史（旧 → 新）：回填值打底，**同一天有自采样时以自采样为准**（自采样是当时的实时真值） */
-export function mergedMacroHistory(
+function mergedMacroHistory(
   days: Record<string, { dxy: number | null; us10y: number | null }>,
   backfill: MacroBackfill | undefined,
   key: 'dxy' | 'us10y',
@@ -1335,12 +1331,6 @@ export function mergedMacroHistory(
   return { values, source: src }
 }
 
-/** 自采样历史（旧 → 新，最多 `FLOW_MACRO_HISTORY` 条；排除今天） */
-export function macroHistory(days: Record<string, { dxy: number | null; us10y: number | null }>, key: 'dxy' | 'us10y', excludeDay?: string, keep = FLOW_MACRO_HISTORY): number[] {
-  const keys = Object.keys(days).sort().filter((k) => k !== excludeDay)
-  const vals = keys.map((k) => days[k][key]).filter((v): v is number => v !== null && Number.isFinite(v))
-  return vals.slice(Math.max(0, vals.length - keep))
-}
 
 /**
  * 新浪两条（GBK）：`globalbd_us10yt` 与 `DINIW`；返回解析后的现值与行情时间。

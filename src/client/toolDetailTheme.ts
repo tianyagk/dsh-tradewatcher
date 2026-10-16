@@ -15,7 +15,7 @@ import type { CSSProperties } from 'react'
 
 /* ────────────────────────────── 1. 文字令牌 ────────────────────────────── */
 
-export interface TypeSpec {
+interface TypeSpec {
   fontSize: number
   fontWeight?: number
   lineHeight?: number | string
@@ -563,7 +563,7 @@ export function cardGridProblems(template: string): string[] {
  *   · 深色档 = 竞品实测值（等价于我们原有的深底，写进来便于核对）；
  *   · 浅色档 = 对应的浅色半透明值（我们自己定，写死会让浅色主题变脏）。
  */
-export interface GlassSlots {
+interface GlassSlots {
   light: { bg: string; blur: string; saturate: string }
   dark: { bg: string; blur: string; saturate: string }
   border: { dark: string; light: string }
@@ -669,7 +669,7 @@ export function cssBlockAt(css: string, from: number): string | null {
 }
 
 /** 从 CSS 文本里抽出一个 `@keyframes` 块（含嵌套花括号） */
-export function keyframeBlock(css: string, name: string): string | null {
+function keyframeBlock(css: string, name: string): string | null {
   const at = css.indexOf(`@keyframes ${name}`)
   if (at < 0) return null
   return cssBlockAt(css, at)

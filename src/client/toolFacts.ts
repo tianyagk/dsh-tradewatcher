@@ -10,7 +10,7 @@
  *
  * ⚠ 关键词必须"人读得出来"、且能唯一指认那条事实；**不要**用单个字符（如 `%`）当关键词。
  */
-export interface FactTopic {
+interface FactTopic {
   /** 主题号（与 `docs/DESIGN-TOOL-PAGE-ALIGN.md` §13.3.4 的编号一致） */
   id: string
   /** 主题（人读） */

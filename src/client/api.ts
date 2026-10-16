@@ -520,9 +520,8 @@ export interface AmountForecastWire {
   phase: 'pre' | 'intraday' | 'closed' | 'non-trading'
   missing: MissingField[]
 }
-export type LimitCountsWire = MarketExtras['limits']
 export type MarginCrossWire = MarketExtras['margin']
-export interface MarketExtras {
+interface MarketExtras {
   limits: { up: LimitCountSideWire; down: LimitCountSideWire; missing: MissingField[]; caliber: string }
   margin: { szse: MarginReadingWire | null; em: MarginReadingWire | null; diffPct: number | null; mismatch: boolean; note: string; missing: MissingField[] }
   forecast: AmountForecastWire

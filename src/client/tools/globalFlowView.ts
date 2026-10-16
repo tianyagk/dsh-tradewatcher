@@ -358,7 +358,7 @@ export function liquiditySupport(input: {
 }
 
 /** 压力是否已传导（自定判定规则；写进悬停） */
-export type StressVerdict = '传导' | '未传导' | '数据不足'
+type StressVerdict = '传导' | '未传导' | '数据不足'
 
 /**
  * **压力是否已传导**（自定判定）：美元与美债**同步走强**（压力上升）**且**蛋糕温度**同期下降**

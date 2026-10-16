@@ -235,6 +235,7 @@ function mergeRescueLog(disk: unknown, mem: LogFile, base: Map<string, number>):
     baselines: { ...(onDisk.baselines ?? {}), ...mem.baselines },
     selfSamples,
     progressCurve: mem.progressCurve ?? onDisk.progressCurve ?? null,
+    progressSd: mem.progressSd ?? onDisk.progressSd ?? null,
     progressDays: Math.max(mem.progressDays ?? 0, onDisk.progressDays ?? 0),
     updatedAt: mem.updatedAt,
   }
@@ -287,6 +288,8 @@ interface LogFile {
   selfSamples: Record<string, Array<{ day: string; superVsAvg: number }>>
   /**日内累计成交占比曲线（自建刷新） */
   progressCurve: number[] | null
+  /** 同刻度基线：逐 slot 的 σ（长度固定 49 ⇒ 有界；与 curve 同一天更新一次） */
+  progressSd?: number[] | null
   progressDays: number
   updatedAt: number
 }
@@ -315,6 +318,35 @@ export function progressAt(curve: readonly number[], elapsedMin: number): number
   const v = curve[i] + (curve[j] - curve[i]) * frac
   return Math.max(0.01, Math.min(1, v))
 }
+
+/**
+ * **同刻度（同 5 分钟 slot）标准分** `z = (今天累计占比 − 同 slot 历史均值) / 同 slot 历史标准差`。
+ *
+ * 为什么需要它（用户口径 v0.17.0）：早盘量能天然偏小，旧的 `timeCoefficient(0.4)` 是这件事的**粗糙替代品** ——
+ * 它把等级线整体抬高（35/0.4 = 87.5 > 四项上限 71.7）⇒ 早盘**数学上不可达**，真信号一起被压掉。
+ * 有同刻度基线后，早盘按"同一时刻的历史分布"判高低 ⇒ 不需要动系数、也不需要动等级线。
+ *
+ * 返回 `null`（**不写 0**）当：样本不足（`n < SAME_SLOT_MIN_DAYS`）、σ 不可用（过小/非有限）、
+ * 或当前进度本身取不到 —— 这三种情况一律**回落**到现有时点系数，并在悬停写明"基线不足，本次用时点系数替代"。
+ */
+export const SAME_SLOT_MIN_DAYS = 20
+export function sameSlotZ(progressNow: number | null, mu: number | null, sd: number | null, days: number): number | null {
+  if (progressNow === null || mu === null || sd === null) return null
+  if (!Number.isFinite(progressNow) || !Number.isFinite(mu) || !Number.isFinite(sd)) return null
+  if (days < SAME_SLOT_MIN_DAYS) return null
+  // σ 过小（例如样本里各天几乎一样）⇒ 分不出高低，如实回落而不是给一个巨大的 z
+  if (sd < Math.max(1e-4, mu * 0.05)) return null
+  return Math.max(-5, Math.min(5, (progressNow - mu) / sd))
+}
+
+/**
+ * z → 0–100 分的锚点（依次 40 / 70 / 100 分）：`0.75σ / 1.5σ / 2.5σ`。
+ *
+ * 依据是**标准分的分位含义**（不是"把门槛调低"）：标准正态下 0.75σ ≈ 高于约 23% 的时点、
+ * 1.5σ ≈ 高于约 7%、2.5σ ≈ 高于约 0.6% —— 也就是说"要拿满分，得是历史上同刻极少见的放量"。
+ * 与旧的 x 倍数锚点（`RESCUE_CALIBRATION.f1`）**不是一个刻度**，所以两者的数值不可直接比较。
+ */
+export const SAME_SLOT_Z_ANCHORS = [0.75, 1.5, 2.5] as const
 
 /**分段线性记分：anchors 依次对应 40 / 70 / 100 分 */
 export function interpScore(value: number, anchors: readonly [number, number, number]): number {
@@ -405,6 +437,13 @@ export function timeCoefficient(elapsedMin: number): number {
 
 export interface RescueFactorInput {
   timeAdjMult: number | null
+  /**
+   * **同刻度 z**（同一 5 分钟 slot 的历史分布标准分；取六通道里最强的那个）。
+   * `null` ⇒ 基线不足/σ 不可用 ⇒ **回落**到时点系数，并在归因里写明（不静默）。
+   */
+  volumeZ?: number | null
+  /** 同刻度基线的样本天数（用于归因与"是否够 20 日"的判据） */
+  volumeZDays?: number
   /**核心通道的最大 超大单/20日均额（F2 以核心通道为主） */
   coreSuperVsAvg: number | null
   /**外围通道的最大 超大单/20日均额（单独净流入时打折） */
@@ -514,7 +553,16 @@ export function scoreRescue(input: RescueFactorInput): RescueScoreResult {
   const bandLabel = input.bandLabel ?? (isTail ? '尾盘' : '盘中')
   const phase: RescuePhase = input.phase ?? (isTail ? 'tail' : 'pm')
 
-  const f1 = interpScore(input.timeAdjMult ?? 0, [RESCUE_CALIBRATION.f1.mid, RESCUE_CALIBRATION.f1.high, RESCUE_CALIBRATION.f1.extreme])
+  /**
+   * 量能因子（v0.17.0）：**有同刻度基线就按 z 归一**（同一时刻的历史分布），
+   * 没有才回落到旧的"同时点倍数 × 时点系数"那套，并在归因里写明"基线不足，本次用时点系数替代"。
+   */
+  const volumeZ = input.volumeZ ?? null
+  const volumeZDays = input.volumeZDays ?? 0
+  const sameSlot = volumeZ !== null
+  const f1 = sameSlot
+    ? interpScore(volumeZ, SAME_SLOT_Z_ANCHORS)
+    : interpScore(input.timeAdjMult ?? 0, [RESCUE_CALIBRATION.f1.mid, RESCUE_CALIBRATION.f1.high, RESCUE_CALIBRATION.f1.extreme])
 
   // F2「超大单强度」**已剔除**（AUDIT-IMPL54 批 A′+B）：宽基 ETF 的分单数据太稀疏 ——
   // 305 个历史样本里该因子分 p90 = 1 / max = 15，原始输入 p90 = 0.01×20 日均额 ⇒ 恒 0，只占权重。
@@ -540,8 +588,11 @@ export function scoreRescue(input: RescueFactorInput): RescueScoreResult {
   const factors: RescueFactor[] = [
     {
       id: 'volume', label: '量能放大', score: f1, weight: RESCUE_WEIGHTS.volume,
-      actual: fmt(input.timeAdjMult, 'x'),
-      threshold: `同时点量能倍数（P75/P90/P95 ${RESCUE_CALIBRATION.f1.mid}/${RESCUE_CALIBRATION.f1.high}/${RESCUE_CALIBRATION.f1.extreme}x 历史标定）`,
+      // 口径随"用哪套"而变：有同刻度基线 ⇒ 显示 z；否则显示旧的倍数（两套刻度不可直接比，所以标注也分开）
+      actual: sameSlot ? `z=${volumeZ.toFixed(2)}` : fmt(input.timeAdjMult, 'x'),
+      threshold: sameSlot
+        ? `同刻度 z（近 ${volumeZDays} 个交易日、同一 5 分钟 slot 的历史分布；锚点 ${SAME_SLOT_Z_ANCHORS.join('/')}σ ⇒ 40/70/100 分）`
+        : `同时点量能倍数（P75/P90/P95 ${RESCUE_CALIBRATION.f1.mid}/${RESCUE_CALIBRATION.f1.high}/${RESCUE_CALIBRATION.f1.extreme}x 历史标定）；⚠ 同刻度基线不足（${volumeZDays}/${SAME_SLOT_MIN_DAYS} 日）⇒ 本次用时点系数替代`,
       hit: f1 >= 40,
     },
     {
@@ -565,7 +616,12 @@ export function scoreRescue(input: RescueFactorInput): RescueScoreResult {
   ]
 
   const raw = factors.reduce((a, f) => a + f.weight * f.score, 0)
-  const coef = input.timeCoef ?? 1
+  /**
+   * **时点系数降级为兜底**（用户口径 v0.17.0）：基线可用时它**不参与**（系数按 1 算 ⇒ 等级线就是 35/55，
+   * 早盘不再被抬到 87.5/137.5 那种不可达的位置）；只有基线不足时（冷启动/σ 不可用）才照旧参与。
+   */
+  const coefInput = input.timeCoef ?? 1
+  const coef = sameSlot ? 1 : coefInput
   const score = Math.max(0, Math.min(100, Math.round(raw * coef)))
   /**
    * 连续评分（0–100）：`raw ÷ 权重合计 × 100`。
@@ -685,7 +741,14 @@ export function scoreRescue(input: RescueFactorInput): RescueScoreResult {
    * 提示词里带上样本量与分位，读者能自己判断"剔除"是否合理。
    */
   const removedNote = '；已剔除「超大单强度」因子：宽基 ETF 分单数据稀疏（305 样本 p90 = 0.01×20 日均额），该因子不可用'
-  const contNote = `连续评分 ${continuous.toFixed(1)}/100（${pct === null ? '近 20 日分位 —（样本不足 5）' : `近 20 日分位 ${pct.pct.toFixed(0)}%，N=${pct.n}`}；时点系数 ${coef}）`
+  /**
+   * 量能口径一句话（进归因、也进悬停）：**有同刻度基线就用它，没有就如实说"用时点系数替代"**。
+   * 这条不只是解释，也是"不得静默"的落点：面板/工具输出里能直接读到本次到底用了哪套。
+   */
+  const volumeNote = sameSlot
+    ? `量能口径：同刻度 z=${volumeZ.toFixed(2)}（近 ${volumeZDays} 日同 slot 分布）⇒ 时点系数不参与`
+    : `量能口径：同刻度基线不足（${volumeZDays}/${SAME_SLOT_MIN_DAYS} 日）⇒ 本次用时点系数 ${coefInput} 替代（不是静默：这一句就是替代声明）`
+  const contNote = `连续评分 ${continuous.toFixed(1)}/100（${pct === null ? '近 20 日分位 —（样本不足 5）' : `近 20 日分位 ${pct.pct.toFixed(0)}%，N=${pct.n}`}；生效时点系数 ${coef}；${volumeNote}）`
   /**
    * 两个**说明项**（Lead 决策：不再作为等级前置，只解释连续评分/分位）：
    *   · 核心通道共振只数；· 超大单读数符号。等级只由 `raw` 与两条线（35/55）决定。
@@ -789,7 +852,7 @@ export function holidayOf(day: string): { name: string } | null {
   return null
 }
 
-export interface TradingDayState {
+interface TradingDayState {
   trading: boolean
   /** 非交易日的原因：周末 / 法定假日 */
   reason: 'weekend' | 'holiday' | null
@@ -1042,7 +1105,7 @@ async function fetchAvgAmount20(secid: string): Promise<{ avg: number; source: '
 }
 
 /**用新浪 5 分钟线自建当日进度曲线（口径与标定脚本一致，失败则沿用标定值） */
-async function fetchProgressCurve(metas: RescueEtfMeta[]): Promise<{ curve: number[]; days: number } | null> {
+async function fetchProgressCurve(metas: RescueEtfMeta[]): Promise<{ curve: number[]; sd: number[]; days: number } | null> {
   const curves: number[][] = []
   for (const meta of metas.slice(0, 6)) {
     try {
@@ -1090,7 +1153,18 @@ async function fetchProgressCurve(metas: RescueEtfMeta[]): Promise<{ curve: numb
   }
   if (curves.length === 0) return null
   const curve = new Array(49).fill(0).map((_, i) => Number((curves.reduce((a, c) => a + c[i], 0) / curves.length).toFixed(4)))
-  return { curve, days: curves.length }
+  /**
+   * **同刻度基线的离散度**（用户口径 v0.17.0）：逐 slot 的标准差。
+   * 只有均值时，"今天这个时刻的累计占比是不是异常"只能跟一个数比（无判别力）；
+   * 有了 σ 才能给出 `z = (今天 − μ) / σ` —— 这正是"同一时刻的历史分布"该干的事。
+   */
+  const sd = new Array(49).fill(0).map((_, i) => {
+    if (curves.length < 2) return 0
+    const mu = curve[i] as number
+    const varSum = curves.reduce((a, c) => a + ((c[i] as number) - mu) ** 2, 0) / (curves.length - 1)
+    return Number(Math.sqrt(varSum).toFixed(4))
+  })
+  return { curve, sd, days: curves.length }
 }
 
 /**── 冷启动回填 ──────────────────────────────────────────────────────────
@@ -1234,7 +1308,7 @@ export async function fetchQuoteSource(
 
 export class RescueMonitor {
   private dir: string
-  private file: LogFile = { v: 1, days: {}, lastSnapshot: null, baselines: {}, selfSamples: {}, progressCurve: null, progressDays: 0, updatedAt: 0 }
+  private file: LogFile = { v: 1, days: {}, lastSnapshot: null, baselines: {}, selfSamples: {}, progressCurve: null, progressSd: null, progressDays: 0, updatedAt: 0 }
   private loaded: Promise<void> | null = null
   private config: RescueConfig
   private ring: Record<string, Sample[]> = {}
@@ -1322,6 +1396,8 @@ export class RescueMonitor {
           baselines: parsed.baselines ?? {},
           selfSamples: parsed.selfSamples ?? {},
           progressCurve: Array.isArray(parsed.progressCurve) && parsed.progressCurve.length === 49 ? parsed.progressCurve : null,
+          // 长度必须正好 49 且全为有限非负数（否则当作没有 ⇒ 回落时点系数，不静默用一个坏基线）
+          progressSd: Array.isArray(parsed.progressSd) && parsed.progressSd.length === 49 && parsed.progressSd.every((x: unknown) => typeof x === 'number' && Number.isFinite(x) && x >= 0) ? parsed.progressSd : null,
           progressDays: typeof parsed.progressDays === 'number' ? parsed.progressDays : 0,
           updatedAt: typeof parsed.updatedAt === 'number' ? parsed.updatedAt : 0,
         }
@@ -1597,6 +1673,14 @@ export class RescueMonitor {
     const evalTs = trading ? ts : tailRef > ts - 12 * 3600_000 ? tailRef : ts
     const allowPulse = trading || phase === 'closed'
     let maxMult: number | null = null
+    /** 同刻度 z 的最大值（六条评分通道里最强的那个）；基线不足/σ 不可用 ⇒ 一直是 null ⇒ 走兜底 */
+    let maxVolumeZ: number | null = null
+    /** 同刻度基线可用的通道数（归因里说明"几个通道用上了基线"） */
+    let volumeZChannels = 0
+    const slotIdx = Math.max(1, Math.min(48, Math.round(elapsed / 5)))
+    const sameSlotMu = (this.file.progressCurve ?? RESCUE_CALIBRATION.progressCurve)[slotIdx] ?? null
+    const sameSlotSd = (this.file.progressSd ?? null)?.[slotIdx] ?? null
+    const sameSlotDays = this.file.progressSd === null || this.file.progressSd === undefined ? 0 : this.file.progressDays
     let coreSuperVsAvg: number | null = null
     let peripheralSuperVsAvg: number | null = null
     let maxPulse: number | null = null
@@ -1613,7 +1697,7 @@ export class RescueMonitor {
         etfs.push({
           secid: meta.secid, name: meta.name, index: meta.index, price: null, pct: null, amount: null, volRatio: null,
           timeAdjMult: null, avgAmt20: base, superNet: null, mainNet: null, superShare: null, superVsAvg: null,
-          pulseMult: null, activity: 0, triggered: false, flowDirection: 'unknown',
+          pulseMult: null, activity: 0, triggered: false, flowDirection: 'unknown', volumeZ: null,
           open: null, high: null, low: null,
         })
         continue
@@ -1621,6 +1705,13 @@ export class RescueMonitor {
       const amount = q.amount
       const superNet = q.superNet
       const timeAdjMult = amount !== null && base !== null && base > 0 ? amount / (base * progress) : null
+      /**
+       * 同刻度 z（v0.17.0）：`(今日累计额 ÷ 20 日均额 − 同 slot 历史均值) ÷ 同 slot 历史 σ`。
+       * 与 `timeAdjMult` 的分母不同（后者用"日内进度"这种粗略替代），所以两套刻度**不可直接比**：
+       * 有 z 就用 z，没有就回落，并在因子行/归因里标清楚用的哪套。
+       */
+      const progressNow = amount !== null && base !== null && base > 0 ? amount / base : null
+      const volumeZ = sameSlotZ(progressNow, sameSlotMu, sameSlotSd, sameSlotDays)
       const superVsAvg = superNet !== null && base !== null && base > 0 ? superNet / base : null
       const superShare = superNet !== null && amount !== null && amount > 0 ? superNet / amount : null
       // 脉冲：最近 5 分钟成交额 ÷ 同时点基准 5 分钟额
@@ -1658,6 +1749,10 @@ export class RescueMonitor {
         if (flow.persistShare !== null && (persistBest === null || flow.persistShare > persistBest)) persistBest = flow.persistShare
         if (flow.retraceRatio !== null && (retraceWorst === null || flow.retraceRatio > retraceWorst)) retraceWorst = flow.retraceRatio
         if (timeAdjMult !== null) maxMult = Math.max(maxMult ?? 0, timeAdjMult)
+        if (volumeZ !== null && scoring.has(meta.secid)) {
+          maxVolumeZ = Math.max(maxVolumeZ ?? -Infinity, volumeZ)
+          volumeZChannels += 1
+        }
       }
       if (superVsAvg !== null && inPool) {
         if (isCoreIndex(meta.index)) {
@@ -1698,11 +1793,14 @@ export class RescueMonitor {
         // 当日开/高/低：底部形态（日内回升、下影线、收回前低）计算所需
         open: q.open, high: q.high, low: q.low,
         flowDirection: superShare === null ? 'unknown' : superShare >= 0.15 ? 'in' : superShare <= -0.15 ? 'out' : 'flat',
+        volumeZ,
       })
     }
     const anchors = this.f2Anchors()
     const scored = scoreRescue({
       timeAdjMult: maxMult,
+      volumeZ: maxVolumeZ,
+      volumeZDays: sameSlotDays,
       coreSuperVsAvg, peripheralSuperVsAvg,
       pulseMult: maxPulse,
       persistShare: persistBest, retraceRatio: retraceWorst,
@@ -1997,6 +2095,7 @@ export class RescueMonitor {
       const prog = await fetchProgressCurve(metas)
       if (prog !== null) {
         this.file.progressCurve = prog.curve
+        this.file.progressSd = prog.sd
         this.file.progressDays = prog.days
       }
       // 昨日样本入库（供 F2 自建分位升级）

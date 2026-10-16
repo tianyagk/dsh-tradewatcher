@@ -25,7 +25,7 @@ const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
 
 // ── push2* 可用性日志（诊断用；不进用户可见文案） ─────────────────────────────
 
-export interface Push2Probe {
+interface Push2Probe {
   ts: number
   host: string
   ok: boolean
@@ -42,7 +42,7 @@ export function notePush2(host: string, ok: boolean, ms: number, note?: string):
   if (availability.length > AVAILABILITY_KEEP) availability.splice(0, availability.length - AVAILABILITY_KEEP)
 }
 
-export function push2Availability(): { probes: number; ok: number; hosts: Record<string, { ok: number; fail: number; avgMs: number }>; recent: Push2Probe[] } {
+export function __push2Availability(): { probes: number; ok: number; hosts: Record<string, { ok: number; fail: number; avgMs: number }>; recent: Push2Probe[] } {
   const hosts: Record<string, { ok: number; fail: number; avgMs: number }> = {}
   let ok = 0
   for (const p of availability) {
@@ -58,7 +58,7 @@ export function push2Availability(): { probes: number; ok: number; hosts: Record
 }
 
 /** 测试用：清空可用性日志 */
-export function resetPush2Availability(): void {
+export function __resetPush2Availability(): void {
   availability.length = 0
 }
 
@@ -107,7 +107,7 @@ export interface LimitCountSide {
   at: number
 }
 
-export interface LimitCounts {
+interface LimitCounts {
   up: LimitCountSide
   down: LimitCountSide
   missing: MissingField[]
@@ -188,7 +188,7 @@ export interface MarginReading {
   source: string
 }
 
-export interface MarginCross {
+interface MarginCross {
   szse: MarginReading | null
   em: MarginReading | null
   /** 两源都能取到时的相对差（融资余额）；任一缺失 ⇒ null */
@@ -416,7 +416,7 @@ export interface AmountForecast {
 }
 
 /** 标定曲线的样本天数（曲线每 5 分钟一点、240 分钟 ⇒ 每天 49 点） */
-export function progressCurveSamples(): number {
+function progressCurveSamples(): number {
   // ⚠ 曲线的长度是"**一天**的 49 个点"（5 分钟一个点 × 240 分钟），不是样本天数 ——
   // 样本天数由标定文件自己声明（`progressDays: 126`：新浪 5 分钟线 126 个交易日）
   return Math.max(0, Math.round(RESCUE_CALIBRATION.progressDays))
@@ -473,7 +473,7 @@ export async function amountForecast(current: number | null, now = Date.now()): 
 
 // ── 6. 较昨日变动（缺昨日 ⇒ null + 原因，不得 0） ────────────────────────────
 
-export interface DayOverDay {
+interface DayOverDay {
   amount: { today: number | null; prev: number | null; delta: number | null; deltaPct: number | null; prevDay: string | null; note: string }
   limitCounts: { today: number | null; prev: number | null; delta: number | null; prevDay: string | null; note: string }
   missing: MissingField[]
@@ -512,7 +512,7 @@ export async function persistExtrasDay(day: string, rec: { limitUp: number | nul
 }
 
 /** 测试用：重置内存缓存（不删文件） */
-export function resetExtrasCache(): void {
+export function __resetExtrasCache(): void {
   extras = null
 }
 

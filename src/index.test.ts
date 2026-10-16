@@ -65,11 +65,13 @@ const FUNCTION_OWNED_PATHS = [
   '/tradewatcher/board',
   // v0.81.2：大盘页的附加行情（涨停/两融/预测）—— 单一消费方 `MarketPage.tsx`（market 行）
   '/tradewatcher/market-extras',
+  // v0.71.0 第 7 行：工具箱独占的蛋糕数据路由（此前漏在本清单外 —— 新断言「并集必须相等」抓到，REVIEW-6 §2.3 D5）
+  '/tradewatcher/tools/global-flow',
 ] as const
 
 // 隔离数据目录：**绝不能在测试里碰用户的 ~/.dsh**（store.init 会读写真实文件）
 process.env.DSH_HOME = mkdtempSync(join(tmpdir(), 'tw-rows-'))
-const { apply, name, rowOf, setKernel, coreKernel, __kernelStats } = await import('./index.ts')
+const { apply, name, rowOf, setKernel, coreKernel, __kernelStats, ROW_ROUTES: REAL_ROW_ROUTES, ROW_TOOLS: REAL_ROW_TOOLS } = await import('./index.ts')
 type CoreKernel = NonNullable<ReturnType<typeof coreKernel>>
 
 /** 每个用例结束都停掉采样循环（否则 node:test 不会退出） */
@@ -331,6 +333,141 @@ const ROW_TOOLS_FOR_TEST: Record<string, readonly string[]> = {
   portfolio: ['portfolio', 'ledger'],
   tools: [],
 }
+
+/**
+ * 归属表的三处**镜像**解析器（v0.94.0，REVIEW-6 §2.3 D5）。
+ *
+ * 背景：`ROW_ROUTES/ROW_TOOLS` 是唯一事实源，但同一份归属还被抄在三处：文档 §2.1 表、
+ * `cordis.patch.yml` 的行注释、本文件的期望副本。抄本**没有任何相等断言** ⇒ 真表改了、抄本没改时
+ * 测试照样绿（REVIEW-6 实测这条缺口）。下面三个解析器把三处抄本读成结构化数据，再由
+ * 「归属表三处镜像必须与代码一致」逐行 deepEqual。
+ */
+function normPath(token: string): string {
+  return token.startsWith('/tradewatcher/') ? token : `/tradewatcher${token}`
+}
+
+/** 文档 §2.1 表 → `{ 行: {routes, tools} }`（core 行不参与：它的路由栏是散文） */
+export function parseDocOwnership(markdown: string): Record<string, { routes: string[]; tools: string[] }> {
+  const out: Record<string, { routes: string[]; tools: string[] }> = {}
+  for (const line of markdown.split('\n')) {
+    const m = /^\|\s*\*{0,2}`([a-z]+)`\*{0,2}\s*\|([^|]*)\|([^|]*)\|/.exec(line)
+    if (m === null || m[1] === 'core') continue
+    const row = m[1]
+    const routes = [...m[2].matchAll(/`(\/[a-z0-9/-]+)`/g)].map((x) => normPath(x[1]))
+    const tools = [...m[3].matchAll(/`([a-z_]+)`/g)].map((x) => x[1]).filter((t) => t !== 'tradewatcher_core')
+    out[row] = { routes, tools }
+  }
+  return out
+}
+
+/** `cordis.patch.yml` 行注释 → `{ 行: {routes, tools} }`（按 `→ row: x` 分段，段内继续读到下一段） */
+export function parsePatchOwnership(patchText: string): Record<string, { routes: string[]; tools: string[] }> {
+  const lines = patchText.split('\n').filter((l) => l.trim().startsWith('#'))
+  const segs: Record<string, string> = {}
+  let cur: string | null = null
+  for (const l of lines) {
+    const m = /→ row:\s*([a-z]+)(.*)$/.exec(l)
+    if (m !== null) {
+      cur = m[1]
+      // ⚠ 标记行**本身**也可能带内容（calendar/portfolio/market 那几行的路由就写在同一行）
+      segs[cur] = m[2]
+      continue
+    }
+    // 续行只认"行号栏 + ≥3 空格缩进"的那些（行清单块的格式）；`# ⚠ …` 这类小节标题缩进只有 1 空格 ⇒ 自然截断，
+    // 否则最后一行会把后面整段注释都算成它的内容（实测：tools 段曾把 `apply`/`config`/`all` 当成工具名）。
+    if (cur === null) continue
+    if (/^#\s{3,}\S/.test(l)) segs[cur] += ` ${l.replace(/^#\s*/, '')}`
+    // 行清单块到此结束：遇到"非续行"的注释行就收段，后面的示例/说明不会再算进最后一行
+    //（实测：不收段时 tools 段会把 profile 覆盖示例里的 `config`/`all`/`apply` 当成工具名）
+    else cur = null
+  }
+  const out: Record<string, { routes: string[]; tools: string[] }> = {}
+  for (const [row, text] of Object.entries(segs)) {
+    if (row === 'core') continue
+    const routes: string[] = []
+    for (const seg of text.matchAll(/`(\/tradewatcher\/[a-z0-9/|-]+)`/g)) {
+      const parts = seg[1].split('|')
+      for (const [i, part] of parts.entries()) routes.push(i === 0 ? normPath(part) : normPath(`/${part}`))
+    }
+    const tools = [...text.matchAll(/`(?:tradewatcher_)?_?([a-z_]+)`/g)]
+      .map((x) => x[1])
+      .filter((t) => !t.startsWith('tradewatcher') && !/^tradewatcher_/.test(t))
+      .filter((t) => t !== 'rows' && t !== 'activeRows')
+    out[row] = { routes, tools }
+  }
+  return out
+}
+
+/** 真表 → `{ 行: {routes, tools} }`（与两个解析器同构，便于 deepEqual） */
+function realOwnership(): Record<string, { routes: string[]; tools: string[] }> {
+  const out: Record<string, { routes: string[]; tools: string[] }> = {}
+  for (const row of Object.keys(REAL_ROW_ROUTES)) {
+    out[row] = {
+      routes: [...REAL_ROW_ROUTES[row as keyof typeof REAL_ROW_ROUTES]],
+      tools: [...(REAL_ROW_TOOLS[row as keyof typeof REAL_ROW_TOOLS] ?? [])],
+    }
+  }
+  return out
+}
+
+test('归属表三处镜像必须与代码一致（代码 = 唯一事实源；改这里就红）', () => {
+  const real = realOwnership()
+  // ① 测试期望副本
+  assert.deepEqual(
+    Object.keys(ROW_ROUTES_FOR_TEST).sort(),
+    Object.keys(real).sort(),
+    '测试副本的行集合必须与真表一致',
+  )
+  for (const row of Object.keys(real)) {
+    assert.deepEqual(ROW_ROUTES_FOR_TEST[row], real[row].routes, `测试副本的路由与真表不一致：${row}`)
+    assert.deepEqual(ROW_TOOLS_FOR_TEST[row], real[row].tools, `测试副本的工具与真表不一致：${row}`)
+  }
+  // ② 文档 §2.1 表
+  const doc = parseDocOwnership(readFileSync(join(ROOT, 'docs/DESIGN-SUBPLUGINS.md'), 'utf8'))
+  assert.deepEqual(Object.keys(doc).sort(), Object.keys(real).sort(), '文档 §2.1 表的行集合必须与真表一致（含第 7 行 tools）')
+  for (const row of Object.keys(real)) {
+    assert.deepEqual(doc[row].routes, real[row].routes, `文档 §2.1 的路由与真表不一致：${row}（缺/多了哪条看 diff）`)
+    assert.deepEqual(doc[row].tools, real[row].tools, `文档 §2.1 的工具与真表不一致：${row}`)
+  }
+  // ③ cordis.patch.yml 行注释
+  const patch = parsePatchOwnership(readFileSync(join(ROOT, 'cordis.patch.yml'), 'utf8'))
+  assert.deepEqual(Object.keys(patch).sort(), Object.keys(real).sort(), 'patch 行注释的行集合必须与真表一致')
+  for (const row of Object.keys(real)) {
+    assert.deepEqual(patch[row].routes, real[row].routes, `patch 行注释的路由与真表不一致：${row}`)
+    assert.deepEqual(patch[row].tools, real[row].tools, `patch 行注释的工具与真表不一致：${row}`)
+  }
+})
+
+test('路由账目：声明数 = 真表并集；文档里的行-路由计数必须与代码一致', () => {
+  const declared = Object.values(REAL_ROW_ROUTES).flat()
+  assert.equal(new Set(declared).size, declared.length, '同一条路由不许被两行同时声明（否则关一行另一行仍会注册）')
+  // core 不许注册任何被声明的路径（判据：声明 = 该行独占）
+  assert.deepEqual(
+    [...FUNCTION_OWNED_PATHS].sort(),
+    [...declared].sort(),
+    'FUNCTION_OWNED_PATHS（core 必须交出去的路径）必须等于真表并集',
+  )
+  // 总路由数：直接扫 routes.ts 的注册表（文本级，与文档同口径），避免再抄一个数字
+  const routesText = readFileSync(join(ROOT, 'src/host/routes.ts'), 'utf8')
+  const all = new Set([...routesText.matchAll(/path: '(\/tradewatcher\/[a-z0-9/-]+)'/g)].map((m) => m[1]))
+  const perRow = Object.fromEntries(Object.entries(REAL_ROW_ROUTES).map(([r, list]) => [r, list.length]))
+  const coreCount = all.size - declared.length
+  assert.equal(coreCount >= 0, true, '声明的路由必须都在注册表里（写错路径会被这条抓到）')
+  for (const p of declared) assert.equal(all.has(p), true, `真表里的 ${p} 在 routes.ts 里不存在（路径写错了）`)
+  // 文档里的账目行（"路由账 N = core X + …"）必须与实测一致
+  const docText = readFileSync(join(ROOT, 'docs/DESIGN-SUBPLUGINS.md'), 'utf8')
+  const ledger = /路由账\s*(\d+)\s*=\s*core\s*(\d+)([^\n]*)/.exec(docText)
+  assert.notEqual(ledger, null, '文档里应当有一行"路由账 N = core X + …"（本用例以它为账目权威）')
+  const total = Number(ledger![1])
+  const core = Number(ledger![2])
+  assert.equal(total, all.size, `文档路由总数 ${total} ≠ 注册表实测 ${all.size}`)
+  assert.equal(core, coreCount, `文档 core 数 ${core} ≠ 实测 ${coreCount}（= 总 ${all.size} − 声明 ${declared.length}）`)
+  for (const [row, n] of Object.entries(perRow)) {
+    const m = new RegExp(`${row}\\s*(\\d+)`).exec(ledger![3])
+    assert.notEqual(m, null, `文档账目行里缺少 ${row} 的计数`)
+    assert.equal(Number(m![1]), n, `文档账目里 ${row} 的计数 ${m![1]} ≠ 真表 ${n}`)
+  }
+})
 
 test('归属按**实测调用方所在行**（board=market / industries=watchlist / anomaly=watchlist）', () => {
   // 判据：被 ≥2 个行消费 ⇒ core；单一消费方 ⇒ 该行。调用方映射（self-verified）：
