@@ -1539,6 +1539,31 @@ export interface RescueSignalEvent {
   reason: string
   /** 记录该事件的引擎版本；缺失表示旧口径（评分逻辑与当前不同） */
   engine?: string
+  /**
+   * **触发瞬间的全市场家数快照**（v0.18.0）：搭车落盘，**不为它发任何上游请求**。
+   *
+   * 取值优先级：① 本拍行情批量里就有的指数家数（`f104/f105/f106`，零成本、时刻最准）；
+   * ② `/breadth` 最近一次成功结果（≤120 秒，来自既有缓存/路由记录）。
+   * 两者都没有 ⇒ `null`，并在 `breadthWhy` 写明原因（**不得写 0**：0 会被读成"全市场无涨跌"）。
+   */
+  breadth?: RescueBreadthMoment | null
+  /** 家数缺失的原因（拿到时为 `null`）；文案进悬停，不新增面板 */
+  breadthWhy?: string | null
+  /** 家数来自哪里（界面/排查用）：本拍行情 or /breadth 缓存 */
+  breadthSource?: 'tick-quote' | 'breadth-cache' | null
+}
+
+/** 触发瞬间的全市场家数（涨/跌/平 + 两市成交额；成交额缺失时 `null`，不写 0） */
+export interface RescueBreadthMoment {
+  up: number
+  down: number
+  even: number
+  /** 两市成交额（元）；来源没有 ⇒ `null` */
+  amount: number | null
+  /** 该读数的观测时刻（epoch ms；本拍行情 = 本拍时刻，缓存 = 缓存里的 asOf） */
+  asOf: number
+  /** 来源标注（源 A 指数行情 / 自统计 …），原样展示，便于解释口径 */
+  source: string
 }
 
 /** 因子可用度：数据缺失时如实标注 */
@@ -1557,6 +1582,51 @@ export interface RescueIntradayPoint {
   superVsAvg: number | null
   /** 窗口内超大单净增 ÷ 该窗口成交额 */
   persistShare?: number | null
+  /**
+   * **该拍六通道各自的读数**（v0.18.0）：悬停"按时刻看六只"用。
+   * 全部来自**同一拍已经取回的那批行情**（零新增请求）；每只只放展示需要的字段。
+   * 体积有上界：当日 + `RESCUE_INTRADAY_MAX` 条 + 序列化体积上限（见 `trimIntradayBySize`）。
+   */
+  channels?: RescueIntradayChannel[]
+}
+
+/**
+ * **一张卡的当日分钟序列**（v0.18.0，卡内迷你折线用）。
+ *
+ * 数据来源：宿主**已有的**分钟采样（交易时段内每 60 秒刷新一次，六通道共用这批结果）
+ * ⇒ 客户端**不需要**为每张卡各打一次 `/trend`（那会是新增取数路径，属红线）。
+ * 上界：只保留当日、每卡 ≤ `RESCUE_CARD_MAX_POINTS`（242）点、整块 ≤ 字节上限（超出丢最旧）。
+ */
+export interface RescueCardSeries {
+  secid: string
+  name: string
+  /** 口径说明（原样展示给用户，避免被读成别的东西） */
+  caliber: string
+  points: Array<{
+    /** HH:mm */
+    hhmm: string
+    /** 该分钟成交额（元）；`null` = 这一分钟没有读数（**不写 0**） */
+    amount: number | null
+    price: number | null
+  }>
+  /** 该卡**没有**序列时的原因（有序列 ⇒ `null`）；空数组 + 原因，不是补 0 的假序列 */
+  why?: string | null
+}
+
+/** 分时点里的单通道读数（同一拍的批量结果，不额外取数） */
+export interface RescueIntradayChannel {
+  secid: string
+  name: string
+  price: number | null
+  pct: number | null
+  /** 当日累计成交额（元） */
+  amount: number | null
+  /** 同时点量能倍数（旧刻度） */
+  timeAdjMult: number | null
+  /** 同刻度 z（v0.17.0；基线不足 ⇒ null） */
+  volumeZ?: number | null
+  /** 超大单净额（当日累计，元） */
+  superNet: number | null
 }
 
 /** 自定义监测通道（通常为某板块 ETF）；仅作展示与量能/脉冲观察，不计入护盘评分 */
@@ -1690,6 +1760,11 @@ export interface RescueSnapshot {
   today: RescueSignalEvent[]
   /** 今日 5 分钟抽样曲线 */
   intraday: RescueIntradayPoint[]
+  /**
+   * **每张卡的当日分钟序列**（六只宽基 ETF；卡内迷你折线用）。
+   * 复用宿主已有的分钟采样 ⇒ **零新增上游请求**；缺数据 ⇒ 该卡 `points: []` + `why` 原因。
+   */
+  etfSeries?: RescueCardSeries[]
   sampleCount: number
   lastSampleTs: number | null
   /**

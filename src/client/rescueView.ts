@@ -37,3 +37,30 @@ export function breakerBadgeOf(input: {
   const marker = fromAlt ? '备用源' : `熔断 ${input.openHosts}/${input.hosts}`
   return { marker, reason: `${head} —— ${impact}`, fromAlt }
 }
+
+// ── v0.98.0（用户建议批 ②）：总分可视化的**语义**工具 ──────────────────────
+// 红线：总分是**异常程度**，不是买卖信号 ⇒ 颜色用**中性色阶**，文案只允许"异常程度"这类刻度词，
+// 不允许出现「买入 / 卖出 / 建议 / 胜率 / 概率」这类措辞（断言 `rescueVisual.test.ts` 会盯住）。
+
+/** 中性色阶：低（灰）→ 中（琥珀）→ 偏高（橙）——**不表方向，只表异常程度** */
+export function abnormalColorOf(score: number | null): string {
+  if (score === null || !Number.isFinite(score)) return 'var(--tw-fg-dim, #8b93a7)'
+  if (score >= 55) return '#e0872a'
+  if (score >= 35) return '#d8a13a'
+  return 'var(--tw-fg-dim, #8b93a7)'
+}
+
+/** 刻度文案（唯一实现）：只描述异常程度，不含任何买卖语义 */
+export function abnormalLabelOf(score: number | null): string {
+  if (score === null || !Number.isFinite(score)) return '异常程度 未知'
+  if (score >= 55) return '异常程度 偏高'
+  if (score >= 35) return '异常程度 中等'
+  return '异常程度 低'
+}
+
+/** 环形进度条的 dash 参数（占满整圈，`score/100` 决定实线段比例）；纯函数便于断言 */
+export function ringDashOf(score: number | null, circumference = 2 * Math.PI * 26): { dash: number; gap: number; pct: number } {
+  const pct = score === null || !Number.isFinite(score) ? 0 : Math.max(0, Math.min(100, score)) / 100
+  const dash = Math.round(circumference * pct * 100) / 100
+  return { dash, gap: Math.round((circumference - dash) * 100) / 100, pct }
+}

@@ -537,6 +537,17 @@ export function makeTradeRoutes(
           // 家数可能是**自统计**的，而成交额仍只有指数行情里有 —— 成交额缺失（行情走备用源）时
           // 不记账：把 0 当成交额记进每日快照会污染分位的历史口径（不许把缺失写成 0）。
           const stored = current === null || amount === null ? false : await breadth.record(Date.now(), current)
+          /**
+           * 搭车（v0.18.0）：把刚算出来的家数记进护盘监视器（**纯内存，不发任何请求、不写文件**），
+           * 供信号事件写"触发瞬间的家数"用；缓存过期/没读过 ⇒ 事件那边记 null + 原因。
+           */
+          if (current !== null && rescue !== undefined) {
+            rescue.noteBreadthMoment({
+              up: current.up, down: current.down, even: current.even,
+              amount: amount ?? null, asOf: Date.now(),
+              source: current.source === 'em-index' ? '东财指数行情（f104/f105/f106）' : '东财 clist 自统计',
+            })
+          }
           const ratio = current === null ? null : upRatio(current)
           const pct = percentileOf(ratio, breadth.history(BREADTH_WINDOW, today))
           // 【涨跌分布】直方图（可选）：与涨跌家数**同一处上游**（东财 clist 的 f3 涨跌幅），

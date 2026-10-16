@@ -1,6 +1,7 @@
 /**
  */
 import * as React from 'react'
+import { abnormalColorOf, abnormalLabelOf, ringDashOf } from './rescueView.ts'
 import { breakerBadgeOf } from './rescueView.ts'
 import type {
   PortPrefs, RescueConfig, RescueDaySummary, RescueEtfMeta, RescueEtfView, RescueFactor,
@@ -80,10 +81,38 @@ function pctColor(v: number | null | undefined, redUp: boolean): string {
 }
 
 /** 权重条：把 0–100 映射成一根细条，颜色随分值变化 */
-function ScoreBar(props: { value: number; color?: string; width?: number }): React.ReactElement {
+/**
+ * 量能"进度条 + 阈值线"（用户建议批 ②）：**只画宿主给得出来的标定阈值**。
+ * 这里唯一的标定数是 `f1.extreme`（P95 = 1.92x）⇒ 条长按 `2×extreme` 归一，
+ * 阈值线落在 50% 处（= extreme）。**没有第二个阈值就不画第二条线**（不编阈值）。
+ */
+function ThresholdBar(props: { value: number | null; width?: number }): React.ReactElement {
+  const max = RESCUE_F1_EXTREME * 2
+  const pct = props.value === null || !Number.isFinite(props.value) ? 0 : Math.max(0, Math.min(100, (props.value / max) * 100))
+  return React.createElement('div', {
+    className: 'tw-rescue-bar', style: { width: props.width ?? 72, position: 'relative' },
+    title: `同时点量能 ${props.value === null ? '未取到' : `${props.value.toFixed(2)}x`}；阈值线 = f1.extreme（P95 = ${RESCUE_F1_EXTREME}x），条长按 ${max.toFixed(2)}x 归一`,
+    'data-role': 'volume-threshold-bar',
+  },
+    React.createElement('i', { style: { width: `${pct}%`, background: (props.value ?? 0) >= RESCUE_F1_EXTREME ? LEVEL_COLOR[3] : 'currentColor' } }),
+    // 阈值线：位置固定 50%（= extreme / 2×extreme），是**标定值**不是我们拍的
+    React.createElement('span', {
+      'data-role': 'threshold-line',
+      style: { position: 'absolute', left: '50%', top: 0, bottom: 0, width: 1, background: LEVEL_COLOR[3], opacity: 0.9 },
+    }),
+  )
+}
+
+function ScoreBar(props: { value: number; color?: string; width?: number; threshold?: number }): React.ReactElement {
   const pct = Math.max(0, Math.min(100, props.value))
-  return React.createElement('div', { className: 'tw-rescue-bar', style: { width: props.width ?? 72 } },
+  return React.createElement('div', { className: 'tw-rescue-bar', style: { width: props.width ?? 72, position: 'relative' } },
     React.createElement('i', { style: { width: `${pct}%`, background: props.color ?? 'currentColor' } }),
+    props.threshold === undefined
+      ? null
+      : React.createElement('span', {
+          'data-role': 'threshold-line',
+          style: { position: 'absolute', left: `${Math.max(0, Math.min(100, props.threshold))}%`, top: 0, bottom: 0, width: 1, background: 'currentColor', opacity: 0.55 },
+        }),
   )
 }
 
@@ -222,7 +251,9 @@ function EtfCard(props: { etf: RescueEtfView; redUp: boolean }): React.ReactElem
       // 「同时点量能」达到**极端档**时用极端档配色。阈值取标定值 f1.extreme（= P95 = 1.92x），
       // 与 `src/host/rescue-thresholds.ts` 的 `RESCUE_CALIBRATION.f1` 同源；两处一致性由
       // `src/client/rescuePanel.test.ts` 的同步断言守着（旧值 1.63 是更早一次标定的 P90，早已失效）。
-      React.createElement('span', { className: 'v', style: { color: (etf.timeAdjMult ?? 0) >= RESCUE_F1_EXTREME ? LEVEL_COLOR[3] : undefined } }, fmtX(etf.timeAdjMult)),
+      React.createElement('span', { className: 'v', style: { display: 'flex', alignItems: 'center', gap: 6 } },
+        React.createElement(ThresholdBar, { value: etf.timeAdjMult, width: 48 }),
+        React.createElement('span', { style: { color: (etf.timeAdjMult ?? 0) >= RESCUE_F1_EXTREME ? LEVEL_COLOR[3] : undefined } }, fmtX(etf.timeAdjMult))),
       React.createElement('span', { className: 'k' }, '超大单净额'),
       React.createElement('span', { className: 'v', style: { color: pctColor(etf.superNet, redUp) } }, fmtYi(etf.superNet)),
       React.createElement('span', { className: 'k' }, '占成交额'),
@@ -483,11 +514,25 @@ export function RescuePanel(props: {
             // （分位数与样本数都来自快照契约；缺数据时显示"分位 —"这个短标记，原因在 title 里）
             paused
               ? '—'
-              : `${snapshot.score}/100 · 当日峰 ${peakToday === null ? '—' : peakToday.score} · 分位 ${
+              : React.createElement(React.Fragment, null,
+                  // 环形进度条（SVG，无依赖）：**中性色阶**，只表示"异常程度"，不是买卖信号
+                  React.createElement('svg', {
+                    width: 22, height: 22, viewBox: '0 0 60 60', 'data-role': 'score-ring',
+                    'aria-label': `${abnormalLabelOf(snapshot.score)}（${snapshot.score}/100，非买卖建议）`,
+                    style: { verticalAlign: 'middle', marginRight: 4 },
+                  },
+                    React.createElement('circle', { cx: 30, cy: 30, r: 26, fill: 'none', stroke: 'var(--tw-border)', strokeWidth: 7 }),
+                    React.createElement('circle', {
+                      cx: 30, cy: 30, r: 26, fill: 'none', stroke: abnormalColorOf(snapshot.score), strokeWidth: 7,
+                      strokeDasharray: `${ringDashOf(snapshot.score).dash} ${ringDashOf(snapshot.score).gap}`,
+                      strokeLinecap: 'round', transform: 'rotate(-90 30 30)',
+                    }),
+                  ),
+                  `${snapshot.score}/100 · 当日峰 ${peakToday === null ? '—' : peakToday.score} · 分位 ${
                   typeof snapshot.continuousPercentile === 'number'
                     ? `${snapshot.continuousPercentile.toFixed(0)}%（N=${snapshot.continuousPercentileN ?? 0}）`
                     : '—'
-                }`)
+                }`))
         : null,
       React.createElement('span', { style: { flex: 1 } }),
       snapshot !== null && (snapshot.stale === true || (data as { staleNote?: string })?.staleNote !== undefined)
@@ -708,14 +753,14 @@ export function RescuePanel(props: {
           ),
           snapshot.bottom !== undefined && snapshot.bottom.lanes.length > 0
             ? React.createElement('div', { className: 'tw-panel', style: { padding: '6px 8px' } },
-                React.createElement('div', { className: 'tw-sub-h' }, '底部位置 / 形态 / 概率',
+                React.createElement('div', { className: 'tw-sub-h' }, '底部位置 / 形态 / 触发后对照',
                   React.createElement('span', { style: { flex: 1 } }),
                   // 保留视图必须显式标注：这是「日线/校准样本暂时拿不到」时的上次结果，
                   // 不是本次计算 —— 否则会被当成刚算出来的实时结论
                   snapshot.bottom.stale === true
                     ? React.createElement('span', {
                         className: 'tw-badge',
-                        title: '日线或校准样本暂时不可用，这里展示上一次成功计算的结果（位置/形态/概率都是慢变量，仍可参考）',
+                        title: '日线或校准样本暂时不可用，这里展示上一次成功计算的结果（位置/形态/触发后对照都是慢变量，仍可参考）',
                         style: { fontSize: 12, color: '#e0a94a' },
                       }, `上次结果${
                         typeof snapshot.bottom.computedAt === 'number'
@@ -731,7 +776,7 @@ export function RescuePanel(props: {
                     React.createElement('th', null, '位置分'), React.createElement('th', null, '60日分位'),
                     React.createElement('th', null, '距60日高'), React.createElement('th', null, '距60日低'), React.createElement('th', null, '连跌'),
                     React.createElement('th', null, '形态分'), React.createElement('th', null, '日内回升'), React.createElement('th', null, '下影线'), React.createElement('th', null, '收回前低'),
-                    React.createElement('th', null, `概率 +${((snapshot.bottom.lanes[0].calibration.targets.at(-1)?.targetPct ?? 0.02) * 100).toFixed(0)}%/${snapshot.bottom.lanes[0].calibration.horizon}日`),
+                    React.createElement('th', null, `触发后对照 +${((snapshot.bottom.lanes[0].calibration.targets.at(-1)?.targetPct ?? 0.02) * 100).toFixed(0)}%/${snapshot.bottom.lanes[0].calibration.horizon}日（历史频率，非胜率/概率）`),
                   )),
                   React.createElement('tbody', null,
                     ...snapshot.bottom.lanes.map((l) =>
@@ -789,7 +834,7 @@ export function RescuePanel(props: {
                   snapshot.bottom.model,
                 ),
                 React.createElement('div', { className: 'tw-hint', style: { fontSize: 12 } },
-                  '口径说明：概率是「历史同类情形的频率」，不是预测；给出的 95% 区间是 Wilson 区间，样本越小区间越宽 —— 区间跨过基线时，这个差异不具备可辨识性。' +
+                  '口径说明：这里是「历史同类情形的出现频率」的对照片段，**不是**胜率、概率或预测；给出的 95% 区间是 Wilson 区间，样本越小区间越宽 —— 区间跨过基线时，这个差异不具备可辨识性。' +
                   '日内形态（回升/下影线/收回前低）没有可回算的历史分钟数据，因此「不参与概率校准」，只作实时修正参考。' +
                   '位置低 ≠ 见底：护盘也可能发生在下跌半程，请结合资金流与量价背离一起判断。',
                 ),

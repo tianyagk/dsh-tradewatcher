@@ -4,7 +4,8 @@ import { mkdir, readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import type {
   DailyBarLite, RescueActiveWindow, RescueBottomLane, RescueConfig, RescueDaySummary, RescueEtfMeta, RescueEtfView,
-  RescueFactor, RescueIntradayPoint, RescueLevel, RescueSignalEvent, RescueSnapshot, RescueThresholdSource,
+  RescueBreadthMoment, RescueCardSeries, RescueFactor, RescueIntradayChannel, RescueIntradayPoint, RescueLevel,
+  RescueSignalEvent, RescueSnapshot, RescueThresholdSource,
 } from '../shared/model.ts'
 import { RESCUE_CORE_OUTFLOW_VETO, RESCUE_CORE_INDEXES, RESCUE_PERIPHERAL_FLOW_DISCOUNT, rescueUniverseMeta } from '../shared/model.ts'
 import { RESCUE_CALIBRATION } from './rescue-thresholds.ts'
@@ -158,6 +159,8 @@ interface PersistedSnapshot {
   continuousPercentile?: RescueSnapshot['continuousPercentile']
   continuousPercentileN?: RescueSnapshot['continuousPercentileN']
   continuousPercentileWhy?: RescueSnapshot['continuousPercentileWhy']
+  /** 六卡分钟序列（当日；已按点数/字节上限裁剪 ⇒ 文件有界） */
+  etfSeries?: RescueSnapshot['etfSeries']
   resonance: RescueSnapshot['resonance']
   pulseBand: RescueSnapshot['pulseBand']
   completeness: RescueSnapshot['completeness']
@@ -175,8 +178,8 @@ interface PersistedSnapshot {
 export function stripSnapshot(s: RescueSnapshot): PersistedSnapshot {
   // flowSource / lastFailTs 也要落盘：收盘后重启时面板才能说明"这份数据来自备用源
   // （所以缺分单资金流因子）"与"最近一次采样失败于何时"，而不是只剩一个时间戳
-  const { ts, level, score, summary, factors, etfs, indexPct, indexName, timeCoef, continuous, continuousPercentile, continuousPercentileN, continuousPercentileWhy, resonance, pulseBand, completeness, thresholdSource, selfSampleDays, config, activeIntervalSec, flowSource, lastFailTs } = s
-  return { ts, level, score, summary, factors, etfs, indexPct, indexName, timeCoef, continuous, continuousPercentile, continuousPercentileN, continuousPercentileWhy, resonance, pulseBand, completeness, thresholdSource, selfSampleDays, config, activeIntervalSec, flowSource, lastFailTs }
+  const { ts, level, score, summary, factors, etfs, indexPct, indexName, timeCoef, continuous, continuousPercentile, continuousPercentileN, continuousPercentileWhy, etfSeries, resonance, pulseBand, completeness, thresholdSource, selfSampleDays, config, activeIntervalSec, flowSource, lastFailTs } = s
+  return { ts, level, score, summary, factors, etfs, indexPct, indexName, timeCoef, continuous, continuousPercentile, continuousPercentileN, continuousPercentileWhy, etfSeries, resonance, pulseBand, completeness, thresholdSource, selfSampleDays, config, activeIntervalSec, flowSource, lastFailTs }
 }
 
 /**
@@ -296,6 +299,84 @@ interface LogFile {
 
 /**── 纯函数（selftest 覆盖）────────────────────────────────────────────── */
 
+/** 每卡分钟序列的点数上限（A 股一整日 = 240 分钟 + 边界 ⇒ 242） */
+export const RESCUE_CARD_MAX_POINTS = 242
+/** 六卡分钟序列整块的序列化字节上限（超出从最旧的一端丢；当日不会无限长） */
+export const RESCUE_CARD_SERIES_MAX_BYTES = 128 * 1024
+/** 每卡序列的口径（进契约，界面原样展示；两套源都是"每分钟成交额"，腾讯链是累计差分推导值） */
+export const RESCUE_CARD_SERIES_CALIBER = '每分钟成交额（元）·当日；腾讯分钟链的逐分钟值由累计额差分推导（amountDerived）'
+
+/**
+ * 六卡序列的**上限裁剪**（纯函数，可测）：① 每卡点数 ≤ maxPoints（保留最新）；
+ * ② 整块序列化体积 ≤ maxBytes（超了就从最旧的分钟丢，六卡**同步**丢，保证各卡长度一致）。
+ */
+export function trimCardSeries(
+  cards: readonly RescueCardSeries[],
+  opts: { maxPoints?: number; maxBytes?: number } = {},
+): { cards: RescueCardSeries[]; droppedPoints: number; bytes: number } {
+  const maxPoints = opts.maxPoints ?? RESCUE_CARD_MAX_POINTS
+  const maxBytes = opts.maxBytes ?? RESCUE_CARD_SERIES_MAX_BYTES
+  let out = cards.map((c) => (c.points.length > maxPoints ? { ...c, points: c.points.slice(c.points.length - maxPoints) } : c))
+  let dropped = cards.reduce((a, c) => a + Math.max(0, c.points.length - maxPoints), 0)
+  let bytes = JSON.stringify(out).length
+  while (bytes > maxBytes && (out[0]?.points.length ?? 0) > 1) {
+    const cut = Math.max(1, Math.floor((out[0]?.points.length ?? 1) / 8))
+    out = out.map((c) => ({ ...c, points: c.points.slice(Math.min(cut, Math.max(0, c.points.length - 1))) }))
+    dropped += cut
+    bytes = JSON.stringify(out).length
+  }
+  return { cards: out, droppedPoints: dropped, bytes }
+}
+
+/**
+ * 由**已有**的分钟采样造六卡序列（纯函数；调用方传进来的 `minutes` 就是采样器那份缓存 ⇒ 不发请求）。
+ * 没有序列的卡 ⇒ `points: []` + `why` 原因（**不许**补 0 冒充完整序列）。
+ */
+export function cardSeriesOf(
+  metas: ReadonlyArray<{ secid: string; name: string }>,
+  minutes: Readonly<Record<string, ReadonlyArray<{ label?: string; hhmm?: string; amount?: number | null; price?: number | null }>>>,
+): RescueCardSeries[] {
+  return metas.map((m) => {
+    const pts = minutes[m.secid] ?? []
+    if (pts.length === 0) {
+      return { secid: m.secid, name: m.name, caliber: RESCUE_CARD_SERIES_CALIBER, points: [], why: '本次会话还没有拿到该标的的分钟序列（上游未返回或还没到 60 秒刷新时刻）⇒ 空数组，不补 0' }
+    }
+    return {
+      secid: m.secid,
+      name: m.name,
+      caliber: RESCUE_CARD_SERIES_CALIBER,
+      points: pts.map((p) => ({
+        hhmm: String(p.hhmm ?? p.label ?? '').slice(-5),
+        amount: typeof p.amount === 'number' && Number.isFinite(p.amount) ? p.amount : null,
+        price: typeof p.price === 'number' && Number.isFinite(p.price) ? p.price : null,
+      })),
+      why: null,
+    }
+  })
+}
+
+/** 分时点保留上限（条） */
+export const RESCUE_INTRADAY_MAX = 120
+/** 分时点序列化体积上限（字节）——六通道字段进来之后必须有上界，否则当日文件会无节制变大 */
+export const RESCUE_INTRADAY_MAX_BYTES = 192 * 1024
+/**
+ * 按**字节**裁剪当日分时点（纯函数，可测）：从最旧的一端丢，直到序列化体积落到上限内。
+ * 条数上限（`RESCUE_INTRADAY_MAX`）另外由写入侧保证；两者都要有（条数少了但字段多了照样会胖）。
+ */
+export function trimIntradayBySize<T>(points: readonly T[], maxBytes = RESCUE_INTRADAY_MAX_BYTES): { points: T[]; dropped: number; bytes: number } {
+  let out = [...points]
+  let bytes = JSON.stringify(out).length
+  let dropped = 0
+  while (bytes > maxBytes && out.length > 1) {
+    // 先丢最旧的 1/8（比逐条丢快，又不会一次砍太多）
+    const cut = Math.max(1, Math.floor(out.length / 8))
+    out = out.slice(cut)
+    dropped += cut
+    bytes = JSON.stringify(out).length
+  }
+  return { points: out, dropped, bytes }
+}
+
 /**HH:mm → 开盘后分钟数（0..240，午休折算到 120） */
 export function sessionElapsed(hhmm: string): number {
   const m = /^(\d{1,2}):(\d{2})$/.exec(hhmm.trim())
@@ -317,6 +398,43 @@ export function progressAt(curve: readonly number[], elapsedMin: number): number
   const frac = (e - i * 5) / 5
   const v = curve[i] + (curve[j] - curve[i]) * frac
   return Math.max(0.01, Math.min(1, v))
+}
+
+/**
+ * 触发瞬间的**家数快照**解析（v0.18.0，纯函数 —— 只有缓存/本拍数据，**任何情况下都不取数**）。
+ *
+ * 优先级：① 本拍行情批量里的指数家数（`f104/f105/f106`，零成本、时刻最准）
+ *         ② `/breadth` 最近一次成功结果（`BREADTH_MOMENT_TTL_MS` 内有效）
+ *         ③ 两者都没有 ⇒ `{ moment: null, why: '…' }`（**不写 0**：0 会被读成"全市场无涨跌"）
+ */
+export const BREADTH_MOMENT_TTL_MS = 120_000
+export function resolveBreadthMoment(args: {
+  /** 本拍行情里的指数行（家数字段可能缺失；缺失 = null） */
+  quote?: { up: number | null; down: number | null; even: number | null; amount: number | null; at: number } | null
+  /** `/breadth` 最近一次成功结果（内存里记录的，不是新请求） */
+  cached?: { up: number; down: number; even: number; amount: number | null; asOf: number; source: string } | null
+  now: number
+  ttlMs?: number
+}): { moment: RescueBreadthMoment | null; why: string | null; source: 'tick-quote' | 'breadth-cache' | null } {
+  const q = args.quote ?? null
+  if (q !== null && typeof q.up === 'number' && typeof q.down === 'number' && typeof q.even === 'number') {
+    return {
+      moment: { up: q.up, down: q.down, even: q.even, amount: q.amount ?? null, asOf: q.at, source: '本拍行情（指数 f104/f105/f106）' },
+      why: null, source: 'tick-quote',
+    }
+  }
+  const c = args.cached ?? null
+  const ttl = args.ttlMs ?? BREADTH_MOMENT_TTL_MS
+  if (c !== null && args.now - c.asOf <= ttl) {
+    return { moment: { up: c.up, down: c.down, even: c.even, amount: c.amount ?? null, asOf: c.asOf, source: c.source }, why: null, source: 'breadth-cache' }
+  }
+  return {
+    moment: null,
+    why: c === null
+      ? '本拍行情没有指数家数字段，且 /breadth 还没有成功过一次（不为此单独发请求；等下一次 /breadth 或下一拍行情）'
+      : `/breadth 的家数读数已过期（${Math.round((args.now - c.asOf) / 1000)}s > ${Math.round(ttl / 1000)}s）⇒ 不拿旧数冒充"触发瞬间"（不为此单独发请求）`,
+    source: null,
+  }
 }
 
 /**
@@ -1050,6 +1168,13 @@ export interface RescueQuoteRow {
   open: number | null
   high: number | null
   low: number | null
+  /**
+   * 全市场涨/跌/平家数（指数行才有；同批行情的 `f104/f105/f106`）——
+   * 护盘事件要"触发瞬间的家数"，用它即可**零新增请求**（见 `resolveBreadthMoment`）。
+   */
+  up: number | null
+  down: number | null
+  even: number | null
 }
 
 // 注：曾经这里有一个 `fetchRescueQuotes`（采样器自己打一条带 f62/f66/f184 的 ulist URL）。
@@ -1296,6 +1421,9 @@ export async function fetchQuoteSource(
       open: row.open,
       high: row.high,
       low: row.low,
+      up: row.up ?? null,
+      down: row.down ?? null,
+      even: row.even ?? null,
     }
   }
   // 只剩 last-known-good（东财/腾讯/新浪都没有回包）⇒ **不**当成一次成功采样：
@@ -1321,6 +1449,16 @@ export class RescueMonitor {
   private samplesBase = new Map<string, number>()
   private todayKey = ''
   private lastSnapshot: RescueSnapshot | null = null
+  /**
+   * `/breadth` 最近一次**成功**结果（由路由在响应时顺手记一份，纯内存）——
+   * 护盘事件要"触发瞬间的家数"，但**不许为此发请求**，所以只能搭车拿已有读数。
+   */
+  private lastBreadth: { up: number; down: number; even: number; amount: number | null; asOf: number; source: string } | null = null
+
+  /** 路由侧调用：把刚生成的 /breadth 家数记进内存（无 IO、无请求） */
+  noteBreadthMoment(m: { up: number; down: number; even: number; amount: number | null; asOf: number; source: string }): void {
+    this.lastBreadth = m
+  }
   private timer: ReturnType<typeof setTimeout> | null = null
   private running = false
   private lastPersist = 0
@@ -1826,10 +1964,25 @@ export class RescueMonitor {
     if (scored.inSession) {
       // 事件去抖：仅记录等级升级，以及从有信号回落到平静（形成完整时间线）
       if (scored.level > this.lastLevel || (scored.level === 0 && this.lastLevel > 0)) {
+        /**
+         * 触发瞬间的家数（v0.18.0）：**搭车**，绝不为此发请求 ——
+         * ① 本拍行情批量里就有指数家数；② 否则用 `/breadth` 最近一次成功结果（≤120s）；③ 都没有 ⇒ null + 原因。
+         */
+        const indexRow = quotes[INDEX_SECID]
+        const breadth = resolveBreadthMoment({
+          quote: indexRow === undefined
+            ? null
+            : { up: indexRow.up ?? null, down: indexRow.down ?? null, even: indexRow.even ?? null, amount: indexRow.amount ?? null, at: ts },
+          cached: this.lastBreadth,
+          now: ts,
+        })
         this.today.events.push({
           ts, hhmm: hhmmOf(ts), level: scored.level, score: scored.score,
           engine: ENGINE_VERSION,
           reason: scored.level === 0 ? '信号回落：量能与超大单流入回到常态' : scored.summary,
+          breadth: breadth.moment,
+          breadthWhy: breadth.why,
+          breadthSource: breadth.source,
         })
         if (this.today.events.length > 60) this.today.events.splice(0, this.today.events.length - 60)
         this.lastLevel = scored.level
@@ -1839,11 +1992,25 @@ export class RescueMonitor {
       const minuteMark = Math.floor(elapsed / 5) * 5
       if (minuteMark !== this.lastIntradayMin && elapsed > 0) {
         this.lastIntradayMin = minuteMark
+        /**
+         * 分时点带上**六通道各自的读数**（v0.18.0）：数据就是本拍 `etfs`（同一批行情），**不新增请求**。
+         * 只有评分通道（宽基六条）进这里；自定义通道不进（避免把板块 ETF 混进护盘口径）。
+         */
+        const channels: RescueIntradayChannel[] = etfs
+          .filter((e) => scoring.has(e.secid))
+          .map((e) => ({ secid: e.secid, name: e.name, price: e.price, pct: e.pct, amount: e.amount, timeAdjMult: e.timeAdjMult, volumeZ: e.volumeZ ?? null, superNet: e.superNet }))
         this.today.intraday.push({
           hhmm: hhmmOf(ts), level: scored.level, score: scored.score,
           timeAdjMult: maxMult, superVsAvg: coreSuperVsAvg ?? peripheralSuperVsAvg, persistShare: persistBest,
+          channels,
         })
-        if (this.today.intraday.length > 120) this.today.intraday.splice(0, this.today.intraday.length - 120)
+        // 条数上限（旧有）+ **体积上限**（六通道字段进来后必须有）：从最旧的一端丢
+        if (this.today.intraday.length > RESCUE_INTRADAY_MAX) this.today.intraday.splice(0, this.today.intraday.length - RESCUE_INTRADAY_MAX)
+        const trimmed = trimIntradayBySize(this.today.intraday)
+        if (trimmed.dropped > 0) {
+          console.warn(`[tradewatcher] 分时点体积超上限（>${Math.round(RESCUE_INTRADAY_MAX_BYTES / 1024)}KB）：丢掉最旧 ${trimmed.dropped} 条`)
+          this.today.intraday = trimmed.points
+        }
         this.pushScoreLog(ts, scored)
       }
     } else {
@@ -1887,6 +2054,18 @@ export class RescueMonitor {
       factorContrib: factorContributions(scored.factors, timeCoefficient(elapsed)),
       config: this.getConfig(), activeIntervalSec: this.activeIntervalSec(ts),
       today: [...this.today.events].reverse(), intraday: [...this.today.intraday],
+      /**
+       * 六卡分钟序列（v0.18.0）：数据就是 `this.minutes`（采样器**已经**在取的那份，60 秒刷新一次）
+       * ⇒ 为了让客户端画卡内迷你折线而**不新增任何上游请求**；上限（点数/字节）在这里裁。
+       */
+      etfSeries: ((): RescueCardSeries[] => {
+        const built = cardSeriesOf(etfs.filter((e) => scoring.has(e.secid)).map((e) => ({ secid: e.secid, name: e.name })), this.minutes)
+        const trimmed = trimCardSeries(built)
+        if (trimmed.droppedPoints > 0) {
+          console.warn(`[tradewatcher] 六卡分钟序列超上限：丢掉最旧 ${trimmed.droppedPoints} 个点（${Math.round(trimmed.bytes / 1024)}KB）`)
+        }
+        return trimmed.cards
+      })(),
       sampleCount: this.today.samples, lastSampleTs: ts, gap: false, lastFailTs: null,
       note: elapsed <= 0 ? '尚未开盘，量能倍数按全天口径显示为 0' : undefined,
     }
