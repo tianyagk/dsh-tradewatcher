@@ -420,8 +420,13 @@ export const api = {
   detail(secid: string): Promise<{ detail: StockDetail | null; missing?: MissingField[] }> {
     return request(`/tradewatcher/detail?secid=${encodeURIComponent(secid)}`)
   },
-  suggest(q: string): Promise<{ hits: SuggestItem[] }> {
-    return request(`/tradewatcher/suggest?q=${encodeURIComponent(q)}`)
+  /**
+   * 搜索候选（v0.95.1：**列出全部匹配**）。
+   * `count` 是本次向宿主/上游要的条数（默认 50，服务端夹 1..100）。
+   * 回包带 `requested`/`truncated`：拿满上限时**无法排除上游还有更多** ⇒ 界面必须如实写"上游本次上限"。
+   */
+  suggest(q: string, count = 50): Promise<{ hits: SuggestItem[]; requested?: number; truncated?: boolean; reason?: string }> {
+    return request(`/tradewatcher/suggest?q=${encodeURIComponent(q)}&count=${encodeURIComponent(String(count))}`)
   },
   board(scope: 'industry' | 'concept' | 'etf', sort: 'pct' | 'money' | 'amount', pn = 1): Promise<{
     total: number

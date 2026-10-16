@@ -2,6 +2,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import type { SuggestItem } from '../shared/model.ts'
 import { api } from './api.ts'
+import { SUGGEST_PAGE, batchOf, countTextOf, suggestListViewOf } from './suggestView.ts'
 
 export function Modal(props: {
   title: React.ReactNode
@@ -51,6 +52,11 @@ export function SuggestInput(props: {
 }): React.ReactElement {
   const [text, setText] = useState('')
   const [hits, setHits] = useState<SuggestItem[]>([])
+  const [meta, setMeta] = useState<{ requested?: number; truncated?: boolean } | null>(null)
+  /** 上游/关键字问题时的原因（红线：失败必须给原因，**不许**用空列表冒充"无匹配"） */
+  const [reason, setReason] = useState<string | null>(null)
+  /** 已渲染多少行（分批渲染：长列表不会把 DOM 撑爆） */
+  const [shown, setShown] = useState(SUGGEST_PAGE)
   const [open, setOpen] = useState(false)
   const [busy, setBusy] = useState(false)
   const boxRef = useRef<HTMLDivElement | null>(null)
@@ -60,14 +66,23 @@ export function SuggestInput(props: {
     const s = ++seq.current
     setBusy(true)
     api
-      .suggest(q)
+      // count=50：一次尽量拿全（服务端夹 1..100；上游给不了更多时回包会标 truncated）
+      .suggest(q, 50)
       .then((r) => {
         if (s !== seq.current) return
         setHits(r.hits)
-        setOpen(r.hits.length > 0)
+        setMeta({ requested: r.requested, truncated: r.truncated })
+        setReason(r.reason ?? null)
+        setShown(SUGGEST_PAGE)
+        setOpen(true)
       })
-      .catch(() => {
-        if (s === seq.current) setOpen(false)
+      .catch((e: Error) => {
+        if (s !== seq.current) return
+        setHits([])
+        setMeta(null)
+        // 失败**照样打开**并把原因写出来（空列表 + 关掉弹层会被读成"就是没有匹配"）
+        setReason(`搜索未取到 —— ${e.message}（上游不可用时按缓存与限流自动重试）`)
+        setOpen(true)
       })
       .finally(() => {
         if (s === seq.current) setBusy(false)
@@ -96,16 +111,22 @@ export function SuggestInput(props: {
     return () => document.removeEventListener('mousedown', onDown)
   }, [])
 
+  /** 排序 + 去重 + 分组 + 计数（纯函数，见 suggestView.ts）；界面只负责渲染 */
+  const view = suggestListViewOf(hits, text.trim(), meta ?? {})
+  const batched = batchOf(view.groups, shown)
+
   const pick = (item: SuggestItem): void => {
     setOpen(false)
     setText('')
+    setReason(null)
     props.onPick(item)
   }
 
   const onKeyDown = (e: React.KeyboardEvent): void => {
-    if (e.key === 'Enter' && hits.length > 0 && text.trim() !== '') {
+    const first = view.groups[0]?.rows[0]
+    if (e.key === 'Enter' && first !== undefined && text.trim() !== '') {
       e.preventDefault()
-      pick(hits[0])
+      pick(first)
     } else if (e.key === 'Escape') {
       setOpen(false)
     }
@@ -127,30 +148,63 @@ export function SuggestInput(props: {
     open
       ? React.createElement(
           'div',
-          { className: 'tw-suggest', style: { top: 'calc(100% + 2px)', left: 0, right: 0 } },
-          hits.map((h) =>
-            React.createElement(
-              'button',
-              {
-                key: h.secid,
-                type: 'button',
-                onMouseDown: (e: React.MouseEvent) => {
-                  e.preventDefault()
-                  pick(h)
-                },
-              },
-              React.createElement('span', null, h.name, React.createElement('small', { className: 'tw-muted' }, ` ${h.code}`)),
-              // 只有东财一条链路的标的：东财被限流期间必然空行，提前说清（不拦着添加）
-              h.hasFallback === false
-                ? React.createElement('span', {
-                    className: 'tw-badge',
-                    title: '腾讯/新浪都没有该标的的映射：东财行情主机不可用时，它不会有价格（加入后会在自选里显示「无行情源」）',
-                    style: { fontSize: 12, color: '#e0a94a' },
-                  }, '仅东财源')
-                : null,
-              React.createElement('span', { className: 'k' }, h.kind),
-            ),
-          ),
+          { className: 'tw-suggest', style: { top: 'calc(100% + 2px)', left: 0, right: 0 }, 'data-role': 'suggest-list' },
+          // ① 原因优先：上游失败 / 关键字问题 ⇒ 只说原因（**不显示空列表冒充"无匹配"**）
+          reason !== null
+            ? React.createElement('div', {
+                className: 'tw-hint', style: { padding: '8px 11px', color: 'var(--tw-up)' },
+                tabIndex: 0, role: 'note', 'aria-label': reason, title: reason,
+              }, reason)
+            : view.total === 0
+              // ② 请求成功但真的没有匹配（与上面那条是两件事）
+              ? React.createElement('div', { className: 'tw-hint', style: { padding: '8px 11px' } },
+                  `没有匹配「${text.trim()}」的标的（已按代码/名称/拼音向东财与腾讯各查一次）。`)
+              : React.createElement(React.Fragment, null,
+                  // ③ 计数（唯一实现在 countTextOf；截断时必须出现"上游本次上限"）
+                  React.createElement('div', {
+                    className: 'tw-hint', style: { padding: '6px 11px', borderBottom: '1px solid var(--tw-border)' },
+                    'data-role': 'suggest-count', tabIndex: 0, role: 'note', 'aria-label': countTextOf(view),
+                  }, countTextOf(view)),
+                  // ④ 分组渲染（组头 + 既有行样式）
+                  ...batched.groups.flatMap((g) => [
+                    React.createElement('div', {
+                      key: `h-${g.market}`, className: 'tw-muted',
+                      style: { padding: '4px 11px', fontSize: 12, background: 'var(--tw-bg2)' },
+                      'data-role': `suggest-group-${g.market}`,
+                    }, `${g.label} · ${g.rows.length} 条`),
+                    ...g.rows.map((h) => React.createElement(
+                      'button',
+                      {
+                        key: h.secid,
+                        type: 'button',
+                        onMouseDown: (e: React.MouseEvent) => {
+                          e.preventDefault()
+                          pick(h)
+                        },
+                      },
+                      React.createElement('span', null, h.name, React.createElement('small', { className: 'tw-muted' }, ` ${h.code}`)),
+                      // 只有东财一条链路的标的：东财被限流期间必然空行，提前说清（不拦着添加）
+                      h.hasFallback === false
+                        ? React.createElement('span', {
+                            className: 'tw-badge',
+                            title: '腾讯/新浪都没有该标的的映射：东财行情主机不可用时，它不会有价格（加入后会在自选里显示「无行情源」）',
+                            style: { fontSize: 12, color: '#e0a94a' },
+                          }, '仅东财源')
+                        : null,
+                      React.createElement('span', { className: 'k' }, h.kind),
+                    )),
+                  ]),
+                  // ⑤ 分批渲染：一次只挂 SUGGEST_PAGE 行（长列表不卡），剩下的按需展开
+                  batched.hidden > 0
+                    ? React.createElement('button', {
+                        type: 'button', 'data-role': 'suggest-more',
+                        onMouseDown: (e: React.MouseEvent) => {
+                          e.preventDefault()
+                          setShown((n) => n + SUGGEST_PAGE)
+                        },
+                      }, `显示更多（还有 ${batched.hidden} 条）`)
+                    : null,
+                ),
         )
       : null,
   )

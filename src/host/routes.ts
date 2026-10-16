@@ -919,9 +919,28 @@ export function makeTradeRoutes(
       handler: async (req, res) => {
         if (!needGate(req, res)) return
         try {
-          const q = String(queryOf(req).get('q') ?? '').slice(0, 40)
-          const hits = q === '' ? [] : await em.searchSymbols(q)
-          send(res, 200, { hits })
+          const p = queryOf(req)
+          // v0.95.1（用户要求"列出所有匹配"）：默认一次要 50 条（原先写死 14、且映射里还有一处写死 10）。
+          // `count` 由调用方给，服务端夹在 1..100（上游单次给不了更多，见报告的上游实测）。
+          const rawCount = Number(p.get('count') ?? 50)
+          const count = Number.isFinite(rawCount) ? Math.max(1, Math.min(100, Math.round(rawCount))) : 50
+          const q = String(p.get('q') ?? '').trim()
+          // 空关键字：不发上游、也不给"无匹配"的假象（客户端另有提示）
+          if (q === '') {
+            send(res, 200, { hits: [], requested: count, truncated: false })
+            return
+          }
+          // 超长关键字：**不静默截断**（截断后查上游会得到与用户输入不符的匹配）
+          if (q.length > 40) {
+            send(res, 200, {
+              hits: [], requested: count, truncated: false,
+              reason: `关键字超过 40 字上限（上游按 input 查询，超长只能截断 ⇒ 不查，免得给你不匹配的结果）`,
+            })
+            return
+          }
+          const hits = await em.searchSymbols(q, count)
+          // 诚实边界：拿满 `count` 条时**无法排除上游还有更多** ⇒ 如实标记（界面写"已显示 N 条（上游本次上限 M）"）
+          send(res, 200, { hits, requested: count, truncated: hits.length >= count })
         } catch (error) {
           fail(res, error)
         }

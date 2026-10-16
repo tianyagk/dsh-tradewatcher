@@ -2788,17 +2788,25 @@ function suggestKind(it: Record<string, unknown>, name: string): string {
   return '行情'
 }
 
-export async function searchSymbols(query: string): Promise<SuggestItem[]> {
+/**
+ * 代码/名称搜索。
+ *
+ * `limit` = **本次要多少条**（宿主路由按用户要求给 50，agent 工具沿用默认 14）。
+ * ⚠ v0.95.1 修：映射里原先写死 `if (out.length >= 10) break`，**不管上游给回多少都只保留 10 条**
+ * —— 这是"搜「中远」只显示 10 条"的**第二个**截断点（第一个是请求里的 `count=14`）。
+ */
+export async function searchSymbols(query: string, limit = 14): Promise<SuggestItem[]> {
   const q = query.trim()
   if (q === '') return []
   if (q.length > 40) return []
-  const key = `suggest:${q}`
+  const cap = Math.max(1, Math.min(100, Math.round(limit)))
+  const key = `suggest:${q}:${cap}`
   let data: Array<Record<string, unknown>> = []
   try {
     const json = await ttlCache(key, 8000, () =>
       fetchAny(
         [SEARCH_HOST],
-        `/api/suggest/get?input=${encodeURIComponent(q)}&type=14&token=${SUGGEST_TOKEN}&count=14`,
+        `/api/suggest/get?input=${encodeURIComponent(q)}&type=14&token=${SUGGEST_TOKEN}&count=${cap}`,
       ),
     )
     const body = json as { QuotationCodeTable?: { Data?: Array<Record<string, unknown>> } }
@@ -2809,7 +2817,7 @@ export async function searchSymbols(query: string): Promise<SuggestItem[]> {
   // 东财搜索不可用时回落腾讯智慧搜索（搜索与行情是不同主机，不能一起熔断）
   if (data.length === 0) {
     try {
-      const tx = await fetchTencentSuggest(q, 10)
+      const tx = await fetchTencentSuggest(q, cap)
       if (tx.length > 0) return tx.map((h) => ({ ...h, hasFallback: hasQuoteFallback(h.secid) }))
     } catch {
       /* 交给下面返回空列表 */
@@ -2836,7 +2844,7 @@ export async function searchSymbols(query: string): Promise<SuggestItem[]> {
       market: mkt,
       hasFallback: hasQuoteFallback(quoteId),
     })
-    if (out.length >= 10) break
+    if (out.length >= cap) break
   }
   return out
 }
