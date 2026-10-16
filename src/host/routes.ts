@@ -2,7 +2,7 @@
  */
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { CorporateAction, MissingField, MutatePortBody, MutateWatchBody, QuoteRow } from '../shared/model.ts'
-import { stripKindOf, RESCUE_LEVEL_LABEL, SECID_RE } from '../shared/model.ts'
+import { stripKindOf, RESCUE_LEVEL_LABEL, SECID_RE, SUGGEST_FULL_COUNT, SUGGEST_MAX_COUNT } from '../shared/model.ts'
 import { isTrustedApiRequest } from './fence.ts'
 import * as em from './em.ts'
 import { ledgerTotal, assemblePortfolio, ledgerViews } from './portfolio.ts'
@@ -922,8 +922,11 @@ export function makeTradeRoutes(
           const p = queryOf(req)
           // v0.95.1（用户要求"列出所有匹配"）：默认一次要 50 条（原先写死 14、且映射里还有一处写死 10）。
           // `count` 由调用方给，服务端夹在 1..100（上游单次给不了更多，见报告的上游实测）。
-          const rawCount = Number(p.get('count') ?? 50)
-          const count = Number.isFinite(rawCount) ? Math.max(1, Math.min(100, Math.round(rawCount))) : 50
+          // 默认值与上夹取都取**共享常量**（与客户端请求值、断言阈值同源，改一处即可）
+          const rawCount = Number(p.get('count') ?? SUGGEST_FULL_COUNT)
+          const count = Number.isFinite(rawCount)
+            ? Math.max(1, Math.min(SUGGEST_MAX_COUNT, Math.round(rawCount)))
+            : SUGGEST_FULL_COUNT
           const q = String(p.get('q') ?? '').trim()
           // 空关键字：不发上游、也不给"无匹配"的假象（客户端另有提示）
           if (q === '') {

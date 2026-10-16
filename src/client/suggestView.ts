@@ -91,8 +91,13 @@ export interface SuggestListView {
   deduped: number
   /** 拿满上限 ⇒ **无法排除上游还有更多**（界面必须写"上游本次上限"） */
   truncated: boolean
-  /** 本次向上游要的条数 */
-  requested: number
+  /** 本次向上游要的条数；**回包没给 ⇒ null**（旧宿主） */
+  requested: number | null
+  /**
+   * **旧宿主**：回包缺 `requested` 字段（v0.96.0 之前的路由不认识 `count`、也不回这个字段）。
+   * 此时**不能**把 `hits.length` 当成"上游上限"写出来 —— 那是拿我们自己的截断数冒充上游上限。
+   */
+  legacyHost: boolean
 }
 
 export function suggestListViewOf(
@@ -101,14 +106,17 @@ export function suggestListViewOf(
   meta: { requested?: number; truncated?: boolean } = {},
 ): SuggestListView {
   const { rows, deduped } = rankSuggestions(hits, query)
-  const requested = meta.requested ?? hits.length
+  // ⚠ 回包**没有** `requested` ⇒ 旧宿主：**不许**用 hits.length 冒充"上游上限"（那会把我们自己的截断当成上游的）
+  const legacyHost = meta.requested === undefined
+  const requested = legacyHost ? null : meta.requested!
   return {
     groups: groupSuggestions(rows),
     total: rows.length,
     deduped,
-    // 上游自己说截断了 ⇒ 认；否则"拿满上限"也算不可排除（两条都指向同一件事：不能说"这是全部"）
-    truncated: meta.truncated === true || (requested > 0 && hits.length >= requested),
+    // 上游自己说截断了 ⇒ 认；否则"拿满**我们请求的**上限"也算不可排除（两条都指向同一件事：不能说"这是全部"）
+    truncated: meta.truncated === true || (requested !== null && requested > 0 && hits.length >= requested),
     requested,
+    legacyHost,
   }
 }
 
@@ -130,8 +138,86 @@ export function batchOf(groups: readonly SuggestGroup[], shown: number): { group
   return { groups: out, hidden: total - used }
 }
 
-/** 计数文案（唯一实现；界面与断言共用）：`共 N 条` + 截断时如实补一句 */
+/**
+ * 计数文案（唯一实现；界面与断言共用）。
+ *
+ * 三种情形，**互斥**：
+ *   · 旧宿主（回包缺 `requested`）⇒ 只说"上限未知 + 请重启"，**不写任何上限数字**
+ *     （写 hits.length 会把自己的截断冒充成上游上限 —— 用户实测就是被这句话误导过）；
+ *   · 拿满我们请求的上限 ⇒ 写出具体条数并声明"可能有更多"；
+ *   · 其余 ⇒ 只有总数。
+ */
 export function countTextOf(view: SuggestListView): string {
   const base = `共 ${view.total} 条`
-  return view.truncated ? `${base} · 已显示全部 ${view.total} 条（上游本次上限 ${view.requested} 条，可能有更多）` : base
+  if (view.legacyHost) return `${base} · 上游本次上限未知（宿主为旧构建，请重启后生效）`
+  return view.truncated
+    ? `${base} · 已显示全部 ${view.total} 条（上游本次上限 ${view.requested} 条，可能有更多）`
+    : base
+}
+
+// ── 弹窗里的下拉高度链（v0.96.2）───────────────────────────────────────────
+// 症状：分组添加弹窗里只看到计数行，下面的候选被裁掉。根因是**祖先裁剪**：
+//   `.tw-modal{max-height:82vh; overflow:auto}`（`styles.ts:369`）是滚动容器 ⇒
+//   它是绝对定位下拉的裁剪边界；下拉 `top:calc(100% + 2px)` 只往下长 ⇒ 超出弹窗内容盒的部分看不见。
+// 修法：下拉改用**视口坐标定位**（`position:fixed` + 实测矩形）⇒ 不受任何祖先的 overflow 影响，
+//   并按"下方空间够不够"决定**向上翻转**或整体上移；高度取"内容高度、上限、可用空间"的最小值，
+//   但**保证 ≥ 5 行 / 160px**（只要视口给得出这个空间）。
+
+/** 一行候选的高度（`.tw-suggest button{padding:6px 11px}` + 12px 字 ⇒ 实测 24px） */
+export const SUGGEST_ROW_PX = 24
+/** 分组头高度（`padding:4px 11px` + 12px 字） */
+export const SUGGEST_HEAD_PX = 21
+/** 计数行高度（`padding:6px 11px` + 12px 字） */
+export const SUGGEST_COUNT_PX = 26
+/** 列表区的最小可见高度：≥5 行 与 ≥160px 取较大者 */
+export const SUGGEST_MIN_LIST_PX = Math.max(160, 5 * SUGGEST_ROW_PX)
+/** 列表区的最大高度（再高就内部滚动）：视口 52vh 与 320px 取小 */
+export function suggestCapOf(viewportH: number): number {
+  return Math.min(320, Math.max(SUGGEST_MIN_LIST_PX, Math.round(viewportH * 0.52)))
+}
+/** 边距（与视口上下各留 8px，避免贴边） */
+export const SUGGEST_GAP_PX = 8
+
+export interface SuggestDropdownBox {
+  /** 视口坐标（用于 `position:fixed`） */
+  top: number
+  left: number
+  width: number
+  /** 整个浮层的最大高度（列表 + 计数行） */
+  maxHeight: number
+  /** 是否向上展开（贴底翻转） */
+  up: boolean
+}
+
+/**
+ * 算出浮层的落点与高度（**纯函数**：输入是输入框矩形、视口与内容高度）。
+ *
+ * 规则（顺序即优先级）：
+ *   ① 先看下方空间：`below = viewportH - rect.bottom - gap`；
+ *   ② 下方放不下"最小可见高度"且上方更宽敞 ⇒ **向上翻转**（`up = true`）；
+ *   ③ 高度 = min(上限, max(可用空间, 最小高度)) —— 可用空间不足时**保底最小高度**（宁可盖住输入框，
+ *      也不给一个只能看一行的列表）；上限由 `suggestCapOf` 给（52vh / 320px）；
+ *   ④ `top` 永远夹在视口内（≥ gap，且不超出底边）⇒ 贴底场景整体上移。
+ */
+export function suggestDropdownBoxOf(input: {
+  rect: { top: number; bottom: number; left: number; width: number }
+  viewportH: number
+  contentHeight: number
+}): SuggestDropdownBox {
+  const { rect, viewportH, contentHeight } = input
+  const cap = suggestCapOf(viewportH)
+  const below = viewportH - rect.bottom - SUGGEST_GAP_PX
+  const above = rect.top - SUGGEST_GAP_PX
+  const up = below < SUGGEST_MIN_LIST_PX && above > below
+  const avail = up ? above : below
+  const want = Math.max(SUGGEST_COUNT_PX + SUGGEST_MIN_LIST_PX, Math.min(cap, contentHeight))
+  const maxHeight = Math.max(SUGGEST_COUNT_PX + SUGGEST_MIN_LIST_PX, Math.min(want, Math.max(avail, want)))
+  const rawTop = up ? rect.top - SUGGEST_GAP_PX - maxHeight : rect.bottom + 2
+  const top = Math.max(SUGGEST_GAP_PX, Math.min(rawTop, viewportH - maxHeight - SUGGEST_GAP_PX))
+  return { top, left: rect.left, width: rect.width, maxHeight, up }
+}
+
+/** 给定浮层高度，列表区能显示几行（用于断言"17 条时可见 ≥5 行"） */
+export function visibleRowsOf(maxHeight: number): number {
+  return Math.max(0, Math.floor((maxHeight - SUGGEST_COUNT_PX) / SUGGEST_ROW_PX))
 }

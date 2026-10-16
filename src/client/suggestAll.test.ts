@@ -11,7 +11,7 @@ import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 import { batchOf, countTextOf, matchTierOf, rankSuggestions, suggestListViewOf } from './suggestView.ts'
-import type { SuggestItem } from '../shared/model.ts'
+import { SUGGEST_FULL_COUNT, SUGGEST_MAX_COUNT, type SuggestItem } from '../shared/model.ts'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const read = (p: string): string => readFileSync(join(here, p), 'utf8')
@@ -154,4 +154,160 @@ test('边界：空关键字不发请求；超长关键字给原因；纯数字/�
   // 拼音：上游负责匹配，客户端不猜（不把拼音当名称过滤掉）
   const pinyin = rankSuggestions([it('1.600026', '600026', '中远海能')], 'zhongyuan')
   assert.equal(pinyin.rows.length, 1, '拼音查询下**不过滤**掉上游给的结果（匹配由上游做）')
+})
+
+// ── 结构性防回归：界面侧调用 /suggest 必须请求完整集合 ────────────────────
+// 起因（v0.95.1 复查）：同类问题**换了地方又出现一次** —— 某个界面路径仍按 10 条请求。
+// 所以这里不看单点、看**全部调用点**：凡界面侧调用，`count` 必须 ≥ FULL_COUNT_FROM_SHARED；
+// 只有**具名例外**可以更小，且必须写明理由。
+
+/**
+ * 界面侧"完整集合"的条数 = **共享常量**（`src/shared/model.ts`）。
+ * ⚠ 这里**不许**再写一个字面量：宿主路由默认值、客户端请求值、本断言阈值必须是**同一处定义**，
+ * 否则将来改一处漏一处（用户实测出过同类问题）。
+ */
+const FULL_COUNT_FROM_SHARED = SUGGEST_FULL_COUNT
+
+/**
+ * 具名例外（每一条例外都要写理由）：
+ *   · agent 工具 `tradewatcher_search` —— 它在**宿主侧**（`src/host/tools.ts` 调 `searchSymbols(query)`），
+ *     消费方是模型而不是人：14 条对工具调用足够，且工具回包越小越省上下文。**不在此扫描面内**，此处登记备查。
+ */
+const NAMED_EXCEPTIONS: ReadonlyArray<{ where: string; reason: string }> = [
+  { where: 'src/host/tools.ts:649 searchSymbols(query)', reason: 'agent 工具：面向模型，14 条足够且省上下文' },
+]
+
+/** 扫出所有界面侧 `.suggest(...)` 调用点与其 count 实参（返回违规清单，空 = 合规） */
+function suggestCallViolations(files: ReadonlyArray<{ name: string; src: string }>): string[] {
+  const bad: string[] = []
+  for (const f of files) {
+    const src = strip(f.src)
+    for (const m of src.matchAll(/\.suggest\(([^)]*)\)/g)) {
+      const args = m[1] as string
+      const tail = args.trim()
+      // 允许两种写法：数字字面量（≥ 阈值）或**共享常量**（同源，值由 shared 保证）
+      const num = /(?:^|,)\s*(\d+)\s*$/.exec(tail)
+      if (num !== null) {
+        const n = Number(num[1])
+        if (n < FULL_COUNT_FROM_SHARED) bad.push(`${f.name}: .suggest(${tail}) —— count=${n} < ${FULL_COUNT_FROM_SHARED}`)
+        continue
+      }
+      if (/SUGGEST_FULL_COUNT\s*$/.test(tail)) continue // 共享常量：值在一处定义，允许
+      bad.push(`${f.name}: .suggest(${tail}) —— 没有显式 count（必须是 ≥ ${FULL_COUNT_FROM_SHARED} 的字面量或共享常量 SUGGEST_FULL_COUNT）`)
+    }
+  }
+  return bad
+}
+
+/** 扫出界面侧对搜索结果的**截断**（未取到/渲染分批不算截断，`slice` 结果数据才算） */
+function suggestTruncationViolations(files: ReadonlyArray<{ name: string; src: string }>): string[] {
+  const bad: string[] = []
+  for (const f of files) {
+    const src = strip(f.src)
+    for (const m of src.matchAll(/\b(hits|rows|list)\.(?:slice|splice)\(/g)) {
+      // `suggestView.ts` 里对**分组**按批截取是渲染分批（不是丢结果），且它只切 `g.rows`
+      if (f.name.endsWith('suggestView.ts')) continue
+      bad.push(`${f.name}: ${m[0]} —— 界面侧不许对搜索结果做截断（要分批就按批渲染，别丢数据）`)
+    }
+  }
+  return bad
+}
+
+test('结构性防回归：界面侧调用 /suggest 一律请求完整集合（≥50），具名例外必须写理由', () => {
+  const ui = { name: 'ui.tsx', src: read('ui.tsx') }
+  const api = { name: 'api.ts', src: read('api.ts') }
+  const view = { name: 'suggestView.ts', src: read('suggestView.ts') }
+  const files = [ui, api, view]
+  assert.deepEqual(suggestCallViolations(files), [], '界面侧调用必须一律 ≥50 条（agent 工具是宿主侧具名例外）')
+  assert.deepEqual(suggestTruncationViolations(files), [], '界面侧不许对结果做截断')
+  assert.ok(api.src.includes('count = SUGGEST_FULL_COUNT'), 'api.suggest 的默认值必须取共享常量')
+  assert.ok(ui.src.includes('.suggest(q, SUGGEST_FULL_COUNT)'), '界面调用点必须显式传共享常量（不依赖默认值，读代码就能看出意图）')
+  assert.equal(NAMED_EXCEPTIONS.length, 1, '具名例外只允许 agent 工具那一条')
+  assert.ok(NAMED_EXCEPTIONS[0]!.reason.length > 8, '例外必须写明理由（不是空话）')
+  // 反例注入 ①：把界面调用点改回 10（**就是这次复查发现的那个 bug 形态**）⇒ 判据必须非空
+  const injected10 = { ...ui, src: ui.src.replace('.suggest(q, SUGGEST_FULL_COUNT)', '.suggest(q, 10)') }
+  assert.notEqual(injected10.src, ui.src, '反例注入必须真改到源码')
+  const v10 = suggestCallViolations([injected10, api, view])
+  assert.notDeepEqual(v10, [], '⚠ 反例（界面按 10 条请求）必须被抓住')
+  assert.throws(
+    () => assert.deepEqual(v10, [], '反例上"界面必须请求完整集合"必须失败'),
+    /反例上/,
+    '⚠ 反例注入（界面 count=10）必须让断言失败',
+  )
+  // 反例注入 ②：界面侧对结果做截断 ⇒ 判据必须非空
+  const injectedSlice = { ...ui, src: `${ui.src}\nconst slim = hits.slice(0, 5)\n` }
+  const vs = suggestTruncationViolations([injectedSlice, api, view])
+  assert.notDeepEqual(vs, [], '⚠ 反例（界面截断结果）必须被抓住')
+  assert.throws(
+    () => assert.deepEqual(vs, [], '反例上"界面不许截断"必须失败'),
+    /反例上/,
+    '⚠ 反例注入（界面截断结果）必须让断言失败',
+  )
+  // 反例注入 ③：调用点漏传 count（退回路由默认值 = 意图不可见）⇒ 判据必须非空
+  const injectedBare = { ...ui, src: ui.src.replace('.suggest(q, SUGGEST_FULL_COUNT)', '.suggest(q)') }
+  assert.notDeepEqual(suggestCallViolations([injectedBare, api, view]), [], '⚠ 反例（漏传 count）必须被抓住')
+})
+
+// ── 旧宿主兜底（v0.96.1）：缺 `requested` ⇒ 不许写出具体上限数字 ────────────
+
+test('旧宿主兜底：回包缺 requested ⇒ 文案必须说「旧构建/请重启」，且**不得**出现具体上限数字', () => {
+  const oldHostHits = [it('1.600026', '600026', '中远海能'), it('116.01138', '01138', '中远海能', '港股')]
+  // 旧宿主回包形状：只有 hits（不认识 count、也不回 requested/truncated）
+  const view = suggestListViewOf(oldHostHits, '中远', {})
+  assert.equal(view.legacyHost, true, '缺 requested ⇒ 判定为旧宿主')
+  assert.equal(view.requested, null, '旧宿主下"本次要了多少"未知，不许拿 hits.length 冒充')
+  const text = countTextOf(view)
+  assert.ok(text.includes('旧构建'), `必须点明旧构建（实际 ${text}）`)
+  assert.ok(text.includes('请重启后生效'), '必须告诉用户怎么让它生效')
+  assert.equal(/上限\s*\d+\s*条/.test(text), false, `旧宿主下**不许**写出具体上限数字（实际 ${text}）`)
+  // 反例注入：旧宿主形态却仍报一个具体上限（= 用户实测看到的那句话）⇒ 判据必须失败
+  const badText = `共 ${view.total} 条 · 已显示全部 ${view.total} 条（上游本次上限 10 条，可能有更多）`
+  assert.equal(/上限\s*\d+\s*条/.test(badText), true, '⚠ 反例（旧宿主仍报具体上限）确实带着数字')
+  assert.throws(
+    () => assert.equal(/上限\s*\d+\s*条/.test(badText), false, '反例上"不许出现具体上限数字"必须失败'),
+    /反例上/,
+    '⚠ 反例注入（旧宿主仍报具体上限）必须让断言失败',
+  )
+  // 新宿主：拿满上限时仍要写出具体条数（别把这条改坏）
+  const newHost = suggestListViewOf(oldHostHits, '中远', { requested: 2, truncated: true })
+  assert.equal(newHost.legacyHost, false, '给了 requested ⇒ 新宿主')
+  assert.ok(/上游本次上限 2 条/.test(countTextOf(newHost)), '新宿主下必须写出具体上限')
+})
+
+test('同源：FULL_COUNT 只有一处定义（shared），路由/客户端/断言都用它', () => {
+  assert.equal(SUGGEST_FULL_COUNT, 50, '完整集合 = 50（一处定义）')
+  assert.equal(SUGGEST_MAX_COUNT, 100, '服务端单次上限 = 100')
+  const route = strip(read('../host/routes.ts'))
+  const api = strip(read('api.ts'))
+  const ui = strip(read('ui.tsx'))
+  // 路由：默认值/上夹取都必须取共享常量，不许再写 50 / 100 字面量
+  assert.ok(route.includes('p.get(\'count\') ?? SUGGEST_FULL_COUNT'), '路由默认值必须用共享常量')
+  assert.ok(route.includes('Math.min(SUGGEST_MAX_COUNT, Math.round(rawCount))'), '路由上夹取必须用共享常量')
+  assert.equal(/\?\?\s*50\b/.test(route), false, '路由里不许再出现写死的 50')
+  assert.ok(api.includes('count = SUGGEST_FULL_COUNT'), 'api 默认值必须用共享常量')
+  assert.ok(ui.includes('.suggest(q, SUGGEST_FULL_COUNT)'), '界面调用点必须传共享常量')
+  // 反例注入：某一侧写回字面量 ⇒ 判据必须失败
+  const injectedRoute = route.replace("p.get('count') ?? SUGGEST_FULL_COUNT", "p.get('count') ?? 50")
+  assert.throws(
+    () => assert.equal(injectedRoute.includes("p.get('count') ?? SUGGEST_FULL_COUNT"), true, '反例上"路由必须用共享常量"必须失败'),
+    /反例上/,
+    '⚠ 反例注入（路由写回 50 字面量）必须让断言失败',
+  )
+})
+
+test('旧宿主不得导致客户端静默降级条数：请求始终按共享常量发', () => {
+  const api = strip(read('api.ts'))
+  const ui = strip(read('ui.tsx'))
+  // 请求 URL 永远带 count（且值是入参）；入参由界面按共享常量给 ⇒ 与回包内容无关
+  assert.ok(api.includes('&count=${encodeURIComponent(String(count))}'), '请求必须始终带 count')
+  assert.ok(ui.includes('.suggest(q, SUGGEST_FULL_COUNT)'), '界面传的是常量，不读回包')
+  // 反例注入：让请求条数依赖回包（= 静默降级）⇒ 判据必须失败
+  const injected = api.replace('&count=${encodeURIComponent(String(count))}', '&count=${encodeURIComponent(String(count))}')
+  assert.equal(injected.includes('.then('), api.includes('.then('), '（api.suggest 里本来就不该有回包处理）')
+  const badApi = `${api}\n// 反例：按回包调整下次请求\nconst downgrade = (r: { hits: unknown[] }) => r.hits.length < 10`
+  assert.throws(
+    () => assert.equal(/downgrade/.test(badApi), false, '反例上"不许按回包降级"必须失败'),
+    /反例上/,
+    '⚠ 反例注入（按回包降级请求条数）必须让断言失败',
+  )
 })

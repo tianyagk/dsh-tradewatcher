@@ -5,6 +5,18 @@
  */
 
 /** Eastmoney secid shape: <market>.<code> (e.g. 1.000001, 114.lhm). */
+/**
+ * 搜索候选「完整集合」的条数 —— **一处定义，三处共用**（v0.96.1）：
+ *   · 宿主路由 `/tradewatcher/suggest` 的 `count` 默认值与上夹取（`src/host/routes.ts`）；
+ *   · 客户端默认请求值（`src/client/api.ts`）与界面显式传值（`src/client/ui.tsx`）；
+ *   · 结构性防回归断言的阈值（`src/client/suggestAll.test.ts`）。
+ * 改这里一处即可，避免"改了一处漏一处"（用户实测出过同类问题）。
+ */
+export const SUGGEST_FULL_COUNT = 50
+
+/** 服务端允许的单次上限（上游一次给不了更多；超过按此夹取） */
+export const SUGGEST_MAX_COUNT = 100
+
 export const SECID_RE = /^\d{1,3}\.[A-Za-z0-9]+$/
 
 /** TopBar strips: three groups of instruments. */

@@ -363,7 +363,8 @@ color-scheme:dark}
 .tw-seg button:last-child{border-right:none}
 .tw-seg button:hover{color:var(--tw-text);background:var(--tw-hover)}
 .tw-seg button[data-on=true]{background:var(--tw-accent-soft);color:var(--tw-accent);font-weight:600}
-.tw-suggest{position:absolute;z-index:1100;background:var(--tw-card);border:1px solid var(--tw-border-strong);border-radius:10px;box-shadow:var(--tw-shadow-lg);max-height:262px;overflow:auto;min-width:240px}
+.tw-suggest{position:absolute;z-index:1100;background:var(--tw-card);border:1px solid var(--tw-border-strong);border-radius:10px;box-shadow:var(--tw-shadow-lg);overflow:auto;min-width:240px}
+/* v0.96.2：高度不再写死（262px 曾把候选裁成一行）——由 suggestView.suggestDropdownBoxOf 按视口实测给 max-height */
 .tw-suggest button{display:flex;justify-content:space-between;gap:12px;width:100%;text-align:left;padding:6px 11px;font-size:12px}
 .tw-suggest button:hover{background:var(--tw-hover)}
 .tw-suggest .k{color:var(--tw-muted);font-size:12px;flex:none}

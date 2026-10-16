@@ -1,8 +1,11 @@
 /** Small reusable UI atoms (modal, fields, suggest combobox, notes). */
 import React, { useCallback, useEffect, useRef, useState } from 'react'
-import type { SuggestItem } from '../shared/model.ts'
+import { SUGGEST_FULL_COUNT, type SuggestItem } from '../shared/model.ts'
 import { api } from './api.ts'
-import { SUGGEST_PAGE, batchOf, countTextOf, suggestListViewOf } from './suggestView.ts'
+import {
+  SUGGEST_HEAD_PX, SUGGEST_PAGE, SUGGEST_ROW_PX, SUGGEST_COUNT_PX,
+  batchOf, countTextOf, suggestDropdownBoxOf, suggestListViewOf, type SuggestDropdownBox,
+} from './suggestView.ts'
 
 export function Modal(props: {
   title: React.ReactNode
@@ -67,7 +70,7 @@ export function SuggestInput(props: {
     setBusy(true)
     api
       // count=50：一次尽量拿全（服务端夹 1..100；上游给不了更多时回包会标 truncated）
-      .suggest(q, 50)
+      .suggest(q, SUGGEST_FULL_COUNT)
       .then((r) => {
         if (s !== seq.current) return
         setHits(r.hits)
@@ -115,6 +118,42 @@ export function SuggestInput(props: {
   const view = suggestListViewOf(hits, text.trim(), meta ?? {})
   const batched = batchOf(view.groups, shown)
 
+  /**
+   * 浮层落点与高度：**视口坐标**（`position:fixed`）⇒ 不受祖先 `overflow` 裁剪
+   * （弹窗 `.tw-modal` 是 `max-height:82vh; overflow:auto` 的滚动容器，原先绝对定位的下拉会被它裁掉）。
+   * 贴底空间不足 ⇒ `suggestDropdownBoxOf` 会向上翻转或整体上移。
+   */
+  const [box, setBox] = useState<SuggestDropdownBox | null>(null)
+  const measure = useCallback((): void => {
+    const el = boxRef.current
+    if (el === null) return
+    const rect = el.getBoundingClientRect()
+    const rows = batched.groups.reduce((a, g) => a + g.rows.length, 0)
+    const heads = batched.groups.length
+    const content = SUGGEST_COUNT_PX + heads * SUGGEST_HEAD_PX + rows * SUGGEST_ROW_PX + (batched.hidden > 0 ? SUGGEST_ROW_PX : 0)
+    setBox(suggestDropdownBoxOf({
+      rect: { top: rect.top, bottom: rect.bottom, left: rect.left, width: rect.width },
+      viewportH: window.innerHeight,
+      contentHeight: content,
+    }))
+  }, [batched])
+
+  useEffect(() => {
+    if (!open) {
+      setBox(null)
+      return
+    }
+    measure()
+    const onMove = (): void => measure()
+    window.addEventListener('resize', onMove)
+    // 捕获阶段：弹窗自身滚动也能跟着走（scroll 不冒泡）
+    window.addEventListener('scroll', onMove, true)
+    return () => {
+      window.removeEventListener('resize', onMove)
+      window.removeEventListener('scroll', onMove, true)
+    }
+  }, [open, measure])
+
   const pick = (item: SuggestItem): void => {
     setOpen(false)
     setText('')
@@ -148,7 +187,17 @@ export function SuggestInput(props: {
     open
       ? React.createElement(
           'div',
-          { className: 'tw-suggest', style: { top: 'calc(100% + 2px)', left: 0, right: 0 }, 'data-role': 'suggest-list' },
+          {
+            className: 'tw-suggest',
+            // 视口坐标（fixed）+ 实测高度：祖先再有 overflow 也裁不到它
+            style: box === null
+              ? { top: 'calc(100% + 2px)', left: 0, right: 0, visibility: 'hidden' }
+              : { position: 'fixed', top: box.top, left: box.left, width: box.width, maxHeight: box.maxHeight, right: 'auto' },
+            'data-role': 'suggest-list',
+            // 供断言读：是否向上翻转、当前可用高度
+            'data-flip': box?.up === true ? 'up' : 'down',
+            'data-max-h': box === null ? '' : String(box.maxHeight),
+          },
           // ① 原因优先：上游失败 / 关键字问题 ⇒ 只说原因（**不显示空列表冒充"无匹配"**）
           reason !== null
             ? React.createElement('div', {

@@ -175,6 +175,7 @@ import type {
   CalEvent,
   YtdPayload,
 } from '../shared/model.ts'
+import { SUGGEST_FULL_COUNT } from '../shared/model.ts'
 
 export class ApiError extends Error {
   status: number
@@ -425,7 +426,7 @@ export const api = {
    * `count` 是本次向宿主/上游要的条数（默认 50，服务端夹 1..100）。
    * 回包带 `requested`/`truncated`：拿满上限时**无法排除上游还有更多** ⇒ 界面必须如实写"上游本次上限"。
    */
-  suggest(q: string, count = 50): Promise<{ hits: SuggestItem[]; requested?: number; truncated?: boolean; reason?: string }> {
+  suggest(q: string, count = SUGGEST_FULL_COUNT): Promise<{ hits: SuggestItem[]; requested?: number; truncated?: boolean; reason?: string }> {
     return request(`/tradewatcher/suggest?q=${encodeURIComponent(q)}&count=${encodeURIComponent(String(count))}`)
   },
   board(scope: 'industry' | 'concept' | 'etf', sort: 'pct' | 'money' | 'amount', pn = 1): Promise<{
