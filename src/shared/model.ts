@@ -274,6 +274,18 @@ export interface TrendData {
   source?: 'local-stitch'
   /** 拼接的覆盖报告（`source === 'local-stitch'` 时给出） */
   coverage?: TrendCoverage
+  /**
+   * 这条序列的**时间基准**（缺省 = 北京时间，与A股分时一致）。
+   * 美股分时的时间戳来自美东墙上时间 ⇒ `'America/New_York'`，界面必须按它标注，
+   * 否则读者会把 09:31 ET 当成 09:31 北京（差 12–13 小时）。
+   */
+  timeZone?: 'Asia/Shanghai' | 'America/New_York'
+  /**
+   * 这条序列的**口径说明**（来源 / 复权 / 单位 / 时区），一行字，界面照显示。
+   * 为什么要它：美股分时的来源、时区、成交量单位都与A股不同，
+   * 只说"这是分时"等于隐藏口径（AUDIT-IMPL68）。
+   */
+  caliber?: string
   /** 本次归档：有 `skipped` 时界面要说明"本次未归档"（体积保护/写失败都算） */
   archive?: TrendArchiveInfo
   /**

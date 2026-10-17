@@ -44,6 +44,26 @@ export interface PositionMetrics {
   why: string | null
 }
 
+/**
+ * 美股"不提供位置指标"的固定理由（工具与分组排序共用，避免两处措辞漂移）。
+ *
+ * 为什么不是"按原始价格算"：位置指标要的是 52 周区间，而美股上游只给**未复权**序列
+ * （实测 AAPL 拆股日 499.23→129.04、FRO 2016-02-03 1.93→10.0 都是原始价）。
+ * 一次拆股就会让窗口内的"最低点"凭空出现，位置百分比随之失真 ⇒ 宁可不给结论。
+ * 见 `docs/AUDIT-IMPL68.md` §3.1 / §5。
+ */
+export const US_NO_FQ_WHY = '美股只提供未复权价（拆股/分红未调整）⇒ 位置指标不提供（52 周区间跨拆股会失真）'
+
+/**
+ * 该标的是否**不允许**算位置指标（返回原因；`null` = 允许）。
+ *
+ * 目前只有一种：美股（东财 105/106/107）—— 上游只给未复权价，52 周区间跨一次拆股就会
+ * 凭空多出一个"最低点"，位置百分比随之失真。判据集中在这里，工具层不许各写一份。
+ */
+export function positionRefusal(secid: string): string | null {
+  return /^10[567]\./.test(secid.trim()) ? US_NO_FQ_WHY : null
+}
+
 const EMPTY = (secid: string, why: string): PositionMetrics => ({
   secid, price: null, high: null, low: null, posPct: null, fromHighPct: null, fromLowPct: null,
   label: null, samples: 0, window: POSITION_WINDOW.label, fq: 0, fqSupported: false, from: null, to: null, why,

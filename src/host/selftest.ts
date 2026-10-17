@@ -781,10 +781,14 @@ async function main(): Promise<void> {
         `年K 次根涨跌幅基于上年收盘 (got ${years[1].pct})`)
     }
 
-    // 复权适用范围（纯函数）：只有股票/ETF/港美股才谈得上除权除息
+    // 复权适用范围（纯函数）：A股/港股股票与 ETF 才谈得上复权
     {
-      const yes = ['1.600519', '0.300750', '0.000858', '1.510300', '1.588000', '0.159915', '116.00700', '105.AAPL', '106.BABA', '107.NVDA']
+      const yes = ['1.600519', '0.300750', '0.000858', '1.510300', '1.588000', '0.159915', '116.00700']
       for (const s of yes) ok(fqSupported(s), `复权适用：${s}`)
+      // AUDIT-IMPL68：美股**有**除权除息概念，但本插件的上游只给未复权原始价
+      // （实测 AAPL 拆股日 499.23→129.04 未被调整）⇒ 我们提供不了复权口径，如实标不支持。
+      // 与"指数/期货本来就不需要复权"是两回事，文案上也分开写。
+      for (const s of ['105.AAPL', '106.BABA', '107.NVDA']) ok(!fqSupported(s), `美股复权不可得（不是"不需要"）：${s}`)
       const no = ['1.000001', '1.000300', '0.399001', '0.399006', '100.DJI', '100.SPX', '90.BK0475', '113.rbm', '114.jmm', '101.HG00Y', '112.B00Y']
       for (const s of no) ok(!fqSupported(s), `复权不适用：${s}`)
       ok(normalizeFq('1.600519', undefined) === 1, '缺省口径 = 前复权')
@@ -792,6 +796,9 @@ async function main(): Promise<void> {
       ok(normalizeFq('1.600519', 9) === 1 && normalizeFq('1.600519', 'x') === 1, '非法口径回落前复权')
       ok(normalizeFq('1.000001', 1) === 0, '指数即便请求前复权也必须回落不复权')
       ok(normalizeFq('113.rbm', 2) === 0, '期货即便请求后复权也必须回落不复权')
+      // 美股：请求前复权也必须收敛成 0 —— 否则图上会声称"前复权"，而数据是原始价（拆股跳空冒充暴跌）
+      ok(normalizeFq('105.AAPL', 1) === 0 && normalizeFq('106.FRO', 1) === 0 && normalizeFq('107.VIXY', 1) === 0,
+        '美股即便请求前复权也回落不复权（上游只给未复权价）')
     }
 
     // lossless-JSON sanitizer (agent tool output contract)

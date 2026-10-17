@@ -203,6 +203,9 @@ color-scheme:dark}
 .tw-tab:hover{color:var(--tw-text);background:var(--tw-hover);border-color:var(--tw-border-strong)}
 .tw-tab[data-on=true]{color:var(--tw-text);font-weight:600;background:var(--tw-accent-soft);border-color:var(--tw-accent);letter-spacing:-0.15px}
 .tw-tab[data-on=true]::before{opacity:1}
+/* 该标的**不提供**的周期（如美股的周/月/年）：视觉与鼠标形状都要"点不动"，原因写在 title/aria */
+.tw-tab[aria-disabled=true]{opacity:.45;cursor:not-allowed;background:var(--tw-card);border-style:dashed}
+.tw-tab[aria-disabled=true]:hover{color:var(--tw-dim);background:var(--tw-card);border-color:var(--tw-border)}
 
 /* ── body & panels ─────────────────────────────────────── */
 .tw-body{display:flex;flex-direction:column;gap:12px;padding:10px;overflow:auto;flex:1;min-height:0}

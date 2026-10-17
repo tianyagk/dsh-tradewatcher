@@ -35,7 +35,11 @@ export function ytdTooltip(
   parts.push(`现价 ${row.price === null ? '—' : row.price.toFixed(3)}`)
   parts.push(row.fqSupported
     ? `复权口径：${FQ_LABEL[row.fq]}（复权口径由宿主回包决定，不是界面请求值）`
-    : '该标的不适用复权，按原始价格计算')
+    // 两种"没有复权"必须分开说：指数/期货是**不需要**；美股是上游**只给未复权价**
+    // （实测 AAPL 拆股日 499.23→129.04 未被调整）⇒ 跨拆股的年初至今涨幅会失真，读者要能分辨
+    : /^10[567]\./.test(row.secid)
+      ? '不复权：美股上游只提供未复权价（拆股/分红未调整）⇒ 跨拆股的年初至今涨幅会失真'
+      : '该标的不适用复权，按原始价格计算')
   return `${head}\n${parts.join('\n')}`
 }
 

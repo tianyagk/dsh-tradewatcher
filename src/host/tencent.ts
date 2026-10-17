@@ -23,7 +23,7 @@
  *
  * 所有请求都过 `breakerFetch.withHostBreaker`（按主机熔断记账）。
  */
-import { parseMarketStamp } from './time.ts'
+import { parseMarketStamp, usWallToEpoch } from './time.ts'
 import { withHostBreaker } from './breakerFetch.ts'
 import { tencentVolToHands } from './klineUnits.ts'
 
@@ -146,25 +146,6 @@ export function parseTencentStamp(text: string | undefined): number | null {
   return Number.isFinite(parsed) ? parsed : null
 }
 
-/** `America/New_York` 的墙上时间分解器（固定时区，与宿主 `TZ` 无关） */
-const NYC_PARTS = new Intl.DateTimeFormat('en-CA', {
-  timeZone: 'America/New_York',
-  hourCycle: 'h23',
-  year: 'numeric',
-  month: '2-digit',
-  day: '2-digit',
-  hour: '2-digit',
-  minute: '2-digit',
-  second: '2-digit',
-})
-
-/** 某个瞬时在纽约的"墙上时间"当作 UTC 数字返回（用于反解偏移） */
-function nycWallMs(ms: number): number {
-  const p: Record<string, string> = {}
-  for (const part of NYC_PARTS.formatToParts(new Date(ms))) p[part.type] = part.value
-  return Date.UTC(Number(p.year), Number(p.month) - 1, Number(p.day), Number(p.hour) % 24, Number(p.minute), Number(p.second))
-}
-
 /**
  * **美股**行情时间（腾讯 `us*` 的 `f[30]`）：`"2026-10-16 16:00:01"` = **美东墙上时间**。
  *
@@ -173,23 +154,11 @@ function nycWallMs(ms: number): number {
  *   · **更危险的是**：即便给它加一条 `-` 分支，`Date.parse('2026-10-16T16:00:01')` 会按**宿主时区**解释
  *     ⇒ 东八区机器上把美东 16:00 读成北京时间 16:00，整整差 **12–13 小时**（还会被当成"未来时间"）。
  *
- * 实测锚点（2026-10-17 抓包）：`usFRO` = `2026-10-16 16:04:53`、`us.INX` = `2026-10-16 16:42:08` ——
- * 都是**美东当天**时刻（16:00 = 收盘）。因此这里按 `America/New_York` 显式反解成 UTC 瞬时：
- * 先假设墙上时间就是 UTC，再按"纽约墙上时间 - 目标墙上时间"迭代纠正（DST 由 `Intl` 自己判定，
- * 换日/换月/换年都走同一条路）。两轮足以收敛（含 DST 切换日），第三轮留作保险。
+ * 实现已下沉到 `time.ts:usWallToEpoch`（AUDIT-IMPL68：新浪美股日线/分钟也用同一套美东换算，
+ * 不再各写一份）。实测锚点：`usFRO` = `2026-10-16 16:04:53`、`us.INX` = `2026-10-16 16:42:08`。
  */
 export function parseTencentUsStamp(text: string | undefined): number | null {
-  const m = /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2}):(\d{2})$/.exec((text ?? '').trim())
-  if (m === null) return null
-  const wall = Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]), Number(m[4]), Number(m[5]), Number(m[6]))
-  let ms = wall
-  for (let i = 0; i < 3; i += 1) {
-    const drift = nycWallMs(ms) - wall
-    if (drift === 0) break
-    ms -= drift
-  }
-  // 反解若没能落回目标墙上时间（例如 DST 跳变的"不存在的本地时刻"），宁可给 null 也不给错时间
-  return nycWallMs(ms) === wall ? ms : null
+  return usWallToEpoch(text ?? '')
 }
 
 export interface TencentQuoteFull extends TencentQuote {

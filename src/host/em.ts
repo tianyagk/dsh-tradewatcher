@@ -21,11 +21,11 @@ import { mkdir, readdir, readFile, rm, stat } from 'node:fs/promises'
 import { writeFileAtomic } from './atomic.ts'
 import { updateJsonLocked, withFileLock } from './lock.ts'
 import { breakerFor, hostsAllowed, minutesToRecover } from './breaker.ts'
-import { fetchSinaEtfRanking, fetchSinaQuotes, sinaSymbol as sinaQuoteSymbol } from './sina.ts'
+import { fetchSinaEtfRanking, fetchSinaQuotes, fetchSinaUsDaily, fetchSinaUsMin, sinaSymbol as sinaQuoteSymbol, type SinaBar } from './sina.ts'
 import { fetchTencentBoards, fetchTencentMinutes, fetchTencentQuoteRows, fetchTencentSuggest, minuteTrendPointsOf, tencentCode, tencentIndexCode, tencentQuoteCode, type TencentQuoteFull } from './tencent.ts'
 import { join } from 'node:path'
 import { dataHome } from './store.ts'
-import { hhmmOf, dayOf, inSession, isSettledOffline, shanghaiParts } from './time.ts'
+import { hhmmOf, dayOf, inSession, isSettledOffline, shanghaiParts, usDayOf, inUsSession, isUsSettledOffline } from './time.ts'
 import { UpstreamCoolingError, withHostBreaker } from './breakerFetch.ts'
 import { normalizeVolUnits, tencentVolToHands } from './klineUnits.ts'
 
@@ -1473,6 +1473,14 @@ async function tencentTrend(secid: string): Promise<TrendData | null> {
  * 101.HG00Y 两次都是 1 天/269 点。此前这里引的是“历史记录”，现在换成本次实测结论。
  */
 async function fetchTrendSingleDay(secid: string, opts: TrendOptions = {}): Promise<TrendData | null> {
+  /**
+   * 美股：先走新浪分钟（唯一可用的分钟源）；拿不到再落回东财 trends2（不改变原有兜底）。
+   * ⚠ 这里**不**用腾讯分钟：腾讯对美股只回 1 个点，凑成"分时"就是拿一个快照冒充 390 根。
+   */
+  if (isUsSecid(secid) && opts.upstream === undefined) {
+    const us = await sinaUsTrend(secid, 1).catch(() => null)
+    if (us !== null && us.points.length > 0) return us
+  }
   const fields2 = 'f51,f52,f53,f54,f55,f56,f57,f58'
   return trendWithFallback(secid, 1, async () => {
     // 注入上游（测试用）：让"上游抛错/没数据"这些分支可以构造，不必真去打上游
@@ -1575,8 +1583,62 @@ async function fetchTencent5Min(sym: string, lmt: number): Promise<MinuteBar[]> 
   return out
 }
 
+/**
+ * **美股分时/五日**：新浪 `US_MinKService.getMinK`（本插件唯一的美股分钟源）。
+ *
+ * 实测（2026-10-17，见 `docs/AUDIT-IMPL68.md` §3.2）：
+ *   · `type=1` → 1023 根 / **3 个交易日**（当日 390 根：09:31→16:00 ET）⇒ 当日分时够用；
+ *   · `type=5` → 1023 根 / **14 个交易日** ⇒ 五日视图是**真实多日源**（不必等本地归档累积）；
+ *   · 时间戳是**美东**墙上时间，只含常规盘；`v` = 股、`a` = 该根成交额（美元，非累计）。
+ *   · 腾讯对美股只回 1 个点（`["1604 52.49 3722974"]`）⇒ 不能当分钟源。
+ *
+ * 昨收：取**保留窗口之前**最后一个交易日的最后一根（`type=1` 有 3 天、`type=5` 有 14 天，都够）。
+ * ⚠ 这一根是"分钟收盘"，与交易所官方收盘可能差 1 分（实测 FRO 10-15 分钟末根 52.53 vs 日线 52.54）
+ * ⇒ 口径说明里如实写出来，不冒充官方昨收。
+ */
+async function sinaUsTrend(secid: string, days: 1 | 5): Promise<TrendData | null> {
+  const ticker = secid.slice(secid.indexOf('.') + 1)
+  const type: 1 | 5 = days > 1 ? 5 : 1
+  const bars = await ttlCache(`us-min:${ticker.toUpperCase()}:${type}`, 60_000, () => fetchSinaUsMin(ticker, type))
+  if (bars.length === 0) return null
+  const allDays = [...new Set(bars.map((b) => b.label.slice(0, 10)))]
+  const keepDays = allDays.slice(-Math.max(1, Math.min(days, allDays.length)))
+  const keep = new Set(keepDays)
+  const picked = bars.filter((b) => keep.has(b.label.slice(0, 10)))
+  if (picked.length === 0) return null
+  const points: TrendPoint[] = picked.map((b) => ({
+    t: b.t,
+    label: b.label.slice(0, 16), // 上游原样的**美东**墙上时间（不换算成北京，避免图文两套时间）
+    price: b.price,
+    avg: null, // 新浪分钟不给 VWAP ⇒ 如实 null，不用价格凑
+    vol: b.vol,
+    amount: b.amount,
+  }))
+  const clean = normalizeTrendSeries(points)
+  const prevDay = days === 1 ? (allDays[allDays.indexOf(keepDays[0]) - 1] ?? null) : null
+  const prevBars = prevDay === null ? [] : bars.filter((b) => b.label.startsWith(prevDay))
+  const prePrice = prevBars.length === 0 ? null : prevBars[prevBars.length - 1].price
+  return {
+    secid,
+    prePrice,
+    points: clean,
+    last: clean[clean.length - 1]?.price ?? null,
+    sessionDay: keepDays[keepDays.length - 1],
+    timeZone: 'America/New_York',
+    caliber: [
+      `来源：新浪美股分钟（${type} 分钟）`,
+      '时区：美东（ET）',
+      '复权：不适用（分时序列）',
+      '成交量单位：股',
+      ...(prePrice === null ? [] : ['昨收＝前一交易日最后一根分钟收盘（非交易所官方收盘）']),
+    ].join(' · '),
+  }
+}
+
 /** 多日分时（五日）：用 5 分钟 K 线拼出最近 N 个交易日。 */
 async function fetchMultiDayTrend(secid: string, days: number): Promise<TrendData | null> {
+  // 美股：新浪 5 分钟线实测覆盖 14 个交易日 ⇒ 五日视图是**真实多日源**（不必等本地归档累积）
+  if (isUsSecid(secid)) return sinaUsTrend(secid, 5)
   // ⚠ 两条渠道的**符号体系是分开的**：新浪只认沪/深（`sh600519`），腾讯覆盖沪/深/**港股**（`hk00700`）。
   // 此前这里先算一个 `sinaSymbol` 并让腾讯档复用它 ⇒ 港股/国际/商品/期货**在结构上永远进不去**
   // （不是"上游没有多日分钟源"，而是"我们的入口把非沪深挡死了"）。现在两条各用自己的符号。
@@ -1687,6 +1749,19 @@ async function stitchFromArchive(secid: string, days: number, opts: TrendOptions
  */
 
 /**
+ * 是否是**美股**（东财 `105`=纳斯达克 / `106`=纽交所 / `107`=美交所）。
+ *
+ * 为什么单独一个判据：美股在三条链上的上游都与 A股/港股**不同** ——
+ *   · 行情：腾讯 `us*` / 新浪 `gb_*`（AUDIT-IMPL67）；
+ *   · 日线：**只有新浪** `US_MinKService.getDailyK`（腾讯对美股只回 2 根"首尾"，见 `requestKlineFromTencent`）；
+ *   · 分钟：**只有新浪** `US_MinKService.getMinK`（腾讯对美股只回 1 个点，实测 `["1604 52.49 3722974"]`）；
+ *   · 复权：上游只给**未复权**原始价（实测 AAPL 2020-08-31 拆股日 499.23→129.04）⇒ 不给复权口径。
+ */
+export function isUsSecid(secid: string): boolean {
+  return /^10[567]\./.test(secid.trim())
+}
+
+/**
  * 该标的是否存在除权除息概念（决定复权开关能不能用）。
  *
  * 股票 / ETF / 基金 / 港美股 → true；指数是点位回报、期货是合约、板块是成分股统计，
@@ -1704,7 +1779,18 @@ export function fqSupported(secid: string): boolean {
     if (market === '1' && code.startsWith('000')) return false
     return !code.startsWith('399')
   }
-  return market === '116' || market === '105' || market === '106' || market === '107'
+  if (market === '105' || market === '106' || market === '107') {
+    /**
+     * ⚠ 美股**有**除权除息概念，但本插件的上游只给**未复权**原始价：
+     * 实测（2026-10-17）新浪美股日线在 AAPL 的 4:1 拆股日（2020-08-31）从 499.23 直接跳 129.04、
+     * FRO 在 2016-02-03 从 1.93 跳 10.0 —— 拆股/分红**没有被调整**。
+     * ⇒ 我们无法提供"前复权"口径，只能按原始价显示并**如实说明**（界面写「不复权（上游未调整）」，
+     *   不是「该标的不适用复权」）。依赖复权序列的功能（筹码分布/位置指标）对美股**不提供结论**。
+     * 见 `docs/AUDIT-IMPL68.md` §3.1。
+     */
+    return false
+  }
+  return market === '116'
 }
 
 /** 把请求口径收敛到该标的真正可用的口径：不适用恒为 0，非法值按默认前复权处理 */
@@ -2210,11 +2296,50 @@ async function fetchHostThroughBreaker(host: string, pathAndQuery: string, timeo
   return withHostBreaker(host, () => fetchFromHost(host, pathAndQuery, timeoutMs))
 }
 
+/**
+ * 美股日线：**新浪** `US_MinKService.getDailyK`（本插件唯一的美股历史源）。
+ *
+ * 实测（2026-10-17，见 `docs/AUDIT-IMPL68.md` §3.1）：
+ *   · `symbol=fro` → **5649 根**，2001-08-06 → 2026-10-16（全历史，**无条数参数**）；
+ *   · `symbol=aapl` → 10055 根，1984-09-07 起；末根与当日行情一致（52.49 / 额 197,036,000）；
+ *   · 字段 `d/o/h/l/c/v/a`：`v` = **股**，`a` = **美元**成交额（早期 bar 或给 `"0"` ⇒ 我们给 null）；
+ *   · **不复权**：AAPL 拆股日 499.23 → 129.04 是原始价（`fqSupported` 因此对美股为 false）。
+ *
+ * 为什么要单独一个 TTL 槽：这个接口一次回整段历史（FRO 504 KB / AAPL 941 KB），
+ * 而 `refreshKline` 的增量刷新每 2 分钟就会来一趟 —— 不缓存等于每次浏览都重下几百 KB。
+ */
+async function requestKlineFromSinaUs(secid: string, fqt: FqMode): Promise<DayBar[]> {
+  if (fqt !== 0) return [] // 美股只有未复权口径；要复权就是"没有"，不拿原始价冒充
+  const ticker = secid.slice(secid.indexOf('.') + 1)
+  const bars = await ttlCache<SinaBar[]>(`kline-us:${ticker.toUpperCase()}`, 10 * 60_000, () => fetchSinaUsDaily(ticker))
+  if (bars.length === 0) return []
+  return bars.map((b, i) => {
+    const prev = i > 0 ? bars[i - 1].close : null
+    const pct = prev !== null && prev > 0 ? Math.round(((b.close - prev) / prev) * 10000) / 100 : null
+    return { date: b.date, open: b.open, close: b.close, high: b.high, low: b.low, vol: b.vol, pct }
+  })
+}
+
 /** 单主机取 K 线；空数组视为失败（push2delay/push2 会返回 200 + 空）。优先腾讯。 */
 async function requestKlineRaw(secid: string, klt: number, lmt: number, fqt: FqMode): Promise<DayBar[] | null> {
   /** 至少有一个源给了**成功回包**（哪怕没有这个标的的 K 线）—— 决定 missing 的 why 是 no-source 还是 transient */
   let replied = false
-  const fromTencent = await requestKlineFromTencent(secid, klt, lmt, fqt)
+  /**
+   * 美股：**先新浪**，并**跳过腾讯**。
+   * 腾讯 `fqkline?param=usFRO,day,,,10,qfq` 实测只回 2 根（2011-06-02 与 2026-10-16 —— 首日与今天），
+   * 那不是"序列"，喂进缓存会画出一张只有两个点的日线图（且中间 15 年凭空消失）⇒ 对美股不采信。
+   */
+  if (isUsSecid(secid)) {
+    try {
+      const us = await requestKlineFromSinaUs(secid, fqt)
+      if (us.length > 0) return us
+      replied = true // 新浪可达但没这个标的的日线 ⇒ 结构性缺失（no-source），不是网络故障
+    } catch (error) {
+      if (error instanceof UpstreamCoolingError) throw error
+      /* 新浪失败 ⇒ 继续落到东财 */
+    }
+  }
+  const fromTencent = isUsSecid(secid) ? null : await requestKlineFromTencent(secid, klt, lmt, fqt)
   if (fromTencent !== null) return fromTencent
   const fields2 = 'f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61'
   const path = `/api/qt/stock/kline/get?secid=${encodeURIComponent(secid)}&klt=${klt}&fqt=${fqt}&lmt=${lmt}&end=20500101&fields1=f1,f2,f3&fields2=${fields2}`
@@ -2280,11 +2405,20 @@ export async function fetchKline(
 ): Promise<(KlineData & { staleReason?: string }) | null> {
   if (!SECID_RE.test(secid)) return null
   const baseKlt = klt === 104 ? 103 : klt
+  const us = isUsSecid(secid)
+  /**
+   * 美股**只提供日线**：上游（新浪）只有 `getDailyK`；周/月/年要么没有源、要么只能拿日线重采样。
+   * 我们没有重采样（避免"用别的周期冒充"，见 AUDIT-IMPL68 §5）；界面上这三档对美股**禁用并给原因**。
+   * 这里直接返回 null，让 `/kline` 带 `missing`（原因由 `klineMissingReason` 按市场给出）。
+   */
+  if (us && baseKlt !== 101) return null
   const supported = fqSupported(secid)
   const mode = normalizeFq(secid, fqt)
   const entry = await loadKlineCache(secid, baseKlt, mode)
   const needFull = entry.bars.length === 0
-  const settled = !needFull && isSettledOffline(entry.updatedAt)
+  // 定稿判定按**各自市场**的收盘：A股 15:05 北京 / 美股 16:05 纽约（跨零点，不能共用北京日历日）
+  const settledFn = us ? isUsSettledOffline : isSettledOffline
+  const settled = !needFull && settledFn(entry.updatedAt)
   const stale = settled ? false : await refreshKline(secid, baseKlt, mode, entry, needFull)
   if (!settled && stale && entry.bars.length === 0) return null
   const series = baseKlt === 103 && klt === 104 ? resampleYearly(entry.bars) : entry.bars
@@ -2293,7 +2427,9 @@ export async function fetchKline(
   // 最后一根是否未收盘：只有"该 bar 就是今天"且此刻仍可能产生新数据时才算。
   // 周/月/年 K 的"今天"同理存在，但判断口径一致（date 相等 + inSession）。
   const lastDate = days[days.length - 1]?.date ?? ''
-  const barOpen = !settled && lastDate !== '' && lastDate === dayOf(Date.now()) && inSession()
+  const todayOf = us ? usDayOf : dayOf
+  const inSessionOf = us ? inUsSession : inSession
+  const barOpen = !settled && lastDate !== '' && lastDate === todayOf(Date.now()) && inSessionOf()
   // 降级复用的说明（只在"用了被判需要回源的缓存 且 回源没拿到新数据"时给；正常/定稿都不给）
   const staleReason = klineStaleNoteOf({
     settled,
@@ -2304,7 +2440,11 @@ export async function fetchKline(
   })
   // 量纲归一的标注：**独立字段**（agent/接口照读原样），同时并进 `staleReason` ——
   // 后者是界面已有的"具体原因"槽位（降级时显示），并进去不新增第二行常驻文案。
-  const unitNote = entry.unitNote
+  // 美股成交量上游给的是**股**（A股是手）：口径必须随数据一起说明，否则读者会按"手"理解量能
+  const usUnitNote = us ? '美股成交量单位为「股」（A股为「手」）' : null
+  const unitNote = usUnitNote === null
+    ? entry.unitNote
+    : (entry.unitNote === null ? usUnitNote : `${usUnitNote}；${entry.unitNote}`)
   const reason = unitNote === null ? staleReason : (staleReason === null ? unitNote : `${staleReason}；${unitNote}`)
   return {
     secid,
@@ -2334,8 +2474,14 @@ export interface UpstreamReason {
   note: string
 }
 
-/** 分时（trend）拿不到时的原因。腾讯分钟线只覆盖沪/深/港股（见 `tencentCode`），其余市场没有兜底。 */
+/**
+ * 分时（trend）拿不到时的原因。**按市场说真话**（AUDIT-IMPL68）：
+ *   · 美股：分钟源是**新浪**（`US_MinKService.getMinK`，单次上限 1023 根）—— 腾讯对美股只有 1 个点，
+ *     所以文案不许再说"没有腾讯分钟线兜底（腾讯只覆盖沪/深/港股）"（那是把"我们没接"说成"上游没有"）；
+ *   · A股/港股：腾讯分钟线兜底（见 `tencentCode`）。
+ */
 export function trendMissingReason(secid: string, opts: { emDown?: boolean } = {}): UpstreamReason {
+  const us = isUsSecid(secid)
   const tencentMinute = tencentCode(secid) !== null
   // 判定顺序：注入值（测试）→ 本链路刚失败过 → 本链路主机熔断中 → 东财整体不可用
   const down = opts.emDown ?? (upstreamFailedRecently('trend') || hostsUnavailable(HISTORY_HOSTS) || emUnavailableNow())
@@ -2343,15 +2489,19 @@ export function trendMissingReason(secid: string, opts: { emDown?: boolean } = {
     return {
       what: '分时',
       why: 'transient',
-      note: tencentMinute
-        ? `东财行情主机当前不可达（熔断/限流），腾讯分钟线这次也未取到，本地又没有可用快照 —— ${MISSING_TIER_ADVICE.transient}`
-        : `东财行情主机当前不可达（熔断/限流），而该标的没有腾讯分钟线兜底（腾讯只覆盖沪/深/港股），本地也没有可用快照 —— ${MISSING_TIER_ADVICE.transient}（不是"该标的没有分时"）`,
+      note: us
+        ? `东财行情主机当前不可达（熔断/限流），新浪美股分钟（美股唯一的分钟源）这次也没取到，本地又没有可用快照 —— ${MISSING_TIER_ADVICE.transient}（不是"该标的没有分时"）`
+        : tencentMinute
+          ? `东财行情主机当前不可达（熔断/限流），腾讯分钟线这次也未取到，本地又没有可用快照 —— ${MISSING_TIER_ADVICE.transient}`
+          : `东财行情主机当前不可达（熔断/限流），而该标的没有腾讯分钟线兜底（腾讯只覆盖沪/深/港股），本地也没有可用快照 —— ${MISSING_TIER_ADVICE.transient}（不是"该标的没有分时"）`,
     }
   }
   return {
     what: '分时',
     why: 'no-source',
-    note: `东财当前可达但没有返回该标的的分时数据，且本插件没有别的分钟源可兜底（腾讯只覆盖沪/深/港股）—— ${MISSING_TIER_ADVICE['no-source']}`,
+    note: us
+      ? `新浪美股分钟可达但没有返回该标的的序列（上游单次最多 1023 根，未知代码直接不给行）—— ${MISSING_TIER_ADVICE['no-source']}`
+      : `东财当前可达但没有返回该标的的分时数据，且本插件没有别的分钟源可兜底（腾讯只覆盖沪/深/港股）—— ${MISSING_TIER_ADVICE['no-source']}`,
   }
 }
 
@@ -2408,7 +2558,20 @@ export function klineMissingReason(
   opts: { emDown?: boolean; cache?: KlineCacheStatus | null } = {},
 ): UpstreamReason {
   const label = klt === 101 ? '日K' : klt === 102 ? '周K' : klt === 103 ? '月K' : '年K'
-  const tencentKline = tencentSymbol(secid) !== null
+  /**
+   * 美股**只有日K**：上游（新浪 `US_MinKService.getDailyK`）只给日线；周/月/年没有源。
+   * 这一条必须排在最前面 —— 否则"东财不可达"会把结论带成 transient（好像等一等就有），
+   * 而事实是**本插件不提供**该周期（no-source，重试无用；界面该档位已禁用并说明）。
+   */
+  if (isUsSecid(secid) && klt !== 101) {
+    return {
+      what: label,
+      why: 'no-source',
+      note: `本插件不提供美股的${label}：美股上游只有日线（新浪 US_MinKService.getDailyK），周/月/年要么没有源、要么只能由日线重采样 —— 我们不拿重采样冒充该周期 —— ${MISSING_TIER_ADVICE['no-source']}`,
+    }
+  }
+  // 腾讯对美股**故意不使用**（它的 day 只有 2 根"首尾"），所以美股不能算"腾讯覆盖"
+  const tencentKline = tencentSymbol(secid) !== null && !isUsSecid(secid)
   const down = opts.emDown ?? (upstreamFailedRecently('kline') || hostsUnavailable(HISTORY_HOSTS) || emUnavailableNow())
   /**
    * **缓存那半句**必须区分三情形（v0.63.0 修）：老实现无论哪种都写"本地没有该周期的缓存"，
@@ -2431,7 +2594,7 @@ export function klineMissingReason(
     return {
       what: label,
       why: 'no-source',
-      note: `${cacheClause}；本轮确实请求过上游（${attempt.note}），腾讯与东财都没给该标的的 K 线 —— ${MISSING_TIER_ADVICE['no-source']}`,
+      note: `${cacheClause}；本轮确实请求过上游（${attempt.note}），${isUsSecid(secid) ? '新浪美股日线与东财' : '腾讯与东财'}都没给该标的的${isUsSecid(secid) ? '日线' : ' K 线'} —— ${MISSING_TIER_ADVICE['no-source']}`,
     }
   }
   if (fresh && !attempt.requested) {
@@ -2445,15 +2608,19 @@ export function klineMissingReason(
     return {
       what: label,
       why: 'transient',
-      note: tencentKline
-        ? `${cacheClause}；东财行情主机当前不可达（熔断/限流），腾讯这次也没取到 —— ${MISSING_TIER_ADVICE.transient}`
-        : `${cacheClause}；该标的也不在腾讯的 K 线覆盖内（腾讯只覆盖沪/深/港股/美股），而东财行情主机当前不可达（熔断/限流）—— ${MISSING_TIER_ADVICE.transient}`,
+      note: isUsSecid(secid)
+        ? `${cacheClause}；新浪美股日线这次没取到，东财行情主机当前也不可达（熔断/限流）—— ${MISSING_TIER_ADVICE.transient}（美股日线的上游只有新浪 + 东财两路）`
+        : tencentKline
+          ? `${cacheClause}；东财行情主机当前不可达（熔断/限流），腾讯这次也没取到 —— ${MISSING_TIER_ADVICE.transient}`
+          : `${cacheClause}；该标的也不在腾讯的 K 线覆盖内（腾讯只覆盖沪/深/港股），而东财行情主机当前不可达（熔断/限流）—— ${MISSING_TIER_ADVICE.transient}`,
     }
   }
   return {
     what: label,
     why: 'no-source',
-    note: `${cacheClause}；腾讯与东财当前都可达但没有返回该标的的 K 线 —— ${MISSING_TIER_ADVICE['no-source']}`,
+    note: isUsSecid(secid)
+      ? `${cacheClause}；新浪美股日线与东财当前都可达但没有返回该标的的日线 —— ${MISSING_TIER_ADVICE['no-source']}`
+      : `${cacheClause}；腾讯与东财当前都可达但没有返回该标的的 K 线 —— ${MISSING_TIER_ADVICE['no-source']}`,
   }
 }
 

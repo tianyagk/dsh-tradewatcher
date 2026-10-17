@@ -22,6 +22,7 @@
  */
 
 import { withHostBreaker } from './breakerFetch.ts'
+import { usWallToEpoch } from './time.ts'
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
 
 export interface SinaEtfRow {
@@ -325,6 +326,12 @@ export interface SinaBar {
   high: number
   low: number
   vol: number
+  /**
+   * 成交额（**美元**，新浪日线的 `a` 段）。
+   * 实测：近期 bar 有值（`2026-10-16` FRO = 197,036,000，与 `gb_fro` 下标 30 的 197,036,261 同源），
+   * 早期 bar 上游给 `"0"` ⇒ 这里如实给 null（**不把"没有"读成 0**）。
+   */
+  amount?: number | null
 }
 
 /** 解析新浪美股日线（jsonp：`/*<script>…*\/x([{d,o,h,l,c,v,a},…]);`） */
@@ -346,9 +353,78 @@ export function parseSinaUsDaily(payload: string): SinaBar[] {
     const close = num(it.c)
     // 除权/停牌的行会给 0 或空 ⇒ 直接丢掉（不许把 0 当成一根 bar 混进收益率）
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || close === null || !(close > 0)) continue
-    out.push({ date, open: num(it.o) ?? close, close, high: num(it.h) ?? close, low: num(it.l) ?? close, vol: num(it.v) ?? 0 })
+    const amount = numField(it.a)
+    out.push({
+      date,
+      open: num(it.o) ?? close,
+      close,
+      high: num(it.h) ?? close,
+      low: num(it.l) ?? close,
+      vol: num(it.v) ?? 0,
+      // 早期 bar 上游给 "0" ⇒ 按"没有"处理（缺失不许编码成 0）
+      amount: amount !== null && amount > 0 ? amount : null,
+    })
   }
   return out
+}
+
+/**
+ * ── 新浪**美股分钟**（AUDIT-IMPL68）────────────────────────────────────────
+ *
+ * 接口：`.../usstock/api/jsonp_v2.php/x/US_MinKService.getMinK?symbol=fro&type=<1|5|15>`
+ *
+ * **实测（2026-10-17，原始回包见 `docs/AUDIT-IMPL68.md` §3）**：
+ *   · `type=1`（1 分钟）→ **1023 根 / 3 个交易日**（当日 390 根：09:31→16:00 ET）；
+ *   · `type=5`（5 分钟）→ **1023 根 / 14 个交易日**（每日 78 根）；
+ *   · `type=15`（15 分钟）→ **1023 根 / 40 个交易日**（每日 26 根）；
+ *   · 三种都**恰好 1023 根**（上游硬上限）；时间戳是**美东墙上时间**，只含常规盘 09:30–16:00。
+ *   · 每根字段：`d`（`YYYY-MM-DD HH:mm:ss`）· `o/h/l/c` · `v`（**股**）· `a`（**该根**成交额，美元）。
+ *     实测 `15:20` 那根 `v=23743`、`a=1161990` ⇒ 1161990/23743 ≈ 48.94 = 当时价 ⇒ **是逐根额，不是累计额**。
+ *   · 未知代码：返回 `null`（实测 `getMinK?symbol=zzzz` ⇒ 空），不会给假序列。
+ */
+export interface SinaUsMinBar {
+  /** epoch ms（由**美东**墙上时间换算，`TZ` 无关） */
+  t: number
+  /** 上游原样的美东墙上时间 `YYYY-MM-DD HH:mm:ss`（界面按美东读，与 A股 的北京时间分开） */
+  label: string
+  price: number
+  /** 成交量（**股**） */
+  vol: number | null
+  /** 该根成交额（**美元**） */
+  amount: number | null
+}
+
+/** 解析新浪美股分钟 jsonp：`/*<script>…*\/x([{d,o,h,l,c,v,a},…]);` */
+export function parseSinaUsMin(payload: string): SinaUsMinBar[] {
+  const from = payload.indexOf('[')
+  const to = payload.lastIndexOf(']')
+  if (from < 0 || to <= from) return []
+  let rows: unknown
+  try {
+    rows = JSON.parse(payload.slice(from, to + 1))
+  } catch {
+    return []
+  }
+  if (!Array.isArray(rows)) return []
+  const out: SinaUsMinBar[] = []
+  for (const raw of rows) {
+    const it = raw as Record<string, unknown>
+    const label = String(it.d ?? '').trim()
+    const price = num(it.c)
+    // 时间戳必须能被**美东**换算：换算不出来的行直接丢（不许按本机时区猜）
+    const t = usWallToEpoch(label)
+    if (t === null || price === null || !(price > 0)) continue
+    out.push({ t, label, price, vol: numField(it.v), amount: numField(it.a) })
+  }
+  return out
+}
+
+/** 拉新浪美股分钟（`type` = 1/5/15 分钟）；上游单次最多 1023 根 */
+export async function fetchSinaUsMin(symbol: string, type: 1 | 5 | 15): Promise<SinaUsMinBar[]> {
+  const sym = symbol.trim().toLowerCase()
+  if (!/^[a-z.]{1,8}$/.test(sym)) throw new Error(`美股代码不合法：${symbol}`)
+  const url = `https://stock.finance.sina.com.cn/usstock/api/jsonp_v2.php/x/US_MinKService.getMinK?symbol=${sym}&type=${type}`
+  return parseSinaUsMin(await sinaText(url, { gbk: false, timeoutMs: 20000 }))
 }
 
 /** 拉新浪美股（`us<ETF>`）全历史日线；调用方自己截尾（本接口不接受条数参数，实测） */

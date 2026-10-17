@@ -13,7 +13,7 @@ import { RESCUE_LEVEL_LABEL, realizedUnknownNote, realizedUnknownQtyOf, unknownR
 import { CAL_CATEGORY_LABEL } from '../shared/model.ts'
 import type { PluginContext, PluginToolDefinition, PluginToolExec, PluginToolRuntime, PluginSystemPrompt } from './context.ts'
 import { WriteJournal } from './writeLog.ts'
-import { POSITION_WINDOW, positionOfBars } from './position.ts'
+import { POSITION_WINDOW, US_NO_FQ_WHY, positionOfBars, positionRefusal } from './position.ts'
 import { forwardOf } from './signalForward.ts'
 import { dayTradesOf } from './dayTrade.ts'
 import { shDateTimeText } from './time.ts'
@@ -1043,6 +1043,11 @@ export function makeAgentTools(
         } else if (by === '位置') {
           for (const it of items) {
             const price = q.items[it.secid]?.price ?? null
+            // 美股：上游只给未复权价 ⇒ 位置指标**不给结论**（不许拿原始价算一个假的 52 周分位）
+            if (positionRefusal(it.secid) !== null) {
+              rowIn.push({ secid: it.secid, name: it.name, value: null, label: null, why: US_NO_FQ_WHY })
+              continue
+            }
             const supported = em.fqSupported(it.secid)
             const fq: 0 | 1 = supported ? 1 : 0
             const k = await em.fetchKline(it.secid, 101, POSITION_WINDOW.bars, fq)
@@ -1176,6 +1181,12 @@ export function makeAgentTools(
         const missing: Array<{ what: string; why: string; note: string }> = []
         for (const secid of ids) {
           const price = q.items[secid]?.price ?? null
+          // 美股：没有复权序列 ⇒ 位置指标不提供（no-source：重试无用，且**不许**用原始价照算）
+          if (positionRefusal(secid) !== null) {
+            rows.push({ secid, name: q.items[secid]?.name ?? secid, price, ...positionOfBars(secid, [], price, { fq: 0, fqSupported: false }) })
+            missing.push({ what: secid, why: 'no-source', note: US_NO_FQ_WHY })
+            continue
+          }
           const supported = em.fqSupported(secid)
           // 指数/期货没有复权概念 ⇒ fqt=0；其余按前复权（跨期比较必须同一口径）
           const fq: 0 | 1 = supported ? 1 : 0
@@ -1191,7 +1202,7 @@ export function makeAgentTools(
         }
         return {
           rows,
-          methodology: `位置指标 = (现价 − 窗口最低) ÷ (窗口最高 − 窗口最低) × 100；窗口＝${POSITION_WINDOW.label}；序列用前复权（指数/期货按原始价格）`,
+          methodology: `位置指标 = (现价 − 窗口最低) ÷ (窗口最高 − 窗口最低) × 100；窗口＝${POSITION_WINDOW.label}；序列用前复权（指数/期货按原始价格；美股不提供：上游只给未复权价）`,
           window: POSITION_WINDOW.label,
           truncated: wanted.length > ids.length,
           requested: wanted.length,

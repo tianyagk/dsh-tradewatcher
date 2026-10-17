@@ -24,6 +24,7 @@ import {
   rememberedTab,
   rememberFq,
   rememberTab,
+  tabUnavailableReason,
   type ChartPayload,
   type ChartTab,
 } from './chartCache.ts'
@@ -87,6 +88,19 @@ export function QuoteDrawer(props: {
   const { secid, name, redUp, onClose } = props
   // 记住上次看的周期：关掉再打开、换一只标的时不必重新点一次
   const [tab, setTab] = useState<ChartTab>(rememberedTab())
+  /** 美股（东财 105/106/107）：口径文案要按事实说（上游只给未复权价 / 只有日线） */
+  const usMarket = /^10[567]\./.test(secid.trim())
+  /**
+   * 该标的不可用的周期：**不许停在禁用档**。
+   * 理由：`rememberedTab` 是全局记忆（上次看的是周K），换到美股时若照记忆去请求，
+   * 就会对着一个禁用按钮发请求、并收到一条"本插件不提供"的错误 —— 那不是"禁用并给原因"。
+   */
+  useEffect(() => {
+    if (tabUnavailableReason(secid, tab) !== null) {
+      rememberTab('day')
+      setTab('day')
+    }
+  }, [secid, tab])
   // 复权口径：默认前复权，按标的记忆（见 chartCache.ts 的 fqFor/rememberFq）
   const [fqt, setFqt] = useState<FqMode>(() => fqFor(secid))
   const [payload, setPayload] = useState<ChartPayload | null>(null)
@@ -474,7 +488,11 @@ export function QuoteDrawer(props: {
       if (payload !== null && payload.kind === 'trend') {
         const t = payload.trend
         const last = t.points[t.points.length - 1]
-        const base = `${TAB_LABEL[payload.tab]} · 不复权（分时序列无除权概念） · 截至 ${last !== undefined ? last.label.slice(5, 16) : '—'}`
+        // 宿主给了 caliber（美股：来源/时区/单位/昨收口径）就照它显示 —— 只写"不复权"会隐藏
+        // "这是美东时间、成交量单位是股、昨收来自分钟末根"这三个会影响读数的前提
+        const base = t.caliber !== undefined && t.caliber !== ''
+          ? `${TAB_LABEL[payload.tab]} · ${t.caliber} · 截至 ${last !== undefined ? last.label : '—'}`
+          : `${TAB_LABEL[payload.tab]} · 不复权（分时序列无除权概念） · 截至 ${last !== undefined ? last.label.slice(5, 16) : '—'}`
         // 五日：覆盖情况写进**这一行**（结构性限制不配单独横幅）。
         // 本地拼接时给出 have/limit 与缺口；真实多日源只有 1 天时明说"仅当日（该市场无多日源）"。
         const cov = t.coverage
@@ -514,7 +532,11 @@ export function QuoteDrawer(props: {
       ? shStampText(k.asOf)
       : '—'
     const mode = TAB_LABEL[payload.tab]
-    const fq = k.fqSupported === false ? '不复权（该标的不适用）' : FQ_LABEL[(k.fqt ?? fqt) as FqMode]
+    const fq = k.fqSupported === false
+      ? usMarket
+        ? '不复权（美股上游只给原始价：拆股/分红未调整）'
+        : '不复权（该标的不适用）'
+      : FQ_LABEL[(k.fqt ?? fqt) as FqMode]
     const tail = k.cached === true
       ? '已收盘定稿'
       : k.barOpen === true
@@ -560,7 +582,9 @@ export function QuoteDrawer(props: {
     if (!isKlineTab(tab)) return null
     const titleOf = (m: FqMode): string =>
       fqDisabled
-        ? '该标的是指数/期货，价格本身没有除权除息，复权不适用'
+        ? usMarket
+          ? '美股上游只提供未复权价（拆股/分红未调整）⇒ 本插件不提供复权口径，图上按原始价显示'
+          : '该标的是指数/期货，价格本身没有除权除息，复权不适用'
         : `${FQ_LABEL[m]}${m === 0 ? '' : ' · 详情头的行情字段始终是真实成交价'}`
     return React.createElement('div', { className: 'tw-fq', role: 'group', 'aria-label': '复权口径' },
       React.createElement('span', { className: 'k' }, '复权'),
@@ -596,18 +620,25 @@ export function QuoteDrawer(props: {
       { className: 'tw-drawer', onMouseDown: (e: React.MouseEvent) => e.stopPropagation() },
       React.createElement('div', { className: 'tw-drawer-head' }, headerRows()),
       React.createElement('div', { className: 'tw-tabs', style: { justifyContent: 'flex-start' } },
-        (Object.keys(TAB_LABEL) as ChartTab[]).map((t) =>
-          React.createElement('button', {
+        (Object.keys(TAB_LABEL) as ChartTab[]).map((t) => {
+          // 不支持的周期：**禁用并给原因**（不是点了才报错）；title 与 aria 都要能读到原因
+          const why = tabUnavailableReason(secid, t)
+          const off = why !== null
+          return React.createElement('button', {
             key: t,
             className: 'tw-tab',
-            title: TAB_LABEL[t],
+            title: off ? `${TAB_LABEL[t]} · 不提供 —— ${why}` : TAB_LABEL[t],
             'data-on': tab === t,
-            onClick: () => {
-              rememberTab(t)
-              setTab(t)
-            },
-          }, TAB_LABEL[t]),
-        ),
+            'aria-disabled': off ? 'true' : undefined,
+            disabled: off,
+            onClick: off
+              ? undefined
+              : () => {
+                  rememberTab(t)
+                  setTab(t)
+                },
+          }, TAB_LABEL[t])
+        }),
         React.createElement('span', { style: { flex: 1, minWidth: 4 } }),
         fqControl(),
       ),

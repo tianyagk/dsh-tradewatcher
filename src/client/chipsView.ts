@@ -65,7 +65,9 @@ export function caliberDeviates(input: {
 }): string | null {
   const base = ((): string | null => {
     if (input.why !== null) return input.why
-    if (!input.fqSupported) return '该标的不支持前复权（指数/期货/板块）⇒ 不提供筹码分布'
+    // ⚠ 前半句是 `build.mjs` 锁定的 UI 片段（73 项校验之一），**不许改它**；
+    // 美股的原因作为括号补在后面（锁定用的是 includes()，追加不影响校验）。
+    if (!input.fqSupported) return '该标的不支持前复权（指数/期货/板块）⇒ 不提供筹码分布（美股另有原因：上游只给未复权原始价，拆股/分红未调整）'
     if (input.decay !== 'turnover') return input.decayReason ?? '按固定半衰期 10 日衰减（经验口径）'
     if (input.samples < input.window) return `只取到近 ${input.samples} 日（不足 ${input.window} 日）——历史越长越准`
     return null

@@ -188,6 +188,118 @@ export function lastCloseBoundary(ts: number = Date.now()): number {
   return Date.parse(`${day}T${CLOSE_HHMM}:00+08:00`)
 }
 
+// ── 美东（America/New_York）────────────────────────────────────────────────
+//
+// 为什么需要单独一组：美股的上游时间戳（腾讯 `us*` 的 `f[30]`、新浪美股日线/分钟的 `d`）
+// 都是**美东墙上时间**，而且美股盘（09:30–16:00 ET）与A股盘完全不重叠（北京 21:30–04:00）。
+// 把美东当东八区解析会差 12–13 小时（还会被当成"未来时间"）；用"美股收盘"去判断
+// "数据是否已定稿"也必须按纽约日历日，不能按北京日历日（跨零点）。
+const NY_TZ = 'America/New_York'
+
+let nyFmt: Intl.DateTimeFormat | null = null
+function nyFormatter(): Intl.DateTimeFormat {
+  if (nyFmt === null) {
+    nyFmt = new Intl.DateTimeFormat('en-CA', {
+      timeZone: NY_TZ,
+      hourCycle: 'h23',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+    })
+  }
+  return nyFmt
+}
+
+/** 某一瞬时在纽约的墙上时间（分解；**与宿主时区无关**） */
+export function newYorkParts(ts: number): { day: string; hhmm: string; hhmmss: string; weekday: number } {
+  const p = nyFormatter().formatToParts(new Date(ts))
+  const get = (type: string): string => p.find((x) => x.type === type)?.value ?? ''
+  const hour = get('hour') === '24' ? '00' : get('hour')
+  const day = `${get('year')}-${get('month')}-${get('day')}`
+  const [y, m, d] = day.split('-').map(Number)
+  return {
+    day,
+    hhmm: `${hour}:${get('minute')}`,
+    hhmmss: `${hour}:${get('minute')}:${get('second')}`,
+    // 用 Date.UTC 构造"该日历日的 00:00"，其 getUTCDay 即该日的星期（不会又被时区挪一天）
+    weekday: new Date(Date.UTC(y, m - 1, d)).getUTCDay(),
+  }
+}
+
+/** 纽约的日历日 `YYYY-MM-DD`（`dayOf` 的纽约版） */
+export function usDayOf(ts: number): string {
+  return newYorkParts(ts).day
+}
+
+/**
+ * **美东墙上时间** → epoch ms（`TZ` 无关）。
+ *
+ * 输入形如 `2026-10-16 16:00:01` / `2026-10-16 09:31` / `2026-10-16T16:00`（秒可省）。
+ * 做法：先假设墙上时间就是 UTC，再用 `Intl` 反解"这个瞬时在纽约的墙上时间"，
+ * 按差值迭代纠正（夏令时由 `Intl` 自己判定）；最后**校验反解收敛**，
+ * 落不回目标墙上时间（例如 DST 跳变里不存在的本地时刻）就返回 `null`，不给错时间。
+ */
+export function usWallToEpoch(text: string): number | null {
+  const m = /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})(?::(\d{2}))?$/.exec(text.trim())
+  if (m === null) return null
+  const wall = Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]), Number(m[4]), Number(m[5]), Number(m[6] ?? '0'))
+  const wallOf = (ms: number): number => {
+    const p = newYorkParts(ms)
+    const [hh, mi, ss] = p.hhmmss.split(':').map(Number)
+    const [y, mo, d] = p.day.split('-').map(Number)
+    return Date.UTC(y, mo - 1, d, hh, mi, ss)
+  }
+  let ms = wall
+  for (let i = 0; i < 3; i += 1) {
+    const drift = wallOf(ms) - wall
+    if (drift === 0) break
+    ms -= drift
+  }
+  return wallOf(ms) === wall ? ms : null
+}
+
+/** 美股常规交易时段（工作日 09:30–16:00 ET，含收盘那一分钟）；半日市不单独处理 */
+export function inUsSession(ts: number = Date.now()): boolean {
+  const p = newYorkParts(ts)
+  if (p.weekday === 0 || p.weekday === 6) return false
+  return p.hhmm >= '09:30' && p.hhmm <= '16:00'
+}
+
+/** 最近一次"美股收盘定稿"（纽约 16:05）的 epoch ms（周末回溯到上周五） */
+export function lastUsCloseBoundary(ts: number = Date.now()): number {
+  const p = newYorkParts(ts)
+  // 16:05 ET 的墙上时间 → epoch；没到就退回前一交易日
+  let day = p.day
+  const afterClose = p.hhmm >= '16:05'
+  if (!afterClose) day = usDayOf(Date.parse(`${day}T12:00:00Z`) - 86_400_000)
+  for (let guard = 0; guard < 10; guard += 1) {
+    const [y, m, d] = day.split('-').map(Number)
+    const wd = new Date(Date.UTC(y, m - 1, d)).getUTCDay()
+    if (wd !== 0 && wd !== 6) break
+    // ⚠ 不用 `toISOString()` 当日界（UTC 日期 ≠ 北京/纽约自然日；全仓有红线扫描守着）
+    const prev = new Date(Date.UTC(y, m - 1, d) - 86_400_000)
+    day = `${prev.getUTCFullYear()}-${String(prev.getUTCMonth() + 1).padStart(2, '0')}-${String(prev.getUTCDate()).padStart(2, '0')}`
+  }
+  const at = usWallToEpoch(`${day} 16:05:00`)
+  return at === null ? 0 : at
+}
+
+/**
+ * 美股版"已定稿"：非美股盘中 且 缓存更新晚于最近一次纽约收盘。
+ *
+ * 为什么不能复用 `isSettledOffline`：它按**北京**日历日与 A股 15:05 收盘判断 ——
+ * 美股盘中正好是北京深夜（CN 休市），会被判成"定稿"⇒ 整夜不回源，日线永远停在昨天的柱子。
+ */
+export function isUsSettledOffline(cacheUpdatedAt: number, ts: number = Date.now()): boolean {
+  if (inUsSession(ts)) return false
+  if (!Number.isFinite(cacheUpdatedAt) || cacheUpdatedAt <= 0) return false
+  const boundary = lastUsCloseBoundary(ts)
+  return boundary > 0 && cacheUpdatedAt >= boundary
+}
+
 /**
  * 休市且本地缓存的更新时间已越过最近一次收盘 → 数据"已定稿"，可以不走上游。
  * 只有 ①休市 ②有缓存 ③缓存晚于最近收盘 三个条件同时成立才算 —— 凌晨/周末/

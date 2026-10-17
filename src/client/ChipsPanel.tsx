@@ -48,7 +48,7 @@ export function ChipsPanel(props: ChipsPanelProps): React.ReactElement | null {
 
   if (!props.fqSupported || d?.why !== null && d?.why !== undefined) {
     return React.createElement('div', { className: 'tw-chips tw-chips-off' },
-      React.createElement('span', { className: 'tw-muted' }, d?.why ?? '该标的不提供筹码分布（指数/期货/板块没有前复权序列）'))
+      React.createElement('span', { className: 'tw-muted' }, d?.why ?? '该标的不提供筹码分布：本插件没有它的前复权序列（指数/期货无除权概念；美股上游只给未复权原始价）'))
   }
   if (props.state.error !== null) {
     return React.createElement('div', { className: 'tw-chips tw-chips-off' },

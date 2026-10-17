@@ -468,7 +468,15 @@ export function chipSeriesOf(bars: readonly ChipBar[], opts: ChipOptions = {}): 
   }
   // ⑤ 不提供的三种情形：不支持前复权（指数/期货/板块）、样本不足、没有可用 bar
   if (opts.fqSupported === false) {
-    return { ...base, days: [], latest: null, why: '指数/期货/板块没有复权口径（前复权序列不可得）⇒ 本模块不提供筹码分布' }
+    return {
+      ...base,
+      days: [],
+      latest: null,
+      // ⚠ 措辞要同时覆盖两种"没有复权序列"：指数/期货是**不需要**，美股是上游**只给未复权价**
+      // （实测 AAPL 拆股日 499.23→129.04 未被调整）⇒ 跨拆股算持仓成本会失真，宁可不提供。
+      // 本函数拿不到 secid（只有 bars），所以两种情况用同一句、把两种原因都写全。
+      why: '本插件没有该标的的前复权序列（指数/期货/板块无除权概念；美股上游只给未复权原始价，拆股/分红未调整）⇒ 本模块不提供筹码分布',
+    }
   }
   if (samples < (opts.minSamples ?? CHIPS_MIN_SAMPLES)) {
     return { ...base, days: [], latest: null, why: `样本不足（近 ${samples} 个交易日 < ${CHIPS_MIN_SAMPLES}）⇒ 不给结论` }
