@@ -104,7 +104,8 @@ test('② 档宽必须落在目标带内（越带只能是被夹住且留痕）'
   )
   // 端到端：`chipSeriesOf` 回包里的 bucketWidth 必须等于区间 ÷ 档数（不是另算一个数）
   const r = chipSeriesOf(barsOf(200, 100, 20), { fqSupported: true, floatMv: 1e10, window: 200, display: 45, minSamples: 1 })
-  const span = Math.max(...r.days.map((d) => d.centers[d.centers.length - 1])) - Math.min(...r.days.map((d) => d.centers[0]))
+  // 轴在顶层只给一份（REVIEW-9-PERF §2.1①）：逐日不再带 centers
+  const span = r.centers[r.centers.length - 1] - r.centers[0]
   assert.ok(r.bucketWidth !== null && Math.abs(r.bucketWidth - span / r.bucketCount) < 0.02, `档宽必须 = 区间/档数（实际 ${r.bucketWidth} vs ${span / r.bucketCount}）`)
 })
 
@@ -241,8 +242,10 @@ test('⑥ 既有语义不变：P5/P95、盈利比例、display 映射与改造�
     const sum = d.buckets.reduce((s, x) => s + x, 0)
     assert.ok(Math.abs(sum - 1) < 1e-6, `权重仍守恒（实际 ${sum}）`)
     assert.equal(d.buckets.length, after.bucketCount, '每天都是同一档数')
-    assert.equal(d.centers.length, after.bucketCount)
+    // 轴只在顶层出现一次（逐日不再重复同一条 242 元数组）
+    assert.equal(d.centers, undefined, '逐日不许再带 centers（轴在顶层）')
   }
+  assert.equal(after.centers.length, after.bucketCount, '顶层轴长度 == 档数（且只有这一份）')
   // 颜色规则的自变量（price / profitRatio）逐日给出且与 profitRatio 同源
   for (const d of after.days) {
     assert.equal(typeof d.price === 'number' || d.price === null, true)

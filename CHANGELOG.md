@@ -11,6 +11,61 @@
 
 ---
 
+## v0.106.0 — 性能批：门禁 −43%、筹码回包 −49~66%、归档写入 −99.9%；修 `trends-lkg` 从未更新
+
+报告 `docs/AUDIT-IMPL73.md`、`docs/REVIEW-9-PERF.md`。`npm run check` **812 / 812 × 2 时区** + selftest + build（73 片段全过）。
+
+### 一、门禁耗时 58.35 s → **33.0 s（−43%）**
+
+`package.json:41` 只加两个参数：`NODE_COMPILE_CACHE=node_modules/.cache/node-compile`（放在已忽略目录，不新增 gitignore）+ `--test-concurrency=8`。
+- 子进程启动 **167 → 71 ms**；单时区用户态 CPU **53.4 → 25.5 s**。
+- 并发 8 实测验证到 **n=16 轮全绿**（6 次 `npm test` × 2 时区 + 4 次 `npm run check` × 2 时区）；回退 4 只损失约 2 s/时区。
+- 追加：`repoHygiene ④` 由「1264 导出 × 121 文件 = 14.7 万次全文正则」改成一遍分词索引 ⇒ **1688 → 68 ms（−1.62 s/时区）**，口径等价性逐条核对 1264 个名字 **0 差异**（含模板字符串 `$` 边界）。
+
+| 指标 | 改前 | 改后 |
+| --- | --- | --- |
+| `npm test`（2 时区） | 58.35 s / user 105.0 s | **32.64–34.20 s（6 次，均值 33.0）/ user 51.4–53.4 s** |
+| 子进程启动 | 167 ms | 71 ms |
+| `repoHygiene ④` | 1688 ms | 68 ms |
+
+### 二、`/chips` 回包 −49~66%、纯计算 −80%
+
+- 轴 `centers` **顶层只发一份**（`ChipDay.centers` 变可选；客户端 `day.centers ?? payload.centers`，混合版本给「轴缺失 ⇒ 刷新」提示，**不画假图**）。
+- **非展示日只跑 `hist` 递推**，不再算 `total/norm/avg/support/resistance/profitRatio`（口径文案依赖的 `minFactor/peakSum/clamped` 仍全窗统计）。
+
+| 标的 | 改前 | 改后 |
+| --- | --- | --- |
+| `0.000636` | 131 234 B | **44 744 B（−65.9%）** |
+| `1.603668` | 166 134 B | **84 268 B（−49.3%）** |
+| 路由 p50 / CPU | 3.58 / 4.95 ms | **2.47 / 3.40 ms（−31%）** |
+| `chipSeriesOf`（180/45/242） | 3.673 ms | **0.751 ms（−80%）** —— 大头是旧实现每展示日 242 次轴拷贝（10 646 次/请求） |
+
+### 三、`/trend` 归档写入 −99.9%
+
+归档按 `entry.points` **内容指纹**跳过（不含 `updatedAt`）+ 跳过前 1 次 stat 防外部删除 + 目录清单每轮只读一次 + prune 只在「真的多出来」时做。
+12 次 `/trend` 写字节 **176 768 → 104 B**；p50 **1.449 → 0.666 ms**；零写入那轮 **0 次 readdir**。
+
+### 四、顺手修掉一个真 bug：`trends-lkg.json` 自 v0.91.0 起从未更新
+
+两个顺序 bug（先清 `dirty` / 先推进 `lastWrite` 再判定）⇒ 判定永远「跳过」且无日志。实测：修前新 home 里 **4 次成功取数文件从未生成**（本机文件停在 10-16 10:03）；修后首次即落盘、内容变化时才写（≤1 次/5 s）。新增 `trendLkgPersist` 端到端断言锁住。
+
+### 验证
+
+`npm run check` **812 / 812 × 2 时区** + selftest + build（73 项）；副本跑 **4 轮全 exit 0**。
+新增 12 例：`chipsPayload` 5（轴唯一次数/体积/跨市场一致/统计天数 45/线性成本）、`trendArchiveCost` 4（零写入 + mtime 不变/写一次/按需 prune）、`trendLkgHygiene` +2、`trendLkgPersist` 1。
+**注入（副本内注入 → 跑 → 恢复）**：A 逐日重复 `centers` ⇒ 3 条红；B 统计量算回非展示日 ⇒ 2 条红（计数实测 180）；C 归档指纹含 `updatedAt` ⇒ 2 条红；D 复现 v0.91.0 顺序 bug ⇒ 红。
+
+### 未做（已记录）
+
+- 退避可注入（估 5–8 s/时区）：要改生产取数层计时语义，风险中且已达标。
+- L10 四文件并行 / L5 缩窗口（估 3–5 s/时区）：需单独回归时序假设。
+- 护盘快照丢空字段（−33 KB）与 `/kline pct:null`、`trend label` 瘦身：第二梯队。
+- `trends-lkg` 单次写体量 2.34 MB **仍未降**（只修了「该不该写」，分片/追加留待下一批）。
+
+### 风险登记
+
+并发 8 在更慢的机器上可能抖动（回退 4 只 +2 s/时区）；新宿主 + 旧客户端需刷新一次页面（已做 `day.centers ?? payload.centers` 兜底）；归档「内容未变跳过」依赖 stat 兜底（外部删除会补写）。
+
 ## v0.105.0 — 全项目评审批次一：宿主 5 项 P0/P1 + 客户端 3 项 P0 与 3 项 UX
 
 报告 `docs/REVIEW-7-HOST.md`、`docs/REVIEW-8-CLIENT-UX.md`、`docs/AUDIT-IMPL71.md`、`docs/AUDIT-IMPL72.md`。`npm run check` **800 / 800 × 2 时区** + selftest + build（73 片段全过）；`build.mjs` 零改动。

@@ -17,6 +17,7 @@ import { MISSING_TIER_ADVICE, SECID_RE, normalizeTrendSeries } from '../shared/m
 import { BREADTH_HS_A_FS, BREADTH_PAGE_SIZE, type CountPage } from './breadthCount.ts'
 import { isMultiDayTrend, stitchTrendDays } from '../shared/trendStitch.ts'
 import { TREND_ARCHIVE_KEEP_DAYS, archiveTrendDays, loadTrendArchive, type TrendArchiveEntry } from './trendArchive.ts'
+import { payloadFingerprint } from '../shared/fingerprint.ts'
 import { aggregateUsDaily, detectUsSplits, splitMarksOf, usAggCaliber, usBucketOf, type UsAggPeriod, type UsSplit } from './usAggregate.ts'
 import { mkdir, readdir, readFile, rm, stat } from 'node:fs/promises'
 import { writeFileAtomic } from './atomic.ts'
@@ -1297,22 +1298,11 @@ const TREND_LKG_MAX = 400
  */
 const TREND_LKG_MAX_BYTES = 4 * 1024 * 1024
 let trendLkgLastPayloadHash: number | null = null
-/** 便宜的内容指纹（字符串长度 + 一段抽样；不做加密级摘要，够用且零依赖） */
-export function payloadFingerprint(text: string): number {
-  let h = 2166136261
-  // 短文本**逐字符**（判别性优先：小改动也要变）；长文本（>400KB）才抽样，避免每次落盘扫全量
-  const stride = text.length > 400_000 ? 97 : 1
-  for (let i = 0; i < text.length; i += stride) {
-    h ^= text.charCodeAt(i)
-    h = Math.imul(h, 16777619)
-  }
-  // 末尾 4KB 再密扫一遍：`ts` 与"最新分时"都在尾部，抽样最容易漏掉这里的改动
-  for (let i = Math.max(0, text.length - 4096); i < text.length; i += 1) {
-    h ^= text.charCodeAt(i)
-    h = Math.imul(h, 16777619)
-  }
-  return (h ^ text.length) >>> 0
-}
+/**
+ * 内容指纹：实现下沉到 `src/shared/fingerprint.ts`（`trendArchive.ts` 也要用，而它已被本文件 import
+ * —— 留在这里会形成循环）。这里 **re-export** 保持既有调用方/测试的 import 路径不变。
+ */
+export { payloadFingerprint }
 
 function trendKey(secid: string, ndays: number): string {
   return `${secid}|${ndays}`
@@ -1344,9 +1334,23 @@ async function loadTrendLkg(): Promise<void> {
 export function trimTrendPayload(
   entries: Array<{ key: string; at: number; trend: unknown }>,
   maxBytes = TREND_LKG_MAX_BYTES,
-): { text: string; kept: Array<{ key: string; at: number; trend: unknown }>; dropped: string[] } {
+): {
+  /** 落盘文本（含 `ts`：这份文件是"什么时候写的"，界面对账要用） */
+  text: string
+  /**
+   * **指纹文本**（只有 `entries`，**不含 `ts`**）。
+   *
+   * 为什么要单独一份：`trendWriteDecision` 用指纹判断"内容有没有变"，而 `ts` 每次调用都不同
+   * ⇒ 指纹永远不同 ⇒ "内容未变不写"这道闸永远失效（设计意图是 2.34MB 整份重写至多每 5 秒一次；
+   * 实测 v0.91.0–v0.105.0 因为 `persistTrendLkg` 的两个顺序 bug **一次都没写**，见 `trendLkgPersistStep`）。
+   * ⚠ 以后给这份文件加任何"写入时刻/计数"字段，都**只能进 `text`，不能进 `stableText`**。
+   */
+  stableText: string
+  kept: Array<{ key: string; at: number; trend: unknown }>
+  dropped: string[]
+} {
   const full = JSON.stringify({ ts: Date.now(), entries })
-  if (full.length <= maxBytes) return { text: full, kept: entries, dropped: [] }
+  if (full.length <= maxBytes) return { text: full, stableText: JSON.stringify(entries), kept: entries, dropped: [] }
   const target = Math.floor(maxBytes * 0.8)
   const sorted = [...entries].sort((a, b) => b.at - a.at)
   const kept: Array<{ key: string; at: number; trend: unknown }> = []
@@ -1358,7 +1362,12 @@ export function trimTrendPayload(
     size += len
   }
   const keptKeys = new Set(kept.map((k) => k.key))
-  return { text: JSON.stringify({ ts: Date.now(), entries: kept }), kept, dropped: entries.filter((e) => !keptKeys.has(e.key)).map((e) => e.key) }
+  return {
+    text: JSON.stringify({ ts: Date.now(), entries: kept }),
+    stableText: JSON.stringify(kept),
+    kept,
+    dropped: entries.filter((e) => !keptKeys.has(e.key)).map((e) => e.key),
+  }
 }
 
 /**
@@ -1379,12 +1388,48 @@ export function trendWriteDecision(input: {
   return { write: true, fingerprint, reason: '有变化' }
 }
 
+/**
+ * `trends-lkg` 落盘的**状态迁移**（纯函数，可测）。
+ *
+ * 存在的理由：v0.91.0 把"要不要写"的判断塞进 `persistTrendLkg` 之后，出现了两个**顺序 bug**
+ * （两个都会让这份兜底文件**永远不更新**，而且没有任何报错）：
+ *   ① 先把 `trendLkgDirty` 清成 false，再把清完的值传给判定 ⇒ 判定永远看到 `dirty:false`；
+ *   ② 先把 `lastWrite` 设成 now，再让判定算 `now - lastWrite < 5000` ⇒ 永远在"节流窗口内"。
+ * 实测后果：`trends-lkg.json` 自 v0.91.0 起没有更新过（本机文件停在 10-16 10:03）。
+ *
+ * 现在把"判定 + 状态怎么变"收进这一个纯函数：**节流跳过 ⇒ 保留 dirty**（下一轮再试），
+ * **内容未变 ⇒ 清 dirty**（盘上已是最新），**写成功 ⇒ 清 dirty + 推进 lastWrite + 记指纹**。
+ */
+export interface TrendLkgState {
+  dirty: boolean
+  lastWrite: number
+  lastFingerprint: number | null
+}
+export interface TrendLkgStep {
+  write: boolean
+  fingerprint: number
+  reason: string
+  next: TrendLkgState
+}
+
+export function trendLkgPersistStep(state: TrendLkgState, payload: string, now: number): TrendLkgStep {
+  const decision = trendWriteDecision({ dirty: state.dirty, now, lastWrite: state.lastWrite, payload, lastFingerprint: state.lastFingerprint })
+  if (decision.write) {
+    return { ...decision, next: { dirty: false, lastWrite: now, lastFingerprint: decision.fingerprint } }
+  }
+  // 内容未变 ⇒ 盘上已经是最新（清 dirty）；其它（不 dirty / 节流）⇒ **保留 dirty**，下一轮再试
+  const unchanged = decision.fingerprint === state.lastFingerprint
+  return {
+    ...decision,
+    next: { dirty: unchanged ? false : state.dirty, lastWrite: state.lastWrite, lastFingerprint: state.lastFingerprint },
+  }
+}
+
 function persistTrendLkg(): void {
   if (!trendLkgDirty) return
   const now = Date.now()
+  // 节流：窗口内**不序列化**（2.3MB 的 stringify 比一次判断贵得多）；dirty 保留，下一轮再试
   if (now - trendLkgLastWrite < TREND_LKG_PERSIST_MS) return
-  trendLkgLastWrite = now
-  trendLkgDirty = false
   if (trendLkg.size > TREND_LKG_MAX) {
     let drop = trendLkg.size - TREND_LKG_MAX
     for (const key of trendLkg.keys()) {
@@ -1399,9 +1444,20 @@ function persistTrendLkg(): void {
     console.warn(`[tradewatcher] trends-lkg 超过体积上限（>${(TREND_LKG_MAX_BYTES / 1024 / 1024).toFixed(1)}MB）：保留最近 ${trimmed.kept.length}/${entries.length} 条`)
     for (const key of trimmed.dropped) trendLkg.delete(key)
   }
-  const decision = trendWriteDecision({ dirty: trendLkgDirty, now, lastWrite: trendLkgLastWrite, payload: trimmed.text, lastFingerprint: trendLkgLastPayloadHash })
-  if (!decision.write) return // 不 dirty / 节流 / **内容未变** ⇒ 一律不写
-  trendLkgLastPayloadHash = decision.fingerprint
+  /**
+   * 指纹只算 `entries`（`stableText`）：`text` 里的 `ts` 每次都变 ⇒ 拿 `text` 做指纹等于把闸拆了。
+   * ⚠ 判定必须拿**改动前**的状态（`dirty` / `lastWrite`），状态迁移交给纯函数 `trendLkgPersistStep`；
+   * 先清 dirty 或先推进 lastWrite 都会让判定永远为"跳过"（v0.91.0 的两个顺序 bug）。
+   */
+  const step = trendLkgPersistStep(
+    { dirty: trendLkgDirty, lastWrite: trendLkgLastWrite, lastFingerprint: trendLkgLastPayloadHash },
+    trimmed.stableText,
+    now,
+  )
+  trendLkgDirty = step.next.dirty
+  trendLkgLastWrite = step.next.lastWrite
+  trendLkgLastPayloadHash = step.next.lastFingerprint
+  if (!step.write) return // 内容未变 / 节流 ⇒ 不写（节流时 dirty 已保留，下一轮会重试）
   const text = trimmed.text
   void (async () => {
     try {

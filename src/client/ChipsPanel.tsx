@@ -70,10 +70,20 @@ export function ChipsPanel(props: ChipsPanelProps): React.ReactElement | null {
     // 量纲被归一过 ⇒ 同样必须可见（只改 vol，但用户有权知道）
     unitNote: d.unitNote ?? null,
   })
+  /**
+   * 档位轴（档中心价）：**新宿主在顶层只给一份**（`payload.centers`），逐日不再重复同一数组
+   * （REVIEW-9-PERF §2.1①：166 KB 回包里 83 KB 是 45 份相同 242 元数组）。
+   * 老宿主逐日给 ⇒ 退回 `day.centers`；两边都没有/长度对不上（宿主与客户端版本混装）⇒ 如实说缺轴，不硬画。
+   */
+  const centers = day.centers ?? d.centers ?? []
+  if (centers.length !== day.buckets.length) {
+    return React.createElement('div', { className: 'tw-chips tw-chips-off' },
+      React.createElement('span', { className: 'tw-muted' }, '筹码档位轴缺失（宿主与客户端版本不一致）⇒ 暂不渲染分布；刷新页面即可'))
+  }
   // 价格轴裁到筹码密集区（覆盖 99% 质量）+ 横轴与条宽**同一来源**（axisOf）
-  const axis = chipAxisOf(day.centers, day.buckets)
+  const axis = chipAxisOf(centers, day.buckets)
   const win = axis.window
-  const viewCenters = day.centers.slice(win.from, win.to + 1)
+  const viewCenters = centers.slice(win.from, win.to + 1)
   const viewBuckets = day.buckets.slice(win.from, win.to + 1)
   // 行布局：由**实际会渲染**的固定项反推绘图区高度 ⇒ 所有行都装得下（不再按 split.bottom 估行高被裁）
   const optionalLines = (deviate !== null ? 1 : 0) + (d.narrow ? 1 : 0)

@@ -123,7 +123,7 @@ test('k 的语义：k 越大，近期筹码权重占比单调上升', () => {
     if (last === null) return 0
     const target = bars[bars.length - 1].close
     // argmin：找最接近最后一天收盘价的桶中心（别用 indexOf(minDiff) —— 那是在 centers 上找差值，找不到）
-    const idx = last.centers.reduce((bi, c, ci) => (Math.abs(c - target) < Math.abs(last.centers[bi] - target) ? ci : bi), 0)
+    const idx = r.centers.reduce((bi, c, ci) => (Math.abs(c - target) < Math.abs(r.centers[bi] - target) ? ci : bi), 0)
     return last.buckets[idx] ?? 0
   }
   const a = share(1.0)
@@ -261,7 +261,7 @@ test('逐日 price：历史日=当日收盘价、最新日=priceUsed；且与该
   assert.equal(r.priceUsed, 25, '顶层 priceUsed 仍然保留（别的消费方在用）')
   // ② **同源**：用该日 price 复算"低于该价的权重占比"，必须等于该日 profitRatio（百分比，2 位小数）
   for (const d of r.days) {
-    const redo = d.buckets.reduce((s, w, i) => (d.centers[i] < (d.price as number) ? s + w : s), 0)
+    const redo = d.buckets.reduce((s, w, i) => (r.centers[i] < (d.price as number) ? s + w : s), 0)
     const expect = Math.round(redo * 100 * 100) / 100
     assert.ok(Math.abs((d.profitRatio as number) - expect) <= 0.01,
       `${d.date}：用 price=${d.price} 复算的占比 ${expect}% 必须等于宿主给的 profitRatio ${d.profitRatio}%`)
@@ -296,7 +296,7 @@ test('端到端同源：宿主 days[].price → 客户端 chipProfitDirOf，翻�
     assert.equal(chipProfitDirOf({ center: (d.price as number) - 0.01, priceUsed: d.price, redUp: true }), 'tw-up', `${d.date}：价下方=获利`)
     assert.equal(chipProfitDirOf({ center: (d.price as number) + 0.01, priceUsed: d.price, redUp: true }), 'tw-down', `${d.date}：价上方=套牢`)
     // ③ 同源：用该日 price 复算的分界 == 宿主给的 profitRatio
-    const redo = Math.round(d.buckets.reduce((s2, w, i) => (d.centers[i] < (d.price as number) ? s2 + w : s2), 0) * 10000) / 100
+    const redo = Math.round(d.buckets.reduce((s2, w, i) => (r.centers[i] < (d.price as number) ? s2 + w : s2), 0) * 10000) / 100
     assert.ok(Math.abs(redo - (d.profitRatio as number)) <= 0.01,
       `${d.date}：客户端按 price=${d.price} 得到的分界 ${redo}% 必须等于宿主 profitRatio ${d.profitRatio}%`)
     checked += 1

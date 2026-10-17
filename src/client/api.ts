@@ -2,7 +2,12 @@
 export interface ChipDayDto {
   date: string
   buckets: number[]
-  centers: number[]
+  /**
+   * ⚠ 本批（AUDIT-IMPL73）起宿主**逐日不再给** `centers`（轴改在顶层 `ChipsPayload.centers` 只给一份，
+   * 回包 166 KB → 84 KB）。保留可选字段是为了**老宿主回包**还能渲染：
+   * 读取侧统一写 `day.centers ?? payload.centers`（见 `ChipsPanel.tsx`）。
+   */
+  centers?: number[]
   avgCost: number | null
   support: number | null
   resistance: number | null
@@ -22,6 +27,8 @@ export interface ChipsPayload {
   asOf: number | null
   stale: boolean
   source: string
+  /** 档中心（轴）——整段序列一份（新宿主恒给；老宿主缺省 ⇒ 退回逐日 `day.centers`） */
+  centers?: number[]
   days: ChipDayDto[]
   latest: ChipDayDto | null
   /** 累积窗口（递推用了几根日线） */

@@ -50,6 +50,37 @@ function exportsOf(text: string): string[] {
 }
 
 /**
+ * **全仓标识符索引**（一遍扫描）：`Map<token, 出现次数>`，分"非测试源文件（全局）"与"测试文件"两张表，
+ * 外加每个源文件自己的 token 计数（算 `own` 要用）。
+ *
+ * 为什么不再"每个导出各扫一遍全仓"：`④` 要对 **1 264 个导出名 × 121 个源文件**做匹配，
+ * 旧写法每次都 `new RegExp(...).match()` 全文扫（1.75 MB）⇒ 单例 **1.69 s**（REVIEW-9-PERF §1.2 第 7 条），
+ * 是整套门禁里最贵的纯 CPU 用例。索引化之后同一判据变成 O(1) 查表。
+ *
+ * 口径等价性（实测逐条核对 1 264 个名字，0 差异）：`\bName\b` 与"整 token 相等"对 JS 标识符等价；
+ * 唯一差异点是**模板字符串** `` `ma${x}` `` —— `$` 不是标识符的一部分，但 `[\w$]` 会把它吞进 token，
+ * 所以扫描前先把 `${` 拆成 ` ${`（只影响分词、不改原文）。
+ */
+const TOKEN_INDEX = (() => {
+  const src = new Map<string, number>()
+  const tests = new Map<string, number>()
+  const perFile = new Map<string, Map<string, number>>()
+  const scan = (text: string, into: (token: string) => void): void => {
+    for (const m of text.replaceAll('${', ' ${').matchAll(/[A-Za-z_$][\w$]*/g)) into(m[0])
+  }
+  for (const [f, text] of SRC_TEXT) {
+    const counts = new Map<string, number>()
+    scan(text, (t) => {
+      counts.set(t, (counts.get(t) ?? 0) + 1)
+      src.set(t, (src.get(t) ?? 0) + 1)
+    })
+    perFile.set(f, counts)
+  }
+  scan(TEST_TEXT, (t) => tests.set(t, (tests.get(t) ?? 0) + 1))
+  return { src, tests, perFile }
+})()
+
+/**
  * 一条导出在三处的引用数：自身文件（除声明本身）/ 其它非测试文件 / 测试文件。
  *
  * 判据口径与 `docs/REVIEW-6-ENGINEERING.md` §1.1 一致 —— 只有**三处都为 0**才算"死导出"；
@@ -57,17 +88,13 @@ function exportsOf(text: string): string[] {
  * 遗留部分不在本用例的判定范围内（否则基线会从 49 条胀到上百条，把规矩变成噪音）。
  */
 function referenceCounts(name: string, ownFile: string): { own: number; external: number; inTests: number } {
-  const pat = new RegExp(`\\b${name}\\b`, 'g')
   const ownText = SRC_TEXT.get(ownFile) as string
-  const ownHits = (ownText.match(pat) ?? []).length
+  const ownHits = TOKEN_INDEX.perFile.get(ownFile)?.get(name) ?? 0
   const declaredInOwn = new RegExp(`^export\\s+(?:declare\\s+)?(?:const|function|class|interface|type|enum|let)\\s+${name}\\b`, 'm').test(ownText)
   const own = Math.max(0, ownHits - (declaredInOwn ? 1 : 0))
-  let external = 0
-  for (const [f, text] of SRC_TEXT) {
-    if (f === ownFile) continue
-    external += (text.match(new RegExp(`\\b${name}\\b`, 'g')) ?? []).length
-  }
-  const inTests = (TEST_TEXT.match(new RegExp(`\\b${name}\\b`, 'g')) ?? []).length
+  // 其它文件里的出现次数 = 全仓出现次数 − 本文件出现次数
+  const external = (TOKEN_INDEX.src.get(name) ?? 0) - ownHits
+  const inTests = TOKEN_INDEX.tests.get(name) ?? 0
   return { own, external, inTests }
 }
 

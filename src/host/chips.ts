@@ -198,12 +198,36 @@ export interface ChipBar {
 
 export type ChipDecay = 'turnover' | 'half-life'
 
+/**
+ * 【测试钩子】本次进程内"真的算了逐日统计量"的天数（`__resetChipStatsDays` 清零）。
+ *
+ * 为什么需要它：非展示日的统计量算完就丢（无输出差异），唯一可观测的差异是**成本**。
+ * 用耗时断言会被机器负载打成 flaky；这里用**调用次数**断言"只有 display 天算统计"，
+ * 判据是确定的：180 天窗/45 天展示 ⇒ 计数必须恰好 45（旧写法是 180）。
+ */
+let __chipStatsDays = 0
+
+/** 测试钩子：读累计"计算过统计量的天数" */
+export function __chipStatsDaysOf(): number {
+  return __chipStatsDays
+}
+
+/** 测试钩子：清零 */
+export function __resetChipStatsDays(): void {
+  __chipStatsDays = 0
+}
+
 export interface ChipDay {
   date: string
   /** 32 桶权重（和为 1；全 0 时代表没有可用样本） */
   buckets: number[]
-  /** 桶中心价位（与 buckets 等长） */
-  centers: number[]
+  /**
+   * ⚠ **本批（AUDIT-IMPL73）起逐日不再携带 `centers`**：档中心是整段序列的**同一根轴**
+   * （`centers` 在 `chipSeriesOf` 里只生成一次），逐日重复一遍让回包 166 KB 里 83 KB
+   * 是同一个 242 元数组的 45 份拷贝（REVIEW-9-PERF §2.1/§4）。轴改在顶层 `ChipSeries.centers` 给一份。
+   * 保留这个可选字段只为**老宿主回包**在客户端能被读到（`ChipsPanel` 用 `day.centers ?? payload.centers`）。
+   */
+  centers?: number[]
   avgCost: number | null
   support: number | null
   resistance: number | null
@@ -227,6 +251,14 @@ export interface ChipSeries {
   days: ChipDay[]
   /** 最后一天（界面默认显示这一天） */
   latest: ChipDay | null
+  /**
+   * **档中心价位（轴）——整段序列只此一份**（与每天的 `buckets` 等长；无分布 ⇒ 空数组）。
+   *
+   * 为什么在顶层：档位由窗口的 `[low, high]` 与档数决定，**与"哪一天"无关** ⇒ 逐日重复是纯冗余
+   * （REVIEW-9-PERF：166 KB 回包里 83 KB 是 45 份相同数组）。客户端按 `day.centers ?? payload.centers` 读，
+   * 老宿主（逐日给）与新宿主（顶层给）都能渲染。
+   */
+  centers: number[]
   /** 累积窗口（递推实际用了几根） */
   window: number
   /** 展示窗口（`days` 里最后这么多天有状态；滑杆只覆盖这些天） */
@@ -462,6 +494,8 @@ export function chipSeriesOf(bars: readonly ChipBar[], opts: ChipOptions = {}): 
     priceScale: scaleRaw,
     latestBarDate,
     barAlignsWithDisplay: true,
+    // 无分布（不支持复权/样本不足/区间为 0）时没有轴：不给空档位冒充"档数为 0"
+    centers: [],
     lastBar: win.length > 0 ? { date: latestBarDate ?? '', close: win[win.length - 1].close, vol: win[win.length - 1].vol ?? 0, partial: false } : null,
     why: null,
     disclaimer: '这是筹码分布统计量（成交量的历史累积），不是支撑/压力的预测，也不是买卖建议。',
@@ -538,6 +572,16 @@ export function chipSeriesOf(bars: readonly ChipBar[], opts: ChipOptions = {}): 
     for (let x = 0; x < buckets; x += 1) hist[x] *= decayFactor
     // 新增筹码按形状铺到当日价格区间（三角形峰在当日均价）
     allocateSpread(hist, centers, lowBar, highBar, w, shape, peakAfter(lowBar, highBar, b.close))
+    /**
+     * ⚠ 只为**最近 display 天**记录状态（递推仍在整个 window 上跑）。
+     *
+     * 这条 `continue` 必须在**算统计量之前**：`total/norm/avg/support/resistance/profitRatio`
+     * 只服务于被记录的那些天，非展示日算完就丢 —— 旧写法把它们写在 `continue` 之前，实测
+     * 180 天窗/45 天展示里有 135 天的统计量全部白算（REVIEW-9-PERF §2.1②：display=45 比 display=1 慢 2.27 ms）。
+     * 递推所需的只有 `hist`、`minFactor`/`clamped`/`peakSum`（都在这之前完成，口径文案依赖它们）。
+     */
+    if (i < win.length - display) continue
+    __chipStatsDays += 1
     const total = hist.reduce((s, x) => s + x, 0)
     const norm = total > 0 ? hist.map((x) => x / total) : hist
     const avg = total > 0 ? centers.reduce((s, c, x) => s + c * norm[x], 0) : null
@@ -550,12 +594,9 @@ export function chipSeriesOf(bars: readonly ChipBar[], opts: ChipOptions = {}): 
     const profitRatio = price === null || total <= 0
       ? null
       : norm.reduce((s2, x, idx) => (centers[idx] < price ? s2 + x : s2), 0)
-    // 只为**最近 display 天**记录状态（递推仍在整个 window 上跑）
-    if (i < win.length - display) continue
     days.push({
       date: b.date,
       buckets: norm.map((x) => round(x, 8)),
-      centers: centers.map((c) => round(c, 4)),
       avgCost: avg === null ? null : round(avg, 4),
       support: support === null ? null : round(support, 4),
       resistance: resistance === null ? null : round(resistance, 4),
@@ -572,6 +613,8 @@ export function chipSeriesOf(bars: readonly ChipBar[], opts: ChipOptions = {}): 
     ...base,
     days,
     latest,
+    // 轴只输出一份（45 天共用同一组档中心）：`round` 也只做一次，不再每天 map 一遍
+    centers: centers.map((c) => round(c, 4)),
     bucketCount: buckets,
     bucketWidth: plan.width,
     bucketTarget: plan.target,
