@@ -142,14 +142,15 @@
 ## 5. 门禁与构建
 
 ```
-# 最终树（并行批次落定后重跑；/tmp/q6-check3 副本），两轮完整 npm run check：
-q6f1 WALL 73.21 s   → exit 0
-q6f2 WALL 47.60 s   → exit 0
+# 提交后的树（825879d = v0.108.0；干净树 /tmp/q6-final，git archive 取出、依赖软链），
+# 两轮完整 npm run check：
+q6p1 WALL 47.90 s  USER 79.00 s  SYS 12.67 s   → exit 0
+q6p2 WALL 49.16 s  USER 68.16 s  SYS 10.92 s   → exit 0
 ℹ tests 863 / pass 863 / fail 0（每个时区各一遍）
-built lib/index.js + lib/client.js（v0.107.0，客户端片段校验通过：73 项）
+built lib/index.js + lib/client.js（v0.108.0，客户端片段校验通过：73 项）
 
-# 更早一次快照（/tmp/q6-check2）：q6check1 50.34 s / q6check2 52.69 s，同样两轮 exit 0、863×2、73 项
-# 工作区：tsc --noEmit exit 0；单飞全量 863/863
+# 更早的提交前快照（/tmp/q6-check3）：73.21 s / 47.60 s；再早一次（/tmp/q6-check2）：50.34 s / 52.69 s
+# 三次都是两轮 exit 0、863×2、73 项（worktree 的 tsc --noEmit 也 exit 0）
 ```
 
 > 期间并行批次的 `src/client/impl78.test.ts` 曾有一处 tsc 未使用变量 + 一条 rAF 用例在 8 并发下偶发红，
