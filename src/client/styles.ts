@@ -21,6 +21,10 @@ export const TW_CSS = `
 --tw-fg-dim:var(--tw-muted);--tw-line:var(--tw-border);
 --tw-up:#e5484d;--tw-down:#0e8f5c;--tw-flat:#6f7787;
 --tw-up-bg:rgba(229,72,77,.09);--tw-down-bg:rgba(12,154,99,.09);--tw-flat-bg:rgba(138,145,160,.10);
+/* 语义色阶（P1-10）：重要性三档与护盘等级四档**不复用涨跌色相**，也**不跟 redUp 翻转**。
+   颜色承载的只有「这件事有多需要注意」这一件语义；深浅两档都定义，隐身档统一灰化（见下方 data-view=incognito）。 */
+--tw-imp-1:#5e6ad2;--tw-imp-2:#a16207;--tw-imp-3:#9a3412;
+--tw-rescue-0:#8a8f98;--tw-rescue-1:#2f6fbf;--tw-rescue-2:#a16207;--tw-rescue-3:#9a3412;
 --tw-accent:#5e6ad2;--tw-accent-hover:#4652c0;--tw-accent-soft:rgba(94,106,210,.10);--tw-ring:rgba(94,106,210,.38);
 --tw-mask:rgba(15,17,20,.42);
 --tw-mono:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;
@@ -39,6 +43,8 @@ letter-spacing:-0.006em}
 --tw-fg-dim:var(--tw-muted);--tw-line:var(--tw-border);
 --tw-up:#ff5f6d;--tw-down:#27a644;--tw-flat:#8a8f98;
 --tw-up-bg:rgba(255,95,109,.12);--tw-down-bg:rgba(47,191,131,.12);--tw-flat-bg:rgba(138,143,152,.12);
+--tw-imp-1:#8b95ff;--tw-imp-2:#f0b429;--tw-imp-3:#ff8a4c;
+--tw-rescue-0:#8a8f98;--tw-rescue-1:#5da5ff;--tw-rescue-2:#f0a63a;--tw-rescue-3:#ff8a4c;
 --tw-accent:#5e6ad2;--tw-accent-hover:#828fff;--tw-accent-soft:rgba(94,106,210,.16);--tw-ring:rgba(94,106,210,.45);
 --tw-mask:rgba(0,0,0,.55);
 --tw-shadow-sm:0 1px 0 rgba(255,255,255,.03);
@@ -105,7 +111,10 @@ color-scheme:dark}
 .tw-root[data-view=incognito] .tw-drawer-foot,
 .tw-root[data-view=incognito] .tw-pop-hint{display:none}
 .tw-root[data-view=incognito]{
---tw-up:#8a8f98;--tw-down:#8a8f98;--tw-up-bg:rgba(138,143,152,.12);--tw-down-bg:rgba(138,143,152,.12)}
+--tw-up:#8a8f98;--tw-down:#8a8f98;--tw-up-bg:rgba(138,143,152,.12);--tw-down-bg:rgba(138,143,152,.12);
+/* 语义色阶同样转灰阶：隐身视图里"高重要度/强护盘"不许是整屏最刺眼的一处颜色（P1-10 ③） */
+--tw-imp-1:#8a8f98;--tw-imp-2:#8a8f98;--tw-imp-3:#8a8f98;
+--tw-rescue-0:#8a8f98;--tw-rescue-1:#8a8f98;--tw-rescue-2:#8a8f98;--tw-rescue-3:#8a8f98}
 /* 图表口径条（P0-5）：紧贴图上方一行，等宽字体便于对齐数字 */
 .tw-caliber{flex:none;padding:5px 8px 4px;font-size:12px;color:var(--tw-dim);font-family:var(--tw-mono);border-bottom:1px dashed var(--tw-border);background:var(--tw-bg2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 /* 自选异动（P1-4）：呼吸高亮。用左边的竖条 + 缓慢呼吸的背景，
@@ -367,6 +376,8 @@ color-scheme:dark}
 /* v0.96.2：高度不再写死（262px 曾把候选裁成一行）——由 suggestView.suggestDropdownBoxOf 按视口实测给 max-height */
 .tw-suggest button{display:flex;justify-content:space-between;gap:12px;width:100%;text-align:left;padding:6px 11px;font-size:12px}
 .tw-suggest button:hover{background:var(--tw-hover)}
+/* 键盘高亮（P1-4）：与 hover 同一视觉（背景色，无动画、无闪烁）；读屏另有 aria-selected */
+.tw-suggest button[data-active=true]{background:var(--tw-hover);box-shadow:inset 2px 0 0 var(--tw-accent)}
 .tw-suggest .k{color:var(--tw-muted);font-size:12px;flex:none}
 .tw-badge{font-size:12px;color:var(--tw-dim);border:1px solid var(--tw-border);border-radius:10px;padding:0 6px;white-space:nowrap}
 .tw-loading{color:var(--tw-muted);text-align:center;padding:26px 0}

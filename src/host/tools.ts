@@ -784,7 +784,7 @@ export function makeAgentTools(
     name: `${PREFIX}calendar_add`,
     description:
       '向 tradewatcher 财经日历写入一条手动事件（宏观会议/数据、未上市公司 IPO 与上市日期、自定义提醒等）。' +
-      'importance：3=高（红）2=中（橙）1=低。自动事件（新股/财报/分红）由数据源同步，不要手工重复添加。' +
+      'importance：3=高 2=中 1=低（界面用独立语义色阶标注，不复用涨跌色）。自动事件（新股/财报/分红）由数据源同步，不要手工重复添加。' +
       'Triggers: 记到日历/加入日历/提醒我/记录某个日期.',
     parameters: {
       type: 'object', additionalProperties: false, required: ['date', 'title'],

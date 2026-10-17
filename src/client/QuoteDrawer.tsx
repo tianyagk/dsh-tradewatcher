@@ -537,12 +537,18 @@ export function QuoteDrawer(props: {
      */
     const aggNote = k.aggregated === undefined ? '' : ` · ${k.aggregated.note}`
     const splitNote = Array.isArray(k.splits) && k.splits.length > 0 ? ` · 已标注 ${k.splits.length} 处` : ''
+    /**
+     * 年K 的涨跌幅口径（AUDIT-IMPL74）：同比（相对上一年收盘），首根留空。
+     * 必须进**口径行**——否则序列里那个 `null` 会被读成"那一年平盘"，
+     * 而旧实现更坏：它拿年内开盘价当基数（年内涨幅冒充同比）且从未披露。
+     */
+    const pctNote = typeof k.pctNote === 'string' && k.pctNote !== '' ? ` · ${k.pctNote}` : ''
     const tail = k.cached === true
       ? '已收盘定稿'
       : k.barOpen === true
         ? `当根未收盘，MA/MACD 已含未收盘当根（${last !== undefined ? last.date.slice(5) : '—'}）`
         : '当根已收盘'
-    return `${mode} · klt ${plan.klt} · ${fq}${aggNote}${splitNote} · 截至 ${at}（${tail}）`
+    return `${mode} · klt ${plan.klt} · ${fq}${aggNote}${splitNote}${pctNote} · 截至 ${at}（${tail}）`
   }
   const caliber = caliberLine()
   /**

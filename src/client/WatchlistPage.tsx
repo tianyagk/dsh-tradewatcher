@@ -623,28 +623,34 @@ function WatchModal(props: {
 }
 
 /**
- * 缩略图的 hover 说明（P1-1）：名称 + 开/高/低/振幅 + 均价。
+ * 缩略图的 hover 说明（P1-1 / P1-11）：名称 + **分时**首笔/高/低 + 分时振幅 + 相对昨收。
  *
- * 振幅 = (高 − 低) ÷ 昨收；缺昨收时不编数（振幅分母不对等于给了一个错的波动幅度）。
- * 数据不全时只列能算的项，不显示占位符 —— hover 里一堆 `—` 只是噪音。
+ * ⚠ 口径（P1-11）：这三个值取自 `/trend` 的**分时抽样点**，不是交易所口径的「今开/最高/最低」
+ * （首点通常晚于 09:30，分钟点还可能被抽样/压缩）。因此标签一律带「分时」二字，
+ * 并在悬停里说明官方开高低在详情抽屉；否则会被读成官方开高低（"看着正常的错数"）。
+ *
+ * 振幅 = (分时高 − 分时低) ÷ 昨收；缺昨收时不编数。数据不全时只列能算的项，不显示占位符。
  */
-function miniHover(name: string, mini: { open?: number | null; high?: number | null; low?: number | null; prePrice?: number | null; values?: number[] } | undefined): string {
+function miniHover(name: string, mini: { sampleFirst?: number | null; sampleHigh?: number | null; sampleLow?: number | null; prePrice?: number | null; values?: number[] } | undefined): string {
   const head = `${name} 分时 · 点击打开明细`
   if (mini === undefined) return head
   const parts: string[] = []
-  if (mini.open !== null && mini.open !== undefined) parts.push(`开 ${mini.open.toFixed(3)}`)
-  if (mini.high !== null && mini.high !== undefined) parts.push(`高 ${mini.high.toFixed(3)}`)
-  if (mini.low !== null && mini.low !== undefined) parts.push(`低 ${mini.low.toFixed(3)}`)
+  const first = mini.sampleFirst
+  const high = mini.sampleHigh
+  const low = mini.sampleLow
+  if (first !== null && first !== undefined) parts.push(`分时首笔 ${first.toFixed(3)}`)
+  if (high !== null && high !== undefined) parts.push(`分时高 ${high.toFixed(3)}`)
+  if (low !== null && low !== undefined) parts.push(`分时低 ${low.toFixed(3)}`)
   const pre = mini.prePrice
-  if (pre !== null && pre !== undefined && pre > 0 && mini.high != null && mini.low != null) {
-    parts.push(`振幅 ${(((mini.high - mini.low) / pre) * 100).toFixed(2)}%`)
+  if (pre !== null && pre !== undefined && pre > 0 && high != null && low != null) {
+    parts.push(`分时振幅 ${(((high - low) / pre) * 100).toFixed(2)}%`)
   } else {
-    parts.push('振幅 —（上游未给昨收）')
+    parts.push('分时振幅 —（上游未给昨收）')
   }
   // 相对昨收的涨跌幅：只在"有昨收且有最新价"时给（缺一就是 NaN 或一个错的分母）
   const last = mini.values !== undefined && mini.values.length > 0 ? mini.values[mini.values.length - 1] : null
   if (last !== null && pre !== null && pre !== undefined && pre > 0) {
     parts.push(`相对昨收 ${(((last - pre) / pre) * 100).toFixed(2)}%`)
   }
-  return `${head}\n${parts.join(' · ')}`
+  return `${head}\n${parts.join(' · ')}\n（以上为分时抽样点，不是交易所口径的开/高/低；官方开高低见详情抽屉）`
 }

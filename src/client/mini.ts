@@ -10,10 +10,16 @@ export interface MiniData {
   up: boolean | null
   /** 分时均价线（P1-1；上游缺该字段时为 null，界面就不画这条线而不是画一条假线） */
   avg?: Array<number | null>
-  /** 当日开/高/低（P1-1，hover 用） */
-  open?: number | null
-  high?: number | null
-  low?: number | null
+  /**
+   * 分时**抽样点**的首笔 / 极值（P1-11，hover 用）。
+   *
+   * ⚠ 这**不是**交易所口径的「今开/最高/最低」：分时序列的首点通常晚于 09:30，上游分钟点
+   * 还可能被抽样/压缩。字段名与展示文案都必须带「分时」二字 —— 否则会被读成官方开高低
+   * （"字段名对、语义差一档"的典型）。官方开高低在 `/detail`，详情抽屉里用的就是它。
+   */
+  sampleFirst?: number | null
+  sampleHigh?: number | null
+  sampleLow?: number | null
   /** 上游给的昨收/昨结基准（振幅分母） */
   prePrice?: number | null
 }
@@ -41,9 +47,10 @@ async function fetchMini(secid: string): Promise<MiniData | null> {
         avg: trend.points.length > 0 && trend.points.every((p) => isUsableAvg(p.avg))
           ? trend.points.map((p) => p.avg ?? null)
           : undefined,
-        open: first,
-        high: Math.max(...values),
-        low: Math.min(...values),
+        // 分时抽样点口径（不是官方开/高/低，见 MiniData 的注释）
+        sampleFirst: first,
+        sampleHigh: Math.max(...values),
+        sampleLow: Math.min(...values),
         prePrice: trend.prePrice,
       }
       miniCache.set(secid, { exp: Date.now() + MINI_TTL, data })

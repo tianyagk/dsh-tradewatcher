@@ -364,6 +364,13 @@ export interface KlineData {
    */
   aggregated?: { period: 'week' | 'month' | 'year'; note: string }
   /**
+   * 年K 的涨跌幅**口径说明**（AUDIT-IMPL74）：涨跌幅是"相对上一年收盘"的**同比**，
+   * 首根没有上一年数据 ⇒ `pct` 留空（不是"那一年平盘"）。
+   * 界面把它并进口径行；agent 直接读这句话，不要自己猜基数。
+   * null/缺省 = 非年K。
+   */
+  pctNote?: string
+  /**
    * 检测到的**疑似拆股/合股**（未复权原始价上的断层）。
    * 用于：① 图上标注该根；② 口径行写"检测到 N 处疑似拆股/合股（未复权，价差不可比）"。
    * ⚠ 我们**不改价**去"抹平"它 —— 那等于伪造复权。
@@ -1638,12 +1645,22 @@ export interface RescueCardSeries {
   name: string
   /** 口径说明（原样展示给用户，避免被读成别的东西） */
   caliber: string
+  /**
+   * 逐点：
+   *  - `amount` **恒在**（`null` = 这一分钟没有读数，不写 0）；
+   *  - `hhmm` / `price` **可能缺省**（AUDIT-IMPL76 ④）：空字符串与 `null` 没有信息量，
+   *    线上回包不再发送它们（`rescue.wireRescueSnapshot` 只裁空字段，语义不变：
+   *    「缺省 ≡ 空/未知」）。**读侧必须兜底** —— 客户端走 `rescueView.rescueCardPointsOf()`，
+   *    它同时吃"新编码（稀疏）"与"旧编码（dense，老宿主/落盘快照）"，逐点还原成
+   *    `{ hhmm: string; amount: number | null; price: number | null }`。
+   */
   points: Array<{
-    /** HH:mm */
-    hhmm: string
+    /** HH:mm（**可能缺省** = 空串） */
+    hhmm?: string
     /** 该分钟成交额（元）；`null` = 这一分钟没有读数（**不写 0**） */
     amount: number | null
-    price: number | null
+    /** 可能缺省 = `null` */
+    price?: number | null
   }>
   /** 该卡**没有**序列时的原因（有序列 ⇒ `null`）；空数组 + 原因，不是补 0 的假序列 */
   why?: string | null

@@ -1,4 +1,5 @@
 import { shStampText } from './marketTime.ts'
+import { TREND_LKG_RETENTION_NOTE } from '../shared/trendRetention.ts'
 /**
  * 为什么日期不能省：K 线兜底那条以前只有 `· 显示上次成功数据（本次刷新失败）`，没有日期 ——
  */
@@ -114,16 +115,21 @@ export function nonSessionNote(day: string): string {
   return ` · 非当日数据（${day.slice(5)}）`
 }
 
+/** 分时兜底时追加的"保留口径"后缀（K 线不走这份库 ⇒ 空串） */
+function trendLkgNote(payload: NotePayloadLike): string {
+  return payload.kind === 'trend' ? ` · ${TREND_LKG_RETENTION_NOTE}` : ''
+}
+
 /** 图表脚注的完整说明（顺序 = 事实的优先级：降级 > 非当日 > 定稿 > 本地缓存） */
 export function cacheNoteOf(payload: NotePayloadLike | null): string {
   if (payload === null) return ''
   // "拿不到"没有缓存口径可谈（原因由 missing 说明，别在这里重复）
   if (payload.kind === 'unavailable') return ''
-  if (payload.fallback === true) return lastSuccessNote(payload)
+  if (payload.fallback === true) return lastSuccessNote(payload) + trendLkgNote(payload)
   // 宿主自己标了降级（K 线的 `stale`）——这也是"上次成功数据"，必须带日期（E1）
   if (payload.kind === 'kline' && payload.kline?.stale === true) return lastSuccessNote(payload)
   // 宿主回了 last-known-good（staleAt 有值）⇒ 这是"上次成功数据"，必须把日期说清
-  if (payload.trend?.staleAt !== undefined) return lastSuccessNote(payload)
+  if (payload.trend?.staleAt !== undefined) return lastSuccessNote(payload) + trendLkgNote(payload)
   // 宿主说"这份序列不是今天的"（节假日上游回节前分时）⇒ 必须写出来，否则会被读成今天
   const sessionDay = payload.trend?.sessionDay
   if (payload.kind === 'trend' && sessionDay !== undefined && sessionDay !== '') return nonSessionNote(sessionDay)

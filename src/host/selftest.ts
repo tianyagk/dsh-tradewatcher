@@ -775,10 +775,28 @@ async function main(): Promise<void> {
       ]
       const years = resampleYearly(months)
       ok(years.length === 2, `年K 聚合为 2 根 (got ${years.length})`)
-      ok(years[0].date === '2025-02-28' && years[0].open === 10 && years[0].close === 11 && years[0].high === 13 && years[0].low === 9,
+      /**
+       * ⚠ AUDIT-IMPL74：年K 的 `date` 是**年内首个月K 的日期**（旧行为是"被每月覆盖 ⇒ 年末月"）。
+       * 为什么必须钉死：`fetchKline` 的 `barOpen` 靠它判"这根还在不在走"；年末月的日期永远
+       * 不等于今天 ⇒ 本年那根年K 会被永久当成已收盘。
+       */
+      ok(years[0].date === '2025-01-31', `年K 首根 date = 年内首个月K (got ${years[0].date})`)
+      ok(years[0].open === 10 && years[0].close === 11 && years[0].high === 13 && years[0].low === 9,
         `年K 首根 OHLC 正确 (got ${JSON.stringify(years[0])})`)
+      /** 首根没有"上一年收盘" ⇒ 涨跌幅留空（旧行为拿年内开盘价当基数是**冒充同比**且未披露） */
+      ok(years[0].pct === null, `年K 首根 pct 必须是 null（没有同比基数） (got ${String(years[0].pct)})`)
       ok(years[1].close === 15 && years[1].pct !== null && Math.abs((years[1].pct as number) - 36.36) < 0.05,
         `年K 次根涨跌幅基于上年收盘 (got ${years[1].pct})`)
+      /**
+       * 缺月量**不得 0 相加**（AUDIT-IMPL74 ①）：2025 年 2 月的量缺失 ⇒ 该年 vol 必须是 null。
+       * 旧行为给出 1（= 把缺失当 0 加上 1 月的 1），是"看起来完全正常的数字"。
+       */
+      const monthsGap = [
+        d('2025-01-31', 12, { open: 10, high: 13, low: 9 }),
+        { ...d('2025-02-28', 11, { open: 12, high: 12.5, low: 10.5 }), vol: null },
+      ]
+      const gap = resampleYearly(monthsGap)
+      ok(gap.length === 1 && gap[0].vol === null, `年K：某月量缺失 ⇒ 该年 vol 为 null（不得 0 相加） (got ${String(gap[0]?.vol)})`)
     }
 
     // 复权适用范围（纯函数）：A股/港股股票与 ETF 才谈得上复权

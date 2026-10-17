@@ -18,6 +18,7 @@ import { BREADTH_HS_A_FS, BREADTH_PAGE_SIZE, type CountPage } from './breadthCou
 import { isMultiDayTrend, stitchTrendDays } from '../shared/trendStitch.ts'
 import { TREND_ARCHIVE_KEEP_DAYS, archiveTrendDays, loadTrendArchive, type TrendArchiveEntry } from './trendArchive.ts'
 import { payloadFingerprint } from '../shared/fingerprint.ts'
+import { TrendLkgStore } from './trendLkgStore.ts'
 import { aggregateUsDaily, detectUsSplits, splitMarksOf, usAggCaliber, usBucketOf, type UsAggPeriod, type UsSplit } from './usAggregate.ts'
 import { mkdir, readdir, readFile, rm, stat } from 'node:fs/promises'
 import { writeFileAtomic } from './atomic.ts'
@@ -1282,22 +1283,14 @@ function parseTrendRow(row: string): TrendPoint | null {
 /**
  * 分时序列的 last-known-good：上游瞬时失败时用最近一次成功结果兜底，
  * 避免缩略图在「有 / 无」之间闪烁（与 quotes-lkg.json 同一思路）。
- * 文件：<dataHome>/trends-lkg.json
+ *
+ * **存储形态（AUDIT-IMPL76 第 3 项）**：按标的拆分成 `trends-lkg.d/<enc(key)>.json`，清单在
+ * `trends-lkg.json`（v3：entries[{key,at,seq,bytes}] + caps + dropped）。
+ * 旧版是单文件整份重写（真机 2.34 MB / 132 条）——一次 persist 要把 2.34 MB 重新序列化并覆写；
+ * 现在一次只写"变了的"分片（每条 ≈ 18 KB）+ 清单（≈ 8 KB），单次写入上限 512 KB。
+ * 迁移/保留策略/等价性判据都写在 `trendLkgStore.ts` 的文件头。
  */
-const trendLkg = new Map<string, { at: number; trend: TrendData }>()
-let trendLkgLoaded: Promise<void> | null = null
-let trendLkgDirty = false
-let trendLkgLastWrite = 0
-const TREND_LKG_PERSIST_MS = 5000
-const TREND_LKG_MAX = 400
-/**
- * 体积/条数上限（REVIEW-4-RISK §P2）：真机实测这份文件 **5.19MB / 111 条**，
- * 且每 5 秒**整份重写**（写放大）。两道闸：
- *   · `TREND_LKG_MAX_BYTES`：序列化后超限 ⇒ 按 `at` 从旧到新淘汰，直到压到上限的 80%；
- *   · **内容未变则不写**：与上次落盘的载荷逐字节比较（这份文件大，字符串比较远比写盘便宜）。
- */
-const TREND_LKG_MAX_BYTES = 4 * 1024 * 1024
-let trendLkgLastPayloadHash: number | null = null
+const lkgStore = new TrendLkgStore(() => dataHome())
 /**
  * 内容指纹：实现下沉到 `src/shared/fingerprint.ts`（`trendArchive.ts` 也要用，而它已被本文件 import
  * —— 留在这里会形成循环）。这里 **re-export** 保持既有调用方/测试的 import 路径不变。
@@ -1309,179 +1302,41 @@ function trendKey(secid: string, ndays: number): string {
 }
 
 async function loadTrendLkg(): Promise<void> {
-  if (trendLkgLoaded !== null) return trendLkgLoaded
-  trendLkgLoaded = (async () => {
-    try {
-      const raw = await readFile(join(dataHome(), 'trends-lkg.json'), 'utf8')
-      const parsed = JSON.parse(raw) as { entries?: Array<{ key?: string; at?: number; trend?: TrendData }> }
-      for (const e of Array.isArray(parsed?.entries) ? parsed.entries : []) {
-        if (typeof e?.key !== 'string' || typeof e?.at !== 'number') continue
-        const t = e.trend
-        if (t === null || typeof t !== 'object' || !Array.isArray(t.points) || t.points.length < 2) continue
-        trendLkg.set(e.key, { at: e.at, trend: t })
-      }
-    } catch {
-      /* 首次：无缓存文件 */
-    }
-  })()
-  return trendLkgLoaded
-}
-
-/**
- * 体积上限（**纯函数**，可测）：超限时按 `at` 新 → 旧保留，压到上限的 80% 留余量。
- * 返回 `{ text, kept, dropped }`；`dropped` 供调用方清掉内存里的对应条目。
- */
-export function trimTrendPayload(
-  entries: Array<{ key: string; at: number; trend: unknown }>,
-  maxBytes = TREND_LKG_MAX_BYTES,
-): {
-  /** 落盘文本（含 `ts`：这份文件是"什么时候写的"，界面对账要用） */
-  text: string
-  /**
-   * **指纹文本**（只有 `entries`，**不含 `ts`**）。
-   *
-   * 为什么要单独一份：`trendWriteDecision` 用指纹判断"内容有没有变"，而 `ts` 每次调用都不同
-   * ⇒ 指纹永远不同 ⇒ "内容未变不写"这道闸永远失效（设计意图是 2.34MB 整份重写至多每 5 秒一次；
-   * 实测 v0.91.0–v0.105.0 因为 `persistTrendLkg` 的两个顺序 bug **一次都没写**，见 `trendLkgPersistStep`）。
-   * ⚠ 以后给这份文件加任何"写入时刻/计数"字段，都**只能进 `text`，不能进 `stableText`**。
-   */
-  stableText: string
-  kept: Array<{ key: string; at: number; trend: unknown }>
-  dropped: string[]
-} {
-  const full = JSON.stringify({ ts: Date.now(), entries })
-  if (full.length <= maxBytes) return { text: full, stableText: JSON.stringify(entries), kept: entries, dropped: [] }
-  const target = Math.floor(maxBytes * 0.8)
-  const sorted = [...entries].sort((a, b) => b.at - a.at)
-  const kept: Array<{ key: string; at: number; trend: unknown }> = []
-  let size = 0
-  for (const e of sorted) {
-    const len = JSON.stringify(e).length + 1
-    if (size + len > target) continue
-    kept.push(e)
-    size += len
+  const { missing } = await lkgStore.load()
+  if (missing.length > 0) {
+    // 如实上报（不静默丢）：清单里仍保留这些条目，下一次取数成功会补写分片
+    console.warn(`[tradewatcher] trends-lkg 有 ${missing.length} 条分片不可用：`, missing.map((m) => `${m.key}（${m.reason}）`).join(' / '))
   }
-  const keptKeys = new Set(kept.map((k) => k.key))
-  return {
-    text: JSON.stringify({ ts: Date.now(), entries: kept }),
-    stableText: JSON.stringify(kept),
-    kept,
-    dropped: entries.filter((e) => !keptKeys.has(e.key)).map((e) => e.key),
-  }
-}
-
-/**
- * **要不要落盘**（纯函数，可测）：① 不 dirty ⇒ 不写；② 距上次不足节流窗口 ⇒ 不写；
- * ③ **内容指纹没变 ⇒ 不写**（写放大就在这一条上：真机 5.19MB × 每 5 秒整份重写）。
- */
-export function trendWriteDecision(input: {
-  dirty: boolean
-  now: number
-  lastWrite: number
-  payload: string
-  lastFingerprint: number | null
-}): { write: boolean; fingerprint: number; reason: string } {
-  const fingerprint = payloadFingerprint(input.payload)
-  if (!input.dirty) return { write: false, fingerprint, reason: '不 dirty' }
-  if (input.now - input.lastWrite < TREND_LKG_PERSIST_MS) return { write: false, fingerprint, reason: '节流窗口内' }
-  if (fingerprint === input.lastFingerprint) return { write: false, fingerprint, reason: '内容未变（跳过整份重写）' }
-  return { write: true, fingerprint, reason: '有变化' }
-}
-
-/**
- * `trends-lkg` 落盘的**状态迁移**（纯函数，可测）。
- *
- * 存在的理由：v0.91.0 把"要不要写"的判断塞进 `persistTrendLkg` 之后，出现了两个**顺序 bug**
- * （两个都会让这份兜底文件**永远不更新**，而且没有任何报错）：
- *   ① 先把 `trendLkgDirty` 清成 false，再把清完的值传给判定 ⇒ 判定永远看到 `dirty:false`；
- *   ② 先把 `lastWrite` 设成 now，再让判定算 `now - lastWrite < 5000` ⇒ 永远在"节流窗口内"。
- * 实测后果：`trends-lkg.json` 自 v0.91.0 起没有更新过（本机文件停在 10-16 10:03）。
- *
- * 现在把"判定 + 状态怎么变"收进这一个纯函数：**节流跳过 ⇒ 保留 dirty**（下一轮再试），
- * **内容未变 ⇒ 清 dirty**（盘上已是最新），**写成功 ⇒ 清 dirty + 推进 lastWrite + 记指纹**。
- */
-export interface TrendLkgState {
-  dirty: boolean
-  lastWrite: number
-  lastFingerprint: number | null
-}
-export interface TrendLkgStep {
-  write: boolean
-  fingerprint: number
-  reason: string
-  next: TrendLkgState
-}
-
-export function trendLkgPersistStep(state: TrendLkgState, payload: string, now: number): TrendLkgStep {
-  const decision = trendWriteDecision({ dirty: state.dirty, now, lastWrite: state.lastWrite, payload, lastFingerprint: state.lastFingerprint })
-  if (decision.write) {
-    return { ...decision, next: { dirty: false, lastWrite: now, lastFingerprint: decision.fingerprint } }
-  }
-  // 内容未变 ⇒ 盘上已经是最新（清 dirty）；其它（不 dirty / 节流）⇒ **保留 dirty**，下一轮再试
-  const unchanged = decision.fingerprint === state.lastFingerprint
-  return {
-    ...decision,
-    next: { dirty: unchanged ? false : state.dirty, lastWrite: state.lastWrite, lastFingerprint: state.lastFingerprint },
-  }
-}
-
-function persistTrendLkg(): void {
-  if (!trendLkgDirty) return
-  const now = Date.now()
-  // 节流：窗口内**不序列化**（2.3MB 的 stringify 比一次判断贵得多）；dirty 保留，下一轮再试
-  if (now - trendLkgLastWrite < TREND_LKG_PERSIST_MS) return
-  if (trendLkg.size > TREND_LKG_MAX) {
-    let drop = trendLkg.size - TREND_LKG_MAX
-    for (const key of trendLkg.keys()) {
-      if (drop <= 0) break
-      trendLkg.delete(key)
-      drop -= 1
-    }
-  }
-  const entries = [...trendLkg.entries()].map(([key, v]) => ({ key, at: v.at, trend: v.trend }))
-  const trimmed = trimTrendPayload(entries)
-  if (trimmed.dropped.length > 0) {
-    console.warn(`[tradewatcher] trends-lkg 超过体积上限（>${(TREND_LKG_MAX_BYTES / 1024 / 1024).toFixed(1)}MB）：保留最近 ${trimmed.kept.length}/${entries.length} 条`)
-    for (const key of trimmed.dropped) trendLkg.delete(key)
-  }
-  /**
-   * 指纹只算 `entries`（`stableText`）：`text` 里的 `ts` 每次都变 ⇒ 拿 `text` 做指纹等于把闸拆了。
-   * ⚠ 判定必须拿**改动前**的状态（`dirty` / `lastWrite`），状态迁移交给纯函数 `trendLkgPersistStep`；
-   * 先清 dirty 或先推进 lastWrite 都会让判定永远为"跳过"（v0.91.0 的两个顺序 bug）。
-   */
-  const step = trendLkgPersistStep(
-    { dirty: trendLkgDirty, lastWrite: trendLkgLastWrite, lastFingerprint: trendLkgLastPayloadHash },
-    trimmed.stableText,
-    now,
-  )
-  trendLkgDirty = step.next.dirty
-  trendLkgLastWrite = step.next.lastWrite
-  trendLkgLastPayloadHash = step.next.lastFingerprint
-  if (!step.write) return // 内容未变 / 节流 ⇒ 不写（节流时 dirty 已保留，下一轮会重试）
-  const text = trimmed.text
-  void (async () => {
-    try {
-      // 原子写（同上：4MB 级的文件更容易被读者撞上"半截"）
-      await writeFileAtomic(join(dataHome(), 'trends-lkg.json'), text)
-    } catch (error) {
-      console.warn('[tradewatcher] persist trends-lkg failed:', String(error))
-    }
-  })()
 }
 
 function rememberTrend(secid: string, ndays: number, trend: TrendData): void {
   if (trend.points.length < 2) return
-  trendLkg.set(trendKey(secid, ndays), { at: Date.now(), trend })
-  trendLkgDirty = true
-  persistTrendLkg()
+  lkgStore.set(trendKey(secid, ndays), Date.now(), trend)
+  void lkgStore.persist()
 }
 
 /** 取兜底快照；maxAgeMs 为 Infinity 时表示「只要有过就用」 */
 export function lastGoodTrend(secid: string, ndays: number, maxAgeMs = Infinity): TrendData | null {
-  const hit = trendLkg.get(trendKey(secid, ndays))
+  const hit = lkgStore.get(trendKey(secid, ndays))
   if (hit === undefined) return null
   if (Date.now() - hit.at > maxAgeMs) return null
   return { ...hit.trend, staleAt: hit.at }
+}
+
+/** 测试钩子：`trends-lkg` 分片存储的写路径计数（判断"单次写入 ≤ 512 KB"用它） */
+export function __trendLkgStatsOf(): ReturnType<TrendLkgStore['statsOf']> {
+  return lkgStore.statsOf()
+}
+
+/** 测试钩子：清空内存状态（不碰磁盘）——用例之间互不影响 */
+export function __resetTrendLkgForTest(): void {
+  lkgStore.__resetForTest()
+}
+
+/** 测试钩子：只清"已装载"标记（模拟重启：下次 load 重新从磁盘读） */
+export function __reloadTrendLkgForTest(): void {
+  lkgStore.__resetForTest()
+  lkgStore.__resetLoadedForTest()
 }
 
 /**
@@ -1509,8 +1364,8 @@ async function trendWithFallbackRaw(
   const fresh = readFresh<TrendData>(key)
   if (fresh !== undefined) return fresh
   // 休市且本地快照已越过最近一次收盘 → 当天的分时/五日序列不会再变，直接吃本地
-  // （进程重启后仍生效：trendLkg 是落盘的）。盘中 / 快照过期一律走上游。
-  const settled = trendLkg.get(trendKey(secid, ndays))
+  // （进程重启后仍生效：分片兜底库是落盘的）。盘中 / 快照过期一律走上游。
+  const settled = lkgStore.get(trendKey(secid, ndays))
   // 休市定稿分支**不动**：那时当天的序列不会再变，复用本地是正确行为
   if (settled !== undefined && settled.trend.points.length >= 2 && isSettledOffline(settled.at, opts.now ?? Date.now())) {
     const reused: TrendData = { ...settled.trend, cached: true }
@@ -2182,12 +2037,35 @@ export function klineCacheUsable(meta: { v?: unknown; partial?: unknown; updated
  * 最近一次取数的"最后一根 bar"元信息（供回包暴露 `lastBar`）：
  * `partial` 为 true 说明它是**盘中未完成 bar**（数值会变，不可与最终 bar 混用）。
  */
-export function lastBarOfKline(secid: string, klt: number, fqt: FqMode): { date: string; close: number; vol: number; partial: boolean } | null {
+export function lastBarOfKline(secid: string, klt: number, fqt: FqMode): {
+  date: string
+  close: number
+  /** `null` = 上游没给这一根的量（**不是 0**）；`0` = 上游真的给了 0 */
+  vol: number | null
+  volReason: string | null
+  zeroVolume: boolean
+  partial: boolean
+} | null {
   const key = `${secid}|${klt}|${fqt}`
   const hit = klineMem.get(key)
   if (hit === undefined || hit.bars.length === 0) return null
   const last = hit.bars[hit.bars.length - 1]
-  return { date: last.date, close: last.close, vol: last.vol, partial: hit.partial === true }
+  /**
+   * ⚠ 与 `chips.ts` 的 `lastBarMetaOf` 同一判据（AUDIT-IMPL74）：
+   * 以前这里声明 `vol: number`，`DayBar.vol` 却是 `number | null` —— 因为 tsconfig 是
+   * `strict: false`（`strictNullChecks` 关）这条谎话一直没被编译器抓到；
+   * 更实际的影响是回包里"缺失"会被读成"零成交"。
+   */
+  const usable = typeof last.vol === 'number' && Number.isFinite(last.vol)
+  const vol = usable ? last.vol : null
+  return {
+    date: last.date,
+    close: last.close,
+    vol,
+    volReason: vol === null ? '上游这一根没有给出成交量（缺失，不是 0）⇒ 按「未取到」处理' : null,
+    zeroVolume: vol === 0,
+    partial: hit.partial === true,
+  }
 }
 
 /** 磁盘缓存当前状态（供路由层写原因文案；在 fetchKline 之后调用即为本次实际用的那份） */
@@ -2446,30 +2324,71 @@ export function mergeBars(oldBars: readonly DayBar[], freshBars: readonly DayBar
   return cap > 0 && merged.length > cap ? merged.slice(merged.length - cap) : merged
 }
 
-/** 月K → 年K 重采样（开盘取首月、收盘取末月、高低取极值、量额求和）。 */
+/**
+ * 月K → 年K 重采样：开盘取首月、收盘取末月、高低取极值、量额求和。
+ *
+ * ⚠ 三处口径（REVIEW-7 D7 / AUDIT-IMPL74），与美股 `aggregateUsDaily`（`usAggregate.ts`）**刻意同形**：
+ *
+ * ① **量/额：任一月缺失 ⇒ 该年记 `null`**。旧写法 `(cur.vol ?? 0) + (b.vol ?? 0)` 把缺失当 0 相加
+ *    —— 探针实测：某年其中一个月的 vol 是 null，年K 仍给出具体数字（真值应为 null）。
+ *    「缺数据不得 0 顶替」是全仓红线，这条是它最后几个破口之一。
+ * ② **`date` 取"年内首个月K的日期"**（旧写法 `cur.date = b.date` 让它变成**年末月**的月末日期）。
+ *    后果不只是"标签难看"：`fetchKline` 的 `barOpen` 用 `lastDate === today` 判"这根还在走"，
+ *    年末月的日期永远不等于今天 ⇒ **本年那根年K 永远被当成已收盘**。
+ *    为什么是"首个月K"而不是"年内首个交易日"：上游月K 的 `date` 本身就是**月末交易日**
+ *    （实测 `1.601398_103_1.json`：`2024-01-31 / 2024-02-29 / …`），输入粒度决定了拿不到"1 月第一个交易日"。
+ *    取桶内**第一根输入**这个语义与 `aggregateUsDaily` 一致，差异只来自输入粒度（月 vs 日）。
+ * ③ **首根 `pct = null`**。旧写法 `base = prevClose ?? bar.open` 在首根拿**年内开盘价**当基数
+ *    —— 那是"年内涨幅"，却挂在"年K 涨跌幅"这个位置上（同比），且从未披露。现在只有真的有"上一年收盘"
+ *    才给同比，首根如实留空（口径句由 `KlineData.pctNote` 说明）。
+ */
 export function resampleYearly(monthly: readonly DayBar[]): DayBar[] {
   const out: DayBar[] = []
   let curYear = ''
   let cur: DayBar | null = null
   let prevClose: number | null = null
+  /** 本年已累加的量/额与"是否见过缺失"（**不用 `?? 0`**：缺失要一路传到结果里） */
+  let volSum = 0
+  let volMissing = false
+  let amountSum = 0
+  let amountMissing = false
+  let amountSeen = false
+  const numOk = (v: number | null | undefined): v is number => typeof v === 'number' && Number.isFinite(v)
   for (const b of monthly) {
     const year = b.date.slice(0, 4)
     if (cur === null || year !== curYear) {
       if (cur !== null) out.push(cur)
-      cur = { date: b.date, open: b.open, close: b.close, high: b.high, low: b.low, vol: b.vol, pct: null }
+      // ⚠ `date` 只在这里定一次（= 年内首个月K），后面**不许**再覆盖
+      cur = { date: b.date, open: b.open, close: b.close, high: b.high, low: b.low, vol: null, pct: null }
       curYear = year
+      volSum = 0
+      volMissing = false
+      amountSum = 0
+      amountMissing = false
+      amountSeen = false
     } else {
-      cur.date = b.date
       cur.close = b.close
       cur.high = Math.max(cur.high, b.high)
       cur.low = Math.min(cur.low, b.low)
-      cur.vol = (cur.vol ?? 0) + (b.vol ?? 0)
     }
+    if (numOk(b.vol)) volSum += b.vol
+    else volMissing = true
+    if (numOk(b.amount)) {
+      amountSum += b.amount
+      amountSeen = true
+    } else if (b.amount !== undefined) {
+      // 这一列存在但不可用（null / NaN）⇒ 该年 amount 判为缺失。
+      // `undefined`（老缓存没有这一列）不算缺失：A股月K 本来就不带成交额。
+      amountSeen = true
+      amountMissing = true
+    }
+    cur.vol = volMissing ? null : volSum
+    if (amountSeen) cur.amount = amountMissing ? null : amountSum
   }
   if (cur !== null) out.push(cur)
   for (const bar of out) {
-    const base = prevClose ?? bar.open
-    bar.pct = base > 0 ? Math.round(((bar.close - base) / base) * 10000) / 100 : null
+    // 同比：基数只认**上一根聚合收盘**；首根没有上一年 ⇒ null（不用开盘价冒充）
+    bar.pct = prevClose !== null && prevClose > 0 ? Math.round(((bar.close - prevClose) / prevClose) * 10000) / 100 : null
     prevClose = bar.close
   }
   return out
@@ -2722,14 +2641,28 @@ export async function fetchKline(
    * 当根是否仍未收盘：
    *   · 日K/A股：`最后一根的日期 === 今天`；
    *   · **美股的聚合档**：聚合根的 `date` 是"该周/月/年的首个交易日"，所以比的是**所属周期**是否等于
-   *     今天所在周期（否则周K 在周三永远显示"当根已收盘"）。
+   *     今天所在周期（否则周K 在周三永远显示"当根已收盘"）；
+   *   · **A股年K（103→104 重采样）**：`date` 是"年内首个月K的日期"（见 `resampleYearly`），
+   *     拿它和今天比日期永远不等 ⇒ 必须比**年份**。旧写法让本年那根年K 永远被判"已收盘"
+   *     （REVIEW-7 D7 的第二个小口径，AUDIT-IMPL74 §1）。
    */
   const usPeriod = us ? usAggPeriodOfKlt(baseKlt) : null
+  const aShareYear = !us && baseKlt === 103 && klt === 104
   const barOpen = !settled && lastDate !== '' && (
-    usPeriod === null
-      ? lastDate === todayOf(Date.now()) && inSessionOf()
-      : usBucketOf(lastDate, usPeriod) === usBucketOf(usDayOf(Date.now()), usPeriod) && inUsSession()
+    aShareYear
+      ? lastDate.slice(0, 4) === String(todayOf(Date.now())).slice(0, 4) && inSessionOf()
+      : usPeriod === null
+        ? lastDate === todayOf(Date.now()) && inSessionOf()
+        : usBucketOf(lastDate, usPeriod) === usBucketOf(usDayOf(Date.now()), usPeriod) && inUsSession()
   )
+  /**
+   * 年K 的涨跌幅口径必须写出来（REVIEW-7 D7 的第三个口径）：**同比（相对上一年收盘）**，
+   * 首根没有上一年 ⇒ 留空。不写这句话的话，序列里那个 `null` 会被读成"那一年平盘"，
+   * 而旧实现更坏：它拿**年内开盘价**当基数（年内涨幅冒充同比）且从未披露。
+   */
+  const pctNote = klt === 104
+    ? '年K 涨跌幅 = 相对上一年收盘（同比）；首根没有上一年数据 ⇒ 留空，不用年内开盘价冒充'
+    : null
   // 降级复用的说明（只在"用了被判需要回源的缓存 且 回源没拿到新数据"时给；正常/定稿都不给）
   const staleReason = klineStaleNoteOf({
     settled,
@@ -2771,6 +2704,7 @@ export async function fetchKline(
     // 口径条的"数据截至"= 本地最近一次成功取数时刻（定稿时就是收盘那一次）
     asOf: entry.updatedAt > 0 ? entry.updatedAt : Date.now(),
     barOpen,
+    ...(pctNote === null ? {} : { pctNote }),
     ...(settled ? { cached: true } : {}),
   }
 }

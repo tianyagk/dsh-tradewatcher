@@ -30,6 +30,17 @@ export const PENDING_LABEL = '未取到'
 
 export const NO_SOURCE_TITLE =
   '东财、腾讯、新浪三个源都没有返回该标的的可用价格。若为期货主连/商品合约，请核对代码大小写（如 114.lhm 与 114.LHM 是同一标的，现已大小写无关匹配）。'
+
+/**
+ * 「无行情源 N」徽标的**读屏/悬停说明**（P1 批次 追加项）。
+ *
+ * ⚠ 这是**真实渲染字符串**（挂在 TopBar 徽标的 `aria-label` 上），不是注释。
+ * 为什么要有它：`build.mjs` 的锁定片段 `无行情源 N` 此前唯一来源是 `NO_SOURCE_LABEL` 上面那句注释
+ * （非压缩构建会保留注释）—— 注释一改写，构建校验就失败（IMPL-71 已踩过一次）。
+ * 现在这条锁可以由一个**真的会渲染出来**的字符串兜住，注释就不再是唯一来源。
+ */
+export const NO_SOURCE_BADGE_HINT =
+  '无行情源 N：三源（东财/腾讯/新浪）都没有该标的的可用价格；重试可能恢复，也可能只是东财没恢复'
 export const PENDING_TITLE = '本轮行情未取到该标的（还没刷新完），不是"这个标的没有行情"'
 
 export const QUOTE_STATE_LABEL: Record<QuoteState, string> = {

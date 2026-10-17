@@ -92,6 +92,18 @@ interface FakeCtx {
   effects: Array<() => void>
 }
 
+/**
+ * 有界等条件：**不要**用固定 sleep 冒充"异步已落定"。
+ *
+ * `store.init()` 是真异步（临时 DSH_HOME 上的文件 IO），落定时间随机器负载浮动；
+ * 固定睡 50ms 在满载/8 并发下会偶发假失败（`starts` 还是 0 就断言 == 1）。
+ * 有界等待 + 原有断言 ⇒ 真没落定时照样失败（不会把失败等成通过）。
+ */
+async function waitForCondition(cond: () => boolean, ms = 5000): Promise<void> {
+  const t0 = Date.now()
+  while (!cond() && Date.now() - t0 < ms) await new Promise((r) => setTimeout(r, 20))
+}
+
 function fakeCtx(kernel?: CoreKernel): FakeCtx {
   const routes: string[] = []
   const tools: string[] = []
@@ -127,7 +139,7 @@ test('apply 幂等：同进程 apply 三次，一次性副作用只跑一次', a
   apply(a.ctx)
   apply(a.ctx)
   for (const row of ['calendar', 'cloudmap', 'market', 'watchlist', 'portfolio', 'tools']) apply(a.ctx, { row })
-  await new Promise((r) => setTimeout(r, 50)) // 等 store.init() 落定
+  await waitForCondition(() => __kernelStats.starts === 1) // 等 store.init() 落定（有界）
   assert.equal(__kernelStats.applies, 8, 'apply 共八次（core 两次 + 六个功能行各一次）')
   assert.equal(__kernelStats.inits, 1, 'store.init() 只跑一次')
   assert.equal(coreKernel()?.starts, 1, 'rescue.start() 只跑一次（采样器只有一个）')
@@ -153,7 +165,7 @@ test('calendar 行：只注册日历那一段；core 行不含日历（行未激
   apply(core.ctx, { row: 'core' }) // core
   const cal = fakeCtx()
   apply(cal.ctx, { row: 'calendar' })
-  await new Promise((r) => setTimeout(r, 50))
+  await waitForCondition(() => __kernelStats.inits === 1)
   const calRoutes = cal.routes.filter((p) => p.startsWith('/tradewatcher/calendar'))
   assert.ok(calRoutes.length > 0, `calendar 行应注册日历路由（实际 ${JSON.stringify(cal.routes)}）`)
   assert.equal(cal.routes.every((p) => p.startsWith('/tradewatcher/calendar')), true, 'calendar 行不许注册别的路由')

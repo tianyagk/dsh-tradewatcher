@@ -47,6 +47,32 @@ export type ChartPayload =
       fallback?: boolean
     }
 
+/**
+ * 悬浮卡/图表"拿不到"时的一句话原因（P1-2）。
+ *
+ * `ChartPayload.kind === 'unavailable'` 里**已经带了 `missing[]`**；旧实现把它丢掉，只写
+ * 「走势获取失败」/「暂无当日走势数据」—— 用户无法区分"这块市场本来就没有这个源"（等也没用）
+ * 与"上游这会儿被限流"（稍后自动重试）。短句常驻、长解释进 title/aria（不新增常驻长文）。
+ */
+export interface UnavailableReason {
+  /** 一行短原因（常驻显示 + 读屏标题） */
+  short: string
+  /** 长解释（title / aria-label） */
+  detail: string
+}
+
+export function unavailableReasonOf(
+  payload: Pick<ChartPayload, 'kind'> & { missing?: MissingField[] } | null,
+): UnavailableReason | null {
+  if (payload === null || payload.kind !== 'unavailable') return null
+  const m = payload.missing?.[0]
+  if (m === undefined) return { short: '该周期未取到', detail: '宿主没有给出原因（missing 为空）' }
+  return {
+    short: `${m.what}未取到`,
+    detail: `${m.note}（${m.why === 'no-source' ? '上游没有这份数据，重试无用' : '本次失败，稍后自动重试'}）`,
+  }
+}
+
 /** 盘中 TTL：分时 30s（宿主每 60s 才重算一次），五日 2min，K 线 10min */
 const TTL_MS: Record<ChartTab, number> = {
   trend: 30_000,

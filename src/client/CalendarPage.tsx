@@ -18,10 +18,18 @@ import { shToday } from './marketTime.ts'
 
 const WEEKDAYS = ['一', '二', '三', '四', '五', '六', '日']
 
+/**
+ * 重要性配色（P1-10）：**独立语义色**，不复用涨跌色相、也不跟 `prefs.redUp` 翻转。
+ *
+ * 旧实现是 `3: var(--tw-up)`：把色义切成"绿涨红跌"后「高重要度」会变绿；隐身档又把
+ * `--tw-up` 灰化 ⇒ 日历的「高」跟着变灰，而护盘面板的「强」因为硬编码色值仍是一片鲜红
+ * （隐身视图下最刺眼的一处颜色泄漏）。现在两处都走 `styles.ts` 的语义 token ��—
+ * 隐身档统一由 `[data-view=incognito]` 灰化。
+ */
 const IMP_COLOR: Record<CalImportance, string> = {
-  3: 'var(--tw-up)',
-  2: '#e8a33d',
-  1: 'var(--tw-accent)',
+  3: 'var(--tw-imp-3)',
+  2: 'var(--tw-imp-2)',
+  1: 'var(--tw-imp-1)',
 }
 const IMP_LABEL: Record<CalImportance, string> = { 3: '高', 2: '中', 1: '低' }
 
@@ -465,9 +473,10 @@ function EventModal(props: {
       ),
       React.createElement(Field, { label: '重要度' },
         React.createElement('select', { className: 'tw-input', value: String(importance), onChange: (e) => setImportance(Number(e.target.value) as CalImportance) } as React.SelectHTMLAttributes<HTMLSelectElement>,
-          React.createElement('option', { value: '3' }, '高（红）'),
-          React.createElement('option', { value: '2' }, '中（橙）'),
-          React.createElement('option', { value: '1' }, '低（蓝）'),
+          // 选项不再写「（红）/（橙）/（蓝）」：颜色已改成独立语义色阶，写死颜色名就会变成谎话
+          React.createElement('option', { value: '3' }, '高'),
+          React.createElement('option', { value: '2' }, '中'),
+          React.createElement('option', { value: '1' }, '低'),
         ),
       ),
     ),

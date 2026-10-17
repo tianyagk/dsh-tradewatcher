@@ -300,8 +300,27 @@ export interface ChipSeries {
   latestBarDate: string | null
   /** 展示日（滑杆当前日）与最新 bar 是否同一天；不一致时盈利比例用**展示日收盘价**，不混用 */
   barAlignsWithDisplay: boolean
-  /** 最后一根 bar 的元信息（partial = 盘中未完成 bar，数值会变） */
-  lastBar: { date: string; close: number; vol: number; partial: boolean } | null
+  /**
+   * 最后一根 bar 的元信息（partial = 盘中未完成 bar，数值会变）。
+   *
+   * ⚠ REVIEW-7 D8 / AUDIT-IMPL74：`vol` 以前是 `number`，取值写成 `vol ?? 0` ——
+   * **把"上游没给"编码成 0**，而类型又把 0 写死成合法值，于是「缺失」与「真的零成交」
+   * 在回包里长得一模一样（同文件其余字段一律 `number | null` + 原因，只有这一处破例）。
+   * 现在两者分开表达：
+   *   · `vol === null` + `volReason !== null` ⇒ **上游没给**（缺失，不是 0）；
+   *   · `vol === 0` + `zeroVolume === true` ⇒ **上游真的给了 0**（停牌/无成交），不是缺失。
+   */
+  lastBar: {
+    date: string
+    close: number
+    /** 成交量：`null` = 上游没给；`0` = 上游真的给了 0 */
+    vol: number | null
+    /** `vol === null` 时的原因（`vol` 有值——含真 0——时为 null） */
+    volReason: string | null
+    /** `vol === 0` 且来自上游的 0（不是缺失）—— 界面据此说「零成交」而不是「未取到」 */
+    zeroVolume: boolean
+    partial: boolean
+  } | null
   /** 不提供该模块时的一句话原因（指数/期货/样本不足），否则 null */
   why: string | null
   disclaimer: string
@@ -447,6 +466,31 @@ export interface ChipOptions {
   spread?: ChipSpread
 }
 
+/**
+ * 最后一根 bar 的元信息（**真 0 与缺失必须可区分**）。
+ *
+ * 判据就一条：`vol` 是不是有限数字。
+ *   · `null` / `undefined` / `NaN` ⇒ 上游没给 ⇒ `vol: null` + 原因；
+ *   · `0` ⇒ 上游真的给了 0（实测港股有 3 根这样的 bar）⇒ `vol: 0` + `zeroVolume: true`。
+ * **绝不** `?? 0`：那会把「没取到」显示成「零成交」，而零成交是**事实断言**。
+ */
+export function lastBarMetaOf(
+  bar: Pick<ChipBar, 'date' | 'close' | 'vol'>,
+  date: string,
+): NonNullable<ChipSeries['lastBar']> {
+  const raw = bar.vol
+  const usable = typeof raw === 'number' && Number.isFinite(raw)
+  const vol = usable ? raw : null
+  return {
+    date,
+    close: bar.close,
+    vol,
+    volReason: vol === null ? `上游这一根没有给出成交量（缺失，不是 0）⇒ 按「未取到」处理` : null,
+    zeroVolume: vol === 0,
+    partial: false,
+  }
+}
+
 /** 逐日筹码分布（含每日的 avgCost / P5 / P95 / 盈利比例） */
 export function chipSeriesOf(bars: readonly ChipBar[], opts: ChipOptions = {}): ChipSeries {
   /**
@@ -496,7 +540,7 @@ export function chipSeriesOf(bars: readonly ChipBar[], opts: ChipOptions = {}): 
     barAlignsWithDisplay: true,
     // 无分布（不支持复权/样本不足/区间为 0）时没有轴：不给空档位冒充"档数为 0"
     centers: [],
-    lastBar: win.length > 0 ? { date: latestBarDate ?? '', close: win[win.length - 1].close, vol: win[win.length - 1].vol ?? 0, partial: false } : null,
+    lastBar: win.length > 0 ? lastBarMetaOf(win[win.length - 1], latestBarDate ?? '') : null,
     why: null,
     disclaimer: '这是筹码分布统计量（成交量的历史累积），不是支撑/压力的预测，也不是买卖建议。',
   }

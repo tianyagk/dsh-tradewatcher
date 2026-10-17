@@ -5,9 +5,9 @@ import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { TW_ROWS, stripKindOf, type QuoteRow, type TrendData, type KlineData } from '../shared/model.ts'
 import { StripConfig } from './StripConfig.tsx'
 import { toneBadgeView, visibleCards, type ToneRow } from './stripTone.ts'
-import { chartCache } from './chartCache.ts'
+import { chartCache, unavailableReasonOf, type UnavailableReason } from './chartCache.ts'
 import { fmtClock, fmtPct, fmtPrice, fmtSigned, dirClass } from './format.ts'
-import { NO_SOURCE_LABEL, NO_SOURCE_TITLE, QUOTE_STATE_COLOR, QUOTE_STATE_LABEL, quoteStateOf, quoteStateTitle, stripSummaryTitle, summarizeStrip, type QuoteState } from './quoteState.ts'
+import { NO_SOURCE_BADGE_HINT, NO_SOURCE_LABEL, NO_SOURCE_TITLE, QUOTE_STATE_COLOR, QUOTE_STATE_LABEL, quoteStateOf, quoteStateTitle, stripSummaryTitle, summarizeStrip, type QuoteState } from './quoteState.ts'
 import { useNow } from './useNow.ts'
 import { Sparkline } from './charts.tsx'
 import { Btn, Modal } from './ui.tsx'
@@ -36,15 +36,25 @@ function HoverCard(props: {
   const { hover, quote, prefs, popRef, onSized, onOpen, onEnter, onLeave } = props
   const [kind, setKind] = useState<PopKind>('loading')
   const [data, setData] = useState<TrendData | KlineData | null>(null)
+  /**
+   * 取数失败/上游不可用的**原因**（P1-2）。
+   *
+   * 宿主在 `ChartPayload.kind === 'unavailable'` 里**已经带了 `missing[]` 原因**，旧实现把它丢了：
+   * 悬浮卡只写「走势获取失败」/「暂无当日走势数据」，用户无法区分"该市场本来没分时源"（等也没用）
+   * 与"东财这会儿限流"（稍后自动重试）—— 而这个区分在详情抽屉里已经做了。
+   */
+  const [reason, setReason] = useState<UnavailableReason | null>(null)
 
   useEffect(() => {
     let alive = true
     setKind('loading')
     setData(null)
-    // 与详情抽屉共用客户端图表缓存：同一只标的来回划过只发一次请求
-    chartCache
-      .get(hover.secid, 'trend')
-      .then(async (p) => {
+    setReason(null)
+    // 原因转换的唯一实现在 chartCache.unavailableReasonOf（纯函数，可单测）
+    const run = async (): Promise<void> => {
+      try {
+        // 与详情抽屉共用客户端图表缓存：同一只标的来回划过只发一次请求
+        const p = await chartCache.get(hover.secid, 'trend')
         if (!alive) return
         if (p !== null && p.kind === 'trend') {
           setKind('trend')
@@ -56,13 +66,18 @@ function HoverCard(props: {
         if (d !== null && d.kind === 'kline') {
           setKind('kline')
           setData(d.kline)
-        } else {
-          setKind('none')
+          return
         }
-      })
-      .catch(() => {
-        if (alive) setKind('error')
-      })
+        // 两份都拿不到：原因优先取"当日分时"那份（悬停默认想看分时）
+        setReason(unavailableReasonOf(p) ?? unavailableReasonOf(d))
+        setKind('none')
+      } catch (e) {
+        if (!alive) return
+        setReason({ short: '上游本次不可达', detail: e instanceof Error ? e.message : String(e) })
+        setKind('error')
+      }
+    }
+    void run()
     return () => {
       alive = false
     }
@@ -131,11 +146,25 @@ function HoverCard(props: {
     ),
     kind === 'loading'
       ? React.createElement('div', { className: 'tw-loading', style: { height: 150 } }, '加载分时…')
-      : kind === 'error'
-        ? React.createElement('div', { className: 'tw-error', style: { height: 150 } }, '走势获取失败')
-        : kind === 'none'
-          ? React.createElement('div', { className: 'tw-loading', style: { height: 150 } }, '暂无当日走势数据')
-          : React.createElement(Sparkline, {
+      : kind === 'error' || kind === 'none'
+        ? React.createElement('div', {
+            className: kind === 'error' ? 'tw-error' : 'tw-loading',
+            style: { height: 150, display: 'flex', flexDirection: 'column', gap: 6, justifyContent: 'center', padding: '0 12px' },
+          },
+            React.createElement('span', null, kind === 'error' ? '走势获取失败' : '暂无当日走势数据'),
+            // P1-2：原因就地显示（短句常驻、长解释进 title / aria-label，键盘与读屏都能拿到）
+            reason !== null
+              ? React.createElement('span', {
+                  className: 'tw-muted',
+                  style: { fontSize: 12 },
+                  title: `${reason.short}\n${reason.detail}`,
+                  tabIndex: 0,
+                  role: 'note',
+                  'aria-label': `${reason.short}：${reason.detail}`,
+                }, reason.short)
+              : null,
+          )
+        : React.createElement(Sparkline, {
               points: sparkPoints,
               baseline,
               width: 306,
@@ -505,6 +534,8 @@ export function TopBar(props: {
         return React.createElement('span', {
           className: 'tw-badge',
           title: `其中 ${n} 个${NO_SOURCE_LABEL}；这些卡片显示 —，明细见自选或持仓页\n${NO_SOURCE_TITLE}`,
+          // 读屏拿到的是「无行情源 N」这个**徽标本身的含义**（真实渲染字符串，锁片段 `无行情源 N` 的来源）
+          'aria-label': `${NO_SOURCE_BADGE_HINT}（本批 ${n} 只）`,
           style: { fontSize: 12, color: '#e0a94a' },
         }, `无行情源 ${n}`)
       })(),

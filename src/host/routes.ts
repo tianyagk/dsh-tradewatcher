@@ -8,7 +8,7 @@ import * as em from './em.ts'
 import { ledgerTotal, assemblePortfolio, ledgerViews } from './portfolio.ts'
 import { DataStore, secidKey } from './store.ts'
 import { CalendarStore, calToday, type CalSyncSourceResult } from './calendar.ts'
-import { RESCUE_METHODOLOGY, RescueMonitor } from './rescue.ts'
+import { RESCUE_METHODOLOGY, RescueMonitor, wireRescueSnapshot } from './rescue.ts'
 import { QUOTE_HOSTS, HISTORY_HOSTS } from './em.ts'
 import { breakerSummary } from './breaker.ts'
 import { HttpError, httpStatusOf, retryAfterSecondsOf } from './http.ts'
@@ -446,7 +446,9 @@ export function makeTradeRoutes(
             asOf: k === null ? null : Date.now(),
             stale: k?.stale === true || qprovenance.stale === true,
             source: 'em-kline+quote',
-            // 最后一根 bar 的元信息：partial=true 说明是盘中未完成 bar（数值会变，不可当最终值）
+            // 最后一根 bar 的元信息：partial=true 说明是盘中未完成 bar（数值会变，不可当最终值）。
+            // ⚠ 下面 `...series` 的 `lastBar` 会**覆盖**这一行（两者同源同形，见 AUDIT-IMPL74 §2）：
+            //    这里先写是为了"回包字段顺序/形状"稳定，实际生效的是 `chipSeriesOf` 产出的那份。
             lastBar: em.lastBarOfKline(secid, 101, 1),
             ...series,
             // 量纲归一的如实标注（null = 没动过）；客户端把它并进"口径偏离"那一行
@@ -1290,9 +1292,12 @@ export function makeTradeRoutes(
             // 否则前端拿到的是空快照 —— 标的卡与因子表会整块消失
             if (!wantsForce) await rescue.ensureFresh()
             const snapshot = wantsForce ? await rescue.sampleNow() : rescue.snapshot()
+            // 线上编码（AUDIT-IMPL76 ④）：只裁空字段（hhmm 空串 / price null），语义不变；
+            // 客户端 `rescueCardPointsOf()` 对新旧两种编码都能还原。落盘快照仍是 dense。
+            const wireSnapshot = wireRescueSnapshot(snapshot)
             if (day !== null && /^\d{4}-\d{2}-\d{2}$/.test(day)) {
               send(res, 200, {
-                snapshot,
+                snapshot: wireSnapshot,
                 history: rescue.history(30),
                 // 口径字符串随结果返回（与算法同源）
                 methodology: RESCUE_METHODOLOGY,
@@ -1306,7 +1311,7 @@ export function makeTradeRoutes(
             }
             const b = breakerSummary(upstreamHosts)
             send(res, 200, {
-              snapshot, history: rescue.history(30), calibrated: rescue.calibratedInfo,
+              snapshot: wireSnapshot, history: rescue.history(30), calibrated: rescue.calibratedInfo,
               calibration: rescue.calibrationInfo,
               // 聚合：此前只反映单台 push2delay 的状态（其它主机被限流时横幅显示"正常"，
               // 而 push2delay 单独熔断时又让界面以为整组不可用）

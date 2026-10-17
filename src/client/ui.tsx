@@ -4,7 +4,7 @@ import { SUGGEST_FULL_COUNT, type SuggestItem } from '../shared/model.ts'
 import { api } from './api.ts'
 import {
   SUGGEST_HEAD_PX, SUGGEST_PAGE, SUGGEST_ROW_PX, SUGGEST_COUNT_PX,
-  batchOf, countTextOf, suggestDropdownBoxOf, suggestListViewOf, type SuggestDropdownBox,
+  batchOf, countTextOf, edgeActiveOf, nextActiveOf, suggestDropdownBoxOf, suggestListViewOf, type SuggestDropdownBox,
 } from './suggestView.ts'
 
 export function Modal(props: {
@@ -62,8 +62,21 @@ export function SuggestInput(props: {
   const [shown, setShown] = useState(SUGGEST_PAGE)
   const [open, setOpen] = useState(false)
   const [busy, setBusy] = useState(false)
+  /**
+   * 键盘高亮的候选下标（P1-4）。
+   *
+   * 旧实现候选行只有 `onMouseDown`：键盘 Enter/Space 激活 `<button>` 触发的是 **click**，
+   * 于是"看起来能用其实不能用"，键盘用户只能靠输入框里的"回车取第一个"选中排序第一的那条。
+   * 现在 ↑/↓/Home/End 移动这个下标，Enter 选中它；同时补 combobox/listbox/option 语义
+   * + `aria-activedescendant`，读屏能读到"这是搜索建议、当前第几条"。
+   */
+  const [active, setActive] = useState(-1)
   const boxRef = useRef<HTMLDivElement | null>(null)
   const seq = useRef(0)
+  /** 唯一 id 前缀：同一弹窗里若挂两个搜索框，`aria-controls` 也不会指错 */
+  const uId = React.useId()
+  const listId = `${uId}-listbox`
+  const optionId = (i: number): string => `${uId}-opt-${i}`
 
   const query = useCallback((q: string) => {
     const s = ++seq.current
@@ -77,6 +90,7 @@ export function SuggestInput(props: {
         setMeta({ requested: r.requested, truncated: r.truncated })
         setReason(r.reason ?? null)
         setShown(SUGGEST_PAGE)
+        setActive(-1)
         setOpen(true)
       })
       .catch((e: Error) => {
@@ -85,6 +99,7 @@ export function SuggestInput(props: {
         setMeta(null)
         // 失败**照样打开**并把原因写出来（空列表 + 关掉弹层会被读成"就是没有匹配"）
         setReason(`搜索未取到 —— ${e.message}（上游不可用时按缓存与限流自动重试）`)
+        setActive(-1)
         setOpen(true)
       })
       .finally(() => {
@@ -99,6 +114,7 @@ export function SuggestInput(props: {
         setHits([])
         setOpen(false)
         setBusy(false)
+        setActive(-1)
       } else {
         query(q)
       }
@@ -158,16 +174,66 @@ export function SuggestInput(props: {
     setOpen(false)
     setText('')
     setReason(null)
+    setActive(-1)
     props.onPick(item)
   }
 
+  /** 键盘移动用**扁平**候选列表（与渲染顺序一致：分组顺序 + 组内顺序 = 界面上的第 1/2/3… 条） */
+  const flatRows: SuggestItem[] = batched.groups.flatMap((g) => g.rows)
+  /** 每组的扁平起始下标（渲染时据此算 `optionId`/`aria-selected`） */
+  const groupOffsets: number[] = []
+  {
+    let off = 0
+    for (const g of batched.groups) {
+      groupOffsets.push(off)
+      off += g.rows.length
+    }
+  }
+  const activeId = active >= 0 && active < flatRows.length ? optionId(active) : undefined
+
   const onKeyDown = (e: React.KeyboardEvent): void => {
-    const first = view.groups[0]?.rows[0]
-    if (e.key === 'Enter' && first !== undefined && text.trim() !== '') {
+    const total = flatRows.length
+    const apply = (next: number, e: React.KeyboardEvent): void => {
       e.preventDefault()
-      pick(first)
-    } else if (e.key === 'Escape') {
+      if (!open) setOpen(true)
+      setActive(next)
+    }
+    // 下标算法在 suggestView（纯函数，单测覆盖环绕/边界）
+    if (e.key === 'ArrowDown') {
+      if (total === 0) return
+      apply(nextActiveOf(open ? active : -1, total, 1), e)
+      return
+    }
+    if (e.key === 'ArrowUp') {
+      if (total === 0) return
+      apply(nextActiveOf(open ? active : -1, total, -1), e)
+      return
+    }
+    if (e.key === 'Home' || e.key === 'End') {
+      if (!open || total === 0) return
+      apply(edgeActiveOf(total, e.key === 'Home' ? 'home' : 'end'), e)
+      return
+    }
+    if (e.key === 'Enter') {
+      // 有键盘高亮就选它；**没有高亮时保持原行为**：回车取排序后第一条（既有默认不变）
+      const highlighted = open && active >= 0 ? flatRows[active] : undefined
+      if (text.trim() === '') return
+      if (highlighted !== undefined) {
+        e.preventDefault()
+        pick(highlighted)
+        return
+      }
+      if (flatRows.length > 0) {
+        e.preventDefault()
+        const first = flatRows[0] as SuggestItem
+        pick(first)
+      }
+      return
+    }
+    if (e.key === 'Escape') {
+      e.preventDefault()
       setOpen(false)
+      setActive(-1)
     }
   }
 
@@ -179,6 +245,13 @@ export function SuggestInput(props: {
       value: text,
       placeholder: props.placeholder ?? '搜索代码/名称，回车取第一个',
       autoFocus: props.autoFocus === true,
+      // combobox 语义（P1-4）：读屏能读到"这是搜索建议、展开没展开、当前高亮第几条"
+      role: 'combobox',
+      'aria-autocomplete': 'list',
+      'aria-expanded': open,
+      'aria-haspopup': 'listbox',
+      'aria-controls': open ? listId : undefined,
+      'aria-activedescendant': open ? activeId : undefined,
       onChange: (e) => setText(e.target.value),
       onKeyDown: onKeyDown,
       onFocus: () => { if (hits.length > 0) setOpen(true) },
@@ -194,6 +267,10 @@ export function SuggestInput(props: {
               ? { top: 'calc(100% + 2px)', left: 0, right: 0, visibility: 'hidden' }
               : { position: 'fixed', top: box.top, left: box.left, width: box.width, maxHeight: box.maxHeight, right: 'auto' },
             'data-role': 'suggest-list',
+            // listbox 语义（P1-4）：容器是 listbox、行是 option、输入框用 aria-activedescendant 指当前项
+            role: 'listbox',
+            id: listId,
+            'aria-label': '搜索候选',
             // 供断言读：是否向上翻转、当前可用高度
             'data-flip': box?.up === true ? 'up' : 'down',
             'data-max-h': box === null ? '' : String(box.maxHeight),
@@ -215,41 +292,56 @@ export function SuggestInput(props: {
                     'data-role': 'suggest-count', tabIndex: 0, role: 'note', 'aria-label': countTextOf(view),
                   }, countTextOf(view)),
                   // ④ 分组渲染（组头 + 既有行样式）
-                  ...batched.groups.flatMap((g) => [
+                  ...batched.groups.flatMap((g, gi) => [
                     React.createElement('div', {
                       key: `h-${g.market}`, className: 'tw-muted',
                       style: { padding: '4px 11px', fontSize: 12, background: 'var(--tw-bg2)' },
                       'data-role': `suggest-group-${g.market}`,
+                      // 组头不是 option（读屏仍读得到文字）
+                      role: 'presentation',
                     }, `${g.label} · ${g.rows.length} 条`),
-                    ...g.rows.map((h) => React.createElement(
-                      'button',
-                      {
-                        key: h.secid,
-                        type: 'button',
-                        onMouseDown: (e: React.MouseEvent) => {
-                          e.preventDefault()
-                          pick(h)
+                    ...g.rows.map((h, ri) => {
+                      const idx = (groupOffsets[gi] ?? 0) + ri
+                      const isActive = active === idx
+                      return React.createElement(
+                        'button',
+                        {
+                          key: h.secid,
+                          type: 'button',
+                          role: 'option',
+                          id: optionId(idx),
+                          'aria-selected': isActive,
+                          'data-active': isActive ? 'true' : undefined,
+                          // 键盘：Enter/Space 激活 button 触发的是 click ⇒ 选中必须接在 onClick 上
+                          // （旧实现只挂 onMouseDown，键盘按下去什么都不发生 —— P1-4）
+                          onClick: () => pick(h),
+                          // 鼠标：按下时不让输入框失焦（否则列表会在 click 之前关掉）
+                          onMouseDown: (e: React.MouseEvent) => {
+                            e.preventDefault()
+                          },
+                          onMouseEnter: () => setActive(idx),
                         },
-                      },
-                      React.createElement('span', null, h.name, React.createElement('small', { className: 'tw-muted' }, ` ${h.code}`)),
-                      // 只有东财一条链路的标的：东财被限流期间必然空行，提前说清（不拦着添加）
-                      h.hasFallback === false
-                        ? React.createElement('span', {
-                            className: 'tw-badge',
-                            title: '腾讯/新浪都没有该标的的映射：东财行情主机不可用时，它不会有价格（加入后会在自选里显示「无行情源」）',
-                            style: { fontSize: 12, color: '#e0a94a' },
-                          }, '仅东财源')
-                        : null,
-                      React.createElement('span', { className: 'k' }, h.kind),
-                    )),
+                        React.createElement('span', null, h.name, React.createElement('small', { className: 'tw-muted' }, ` ${h.code}`)),
+                        // 只有东财一条链路的标的：东财被限流期间必然空行，提前说清（不拦着添加）
+                        h.hasFallback === false
+                          ? React.createElement('span', {
+                              className: 'tw-badge',
+                              title: '腾讯/新浪都没有该标的的映射：东财行情主机不可用时，它不会有价格（加入后会在自选里显示「无行情源」）',
+                              style: { fontSize: 12, color: '#e0a94a' },
+                            }, '仅东财源')
+                          : null,
+                        React.createElement('span', { className: 'k' }, h.kind),
+                      )
+                    }),
                   ]),
                   // ⑤ 分批渲染：一次只挂 SUGGEST_PAGE 行（长列表不卡），剩下的按需展开
                   batched.hidden > 0
                     ? React.createElement('button', {
                         type: 'button', 'data-role': 'suggest-more',
+                        onClick: () => setShown((n) => n + SUGGEST_PAGE),
+                        // 键盘 Enter 触发 click；mousedown 只负责"别让输入框失焦"
                         onMouseDown: (e: React.MouseEvent) => {
                           e.preventDefault()
-                          setShown((n) => n + SUGGEST_PAGE)
                         },
                       }, `显示更多（还有 ${batched.hidden} 条）`)
                     : null,

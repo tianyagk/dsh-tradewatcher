@@ -221,3 +221,23 @@ export function suggestDropdownBoxOf(input: {
 export function visibleRowsOf(maxHeight: number): number {
   return Math.max(0, Math.floor((maxHeight - SUGGEST_COUNT_PX) / SUGGEST_ROW_PX))
 }
+
+// ── 键盘高亮下标（P1-4，纯函数便于断言）─────────────────────────────────────
+// 旧实现候选行只有 `onMouseDown`：键盘 Enter/Space 触发的是 click ⇒ 键盘永远选不中，
+// 只能靠输入框里"回车取第一个"。下面两个函数是 ↑/↓/Home/End 的**唯一实现**。
+
+/**
+ * 上下键移动高亮：`-1`（没有高亮）时，↓ 落到第一条、↑ 落到最后一条；到边界**环绕**。
+ * `total === 0` ⇒ 返回 `-1`（没有候选，不高亮任何东西）。
+ */
+export function nextActiveOf(current: number, total: number, delta: -1 | 1): number {
+  if (total <= 0) return -1
+  if (current < 0) return delta === 1 ? 0 : total - 1
+  return (((current + delta) % total) + total) % total
+}
+
+/** Home/End：跳到第一条 / 最后一条（没有候选时 `-1`） */
+export function edgeActiveOf(total: number, edge: 'home' | 'end'): number {
+  if (total <= 0) return -1
+  return edge === 'home' ? 0 : total - 1
+}

@@ -42,12 +42,29 @@ export function breakerBadgeOf(input: {
 // 红线：总分是**异常程度**，不是买卖信号 ⇒ 颜色用**中性色阶**，文案只允许"异常程度"这类刻度词，
 // 不允许出现「买入 / 卖出 / 建议 / 胜率 / 概率」这类措辞（断言 `rescueVisual.test.ts` 会盯住）。
 
-/** 中性色阶：低（灰）→ 中（琥珀）→ 偏高（橙）——**不表方向，只表异常程度** */
+/**
+ * 中性色阶：低（中性灰）→ 中（琥珀）→ 偏高（焦橙）——**不表方向，只表异常程度**。
+ *
+ * P1-10：改用 `styles.ts` 的语义 token（`--tw-imp-2/3`）。此前的两个硬编码色值在隐身视图里
+ * 不会灰化（与护盘等级那一处同一类颜色泄漏）；token 由 `[data-view=incognito]` 统一灰化。
+ */
 export function abnormalColorOf(score: number | null): string {
-  if (score === null || !Number.isFinite(score)) return 'var(--tw-fg-dim, #8b93a7)'
-  if (score >= 55) return '#e0872a'
-  if (score >= 35) return '#d8a13a'
-  return 'var(--tw-fg-dim, #8b93a7)'
+  if (score === null || !Number.isFinite(score)) return 'var(--tw-fg-dim)'
+  if (score >= 55) return 'var(--tw-imp-3)'
+  if (score >= 35) return 'var(--tw-imp-2)'
+  return 'var(--tw-fg-dim)'
+}
+
+/**
+ * 历史回看弹窗的状态（P1-9）：**失败不许伪装成"当日无信号/无抽样点"**。
+ *
+ * - `error`：有失败原因 ⇒ 只显示原因 + 重试（那两句"无信号/无抽样"都不会出现）；
+ * - `loading`：没有失败、也还没有结果 ⇒ 骨架；
+ * - `ready`：拿到结果 ⇒ 正常渲染（此时 events/intraday 为空才是**真的**"当日没有"）。
+ */
+export function dayHistoryStateOf(input: { err: string | null; detail: unknown | null }): 'error' | 'loading' | 'ready' {
+  if (input.err !== null) return 'error'
+  return input.detail === null ? 'loading' : 'ready'
 }
 
 /** 刻度文案（唯一实现）：只描述异常程度，不含任何买卖语义 */
@@ -63,4 +80,29 @@ export function ringDashOf(score: number | null, circumference = 2 * Math.PI * 2
   const pct = score === null || !Number.isFinite(score) ? 0 : Math.max(0, Math.min(100, score)) / 100
   const dash = Math.round(circumference * pct * 100) / 100
   return { dash, gap: Math.round((circumference - dash) * 100) / 100, pct }
+}
+
+/**
+ * 六卡分钟序列的**读侧归一**（AUDIT-IMPL76 ④）。
+ *
+ * 宿主线上编码只发有信息量的字段（`hhmm` 空串不发、`price` null 不发），老宿主/落盘快照仍是 dense。
+ * 这个函数把**两种编码**都还原成同一种形状：`{ hhmm, amount, price }`，缺省按语义兜底
+ * （`hhmm → ''`、`price → null`、`amount → null`，**不把缺失当成 0**）。
+ * 判据：对同一份数据，dense 与稀疏编码归一后必须**逐点 deepEqual**。
+ */
+export interface RescueCardPoint {
+  hhmm: string
+  amount: number | null
+  price: number | null
+}
+
+export function rescueCardPointsOf(
+  card: { points?: ReadonlyArray<{ hhmm?: string; amount?: number | null; price?: number | null }> | null } | null,
+): RescueCardPoint[] {
+  const points = card?.points ?? []
+  return points.map((p) => ({
+    hhmm: typeof p.hhmm === 'string' ? p.hhmm : '',
+    amount: typeof p.amount === 'number' && Number.isFinite(p.amount) ? p.amount : null,
+    price: typeof p.price === 'number' && Number.isFinite(p.price) ? p.price : null,
+  }))
 }

@@ -1,96 +1,129 @@
 /**
- * `trends-lkg.json` 的数据卫生（REVIEW-4-RISK §P2）：真机实测 **5.19MB / 111 条 / 无上限 / 每 5 秒整份重写**。
+ * `trends-lkg` 分片存储的**数据卫生**（AUDIT-IMPL76 第 3 项）。
  *
- * 两道闸各有一个**纯函数**做判据（可测、可注入）：
- *   · `trimTrendPayload` —— 体积上限：超限按 `at` 新 → 旧保留，压到上限的 80%；
- *   · `trendWriteDecision` —— 要不要落盘：不 dirty / 节流窗口内 / **内容指纹未变** ⇒ 不写。
- * 断言目标不是"函数存在"，而是"超大输入会被裁"与"内容没变时不写"（删掉任一条都会红）。
+ * 旧实现是单文件 2.34 MB / 132 条、每 5 秒整份重写（REVIEW-9-PERF §3.2）。拆成分片后必须继续锁住四件事：
+ *  ① **保留有上限、且不静默**：超条数/超体积时只按最旧丢，每一条都在清单 `dropped` 里带原因
+ *     （守恒判据：`存活 + 累计丢弃 == 写入过的总数`）；
+ *  ② **只写变化的分片**：`trend` 没变（只有 `at` 变）⇒ 分片 0 写入、只写清单（≈8 KB）；
+ *  ③ **分片里只有 trend**（`ts`/`at` 不进分片）：时间进分片会让"内容未变"永远判成"变了"；
+ *  ④ **节流语义**：窗口内不写、且 dirty 必须保留（下一轮重试）—— v0.91.0 的两个顺序 bug 就是在这里丢的。
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { payloadFingerprint, trendLkgPersistStep, trimTrendPayload, trendWriteDecision } from './em.ts'
+import { mkdtempSync, readFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import type { TrendData } from '../shared/model.ts'
+import {
+  LKG_MANIFEST_V, LKG_PERSIST_MS, TrendLkgStore, decodeLkgManifest, encodeLkgShard, lkgShardName, planLkgTrim,
+} from './trendLkgStore.ts'
+import { TREND_LKG_MAX, TREND_LKG_MAX_BYTES } from '../shared/trendRetention.ts'
 
-/** 造一条体积可控的假分时 */
-function fakeTrend(points: number, pad: string): { points: Array<[number, number]>; pad: string } {
-  return { points: Array.from({ length: points }, (_, i) => [1_700_000_000_000 + i * 60_000, 100 + (i % 7)] as [number, number]), pad }
+function freshDir(): string {
+  return mkdtempSync(join(tmpdir(), 'tw-lkg-hyg-'))
 }
 
-test('① 体积上限：超大输入必须被裁到上限内，且保留的是**最新的**条目', () => {
-  const entries = Array.from({ length: 12 }, (_, i) => ({ key: `1.00000${i}|1`, at: 1_700_000_000_000 + i * 1000, trend: fakeTrend(50, 'x'.repeat(200_000)) }))
-  const before = JSON.stringify({ ts: 0, entries }).length
-  const out = trimTrendPayload(entries, 1_000_000)
-  const after = JSON.parse(out.text) as { entries: Array<{ key: string; at: number }> }
-  assert.equal(before > 1_000_000, true, `夹具本身要超限（实得 ${(before / 1024).toFixed(0)}KB）`)
-  assert.equal(out.text.length <= 1_000_000, true, `裁剪后必须 ≤ 上限（实得 ${(out.text.length / 1024).toFixed(0)}KB）`)
-  assert.equal(out.dropped.length > 0, true, '必须报出被裁掉的条目（调用方要同步清内存）')
-  const keptAts = after.entries.map((e) => e.at)
-  assert.deepEqual([...keptAts].sort((a, b) => a - b), keptAts.slice().sort((a, b) => a - b), '保留顺序按 at 新→旧')
-  assert.equal(keptAts.includes(1_700_000_000_000 + 11 * 1000), true, '最新的一条必须在保留集合里')
-  // 未超限 ⇒ 原样返回（不许白白重排）
-  const small = [{ key: 'a|1', at: 1, trend: fakeTrend(3, 'y') }]
-  assert.equal(trimTrendPayload(small, 1_000_000).dropped.length, 0, '没超限就不裁')
-})
-
-test('② 有变化 ⇒ 写；节流窗口内 ⇒ 不写；**内容未变 ⇒ 不写**（写放大的闸）', () => {
-  const payload = JSON.stringify({ ts: 1, entries: [{ key: 'a|1', at: 1 }] })
-  const fp = payloadFingerprint(payload)
-  const base = { now: 10_000_000, lastWrite: 0, payload }
-  assert.deepEqual(trendWriteDecision({ ...base, dirty: true, lastFingerprint: null }), { write: true, fingerprint: fp, reason: '有变化' })
-  assert.equal(trendWriteDecision({ ...base, dirty: false, lastFingerprint: null }).write, false, '不 dirty ⇒ 不写')
-  assert.equal(trendWriteDecision({ ...base, dirty: true, lastFingerprint: null, lastWrite: base.now - 1000 }).write, false, '节流窗口内 ⇒ 不写')
-  const same = trendWriteDecision({ ...base, dirty: true, lastFingerprint: fp })
-  assert.equal(same.write, false, '⚠ 内容指纹一致 ⇒ 必须跳过整份重写（否则就是 5MB × 每 5 秒的写放大）')
-  assert.ok(same.reason.includes('内容未变'), `原因要写清楚：${same.reason}`)
-  // 指纹判别性：内容一变，指纹必须变（否则"跳过"会把真变化吞掉）
-  assert.notEqual(payloadFingerprint(payload.replace('at":1', 'at":2')), fp, '内容变了指纹必须变')
-})
-
-test('③ 指纹文本不含 `ts`（含它 = 闸永远开着）：跨时间稳定 ⇒ 第二次不写；注入回 `text` ⇒ 必败', () => {
-  const entries = [{ key: '1.600519|1', at: 1_700_000_000_000, trend: fakeTrend(40, 'z') }]
-  const realNow = Date.now
-  try {
-    // 同一份 entries、两个不同的"现在"：落盘文本里的 ts 会变，指纹文本必须不变
-    Date.now = () => 1_000_000
-    const a = trimTrendPayload(entries, 1_000_000)
-    Date.now = () => 9_000_000
-    const b = trimTrendPayload(entries, 1_000_000)
-    assert.notEqual(a.text, b.text, '落盘文本必须带 ts（这份文件是什么时候写的）')
-    assert.ok(a.text.includes('"ts"'), '落盘文本里有 ts')
-    assert.equal(a.stableText.includes('"ts"'), false, '⚠ 指纹文本不许含 ts（含了就会每次判"有变化"）')
-    assert.equal(a.stableText, b.stableText, '同一份 entries ⇒ 指纹文本必须逐字节相同')
-    // 判据：第二轮"内容未变 ⇒ 不写"
-    const fp = payloadFingerprint(a.stableText)
-    const write1 = trendWriteDecision({ dirty: true, now: 10_000_000, lastWrite: 0, payload: a.stableText, lastFingerprint: null })
-    assert.equal(write1.write, true, '第一次：有变化 ⇒ 写')
-    const write2 = trendWriteDecision({ dirty: true, now: 10_000_000, lastWrite: 0, payload: b.stableText, lastFingerprint: fp })
-    assert.equal(write2.write, false, '第二轮：内容未变 ⇒ 不写（2.34MB 整份重写的闸）')
-    assert.ok(write2.reason.includes('内容未变'), `原因要写清楚：${write2.reason}`)
-    // 反例注入：拿带 ts 的 text 当指纹 ⇒ 第二轮仍然"有变化" ⇒ 上面那条必败
-    const fpText = payloadFingerprint(a.text)
-    const injected = trendWriteDecision({ dirty: true, now: 10_000_000, lastWrite: 0, payload: b.text, lastFingerprint: fpText })
-    assert.equal(injected.write, true, '⚠ 反例（指纹用 text）必须仍然要写 —— 这正是修之前的行为')
-  } finally {
-    Date.now = realNow
+function trendOf(points: number, seed = 1): TrendData {
+  return {
+    secid: '1.600519',
+    prePrice: null,
+    points: Array.from({ length: points }, (_, i) => ({
+      t: 1_790_000_000_000 + i * 60_000,
+      label: `2026-10-16 10:${String(i % 60).padStart(2, '0')}`,
+      price: 100 + (i % 7) + seed,
+      avg: null,
+      vol: null,
+      amount: null,
+    })),
+    last: 100,
   }
+}
+
+test('① 保留策略：超条数/超体积只按最旧丢，每条带原因（守恒：存活 + 丢弃 == 总数）', () => {
+  const entries = Array.from({ length: 12 }, (_, i) => ({ key: `k${i}|1`, at: 1_000 + i * 10, seq: i + 1, bytes: 10 }))
+  const byCount = planLkgTrim(entries, { maxEntries: 10, maxBytes: TREND_LKG_MAX_BYTES })
+  assert.equal(byCount.dropped.length, 2, `超 2 条 ⇒ 丢 2 条（实际 ${byCount.dropped.length}）`)
+  assert.deepEqual(byCount.dropped.map((d) => d.key), ['k0|1', 'k1|1'], '丢的必须是最旧的两条')
+  assert.ok(byCount.dropped.every((d) => d.reason.includes('条数上限')), `原因要写清是条数上限：${JSON.stringify(byCount.dropped)}`)
+  // 体积上限：每条形如 10 字节，上限 25 字节 ⇒ 只能留 2 条（新的）
+  const byBytes = planLkgTrim(entries, { maxEntries: 100, maxBytes: 25 })
+  assert.equal(byBytes.dropped.length, 10, `体积超限 ⇒ 丢 10 条（实际 ${byBytes.dropped.length}）`)
+  assert.ok(byBytes.dropped.every((d) => d.reason.includes('体积上限')), '原因要写清是体积上限')
+  assert.deepEqual(byBytes.kept.map((k) => k.key), ['k10|1', 'k11|1'], '留下的是最新的两条')
+  // 守恒：存活 + 丢弃 == 总数（静默截断会让这个等式不成立）
+  assert.equal(byCount.kept.length + byCount.dropped.length, entries.length)
+  assert.equal(byBytes.kept.length + byBytes.dropped.length, entries.length)
 })
 
-test('④ 落盘状态迁移：节流跳过必须**保留 dirty**（下一轮重试）；内容未变才清 dirty；先推进 lastWrite ⇒ 必败', () => {
-  const payload = JSON.stringify([{ key: 'a|1', at: 1 }])
-  const now = 10_000_000
-  // ① 正常：dirty + 窗口外 + 新内容 ⇒ 写，并推进 lastWrite / 记指纹
-  const written = trendLkgPersistStep({ dirty: true, lastWrite: 0, lastFingerprint: null }, payload, now)
-  assert.equal(written.write, true)
-  assert.deepEqual(written.next, { dirty: false, lastWrite: now, lastFingerprint: written.fingerprint })
-  // ② 节流：dirty + 窗口内 ⇒ 不写，但 **dirty 必须保留**（丢掉它 = 这份兜底文件不再更新）
-  const throttled = trendLkgPersistStep({ dirty: true, lastWrite: now - 1000, lastFingerprint: null }, payload, now)
-  assert.equal(throttled.write, false)
-  assert.equal(throttled.next.dirty, true, '⚠ 节流跳过不得丢掉 dirty（下一轮必须重试）')
-  // ③ 内容未变 ⇒ 不写，且清 dirty（盘上已是最新）
-  const same = trendLkgPersistStep({ dirty: true, lastWrite: now - 6000, lastFingerprint: written.fingerprint }, payload, now)
-  assert.equal(same.write, false)
-  assert.ok(same.reason.includes('内容未变'), `原因要写清楚：${same.reason}`)
-  assert.equal(same.next.dirty, false, '内容未变 ⇒ 盘上已是最新，可以清 dirty')
-  // ④ 反例注入：调用方先把 lastWrite 设成 now（v0.91.0 的第二个顺序 bug）⇒ 永远"窗口内" ⇒ 永远不写
-  const broken = trendLkgPersistStep({ dirty: true, lastWrite: now, lastFingerprint: null }, payload, now)
-  assert.equal(broken.write, false, '⚠ 反例（先推进 lastWrite）必须写不出去 —— 这就是 bug 的形状')
+test('② 只写变化的分片：trend 未变（只有 at 变）⇒ 分片 0 写、只写清单；trend 变 ⇒ 恰好 1 次分片写', async () => {
+  const dir = freshDir()
+  const store = new TrendLkgStore(() => dir)
+  store.set('1.600519|1', 1_000, trendOf(30))
+  await store.persist({ force: true })
+  const first = store.statsOf()
+  assert.equal(first.shardWrites, 1, `首次必须写 1 条分片（实际 ${first.shardWrites}）`)
+  assert.equal(first.manifestWrites, 1, '同时写清单')
+  // 同一份 trend、只有 at 变（每次取数都会刷新 at）⇒ 分片不许重写
+  store.set('1.600519|1', 2_000, trendOf(30))
+  // 节流窗口内 ⇒ 不写（交给 ④ 验证）；这里 force 绕过
+  await store.persist({ force: true })
+  const second = store.statsOf()
+  assert.equal(second.shardWrites, 1, `trend 未变 ⇒ 分片写入次数不得增加（实际 ${second.shardWrites}）`)
+  assert.equal(second.manifestWrites, 2, 'at 变了 ⇒ 清单要更新（清单只有几 KB）')
+  // trend 变了 ⇒ 恰好 1 次
+  store.set('1.600519|1', 3_000, trendOf(31))
+  await store.persist({ force: true })
+  assert.equal(store.statsOf().shardWrites, 2, `trend 变了 ⇒ 分片写 1 次（累计 2，实际 ${store.statsOf().shardWrites}）`)
+})
+
+test('③ 分片里只有 trend（不含 ts/at）；清单带 caps/dropped/entries(seq)；注入 ts ⇒ 必败', async () => {
+  const dir = freshDir()
+  const store = new TrendLkgStore(() => dir)
+  store.set('1.600519|1', 1_234, trendOf(5))
+  await store.persist({ force: true })
+  const shard = JSON.parse(readFileSync(join(dir, 'trends-lkg.d', lkgShardName('1.600519|1')), 'utf8')) as Record<string, unknown>
+  assert.deepEqual(Object.keys(shard).sort(), ['key', 'trend', 'v'], `分片只允许这三个键（实际 ${Object.keys(shard).join(',')}）`)
+  assert.equal('at' in shard, false, 'at 只在清单里（进分片会让"内容未变"永远判成变了）')
+  assert.equal('ts' in shard, false, 'ts 不许进分片')
+  const manifestRaw = JSON.parse(readFileSync(join(dir, 'trends-lkg.json'), 'utf8')) as unknown
+  const manifest = decodeLkgManifest(manifestRaw)
+  assert.ok(manifest !== null, '清单必须可解码（v3）')
+  assert.equal(manifest.v, LKG_MANIFEST_V)
+  assert.deepEqual(manifest.caps, { maxEntries: TREND_LKG_MAX, maxBytes: TREND_LKG_MAX_BYTES, maxShardWriteBytes: 512 * 1024 }, '保留口径必须写进清单（悬停文案与它同源）')
+  assert.equal(manifest.entries.length, 1)
+  assert.equal(manifest.entries[0].key, '1.600519|1')
+  assert.equal(manifest.entries[0].at, 1_234, 'at 在清单里')
+  assert.equal(typeof manifest.entries[0].seq, 'number', 'seq 决定重载顺序')
+  assert.ok(manifest.entries[0].bytes > 0, '字节数也记下来（体积上限不必每次 stat）')
+  // 反例注入：把 at 塞回分片 ⇒ 上面对键集合的断言必败
+  const injected = JSON.parse(encodeLkgShard('1.600519|1', trendOf(5))) as Record<string, unknown>
+  injected.at = 1_234
+  assert.notDeepEqual(Object.keys(injected).sort(), ['key', 'trend', 'v'], '⚠ 注入（分片里塞 at）必须被键集合判据抓住')
+})
+
+test('④ 节流：窗口内不写且 **dirty 保留**；过窗后写（v0.91.0 的两个顺序 bug 的形状）', async () => {
+  const dir = freshDir()
+  let now = 10_000_000
+  const store = new TrendLkgStore(() => dir, () => now)
+  store.set('a|1', now, trendOf(3))
+  await store.persist() // 第一次：lastWrite=now
+  const base = store.statsOf()
+  assert.equal(base.persists, 1)
+  // 窗口内再改：persist 必须什么都不做
+  now += Math.floor(LKG_PERSIST_MS / 2)
+  store.set('b|1', now, trendOf(4))
+  await store.persist()
+  assert.equal(store.statsOf().persists, 1, '节流窗口内不许 persist')
+  assert.equal(store.statsOf().shardWrites, 1, '窗口内不许写分片')
+  // 过窗：上一轮的 dirty 必须**还在**（丢掉它 = 这条永远不落盘）
+  now += LKG_PERSIST_MS + 1
+  await store.persist()
+  assert.equal(store.statsOf().persists, 2, '过窗后必须真的 persist')
+  assert.equal(store.statsOf().shardWrites, 2, 'b|1 的分片必须补写（dirty 被保住）')
+  // 反例：窗口内把 dirty 清掉（旧 bug）⇒ 过窗后不会有第 2 次写
+  const fresh = new TrendLkgStore(() => freshDir(), () => now)
+  fresh.set('c|1', now, trendOf(3))
+  await fresh.persist()
+  fresh.__resetForTest()
+  assert.equal(fresh.statsOf().persists, 0, '⚠ 反例形状：清掉 dirty（reset）后窗口内一次都不会写')
 })

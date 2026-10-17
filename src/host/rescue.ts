@@ -355,6 +355,35 @@ export function cardSeriesOf(
   })
 }
 
+/**
+ * 线上编码（AUDIT-IMPL76 ④）：**只裁空字段**，语义不变。
+ *
+ * 背景（REVIEW-9-PERF §4）：`/rescue` 回包 78.7 KB 里 `etfSeries` 占 69.8 KB，每点 48.1 B 中
+ * **39% 是 `"hhmm":""` 或 `"price":null`** —— 空串/显式 null 没有信息量，却要为 6 通道 × 242 点各付一次。
+ * 这里只做"缺省 ≡ 空/未知"的裁剪：`amount` 恒在（`null` 表示这一分钟没有读数，**不写 0**），
+ * `hhmm` 非空才发、`price` 非 null 才发。读侧用 `rescueView.rescueCardPointsOf()` 还原（兼容新旧两种编码）。
+ *
+ * ⚠ 只作用于**回包**：落盘快照（`rescue-log.json`）与内存里的快照仍是 dense 形状
+ * （老版本回滚后仍能读；也避免"落盘格式"跟着线上编码漂）。
+ */
+export function wireCardSeries(cards: readonly RescueCardSeries[]): RescueCardSeries[] {
+  return cards.map((card) => ({
+    ...card,
+    points: card.points.map((p) => {
+      const out: RescueCardSeries['points'][number] = { amount: p.amount }
+      if (p.hhmm !== undefined && p.hhmm !== '') out.hhmm = p.hhmm
+      if (p.price !== undefined && p.price !== null) out.price = p.price
+      return out
+    }),
+  }))
+}
+
+/** 快照的线上编码（`etfSeries` 走 `wireCardSeries`，其余字段原样；`null` 原样返回） */
+export function wireRescueSnapshot(snapshot: RescueSnapshot | null): RescueSnapshot | null {
+  if (snapshot === null || snapshot.etfSeries === undefined) return snapshot
+  return { ...snapshot, etfSeries: wireCardSeries(snapshot.etfSeries) }
+}
+
 /** 分时点保留上限（条） */
 export const RESCUE_INTRADAY_MAX = 120
 /** 分时点序列化体积上限（字节）——六通道字段进来之后必须有上界，否则当日文件会无节制变大 */

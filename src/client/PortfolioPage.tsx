@@ -919,8 +919,15 @@ function LedgerModal(props: { target: { mode: string; id: string; title: string;
   const r = props.target.row
   const redUp = props.redUp
   const diluted = props.diluted
-  const chip = (verb: LedgerView['verb']): string =>
-    verb === 'buy' ? 'tw-chip-up' : verb === 'sell' ? 'tw-chip-down' : 'tw-chip-flat'
+  /**
+   * 买卖方向（P1-6）：**颜色不承载方向**。
+   *
+   * 旧实现 `buy → tw-chip-up / sell → tw-chip-down`：这两个 class 的颜色由 `prefs.redUp` 决定，
+   * 于是把色义切成"绿涨红跌"后**买入变绿、卖出变红** —— 同一笔操作的颜色含义随偏好翻转；
+   * 隐身档又把 up/down 一起灰化 ⇒ 买卖两侧同色。方向与涨跌是两件事：
+   * 这里一律中性 chip，方向由文字「买/卖」表达，颜色只留给金额的盈亏。
+   */
+  const VERB_CHIP = 'tw-chip-flat'
   const pctStrip = (): React.ReactNode | null => {
     if (r === undefined) return null
     const cost = diluted ? r.dilutedCost : r.avgCost
@@ -954,7 +961,7 @@ function LedgerModal(props: { target: { mode: string; id: string; title: string;
               React.createElement('div', { key: r.id, className: 'tw-wrow', style: { borderTop: '1px solid var(--tw-border)', padding: '5px 2px' } },
                 React.createElement('div', { className: 'nm' },
                   React.createElement('b', null,
-                    React.createElement('span', { className: `tw-chg-chip ${chip(r.verb)}` }, verbLabel(r.verb)),
+                    React.createElement('span', { className: `tw-chg-chip ${VERB_CHIP}`, 'data-verb': r.verb }, verbLabel(r.verb)),
                     r.posName !== null ? ` ${r.posName}` : r.groupName !== null ? ` ${r.groupName}` : '',
                   ),
                   React.createElement('small', null,
@@ -1181,22 +1188,26 @@ function PosRow(props: {
 }
 
 /**
- * 持仓行缩略图的 hover 说明（P1-1）。与自选页同一口径：
- * 振幅 = (高 − 低) ÷ 昨收；缺昨收时不给振幅（分母不对等于给了一个错的波动幅度）。
+ * 持仓行缩略图的 hover 说明（P1-1 / P1-11）。与自选页同一口径：
+ * 三个值取自**分时抽样点**（不是交易所口径的今开/最高/最低），因此标签带「分时」二字；
+ * 分时振幅 = (分时高 − 分时低) ÷ 昨收；缺昨收时不给振幅（分母不对等于给了一个错的波动幅度）。
  */
-function miniHover(name: string, mini: { open?: number | null; high?: number | null; low?: number | null; prePrice?: number | null } | undefined): string {
+function miniHover(name: string, mini: { sampleFirst?: number | null; sampleHigh?: number | null; sampleLow?: number | null; prePrice?: number | null } | undefined): string {
   const head = `${name} 分时 · 点击打开明细`
   if (mini === undefined) return head
   const parts: string[] = []
-  if (mini.open != null) parts.push(`开 ${mini.open.toFixed(3)}`)
-  if (mini.high != null) parts.push(`高 ${mini.high.toFixed(3)}`)
-  if (mini.low != null) parts.push(`低 ${mini.low.toFixed(3)}`)
-  if (isUsableBaseline(mini.prePrice) && mini.high != null && mini.low != null) {
-    parts.push(`振幅 ${(((mini.high - mini.low) / mini.prePrice) * 100).toFixed(2)}%`)
+  const first = mini.sampleFirst
+  const high = mini.sampleHigh
+  const low = mini.sampleLow
+  if (first != null) parts.push(`分时首笔 ${first.toFixed(3)}`)
+  if (high != null) parts.push(`分时高 ${high.toFixed(3)}`)
+  if (low != null) parts.push(`分时低 ${low.toFixed(3)}`)
+  if (isUsableBaseline(mini.prePrice) && high != null && low != null) {
+    parts.push(`分时振幅 ${(((high - low) / mini.prePrice) * 100).toFixed(2)}%`)
   } else {
-    parts.push('振幅 —（上游未给昨收）')
+    parts.push('分时振幅 —（上游未给昨收）')
   }
-  return `${head}\n${parts.join(' · ')}`
+  return `${head}\n${parts.join(' · ')}\n（以上为分时抽样点，不是交易所口径的开/高/低；官方开高低见详情抽屉）`
 }
 
 /**

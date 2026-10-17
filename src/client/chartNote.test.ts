@@ -4,6 +4,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { cacheNoteOf, lastSuccessNote, nonSessionNote, staleReasonOf, staleVisibleOf, stamp } from './chartNote.ts'
+import { TREND_LKG_RETENTION_NOTE } from '../shared/trendRetention.ts'
 
 const trend = (labels: string[], extra: Record<string, unknown> = {}) => ({
   kind: 'trend' as const,
@@ -14,8 +15,12 @@ test('E1：降级复用一律写成「上次成功数据（MM-DD HH:mm）」，�
   const live = trend(['2026-10-09 09:30', '2026-10-09 14:55'])
   const fallback = cacheNoteOf({ ...live, fallback: true })
   const stale = cacheNoteOf({ ...live, trend: { ...live.trend, staleAt: 1790000000000 } })
-  assert.equal(fallback, ' · 上次成功数据（10-09 14:55）')
+  // AUDIT-IMPL76 ③：分时兜底必须**写明本地兜底库的保留口径**（不静默截断）——
+  // 后缀与宿主共用同一常量，所以这里用常量拼期望值（仍然是整串相等，不是"包含"）。
+  const expected = ` · 上次成功数据（10-09 14:55） · ${TREND_LKG_RETENTION_NOTE}`
+  assert.equal(fallback, expected)
   assert.equal(stale, fallback, '刷新失败与 LKG 兜底必须同一句话（此前是两种说法）')
+  assert.ok(fallback.includes('本地兜底'), '保留口径必须可见（趋势兜底）')
   assert.ok(!fallback.includes('本次刷新失败'), '「本次刷新失败」这种说法已删除')
 })
 

@@ -1,7 +1,7 @@
 /**
  */
 import * as React from 'react'
-import { abnormalColorOf, abnormalLabelOf, ringDashOf } from './rescueView.ts'
+import { abnormalColorOf, abnormalLabelOf, dayHistoryStateOf, ringDashOf } from './rescueView.ts'
 import { breakerBadgeOf } from './rescueView.ts'
 import type {
   PortPrefs, RescueConfig, RescueDaySummary, RescueEtfMeta, RescueEtfView, RescueFactor,
@@ -25,11 +25,19 @@ import { shClockText, shDayText } from './marketTime.ts'
 /** 「同时点量能」的极端档阈值（= 标定 f1.extreme = P95 = 1.92x；见上方注释的同步断言） */
 const RESCUE_F1_EXTREME = 1.92
 
+/**
+ * 护盘等级配色（P1-10）：走 `styles.ts` 的语义 token `--tw-rescue-0..3`（中性 → 警示），
+ * **不复用涨跌色相**。
+ *
+ * 旧实现把 3 档硬编码成 '#f2555a'（与浅色档 `--tw-up:#e5484d` 几乎同色）：日历的「高」跟随
+ * `--tw-up` 在隐身档被灰化，而这里的「强」**保持鲜红** —— 隐身视图下最刺眼的一处颜色泄漏。
+ * 现在两处同源，隐身档由 `[data-view=incognito]` 统一灰化。
+ */
 const LEVEL_COLOR: Record<RescueLevel, string> = {
-  0: 'var(--tw-fg-dim, #8b93a7)',
-  1: '#5da5ff',
-  2: '#f0a63a',
-  3: '#f2555a',
+  0: 'var(--tw-rescue-0)',
+  1: 'var(--tw-rescue-1)',
+  2: 'var(--tw-rescue-2)',
+  3: 'var(--tw-rescue-3)',
 }
 
 interface Calibration {
@@ -360,6 +368,8 @@ export function RescuePanel(props: {
   const [trendLoading, setTrendLoading] = React.useState(false)
   const [openDay, setOpenDay] = React.useState<string | null>(null)
   const [dayDetail, setDayDetail] = React.useState<{ events: RescueSignalEvent[]; intraday: RescueIntradayPoint[] } | null>(null)
+  /** 历史回看**失败原因**（P1-9）：失败时 detail 保持 null（=未取到），绝不拿空事件数组冒充"当日无信号" */
+  const [dayErr, setDayErr] = React.useState<string | null>(null)
 
   const config: RescueConfig = props.prefs.rescue
   const snapshot = data?.snapshot ?? null
@@ -437,10 +447,14 @@ export function RescuePanel(props: {
   const openHistory = (day: string): void => {
     setOpenDay(day)
     setDayDetail(null)
+    setDayErr(null)
     api
       .rescueDay(day)
       .then((r) => setDayDetail({ events: r.dayEvents ?? [], intraday: r.dayIntraday ?? [] }))
-      .catch(() => setDayDetail({ events: [], intraday: [] }))
+      // P1-9：失败**不许**写成 `{events: [], intraday: []}` —— 那两句会变成
+      // "当日无信号事件""当日无抽样点"，两句话都是**未经验证的否定**。
+      // 这里保持 `dayDetail === null`（= 未取到）并把原因交给弹窗显示 + 重试。
+      .catch((e: Error) => setDayErr(e.message))
   }
 
   const saveConfig = (patch: Partial<RescueConfig>): void => {
@@ -781,7 +795,10 @@ export function RescuePanel(props: {
                         style: { fontSize: 12, color: '#e0a94a' },
                       }, `上次结果${
                         typeof snapshot.bottom.computedAt === 'number'
-                          ? ` · ${new Date(snapshot.bottom.computedAt).toTimeString().slice(0, 5)}`
+                          // R5：这里曾用 `new Date(x).toTimeString()` ⇒ 按**浏览器时区**渲染
+                          // （UTC 浏览器里 14:32 会显示 06:32），与页面其它"数据时刻"不同源。
+                          // 一律走 `shClockText`（固定 Asia/Shanghai）。
+                          ? ` · ${shClockText(snapshot.bottom.computedAt).slice(0, 5)}`
                           : ''
                       }`)
                     : null,
@@ -808,7 +825,7 @@ export function RescuePanel(props: {
                         React.createElement('td', { className: 'tw-muted' }, l.pattern.bouncePct === null ? '—' : `${l.pattern.bouncePct.toFixed(2)}%`),
                         React.createElement('td', { className: 'tw-muted' }, l.pattern.lowerShadow === null ? '—' : `${(l.pattern.lowerShadow * 100).toFixed(0)}%`),
                         React.createElement('td', { className: 'tw-muted' }, l.pattern.reclaimedPrevLow ? '是' : '否'),
-                        React.createElement('td', { className: 'tw-muted' }, l.pattern.lowAtTs !== null ? new Date(l.pattern.lowAtTs).toTimeString().slice(0, 5) : '—'),
+                        React.createElement('td', { className: 'tw-muted', title: '前低时点（北京时间）' }, l.pattern.lowAtTs !== null ? shClockText(l.pattern.lowAtTs).slice(0, 5) : '—'),
                       ),
                     ),
                   ),
@@ -916,7 +933,7 @@ export function RescuePanel(props: {
         })
       : null,
     openDay !== null
-      ? React.createElement(DayModal, { day: openDay, detail: dayDetail, onClose: () => setOpenDay(null) })
+      ? React.createElement(DayModal, { day: openDay, detail: dayDetail, err: dayErr, onRetry: () => openHistory(openDay), onClose: () => setOpenDay(null) })
       : null,
     React.createElement('div', { className: 'tw-hint', style: { fontSize: 12, padding: '4px 10px 0' } },
       '口径说明：识别的是「符合国家队历史行为模式的宽基 ETF 放量 + 超大单净流入」，' +
@@ -1047,11 +1064,29 @@ function SettingsModal(props: {
 function DayModal(props: {
   day: string
   detail: { events: RescueSignalEvent[]; intraday: RescueIntradayPoint[] } | null
+  /** 取数失败原因（非 null ⇒ 只显示原因 + 重试，**不显示"无信号/无抽样"**） */
+  err: string | null
+  onRetry: () => void
   onClose: () => void
 }): React.ReactElement {
   const d = props.detail
+  /** 三态由纯函数决定（`rescueView.dayHistoryStateOf`，可单测）：失败态**不渲染**任何"无信号/无抽样"的句子 */
+  const state = dayHistoryStateOf({ err: props.err, detail: d })
   return React.createElement(Modal, { title: `${props.day} 护盘信号回看`, onClose: props.onClose, width: 620 },
-    d === null
+    state === 'error'
+      ? React.createElement('div', {
+          className: 'tw-hint',
+          style: { color: 'var(--tw-up)' },
+          tabIndex: 0,
+          role: 'note',
+          'aria-label': `历史回看未取到：${props.err}（可重试）`,
+        },
+          `历史回看本次未取到 —— ${props.err}`,
+          React.createElement('div', { style: { marginTop: 8 } },
+            React.createElement(Btn, { onClick: props.onRetry, primary: true }, '重试'),
+          ),
+        )
+      : state === 'loading'
       ? React.createElement(Skeleton, { lines: 4, height: 18 })
       : React.createElement(React.Fragment, null,
           React.createElement('div', { className: 'tw-sub-h' }, `信号事件（${d.events.length}）`),
