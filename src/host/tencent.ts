@@ -14,8 +14,12 @@
  *  - 板块排行：https://proxy.finance.qq.com/ifzqgtimg/appstock/app/mktHs/rank
  *  - 搜索建议：https://smartbox.gtimg.cn/s3/
  *
- * ⚠ 国际指数没有腾讯兜底：新浪 `int_*` 因"陈旧快照 + 无时间戳"被整体停用（见 `sina.ts` 文件头）
- * ⇒ 取不到时如实标"无兜底源"，不许拿旧值顶替。
+ * 兜底覆盖面（实测锚点见各映射表的注释）：
+ *   - 沪深/港股：行情、五日分时、日线全开；
+ *   - 国际指数：**只有行情**（`us.INX`/`us.DJI`/`us.NDX`/`hkHSI`），腾讯对它不提供分时/多日；
+ *   - 美股（105/106/107）：**只有行情**（`usFRO`/`usVIXY`/…），日线只回 1 根 ⇒ 不进 K 线链；
+ *   - 新浪 `int_*`（旧国际指数源）因"陈旧快照 + 无时间戳"整体停用（见 `sina.ts` 文件头）。
+ * 取不到时如实标"无兜底源"，不许拿旧值顶替。
  *
  * 所有请求都过 `breakerFetch.withHostBreaker`（按主机熔断记账）。
  */
@@ -27,9 +31,10 @@ const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
 
 /**
  * 东财 secid → 腾讯代码。
- * 覆盖：沪市(1.)、深市(0.)、港股(116.)。美股(105/106/107)、商品/期货(101/113/114) 无法稳定映射，
- * 返回 null（这些标的仍只有东财源）。**国际指数(100.) 见下面的 `tencentIndexCode`**——
- * 它们用的是另一种写法（`us.INX`，带点），而且 `qt.gtimg.cn` 覆盖的只有其中几个。
+ * 覆盖：沪市(1.)、深市(0.)、港股(116.)。商品/期货(101/113/114) 无法稳定映射，返回 null。
+ * **国际指数(100.) 见下面的 `tencentIndexCode`** —— 它们用的是另一种写法（`us.INX`，带点）；
+ * **美股(105/106/107) 见 `tencentUsStockQuoteCode`** —— 只开行情一条链（理由见那张表的注释）。
+ * 这三档**都不并进本函数**：它被五日分时（mkline）与日线（fqkline）复用。
  */
 export function tencentCode(secid: string): string | null {
   const [market, code] = secid.split('.')
@@ -68,9 +73,35 @@ export function tencentIndexCode(secid: string): string | null {
   return TENCENT_INDEX_CODE[secid.trim().toUpperCase()] ?? null
 }
 
-/** 「快照」可用的腾讯代码：沪深/港股 + 国际指数（**不含**五日分时的 mkline 那条链，理由见上） */
+/**
+ * 美股（东财 `105`=纳斯达克 / `106`=纽交所 / `107`=美交所）→ 腾讯 `us<TICKER>`。
+ *
+ * **实测（2026-10-17，本机；原始回包见 `docs/PROBE-US-QUOTES.md` §3.1）**：
+ *   - `usFRO` = 52.49 / -0.10%、成交额 196,988,621、总市值 116.85475 亿（= 11,685,475,000 元）；
+ *   - `usVIXY` = 17.73 / +8.11%、成交额 270,828,663（ETF 的 `f44/f45` 为**空串**，`f71` = 13,566,000 份）；
+ *   - `usAAPL` / `usSPY` / `usEWJ` / `usUVXY` / `usUNG` / `usSLV` / `usTLT` / `usSQQQ` 同样回完整行情；
+ *   - **未知代码不回行**（`usZZZZNOTREAL` ⇒ 回包里没有 `v_usZZZZNOTREAL` 这一行）⇒ 缺失仍走
+ *     「未取到 + 原因」，不会被读成 0 或别的品种；
+ *   - 交易所后缀可反查前缀：`FRO.N`（106）/`VIXY.AM`（107）/`AAPL.OQ`（105）。
+ *
+ * ⚠ **只进 `tencentQuoteCode`，不并进 `tencentCode`**：`tencentCode` 还被五日分时（mkline）与
+ * 日线（fqkline）复用，而腾讯对美股只回 1 根日线（`param=usEWY,day,,,10,qfq`，实测记录见
+ * `fetchTencentRawQuotes` 的注释）⇒ 并进去等于给日线路径凭空加一条注定拿不到历史的请求。
+ */
+export function tencentUsStockQuoteCode(secid: string): string | null {
+  const dot = secid.indexOf('.')
+  if (dot <= 0) return null
+  const market = secid.slice(0, dot)
+  if (market !== '105' && market !== '106' && market !== '107') return null
+  const code = secid.slice(dot + 1).trim().toUpperCase()
+  // 只放行常见美股代码形状：字母起头，允许数字与点（BRK.B / BF.B 这类），长度上限够用即可。
+  if (!/^[A-Z][A-Z0-9.]{0,11}$/.test(code)) return null
+  return `us${code}`
+}
+
+/** 「快照」可用的腾讯代码：沪深/港股 + 国际指数 + 美股（**不含**五日分时的 mkline 那条链，理由见上） */
 export function tencentQuoteCode(secid: string): string | null {
-  return tencentCode(secid) ?? tencentIndexCode(secid)
+  return tencentCode(secid) ?? tencentIndexCode(secid) ?? tencentUsStockQuoteCode(secid)
 }
 
 export interface TencentQuote {
@@ -91,6 +122,16 @@ const num = (v: string | undefined): number | null => {
   return Number.isFinite(n) ? n : null
 }
 
+/**
+ * 同 `num`，但把**空串**当成「上游没有这个字段」⇒ null。
+ *
+ * 为什么需要它：`Number('')` = 0 ⇒ 老实的"没有"会被写成 **0**（红线：不得 0 顶替）。
+ * 实测美股 ETF 的 `f44`/`f45` 就是空串（`usVIXY` / `usSPY` / `usEWJ`），
+ * 而 `f34`（币种）之类的位置在其它市场也可能空。
+ * 只用于**市值/成交额/股本**这类"空 = 不知道"的字段；价格/涨跌幅仍走 `num`（0 价的语义另行处理）。
+ */
+const numField = (v: string | undefined): number | null => (v === undefined || v.trim() === '' ? null : num(v))
+
 /** 时间戳：A股/ETF/指数为 "20260924161456"，港股为 "2026/09/24 16:14:56" */
 export function parseTencentStamp(text: string | undefined): number | null {
   if (text === undefined) return null
@@ -103,6 +144,52 @@ export function parseTencentStamp(text: string | undefined): number | null {
   const iso = `${t.slice(0, 4)}-${t.slice(4, 6)}-${t.slice(6, 8)}T${t.slice(8, 10)}:${t.slice(10, 12)}:${t.slice(12, 14)}`
   const parsed = Date.parse(iso)
   return Number.isFinite(parsed) ? parsed : null
+}
+
+/** `America/New_York` 的墙上时间分解器（固定时区，与宿主 `TZ` 无关） */
+const NYC_PARTS = new Intl.DateTimeFormat('en-CA', {
+  timeZone: 'America/New_York',
+  hourCycle: 'h23',
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit',
+  hour: '2-digit',
+  minute: '2-digit',
+  second: '2-digit',
+})
+
+/** 某个瞬时在纽约的"墙上时间"当作 UTC 数字返回（用于反解偏移） */
+function nycWallMs(ms: number): number {
+  const p: Record<string, string> = {}
+  for (const part of NYC_PARTS.formatToParts(new Date(ms))) p[part.type] = part.value
+  return Date.UTC(Number(p.year), Number(p.month) - 1, Number(p.day), Number(p.hour) % 24, Number(p.minute), Number(p.second))
+}
+
+/**
+ * **美股**行情时间（腾讯 `us*` 的 `f[30]`）：`"2026-10-16 16:00:01"` = **美东墙上时间**。
+ *
+ * 为什么不能复用 `parseTencentStamp`：
+ *   · 它只认 14 位纯数字（A股/ETF/指数）与带 `/` 的写法（港股），美股这种 `-` 分隔的会拼出乱码 ⇒ null；
+ *   · **更危险的是**：即便给它加一条 `-` 分支，`Date.parse('2026-10-16T16:00:01')` 会按**宿主时区**解释
+ *     ⇒ 东八区机器上把美东 16:00 读成北京时间 16:00，整整差 **12–13 小时**（还会被当成"未来时间"）。
+ *
+ * 实测锚点（2026-10-17 抓包）：`usFRO` = `2026-10-16 16:04:53`、`us.INX` = `2026-10-16 16:42:08` ——
+ * 都是**美东当天**时刻（16:00 = 收盘）。因此这里按 `America/New_York` 显式反解成 UTC 瞬时：
+ * 先假设墙上时间就是 UTC，再按"纽约墙上时间 - 目标墙上时间"迭代纠正（DST 由 `Intl` 自己判定，
+ * 换日/换月/换年都走同一条路）。两轮足以收敛（含 DST 切换日），第三轮留作保险。
+ */
+export function parseTencentUsStamp(text: string | undefined): number | null {
+  const m = /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2}):(\d{2})$/.exec((text ?? '').trim())
+  if (m === null) return null
+  const wall = Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]), Number(m[4]), Number(m[5]), Number(m[6]))
+  let ms = wall
+  for (let i = 0; i < 3; i += 1) {
+    const drift = nycWallMs(ms) - wall
+    if (drift === 0) break
+    ms -= drift
+  }
+  // 反解若没能落回目标墙上时间（例如 DST 跳变的"不存在的本地时刻"），宁可给 null 也不给错时间
+  return nycWallMs(ms) === wall ? ms : null
 }
 
 export interface TencentQuoteFull extends TencentQuote {
@@ -170,7 +257,16 @@ export async function fetchTencentQuoteRows(secids: string[]): Promise<Record<st
   return parseTencentQuoteText(text, (code) => map.get(code))
 }
 
-/** 解析 `v_CODE="a~b~c";` 文本；`keyOf(code)` 返回该行的键（null/undefined = 丢弃这一行） */
+/**
+ * 解析 `v_CODE="a~b~c";` 文本；`keyOf(code)` 返回该行的键（null/undefined = 丢弃这一行）。
+ *
+ * 字段下标按市场分档（**实测**，见 `docs/PROBE-US-QUOTES.md` §3.4/§4）：
+ *   · 沪深/港股（88 字段）：`f[30]` 14 位北京时刻、`f[35]` = `"价/量/成交额(元)"`、`f[37]` 成交额**万元**；
+ *   · 美股（73 字段）：`f[30]` = **美东** `"YYYY-MM-DD HH:MM:SS"`、`f[35]` = `"USD"`（币种，不是三连）、
+ *     `f[37]` 成交额**美元**（实测 usFRO 196,988,621 与新浪 `gb_fro` 下标 30 同量级）、
+ *     `f[44]/f[45]` 流通/总市值（亿元；**ETF 为空串**）、`f[71]` 股本/份额。
+ *   ⇒ 成交额量纲与时间戳时区**必须按市场分流**，否则美股会乘 10000 倍、把美东当东八区。
+ */
 export function parseTencentQuoteText(text: string, keyOf: (code: string) => string | undefined): Record<string, TencentQuoteFull> {
   const out: Record<string, TencentQuoteFull> = {}
   for (const line of text.split(';')) {
@@ -179,9 +275,15 @@ export function parseTencentQuoteText(text: string, keyOf: (code: string) => str
     const code = line.slice(0, eq).trim().replace(/^v_/, '')
     const secid = keyOf(code)
     if (secid === undefined) continue
+    const isUs = /^us/i.test(code)
     const raw = line.slice(eq + 1).trim().replace(/^"/, '').replace(/"$/, '')
     const f = raw.split('~')
+    // A股/港股：`f[35]` 是 `"价/量/成交额(元)"` 三连 ⇒ 第 3 段直接是元。美股 `f[35]` 是币种（USD）⇒ 无三连。
     const tri = (f[35] ?? '').split('/')
+    const amountTri = num(tri[2])
+    const amountF37 = numField(f[37])
+    // 成交额量纲：A股/港股的 `f[37]` 是**万元** ⇒ ×1e4；美股 `f[37]` 已是**美元** ⇒ 原样。
+    const amountFallback = amountF37 === null ? null : amountF37 * (isUs ? 1 : 1e4)
     out[secid] = {
       secid,
       name: (f[1] ?? '').trim(),
@@ -192,14 +294,17 @@ export function parseTencentQuoteText(text: string, keyOf: (code: string) => str
       high: num(f[33]),
       low: num(f[34]),
       vol: num(f[6]),
-      amount: num(tri[2]) ?? (num(f[37]) !== null ? (num(f[37]) as number) * 1e4 : null),
-      // 市值字段：腾讯给的是**亿元**（实测 f44/f45 对 sh600519 = 15445.76 亿），统一乘 1e8 转元；
-      // 指数/ETF 也有值（ETF 为基金规模），期货/国际指数无该字段 → null
-      totalMv: num(f[45]) !== null ? (num(f[45]) as number) * 1e8 : null,
-      floatMv: num(f[44]) !== null ? (num(f[44]) as number) * 1e8 : null,
+      amount: amountTri ?? amountFallback,
+      // 市值字段：腾讯给的是**亿元**（实测 f44/f45 对 sh600519 = 15445.76 亿；usFRO = 75.15370/116.85475 亿），
+      // 统一乘 1e8 转元；期货/国际指数无该字段 → null。
+      // ⚠ 美股 **ETF 的 f44/f45 是空串**（实测 usVIXY/usSPY/usEWJ），必须走 `numField` 变 null ——
+      //    `num('')` 会给出 0，那就是"用 0 顶替市值"。
+      totalMv: numField(f[45]) !== null && (numField(f[45]) as number) > 0 ? (numField(f[45]) as number) * 1e8 : null,
+      floatMv: numField(f[44]) !== null && (numField(f[44]) as number) > 0 ? (numField(f[44]) as number) * 1e8 : null,
       // f71 = 股本：只在美股上验证过（见字段注释），其它市场一律 null（含义不同，不许猜）
-      shares: /^us/i.test(code) && num(f[71]) !== null && (num(f[71]) as number) > 0 ? (num(f[71]) as number) : null,
-      ts: parseTencentStamp(f[30]),
+      shares: isUs && numField(f[71]) !== null && (numField(f[71]) as number) > 0 ? (numField(f[71]) as number) : null,
+      // 时间戳：美股是**美东**墙上时间（时区无关的反解），沪深/港股是北京时刻/带斜杠格式
+      ts: isUs ? parseTencentUsStamp(f[30]) : parseTencentStamp(f[30]),
     }
   }
   return out

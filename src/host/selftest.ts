@@ -359,27 +359,46 @@ async function main(): Promise<void> {
     }
 
     // 护盘快照 LKG：本会话没有数据时回落到落盘的上次成功快照
+    //
+    // ⚠ 时钟必须钉在**交易日**：`RescueMonitor.snapshot()` 的非交易日门禁（`rescue.ts` 的
+    // `if (day.trading) … else level = null`）会在周末/法定假日把 level 置 null，而本用例断言的是
+    // "回落的上次成功快照 level = 2"。此前直接用真实日期 ⇒ **周六/节假日跑必红**
+    // （2026-10-17 周六实测：`npm run check` 唯一红灯就是这一条）。
+    // 修法按"测试对真实日期敏感"这个**缺陷**本身来修：用 stub 时钟固定到 **2026-10-19（周一）10:00 北京**，
+    // **不放宽断言、也不给周末开后门**；断言因此与宿主时区、真实日期都无关。
     {
       const lkgDir = mkdtempSync(join(tmpdir(), 'tw-lkg-'))
-      const good = {
-        ts: Date.now() - 3600_000, level: 2 as const, score: 63, summary: '（fixture）',
-        factors: [], etfs: [{ secid: '1.510300', name: '沪深300ETF华泰柏瑞', index: '沪深300' }],
-        indexPct: -1.2, indexName: '沪深300', timeCoef: 1.1,
-        resonance: { lanes: ['沪深300'], core: 1, peripheral: 0, intensity: 'systemic' as const },
-        pulseBand: { elapsed: 200, label: '尾盘', isTail: true, anchors: [1.26, 1.91, 2.43] as [number, number, number], phase: 'tail' as const },
-        completeness: { available: 6, total: 6, missing: [] },
-        thresholdSource: 'empirical' as const, selfSampleDays: 5,
-        config: { enabled: true, intervalSec: 60, tailIntervalSec: 15, tailFrom: '14:30', universe: [] },
-        activeIntervalSec: 15,
+      const realNow = Date.now
+      const TRADING_DAY = Date.parse('2026-10-19T10:00:00+08:00')
+      const WEEKEND = Date.parse('2026-10-17T10:00:00+08:00')
+      Date.now = () => TRADING_DAY
+      try {
+        const good = {
+          ts: Date.now() - 3600_000, level: 2 as const, score: 63, summary: '（fixture）',
+          factors: [], etfs: [{ secid: '1.510300', name: '沪深300ETF华泰柏瑞', index: '沪深300' }],
+          indexPct: -1.2, indexName: '沪深300', timeCoef: 1.1,
+          resonance: { lanes: ['沪深300'], core: 1, peripheral: 0, intensity: 'systemic' as const },
+          pulseBand: { elapsed: 200, label: '尾盘', isTail: true, anchors: [1.26, 1.91, 2.43] as [number, number, number], phase: 'tail' as const },
+          completeness: { available: 6, total: 6, missing: [] },
+          thresholdSource: 'empirical' as const, selfSampleDays: 5,
+          config: { enabled: true, intervalSec: 60, tailIntervalSec: 15, tailFrom: '14:30', universe: [] },
+          activeIntervalSec: 15,
+        }
+        writeFileSync(join(lkgDir, 'rescue-log.json'), JSON.stringify({ v: 1, days: {}, baselines: {}, selfSamples: {}, lastSnapshot: good }), 'utf8')
+        const mon = new RescueMonitor(lkgDir, { enabled: true, intervalSec: 60, tailIntervalSec: 15, tailFrom: '14:30', universe: [] })
+        await mon.init()
+        const snap = mon.snapshot()
+        ok(snap.etfs.length === 1 && snap.level === 2 && snap.stale === true, `本会话无数据 → 回落落盘 LKG（etfs ${snap.etfs.length}，stale ${String(snap.stale)}）`)
+        ok((snap.note ?? '').includes('上次成功采样'), 'LKG 快照注明为上次成功采样')
+        ok(mon.hasFreshData === false, 'hasFreshData 反映本会话尚未采到数据')
+        // 反例注入：同一份快照把时钟挪到**周六** ⇒ 必须不出等级（证明上一条不是恒真、周末门禁还在）
+        Date.now = () => WEEKEND
+        const weekend = mon.snapshot()
+        ok(weekend.level === null && weekend.nonTrading?.reason === 'weekend', `反例：周末同一快照必须不出等级（level ${String(weekend.level)}，nonTrading ${String(weekend.nonTrading?.reason)}）`)
+      } finally {
+        Date.now = realNow
+        rmSync(lkgDir, { recursive: true, force: true })
       }
-      writeFileSync(join(lkgDir, 'rescue-log.json'), JSON.stringify({ v: 1, days: {}, baselines: {}, selfSamples: {}, lastSnapshot: good }), 'utf8')
-      const mon = new RescueMonitor(lkgDir, { enabled: true, intervalSec: 60, tailIntervalSec: 15, tailFrom: '14:30', universe: [] })
-      await mon.init()
-      const snap = mon.snapshot()
-      ok(snap.etfs.length === 1 && snap.level === 2 && snap.stale === true, `本会话无数据 → 回落落盘 LKG（etfs ${snap.etfs.length}，stale ${String(snap.stale)}）`)
-      ok((snap.note ?? '').includes('上次成功采样'), 'LKG 快照注明为上次成功采样')
-      ok(mon.hasFreshData === false, 'hasFreshData 反映本会话尚未采到数据')
-      rmSync(lkgDir, { recursive: true, force: true })
     }
 
     // ── Commit A 回归用例（数据安全四项）────────────────────────────────
@@ -1002,7 +1021,9 @@ async function main(): Promise<void> {
     {
       ok(secidKey('114.lhm') === secidKey('114.LHM'), 'secidKey 大小写无关于同一标的')
       ok(hasQuoteFallback('114.lhm') && hasQuoteFallback('114.LHM'), '商品主连有新浪兜底（大小写两种写法都认）')
-      ok(!hasQuoteFallback('113.rb2610') && !hasQuoteFallback('107.SPY'), '月度合约/美股如实标注只有东财一条链路')
+      ok(!hasQuoteFallback('113.rb2610'), '月度合约如实标注只有东财一条链路（无腾讯/新浪映射）')
+      // AUDIT-IMPL67：美股（105/106/107）已接上腾讯 `us*` 与新浪 `gb_*` 两档兜底 ⇒ 不再是"仅东财源"
+      ok(hasQuoteFallback('107.SPY') && hasQuoteFallback('106.FRO') && hasQuoteFallback('105.AAPL'), '美股有腾讯/新浪两档兜底（105/106/107 → us*/gb_*）')
       ok(hasQuoteFallback('1.600519') && hasQuoteFallback('116.00700'), 'A股/港股有腾讯兜底')
       // LKG 库按大小写无关键取用：库里存大写、请求小写（或反之）都要命中
       const bank = new Map<string, QuoteRow>()

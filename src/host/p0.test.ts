@@ -111,23 +111,25 @@ function provenanceOf(missing: string[], sources: Record<string, number>, rows: 
 }
 
 test('P0-1 出处：缺备用源的标的判为 no-source，有备用源的判为 transient', () => {
-  // 107.SPY 美股无腾讯/新浪映射（hasQuoteFallback=false）→ 重试无用
+  // 113.rb2610（螺纹钢月度合约）无腾讯/新浪映射（hasQuoteFallback=false）→ 重试无用
   // 1.600519 有腾讯兜底（true）→ 本次失败，稍后重试可能恢复
-  const p = quoteProvenance(provenanceOf(['107.SPY', '1.600519'], { em: 1 }, 2, 1))
-  const spy = p.missing.find((m) => m.what === '107.SPY')
+  // ⚠ 例证从 `107.SPY`（美股）换成月度合约：AUDIT-IMPL67 之后美股已接上腾讯 `us*` 与新浪 `gb_*` 两档兜底，
+  //    再拿美股当"仅东财源"的例子就不再成立（`hasQuoteFallback('107.SPY') === true`）。
+  const p = quoteProvenance(provenanceOf(['113.rb2610', '1.600519'], { em: 1 }, 2, 1))
+  const futures = p.missing.find((m) => m.what === '113.rb2610')
   const kweichow = p.missing.find((m) => m.what === '1.600519')
-  assert.equal(spy?.why, 'no-source')
+  assert.equal(futures?.why, 'no-source')
   assert.equal(kweichow?.why, 'transient')
-  assert.ok((spy?.note ?? '').includes('重试无用'))
+  assert.ok((futures?.note ?? '').includes('重试无用'))
   assert.equal(p.stale, false)
   assert.equal(p.source, 'em')
 })
 
 test('P1-7 出处：东财不可用时，"只有东财一条链路"的标的判 transient（等东财恢复），不是 no-source', () => {
-  // 同一个标的（107.SPY：无腾讯/新浪映射），只看东财此刻可不可用：
+  // 同一个标的（113.rb2610：月度合约，无腾讯/新浪映射），只看东财此刻可不可用：
   //   东财可达但它不给这个标的 → 结构性缺失（no-source，重试无用）
   //   东财不可用（熔断/整批失败）→ 等东财恢复就有（transient，稍后自动重试）
-  const detail = provenanceOf(['107.SPY'], { em: 1 }, 1, 0)
+  const detail = provenanceOf(['113.rb2610'], { em: 1 }, 1, 0)
   const up = quoteProvenance(detail, { emDown: false })
   assert.equal(up.missing[0].why, 'no-source')
   assert.ok(up.missing[0].note.includes('重试无用'))

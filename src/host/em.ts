@@ -665,8 +665,11 @@ async function rawQuotes(list: string[]): Promise<Map<string, QuoteRow>> {
  *
  * 东财行情主机遇限流时，此前只能吃 last-known-good（价格冻在旧值，用户看到的就是
  * "无法加载最新数据"）。这里把腾讯作为实时兜底：EM 拿不到的标的用腾讯补齐，
- * 结果带 source='tencent' 以便界面如实标注来源。仅覆盖沪/深/港股；
- * 美股、国际指数、商品无法映射，仍只有东财源。
+ * 结果带 source='tencent' 以便界面如实标注来源。
+ *
+ * 覆盖（2026-10-17 实测，见 `docs/AUDIT-IMPL67.md` §2）：沪/深/港股 + **国际指数**（`us.INX` 等）
+ * + **美股**（东财 `105/106/107` → 腾讯 `us<TICKER>`，如 `106.FRO` → `usFRO`）。
+ * 商品/期货仍无腾讯映射（`101/112/113/114/122.*`）⇒ 只有东财 + 新浪两路。
  */
 export function quoteFromTencent(secid: string, q: TencentQuoteFull): QuoteRow | null {
   if (q.price === null || !(q.price > 0)) return null
@@ -713,12 +716,16 @@ async function tencentQuoteRows(list: readonly string[]): Promise<Map<string, Qu
 
 /** 用腾讯补齐缺失或价格为空的标的（EM 部分丢码时也走这里） */
 /**
- * 兜底链：**腾讯（沪/深/港 + 美股指数）→ 新浪（国际指数、国内期货、外盘商品）**。
+ * 兜底链：**腾讯（沪/深/港 + 国际指数 + 美股）→ 新浪（国际指数以外：国内期货/外盘商品/美股）**。
  *
  * 此前只有腾讯，于是「国际市场 + 大宗商品」共 17 只标的在东财不可用时**代码层就没有任何兜底**
  * （客户端只能吃 LKG 旧值）—— 实测 23 只预设里只有 6 只可解析。现补新浪一档：
- * 国内期货 nf_*、外盘商品 hf_*（国际指数**不再**走新浪 —— `int_*` 是陈旧快照且无时间戳，
+ * 国内期货 nf_*、外盘商品 hf_*、**美股 gb_\***（国际指数**不走**新浪 —— `int_*` 是陈旧快照且无时间戳，
  * 已整族停用，改由腾讯 `us.INX`/`us.DJI`/`us.NDX`/`hkHSI` 兜底，见 sina.ts/tencent.ts 的实测注释）。
+ *
+ * 美股（东财 `105/106/107`，AUDIT-IMPL67）此前在**两个兜底源上都没有映射**，
+ * 东财一挂就必然「无行情源」。现在腾讯 `us<TICKER>` 与新浪 `gb_<ticker>` 都接上了，
+ * 且新浪那一档会把 `gb_*` 的成交量/成交额/市值/成交时刻一并填进行（此前一律 null）。
  */
 async function fillFromFallbacks(list: readonly string[], rows: Map<string, QuoteRow>): Promise<void> {
   const need = (): string[] => list.filter((secid) => {
@@ -756,12 +763,16 @@ async function fillFromFallbacks(list: readonly string[], rows: Map<string, Quot
         open: q.open,
         high: q.high,
         low: q.low,
-        vol: null,
-        amount: null,
+        // 美股 `gb_*` 自带成交量/成交额/市值/成交时刻（下标见 `sina.ts:parseSinaGb`）；
+        // 期货/商品的 `nf_*`/`hf_*` 没有这些列 ⇒ 如实 null（不许拿别处数字凑）。
+        vol: q.vol ?? null,
+        amount: q.amount ?? null,
         up: null,
         down: null,
         even: null,
-        time: null,
+        time: q.time ?? null,
+        totalMv: q.totalMv ?? null,
+        floatMv: null,
         source: 'sina',
         at: Date.now(),
       })
@@ -1493,8 +1504,9 @@ async function fetchTrendSingleDay(secid: string, opts: TrendOptions = {}): Prom
 
 /** 该标的是否有备用源（腾讯或新浪报价映射）；用于搜索结果与工具输出如实标注"仅东财源"。 */
 export function hasQuoteFallback(secid: string): boolean {
-  // 用 tencentQuoteCode（沪深/港股 + 国际指数）：国际指数已改由腾讯兜底，
-  // 新浪 int_* 整族停用（陈旧快照 + 无时间戳，见 sina.ts 文件头）
+  // 用 tencentQuoteCode（沪深/港股 + 国际指数 + 美股）：国际指数已改由腾讯兜底，
+  // 新浪 int_* 整族停用（陈旧快照 + 无时间戳，见 sina.ts 文件头）；美股两侧都有映射
+  // （腾讯 `us<TICKER>` / 新浪 `gb_<ticker>`，AUDIT-IMPL67）
   return tencentQuoteCode(secid) !== null || sinaQuoteSymbol(secid) !== null
 }
 

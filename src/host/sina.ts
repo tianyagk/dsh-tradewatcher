@@ -12,8 +12,11 @@
  *  - 资金流：`MoneyFlow.ssl_qsfx_zjlrqs?daima=sh510300`（逐日 `netamount`，元）
  *  - 汇率：`hq.sinajs.cn/list=fx_susdcny`（下标 8 = 最新，下标 3 = 昨收）
  *
- * ⚠ 新浪 `int_*`（国际指数）整族**停用**：实测是陈旧快照且无时间戳，无法判定新鲜度 ——
- * 任何调用方都不许再拿它当国际指数来源（`tencent.ts`/`em.ts` 的相关注释指向这里）。
+ *  - 美股行情：`hq.sinajs.cn/list=gb_fro`（`gb_*` = 美股/美股 ETF，**必须带 Referer**）。
+ *    与腾讯 `us*` 互为第二兜底：实测 `gb_fro` 52.49 / `gb_vixy` 17.73 与腾讯逐项一致
+ *    （字段下标见 `parseSinaGb`；2026-10-17 实测原始回包见 `docs/PROBE-US-QUOTES.md` §3.2）。
+ *    ⚠ `int_*`（国际指数）整族**停用**：实测是陈旧快照且无时间戳，无法判定新鲜度 ——
+ *    任何调用方都不许再拿它当国际指数来源（`tencent.ts`/`em.ts` 的相关注释指向这里）。
  *
  * 所有请求都过 `breakerFetch.withHostBreaker`（按主机熔断记账）。
  */
@@ -41,6 +44,14 @@ const num = (v: unknown): number | null => {
 }
 
 /**
+ * 同 `num`，但**空串 = 上游没有这个字段**（null）。
+ *
+ * 为什么需要：`Number('')` = 0 ⇒ "没有"会被写成 0（红线：不得 0 顶替）。
+ * 美股 `gb_*` 行里 `--`、空串都出现过（实测 `gb_fro` 的市盈率就是 `--`）。
+ */
+const numField = (v: unknown): number | null => (typeof v === 'string' && v.trim() === '' ? null : num(v))
+
+/**
  * 国际指数 / 国内期货 / 外盘商品 的 EM secid → 新浪代码映射。
  *
  * ⚠ **国际指数（`100.*`）已从本表整体移除**（2026-10-12 实测，见 docs/AUDIT-IMPL44.md）：
@@ -64,8 +75,31 @@ const num = (v: unknown): number | null => {
  */
 const SINA_BY_UPPER: Record<string, string> = {}
 
+/**
+ * 美股（东财 `105`=纳斯达克 / `106`=纽交所 / `107`=美交所）→ 新浪 `gb_<ticker>`。
+ *
+ * 为什么是**规则**而不是往 `SINA_SYMBOL` 里再加几行：那张表是逐标的登记（期货主连/外盘商品，
+ * 因为新浪对它们的代码是另一套 `nf_*`/`hf_*`）；美股的新浪代码就是 `gb_` + 小写 ticker，
+ * 全市场同一个形状 ⇒ 用规则才对得上任意自选股（否则每加一只美股都要改表）。
+ *
+ * **实测（2026-10-17）**：`gb_fro` 52.49 / -0.10%、`gb_vixy` 17.73 / +8.11%、`gb_spy` 763.25 / -1.11%
+ * 与腾讯 `us*` 同刻一致。
+ * ⚠ **未知 ticker 与腾讯行为不同**：腾讯不回行，而新浪会回一行"全零空壳"（实测 `gb_zzzz` 价格给 1.0000、
+ * 其余全 0）⇒ 必须由 `gbRowOf` 的占位行判据丢掉，否则界面会把"没有这只票"显示成 1.00 / 0.00%。
+ */
+function sinaUsSymbolOf(secid: string): string | null {
+  const dot = secid.indexOf('.')
+  if (dot <= 0) return null
+  const market = secid.slice(0, dot)
+  if (market !== '105' && market !== '106' && market !== '107') return null
+  const code = secid.slice(dot + 1).trim().toUpperCase()
+  // 与腾讯侧同一形状约束：字母起头，允许数字与点（BRK.B 这类）
+  if (!/^[A-Z][A-Z0-9.]{0,11}$/.test(code)) return null
+  return `gb_${code.toLowerCase()}`
+}
+
 function sinaSymbolOf(secid: string): string | null {
-  return SINA_BY_UPPER[secid.trim().toUpperCase()] ?? null
+  return SINA_BY_UPPER[secid.trim().toUpperCase()] ?? sinaUsSymbolOf(secid)
 }
 
 const SINA_SYMBOL: Record<string, string> = {
@@ -101,12 +135,23 @@ export interface SinaHqQuote {
   low: number | null
   /** 涨跌幅（%）；昨收不可靠时为 null（不外推） */
   pct: number | null
+  /** 成交量（股）—— 只有 `gb_*` 有该字段 */
+  vol?: number | null
+  /** 成交额（原币）—— 只有 `gb_*` 有该字段（美元） */
+  amount?: number | null
+  /** 总市值（原币）—— 只有 `gb_*` 有该字段（美元，下标 12） */
+  totalMv?: number | null
+  /** 股本/份额（股）—— 只有 `gb_*` 有该字段（下标 19） */
+  shares?: number | null
+  /** 上游自报的**成交**时刻（epoch ms）—— 只有 `gb_*` 有（美东，见 `parseSinaUsTradeStamp`） */
+  time?: number | null
 }
 
 /**
- * 解析 `hq.sinajs.cn` 响应。两种受支持布局（实测字段下标）：
+ * 解析 `hq.sinajs.cn` 响应。三种受支持布局（实测字段下标）：
  *   nf_* （44 字段）：名称, 时间, 开, 高, 低, 昨收, 买, 卖, **最新**, 结算, …
  *   hf_* （14 字段）：**最新**, 昨收?, …, 开, 高, 低, 时间, **昨收**, …
+ *   gb_* （36+ 字段）：**美股/美股 ETF**，下标见 `parseSinaGb`（价格/涨跌幅/开高低/量/额/市值/成交时刻）
  *
  * ⚠ `int_*`（国际指数，4 字段：名称/最新/涨跌额/涨跌幅）**不再解析**：它没有时间戳，
  * 无法判定新鲜度，且实测是陈旧快照（见文件头）。整族停用 ⇒ 任何调用方都不可能再拿到它
@@ -133,6 +178,26 @@ export function parseSinaHq(payload: string): Record<string, SinaHqQuote> {
       if (price === null) continue
       const pct = prev !== null && prev > 0 ? ((price - prev) / prev) * 100 : null
       q = { name: symbol.replace(/^hf_/, ''), price, prev, open: num(parts[3]), high: num(parts[4]), low: num(parts[5]), pct: sanePct(pct) }
+    } else if (symbol.startsWith('gb_')) {
+      // 美股：字段语义与 nf_/hf_ 完全不同（下标见 parseSinaGb）⇒ 复用同一个下标表，不另抄一份
+      const gb = gbRowOf(parts)
+      if (gb === null || gb.price === null) continue
+      q = {
+        name: gb.name === '' ? symbol : gb.name,
+        price: gb.price,
+        prev: gb.prev,
+        open: gb.open,
+        high: gb.high,
+        low: gb.low,
+        // gb_ 自带现成的涨跌幅字段（下标 2），直接用它 —— 不再用 ±25% 的"昨收可疑"闸门
+        //（那道闸门是为商品期货的不可靠昨收设的，用在股票/ETF 上会误杀真涨跌）
+        pct: gb.pct,
+        vol: gb.vol,
+        amount: gb.amount,
+        totalMv: gb.totalMv,
+        shares: gb.shares,
+        time: gb.tradeTime,
+      }
     }
     if (q !== null) out[symbol] = q
   }
@@ -302,28 +367,95 @@ export interface SinaGbQuote {
   totalMv: number | null
   /** 股本（下标 19），用于与总市值交叉校验 */
   shares: number | null
-  /** 行情时间文本（下标 3） */
+  /** 快照时刻文本（下标 3，**北京时间**的下发时刻，不是成交时刻） */
   time: string | null
+  /** 昨收（下标 26；缺失时用「最新 − 涨跌额」推导，两者都不可得则为 null） */
+  prev: number | null
+  open: number | null
+  high: number | null
+  low: number | null
+  /** 成交量（**股**，下标 10） */
+  vol: number | null
+  /** 成交额（**美元**，下标 30） */
+  amount: number | null
+  /**
+   * 最新成交时刻（epoch ms，**美东**）：取下标 24（含盘后的最新一笔）→ 回退下标 25（常规收盘）。
+   * 解析不出就是 null —— 不拿下标 3 那个"下发时刻"冒充成交时刻。
+   */
+  tradeTime: number | null
 }
 
-/** 解析 `gb_*`（美股/美股 ETF）行情行 */
+/** `Oct 16 04:00PM EDT` → epoch ms（EDT=−4 / EST=−5；其它时区标记一律 null，不猜） */
+function parseSinaUsTradeStamp(text: string | undefined, year: number | null): number | null {
+  const m = /^([A-Z][a-z]{2}) (\d{1,2}) (\d{1,2}):(\d{2})(AM|PM) (EDT|EST)$/.exec((text ?? '').trim())
+  if (m === null || year === null || !(year > 2000)) return null
+  const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+  const month = MONTHS.indexOf(m[1]) + 1
+  if (month === 0) return null
+  const day = Number(m[2])
+  const hour12 = Number(m[3])
+  if (!(hour12 >= 1 && hour12 <= 12)) return null
+  const hour = (hour12 % 12) + (m[5] === 'PM' ? 12 : 0)
+  const wall = Date.UTC(year, month - 1, day, hour, Number(m[4]))
+  // EDT = UTC−4 ⇒ UTC = 墙上时间 + 4h；EST = UTC−5 ⇒ +5h
+  return wall + (m[6] === 'EDT' ? 4 : 5) * 3_600_000
+}
+
+/**
+ * 解析 `gb_*`（美股/美股 ETF）行情行。
+ *
+ * 下标实测（2026-10-17，`gb_fro` / `gb_vixy` / `gb_spy` 三条原始回包见 `docs/PROBE-US-QUOTES.md` §3.2）：
+ *   0 名称 · 1 最新 · 2 涨跌幅% · 3 下发时刻(北京) · 4 涨跌额 · 5 开 · 6 高 · 7 低 · 8 52周高 · 9 52周低
+ *   10 成交量(股) · 11 均量 · 12 总市值(美元) · 13 市盈率 · … · 19 股本 · … · 24 最新成交(含盘后,ET)
+ *   25 常规收盘(ET) · 26 昨收 · … · 29 年份 · 30 成交额(美元)
+ * 交叉校验：`price × shares == totalMv`（FRO 52.49×222,622,894 = 11,685,475,706 ✔；VIXY 17.73×13,566,252 ✔）。
+ */
 export function parseSinaGb(payload: string): Record<string, SinaGbQuote> {
   const out: Record<string, SinaGbQuote> = {}
   for (const line of payload.split('\n')) {
     const m = /^var hq_str_(gb_[A-Za-z0-9._]+)="([^"]*)"/.exec(line.trim())
     if (m === null) continue
-    const parts = m[2].split(',')
-    if (parts.length < 20) continue
-    out[m[1]] = {
-      name: String(parts[0] ?? '').trim(),
-      price: num(parts[1]),
-      pct: num(parts[2]),
-      time: parts[3] === undefined ? null : String(parts[3]).trim(),
-      totalMv: num(parts[12]),
-      shares: num(parts[19]),
-    }
+    const q = gbRowOf(m[2].split(','))
+    if (q !== null) out[m[1]] = q
   }
   return out
+}
+
+/** 一条 `gb_*` 行的字段映射（下标见 `parseSinaGb` 的注释）；`parseSinaHq` 的 `gb_` 分支复用它 */
+function gbRowOf(parts: string[]): SinaGbQuote | null {
+  if (parts.length < 20) return null
+  const price = numField(parts[1])
+  const chg = numField(parts[4])
+  const prevAt26 = numField(parts[26])
+  const prev = prevAt26 ?? (price !== null && chg !== null ? price - chg : null)
+  const year = numField(parts[29])
+  const q: SinaGbQuote = {
+    name: String(parts[0] ?? '').trim(),
+    price,
+    pct: numField(parts[2]),
+    time: parts[3] === undefined ? null : String(parts[3]).trim(),
+    totalMv: numField(parts[12]),
+    shares: numField(parts[19]),
+    prev,
+    open: numField(parts[5]),
+    high: numField(parts[6]),
+    low: numField(parts[7]),
+    vol: numField(parts[10]),
+    amount: numField(parts[30]),
+    tradeTime: parseSinaUsTradeStamp(parts[24], year) ?? parseSinaUsTradeStamp(parts[25], year),
+  }
+  /**
+   * 占位行必须丢弃：新浪对**不存在的**美股代码会回一行"全零空壳"，
+   * 实测 `gb_zzzz`（2026-10-17 抓包）：
+   *   `ZZZZ,1.0000,0.00,2026-05-28 09:30:13,0,0,0,0,0,0,0,0,0,…,0,0,0.0000,…`
+   * —— 价格给 **1.0000**、其余全 0、日期停在几个月前。若照收，界面会把"这只票不存在"
+   * 显示成 "1.00 / 0.00%"，比"无行情源"更坏（编造）。
+   * 判据：价格 > 0，且**至少有一项真实活动痕迹**（昨收 / 成交量 / 成交额 / 当日高低）。
+   * 停牌股仍会留下昨收 ⇒ 不会被误杀。
+   */
+  const active = [q.prev, q.vol, q.amount, q.high, q.low].some((v) => v !== null && v > 0)
+  if (q.price === null || !(q.price > 0) || !active) return null
+  return q
 }
 
 /** 拉 `gb_*` 行情（`spy` → `gb_spy`） */
