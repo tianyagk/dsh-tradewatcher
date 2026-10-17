@@ -258,12 +258,23 @@ test('⑨ robotsGate 接入面：恰好是宏观/归档链（新增报价链接�
   walk(SRC)
   const ROBOTS = /from '[^']*robotsGate\.ts'/
   const detect = (files: Array<[string, string]>): string[] => files.filter(([, text]) => ROBOTS.test(text)).map(([f]) => f).sort()
-  // 宏观/归档链（globalFlow）是**唯一**接入面：报价链的显式豁免见 docs/DECISIONS.md
-  assert.deepEqual(detect(scanned), ['host/globalFlow.ts'], `robotsGate 的接入面变了：${JSON.stringify(detect(scanned))}`)
-  // 反例注入（两个方向都要能红）
-  assert.deepEqual(detect([...scanned, ['host/em.ts', "import { gatedFetch } from './robotsGate.ts'"]]), ['host/em.ts', 'host/globalFlow.ts'], '反例：报价链接入 robotsGate ⇒ 判据必须抓到')
-  const withoutMacro = scanned.map(([f, t]) => [f, f === 'host/globalFlow.ts' ? t.replace(ROBOTS, '') : t] as [string, string])
+  /**
+   * 宏观/归档链 = **两份**：`globalFlow`（宏观四源）与 `marketExtras`（美元指数/美债 10Y
+   * 及其历史，与 globalFlow 同一主机同一路径）。报价链（`em/tencent/sina`）的显式豁免见
+   * `docs/DECISIONS.md`。
+   *
+   * ⚠ REVIEW-7 D3：本判据只证明「**谁 import 了 robotsGate**」，证明不了「宏观取数点都过了门禁」。
+   * 真正的取数点级判据在 `fix7Host.test.ts` 的 D3（结构扫描：宏观块里不许有裸 `fetch(`）。
+   * 两条一起才完整 —— 这条负责"接线面不许再扩散"，那条负责"接线之后真的走门禁"。
+   */
+  const MACRO_IMPORTERS = ['host/globalFlow.ts', 'host/marketExtras.ts']
+  assert.deepEqual(detect(scanned), MACRO_IMPORTERS, `robotsGate 的接入面变了：${JSON.stringify(detect(scanned))}`)
+  // 反例注入（三个方向都要能红）
+  assert.deepEqual(detect([...scanned, ['host/em.ts', "import { gatedFetch } from './robotsGate.ts'"]]), ['host/em.ts', ...MACRO_IMPORTERS], '反例：报价链接入 robotsGate ⇒ 判据必须抓到')
+  const withoutMacro = scanned.map(([f, t]) => [f, MACRO_IMPORTERS.includes(f) ? t.replace(ROBOTS, '') : t] as [string, string])
   assert.deepEqual(detect(withoutMacro), [], '反例：把宏观链接入删掉 ⇒ 判据必须抓到（接入面变空也算变了）')
+  const onlyGlobalFlow = scanned.map(([f, t]) => [f, f === 'host/marketExtras.ts' ? t.replace(ROBOTS, '') : t] as [string, string])
+  assert.deepEqual(detect(onlyGlobalFlow), ['host/globalFlow.ts'], '反例：只留 globalFlow ⇒ 回到"宏观有第二扇门"的旧状态，判据必须抓到')
 })
 
 /** 按"字段下标 → 值"构造一行腾讯回包（数组长度固定 75，够覆盖美股 73 字段布局） */

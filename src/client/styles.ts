@@ -180,7 +180,7 @@ color-scheme:dark}
 .tw-placeholder{flex:1;min-height:200px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;text-align:center;padding:24px 18px;color:var(--tw-dim);font-size:12px;background:var(--tw-card2);border-top:1px solid var(--tw-border)}
 .tw-badge[data-state=timeout]{color:var(--tw-up);border-color:var(--tw-up)}
 .tw-badge[data-state=loaded]{color:var(--tw-down);border-color:var(--tw-down)}
-/* 四态色点（P0-2）：6px，绝对定位到右上角，不影响卡片高度 */
+/* 五态色点（P0-2）：6px，绝对定位到右上角，不影响卡片高度 */
 .tw-qdot{position:absolute;top:5px;right:5px;width:6px;height:6px;border-radius:50%;flex:none;pointer-events:none}
 .tw-qdot::after{content:"";position:absolute;inset:-3px;border-radius:50%}
 .tw-qcard .nm{font-size:12px;color:var(--tw-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1.4}

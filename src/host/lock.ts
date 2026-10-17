@@ -210,13 +210,39 @@ export async function inspectLock(lockPath: string): Promise<LockSnapshot | null
   return { lockPath, holder, mtimeMs, ageMs, pidAlive: holder === null ? null : pidAlive(holder.pid) }
 }
 
-/** 锁文件是否已陈旧到可回收；是则给出**原因**（人类可读 + 判据字段） */
+/**
+ * 持有者**还活着**时，心跳要断供到 `staleMs` 的多少倍才允许回收（REVIEW-7 D5）。
+ *
+ * 为什么需要这个系数：心跳间隔是 `max(200, staleMs/3)`，判据只看 mtime 年龄。
+ * 只要持锁进程的事件循环被阻塞 > `staleMs`（默认 10 s：CPU 打满 / 宿主同步写大 JSON /
+ * 调试断点 / 容器 swap 都会命中），另一个进程就会 `rename` 走这把锁并建自己的 ——
+ * 而原持有者**仍在临界区里、仍会把自己的结果写回去**。`releaseLock` 的 token 校验
+ * 只能防止"误删别人的锁"，**防不住丢更新**（写回本身没有 fencing）。
+ *
+ * 3 倍的取值：心跳断供 3 个周期仍然一个字节都没写 ⇒ 基本可以断定是挂死而不是慢；
+ * 小于 3 倍就会把"一次长 GC / 一次磁盘抖动"误判成死锁并制造并发写。
+ */
+export const HEARTBEAT_HUNG_FACTOR = 3
+
+/**
+ * 锁文件是否已陈旧到可回收；是则给出**原因**（人类可读 + 判据字段）。
+ *
+ * ⚠ REVIEW-7 D5：`pidAlive === true` 时**默认否决回收**（返回 null ⇒ 调用方继续等待），
+ * 只有心跳断供超过 `HEARTBEAT_HUNG_FACTOR × staleMs` 才判为挂死并回收。
+ * 否决时等待方仍会发出 `wait` 事件（带 `holderAlive`/`ageMs`），所以"为什么不回收"可见。
+ */
 export function staleReason(snap: LockSnapshot, staleMs: number): string | null {
   const pid = snap.holder?.pid ?? null
+  const hungBeyond = snap.ageMs > staleMs * HEARTBEAT_HUNG_FACTOR
   if (snap.ageMs > staleMs) {
+    /**
+     * 持有者**还在**（`pidAlive === true`）且只是"心跳断供"—— 先怀疑"它被卡住了"，
+     * 不要怀疑"它死了"。卡住的进程可能随时继续写，抢锁只会让两个写者同时进临界区。
+     */
+    if (snap.pidAlive === true && !hungBeyond) return null
     return (
       `锁文件年龄 ${Math.round(snap.ageMs)}ms > staleMs ${staleMs}ms（心跳断供）` +
-      `；持有者 pid=${pid ?? '未知'}${snap.pidAlive === null ? '（内容不可解析）' : snap.pidAlive ? '（仍在运行，但心跳已断供）' : '（进程已不存在）'}`
+      `；持有者 pid=${pid ?? '未知'}${snap.pidAlive === null ? '（内容不可解析）' : snap.pidAlive ? `（仍在运行，但心跳断供已超过 ${HEARTBEAT_HUNG_FACTOR}×staleMs ⇒ 判为挂死）` : '（进程已不存在）'}`
     )
   }
   if (snap.holder !== null && snap.pidAlive === false && snap.ageMs > DEAD_HOLDER_GRACE_MS) {

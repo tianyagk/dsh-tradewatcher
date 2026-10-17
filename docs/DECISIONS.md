@@ -1753,3 +1753,32 @@ HEAD 仍是 v0.89.0。此时若重启 `dsh web`，宿主会装载一个"**版本
 - 把宏观链的接入删掉（接入面变空）⇒ 同样**必败**。
 
 **不许**：把本豁免扩大成"任何上游都不必看 robots"—— 一旦要抓正文/归档/历史批量，就必须回到 `robotsGate`。
+
+# 决策：宏观门禁的**第二扇门**补上 + 两融/涨停池明确划出宏观圈（2026-10-17，v0.105.0 时代）
+
+**背景**（REVIEW-7-HOST D3，实测）：`robotsGate` 的文档写着「宏观链路四条全走它……缺一条就等于门禁没覆盖」，
+但守卫它的断言（`src/host/usQuote.test.ts` ⑨）判的是「**谁 import 了 robotsGate**」，而不是「宏观取数点都过了门禁」。
+于是 `src/host/marketExtras.ts` 里的宏观取数（`DINIW` / `globalbd_us10yt` / `100.UDI` / `171.US10Y` 现货与历史）
+**全部裸 `fetch`** —— 与 `globalFlow` 同一主机、同一 `symbol`、几乎同一 path，却完全不看 robots、不占预算。
+评审把「改走 gatedFetch」逐字注入后 775 条**依旧全绿**，证明这是断言盲区，不是「已知豁免」。
+
+**决定**：
+
+1) **宏观取数一律走 `gatedFetch`**。`marketExtras.ts` 新增两个原语 `gatedJson` / `gatedSinaBody`
+   （各自带模块级 `HostBudget`），五条宏观取数点全部改经它们；**被 robots 或预算拦下时零请求**，
+   并把 `{what, why, note}` 如实写进该函数的 `missing[]`。
+2) **两融与涨停池明确划出宏观圈，登记为显式豁免**：
+   - 主机：`push2ex.eastmoney.com`（涨停/跌停池）、`www.szse.cn` + `datacenter-web.eastmoney.com`（两融余额）。
+   - 理由：它们是**A股市场交易统计**（与 `/breadth` 的涨跌家数、涨停池同类），不是宏观经济数据，
+     也不进 `globalFlow` 的宏观口径；且 `/market-extras` 在用户每次打开大盘页时都会被调用，
+     套上「每主机 ≤5 次/小时」会把它当场打空（涨停池只有这一个源，打空就等于整块不可用）。
+   - 豁免**不等于**不过熔断：这三台仍必须经 `withHostBreaker`（记账 + 冷却期零请求）。
+3) **断言从「import 句子」升级到「取数点」**（`src/host/fix7Host.test.ts` 的 D3）：
+   - 结构扫描 `marketExtras.ts` 的**宏观块**（`usdIndexCross` → `us10yHistory`）：不许出现任何裸 `fetch(`；
+   - 每条宏观主机必须出现在 `gatedJson(` 的实参里，新浪两条必须经 `gatedSinaBody(` 且该 helper 自身直连 `hq.sinajs.cn` 并走 `gatedFetch`；
+   - 豁免清单**不得包含任何宏观主机**，且豁免主机**不得**出现在门禁调用里（不该占宏观预算）；
+   - `usQuote.test.ts` ⑨ 的接入面更新为**恰好两份**（`globalFlow` + `marketExtras`），并保留三个方向的注入
+     （报价链接入 ⇒ 红；接入面变空 ⇒ 红；只留 globalFlow ⇒ 红——后者正是"第二扇门"复发的形态）。
+
+**不许**：把宏观门禁再开一扇窗（新增宏观源却不经 `gatedFetch`）；也**不许**把本豁免扩大成
+「市场统计类接口都不必看 robots」—— 一旦要抓交易所正文/公告/历史批量，就必须回到 `robotsGate`。

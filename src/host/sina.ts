@@ -325,7 +325,16 @@ export interface SinaBar {
   close: number
   high: number
   low: number
-  vol: number
+  /**
+   * 成交量（**股**）。
+   *
+   * ⚠ 可空（REVIEW-7 D2）：上游对早期 bar 会给 `v: ""` 或 `v: "0"`，
+   * `Number('')` = 0 ⇒ 旧写法 `num(it.v) ?? 0` 会把"没有"编码成 **0**，
+   * 于是 `usAggregate` 的「任一日缺失 ⇒ 该根 vol 记 null」契约在真实链路上**永远走不到**
+   * （实测构造载荷：一周 3 天里有 2 天是空 `v`，聚合结果仍是具体数字）。
+   * 与同结构体的 `amount`（早就是 `number | null`）保持同一标准。
+   */
+  vol: number | null
   /**
    * 成交额（**美元**，新浪日线的 `a` 段）。
    * 实测：近期 bar 有值（`2026-10-16` FRO = 197,036,000，与 `gb_fro` 下标 30 的 197,036,261 同源），
@@ -360,7 +369,13 @@ export function parseSinaUsDaily(payload: string): SinaBar[] {
       close,
       high: num(it.h) ?? close,
       low: num(it.l) ?? close,
-      vol: num(it.v) ?? 0,
+      // 早期 bar 上游给 `""` / `"0"` ⇒ 按"没有"处理（缺失不许编码成 0）。
+      // `numField` 只挡空串，`"0"` 还要再过一道 `> 0` —— 成交量 0 在日线上不是"零成交"，
+      // 而是上游没给（真有零成交也不会出现在日线序列里）。
+      vol: ((): number | null => {
+        const v = numField(it.v)
+        return v !== null && v > 0 ? v : null
+      })(),
       // 早期 bar 上游给 "0" ⇒ 按"没有"处理（缺失不许编码成 0）
       amount: amount !== null && amount > 0 ? amount : null,
     })

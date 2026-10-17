@@ -124,18 +124,23 @@ export function CalendarPage(_props: { prefs: PortPrefs }): React.ReactElement {
     [visible, today],
   )
 
-  const mutate = (body: Record<string, unknown>): void => {
+  /**
+   * 写操作入口（U1）：**返回 Promise，拒绝即失败**。
+   *
+   * 旧写法把错误写进页面级 `err`，而弹窗时 `.tw-mask` 盖在整页之上 ⇒ 在弹窗里点「添加/保存」
+   * 失败时用户看到的是"点了没反应"，关掉弹窗才看见红字。现在原因由弹窗自己 `setErr` 显示，
+   * 成功后也由弹窗自己关闭（父组件不再替它关）。
+   */
+  const mutate = (body: Record<string, unknown>): Promise<void> => {
     setBusy(true)
-    api
+    return api
       .mutateCalendar(body)
       .then((r) => {
         setEvents(r.events)
         setSyncedAt(r.syncedAt)
         setSyncInfo({ stale: r.stale, attemptAt: r.syncAttemptAt, missing: r.missing ?? [] })
         setErr(null)
-        setEditing(null)
       })
-      .catch((e: Error) => setErr(e.message))
       .finally(() => setBusy(false))
   }
 
@@ -316,7 +321,8 @@ function DayModal(props: {
   onClose: () => void
   onEdit: (e: CalEvent) => void
   onAdd: () => void
-  mutate: (body: Record<string, unknown>) => void
+  /** 写操作：返回 Promise，**拒绝即失败**（原因由弹窗自己 `setErr` 显示，见 U1） */
+  mutate: (body: Record<string, unknown>) => Promise<void>
 }): React.ReactElement {
   // `props.date` 是"YYYY-MM-DD"自然日（非时刻）：按本地 00:00 构造它、再取星期，结果与该日历日一一对应
   //（不经过任何时刻换算 ⇒ 与浏览器时区无关）
@@ -324,6 +330,13 @@ function DayModal(props: {
  // 默认按**勾稽**排（持仓 → 自选 → 其他），组内按重要度与时刻。
   // 也可切成纯重要度排序 —— 有时只想看"今天最重要的事是什么"。
   const [byLink, setByLink] = React.useState(true)
+  /** 本弹窗内的写操作失败原因（U1：显示在**弹窗内**，不是遮罩后面的页面级红字） */
+  const [err, setErr] = React.useState<string | null>(null)
+  /** 隐藏/删除：失败 ⇒ 在弹窗顶部给原因；成功 ⇒ 事件列表由父级刷新 */
+  const act = (body: Record<string, unknown>): void => {
+    setErr(null)
+    props.mutate(body).catch((e: Error) => setErr(e.message))
+  }
   const rank = (e: CalEvent): number => (e.link?.held === true ? 0 : e.link?.watched === true ? 1 : 2)
   const sorted = React.useMemo(() => {
     const arr = [...props.events]
@@ -341,6 +354,7 @@ function DayModal(props: {
   const linkLabel = (e: CalEvent): string | null =>
     e.link?.held === true ? '持仓标的' : e.link?.watched === true ? '自选标的' : null
   return React.createElement(Modal, { title: `${props.date} 周${weekday} · ${props.events.length} 个事件`, onClose: props.onClose, width: 560 },
+    React.createElement(ErrorNote, { error: err }),
     props.events.length > 1
       ? React.createElement('div', { className: 'tw-seg', style: { marginBottom: 6 } },
           React.createElement('button', { 'data-on': byLink, onClick: () => setByLink(true), title: '持仓 → 自选 → 其他；组内按重要度' }, '按勾稽排序'),
@@ -386,12 +400,12 @@ function DayModal(props: {
               e.source === 'manual'
                 ? React.createElement(Btn, { onClick: () => props.onEdit(e) }, '编辑')
                 : React.createElement(Btn, {
-                    onClick: () => props.mutate({ op: 'hideAuto', autoKey: e.autoKey }),
+                    onClick: () => act({ op: 'hideAuto', autoKey: e.autoKey }),
                   }, '隐藏'),
               e.source === 'manual'
                 ? React.createElement(Btn, {
                     onClick: () => {
-                      if (window.confirm(`删除事件「${e.title}」？`)) props.mutate({ op: 'remove', id: e.id })
+                      if (window.confirm(`删除事件「${e.title}」？`)) act({ op: 'remove', id: e.id })
                     },
                   }, '删除')
                 : null,
@@ -410,7 +424,8 @@ function EventModal(props: {
   defaultDate: string
   busy: boolean
   onClose: () => void
-  mutate: (body: Record<string, unknown>) => void
+  /** 写操作：返回 Promise，**拒绝即失败**（原因由弹窗自己 `setErr` 显示，见 U1） */
+  mutate: (body: Record<string, unknown>) => Promise<void>
 }): React.ReactElement {
   const [date, setDate] = useState(props.event?.date ?? props.defaultDate)
   const [title, setTitle] = useState(props.event?.title ?? '')
@@ -423,13 +438,15 @@ function EventModal(props: {
   const submit = (): void => {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) { setErr('日期格式 YYYY-MM-DD'); return }
     if (title.trim() === '') { setErr('请填写事件名'); return }
-    props.mutate({
-      op: props.event === null ? 'add' : 'update',
-      id: props.event?.id,
-      date, title: title.trim(), category, importance,
-      note: note.trim() === '' ? undefined : note.trim(),
-      symbol: symbol.trim() === '' ? undefined : symbol.trim(),
-    })
+    props
+      .mutate({
+        op: props.event === null ? 'add' : 'update',
+        id: props.event?.id,
+        date, title: title.trim(), category, importance,
+        note: note.trim() === '' ? undefined : note.trim(),
+        symbol: symbol.trim() === '' ? undefined : symbol.trim(),
+      })
+      .then(props.onClose, (e: Error) => setErr(e.message))
   }
 
   return React.createElement(Modal, { title: props.event === null ? '新增日历事件' : '编辑日历事件', onClose: props.onClose, width: 520 },

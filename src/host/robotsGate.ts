@@ -136,6 +136,11 @@ export class HostBudget {
     this.req[host] = kept
   }
 
+  /** 清空全部账本（**测试钩子用**：同一进程内连跑用例时不希望撞 5 次/小时上限） */
+  clear(): void {
+    for (const host of Object.keys(this.req)) delete this.req[host]
+  }
+
   /** 导出（落盘） */
   snapshot(): Record<string, number[]> {
     const now = Date.now()

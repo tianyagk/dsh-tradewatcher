@@ -157,18 +157,25 @@ export function PortfolioPage(props: {
     return () => clearInterval(t)
   }, [active, refreshSec, reload, quoteTs])
 
-  const mutate = (body: MutatePortBody, done?: () => void): void => {
+  /**
+   * 写操作入口（U1）：**返回 Promise，拒绝即失败**。
+   *
+   * 旧写法把错误只写进页面级 `error`，而弹窗时 `.tw-mask` 盖在整页之上 ⇒
+   * 用户在弹窗里点"保存"看到的是"点了没反应"，必须关掉弹窗才看得见那行红字。
+   * 现在原因由**失败发生的那一层**显示：弹窗内 `setErr`，页面级按钮走 `mutatePage`。
+   */
+  const mutate = (body: MutatePortBody): Promise<void> => {
     setError(null)
-    api
-      .mutatePortfolio(body)
-      .then((r) => {
-        setView(r.view)
-        setDayTrades(r.dayTrades ?? null)
-        setStale(r.stale)
-        setActions(r.corporateActions ?? [])
-        done?.()
-      })
-      .catch((e: Error) => setError(e.message))
+    return api.mutatePortfolio(body).then((r) => {
+      setView(r.view)
+      setDayTrades(r.dayTrades ?? null)
+      setStale(r.stale)
+      setActions(r.corporateActions ?? [])
+    })
+  }
+  /** 页面级（不在弹窗里）的写操作：失败写进页面级 ErrorNote（错误仍可见，不是被吞掉） */
+  const mutatePage = (body: MutatePortBody): void => {
+    mutate(body).catch((e: Error) => setError(e.message))
   }
 
   const openLedger = (target: LedgerTarget): void => {
@@ -181,8 +188,34 @@ export function PortfolioPage(props: {
       .catch((e: Error) => setError(e.message))
   }
 
-  if (view === null && error === null) {
-    return React.createElement('div', { className: 'tw-body' }, React.createElement(Skeleton, { lines: 5, height: 18 }))
+  /**
+   * 首屏守卫（P0-1）：**加载中**与**失败**必须分成两条路。
+   *
+   * 旧写法只挡 `view === null && error === null`，于是 `view === null && error !== null`
+   * 会落到下面的 `[...view.groups]` ⇒ 渲染期 `TypeError`（`tsconfig` 是 `strict:false`，tsc 拦不住）。
+   * 现在失败分支**完全不读 `view`**：只渲染错误 + 原因 + 重试。
+   */
+  if (view === null) {
+    return React.createElement(
+      'div',
+      { className: 'tw-body' },
+      error === null
+        ? React.createElement(Skeleton, { lines: 5, height: 18 })
+        : React.createElement(
+            'div',
+            { className: 'tw-panel' },
+            React.createElement('div', { className: 'tw-panel-h' },
+              React.createElement('span', { className: 't' }, '持仓总览（实时行情）'),
+            ),
+            React.createElement(ErrorNote, { error: `持仓数据本次未取到 —— ${error}` }),
+            React.createElement('div', { className: 'tw-hint', role: 'note' },
+              '首次加载失败：这不代表"没有持仓"。上方是宿主/上游返回的原因；点「重试」会再取一次（自动刷新仍在跑）。',
+            ),
+            React.createElement('div', { style: { display: 'flex', justifyContent: 'flex-end', marginTop: 8 } },
+              React.createElement(Btn, { primary: true, onClick: reload }, '重试'),
+            ),
+          ),
+    )
   }
 
   const groups = [...view.groups].sort((a, b) => a.order - b.order)
@@ -437,7 +470,7 @@ export function PortfolioPage(props: {
                   label: '删除分组（归档）',
                   danger: true,
                   onClick: () => {
-                    if (window.confirm(`删除分组「${grp.name}」？将归档处理：持仓与全部流水保留，可随时恢复。`)) mutate({ op: 'archiveGroup', groupId: grp.id })
+                    if (window.confirm(`删除分组「${grp.name}」？将归档处理：持仓与全部流水保留，可随时恢复。`)) mutatePage({ op: 'archiveGroup', groupId: grp.id })
                   },
                 },
               ],
@@ -482,7 +515,7 @@ export function PortfolioPage(props: {
                       window.alert(`请先在「卖」中卖出全部 ${row.qty} 后再移除（保证流水完整）。`)
                       return
                     }
-                    if (window.confirm(`移除空仓「${row.name}」？交易流水将保留。`)) mutate({ op: 'removePos', posId: row.posId })
+                    if (window.confirm(`移除空仓「${row.name}」？交易流水将保留。`)) mutatePage({ op: 'removePos', posId: row.posId })
                   },
                 }),
               ),
@@ -497,7 +530,7 @@ export function PortfolioPage(props: {
                 React.createElement('b', null, grp.name),
                 React.createElement('small', null, `市值 ${fmtAmt(grp.totalMv)} · 浮盈 ${fmtMoneySigned(grp.floatPnl)} · 流水保留`),
               ),
-              React.createElement(Btn, { onClick: () => mutate({ op: 'restoreGroup', groupId: grp.id }) }, '恢复'),
+              React.createElement(Btn, { onClick: () => mutatePage({ op: 'restoreGroup', groupId: grp.id }) }, '恢复'),
               React.createElement(Btn, { onClick: () => openLedger({ mode: 'group', id: grp.id, title: grp.name }) }, '流水'),
             ),
           ),
@@ -540,7 +573,8 @@ function PortModalHost(props: {
   groups: ReadonlyArray<{ id: string; name: string; archived?: boolean }>
   items: ReadonlyArray<{ id: string; secid: string; name: string }>
   onClose: () => void
-  mutate: (body: MutatePortBody, done?: () => void) => void
+  /** 写操作：返回 Promise，**拒绝即失败**（原因由弹窗自己 `setErr` 显示，见 U1） */
+  mutate: (body: MutatePortBody) => Promise<void>
 }): React.ReactElement {
   const m = props.modal
   if (m.kind === 'bulk') {
@@ -701,7 +735,7 @@ function GroupFormModal(props: {
   name: string
   note: string
   onClose: () => void
-  mutate: (body: MutatePortBody, done?: () => void) => void
+  mutate: (body: MutatePortBody) => Promise<void>
 }): React.ReactElement {
   const [name, setName] = useState(props.name)
   const [note, setNote] = useState(props.note)
@@ -720,8 +754,8 @@ function GroupFormModal(props: {
         primary: true,
         onClick: () => {
           if (name.trim() === '') { setErr('请输入分组名'); return }
-          if (props.mode === 'create') props.mutate({ op: 'addGroup', name }, props.onClose)
-          else props.mutate({ op: 'renameGroup', groupId: props.groupId, name, note }, props.onClose)
+          if (props.mode === 'create') props.mutate({ op: 'addGroup', name }).then(props.onClose, (e: Error) => setErr(e.message))
+          else props.mutate({ op: 'renameGroup', groupId: props.groupId, name, note }).then(props.onClose, (e: Error) => setErr(e.message))
         },
       }, '保存'),
     ),
@@ -732,7 +766,7 @@ function AddPosModal(props: {
   groupId: string
   groupName: string
   onClose: () => void
-  mutate: (body: MutatePortBody, done?: () => void) => void
+  mutate: (body: MutatePortBody) => Promise<void>
 }): React.ReactElement {
   const [selected, setSelected] = useState<SuggestItem | null>(null)
   const [err, setErr] = useState<string | null>(null)
@@ -755,7 +789,8 @@ function AddPosModal(props: {
         disabled: selected === null,
         onClick: () => {
           if (selected === null) return
-          props.mutate({ op: 'addPos', groupId: props.groupId, secid: selected.secid, symbolName: selected.name }, props.onClose)
+          props.mutate({ op: 'addPos', groupId: props.groupId, secid: selected.secid, symbolName: selected.name })
+            .then(props.onClose, (e: Error) => setErr(e.message))
         },
       }, '加入分组'),
     ),
@@ -769,7 +804,7 @@ function TradeModal(props: {
   quote: QuoteRow | undefined
   redUp: boolean
   onClose: () => void
-  mutate: (body: MutatePortBody, done?: () => void) => void
+  mutate: (body: MutatePortBody) => Promise<void>
 }): React.ReactElement {
   const { verb, pos, groupName } = props
   const livePrice = props.quote?.price ?? pos.price
@@ -826,12 +861,13 @@ function TradeModal(props: {
           }
           if (verb !== 'adjust') {
             if (!Number.isFinite(pN) || pN <= 0) { setErr('请输入有效价格'); return }
-            props.mutate({ op: verb, posId: pos.posId, qty: qN, price: pN, fee: fN, note: note.trim() === '' ? undefined : note.trim() }, props.onClose)
+            props.mutate({ op: verb, posId: pos.posId, qty: qN, price: pN, fee: fN, note: note.trim() === '' ? undefined : note.trim() })
+              .then(props.onClose, (e: Error) => setErr(e.message))
           } else {
             if (price.trim() !== '' && (!Number.isFinite(pN) || pN <= 0)) { setErr('请输入有效价格或留空'); return }
             const body: MutatePortBody = { op: 'adjust', posId: pos.posId, qty: qN, fee: fN, note: note.trim() === '' ? undefined : note.trim() }
             if (price.trim() !== '') body.price = pN
-            props.mutate(body, props.onClose)
+            props.mutate(body).then(props.onClose, (e: Error) => setErr(e.message))
           }
         },
       }, '确认'),
@@ -844,7 +880,7 @@ function PosEditModal(props: {
   groupName: string
   groups: Array<{ id: string; name: string }>
   onClose: () => void
-  mutate: (body: MutatePortBody, done?: () => void) => void
+  mutate: (body: MutatePortBody) => Promise<void>
 }): React.ReactElement {
   const [name, setName] = useState(props.pos.name)
   const [moveGroup, setMoveGroup] = useState('')
@@ -871,7 +907,7 @@ function PosEditModal(props: {
           if (name.trim() === '') { setErr('请输入名称'); return }
           const body: MutatePortBody = { op: 'editPos', posId: props.pos.posId, symbolName: name }
           if (moveGroup !== '') body.groupId = moveGroup
-          props.mutate(body, props.onClose)
+          props.mutate(body).then(props.onClose, (e: Error) => setErr(e.message))
         },
       }, '保存'),
     ),
@@ -1249,7 +1285,9 @@ function FxModal(props: {
 
 /**
  * 复盘与摊销条（P1-3 / P2-1 / P2-6 的界面侧）：
- *  - **做T 收起态一行**：`做T 12 次 · 净 +328.50 · 胜率 58%`，展开才看逐次，**方向如实标**（先卖后买＝反 T）；
+ *  - **做T 收起态一行**：`做T 12 次 · 净 +328.50 · 平均每笔 +27.38`，展开才看逐次，**方向如实标**（先卖后买＝反 T）。
+ *    ⚠ P0-3：这里**不许**出现"胜率/概率/预测"——用户明令禁止在界面呈现概率类结论。
+ *    替而给出的是**中性事实**（次数、净额、平均每笔、跨几个交易日），口径进悬停。
  *  - **分档卡**：把当前持仓按同一分档汇总成一行，**各档之和 = 总数**，缺失用 `—`（不写"未知"）。
  *    这里的分档维度＝今日涨跌（界面手上就有 `pct`；位置口径的分档需要宿主逐只给档位，留待下一轮）。
  *  - 数字面在隐身档下由 `data-blur=1` 清单统一模糊。
@@ -1268,6 +1306,15 @@ function PortfolioReview(props: {
   const buckets: Array<[string, number]> = [['上涨', up], ['平盘', flat], ['下跌', down]]
   const bucketText = [...buckets.filter(([, n]) => n > 0).map(([k, n]) => `${n} 只${k}`), ...(miss > 0 ? [`${miss} 只 —`] : [])].join(' / ')
   if (dt === null && props.rows.length === 0) return null
+  /**
+   * 做T 的口径（进悬停，不在常驻里堆长句）：只统计**已经发生**的同日往返，
+   * 不给出任何对未来的推断；缺成交价的流水让"净"如实变成「未取到」。
+   */
+  const dayTradeTitle =
+    `样本：${dt?.summary.count ?? 0} 次同日往返、跨 ${dt?.summary.days ?? 0} 个交易日（同日两轮计 2 次）。\n` +
+    '净 = Σ(卖价 − 买价) × 数量 − 分摊费用；方向保留时序（先买后卖＝正 T，先卖后买＝反 T）；' +
+    '配不上的单边列在下方，不硬凑成往返。\n' +
+    '这里只统计已发生的交易，不做任何对将来的推断。'
   return React.createElement('div', { className: 'tw-review' },
     dt === null
       ? null
@@ -1277,11 +1324,14 @@ function PortfolioReview(props: {
             onClick: () => setOpen((v) => !v),
             'aria-expanded': open,
             'aria-label': `做T ${dt.summary.count} 次，展开明细`,
+            title: dayTradeTitle,
             disabled: dt.rounds.length === 0,
           }, dt.summary.netPnl === null
             // R3：缺价流水被排除后**不许**再显示"净 ±X"（那会是"已知那部分"冒充总额）
             ? `做T ${dt.summary.count} 次 · 净 未取到（${dt.summary.unpricedCount ?? 0} 笔流水缺成交价）`
-            : `做T ${dt.summary.count} 次 · 净 ${fmtMoneySigned(dt.summary.netPnl)} · 胜率 ${dt.summary.winRate === null ? '—' : `${Math.round(dt.summary.winRate)}%`}`),
+            // P0-3：中性事实替代概率类结论（次数 / 净额 / 平均每笔）
+            : `做T ${dt.summary.count} 次 · 净 ${fmtMoneySigned(dt.summary.netPnl)}` +
+              `${dt.summary.avgNet === null ? '' : ` · 平均每笔 ${fmtMoneySigned(dt.summary.avgNet)}`}`),
           open
             ? React.createElement('table', { className: 'tw-daytrade-table' },
                 React.createElement('thead', null, React.createElement('tr', null,

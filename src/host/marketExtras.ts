@@ -20,8 +20,61 @@ import { dataHome } from './store.ts'
 import { dayOf as shDayOf, hhmmOf as shHhmmOf } from './time.ts'
 import { progressAt, sessionElapsed, tradingDayState } from './rescue.ts'
 import { RESCUE_CALIBRATION } from './rescue-thresholds.ts'
+import { HostBudget, gatedFetch } from './robotsGate.ts'
 
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+
+/**
+ * ── 宏观取数的 robots 门禁（REVIEW-7 D3）────────────────────────────────────────
+ *
+ * 背景：`robotsGate.ts` 的文档写着「宏观链路四条全走它……缺一条就等于门禁没覆盖」，
+ * 但断言的判据是「**谁 import 了 robotsGate**」而不是「宏观取数点都经过了门禁」——
+ * 于是 `marketExtras` 里 6 个宏观主机全部裸 `fetch`，测试照样全绿（评审实测）。
+ *
+ * 现在的边界（与 `docs/DECISIONS.md` 的登记一致）：
+ *   ✅ **走门禁**（境外宏观 / 与 globalFlow 同一主机同一路径）：
+ *      `hq.sinajs.cn`（`DINIW` / `globalbd_us10yt`）、`push2delay`（`100.UDI` / `171.US10Y`）、
+ *      `push2his`（`171.US10Y` 日K历史）；
+ *   ⛔ **明确划出宏观圈**（A股市场统计，不是宏观经济数据；理由见 DECISIONS）：
+ *      涨停池 `push2ex.eastmoney.com`、两融 `www.szse.cn` / `datacenter-web.eastmoney.com`。
+ *      它们仍走 `withHostBreaker`（记账 + 冷却期零请求），只是不占「宏观 5 次/小时」预算 ——
+ *      面板每次打开都要拉涨停池，套 5 次/小时会把它直接打空。
+ *
+ * ⚠ 断言（`src/host/fix7Host.test.ts` 的 D3）：结构扫描 `marketExtras.ts` 的**每一个**取数点，
+ * 豁免清单之外不许出现裸 `fetch(`，且豁免清单**不得包含任何宏观主机**。
+ */
+const macroBudget = new HostBudget()
+
+/** 测试用：清空宏观预算账本（否则同一进程里连跑几个用例会撞 5 次/小时上限） */
+export function __resetMacroBudget(): void {
+  macroBudget.clear()
+}
+
+type Gated<T> = { ok: true; value: T; note: string } | { ok: false; missing: MissingField }
+
+/** 过门禁的 JSON 取数（宏观专用）：被 robots/预算拦下时**不发请求**，如实返回原因 */
+async function gatedJson(url: string, timeoutMs = 12_000): Promise<Gated<unknown>> {
+  const got = await gatedFetch(url, { budget: macroBudget, timeoutMs })
+  if (got.ok === false) return { ok: false, missing: got.missing }
+  const text = await got.res.text()
+  return { ok: true, value: text === '' ? {} : (JSON.parse(text) as unknown), note: got.note }
+}
+
+/** 过门禁的 GBK 文本取数（新浪宏观 `DINIW` / `globalbd_us10yt`） */
+async function gatedSinaBody(symbol: string): Promise<Gated<string | null>> {
+  const url = `https://hq.sinajs.cn/list=${encodeURIComponent(symbol)}`
+  const got = await gatedFetch(url, {
+    budget: macroBudget,
+    timeoutMs: 10_000,
+    headers: { 'user-agent': UA, referer: 'https://finance.sina.com.cn/' },
+  })
+  if (got.ok === false) return { ok: false, missing: got.missing }
+  const buf = await got.res.arrayBuffer()
+  const text = new TextDecoder('gbk').decode(buf)
+  const m = /="([^"]*)"/.exec(text)
+  const body = m?.[1] ?? ''
+  return { ok: true, value: body.trim() === '' ? null : body, note: got.note }
+}
 
 // ── push2* 可用性日志（诊断用；不进用户可见文案） ─────────────────────────────
 
@@ -76,25 +129,6 @@ async function jsonVia(host: string, url: string, timeoutMs = 12_000): Promise<u
     notePush2(host, false, Date.now() - t0, String(error).slice(0, 80))
     throw error
   }
-}
-
-/** 新浪行情（GBK，需 Referer）：返回 `var hq_str_X="..."` 里引号内的内容；符号不存在 ⇒ null */
-export async function sinaRaw(symbol: string): Promise<string | null> {
-  const host = 'hq.sinajs.cn'
-  // 收口到熔断出口（v0.77.0 规则）：`fetch` 作为 `withHostBreaker` 的参数传入，
-  // 与全仓其它站点同一写法（fetch 作为回调返回值传入 ⇒ 全仓文本防线通过）
-  const res = await withHostBreaker(host, () =>
-    fetch(`https://${host}/list=${encodeURIComponent(symbol)}`, {
-      headers: { 'user-agent': UA, referer: 'https://finance.sina.com.cn/' },
-      signal: AbortSignal.timeout(10_000),
-    }),
-  )
-  if (!res.ok) throw new Error(`HTTP ${res.status} from ${host}`)
-  const buf = await res.arrayBuffer()
-  const text = new TextDecoder('gbk').decode(buf)
-  const m = /="([^"]*)"/.exec(text)
-  const body = m?.[1] ?? ''
-  return body.trim() === '' ? null : body
 }
 
 // ── 1. 涨停 / 跌停家数（push2ex 池，一次给家数与名单） ───────────────────────
@@ -202,10 +236,20 @@ interface MarginCross {
   missing: MissingField[]
 }
 
+/**
+ * 上游数字（可能带千分位）→ `number | null`。
+ *
+ * ⚠ REVIEW-7 D4：**空串必须给 null，不是 0**。
+ * `Number('')` === 0，旧写法会把"上游没给这个字段"读成 0 —— 两融因此显示「融资余额 0 亿元」，
+ * 而拿这个假 0 去和另一源交叉还会得出"两源一致"或"差 4287 亿"这类无意义的结论。
+ * 实现与 `sina.ts:53` 的 `numField` 同一口径（那里早就踩过同一个坑）。
+ */
 function numOf(v: unknown): number | null {
   if (typeof v === 'number') return Number.isFinite(v) ? v : null
   if (typeof v === 'string') {
-    const n = Number(v.replace(/,/g, ''))
+    const text = v.replace(/,/g, '').trim()
+    if (text === '') return null
+    const n = Number(text)
     return Number.isFinite(n) ? n : null
   }
   return null
@@ -312,7 +356,9 @@ export async function usdIndexCross(): Promise<{ sina: H24Quote | null; em: H24Q
   let sina: H24Quote | null = null
   let em: H24Quote | null = null
   try {
-    const body = await sinaRaw('DINIW')
+    const got = await gatedSinaBody('DINIW')
+    if (got.ok === false) missing.push(got.missing)
+    const body = got.ok ? got.value : null
     if (body !== null) {
       const f = body.split(',')
       // 实测形状：21:59:38,102.2991,102.2991,102.5844,4272,102.5704,102.5905,102.1633,102.2991,美元指数,2026-10-13
@@ -325,9 +371,13 @@ export async function usdIndexCross(): Promise<{ sina: H24Quote | null; em: H24Q
     missing.push({ what: '美元指数（新浪）', why: 'transient', note: `本次取数失败（${String(error).slice(0, 80)}）⇒ 稍后重试` })
   }
   try {
-    const json = await jsonVia('push2delay.eastmoney.com', 'https://push2delay.eastmoney.com/api/qt/ulist.np/get?secids=100.UDI&fltt=2&invt=2&fields=f2,f3,f4,f12,f14,f124')
-    const row = ((json as { data?: { diff?: Array<Record<string, unknown>> } }).data?.diff ?? [])[0]
-    if (row !== undefined) em = { value: numOf(row.f2), at: typeof row.f124 === 'number' ? row.f124 * 1000 : null, source: '东财 100.UDI', prev: null, pct: numOf(row.f3) }
+    const got = await gatedJson('https://push2delay.eastmoney.com/api/qt/ulist.np/get?secids=100.UDI&fltt=2&invt=2&fields=f2,f3,f4,f12,f14,f124')
+    if (got.ok === false) {
+      missing.push(got.missing)
+    } else {
+      const row = ((got.value as { data?: { diff?: Array<Record<string, unknown>> } }).data?.diff ?? [])[0]
+      if (row !== undefined) em = { value: numOf(row.f2), at: typeof row.f124 === 'number' ? row.f124 * 1000 : null, source: '东财 100.UDI', prev: null, pct: numOf(row.f3) }
+    }
   } catch (error) {
     missing.push({ what: '美元指数（东财）', why: 'transient', note: `本次取数失败（${String(error).slice(0, 80)}）⇒ 稍后重试` })
   }
@@ -346,15 +396,21 @@ export async function us10yCross(): Promise<{ em: H24Quote | null; sina: H24Quot
   let em: H24Quote | null = null
   let sina: H24Quote | null = null
   try {
-    const json = await jsonVia('push2delay.eastmoney.com', 'https://push2delay.eastmoney.com/api/qt/ulist.np/get?secids=171.US10Y&fltt=2&invt=2&fields=f2,f3,f4,f12,f14,f124')
-    const row = ((json as { data?: { diff?: Array<Record<string, unknown>> } }).data?.diff ?? [])[0]
-    if (row !== undefined) em = { value: numOf(row.f2), at: typeof row.f124 === 'number' ? row.f124 * 1000 : null, source: '东财 171.US10Y', prev: null, pct: numOf(row.f3) }
+    const got = await gatedJson('https://push2delay.eastmoney.com/api/qt/ulist.np/get?secids=171.US10Y&fltt=2&invt=2&fields=f2,f3,f4,f12,f14,f124')
+    if (got.ok === false) {
+      missing.push(got.missing)
+    } else {
+      const row = ((got.value as { data?: { diff?: Array<Record<string, unknown>> } }).data?.diff ?? [])[0]
+      if (row !== undefined) em = { value: numOf(row.f2), at: typeof row.f124 === 'number' ? row.f124 * 1000 : null, source: '东财 171.US10Y', prev: null, pct: numOf(row.f3) }
+    }
   } catch (error) {
     missing.push({ what: '美债 10Y（东财）', why: 'transient', note: `本次取数失败（${String(error).slice(0, 80)}）⇒ 稍后重试` })
   }
   try {
     // ⚠ 只有 `globalbd_us10yt` 这种写法有效（`gb_us10yt` / `US10YT` 实测都返回空）
-    const body = await sinaRaw('globalbd_us10yt')
+    const got = await gatedSinaBody('globalbd_us10yt')
+    if (got.ok === false) missing.push(got.missing)
+    const body = got.ok ? got.value : null
     if (body !== null) {
       // 实测形状：美国10年期国债,5.232,5.240,5.222,5.236,5.173,0,-0.3422,-0.0179,0,0,1791899931,2026-10-13,09:58:51,2036-08-15,...
       const f = body.split(',')
@@ -373,15 +429,47 @@ export async function us10yCross(): Promise<{ em: H24Quote | null; sina: H24Quot
 /** 美债 10Y 日线历史（东财 push2his；实测自 2023-05-08 起，约 860 个交易日） */
 export async function us10yHistory(limit = 30): Promise<{ points: Array<{ day: string; value: number }>; source: string; missing: MissingField[] }> {
   try {
-    const json = await jsonVia('push2his.eastmoney.com', `https://push2his.eastmoney.com/api/qt/stock/kline/get?secid=171.US10Y&klt=101&fqt=0&beg=0&end=20500101&fields1=f1,f2,f3&fields2=f51,f53&lmt=${limit}`)
+    const got = await gatedJson(`https://push2his.eastmoney.com/api/qt/stock/kline/get?secid=171.US10Y&klt=101&fqt=0&beg=0&end=20500101&fields1=f1,f2,f3&fields2=f51,f53&lmt=${limit}`)
+    if (got.ok === false) return { points: [], source: '东财 push2his（未取到）', missing: [got.missing] }
+    const json = got.value
     // ⚠ `lmt` 实测不生效（push2his 回全量 ~860 根）⇒ 客户端自己截尾
     const all = ((json as { data?: { klines?: string[] } }).data?.klines ?? [])
     const klines = limit > 0 ? all.slice(-limit) : all
-    const points = klines.map((k) => {
+    /**
+     * ⚠ REVIEW-7 D4：缺值的行**丢掉并如实计数**，不许写成 `0`。
+     *
+     * 旧写法 `value: numOf(v) ?? 0` 会在收益率曲线上留一个真实的「0.000%」坑 ——
+     * 那是**看着正常的错数**（比空值更坏）。同文件的失败分支本来就写着"不用 0 顶替"，
+     * 两条路径不能两种标准。
+     */
+    const points: Array<{ day: string; value: number }> = []
+    let undated = 0
+    let unvalued = 0
+    for (const k of klines) {
       const [day, v] = k.split(',')
-      return { day: day ?? '', value: numOf(v) ?? 0 }
-    }).filter((p) => p.day !== '')
-    return { points, source: '东财 push2his（171.US10Y 日K）', missing: [] }
+      if (day === undefined || day === '') {
+        undated += 1
+        continue
+      }
+      const value = numOf(v)
+      if (value === null) {
+        unvalued += 1
+        continue
+      }
+      points.push({ day, value })
+    }
+    const missing: MissingField[] = []
+    if (unvalued > 0) {
+      missing.push({
+        what: '美债 10Y 历史的缺值日',
+        why: 'no-source',
+        note: `上游本次给了 ${klines.length} 行，其中 ${unvalued} 行没有收益率数值（空串或「—」）⇒ 这些日整条不画（不用 0 顶替；真实 0% 收益率不会出现在这里）`,
+      })
+    }
+    if (undated > 0) {
+      missing.push({ what: '美债 10Y 历史的无日期行', why: 'no-source', note: `上游本次给了 ${undated} 行没有日期 ⇒ 丢弃（缺日期就无法定位到交易日）` })
+    }
+    return { points, source: '东财 push2his（171.US10Y 日K）', missing }
   } catch (error) {
     return {
       points: [],

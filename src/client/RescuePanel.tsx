@@ -18,6 +18,7 @@ function shortReason(text: string, max = 42): string {
 import { api } from './api'
 import { Btn, ErrorNote, Field, Modal, Skeleton } from './ui'
 import { fmtStamp } from './format.ts'
+import { TREND_MIN_INTERVAL_MS, dueByInterval } from './pacing.ts'
 import { isUsableBaseline } from './trendView.ts'
 import { shClockText, shDayText } from './marketTime.ts'
 
@@ -406,19 +407,31 @@ export function RescuePanel(props: {
     return () => window.clearInterval(timer)
   }, [load, snapshot?.trading, snapshot?.activeIntervalSec])
 
-  // 分时量能图：跟随选中通道
+  /**
+   * 分时量能图：跟随选中通道 + **60 秒最小间隔**（U3）。
+   *
+   * 旧写法每来一次采样（交易时段 ≈10s 一拍）就重取一次 `/trend`，静置 10 分钟 ≈60 次；
+   * 分时量能本来就按分钟聚合，10s 一取只是把同一条曲线反复画。切通道时**立刻**取（不等节拍）。
+   * 副作用（最多旧 60 秒）写在图下方那行的 `title` 里。
+   */
+  const trendAt = React.useRef<number | null>(null)
+  const trendLane = React.useRef<string | null>(null)
   React.useEffect(() => {
-    if (!settings && lane !== '') {
-      setTrendLoading(true)
-      api
-        .trend(lane, 1)
-        .then((r) => {
-          setTrend(r.trend)
-          setTrendAmountReason(r.missing?.[0]?.note ?? null)
-        })
-        .catch(() => setTrend(null))
-        .finally(() => setTrendLoading(false))
-    }
+    if (settings || lane === '') return
+    const at = Date.now()
+    const switched = trendLane.current !== lane
+    if (!switched && !dueByInterval(at, trendAt.current, TREND_MIN_INTERVAL_MS)) return
+    trendLane.current = lane
+    trendAt.current = at
+    setTrendLoading(true)
+    api
+      .trend(lane, 1)
+      .then((r) => {
+        setTrend(r.trend)
+        setTrendAmountReason(r.missing?.[0]?.note ?? null)
+      })
+      .catch(() => setTrend(null))
+      .finally(() => setTrendLoading(false))
   }, [lane, snapshot?.ts])
 
   const openHistory = (day: string): void => {
@@ -746,7 +759,11 @@ export function RescuePanel(props: {
                 trend, base: laneBase, curve: data?.calibration?.progressCurve ?? null, loading: trendLoading,
                 amountReason: trendAmountReason,
               }),
-              React.createElement('div', { className: 'tw-hint', style: { fontSize: 12 } },
+              React.createElement('div', {
+                className: 'tw-hint',
+                style: { fontSize: 12 },
+                title: '分时量能按 60 秒节拍刷新（与护盘采样同频；节流后最多旧 60 秒）。柱＝每分钟成交额，本身按分钟聚合。',
+              },
                 '柱＝每分钟成交额；虚线＝同时点基准（20日均额 × 标定的日内进度曲线）；红柱＝达同时点 2.5 倍以上的脉冲。',
               ),
             ),

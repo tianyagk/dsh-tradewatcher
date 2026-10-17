@@ -1,7 +1,7 @@
 /** A股大盘行情: index overview + breadth/amount stats, sector & ETF boards,
  *  money-flow ranking (boards sorted by main-capital inflow), stock search
  *  with detail card + intraday chart. */
-import React, { useCallback, useEffect, useState } from 'react'
+import React, { useCallback, useEffect, useRef, useState } from 'react'
 import type { BoardRow, QuoteRow, StockDetail, TrendData } from '../shared/model.ts'
 import { api } from './api.ts'
 import { UPDOWN_MISSING_NOTE, breadthCells, pickBreadthCounts, upDownPair } from './breadthView.ts'
@@ -14,6 +14,7 @@ import { Sparkline } from './charts.tsx'
 import { RescuePanel } from './RescuePanel.tsx'
 import type { PortPrefs, QuoteSource } from '../shared/model.ts'
 import { isUsableBaseline } from './trendView.ts'
+import { BREADTH_MIN_INTERVAL_MS, EXTRAS_MIN_INTERVAL_MS, dueByInterval } from './pacing.ts'
 
 type Scope = 'industry' | 'concept' | 'etf'
 
@@ -27,6 +28,8 @@ const SCOPE_LABEL: Record<Scope, string> = { industry: '行业板块', concept: 
 
 export function MarketPage(props: {
   quotes: Record<string, QuoteRow>
+  /** 共享行情引擎的**节拍信号**（响应时刻）：下游按它节流，而不是挂 `quotes` 的对象身份 */
+  quoteTs?: number | null
   prefs: PortPrefs
   onPrefs?: (prefs: PortPrefs) => void
 }): React.ReactElement {
@@ -100,7 +103,16 @@ export function MarketPage(props: {
  // 涨跌家数历史分位。宿主持每日快照（收盘后写），这里只读。
   const [breadth, setBreadth] = useState<Awaited<ReturnType<typeof api.breadth>> | null>(null)
   const [breadthErr, setBreadthErr] = useState<string | null>(null)
+  /**
+   * 涨跌家数分布（U3）：依赖从 `quotes`（**对象身份**，每拍都换）改成 `quoteTs`（节拍信号），
+   * 并且最小间隔 **60s** —— `dist=1` 会在宿主侧"多扫 ~56 页"，每 10s 重来一次纯属浪费。
+   * 副作用（数据最多旧 60s）写在下方格子的 `title` 里。
+   */
+  const breadthAt = useRef<number | null>(null)
   useEffect(() => {
+    const at = Date.now()
+    if (!dueByInterval(at, breadthAt.current, BREADTH_MIN_INTERVAL_MS)) return
+    breadthAt.current = at
     let alive = true
     api
       // dist=1：额外要一份【涨跌分布】直方图（多扫 ~56 页，宿主侧 60s 缓存）——只有这一页要
@@ -117,14 +129,23 @@ export function MarketPage(props: {
     return () => {
       alive = false
     }
-    // 行情每轮刷新后顺带重读（分位只在收盘后变化，但当日数值要跟着动）
-  }, [props.quotes])
+    // 只跟节拍走：不再依赖 quotes 对象身份（分位只在收盘后变化，当日数值跟着 60s 节拍动）
+  }, [props.quoteTs])
 
   // 附加行情（v0.81.2）：涨停/跌停家数、两融（双源交叉）、全天成交额预测。
   // 预测要把"页面自己已经显示的那个当日成交额"带过去（宿主不再抓一遍）；缺/0 ⇒ 预测部分如实缺失。
   const [extras, setExtras] = useState<Awaited<ReturnType<typeof api.marketExtras>> | null>(null)
   const amountForForecast = breadth?.current?.amount ?? null
+  /**
+   * 附加行情（U3）：同样从"每拍一次"改成**按节拍 + 30s 最小间隔**。
+   * 预测要用页面上那个当日成交额 ⇒ `amountForForecast` 仍是实参、也在依赖里（它是数字，
+   * 不是会换身份的对象）；有了 30s 下限，它最多把调用提到"30 秒一次"。
+   */
+  const extrasAt = useRef<number | null>(null)
   useEffect(() => {
+    const at = Date.now()
+    if (!dueByInterval(at, extrasAt.current, EXTRAS_MIN_INTERVAL_MS)) return
+    extrasAt.current = at
     let alive = true
     api
       .marketExtras(amountForForecast === null || !(amountForForecast > 0) ? null : amountForForecast)
@@ -132,13 +153,15 @@ export function MarketPage(props: {
         if (alive) setExtras(x)
       })
       .catch(() => {
+        // 取不到就如实置空（各格显示「未取到 + 原因」），不拿上一轮的数冒充本次
         if (alive) setExtras(null)
       })
     return () => {
       alive = false
     }
-    // 成交额变了（行情轮询）就重取：宿主侧有缓存，预测本身每分钟才该变
-  }, [amountForForecast])
+    // 节拍（quoteTs）驱动重取，成交额变化也顺带重取；两条路都受 30s 最小间隔约束
+    // （宿主侧有缓存，预测本身每分钟才该变；数据最多旧 30s，见各格 title）
+  }, [props.quoteTs, amountForForecast])
 
   const sh = quotes['1.000001']
   const sz = quotes['0.399001']
@@ -166,9 +189,12 @@ export function MarketPage(props: {
    * 「上涨/平盘/下跌」三格的**悬停说明**（唯一来源）：
    * 缺失 ⇒ 带原因（红线：缺失必须给原因，且要能被键盘/触屏读到）；有数据 ⇒ 带口径与自统计时刻。
    */
-  const countsNote = !breadthOk
+  const countsNote = (!breadthOk
     ? `涨跌家数本次未取到 —— ${countsReason ?? '原因未给出'}`
-    : (countsTitle ?? '沪深两市涨跌家数（指数行情 f104/f105/f106；取不到时由本插件自统计）')
+    : (countsTitle ?? '沪深两市涨跌家数（指数行情 f104/f105/f106；取不到时由本插件自统计）')) +
+    '；本格按 60 秒节拍刷新（节流后最多旧 60 秒，不是行情条那一刻）'
+  /** 附加行情（涨停/跌停/两融/预测）的节拍说明：写进各自 `title`，别让用户以为它跟行情条同频 */
+  const EXTRAS_POLL_NOTE = '；本格按 30 秒节拍刷新（节流后最多旧 30 秒）'
   // 昨日成交（本地上一交易日快照）：取不到就是 null ⇒ 显示「未取到」，**不拿今天的数顶替**
   const prevAmt = breadth?.prevAmount ?? null
   const delta = prevAmt === null || !cells.amountOk ? null : cells.amount - prevAmt.amount
@@ -254,8 +280,9 @@ export function MarketPage(props: {
   const legendRow = (rows: Array<{ name: string; color: string; value: string; note: string }>): React.ReactElement =>
     React.createElement('div', { className: 'tw-dist-legend' },
       ...rows.map((r) => React.createElement('span', {
-        key: r.name, className: 'lg', title: r.note, tabIndex: 0, role: 'note',
-        'aria-label': `${r.name} ${r.value} —— ${r.note}`,
+        // 节拍说明统一追加在**渲染处**（原因常量本身保持原样，见 distLayout 的实参断言）
+        key: r.name, className: 'lg', title: r.note + EXTRAS_POLL_NOTE, tabIndex: 0, role: 'note',
+        'aria-label': `${r.name} ${r.value} —— ${r.note}${EXTRAS_POLL_NOTE}`,
       },
         React.createElement('span', { className: 'dot', style: { background: r.color } }),
         React.createElement('span', null, r.name),
@@ -292,17 +319,17 @@ export function MarketPage(props: {
                 '涨停',
                 extras === null || extras.limits.up.count === null ? '未取到' : String(extras.limits.up.count),
                 extras !== null && extras.limits.up.count !== null ? (redUp ? 'tw-up' : 'tw-down') : 'tw-dim',
-                extras === null
+                (extras === null
                   ? LIMIT_REASON
-                  : limitNoteOf(extras.limits.up.count === null ? null : extras.limits.up, extras.limits.caliber, '涨停'),
+                  : limitNoteOf(extras.limits.up.count === null ? null : extras.limits.up, extras.limits.caliber, '涨停')) + EXTRAS_POLL_NOTE,
               ),
               item(
                 '跌停',
                 extras === null || extras.limits.down.count === null ? '未取到' : String(extras.limits.down.count),
                 extras !== null && extras.limits.down.count !== null ? (redUp ? 'tw-down' : 'tw-up') : 'tw-dim',
-                extras === null
+                (extras === null
                   ? LIMIT_REASON
-                  : limitNoteOf(extras.limits.down.count === null ? null : extras.limits.down, extras.limits.caliber, '跌停'),
+                  : limitNoteOf(extras.limits.down.count === null ? null : extras.limits.down, extras.limits.caliber, '跌停')) + EXTRAS_POLL_NOTE,
               ),
             ),
             // 参考版副标题样式的一行小字：上涨占比 + 样本/快照说明（过长部分进悬停）
@@ -314,7 +341,7 @@ export function MarketPage(props: {
                 '上涨家数 ÷ 三类之和；与上方三格同一份家数口径'),
               breadth === null || breadth.percentile.pct === null
                 ? item('近 N 日分位', '—', 'tw-dim', breadth === null
-                    ? `涨跌家数分位本次未取到${breadthErr === null ? '' : `：${breadthErr}`}（稍后随行情轮询自动重试）`
+                    ? `涨跌家数分位本次未取到${breadthErr === null ? '' : `：${breadthErr}`}（稍后自动重试：统计格按 60 秒节拍刷新）`
                     : breadth.percentile.sampleSmall
                       ? `已存 ${breadth.percentile.n} 个交易日，需 ≥ ${breadth.minDays} 天；样本太少的"分位"是噪音，故不显示`
                       : '分位不可算（原因见数据来源）')
@@ -337,7 +364,7 @@ export function MarketPage(props: {
               item('较昨日变动', delta === null ? '未取到' : `${delta >= 0 ? '+' : ''}${fmtAmt(delta)}`,
                 delta === null ? 'tw-dim' : (delta >= 0 ? (redUp ? 'tw-up' : 'tw-down') : (redUp ? 'tw-down' : 'tw-up')),
                 delta === null ? '取不到昨日成交就无法算变动（不是 0）' : '当日成交额 − 上一交易日收盘快照'),
-              item('预测全天', forecastCell.value, forecastCell.cls, forecastCell.note),
+              item('预测全天', forecastCell.value, forecastCell.cls, forecastCell.note + EXTRAS_POLL_NOTE),
             ),
           ),
           seg('两融走势', 'margin',

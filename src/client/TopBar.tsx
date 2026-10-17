@@ -7,7 +7,7 @@ import { StripConfig } from './StripConfig.tsx'
 import { toneBadgeView, visibleCards, type ToneRow } from './stripTone.ts'
 import { chartCache } from './chartCache.ts'
 import { fmtClock, fmtPct, fmtPrice, fmtSigned, dirClass } from './format.ts'
-import { NO_SOURCE_LABEL, NO_SOURCE_TITLE, QUOTE_STATE_COLOR, QUOTE_STATE_LABEL, quoteStateOf, quoteStateTitle, summarizeQuoteStates, type QuoteState } from './quoteState.ts'
+import { NO_SOURCE_LABEL, NO_SOURCE_TITLE, QUOTE_STATE_COLOR, QUOTE_STATE_LABEL, quoteStateOf, quoteStateTitle, stripSummaryTitle, summarizeStrip, type QuoteState } from './quoteState.ts'
 import { useNow } from './useNow.ts'
 import { Sparkline } from './charts.tsx'
 import { Btn, Modal } from './ui.tsx'
@@ -353,7 +353,7 @@ export function TopBar(props: {
     return () => cancelAnimationFrame(raf)
   }, [hover, applyPos])
 
-  // 逐卡四态（一次算好，供列表头汇总与卡片色点共用同一结果）
+  // 逐卡五态（一次算好，供列表头汇总与卡片色点共用同一结果）
   const stateOf = (secid: string): QuoteState => quoteStateOf({
     row: quotes[secid],
     isMissing: missing?.has(secid.toUpperCase()) === true,
@@ -361,9 +361,25 @@ export function TopBar(props: {
     refreshSec: prefs.refreshSec,
     now,
   })
-  const summary = summarizeQuoteStates(
-    TW_ROWS.flatMap((row) => (row.items as ReadonlyArray<{ secid: string }>).map((it) => stateOf(it.secid))),
-  )
+  /** 生效卡片（存隐藏集合：老 profile 缺键 ⇒ 全可见；整组全隐藏 ⇒ 不渲染空组头） */
+  const stripRows = visibleCards(TW_ROWS, prefs.stripCfg?.hidden)
+  const stripIds = stripRows.flatMap((r) => r.items.map((i) => i.secid))
+  const stripKey = stripIds.join(',')
+  // 隐藏张数 = 全量卡片数 − 屏幕卡片数（不按 secid 求差，避免重复 secid 时算错）
+  const hiddenCount = TW_ROWS.reduce((n, row) => n + row.items.length, 0) - stripIds.length
+  /**
+   * P0-2：汇总分母 = **屏幕上的卡片数**。
+   *
+   * 旧写法用 `TW_ROWS`（28 张全量，含用户已隐藏的卡）：隐藏 1 张后那张卡永远没有回包，
+   * 于是徽标常驻「27/28 实时 · 1 缺失」—— 把"你让我别取"说成"三源都没有"，
+   * 而右边用服务端 `missing` 的「无行情源 N」不出现 ⇒ 两个相邻徽标互相打脸。
+   */
+  const stripSummary = summarizeStrip({
+    screen: stripRows,
+    hiddenCount,
+    missing,
+    stateOf,
+  })
 
  // 当前值（缺省 1 / false，与宿主默认一致）
   const opacity = normalizePanelOpacity(prefs.panelOpacity, 1)
@@ -376,10 +392,6 @@ export function TopBar(props: {
   }
 
  // 截图/录屏设置（不透明度 + 数字模糊）
-  /** 生效卡片（存隐藏集合：老 profile 缺键 ⇒ 全可见；整组全隐藏 ⇒ 不渲染空组头） */
-  const stripRows = visibleCards(TW_ROWS, prefs.stripCfg?.hidden)
-  const stripIds = stripRows.flatMap((r) => r.items.map((i) => i.secid))
-  const stripKey = stripIds.join(',')
   useEffect(() => {
     if (stripKey === '') return
     let alive = true
@@ -469,21 +481,26 @@ export function TopBar(props: {
         // "更新 14:32:05"（那是响应生成时间），用户误以为刚拿到最新价
         asOf !== null ? `数据 ${fmtClock(asOf)} · 每 ${prefs.refreshSec}s` : '加载中…',
       ),
-      // P0-2：四态汇总。数字必须**加得上**（live+delayed+settled+missing == total），
+      // P0-2：五态汇总，分母 = **屏幕上的卡片数**（隐藏卡不请求 ⇒ 也不能算成"缺失"）。
+      // 数字必须**加得上**（live+delayed+settled+pending+missing == total），
       // 因此这里用与逐卡完全相同的判定函数，而不是另算一套"滞后"。
-      summary.total > 0
+      stripSummary.screen > 0
         ? React.createElement('span', {
             className: 'tw-badge',
-            title:
-              `本批 ${summary.total} 张卡片：实时 ${summary.live} · 延迟 ${summary.delayed} · 定稿复用 ${summary.settled} · 缺失 ${summary.missing}\n` +
-              `最近一次成功行情 ${asOf === null ? '—' : fmtClock(asOf)}；来源明细：` +
-              Object.entries(sources).map(([k, n]) => `${k} ${n}`).join(' / '),
+            title: stripSummaryTitle({
+              summary: stripSummary.summary,
+              screen: stripSummary.screen,
+              hidden: stripSummary.hidden,
+              asOfText: asOf === null ? '—' : fmtClock(asOf),
+              sourcesText: Object.entries(sources).map(([k, n]) => `${k} ${n}`).join(' / '),
+            }),
             style: { fontSize: 12, color: stale && staleCount > 0 ? '#e0a94a' : undefined },
-          }, `${summary.live}/${summary.total} 实时${summary.delayed > 0 ? ` · ${summary.delayed} 延迟` : ''}${summary.settled > 0 ? ` · ${summary.settled} 定稿` : ''}${summary.missing > 0 ? ` · ${summary.missing} 缺失` : ''}`)
+          }, stripSummary.badgeText)
         : null,
-      // 无任何源可用的标的数：不能与"本轮还没数据"混为一谈
+      // 无任何源可用的标的数：不能与"本轮还没数据"混为一谈。
+      // **只看屏幕上的卡**：隐藏卡不请求，把它们算进"无行情源"是同一处误报的另一半。
       (() => {
-        const n = missing?.size ?? 0
+        const n = stripSummary.noSourceOnScreen
         if (n === 0) return null
         return React.createElement('span', {
           className: 'tw-badge',

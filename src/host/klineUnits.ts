@@ -202,20 +202,49 @@ export interface VolUnitQuoteRef {
  * **绝对量纲**校正（读侧最后一道闸）：用同日报价（手口径）比对日线。
  *
  * 段内归一只能保证"自己一致"，保证不了"自己是手"——整段都被放大 100×（一致性完好）时，
- * 只有外部参照能抓出来。判据：缓存 bar 是**盘中快照**，物理上不可能超过当日全量太多 ⇒
- * 比值 > 20 判"缓存是股"、< 1/20 判"缓存比手还小 100×"；其余不动。
+ * 只有外部参照能抓出来。
+ *
+ * 判据（REVIEW-7 D1 收紧，两条都必须成立才动手）：
+ *   ① **必须是 100 的整数次幂附近**：`|log10(ratio / 100)| ≤ 0.1`（缓存是股）或
+ *      `|log10(ratio * 100)| ≤ 0.1`（缓存比手还小 100×）。旧写法只要 `ratio ∉ [1/20, 20]` 就
+ *      **无条件 ×/÷100** —— 实测 60× 也照乘，归一到手之后反而变成 0.6×，离"手"更远；
+ *   ② `opts.band` 的"盘中快照不许误判"band 仍然先判（比全量小是正常的）。
+ *
+ * 不满足 ① 时**不改数**，只回一句"判不了"（如实说明，不猜）。
  */
 export function alignVolUnitWithQuote<T extends VolBearingBar>(
   bars: readonly T[],
   ref: VolUnitQuoteRef,
-  opts: { band?: number } = {},
+  opts: { band?: number; tolerance?: number } = {},
 ): VolUnitFix<T> {
   const band = opts.band ?? 20
+  /** 100 倍判据的容差（十进对数）：0.1 ⇒ ratio ∈ [79.4, 125.9] 才算"这是股/手之差" */
+  const tolerance = opts.tolerance ?? 0.1
   if (!usable(ref.vol)) return { bars: bars as T[], fixed: false, dropped: 0, reason: null }
   const i = bars.findIndex((b) => b.date === ref.date)
   if (i < 0 || !usable(bars[i].vol)) return { bars: bars as T[], fixed: false, dropped: 0, reason: null }
   const ratio = (bars[i].vol as number) / (ref.vol as number)
   if (ratio <= band && ratio >= 1 / band) return { bars: bars as T[], fixed: false, dropped: 0, reason: null }
+  /**
+   * ② 只有"真的是 100 倍差"才动手。
+   *
+   * `log10(ratio)` 落在 +2 附近 ⇒ 缓存是股（÷100）；落在 −2 附近 ⇒ 缓存比手还小 100×（×100）。
+   * 其它任何倍数（实测踩到 60×）**判不了**：既可能是上游量纲，也可能是"日线是盘中快照、
+   * 报价是全天"或两者根本不是同一天 —— 猜一个 100 倍只会把数字改错。
+   */
+  const exponent = Math.log10(ratio)
+  const asShares = Math.abs(exponent - 2) <= tolerance
+  const asBelowHands = Math.abs(exponent + 2) <= tolerance
+  if (!asShares && !asBelowHands) {
+    return {
+      bars: bars as T[],
+      fixed: false,
+      dropped: 0,
+      reason:
+        `${ref.date} 的日线成交量 ${String(bars[i].vol)} 与同日报价 ${String(ref.vol)}（手）相差 ${ratio.toFixed(1)}×，` +
+        `既不是 ≈1×（同口径）也不是 ≈${VOL_UNIT_FACTOR}×（股/手）⇒ 判不了，未改动（只报数，不猜量纲）`,
+    }
+  }
   const factor = ratio > 1 ? 1 / VOL_UNIT_FACTOR : VOL_UNIT_FACTOR
   const out = bars.map((b) => (usable(b.vol) ? { ...b, vol: roundTo(b.vol * factor, 4) } : { ...b }))
   return {

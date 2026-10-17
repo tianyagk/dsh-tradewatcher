@@ -8,6 +8,7 @@ import { Btn, EmptyHint, ErrorNote, Field, Modal, MoreMenu, Skeleton, SuggestInp
 import { MiniTrend } from './charts.tsx'
 import { useMiniTrends } from './mini.ts'
 import { NO_SOURCE_LABEL, NO_SOURCE_TITLE, PENDING_LABEL, PENDING_TITLE } from './quoteState.ts'
+import { INDUSTRIES_EVERY_TICKS, dueEveryTicks } from './pacing.ts'
 import { SILENCE_MS, useWatchAlerts, type AlertRow } from './alerts.ts'
 import { SortBar } from './SortBar.tsx'
 import { WATCH_SORT_HINT, WATCH_SORT_KEYS, WATCH_SORT_LABEL, normalizeSortState, sortWatch, type WatchSortKey } from './sort.ts'
@@ -79,14 +80,27 @@ export function WatchlistPage(props: {
    */
   const [indState, setIndState] = useState<{ status: 'idle' | 'ok' | 'error'; at: number | null; error: string | null }>({ status: 'idle', at: null, error: null })
   const indSeq = useRef(0)
+  /**
+   * 节拍（U3）：依赖从 `quotes`（**对象身份**，每拍都换）改成 `quoteTs`（节拍信号），
+   * 并且**每 6 拍（≈60s @10s）才真发一次** —— 旧写法每 10s 就把全自选的板块重拉一遍。
+   * 自选集合变化（加/删/移）时立刻拉一次，不等节拍，否则新加的标的没有板块。
+   */
+  const indTicks = useRef(0)
+  const indLastKey = useRef<string | null>(null)
   useEffect(() => {
     if (watch === null) return
     const secs = [...new Set(watch.items.map((i) => i.secid))]
+    const key = secs.join(',')
+    const changed = key !== indLastKey.current
+    indTicks.current += 1
     if (secs.length === 0) {
+      indLastKey.current = key
       setInds({})
       setIndState({ status: 'ok', at: Date.now(), error: null })
       return
     }
+    if (!changed && !dueEveryTicks(indTicks.current, INDUSTRIES_EVERY_TICKS)) return
+    indLastKey.current = key
     const n = ++indSeq.current
     api
       .industries(secs)
@@ -99,9 +113,9 @@ export function WatchlistPage(props: {
         if (n !== indSeq.current) return
         setIndState({ status: 'error', at: Date.now(), error: e.message })
       })
-    // 依赖 quotes：每次行情轮询后同步刷新板块涨幅与 alpha
+    // 只跟节拍（quoteTs）与自选集合走；不再依赖 quotes 对象身份
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [watch, quotes])
+  }, [watch, props.quoteTs])
 
   // 年初至今（YTD）：现价来自共享行情引擎，基准是宿主按日 memo 的日线（见 host/ytd.ts）
   const ytd = useYtd(miniIds, props.quoteTs ?? null, true)
@@ -139,18 +153,54 @@ export function WatchlistPage(props: {
     onSymbols(ids)
   }, [watch, onSymbols])
 
-  const mutate = (body: Parameters<typeof api.mutateWatch>[0], done?: () => void): void => {
+  /**
+   * 写操作入口（U1）：**返回 Promise，拒绝即失败**。
+   *
+   * 旧写法把错误只写进页面级 `error`，而弹窗时 `.tw-mask` 盖在整页之上 ⇒
+   * 在弹窗里点「保存/加入分组/移动」失败时用户看到的是"点了没反应"，
+   * 必须关掉弹窗才看见那行红字。现在原因由**失败发生的那一层**显示：
+   * 弹窗内 `setErr`，页面级按钮（归档/移除/恢复）走 `mutatePage`。
+   */
+  const mutate = (body: Parameters<typeof api.mutateWatch>[0]): Promise<void> => {
     setError(null)
-    api
-      .mutateWatch(body)
-      .then((r) => {
-        setWatch(r.watch)
-        done?.()
-      })
-      .catch((e: Error) => setError(e.message))
+    return api.mutateWatch(body).then((r) => {
+      setWatch(r.watch)
+    })
+  }
+  /** 页面级（不在弹窗里）的写操作：失败写进页面级 ErrorNote（仍可见，不是被吞掉） */
+  const mutatePage = (body: Parameters<typeof api.mutateWatch>[0]): void => {
+    mutate(body).catch((e: Error) => setError(e.message))
   }
 
-  if (watch === null) return React.createElement('div', { className: 'tw-body' }, React.createElement(Skeleton, { lines: 4, height: 16 }))
+  /**
+   * 首屏守卫（U2）：**加载中**与**失败**必须分成两条路。
+   *
+   * 旧写法是 `if (watch === null) return <Skeleton/>` —— 首次取数失败时骨架屏**永久**转下去，
+   * 而下面那行 `ErrorNote` 永远走不到，用户无法把"还在加载"与"已经失败"区分开。
+   * 现在失败分支给原因 + 重试（不读 `watch`）。
+   */
+  if (watch === null) {
+    return React.createElement(
+      'div',
+      { className: 'tw-body' },
+      error === null
+        ? React.createElement(Skeleton, { lines: 4, height: 16 })
+        : React.createElement(
+            'div',
+            { className: 'tw-panel' },
+            React.createElement('div', { className: 'tw-panel-h' },
+              React.createElement('span', { className: 't' }, '自选分组'),
+            ),
+            React.createElement(ErrorNote, { error: `自选列表本次未取到 —— ${error}` }),
+            React.createElement('div', { className: 'tw-hint', role: 'note' },
+              '首次加载失败：这不代表"没有自选分组"。上方是宿主/上游返回的原因；点「重试」会再取一次。',
+            ),
+            React.createElement('div', { style: { display: 'flex', justifyContent: 'flex-end', marginTop: 8 } },
+              React.createElement(Btn, { primary: true, onClick: reload }, '重试'),
+            ),
+          ),
+    )
+  }
 
   const groups = [...watch.groups].sort((a, b) => a.order - b.order)
   const active = groups.filter((g) => g.archived !== true)
@@ -293,7 +343,7 @@ export function WatchlistPage(props: {
                 label: '删除分组（归档）',
                 danger: true,
                 onClick: () => {
-                  if (window.confirm(`归档删除分组「${g.name}」？组内条目保留并可随分组恢复。`)) mutate({ op: 'archiveGroup', groupId: g.id })
+                  if (window.confirm(`归档删除分组「${g.name}」？组内条目保留并可随分组恢复。`)) mutatePage({ op: 'archiveGroup', groupId: g.id })
                 },
               },
             ],
@@ -367,9 +417,16 @@ export function WatchlistPage(props: {
                       : null,
                     ind !== undefined
                       ? React.createElement(React.Fragment, null,
-                          React.createElement('span', { className: 'tw-dim' }, `行业 ${ind.name}`),
+                          // U3 的副作用要如实说出来：板块数据每 60s 才刷新一次 ⇒ 它可能比价格旧
+                          React.createElement('span', {
+                            className: 'tw-dim',
+                            title: '板块数据每 60 秒刷新一次（节流后最多旧 60 秒；个股价格仍随行情每拍更新）',
+                          }, `行业 ${ind.name}`),
                           ind.pct !== null
-                            ? React.createElement('span', { className: dirClass(ind.pct, prefs.redUp) }, fmtPct(ind.pct))
+                            ? React.createElement('span', {
+                                className: dirClass(ind.pct, prefs.redUp),
+                                title: '板块涨幅每 60 秒刷新一次（最多旧 60 秒）',
+                              }, fmtPct(ind.pct))
                             : React.createElement('span', {
                                 className: 'tw-muted',
                                 // 板块涨幅缺失一律显示 —，**绝不拿 0 代替**：0 会被读成"没涨没跌"，
@@ -445,7 +502,7 @@ export function WatchlistPage(props: {
                   title: '更多',
                   items: [
                     { label: '移动分组', onClick: () => setModal({ kind: 'moveItem', groupId: g.id, groupName: g.name, itemId: it.id, itemName: it.name, secid: it.secid }) },
-                    { label: '移除', danger: true, onClick: () => mutate({ op: 'removeItem', itemId: it.id }) },
+                    { label: '移除', danger: true, onClick: () => mutatePage({ op: 'removeItem', itemId: it.id }) },
                   ],
                 }),
               )
@@ -459,7 +516,7 @@ export function WatchlistPage(props: {
           archived.map((g) =>
             React.createElement('div', { key: g.id, className: 'tw-wrow' },
               React.createElement('div', { className: 'nm' }, React.createElement('b', null, g.name), React.createElement('small', null, `${itemsOf(g.id).length} 只（原条目保留）`)),
-              React.createElement(Btn, { onClick: () => mutate({ op: 'restoreGroup', groupId: g.id }) }, '恢复'),
+              React.createElement(Btn, { onClick: () => mutatePage({ op: 'restoreGroup', groupId: g.id }) }, '恢复'),
             ),
           ),
         )
@@ -472,7 +529,8 @@ function WatchModal(props: {
   modal: NonNullable<ModalState>
   groups: Array<{ id: string; name: string }>
   onClose: () => void
-  mutate: (body: Parameters<typeof api.mutateWatch>[0], done?: () => void) => void
+  /** 写操作：返回 Promise，**拒绝即失败**（原因由弹窗自己 `setErr` 显示，见 U1） */
+  mutate: (body: Parameters<typeof api.mutateWatch>[0]) => Promise<void>
 }): React.ReactElement {
   const { modal, groups, onClose, mutate } = props
   const [name, setName] = useState(modal.kind === 'renameGroup' ? modal.name : '')
@@ -506,12 +564,12 @@ function WatchModal(props: {
           onClick: () => {
             if (modal.kind === 'addGroup') {
               if (name.trim() === '') { setErr('请输入分组名'); return }
-              mutate({ op: 'addGroup', name }, onClose)
+              mutate({ op: 'addGroup', name }).then(onClose, (e: Error) => setErr(e.message))
             } else if (modal.kind === 'renameGroup') {
               if (name.trim() === '') { setErr('请输入分组名'); return }
-              mutate({ op: 'renameGroup', groupId: modal.groupId, name }, onClose)
+              mutate({ op: 'renameGroup', groupId: modal.groupId, name }).then(onClose, (e: Error) => setErr(e.message))
             } else {
-              mutate({ op: 'noteGroup', groupId: modal.groupId, note }, onClose)
+              mutate({ op: 'noteGroup', groupId: modal.groupId, note }).then(onClose, (e: Error) => setErr(e.message))
             }
           },
         }, '保存'),
@@ -521,7 +579,8 @@ function WatchModal(props: {
   if (modal.kind === 'addItem') {
     const pick = (item: SuggestItem): void => {
       setErr(null)
-      mutate({ op: 'addItem', groupId: modal.groupId, secid: item.secid, symbolName: item.name }, onClose)
+      mutate({ op: 'addItem', groupId: modal.groupId, secid: item.secid, symbolName: item.name })
+        .then(onClose, (e: Error) => setErr(e.message))
     }
     return React.createElement(
       Modal,
@@ -552,7 +611,10 @@ function WatchModal(props: {
         React.createElement(Btn, {
           primary: true,
           disabled: targets.length === 0 || targetGroup === null,
-          onClick: () => { if (targetGroup !== null) mutate({ op: 'moveItem', itemId: modal.itemId, groupId: targetGroup }, onClose) },
+          onClick: () => {
+            if (targetGroup === null) return
+            mutate({ op: 'moveItem', itemId: modal.itemId, groupId: targetGroup }).then(onClose, (e: Error) => setErr(e.message))
+          },
         }, '移动'),
       ),
     )

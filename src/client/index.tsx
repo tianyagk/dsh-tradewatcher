@@ -406,7 +406,8 @@ function Dashboard(): React.ReactElement {
       })
     }
     if (page === 'market') {
-      return React.createElement(MarketPage, { quotes, prefs: prefs ?? DEFAULT_PREFS, onPrefs: (p) => setPrefsState(p) })
+      // quoteTs：大盘页的 breadth/extras 用它当节拍信号（不再挂 quotes 的对象身份，见 pacing.ts）
+      return React.createElement(MarketPage, { quotes, quoteTs: engine.ts, prefs: prefs ?? DEFAULT_PREFS, onPrefs: (p) => setPrefsState(p) })
     }
     if (page === 'calendar') {
       return React.createElement(CalendarPage, { prefs: prefs ?? DEFAULT_PREFS })

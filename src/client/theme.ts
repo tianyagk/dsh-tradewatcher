@@ -1,5 +1,5 @@
 /**
- * 客户端**必须用字面量色值**的两处色板（侧栏徽标 / 四态色点）。
+ * 客户端**必须用字面量色值**的两处色板（侧栏徽标 / 五态色点）。
  *
  * 为什么不能直接用 `var(--tw-up)`：这两处渲染在**主题容器之外**（徽标挂在 DSH 侧栏、
  * 色点有自己的宿主），拿不到 `.tw-root` 上的 CSS 变量作用域，只能写字面量。
@@ -32,11 +32,13 @@ export function badgeToneColor(tone: 'up' | 'down' | 'flat', redUp: boolean): st
   return tone === 'up' ? colorUp : colorDown
 }
 
-/** 四态色点（与徽标同源同色） */
+/** 五态色点（与徽标同源同色） */
 export const QUOTE_STATE_COLOR = {
   live: '#27a644',
   delayed: '#e0a94a',
   settled: '#8a8f98',
+  // 「未取到」用中性灰（不是红色）：它表示"还没回来"，不是"三源都没有"
+  pending: '#8a8f98',
   missing: '#ff5f6d',
 } as const
 

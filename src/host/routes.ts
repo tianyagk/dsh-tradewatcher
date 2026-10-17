@@ -396,11 +396,26 @@ export function makeTradeRoutes(
           const priceForRatio = quotePrice ?? (lastFq1 !== null ? lastFq1.close / (priceScale || 1) : null)
           const priceSourceForRatio: 'quote' | 'close' = quotePrice !== null ? 'quote' : 'close'
           const bars = (k?.days ?? []).map((d) => ({ date: d.date, close: d.close, vol: d.vol }))
-          // **绝对**量纲校正（读侧最后一道闸）：`fetchKline` 的段内归一只能保证"自己一致"，
-          // 保证不了"自己是手"。同日报价（`amount ÷ (vol×100) ≈ price` 自洽，手口径）
-          // 是外部参照：缓存 bar 是盘中快照，物理上不该超过当日全量 ⇒ 相差 20× 以上即判量纲不对。
-          const unitRef = quote !== null && lastFq1 !== null && typeof quote.vol === 'number' && quote.vol > 0
-            ? { date: lastFq1.date, vol: quote.vol }
+          /**
+           * **绝对**量纲校正（读侧最后一道闸）：`fetchKline` 的段内归一只能保证"自己一致"，
+           * 保证不了"自己是手"。同日报价（`amount ÷ (vol×100) ≈ price` 自洽，手口径）是外部参照。
+           *
+           * ⚠ REVIEW-7 D1 修复：参照日**必须来自报价自己的交易日**，不能取日线自己最后一根的日期。
+           * 旧写法 `date: lastFq1.date` 让 `alignVolUnitWithQuote` 里的
+           * `bars.findIndex(b => b.date === ref.date)` **必然命中最后一根** —— "必须同一天"这条前提
+           * 退化成恒真式，代码里从来没有检查过报价的成交量属于哪一天。
+           * 真实命中场景：东财限流 ⇒ `fetchKline` 返回**昨天**的旧 bar（`stale:true`），
+           * 而报价是**今天开盘几分钟**的量，两者本来就不该比（实测比值 60×，
+           * 旧实现照样 ×0.01 ⇒ 筹码换手率整体小 100 倍、`avgCost 9.9511 → 10.0675`）。
+           *
+           * 现在：报价时刻 → 该市场的日历日（A股/港股都是北京日），与日线最后一根不一致
+           * ⇒ **不做量纲判定**（`unitRef = null`）。判不了就不改数，这比改错强。
+           */
+          const quoteDay = typeof quote?.time === 'number' && Number.isFinite(quote.time) && quote.time > 0
+            ? dayOf(quote.time)
+            : null
+          const unitRef = quote !== null && lastFq1 !== null && quoteDay !== null && typeof quote.vol === 'number' && quote.vol > 0
+            ? { date: quoteDay, vol: quote.vol }
             : null
           const unitGuard = unitRef === null
             ? { bars, dropped: 0, reason: null as string | null }

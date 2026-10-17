@@ -14,5 +14,5 @@ export function indReasonOf(state: { at: number | null; error: string | null }):
   const at = state.at === null
     ? '时刻未知'
     : new Date(state.at).toLocaleTimeString('zh-CN', { hour12: false, timeZone: 'Asia/Shanghai' })
-  return `板块涨跌与 α 本次未取到 · ${at} · ${state.error ?? '上游不可用'}；下一次行情轮询会自动重试`
+  return `板块涨跌与 α 本次未取到 · ${at} · ${state.error ?? '上游不可用'}；最多 60 秒后（下一个板块节拍）自动重试`
 }
