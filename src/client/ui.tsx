@@ -1,11 +1,53 @@
 /** Small reusable UI atoms (modal, fields, suggest combobox, notes). */
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { SUGGEST_FULL_COUNT, type SuggestItem } from '../shared/model.ts'
+import { createOverlayStack } from './overlay.ts'
 import { api } from './api.ts'
 import {
   SUGGEST_HEAD_PX, SUGGEST_PAGE, SUGGEST_ROW_PX, SUGGEST_COUNT_PX,
   batchOf, countTextOf, edgeActiveOf, nextActiveOf, suggestDropdownBoxOf, suggestListViewOf, type SuggestDropdownBox,
 } from './suggestView.ts'
+
+/** 浮层层级栈（模块级）：`Modal` / `MoreMenu` / `QuoteDrawer` 都往这里登记 */
+export const overlayStack = createOverlayStack()
+let overlaySeq = 0
+
+/**
+ * Esc 层级（P2-5）：**只有栈顶那一层**响应 Escape。
+ *
+ * 回调放 ref 里、注册只做一次（空依赖）——否则任何一次重渲染都会"先出栈再入栈"，
+ * 把下面那层挪到栈顶，Esc 就会关错层。
+ */
+export function useEscapeLayer(onEscape: () => void, active = true): void {
+  const cb = useRef(onEscape)
+  cb.current = onEscape
+  const idRef = useRef<string>('')
+  if (idRef.current === '') {
+    overlaySeq += 1
+    idRef.current = `ov-${overlaySeq}`
+  }
+  useEffect(() => {
+    // `active === false`（例如**收起状态的下拉菜单**）不许占栈位：
+    // 否则一个看不见的层会成为栈顶，把 Esc 吃掉（"按了没反应"）。
+    if (!active) return undefined
+    const id = idRef.current
+    overlayStack.push(id)
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key !== 'Escape') return
+      if (!overlayStack.isTop(id)) return
+      e.preventDefault()
+      cb.current()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => {
+      window.removeEventListener('keydown', onKey)
+      overlayStack.remove(id)
+    }
+  }, [active])
+}
+
+/** 浮层里"第一个可聚焦元素"（打开时把焦点移进来；关闭时归还） */
+const FOCUSABLE = 'input:not([type=hidden]):not([disabled]),select:not([disabled]),textarea:not([disabled]),button:not([disabled]),[tabindex]:not([tabindex="-1"])'
 
 export function Modal(props: {
   title: React.ReactNode
@@ -13,19 +55,56 @@ export function Modal(props: {
   children?: React.ReactNode
   width?: number
 }): React.ReactElement {
+  useEscapeLayer(props.onClose)
+  const ref = useRef<HTMLDivElement | null>(null)
+  // 无障碍（P2-5）：打开时把焦点移进第一个可聚焦元素，关闭后归还 —— 键盘用户不会掉到文档开头
   useEffect(() => {
-    const onKey = (e: KeyboardEvent): void => {
-      if (e.key === 'Escape') props.onClose()
+    const prev = typeof document !== 'undefined' ? document.activeElement : null
+    const first = ref.current?.querySelector<HTMLElement>(FOCUSABLE)
+    first?.focus()
+    return () => {
+      if (prev instanceof HTMLElement && prev.isConnected) prev.focus()
     }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [props.onClose])
+  }, [])
+  /**
+   * 焦点陷阱（P2-5）：Tab 在弹窗内循环，不许跑到背后的页面上（键盘用户不会"按着按着就丢了焦点"）。
+   * 叠开时最上层先收到事件并 `stopPropagation`，下层不会把焦点抢回去。
+   */
+  const trapTab = (e: React.KeyboardEvent): void => {
+    if (e.key !== 'Tab') return
+    const nodes = [...(ref.current?.querySelectorAll<HTMLElement>(FOCUSABLE) ?? [])]
+    if (nodes.length === 0) return
+    const first = nodes[0] as HTMLElement
+    const last = nodes[nodes.length - 1] as HTMLElement
+    const activeEl = (typeof document === 'undefined' ? null : document.activeElement) as HTMLElement | null
+    const inside = activeEl !== null && nodes.includes(activeEl)
+    if (e.shiftKey && (activeEl === first || !inside)) {
+      e.preventDefault()
+      e.stopPropagation()
+      last.focus()
+    } else if (!e.shiftKey && (activeEl === last || !inside)) {
+      e.preventDefault()
+      e.stopPropagation()
+      first.focus()
+    }
+  }
   return React.createElement(
     'div',
-    { className: 'tw-mask', onMouseDown: (e: React.MouseEvent) => { if (e.target === e.currentTarget) props.onClose() } },
+    {
+      className: 'tw-mask',
+      onMouseDown: (e: React.MouseEvent) => { if (e.target === e.currentTarget) props.onClose() },
+    },
     React.createElement(
       'div',
-      { className: 'tw-modal', style: props.width !== undefined ? { width: props.width } : undefined },
+      {
+        ref,
+        className: 'tw-modal',
+        role: 'dialog',
+        'aria-modal': 'true',
+        'aria-label': typeof props.title === 'string' ? props.title : undefined,
+        onKeyDown: trapTab,
+        style: props.width !== undefined ? { width: props.width } : undefined,
+      },
       React.createElement('h3', null, props.title),
       props.children,
     ),
@@ -327,7 +406,7 @@ export function SuggestInput(props: {
                           ? React.createElement('span', {
                               className: 'tw-badge',
                               title: '腾讯/新浪都没有该标的的映射：东财行情主机不可用时，它不会有价格（加入后会在自选里显示「无行情源」）',
-                              style: { fontSize: 12, color: '#e0a94a' },
+                              style: { fontSize: 12, color: 'var(--tw-warn)' },
                             }, '仅东财源')
                           : null,
                         React.createElement('span', { className: 'k' }, h.kind),
@@ -370,18 +449,15 @@ export function MoreMenu(props: { items: MenuItem[]; ariaLabel?: string; title?:
     const onDown = (e: MouseEvent): void => {
       if (wrapRef.current !== null && !wrapRef.current.contains(e.target as Node)) close()
     }
-    const onKey = (e: KeyboardEvent): void => {
-      if (e.key === 'Escape') close()
-    }
     document.addEventListener('mousedown', onDown)
     document.addEventListener('scroll', close, true)
-    window.addEventListener('keydown', onKey)
     return () => {
       document.removeEventListener('mousedown', onDown)
       document.removeEventListener('scroll', close, true)
-      window.removeEventListener('keydown', onKey)
     }
   }, [open])
+  // Esc 走层级栈：与上层 Modal/抽屉叠开时只关最上面那层（P2-5）。**只在展开时占栈位**。
+  useEscapeLayer(useCallback(() => setOpen(false), []), open)
   // 打开后按真实裁剪区（视口 ∩ 所有 overflow 祖先）自适应：
   // 右侧放不下则左移，下方放不下则整体翻到触发器上方。
   useEffect(() => {
@@ -429,7 +505,7 @@ export function MoreMenu(props: { items: MenuItem[]; ariaLabel?: string; title?:
       },
     }, '⋯'),
     open
-      ? React.createElement('div', { ref: menuRef, className: 'tw-menu' },
+      ? React.createElement('div', { ref: menuRef, className: 'tw-menu', role: 'menu', 'aria-label': props.ariaLabel ?? '更多操作' },
           props.items.map((it) =>
             React.createElement('button', {
               key: it.label,

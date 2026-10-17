@@ -32,6 +32,9 @@ import { shClockText, shToday } from './marketTime.ts'
 // 与宿主共用一份（shared/model.ts）——此前两边各写一份逐字相同的映射
 const VERB_LABEL: Record<LedgerEntry['verb'], string> = LEDGER_VERB_LABEL
 
+/** 做T 明细一次最多渲染多少行（P3-4：超出部分**如实披露**，与搜索/流水列表同一做法） */
+const DAY_TRADE_ROW_LIMIT = 50
+
 function verbLabel(verb: LedgerView['verb']): string {
   return VERB_LABEL[verb] ?? verb
 }
@@ -328,7 +331,7 @@ export function PortfolioPage(props: {
  // 除权除息提示。只提示"要变"，**不自动改账** —— 送转到账数量以券商为准
       // 自动改会把用户唯一的交易记录改成一个"看起来对但没人能核对"的状态。
       actions.length > 0
-        ? React.createElement('div', { className: 'tw-hint', style: { padding: '2px 2px 0', color: '#e8a33d' } },
+        ? React.createElement('div', { className: 'tw-hint', style: { padding: '2px 2px 0', color: 'var(--tw-warn)' } },
             `${actions.length} 条公司行为涉及你的持仓：${actions.slice(0, 3).map((a) => `${a.date} ${a.name}${a.kind === 'ex' ? '除权除息' : '股权登记'}`).join('、')}${actions.length > 3 ? ' 等' : ''}。` +
             '除权除息后数量与成本会变 —— 请在「调整」里按券商实际到账录入新数量与成本（本插件不自动改账：真实的送转/派息以券商为准，自动改出来的数字没人能核对）。',
           )
@@ -387,7 +390,7 @@ export function PortfolioPage(props: {
     costUnknownRows.length > 0
       ? React.createElement('div', {
           className: 'tw-hint',
-          style: { padding: '2px 2px 0', color: '#e0a94a' },
+          style: { padding: '2px 2px 0', color: 'var(--tw-warn)' },
           tabIndex: 0,
           role: 'note',
           'aria-label': `${costUnknownRows.length} 只未录入成本：市值照算，盈亏 —`,
@@ -1062,7 +1065,7 @@ function PosRow(props: {
         props.action !== undefined
           ? React.createElement('span', {
               className: 'tw-badge',
-              style: { marginRight: 4, color: '#e8a33d', borderColor: '#e8a33d' },
+              style: { marginRight: 4, color: 'var(--tw-warn)', borderColor: 'var(--tw-warn)' },
               title: `${props.action.date} ${props.action.kind === 'ex' ? '除权除息' : '股权登记'}${props.action.note === '' ? '' : `：${props.action.note}`}\n` +
                 '除权除息后数量与成本会变 —— 请在「调整」里按券商实际到账录入（本插件不自动改账）',
             }, `${props.action.daysUntil <= 0 ? '除权' : `${props.action.daysUntil} 天后除权`}`)
@@ -1149,7 +1152,8 @@ function PosRow(props: {
         //（否则这个数会被读成"年初至今"而高估）。基准缺失时也不再写"本轮未算（悬停看原因）"：
         // 那个字为零信息（R3），原因在 tooltip 里。
         ytdBaseNote(props.ytd?.baseDate, props.ytd?.baseKind)),
-      pps(diluted ? '累计已实现' : '累计已实现',
+      // 两个分支字面相同（P3-2）：这里本来就没有口径差异，直接写死标签
+      pps('累计已实现',
         React.createElement('span', { className: 'tw-dim' }, fmtMoneySigned(row.realized)),
  // 行内只给短句（80 字解释只留面板级一处，避免同一句在每行重复）
         (row.realizedUnknownQty ?? 0) > 0
@@ -1347,7 +1351,7 @@ function PortfolioReview(props: {
             ? React.createElement('table', { className: 'tw-daytrade-table' },
                 React.createElement('thead', null, React.createElement('tr', null,
                   ['日期', '方向', '数量', '买价', '卖价', '净盈亏'].map((h) => React.createElement('th', { key: h }, h)))),
-                React.createElement('tbody', null, ...dt.rounds.slice(0, 50).map((r, i) => React.createElement('tr', { key: `${r.day}-${i}` },
+                React.createElement('tbody', null, ...dt.rounds.slice(0, DAY_TRADE_ROW_LIMIT).map((r, i) => React.createElement('tr', { key: `${r.day}-${i}` },
                   React.createElement('td', null, r.day),
                   // 方向如实：先卖后买就是 sell-first（不统一渲染成"买入→卖出"）
                   React.createElement('td', null, r.direction === 'sell-first' ? '先卖后买（反T）' : '先买后卖（正T）'),
@@ -1357,6 +1361,13 @@ function PortfolioReview(props: {
                   React.createElement('td', { className: `tw-num ${dirClass(r.netPnl, props.redUp)}` }, fmtMoneySigned(r.netPnl)),
                 ))),
               )
+            : null,
+          // P3-4：明细表只渲染前 N 行 ⇒ 必须说清"还有多少没显示"（不静默截断）
+          dt.rounds.length > DAY_TRADE_ROW_LIMIT
+            ? React.createElement('span', {
+                className: 'tw-review-note',
+                title: `明细表最多渲染 ${DAY_TRADE_ROW_LIMIT} 行；更早的往返只计入上方合计（合计口径见按钮悬停）`,
+              }, `另有 ${dt.rounds.length - DAY_TRADE_ROW_LIMIT} 次未显示（本表上限 ${DAY_TRADE_ROW_LIMIT} 行）`)
             : null,
           dt.unmatched.length > 0
             ? React.createElement('span', { className: 'tw-review-note' }, `另有 ${dt.unmatched.length} 笔单边未配对（不计入往返）`)

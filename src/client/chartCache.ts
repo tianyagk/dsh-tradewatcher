@@ -1,6 +1,7 @@
 /**
  */
 import type { FqMode, KlineData, MissingField, TrendData } from '../shared/model.ts'
+import { normalizeKlineDays, normalizeTrendLabels } from './chartWire.ts'
 import { cacheNoteOf as noteOf, settled as noteSettled } from './chartNote.ts'
 import { api } from './api.ts'
 
@@ -101,12 +102,16 @@ export async function fetchChartPayload(secid: string, tab: ChartTab, fqt: FqMod
   if (tab === 'trend' || tab === '5d') {
     const { trend, missing } = await api.trend(secid, tab === 'trend' ? 1 : 5)
     if (trend === null) return { kind: 'unavailable', tab, missing: missing ?? [] }
-    return { kind: 'trend', tab, trend }
+    // 双编码归一（AUDIT-IMPL77 第 2 项）：新宿主的单日序列只带 HH:mm（日期在 labelDay），
+    // 老宿主/本地归档是完整标签 —— 这里统一还原成完整标签，下游所有消费者都不用改。
+    return { kind: 'trend', tab, trend: { ...trend, points: normalizeTrendLabels(trend.points, trend.labelDay, trend.labelFormat) } }
   }
   const plan = KLINE_PLAN[tab]
   const { kline, missing } = await api.kline(secid, plan.klt, plan.lmt, fqt)
   if (kline === null) return { kind: 'unavailable', tab, missing: missing ?? [] }
-  return { kind: 'kline', tab, kline }
+  // 二级瘦身读侧（AUDIT-IMPL77 第 2 项）：新宿主不再发送 `pct:null` ⇒ 这里统一还原成 null
+  // （0 是有值的涨跌幅，不会被这条改动碰到）。
+  return { kind: 'kline', tab, kline: { ...kline, days: normalizeKlineDays(kline.days) } }
 }
 
 export interface ChartCacheStats {

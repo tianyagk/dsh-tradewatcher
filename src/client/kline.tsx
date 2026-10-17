@@ -5,6 +5,7 @@
  * 两种图共用：纵轴刻度线、成交量柱、MACD（DIF/DEA/HIST）。
  */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { createRafCoalescer, type RafCoalescer } from './rafThrottle.ts'
 import type { CandleMarker, SparkMarker } from './charts.tsx'
 import { fmtAxis, ma, macd, niceTicks } from './indicators.ts'
 import { hasVolumeSeries, isUsableAvg, isUsableBaseline, plausibleAvgs, trendDayAxis, trendScale } from './trendView.ts'
@@ -247,6 +248,13 @@ export function TrendChart(props: {
   const innerW = width - PAD_X - (pctScale ? 44 : PAD_X)
   /** 光标所在数据点（null = 不显示）。鼠标移动只改这一个 state，不重建图的数据。 */
   const [cursor, setCursor] = useState<number | null>(null)
+  /**
+   * 游标按帧合并（P2-10）：`onMouseMove` 原来每次直接 setCursor ⇒ 整张 SVG（主图+成交量+MACD）全量重渲染。
+   * 语义不变（仍是"鼠标所在那根"），只是每帧最多一次 setState。
+   */
+  const cursorRaf = useRef<RafCoalescer<number | null> | null>(null)
+  if (cursorRaf.current === null) cursorRaf.current = createRafCoalescer<number | null>(setCursor)
+  useEffect(() => () => { cursorRaf.current?.cancel() }, [])
   /** 涨跌色唯一来源（S5） */
   const { up: UP_COLOR, down: DOWN_COLOR } = upDownColors(redUp)
   const multiDay = props.points.length > 1 && trendDayCount(props.points) > 1
@@ -446,9 +454,9 @@ export function TrendChart(props: {
     'aria-label': cursor === null ? '分时图' : '分时图（已选中某一点，详见卡片）',
     onMouseMove: (ev: React.MouseEvent<SVGSVGElement>) => {
       const rect = ev.currentTarget.getBoundingClientRect()
-      setCursor(nearestIndex(ev.clientX - rect.left, view.xs, PAD_X, innerW))
+      cursorRaf.current?.push(nearestIndex(ev.clientX - rect.left, view.xs, PAD_X, innerW))
     },
-    onMouseLeave: () => setCursor(null),
+    onMouseLeave: () => cursorRaf.current?.push(null),
     onKeyDown: (ev: React.KeyboardEvent) => {
       if (ev.key === 'Escape') { setCursor(null); return }
       const start = cursor !== null ? cursor : lastIndex
@@ -515,6 +523,10 @@ export function KlineChart(props: {
   ])
   /** 光标数据点（null = 不显示卡片）；鼠标移动只改它，不重建图 */
   const [cursor, setCursor] = useState<number | null>(null)
+  /** 游标按帧合并（P2-10）：K 线窗口是 240 根柱 + 均线 + MACD，mousemove 不允许每像素重绘一次 */
+  const cursorRaf = useRef<RafCoalescer<number | null> | null>(null)
+  if (cursorRaf.current === null) cursorRaf.current = createRafCoalescer<number | null>(setCursor)
+  useEffect(() => () => { cursorRaf.current?.cancel() }, [])
   /** 涨跌色唯一来源（S5） */
   const { up: UP_COLOR, down: DOWN_COLOR } = upDownColors(redUp)
   useEffect(() => {
@@ -707,9 +719,9 @@ export function KlineChart(props: {
       const rect = ev.currentTarget.getBoundingClientRect()
       const k = nearestIndex(ev.clientX - rect.left, xsInWindow, PAD_X, innerW)
       if (k === null) return
-      setCursor(Math.min(bars.length - 1, s + k))
+      cursorRaf.current?.push(Math.min(bars.length - 1, s + k))
     },
-    onMouseLeave: () => setCursor(null),
+    onMouseLeave: () => cursorRaf.current?.push(null),
   }, children)
   const tipLines = cursor === null ? [] : klineReadout({ bars, i: cursor, mas, macd: m })
   const tipPos = cursorInWindow

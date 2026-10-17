@@ -122,6 +122,23 @@ export const DIST_LABELS = ['≥7%', '5~7%', '3~5%', '0~3%', '平盘', '-3~0%', 
 /** 平盘那一档的下标 */
 const DIST_ZERO_INDEX = 4
 
+/**
+ * 分档的涨跌色向（P3-5）：**按档名判**，不按下标硬编码。
+ *
+ * 旧写法是 `i < 4 ? 'up' : i === 4 ? 'flat' : 'down'`（9 档写死）—— 上游档位一变，
+ * 颜色就会静默错位（"跌的档涂成红的"）。这里从档名解析：`平盘` ⇒ flat；
+ * 区间上界为负（`-3~0%` / `≤-7%`）⇒ down；其余（含 `0~3%`）⇒ up。
+ */
+export function distToneOf(label: string): 'up' | 'flat' | 'down' {
+  const text = label.trim()
+  if (text === '' || text.includes('平')) return 'flat'
+  const first = text.split('~')[0] ?? text
+  // 形如 `-3`、`≤-7`、`<-5` 的都是负向档
+  if (/[≤<]?\s*-/.test(first)) return 'down'
+  // `0~3%` 这一档的区间是 [0,3)：涨向档（与旧实现的 i<4 一致）
+  return 'up'
+}
+
 export function distributionBinsOf(pcts: ReadonlyArray<number | null>): {
   labels: readonly string[]
   counts: number[]

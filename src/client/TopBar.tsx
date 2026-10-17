@@ -13,6 +13,7 @@ import { Sparkline } from './charts.tsx'
 import { Btn, Modal } from './ui.tsx'
 import { PANEL_OPACITY_MAX, PANEL_OPACITY_MIN, normalizePanelOpacity } from '../shared/model.ts'
 import type { PortPrefs } from '../shared/model.ts'
+import { MAX_QUOTE_IDS } from '../shared/quoteLimit.ts'
 import { isUsableBaseline } from './trendView.ts'
 import { api } from './api.ts'
 
@@ -523,7 +524,7 @@ export function TopBar(props: {
               asOfText: asOf === null ? '—' : fmtClock(asOf),
               sourcesText: Object.entries(sources).map(([k, n]) => `${k} ${n}`).join(' / '),
             }),
-            style: { fontSize: 12, color: stale && staleCount > 0 ? '#e0a94a' : undefined },
+            style: { fontSize: 12, color: stale && staleCount > 0 ? 'var(--tw-warn)' : undefined },
           }, stripSummary.badgeText)
         : null,
       // 无任何源可用的标的数：不能与"本轮还没数据"混为一谈。
@@ -536,11 +537,19 @@ export function TopBar(props: {
           title: `其中 ${n} 个${NO_SOURCE_LABEL}；这些卡片显示 —，明细见自选或持仓页\n${NO_SOURCE_TITLE}`,
           // 读屏拿到的是「无行情源 N」这个**徽标本身的含义**（真实渲染字符串，锁片段 `无行情源 N` 的来源）
           'aria-label': `${NO_SOURCE_BADGE_HINT}（本批 ${n} 只）`,
-          style: { fontSize: 12, color: '#e0a94a' },
+          style: { fontSize: 12, color: 'var(--tw-warn)' },
         }, `无行情源 ${n}`)
       })(),
       truncated === true
-        ? React.createElement('span', { className: 'tw-badge', title: '一次最多请求 160 个标的，超出部分未请求；必须减少自选数量，或分页查看', style: { fontSize: 12, color: '#e0a94a' } }, '已截断 160')
+        ? React.createElement('span', {
+            className: 'tw-badge',
+            // P2-10：上限来自共享常量（不再把宿主的 160 抄进文案）；徽标文案见下（锁片段见 shared/quoteLimit.ts 的说明）
+            title: `一次最多请求 ${MAX_QUOTE_IDS} 个标的，超出部分未请求；必须减少自选数量，或分页查看`,
+            style: { fontSize: 12, color: 'var(--tw-warn)' },
+            // ⚠ 徽标文案仍是**字面量**：`build.mjs` 的锁定片段是 `已截断 160`（本批不许动 build.mjs）。
+            // 数字与 `MAX_QUOTE_IDS` 的一致性由 impl78.test.ts 的漂移断言盯住；等锁定片段改成
+            // `已截断 ` 之后，这里就能直接写 `已截断 ${MAX_QUOTE_IDS}`（见 shared/quoteLimit.ts 的说明）。
+          }, '已截断 160')
         : null,
       // 东财行情不可用时部分标的走腾讯/新浪备用源：如实标注，避免误以为是东财数据
       (() => {

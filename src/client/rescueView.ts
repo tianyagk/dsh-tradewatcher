@@ -56,6 +56,19 @@ export function abnormalColorOf(score: number | null): string {
 }
 
 /**
+ * 表头「触发后对照 +X%/N日」的唯一实现（P3-3）。
+ *
+ * 旧写法是 `(targets.at(-1)?.targetPct ?? 0.02) * 100` —— `targets` 为空时**编造**一个
+ * "+2%/日"的阈值印在表头上（读者会以为这是宿主标定值）。没有目标就如实说"未取到"。
+ */
+export function calibrationHeaderOf(input: { targetPct: number | null; horizon: number | null }): string {
+  const pct = input.targetPct === null || !Number.isFinite(input.targetPct) ? null : input.targetPct
+  const horizon = input.horizon === null || !Number.isFinite(input.horizon) ? null : input.horizon
+  if (pct === null || horizon === null) return '触发后对照（目标涨幅/持有期未取到）'
+  return `触发后对照 +${(pct * 100).toFixed(0)}%/${horizon}日（历史频率，非胜率/概率）`
+}
+
+/**
  * 历史回看弹窗的状态（P1-9）：**失败不许伪装成"当日无信号/无抽样点"**。
  *
  * - `error`：有失败原因 ⇒ 只显示原因 + 重试（那两句"无信号/无抽样"都不会出现）；

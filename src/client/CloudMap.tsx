@@ -102,7 +102,7 @@ export function CloudMap(props: {
       redUp
         ? React.createElement('span', {
             className: 'tw-badge',
-            style: { color: '#e0a94a', borderColor: '#e0a94a' },
+            style: { color: 'var(--tw-warn)', borderColor: 'var(--tw-warn)' },
             title: '第三方站点的涨跌配色由它自己决定，本插件无法修改，也不抓取它的内容。它的口径是「红=跌、绿=涨」',
           }, '该站红跌绿涨，与本面板相反')
         : null,

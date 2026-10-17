@@ -4,7 +4,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import type { BoardRow, QuoteRow, StockDetail, TrendData } from '../shared/model.ts'
 import { api } from './api.ts'
-import { UPDOWN_MISSING_NOTE, breadthCells, pickBreadthCounts, upDownPair } from './breadthView.ts'
+import { UPDOWN_MISSING_NOTE, breadthCells, distToneOf, pickBreadthCounts, upDownPair } from './breadthView.ts'
 import { distAxisOf, distBarPctOf, forecastCellOf, limitNoteOf, marginRowOf } from './distView.ts'
 import { dirClass, fmtAmt, fmtBig, fmtPct, fmtPrice, fmtSigned } from './format.ts'
 import { CN_PHASE_LABEL, cnSessionState, shClockText } from './marketTime.ts'
@@ -607,13 +607,25 @@ function DistHistogram(props: {
     yAxis,
     grid,
     React.createElement('div', { className: 'tw-dist-hist' },
-      ...d.labels.map((label, i) => React.createElement('div', { key: label, className: 'tw-dist-bar-wrap' },
-        React.createElement('div', { className: 'tw-dist-count' }, String(d.counts?.[i] ?? 0)),
-        React.createElement('div', { className: `tw-dist-bar ${i < 4 ? 'up' : i === 4 ? 'flat' : 'down'}` },
-          React.createElement('div', { className: 'tw-dist-bar-fill', style: { height: `${Math.max(1, distBarPctOf(d.counts?.[i] ?? 0, axis.max))}%` } }),
-        ),
-        React.createElement('div', { className: 'tw-dist-label' }, label),
-      )),
+      ...d.labels.map((label, i) => {
+        // P3-5：档位计数**缺一个就是一个洞**，不许 `?? 0`（0 会被读成"这一档 0 只"）
+        const raw = d.counts[i]
+        const count = typeof raw === 'number' && Number.isFinite(raw) ? raw : null
+        // 色向按**档名**判（不按下标硬编码 9 档；上游档位变化时不会静默错色）
+        const tone = distToneOf(label)
+        return React.createElement('div', { key: label, className: 'tw-dist-bar-wrap' },
+          React.createElement('div', {
+            className: 'tw-dist-count',
+            ...(count === null
+              ? { title: '该档未取到（上游档位数与档名数不一致）', tabIndex: 0, role: 'note', 'aria-label': '该档未取到' }
+              : {}),
+          }, count === null ? '—' : String(count)),
+          React.createElement('div', { className: `tw-dist-bar ${tone}`, 'data-tone': tone },
+            React.createElement('div', { className: 'tw-dist-bar-fill', style: { height: `${count === null ? 0 : Math.max(1, distBarPctOf(count, axis.max))}%` } }),
+          ),
+          React.createElement('div', { className: 'tw-dist-label' }, label),
+        )
+      }),
     ),
   )
 }

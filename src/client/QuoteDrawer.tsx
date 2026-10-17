@@ -9,7 +9,7 @@ import type { FqMode, MissingField, StockDetail, TradeMark } from '../shared/mod
 import { FQ_LABEL } from '../shared/model.ts'
 import { api } from './api.ts'
 import { dirClass, fmtAmt, fmtBig, fmtPct, fmtPrice, fmtSigned } from './format.ts'
-import { Btn, Skeleton} from './ui.tsx'
+import { Btn, Skeleton, useEscapeLayer } from './ui.tsx'
 import type { CandleMarker, SparkMarker } from './charts.tsx'
 import { KlineChart, TrendChart } from './kline.tsx'
 import { trendDayCount } from '../shared/model.ts'
@@ -202,13 +202,8 @@ export function QuoteDrawer(props: {
     return () => { alive = false }
   }, [secid, tab, fqt, retry])
 
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent): void => {
-      if (e.key === 'Escape') onClose()
-    }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [onClose])
+  // Esc 走层级栈（P2-5）：抽屉与弹窗叠开时只关最上面那层
+  useEscapeLayer(onClose)
 
   const priceCls = dirClass(detail?.chg ?? null, redUp)
   // 三窗格（主图 + 成交量 + MACD）
@@ -623,7 +618,14 @@ export function QuoteDrawer(props: {
     { className: 'tw-drawer-mask', onMouseDown: (e: React.MouseEvent) => { if (e.target === e.currentTarget) onClose() } },
     React.createElement(
       'div',
-      { className: 'tw-drawer', onMouseDown: (e: React.MouseEvent) => e.stopPropagation() },
+      {
+        className: 'tw-drawer',
+        // 无障碍（P2-5）：抽屉是一个模态对话框（读屏能读到"打开了什么、是不是模态"）
+        role: 'dialog',
+        'aria-modal': 'true',
+        'aria-label': `${name} 行情详情`,
+        onMouseDown: (e: React.MouseEvent) => e.stopPropagation(),
+      },
       React.createElement('div', { className: 'tw-drawer-head' }, headerRows()),
       React.createElement('div', { className: 'tw-tabs', style: { justifyContent: 'flex-start' } },
         (Object.keys(TAB_LABEL) as ChartTab[]).map((t) =>

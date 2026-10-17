@@ -1302,11 +1302,8 @@ function trendKey(secid: string, ndays: number): string {
 }
 
 async function loadTrendLkg(): Promise<void> {
-  const { missing } = await lkgStore.load()
-  if (missing.length > 0) {
-    // 如实上报（不静默丢）：清单里仍保留这些条目，下一次取数成功会补写分片
-    console.warn(`[tradewatcher] trends-lkg 有 ${missing.length} 条分片不可用：`, missing.map((m) => `${m.key}（${m.reason}）`).join(' / '))
-  }
+  // 装载只读清单（热条内联；冷条懒加载）⇒ 启动 ~5 ms。读不到的分片在首次访问时逐条报。
+  await lkgStore.load()
 }
 
 function rememberTrend(secid: string, ndays: number, trend: TrendData): void {
@@ -1315,9 +1312,14 @@ function rememberTrend(secid: string, ndays: number, trend: TrendData): void {
   void lkgStore.persist()
 }
 
-/** 取兜底快照；maxAgeMs 为 Infinity 时表示「只要有过就用」 */
-export function lastGoodTrend(secid: string, ndays: number, maxAgeMs = Infinity): TrendData | null {
-  const hit = lkgStore.get(trendKey(secid, ndays))
+/**
+ * 取兜底快照；maxAgeMs 为 Infinity 时表示「只要有过就用」。
+ *
+ * **异步**（AUDIT-IMPL77 第 1 项）：冷条不在装载时读回（否则启动要等 111 个分片），
+ * 这里按需 `getOrLoad` —— 热条同步命中，冷条首次访问读一个分片（≈0.5 ms），并发同 key 只读一次。
+ */
+export async function lastGoodTrend(secid: string, ndays: number, maxAgeMs = Infinity): Promise<TrendData | null> {
+  const hit = await lkgStore.getOrLoad(trendKey(secid, ndays))
   if (hit === undefined) return null
   if (Date.now() - hit.at > maxAgeMs) return null
   return { ...hit.trend, staleAt: hit.at }
@@ -1337,6 +1339,16 @@ export function __resetTrendLkgForTest(): void {
 export function __reloadTrendLkgForTest(): void {
   lkgStore.__resetForTest()
   lkgStore.__resetLoadedForTest()
+}
+
+/** 测试钩子：迁移摘要（条数/字节/时间/sha256/是否已清理备份） */
+export function __trendLkgMigratedFromOf(): ReturnType<TrendLkgStore['migratedFromOf']> {
+  return lkgStore.migratedFromOf()
+}
+
+/** 测试钩子：装载/懒加载读不到的分片（逐条原因） */
+export function __trendLkgMissingOf(): ReturnType<TrendLkgStore['missingOf']> {
+  return lkgStore.missingOf()
 }
 
 /**
@@ -1389,7 +1401,7 @@ async function trendWithFallbackRaw(
       backup = await (opts.fallbackSource ?? tencentTrend)(secid).catch(() => null)
     }
     const now = opts.now ?? Date.now()
-    const picked = pickTrendFallback({ upstream, backup, lkg: lastGoodTrend(secid, ndays), today: dayOf(now) })
+    const picked = pickTrendFallback({ upstream, backup, lkg: await lastGoodTrend(secid, ndays), today: dayOf(now) })
     if (picked.data === null) {
       // 上游与备用源都没给数据 —— 记账（"东财被限流"与"该标的没有分时"必须能分开）
       if (upstreamThrew) noteUpstreamFailure('trend')

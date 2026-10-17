@@ -17,6 +17,21 @@ export function panelIdle(visible: boolean, documentHidden: boolean): boolean {
   return !visible || documentHidden
 }
 
+/**
+ * 纯判定：面板**是否真的可见**（P2-4）。
+ *
+ * 两个信号：
+ *   · `documentHidden`：整页切后台；
+ *   · `intersecting`：面板根节点这一轮是否与视口相交（`IntersectionObserver` 给）；
+ *     `null` = 观察器不可用/还没回调 ⇒ **失败放行**（宁可按可见处理，也不要把数据停了）。
+ *
+ * 旧实现是 `const visible = true`（常量），上层的 `enabled` 参数全部形同虚设。
+ */
+export function panelVisibleOf(input: { documentHidden: boolean; intersecting: boolean | null }): boolean {
+  if (input.documentHidden) return false
+  return input.intersecting !== false
+}
+
 /** 读当前文档是否隐藏（无 `document` 的运行环境按"未隐藏"处理） */
 export function documentHiddenNow(): boolean {
   try {

@@ -168,6 +168,10 @@ export function CalendarPage(_props: { prefs: PortPrefs }): React.ReactElement {
     const mark = e.link?.held === true ? '●' : e.link?.watched === true ? '○' : ''
     const linkText = e.link?.held === true ? '持仓标的' : e.link?.watched === true ? '自选标的' : ''
     const changeText = e.changes !== undefined && e.changes.length > 0 ? `（改期 ${e.changes.length} 次）` : ''
+    const open = (ev: { stopPropagation: () => void }): void => {
+      ev.stopPropagation()
+      setDayOpen(e.date)
+    }
     return React.createElement('span', {
       key: e.id,
       className: 'tw-cal-pill',
@@ -175,9 +179,16 @@ export function CalendarPage(_props: { prefs: PortPrefs }): React.ReactElement {
         `${e.time !== undefined ? `${e.time} ` : ''}${e.title}${e.note !== undefined ? ` — ${e.note}` : ''}` +
         `${linkText === '' ? '' : ` · ${linkText}`}${changeText}`,
       style: { color: IMP_COLOR[e.importance], borderColor: IMP_COLOR[e.importance] },
-      onClick: (ev: React.MouseEvent) => {
-        ev.stopPropagation()
-        setDayOpen(e.date)
+      // 键盘可达（P2-6）：点击型 span 必须能 Tab 到、回车/空格能打开（此前只有 onClick）
+      role: 'button',
+      tabIndex: 0,
+      'aria-label': `${e.title}，打开 ${e.date} 的事件详情`,
+      onClick: (ev: React.MouseEvent) => open(ev),
+      onKeyDown: (ev: React.KeyboardEvent) => {
+        if (ev.key === 'Enter' || ev.key === ' ') {
+          ev.preventDefault()
+          open(ev)
+        }
       },
     },
       mark === '' ? null : React.createElement('span', { style: { marginRight: 4, opacity: 0.85 } }, mark),
@@ -276,7 +287,21 @@ export function CalendarPage(_props: { prefs: PortPrefs }): React.ReactElement {
                   ),
                   ...list.slice(0, 3).map((e) => pill(e)),
                   list.length > 3
-                    ? React.createElement('span', { className: 'tw-cal-more', onClick: (ev: React.MouseEvent) => { ev.stopPropagation(); setDayOpen(c.date) } }, `+${list.length - 3}`)
+                    // 键盘可达（P2-6）：`+N` 也是可点击控件
+                    ? React.createElement('span', {
+                        className: 'tw-cal-more',
+                        role: 'button',
+                        tabIndex: 0,
+                        'aria-label': `还有 ${list.length - 3} 个事件，打开 ${c.date} 详情`,
+                        onClick: (ev: React.MouseEvent) => { ev.stopPropagation(); setDayOpen(c.date) },
+                        onKeyDown: (ev: React.KeyboardEvent) => {
+                          if (ev.key === 'Enter' || ev.key === ' ') {
+                            ev.preventDefault()
+                            ev.stopPropagation()
+                            setDayOpen(c.date)
+                          }
+                        },
+                      }, `+${list.length - 3}`)
                     : null,
                 )
               }),
@@ -393,7 +418,7 @@ function DayModal(props: {
               e.changes !== undefined && e.changes.length > 0
                 ? React.createElement('span', {
                     className: 'tw-badge',
-                    style: { color: '#e8a33d', borderColor: '#e8a33d' },
+                    style: { color: 'var(--tw-warn)', borderColor: 'var(--tw-warn)' },
                     title: e.changes
                       .map((c) => `${fmtStamp(c.at)}：${c.field} ${c.from === '' ? '（无）' : c.from} → ${c.to}`)
                       .join('\n'),

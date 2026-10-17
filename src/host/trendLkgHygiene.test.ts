@@ -89,7 +89,13 @@ test('③ 分片里只有 trend（不含 ts/at）；清单带 caps/dropped/entri
   const manifest = decodeLkgManifest(manifestRaw)
   assert.ok(manifest !== null, '清单必须可解码（v3）')
   assert.equal(manifest.v, LKG_MANIFEST_V)
-  assert.deepEqual(manifest.caps, { maxEntries: TREND_LKG_MAX, maxBytes: TREND_LKG_MAX_BYTES, maxShardWriteBytes: 512 * 1024 }, '保留口径必须写进清单（悬停文案与它同源）')
+  assert.deepEqual(
+    { maxEntries: manifest.caps.maxEntries, maxBytes: manifest.caps.maxBytes, maxShardWriteBytes: manifest.caps.maxShardWriteBytes },
+    { maxEntries: TREND_LKG_MAX, maxBytes: TREND_LKG_MAX_BYTES, maxShardWriteBytes: 512 * 1024 },
+    '保留口径必须写进清单（悬停文案与它同源）',
+  )
+  assert.equal(manifest.caps.hotMax > 0, true, '热条上限也写进清单（装载提速的配置同样可见）')
+  assert.equal(manifest.caps.manifestMaxBytes, 512 * 1024, '清单体积硬上限（保证单次写 ≤ 512 KB）')
   assert.equal(manifest.entries.length, 1)
   assert.equal(manifest.entries[0].key, '1.600519|1')
   assert.equal(manifest.entries[0].at, 1_234, 'at 在清单里')

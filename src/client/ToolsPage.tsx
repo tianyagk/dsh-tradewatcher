@@ -257,10 +257,22 @@ function catalogView(
     React.createElement(
       'div',
       { className: 'tw-tabs', style: { border: 'none', background: 'transparent', padding: 0 }, role: 'tablist', 'aria-label': '工具分类' },
-      model.categories.map((c) =>
+      // P3-6：tablist 里的按钮必须是 tab（`data-on` 只是视觉，读屏读不出来）
+      model.categories.map((c, i) =>
         React.createElement(
           'button',
-          { key: c.key, className: 'tw-tab', type: 'button', 'data-on': io.category === c.key, onClick: () => io.setCategory(c.key) },
+          {
+            key: c.key,
+            className: 'tw-tab',
+            type: 'button',
+            role: 'tab',
+            'aria-selected': io.category === c.key,
+            'data-on': io.category === c.key,
+            // 只有一个 tab 时 roving tabindex 没有意义：全部可聚焦（键盘总能 Tab 到当前 tab）
+            tabIndex: io.category === c.key ? 0 : -1,
+            'data-index': i,
+            onClick: () => io.setCategory(c.key),
+          },
           c.label,
         ),
       ),

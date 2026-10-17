@@ -69,13 +69,16 @@ export interface BadgeState {
  */
 export interface BadgeInput {
   indexPoint: number | null
-  indexName: string | null
   /** 持仓当日盈亏率；`null` = 没有持仓行情（不可算） */
   dayPnlPct: number | null
-  dayPnl: number
   asOf: number | null
   settled: boolean
 }
+/**
+ * P3-2：删掉 `indexName` 与 `dayPnl` —— 它们**从未被读取**（入参带着"值"却画不出来，
+ * 读代码的人会以为徽标能显示指数名或当日盈亏金额）。回包仍带这两个字段（宿主契约不变），
+ * 结构类型下多出来的字段会被忽略。
+ */
 
 /** 悬停提示的长度上限（超出会被宿主截断成"…"，等于没写） */
 export const BADGE_DETAIL_MAX = 32

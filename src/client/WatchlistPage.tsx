@@ -26,6 +26,8 @@ type ModalState =
 
 
 export function WatchlistPage(props: {
+  /** 面板是否**真的可见**（P2-4）：不可见时停掉缩略图/异动/YTD 的取数（面板被宿主藏起来时不再空跑） */
+  active?: boolean
   quotes: Record<string, QuoteRow>
   /** 共享行情引擎最近一次成功更新的时间戳：异动判定跟着它走（行情没变就不重判） */
   quoteTs?: number | null
@@ -39,6 +41,8 @@ export function WatchlistPage(props: {
   onOpenDetail?: (secid: string, name: string) => void
 }): React.ReactElement {
   const { quotes, missing, quotesReady, prefs, setPrefs, onSymbols, onOpenDetail } = props
+  /** 面板可见性（P2-4）——注意与下面的 `active`（未归档分组）不是一回事 */
+  const panelActive = props.active !== false
   const [alertsOpen, setAlertsOpen] = useState(false)
   const openDetail = (secid: string, name: string): void => onOpenDetail?.(secid, name)
   const noSource = (secid: string): boolean => missing?.has(secid.toUpperCase()) === true
@@ -55,14 +59,14 @@ export function WatchlistPage(props: {
     if (watch !== null) for (const it of watch.items) ids.add(it.secid)
     return [...ids]
   }, [watch])
-  const minis = useMiniTrends(miniIds, true)
+  const minis = useMiniTrends(miniIds, panelActive)
   const alertIds = React.useMemo(() => {
     const ids = new Set<string>()
     if (watch !== null) for (const it of watch.items) ids.add(it.secid)
     return [...ids]
   }, [watch])
  // 异动判定（宿主侧算，客户端只负责提醒策略与静默窗口）
-  const alerts = useWatchAlerts(alertIds, props.quoteTs ?? null, true)
+  const alerts = useWatchAlerts(alertIds, props.quoteTs ?? null, panelActive)
   const alertOf = React.useMemo(() => {
     const m = new Map<string, AlertRow>()
     for (const a of alerts.alerts) m.set(a.secid, a)
@@ -118,7 +122,7 @@ export function WatchlistPage(props: {
   }, [watch, props.quoteTs])
 
   // 年初至今（YTD）：现价来自共享行情引擎，基准是宿主按日 memo 的日线（见 host/ytd.ts）
-  const ytd = useYtd(miniIds, props.quoteTs ?? null, true)
+  const ytd = useYtd(miniIds, props.quoteTs ?? null, panelActive)
 
   /**
    * α 的**唯一**算法（P1-3）：个股涨跌幅 − 板块涨跌幅。
@@ -235,7 +239,18 @@ export function WatchlistPage(props: {
             className: 'tw-badge',
             style: { cursor: 'pointer', color: alerts.alerts.length > 0 ? 'var(--tw-up)' : 'var(--tw-muted)', borderColor: alerts.alerts.length > 0 ? 'var(--tw-up)' : undefined },
             title: '点击展开异动队列（同一条目 30 分钟内只提醒一次，静默不改变"它正在异动"这个事实）',
+            // 键盘可达（P2-6）：徽标本身是开关，必须能 Tab 到、回车/空格能按
+            role: 'button',
+            tabIndex: 0,
+            'aria-expanded': alertsOpen,
+            'aria-label': `异动 ${alerts.alerts.length} 条${alerts.suppressed.length > 0 ? `（静默 ${alerts.suppressed.length}）` : ''}，${alertsOpen ? '收起' : '展开'}队列`,
             onClick: () => setAlertsOpen((v) => !v),
+            onKeyDown: (e: React.KeyboardEvent) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault()
+                setAlertsOpen((v) => !v)
+              }
+            },
           }, `异动 ${alerts.alerts.length}${alerts.suppressed.length > 0 ? `（静默 ${alerts.suppressed.length}）` : ''}${alertsOpen ? ' ▲' : ' ▼'}`)
         : null,
       archived.length > 0
@@ -484,7 +499,7 @@ export function WatchlistPage(props: {
                           React.createElement('span', {
                             className: 'tw-badge',
                             title: NO_SOURCE_TITLE,
-                            style: { fontSize: 12, color: '#e0a94a' },
+                            style: { fontSize: 12, color: 'var(--tw-warn)' },
                             tabIndex: 0,
                             role: 'note',
                             'aria-label': NO_SOURCE_LABEL,

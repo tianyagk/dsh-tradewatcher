@@ -2,6 +2,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { QuoteRow } from '../shared/model.ts'
 import { api } from './api.ts'
+import { createRequestGen } from './requestGen.ts'
 
 /**
  * Page-session quote store: survives component remounts (inner-tab switches,
@@ -57,16 +58,20 @@ export function useQuoteEngine(secids: string[], intervalMs: number, enabled: bo
   const [refreshing, setRefreshing] = useState(false)
   const inFlight = useRef(false)
   const alive = useRef(true)
+  /** 请求代号（P2-2）：旧代响应整体丢弃（见 `requestGen.ts`） */
+  const gen = useRef(createRequestGen())
 
   const load = (): void => {
     if (ids.length === 0 || !enabled) return
     if (inFlight.current) return
     inFlight.current = true
     setRefreshing(true)
+    const my = gen.current.next()
     api
       .quotes(ids)
       .then((r) => {
-        if (!alive.current) return
+        // 旧代（key 变了/卸载）⇒ 丢弃：否则会拿上一轮的缺失集合与时刻标注新页面
+        if (!alive.current || gen.current.stale(my)) return
         setQuotes((prev) => {
           const next = { ...prev }
           for (const [k, v] of Object.entries(r.items)) {
@@ -105,9 +110,11 @@ export function useQuoteEngine(secids: string[], intervalMs: number, enabled: bo
         setError(null)
       })
       .catch((e: Error) => {
-        if (alive.current) setError(e.message)
+        // 旧代的错误同样丢弃（它描述的是另一组 id 的这一次尝试）
+        if (alive.current && !gen.current.stale(my)) setError(e.message)
       })
       .finally(() => {
+        // ⚠ 这里**必须无条件**复位：只在 alive 时复位会让一次失败把轮询永久卡死
         inFlight.current = false
         if (alive.current) setRefreshing(false)
       })
@@ -115,6 +122,8 @@ export function useQuoteEngine(secids: string[], intervalMs: number, enabled: bo
 
   useEffect(() => {
     alive.current = true
+    // 新 key/新 enabled：开新一代 ⇒ 在途的旧请求落地时会被 stale() 丢弃
+    gen.current.next()
     load()
     if (!enabled || ids.length === 0) return () => { alive.current = false }
     const t = setInterval(load, intervalMs)

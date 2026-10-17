@@ -11,6 +11,15 @@ export const TREND_LKG_MAX = 400
 export const TREND_LKG_MAX_BYTES = 4 * 1024 * 1024
 /** 单次写盘上限（一条分片；分片制下每条 ≈ 20 KB，留足余量） */
 export const TREND_LKG_MAX_SHARD_WRITE_BYTES = 512 * 1024
+/**
+ * **热条**内联进清单的条数上限（AUDIT-IMPL77 第 1 项）。
+ *
+ * 装载时只读清单 ⇒ 热条越多、启动越快、但清单（每次 persist 都要写）越大。
+ * 8 条 × 约 18 KB ≈ 150 KB：装载从 60–65 ms 降到 ~5 ms，单次写仍远低于 512 KB。
+ */
+export const TREND_LKG_HOT_MAX = 8
+/** 清单体积硬上限（热条按预算裁剪；保证"单次写 ≤ 512 KB"这条红线不被 N 调大破坏） */
+export const TREND_LKG_MANIFEST_MAX_BYTES = 512 * 1024
 
 /**
  * 悬停里那一行（`· 上次成功数据` 后接）。**别把数字写死**：全部来自上面的常量。

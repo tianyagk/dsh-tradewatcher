@@ -29,8 +29,8 @@ import { badgeToneColor } from './theme.ts'
 const require = createRequire(import.meta.url)
 
 const base: BadgeInput = {
-  indexPoint: 3963, indexName: '沪深300',
-  dayPnlPct: 0.07, dayPnl: 795, asOf: Date.parse('2026-10-09T15:00:00+08:00'), settled: false,
+  indexPoint: 3963,
+  dayPnlPct: 0.07, asOf: Date.parse('2026-10-09T15:00:00+08:00'), settled: false,
 }
 
 /** 徽标**唯一允许的形状**（非隐身档）：带符号一位小数、`10+` 省略档、真零、或不可算时的空 */
@@ -221,7 +221,7 @@ test('⑦ 标签恰为「盯盘」（不含 数据/已收盘/`·` 分隔后缀�
   // 判据 3：**信息没丢** —— 数据时刻与「已收盘」必须在悬停 title（= detail）里
   // ⚠ 期望值**必须**写死字面量（R5）：用同一个 toLocaleTimeString 推导 ⇒ 任何时区都过，
   // 等于把"数据时刻按浏览器时区渲染"这个缺陷锁成契约（UTC 浏览器下它接受 01:42:52）。
-  const v = badgeView({ indexPoint: 3000, indexName: '上证指数', dayPnlPct: -2.29, dayPnl: -2290, asOf: Date.parse('2026-10-12T09:42:52+08:00'), settled: false }, false)
+  const v = badgeView({ indexPoint: 3000, dayPnlPct: -2.29, asOf: Date.parse('2026-10-12T09:42:52+08:00'), settled: false }, false)
   assert.ok(v.detail.includes('· 数据 09:42:52'), `悬停里必须有北京数据时刻（实际 ${v.detail}）`)
   assert.equal(v.detail, '当日盈亏 -2.3% · 数据 09:42:52', `悬停形状（实际 ${v.detail}）`)
   assert.ok(badgeView({ ...base, settled: true }, false).detail.includes('· 已收盘'), '已收盘状态必须在悬停里（不许因为标签去掉后缀就把信息丢掉）')
@@ -233,20 +233,20 @@ test('⑦ 标签恰为「盯盘」（不含 数据/已收盘/`·` 分隔后缀�
 test('⑧ task-80：徽标与 tooltip 同口径同舍入（同一输入）', () => {
   const cases: Array<[number, string]> = [[-2.29, '-2.3%'], [2.349, '+2.3%'], [0, '0.0%'], [12.5, '+10+%']]
   for (const [pct, expect] of cases) {
-    const v = badgeView({ indexPoint: null, indexName: null, dayPnlPct: pct, dayPnl: 0, asOf: null, settled: false }, false)
+    const v = badgeView({ indexPoint: null, dayPnlPct: pct, asOf: null, settled: false }, false)
     assert.equal(v.text, expect, `徽标（输入 ${pct}）`)
     // tooltip 里的百分比必须与徽标**同一个舍入结果**（去掉尾部的 · 数据 … 部分后逐字比对）
     const inDetail = /当日盈亏 ([+-]?[\d.]+\+?%)/.exec(v.detail)?.[1] ?? ''
     assert.equal(inDetail, v.text, `tooltip 里的百分比必须与徽标一致（detail=${v.detail}）`)
   }
   // 「不可算」时徽标为空、tooltip 给原因（不是 0）
-  const none = badgeView({ indexPoint: null, indexName: null, dayPnlPct: null, dayPnl: 0, asOf: null, settled: false }, false)
+  const none = badgeView({ indexPoint: null, dayPnlPct: null, asOf: null, settled: false }, false)
   assert.equal(none.text, '')
   assert.ok(none.detail.includes('当日盈亏 —'), none.detail)
 })
 
 test('⑨ 金额不进悬停提示（那截永远被截断，细节留在面板里）', () => {
-  const v = badgeView({ ...base, dayPnlPct: 0.07, dayPnl: 795 }, false)
+  const v = badgeView({ ...base, dayPnlPct: 0.07 }, false)
   assert.ok(!v.detail.includes('元'), `不该出现金额：${v.detail}`)
   assert.ok(!v.detail.includes('持仓'), `不该重复"持仓"这类可从上下文得知的词：${v.detail}`)
 })
@@ -291,7 +291,7 @@ test('⑪ 徽标档位只有 up/down/flat（类型 + 运行时都只有这三个
  */
 test('⑫ 回归：宿主报「疑似护盘」时，徽标仍是当日涨跌幅（不是「护」）', () => {
   const fromApi = {
-    indexPoint: 4134.25, indexName: '沪深300', dayPnlPct: -2.33, dayPnl: -34189,
+    indexPoint: 4134.25, dayPnlPct: -2.33,
     asOf: Date.parse('2026-10-16T14:39:00+08:00'), settled: false,
     // 宿主契约里仍有的两个字段（客户端不再消费）
     level: 2, levelLabel: '疑似护盘',

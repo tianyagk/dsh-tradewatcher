@@ -694,6 +694,34 @@ export function keyframesProblems(css: string): string[] {
 }
 
 /** 动效纪律的 CSS 判据（唯一实现）：关闭态 display:none + 后台暂停 + reduced-motion 覆盖 */
+/**
+ * `transition` 属性白名单（P2-11）：**不许动布局属性**。
+ *
+ * 既有断言只扫 `@keyframes`（`animationPropertyProblems` / `keyframesProblems`），扫不到
+ * `transition:width` —— 而 `width` 每次变化都会触发 layout（与"只动 transform/opacity"的纪律相悖）。
+ * 这里把扫描扩到 `transition`：纯 paint 属性（color/background/border-color/filter…）不触发布局，
+ * 予以保留；transform/opacity 之外的**布局类属性**一律拒绝。
+ */
+export const TRANSITION_LAYOUT_PROPS = [
+  'width', 'height', 'top', 'left', 'right', 'bottom', 'inset',
+  'margin', 'padding', 'font-size', 'line-height', 'flex-basis', 'grid-template',
+] as const
+
+export function transitionProblems(css: string): string[] {
+  const clean = css.replace(/\/\*[\s\S]*?\*\//g, '')
+  const out: string[] = []
+  for (const m of clean.matchAll(/transition:\s*([^;}]+)/g)) {
+    const decl = (m[1] ?? '').trim()
+    if (decl === '' || decl === 'none') continue
+    for (const part of decl.split(',')) {
+      const name = part.trim().split(/\s+/)[0] ?? ''
+      const bad = TRANSITION_LAYOUT_PROPS.find((p) => name === p || name.startsWith(`${p}-`))
+      if (bad !== undefined) out.push(`transition 动了布局属性 ${name}（${decl.slice(0, 60)}）`)
+    }
+  }
+  return out
+}
+
 export function motionCssProblems(css: string): string[] {
   // ⚠ 统一在"剥注释 + 去空白"的版本上判：注释里会写反例说明；
   //   而且 `@media (…)` 与 `@media(…)` 两种写法只差一个空格（实测踩到：漏空格 ⇒ 块扫描一个都匹配不上）。

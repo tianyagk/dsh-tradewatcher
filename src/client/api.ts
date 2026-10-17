@@ -212,16 +212,65 @@ export class ApiError extends Error {
   }
 }
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
+/**
+ * 请求超时（毫秒）。**行情轮询的命门**（P2-1）：
+ * 旧实现没有超时 —— 一次挂起的 fetch 会让 `inFlight.current` 永远为 true，
+ * 之后每一拍 `load()` 都在第一行 return ⇒ **行情轮询彻底停摆**（只能刷新页面）。
+ * 所有接口共用这一份上限（行情/详情/搜索都不该无限等）。
+ */
+export const REQUEST_TIMEOUT_MS = 15_000
+
+export interface RequestSignal {
+  signal: AbortSignal
+  /** 是否已被取消（超时或外部取消） */
+  aborted: () => boolean
+  /** 是否是**超时**取消（据此给"请求超时"而不是"网络错误"） */
+  timedOut: () => boolean
+  /** 必须调用：清掉定时器与外部监听（否则定时器泄漏） */
+  clear: () => void
+}
+
+/**
+ * 超时 + 外部取消合并成一个 `AbortSignal`（纯函数式，便于单测）。
+ * `timeoutMs <= 0` 视为"不超时"（仅测试/调试用）。
+ */
+export function requestSignal(timeoutMs: number = REQUEST_TIMEOUT_MS, outer?: AbortSignal): RequestSignal {
+  const ctrl = new AbortController()
+  let timedOut = false
+  const timer = timeoutMs > 0 ? setTimeout(() => { timedOut = true; ctrl.abort() }, timeoutMs) : null
+  const onAbort = (): void => ctrl.abort()
+  if (outer !== undefined) {
+    if (outer.aborted) ctrl.abort()
+    else outer.addEventListener('abort', onAbort)
+  }
+  return {
+    signal: ctrl.signal,
+    aborted: () => ctrl.signal.aborted,
+    timedOut: () => timedOut,
+    clear: () => {
+      if (timer !== null) clearTimeout(timer)
+      outer?.removeEventListener('abort', onAbort)
+    },
+  }
+}
+
+/** `request` 的超时参数在测试里可缩短（生产路径始终用 `REQUEST_TIMEOUT_MS`） */
+export async function requestWithTimeout<T>(path: string, init?: RequestInit, timeoutMs: number = REQUEST_TIMEOUT_MS): Promise<T> {
+  const sig = requestSignal(timeoutMs)
   let res: Response
   try {
     res = await fetch(path, {
       ...init,
       headers: { 'content-type': 'application/json', ...(init?.headers ?? {}) },
       cache: 'no-store',
+      signal: sig.signal,
     })
   } catch (error) {
+    // 超时与"网络真的断了"是两个原因：前者稍后重试就好，后者要查网络/宿主
+    if (sig.timedOut()) throw new ApiError(`请求超时（${Math.max(1, Math.round(timeoutMs / 1000))} 秒未响应）`, 0)
     throw new ApiError(`网络错误: ${error instanceof Error ? error.message : String(error)}`, 0)
+  } finally {
+    sig.clear()
   }
   let payload: { error?: string } & T
   try {
@@ -233,6 +282,11 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     throw new ApiError(payload.error ?? `HTTP ${res.status}`, res.status)
   }
   return payload
+}
+
+/** 生产路径入口：固定超时上限（测试用 `requestWithTimeout` 指定短超时） */
+function request<T>(path: string, init?: RequestInit): Promise<T> {
+  return requestWithTimeout<T>(path, init)
 }
 
 export const api = {

@@ -22,7 +22,8 @@ import type { TrendPoint } from '../shared/model.ts'
 process.env.DSH_HOME = mkdtempSync(join(tmpdir(), 'tw-lkg-persist-'))
 
 const {
-  fetchTrend, lastGoodTrend, __reloadTrendLkgForTest, __resetTrendLkgForTest, __trendLkgStatsOf,
+  fetchTrend, lastGoodTrend, __reloadTrendLkgForTest, __resetTrendLkgForTest, __trendLkgMigratedFromOf,
+  __trendLkgMissingOf, __trendLkgStatsOf,
 } = await import('./em.ts')
 
 const points: TrendPoint[] = Array.from({ length: 5 }, (_, i) => ({
@@ -49,7 +50,7 @@ test('一次成功取数必须落盘；单次写入 ≤ 512 KB；模拟重启后
 
   assert.equal(existsSync(manifestPath), true, '清单必须落盘 —— dirty 被提前清掉 / lastWrite 被提前推进，这里就永远不存在')
   const manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as { v?: number; ts?: number; caps?: { maxShardWriteBytes?: number }; entries?: Array<{ key?: string; at?: number; seq?: number }> }
-  assert.equal(manifest.v, 3, '清单是新版 v3（分片布局）')
+  assert.equal(manifest.v, 4, '清单是新版 v4（分片 + 热条内联）')
   assert.equal(typeof manifest.ts, 'number', '落盘文本带 ts（这份文件是什么时候写的）')
   assert.equal(manifest.entries?.length, 1, `必须有一条 entries（实际 ${manifest.entries?.length ?? 0}）`)
   assert.equal(manifest.entries?.[0]?.key, '1.600519|1', '条目键 = secid|ndays')
@@ -57,11 +58,15 @@ test('一次成功取数必须落盘；单次写入 ≤ 512 KB；模拟重启后
   const stats = __trendLkgStatsOf()
   assert.ok(stats.shardWrites >= 1, `必须写了分片（实际 ${stats.shardWrites}）`)
   assert.ok(stats.maxWriteBytes <= 512 * 1024, `单次写入必须 ≤ 512 KB（实际 ${stats.maxWriteBytes} B）`)
-  assert.ok(stats.maxWriteBytes < 64 * 1024, `真实分片应远小于 512 KB（实际 ${Math.round(stats.maxWriteBytes / 1024)} KB）`)
+  assert.ok(stats.maxShardWriteBytes < 64 * 1024, `真实分片应远小于 512 KB（实际 ${Math.round(stats.maxShardWriteBytes / 1024)} KB）`)
+  // 装载/懒加载不该有读不回来的分片；临时目录是新建的 ⇒ 没有迁移摘要（可观测，不是"永远返回 undefined"的摆设）
+  assert.deepEqual(__trendLkgMissingOf(), [], '不该有缺失分片')
+  assert.equal(__trendLkgMigratedFromOf(), undefined, '新目录没有迁移历史')
+  assert.equal(stats.loadedShards, 0, '全新目录：装载阶段没有热条可读（0 条）')
 
   // 模拟重启：清内存 + 清"已装载" ⇒ 下一次取数会重新从清单 + 分片重建
   __reloadTrendLkgForTest()
-  assert.equal(lastGoodTrend('1.600519', 1), null, '重启后内存为空（还没 load）')
+  assert.equal(await lastGoodTrend('1.600519', 1), null, '重启后内存为空（还没 load）')
   const again = await fetchTrend('1.600519', 1, { archive: false, upstream })
   assert.ok(again !== null && again.points.length === 5, '重启后取数仍然成功')
   const after = __trendLkgStatsOf()

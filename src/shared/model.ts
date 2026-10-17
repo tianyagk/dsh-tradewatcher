@@ -272,6 +272,14 @@ export interface TrendData {
    * 界面对两者必须给出不同说明：拼接是"从本版起累积"，不是"上游给了五日"。
    */
   source?: 'local-stitch'
+  /**
+   * 紧凑标签编码（AUDIT-IMPL77 第 2 项）：`labelFormat === 'hhmm'` 时，逐点的 `label` 只有 `HH:mm`
+   * （日期挪到 `labelDay`），单日 242 点省 ≈4.8 KB。读侧必须走
+   * `chartWire.normalizeTrendLabels(points, labelDay, labelFormat)` 还原成 `YYYY-MM-DD HH:mm`。
+   * 缺省（老宿主）⇒ `label` 本来就是完整标签，归一函数原样返回。
+   */
+  labelDay?: string
+  labelFormat?: 'hhmm'
   /** 拼接的覆盖报告（`source === 'local-stitch'` 时给出） */
   coverage?: TrendCoverage
   /**
@@ -303,7 +311,14 @@ export interface DayBar {
   high: number
   low: number
   vol: number | null
-  pct: number | null
+  /**
+   * 当日涨跌幅（%）。
+   *
+   * **可能缺省**（AUDIT-IMPL77 第 2 项）：上游没给就是 `null`，而 `null` 在回包里不再发送
+   * （240 根 × `"pct":null` ≈ 2.9 KB）。读侧必须走 `chartWire.klinePctOf(day)` ⇒ 缺省还原成 `null`，
+   * **不得把缺失当 0**。
+   */
+  pct?: number | null
   /**
    * 成交额（**原币**：美股为美元）。目前只有美股链路提供（新浪日线 `a` 段），
    * A股/港股走东财时该字段缺省（`undefined`）。

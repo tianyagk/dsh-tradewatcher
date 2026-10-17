@@ -24,6 +24,10 @@ export const TW_CSS = `
 /* 语义色阶（P1-10）：重要性三档与护盘等级四档**不复用涨跌色相**，也**不跟 redUp 翻转**。
    颜色承载的只有「这件事有多需要注意」这一件语义；深浅两档都定义，隐身档统一灰化（见下方 data-view=incognito）。 */
 --tw-imp-1:#5e6ad2;--tw-imp-2:#a16207;--tw-imp-3:#9a3412;
+/* 警示琥珀（P3-1）：全项目此前引用一个从未定义的 token（带 #d97706 fallback），
+   于是永远走 fallback、且不随主题；另有 #e0a94a / #e8a33d 两种琥珀散落 10 处。
+   现在只有这一个来源（浅色档取更深的值，保证 12px 文字对白底 >= 4.5:1）。 */
+--tw-warn:#b45309;
 --tw-rescue-0:#8a8f98;--tw-rescue-1:#2f6fbf;--tw-rescue-2:#a16207;--tw-rescue-3:#9a3412;
 --tw-accent:#5e6ad2;--tw-accent-hover:#4652c0;--tw-accent-soft:rgba(94,106,210,.10);--tw-ring:rgba(94,106,210,.38);
 --tw-mask:rgba(15,17,20,.42);
@@ -43,7 +47,7 @@ letter-spacing:-0.006em}
 --tw-fg-dim:var(--tw-muted);--tw-line:var(--tw-border);
 --tw-up:#ff5f6d;--tw-down:#27a644;--tw-flat:#8a8f98;
 --tw-up-bg:rgba(255,95,109,.12);--tw-down-bg:rgba(47,191,131,.12);--tw-flat-bg:rgba(138,143,152,.12);
---tw-imp-1:#8b95ff;--tw-imp-2:#f0b429;--tw-imp-3:#ff8a4c;
+--tw-imp-1:#8b95ff;--tw-imp-2:#f0b429;--tw-imp-3:#ff8a4c;--tw-warn:#f0b429;
 --tw-rescue-0:#8a8f98;--tw-rescue-1:#5da5ff;--tw-rescue-2:#f0a63a;--tw-rescue-3:#ff8a4c;
 --tw-accent:#5e6ad2;--tw-accent-hover:#828fff;--tw-accent-soft:rgba(94,106,210,.16);--tw-ring:rgba(94,106,210,.45);
 --tw-mask:rgba(0,0,0,.55);
@@ -113,7 +117,7 @@ color-scheme:dark}
 .tw-root[data-view=incognito]{
 --tw-up:#8a8f98;--tw-down:#8a8f98;--tw-up-bg:rgba(138,143,152,.12);--tw-down-bg:rgba(138,143,152,.12);
 /* 语义色阶同样转灰阶：隐身视图里"高重要度/强护盘"不许是整屏最刺眼的一处颜色（P1-10 ③） */
---tw-imp-1:#8a8f98;--tw-imp-2:#8a8f98;--tw-imp-3:#8a8f98;
+--tw-imp-1:#8a8f98;--tw-imp-2:#8a8f98;--tw-imp-3:#8a8f98;--tw-warn:#8a8f98;
 --tw-rescue-0:#8a8f98;--tw-rescue-1:#8a8f98;--tw-rescue-2:#8a8f98;--tw-rescue-3:#8a8f98}
 /* 图表口径条（P0-5）：紧贴图上方一行，等宽字体便于对齐数字 */
 .tw-caliber{flex:none;padding:5px 8px 4px;font-size:12px;color:var(--tw-dim);font-family:var(--tw-mono);border-bottom:1px dashed var(--tw-border);background:var(--tw-bg2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -470,7 +474,9 @@ color-scheme:dark}
 .tw-rescue-card-grid .v{font-family:var(--tw-mono);font-variant-numeric:tabular-nums;text-align:right;white-space:nowrap}
 .tw-rescue-card-f{display:flex;align-items:center;gap:8px;margin-top:6px;padding-top:5px;border-top:1px solid var(--tw-border)}
 .tw-rescue-bar{height:5px;border-radius:3px;background:var(--tw-border);overflow:hidden;display:inline-block;flex:none;vertical-align:middle}
-.tw-rescue-bar i{display:block;height:100%;border-radius:3px;transition:width .25s}
+/* P2-11：条长改 transform:scaleX()（原来动 width ⇒ 每帧 layout）。
+   transform-origin:left + width:100% 等价于原来的 width:pct%，视觉不变。 */
+.tw-rescue-bar i{display:block;height:100%;width:100%;border-radius:3px;transform-origin:left center;transition:transform .25s}
 .tw-rescue-split{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:4px}
 @media (max-width:900px){.tw-rescue-split{grid-template-columns:1fr}}
 .tw-sub-h{display:flex;align-items:center;gap:6px;font-size:12px;font-weight:600;color:var(--tw-dim);text-transform:none;letter-spacing:0.2px;margin:2px 0 5px;padding-bottom:3px;border-bottom:1px solid var(--tw-border)}

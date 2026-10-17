@@ -1,7 +1,7 @@
 /**
  */
 import * as React from 'react'
-import { abnormalColorOf, abnormalLabelOf, dayHistoryStateOf, ringDashOf } from './rescueView.ts'
+import { abnormalColorOf, abnormalLabelOf, calibrationHeaderOf, dayHistoryStateOf, ringDashOf } from './rescueView.ts'
 import { breakerBadgeOf } from './rescueView.ts'
 import type {
   PortPrefs, RescueConfig, RescueDaySummary, RescueEtfMeta, RescueEtfView, RescueFactor,
@@ -103,7 +103,8 @@ function ThresholdBar(props: { value: number | null; width?: number }): React.Re
     title: `同时点量能 ${props.value === null ? '未取到' : `${props.value.toFixed(2)}x`}；阈值线 = f1.extreme（P95 = ${RESCUE_F1_EXTREME}x），条长按 ${max.toFixed(2)}x 归一`,
     'data-role': 'volume-threshold-bar',
   },
-    React.createElement('i', { style: { width: `${pct}%`, background: (props.value ?? 0) >= RESCUE_F1_EXTREME ? LEVEL_COLOR[3] : 'currentColor' } }),
+    // P2-11：条长用 transform:scaleX（CSS 里 transition 只动 transform）——旧的 width% 会触发布局
+    React.createElement('i', { style: { transform: `scaleX(${pct / 100})`, background: (props.value ?? 0) >= RESCUE_F1_EXTREME ? LEVEL_COLOR[3] : 'currentColor' } }),
     // 阈值线：位置固定 50%（= extreme / 2×extreme），是**标定值**不是我们拍的
     React.createElement('span', {
       'data-role': 'threshold-line',
@@ -115,7 +116,8 @@ function ThresholdBar(props: { value: number | null; width?: number }): React.Re
 function ScoreBar(props: { value: number; color?: string; width?: number; threshold?: number }): React.ReactElement {
   const pct = Math.max(0, Math.min(100, props.value))
   return React.createElement('div', { className: 'tw-rescue-bar', style: { width: props.width ?? 72, position: 'relative' } },
-    React.createElement('i', { style: { width: `${pct}%`, background: props.color ?? 'currentColor' } }),
+    // P2-11：同上（transform 而不是 width，避免每帧重排）
+    React.createElement('i', { style: { transform: `scaleX(${pct / 100})`, background: props.color ?? 'currentColor' } }),
     props.threshold === undefined
       ? null
       : React.createElement('span', {
@@ -668,7 +670,7 @@ export function RescuePanel(props: {
     snapshot?.calendarStatus != null && snapshot.calendarStatus.warning != null
       ? React.createElement('div', {
           className: 'tw-muted',
-          style: { fontSize: 12, color: 'var(--tw-warn, #d97706)', padding: '2px 0' },
+          style: { fontSize: 12, color: 'var(--tw-warn)', padding: '2px 0' },
           title: `交易日历文件：${snapshot.calendarStatus.path}`,
         }, `⚠ ${snapshot.calendarStatus.warning}`)
       : null,
@@ -792,7 +794,7 @@ export function RescuePanel(props: {
                     ? React.createElement('span', {
                         className: 'tw-badge',
                         title: '日线或校准样本暂时不可用，这里展示上一次成功计算的结果（位置/形态/触发后对照都是慢变量，仍可参考）',
-                        style: { fontSize: 12, color: '#e0a94a' },
+                        style: { fontSize: 12, color: 'var(--tw-warn)' },
                       }, `上次结果${
                         typeof snapshot.bottom.computedAt === 'number'
                           // R5：这里曾用 `new Date(x).toTimeString()` ⇒ 按**浏览器时区**渲染
@@ -810,7 +812,11 @@ export function RescuePanel(props: {
                     React.createElement('th', null, '位置分'), React.createElement('th', null, '60日分位'),
                     React.createElement('th', null, '距60日高'), React.createElement('th', null, '距60日低'), React.createElement('th', null, '连跌'),
                     React.createElement('th', null, '形态分'), React.createElement('th', null, '日内回升'), React.createElement('th', null, '下影线'), React.createElement('th', null, '收回前低'),
-                    React.createElement('th', null, `触发后对照 +${((snapshot.bottom.lanes[0].calibration.targets.at(-1)?.targetPct ?? 0.02) * 100).toFixed(0)}%/${snapshot.bottom.lanes[0].calibration.horizon}日（历史频率，非胜率/概率）`),
+                    // P3-3：目标涨幅/持有期缺失时**不再编造 +2%**（表头如实说"未取到"）
+                    React.createElement('th', null, calibrationHeaderOf({
+                      targetPct: snapshot.bottom.lanes[0].calibration.targets.at(-1)?.targetPct ?? null,
+                      horizon: snapshot.bottom.lanes[0].calibration.horizon,
+                    })),
                   )),
                   React.createElement('tbody', null,
                     ...snapshot.bottom.lanes.map((l) =>
@@ -855,7 +861,7 @@ export function RescuePanel(props: {
                       snapshot.bottom.lanes[0].calibration.sampleSmall === true
                         ? React.createElement('span', {
                             className: 'tw-badge',
-                            style: { color: '#e0a94a', borderColor: '#e0a94a' },
+                            style: { color: 'var(--tw-warn)', borderColor: 'var(--tw-warn)' },
                             title: `同类样本 N=${snapshot.bottom.lanes[0].calibration.n} < 30：样本不足，仅作参考`,
                           }, '样本少')
                         : null,
@@ -912,7 +918,21 @@ export function RescuePanel(props: {
                     '尚无历史记录：host 采样器已启动，交易时段会自动累积（免费源无 ETF 资金流历史，历史回看只能从上线日算起）。')
                 : React.createElement('div', { className: 'tw-rescue-history' },
                     ...(data?.history ?? []).map((h) =>
-                      React.createElement('div', { key: h.day, className: 'tw-rescue-h-row', onClick: () => openHistory(h.day) },
+                      // 键盘可达（P2-6）：历史回看行是点击型 div
+                      React.createElement('div', {
+                        key: h.day,
+                        className: 'tw-rescue-h-row',
+                        role: 'button',
+                        tabIndex: 0,
+                        'aria-label': `${h.day} 历史回看（峰值 ${h.maxScore}）`,
+                        onClick: () => openHistory(h.day),
+                        onKeyDown: (e: React.KeyboardEvent) => {
+                          if (e.key === 'Enter' || e.key === ' ') {
+                            e.preventDefault()
+                            openHistory(h.day)
+                          }
+                        },
+                      },
                         React.createElement('span', { style: { fontFamily: 'var(--tw-mono)', fontSize: 12 } }, h.day),
                         React.createElement('span', { className: 'tw-badge', style: { color: LEVEL_COLOR[h.maxLevel], borderColor: LEVEL_COLOR[h.maxLevel] } }, RESCUE_LEVEL_LABEL[h.maxLevel]),
                         React.createElement('span', { className: 'tw-muted', style: { fontSize: 12 } }, `峰值 ${h.maxScore}${h.peakHhmm !== null ? ` @${h.peakHhmm}` : ''}`),

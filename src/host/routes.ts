@@ -9,6 +9,7 @@ import { ledgerTotal, assemblePortfolio, ledgerViews } from './portfolio.ts'
 import { DataStore, secidKey } from './store.ts'
 import { CalendarStore, calToday, type CalSyncSourceResult } from './calendar.ts'
 import { RESCUE_METHODOLOGY, RescueMonitor, wireRescueSnapshot } from './rescue.ts'
+import { wireKline, wireTrend } from './wireSlim.ts'
 import { QUOTE_HOSTS, HISTORY_HOSTS } from './em.ts'
 import { breakerSummary } from './breaker.ts'
 import { HttpError, httpStatusOf, retryAfterSecondsOf } from './http.ts'
@@ -933,7 +934,8 @@ export function makeTradeRoutes(
             ...(trend === null ? [em.trendMissingReason(secid)] : []),
             ...(amountReason === null ? [] : [amountReason]),
           ]
-          send(res, 200, { trend, ...(missing.length === 0 ? {} : { missing }) })
+          // 二级瘦身（AUDIT-IMPL77 第 2 项）：单日序列逐点 label 只留 HH:mm（日期在 labelDay）
+          send(res, 200, { trend: wireTrend(trend), ...(missing.length === 0 ? {} : { missing }) })
         } catch (error) {
           fail(res, error)
         }
@@ -960,7 +962,8 @@ export function makeTradeRoutes(
           // 缓存状态要在 fetchKline 之后读（它才填过内存）—— note 必须能说清"是没缓存还是缓存被判不可用"。
           // 键必须与 fetchKline 内部一致：年K 用 103 的缓存，复权口径过 normalizeFq（指数/期货会被归为 0）
           const cache = em.klineCacheStatusOf(secid, klt === 104 ? 103 : klt, em.normalizeFq(secid, fqt))
-          send(res, 200, { kline, ...(kline === null ? { missing: [em.klineMissingReason(secid, klt, { cache })] } : {}) })
+          // 二级瘦身（AUDIT-IMPL77 第 2 项）：`pct:null` 不上线；读侧 `chartWire.klinePctOf` 还原成 null
+          send(res, 200, { kline: wireKline(kline), ...(kline === null ? { missing: [em.klineMissingReason(secid, klt, { cache })] } : {}) })
         } catch (error) {
           fail(res, error)
         }

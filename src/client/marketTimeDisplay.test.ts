@@ -53,7 +53,7 @@ const row = (at: number): QuoteRow => ({
  */
 test('R5-① 侧栏徽标悬停：`数据 HH:mm:ss` 必须是北京时间（字面量断言，不是推导值）', () => {
   const v = badgeView(
-    { indexPoint: 3000, indexName: '上证指数', dayPnlPct: -2.29, dayPnl: -2290, asOf: AT, settled: false },
+    { indexPoint: 3000, dayPnlPct: -2.29, asOf: AT, settled: false },
     false,
   )
   assert.ok(

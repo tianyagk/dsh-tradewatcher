@@ -1,11 +1,11 @@
 /**
  */
-import React, { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react'
+import React, { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { DEFAULT_PREFS, TW_ROWS, VIEW_MODES, normalizePanelOpacity, type PortPrefs, type QuoteRow, type ViewMode } from '../shared/model.ts'
 import { api } from './api.ts'
 import { badgeView, type BadgeState } from './badgeView.ts'
 import { useQuoteEngine } from './useQuotes.ts'
-import { usePageIdle } from './usePageIdle.ts'
+import { usePageIdle, usePanelVisible } from './usePageIdle.ts'
 import { pageExtraIds, quoteEngineIds } from './engineIds.ts'
 import { TopBar } from './TopBar.tsx'
 import { WatchlistPage } from './WatchlistPage.tsx'
@@ -229,8 +229,24 @@ function PanelIcon(props: { size?: number; active?: boolean }): React.ReactEleme
 
 type PageKey = 'watch' | 'portfolio' | 'market' | 'cloud' | 'calendar' | 'tools'
 
+/**
+ * 保活页（P2-7）：切走不卸载。先只放"无轮询、纯本地状态"的两页 ——
+ * 其余页涉及高频取数，必须先接 `active` 门控（下一批），否则会变成"六页同时轮询"。
+ */
+const KEEP_ALIVE: readonly PageKey[] = ['calendar', 'tools']
+
 function Dashboard(): React.ReactElement {
-  const visible = true
+  /**
+   * 面板**真实可见性**（P2-4）。
+   *
+   * 旧实现是 `const visible = true`（常量）⇒ `useQuoteEngine(..., enabled=true)` 与
+   * `usePageIdle(true)` 都形同虚设：宿主把面板藏起来（display:none）时行情照打（每 10s）。
+   * 现在由 `usePanelVisible(rootRef)` 给出：文档隐藏 **或** 本轮布局与视口不相交 ⇒ 不可见。
+   * 取得不到信号时**失败放行**（`panelVisibleOf` 的 `intersecting === null`）——宁可按可见处理，
+   * 也不要把数据停了。
+   */
+  const rootRef = useRef<HTMLDivElement | null>(null)
+  const visible = usePanelVisible(rootRef)
   const [page, setPage] = useState<PageKey>('watch')
   /** 页签切换的**唯一入口**（v0.81.0 起只做 setPage：工具箱的页级返回按钮已按用户要求删除） */
   const goPage = useCallback((next: PageKey): void => {
@@ -265,24 +281,28 @@ function Dashboard(): React.ReactElement {
   }, [])
 
   /**
-   * 偏好写入：**乐观更新 + 失败回滚**。
+   * 偏好写入的**唯一实现**（乐观更新 + 失败回滚 + 报原因），返回"是否真的落盘"。
    *
    * 此前是 `.catch(() => undefined)` —— 保存失败时本地看着一切正常、刷新后全丢，
    * 全程无提示（宿主白名单漏 `stripCfg` 就是这么被掩盖了整轮）。现在失败要①回滚②说一声。
    * 回滚基准取自**本次渲染闭包里的 `prefs`**（失败路径够用；连续多次写入后同时失败可能回滚到偏旧值，
    * 这是有意的取舍：宁可回到一个确定存在的旧配置，也不要留一个"看起来生效其实没落盘"的状态）。
+   *
+   * 返回 `true/false` 是为了让**有后续提示**的调用方（如 `cycleViewMode` 的"已切换"toast）
+   * 在失败时**不要再盖掉失败原因**（toast 是单实例的，见 `ui.tsx` 的说明）。
    */
-  const setPrefs = (patch: Partial<PortPrefs>): void => {
-    const before = prefs ?? DEFAULT_PREFS
-    setPrefsState((prev) => ({ ...(prev ?? DEFAULT_PREFS), ...patch }))
-    void api.setPrefs(patch).catch((err: unknown) => {
-      setPrefsState(before)
-      toast.show(`偏好保存失败（已回滚本次修改）：${String(err).slice(0, 60)}`)
-    })
-  }
-
   // 单实例 toast：视图档位、成本口径等"一次性动作的说明"共用（见 ui.tsx 的说明）
   const toast = useToast()
+  const applyPrefs = useCallback((patch: Partial<PortPrefs>): Promise<boolean> => {
+    const before = prefs ?? DEFAULT_PREFS
+    setPrefsState((prev) => ({ ...(prev ?? DEFAULT_PREFS), ...patch }))
+    return api.setPrefs(patch).then(() => true, (err: unknown) => {
+      setPrefsState(before)
+      toast.show(`偏好保存失败（已回滚本次修改）：${String(err).slice(0, 60)}`)
+      return false
+    })
+  }, [prefs, toast])
+  const setPrefs = (patch: Partial<PortPrefs>): void => { void applyPrefs(patch) }
 
   const viewMode: ViewMode = prefs?.viewMode ?? 'full'
  // 金额遮罩做在格式化出口里，因此这一行就够全局生效（取数/告警/工具返回不受影响）
@@ -306,17 +326,22 @@ function Dashboard(): React.ReactElement {
   const cycleViewMode = useCallback((): void => {
     const cur = prefs?.viewMode ?? 'full'
     const next = VIEW_MODES[(VIEW_MODES.indexOf(cur) + 1) % VIEW_MODES.length]
-    setPrefsState((prev) => ({ ...(prev ?? DEFAULT_PREFS), viewMode: next }))
-    api.setPrefs({ viewMode: next }).catch(() => undefined)
-    toast.show(
-        next === 'full'
-          ? '视图：完整（恢复说明文字与全部金额）'
-          : next === 'compact'
-            ? '视图：紧凑（已隐藏说明文字与脚注；Alt+M 继续切换）'
-            : // 隐身的两项"细化"（不透明度/数字模糊）在「▣ 截图」里，这里提示一句，否则没人知道还有这一层
-              '视图：隐身（金额已模糊为 ¥••••、涨跌色转灰阶）。若要连价格/百分比一起糊住，见行情条右侧「▣ 截图」里的数字模糊。Alt+M 继续切换',
-    )
-  }, [prefs?.viewMode, toast])
+    // 走**同一个** applyPrefs（乐观更新 + 失败回滚 + 报原因）；此前这里是
+    // `api.setPrefs(...).catch(() => undefined)` —— 视图档位保存失败永远静默，
+    // 与 `setPrefs` 上方注释里"静默吞错掩盖了整轮 bug"的教训自相矛盾（P2-5）。
+    void applyPrefs({ viewMode: next }).then((ok) => {
+      // 失败时 applyPrefs 已经报过原因；**不要再**报"已切换"把原因盖掉（toast 单实例）
+      if (!ok) return
+      toast.show(
+          next === 'full'
+            ? '视图：完整（恢复说明文字与全部金额）'
+            : next === 'compact'
+              ? '视图：紧凑（已隐藏说明文字与脚注；Alt+M 继续切换）'
+              : // 隐身的两项"细化"（不透明度/数字模糊）在「▣ 截图」里，这里提示一句，否则没人知道还有这一层
+                '视图：隐身（金额已模糊为 ¥••••、涨跌色转灰阶）。若要连价格/百分比一起糊住，见行情条右侧「▣ 截图」里的数字模糊。Alt+M 继续切换',
+      )
+    })
+  }, [prefs?.viewMode, toast, applyPrefs])
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
@@ -380,6 +405,7 @@ function Dashboard(): React.ReactElement {
   const pageEl = (): React.ReactNode => {
     if (page === 'watch') {
       return React.createElement(WatchlistPage, {
+        active: visible,
         quotes,
         missing: engine.missing,
         quotesReady: engine.ts !== null,
@@ -409,16 +435,21 @@ function Dashboard(): React.ReactElement {
       // quoteTs：大盘页的 breadth/extras 用它当节拍信号（不再挂 quotes 的对象身份，见 pacing.ts）
       return React.createElement(MarketPage, { quotes, quoteTs: engine.ts, prefs: prefs ?? DEFAULT_PREFS, onPrefs: (p) => setPrefsState(p) })
     }
-    if (page === 'calendar') {
-      return React.createElement(CalendarPage, { prefs: prefs ?? DEFAULT_PREFS })
-    }
-    if (page === 'tools') {
-      // 工具箱：目录页 + 工具详情页都在 ToolsPage 里（v0.81.0 起它不接 props ——
-      // 页级返回按钮已删，`toolsNav.ts` 与 lastNonTools/backPage 随之删除）
-      return React.createElement(ToolsPage)
-    }
+    if (KEEP_ALIVE.includes(page)) return null // 由保活容器渲染（见 keepAliveEl）
     // 云图页仍要 redUp：只用来判断第三方站点的色义是否与本插件**相反**（相反才出那个徽标）
     return React.createElement(CloudMap, { redUp: (prefs ?? DEFAULT_PREFS).redUp })
+  }
+  /**
+   * 保活页（P2-7）：切走**不卸载**，用 `display:none` 切显隐（与"关闭即 display:none"的既有约定一致，不动画）。
+   *
+   * 先只保活 `calendar` + `tools`：这两页**没有轮询**（日历只在挂载/换月/点同步时取数，工具目录是本地状态），
+   * 收益立刻可见（月份、工具详情页 id、滚动位置都保住），风险最低。其余四页涉及高频取数，
+   * 需要先接 `active` 门控才安全，留待下一批（见报告未做项）。
+   */
+  const keepAliveEl = (key: PageKey): React.ReactNode => {
+    if (key === 'calendar') return React.createElement(CalendarPage, { prefs: prefs ?? DEFAULT_PREFS })
+    // 工具箱：目录页 + 工具详情页都在 ToolsPage 里（v0.81.0 起它不接 props）
+    return React.createElement(ToolsPage)
   }
 
   // 每个 tab 归属**一行**（`GET /tradewatcher/rows` 的 gate 依据）：行被停用 ⇒ tab 直接不渲染。
@@ -458,6 +489,7 @@ function Dashboard(): React.ReactElement {
   return React.createElement(
     'div',
     {
+      ref: rootRef,
       className: 'tw-root',
       'data-theme': theme,
       'data-view': viewMode,
@@ -501,7 +533,22 @@ function Dashboard(): React.ReactElement {
         ),
       ),
     ),
-    React.createElement('div', { style: { flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' } }, pageEl()),
+    React.createElement('div', { style: { flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' } },
+      pageEl(),
+      // 保活页（P2-7）：始终挂载、只切显隐；不渲染动画（display 切换不是动画）。
+      // ⚠ 只挂"当前行被启用"的页：行被停用（tabsGate 隐藏）时不许因为保活又把它取数跑起来。
+      ...KEEP_ALIVE.filter((key) => visibleTabs.some((t) => t.key === key)).map((key) => React.createElement(
+        'div',
+        {
+          key,
+          'data-keepalive': key,
+          style: page === key
+            ? { flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }
+            : { display: 'none' },
+        },
+        keepAliveEl(key),
+      )),
+    ),
     detail !== null
       ? React.createElement(QuoteDrawer, {
           key: detail.secid,

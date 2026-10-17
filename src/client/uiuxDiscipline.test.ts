@@ -32,6 +32,7 @@ import {
   keyframesProblems,
   motionCssProblems,
   spaceScaleProblems,
+  transitionProblems,
   typeScaleProblems,
 } from './toolDetailTheme.ts'
 import { TW_CSS } from './styles.ts'
@@ -160,6 +161,23 @@ test('④ 玻璃浮层令牌：两档主题都有值、深色档 = 竞品实测�
   // 反例注入
   assert.notDeepEqual(glassProblems({ ...GLASS, light: { ...GLASS.light, bg: GLASS.dark.bg } }), [], '⚠ 浅色档抄深色必须被抓到')
   assert.notDeepEqual(glassProblems({ ...GLASS, dark: { ...GLASS.dark, blur: '2px' } }), [], '⚠ 深色档 blur 不是实测值必须被抓到')
+})
+
+test('⑤b transition 只许动 transform/opacity（P2-11：布局属性一律拒绝）', () => {
+  assert.deepEqual(transitionProblems(TW_CSS), [], `样式表里有动布局属性的 transition：${transitionProblems(TW_CSS).join(' ／ ')}`)
+  // 具体回归：量能条的条长原来动 `width`（每帧 layout）⇒ 必须已改成 transform
+  assert.equal(/transition:\s*width/.test(TW_CSS), false, '`.tw-rescue-bar i` 不许再动 width')
+  assert.ok(/\.tw-rescue-bar i\{[^}]*transition:transform/.test(TW_CSS), '条长必须改动 transform')
+  // 反例注入：塞回一条 `transition:width` ⇒ 判据必须非空
+  const injected = `${TW_CSS}\n.tw-bad{transition:width .2s ease}`
+  assert.notDeepEqual(transitionProblems(injected), [], '⚠ 反例（transition:width）必须被抓住')
+  assert.throws(
+    () => assert.deepEqual(transitionProblems(injected), [], '反例上"不许动布局属性"必须失败'),
+    /反例上/,
+    '⚠ 反例注入必须让断言失败',
+  )
+  // 纯 paint 属性保留（不触发布局）：不能把 color/background 也判成违规
+  assert.deepEqual(transitionProblems('.x{transition:color .12s,background .12s,transform .2s,opacity .2s}'), [], '纯 paint 属性应当放行')
 })
 
 test('⑤ 动效纪律：只动 transform/opacity；关闭态 display:none；后台暂停；reduced-motion 降级', () => {
