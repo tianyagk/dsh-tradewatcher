@@ -27,25 +27,6 @@ export const KLINE_PLAN: Record<KlineTab, { klt: 101 | 102 | 103 | 104; lmt: num
 export const isKlineTab = (t: ChartTab): t is KlineTab =>
   t === 'day' || t === 'week' || t === 'month' || t === 'year'
 
-/**
- * 该标的**不提供**的周期（返回原因；`null` = 可用）。
- *
- * 判据只有一条事实：**美股的上游只有日线**（新浪 `US_MinKService.getDailyK`；
- * 腾讯对美股 `fqkline` 只回 2 根"首尾"、分钟只回 1 个点，见 `docs/AUDIT-IMPL68.md` §3）。
- * 周/月/年没有源，我们也不用日线重采样去冒充 —— 所以这三档对美股**禁用并给原因**，
- * 而不是"点了才报错"。
- *
- * ⚠ 与宿主 `em.isUsSecid` / `em.fqSupported` 同一规则（客户端不依赖宿主模块的运行时，
- * 也不假设宿主是新构建），三处都必须一致；`usChart.test.ts` 有跨端一致性断言。
- */
-export function tabUnavailableReason(secid: string, tab: ChartTab): string | null {
-  const isUs = /^10[567]\./.test(secid.trim())
-  if (!isUs) return null
-  if (tab === 'week' || tab === 'month' || tab === 'year') {
-    return '美股不提供该周期：上游只有日线（新浪 US_MinKService.getDailyK），周/月/年没有源，本插件不用日线重采样冒充'
-  }
-  return null
-}
 
 /** payload 记住自己属于哪个 tab —— 切周期时旧数据不会被拿去渲染新周期 */
 export type ChartPayload =

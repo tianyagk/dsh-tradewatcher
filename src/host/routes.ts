@@ -12,6 +12,7 @@ import { RESCUE_METHODOLOGY, RescueMonitor } from './rescue.ts'
 import { QUOTE_HOSTS, HISTORY_HOSTS } from './em.ts'
 import { breakerSummary } from './breaker.ts'
 import { HttpError, httpStatusOf, retryAfterSecondsOf } from './http.ts'
+import { TotalUpstreamError, partialOutcomeOf, shortError, upstreamHealth, type PartialOutcome } from './degrade.ts'
 import { describeConflicts, makeBundle, verifyBundle } from './backup.ts'
 import { detectAnomalies } from './anomaly.ts'
 import { YTD_MAX_IDS, computeYtds } from './ytd.ts'
@@ -279,13 +280,43 @@ export function makeTradeRoutes(
   const gate = (req: IncomingMessage): boolean => isTrustedApiRequest(req, trustedHosts)
   /** 上游主机组：503 时用它给出 retry-after，并聚合展示熔断明细（去重后 3 台） */
   const upstreamHosts = [...new Set([...QUOTE_HOSTS, ...HISTORY_HOSTS])]
-  const fail = (res: ServerResponse, error: unknown): void => {
+  /**
+   * 兜底错误出口。
+   *
+   * P0（AUDIT-IMPL70 §1）：**逐标的路由不该走到这里**。走到这里说明这条路由没有部分结果
+   * （板块榜单/搜索这类聚合接口），或者代码里还有把上游异常直接抛出来的路径。
+   * 消息里必须带「哪个上游 × 哪个范围」（`TotalUpstreamError` 已经强制），否则界面上
+   * 只剩一句"不可用"，用户不知道该等谁、等到什么时候。
+   */
+  const fail = (res: ServerResponse, error: unknown, scope?: string): void => {
     const message = error instanceof Error ? error.message : String(error)
     const status = httpStatusOf(error)
     log(`route error (${status}):`, message)
     // 503 带上建议重试时刻：熔断中最早恢复的那台到点即可重试
     const retry = retryAfterSecondsOf(error, breakerSummary(upstreamHosts).minutesLeft)
-    send(res, status, { error: message }, retry === null ? {} : { 'retry-after': String(retry) })
+    const payload: Record<string, unknown> = { error: message }
+    // 让界面/agent 一次看到"哪些上游现在不行"，而不是只有一个状态码
+    if (status >= 500) {
+      const health = upstreamHealth(upstreamHosts)
+      payload.upstream = { line: health.line, hosts: health.hosts }
+      if (scope !== undefined) payload.scope = scope
+    }
+    send(res, status, payload, retry === null ? {} : { 'retry-after': String(retry) })
+  }
+  /**
+   * 多标的路由统一收口（P0）：**部分成功一律 200**。
+   *
+   * 为什么单独一个函数而不是各路由各写一遍：这条判据（"哪些标的没取到、为什么"）
+   * 一旦在某条路由上漏写，界面就会退回"整块报错"，而用户看不出到底是哪一只。
+   * 收口后：`partial` 给出请求/成功/失败计数，`missing[]` 给出逐标原因。
+   */
+  const replyBatch = <T extends Record<string, unknown>>(
+    res: ServerResponse,
+    body: T,
+    outcome: PartialOutcome,
+    missing: MissingField[],
+  ): void => {
+    send(res, 200, { ...body, partial: outcome, ...(missing.length === 0 ? {} : { missing }) })
   }
   const needGate = (req: IncomingMessage, res: ServerResponse): boolean => {
     if (gate(req)) return true
@@ -314,7 +345,20 @@ export function makeTradeRoutes(
       path: '/tradewatcher/health',
       handler: (req, res) => {
         if (!needGate(req, res)) return
-        send(res, 200, { ok: true, name: 'dsh-tradewatcher', time: Date.now(), breaker: breakerSummary(upstreamHosts) })
+        send(res, 200, {
+          ok: true,
+          name: 'dsh-tradewatcher',
+          time: Date.now(),
+          breaker: breakerSummary(upstreamHosts),
+          /**
+           * 「上一次上游健康摘要」（AUDIT-IMPL70 §5）：按主机给出最后一次成功/失败时刻、
+           * 连续失败次数、是否熔断，外加一行可直接显示/写日志的 `line`。
+           *
+           * **零新增上游请求**：全部来自 `withHostBreaker` 与 `em.fetchAny` 已有的记账，
+           * 这里只是把内存状态读出来。它不复位、不探活 —— 探活会变成"看一眼就多一次请求"。
+           */
+          upstream: upstreamHealth(upstreamHosts),
+        })
       },
     },
     {
@@ -521,7 +565,9 @@ export function makeTradeRoutes(
           await breadth.init()
           const wantDist = queryOf(req).get('dist') === '1'
           const ids = ['1.000001', '0.399001']
-          const q = await em.fetchQuotesWithProvenance(ids)
+          // emFields：涨跌家数（f104/f105/f106）**只有东财给** ⇒ 这条链路允许东财先行
+          // （AUDIT-IMPL70 P1：行情链已把东财降为兜底，不声明就拿不到家数）
+          const q = await em.fetchQuotesWithProvenance(ids, { emFields: true })
           const sh = q.items['1.000001']
           const sz = q.items['0.399001']
           const usable = breadthUsable([sh?.up, sh?.down, sh?.even, sz?.up, sz?.down, sz?.even])
@@ -826,7 +872,25 @@ export function makeTradeRoutes(
           // stale = 至少一行是 last-known-good 或已超过 90s —— 上游全挂时界面必须能如实报警。
           // missing = 请求了但**没有任何源**给出可用价格的标的（界面据此显示「无行情源」）
           const detail = await em.fetchQuotesDetailed(ids)
-          send(res, 200, { ts: Date.now(), ...detail, requested, truncated })
+          /**
+           * P0（AUDIT-IMPL70 §1）：`missing` 一直是**纯 id 列表**（界面只显示"无行情源"），
+           * 但"为什么没有"从来没进过 `/quotes` 回包 —— 用户/agent 只能看到一个干名字。
+           * 这里补 `missingReasons[]`（`{what, why, note}`，与工具层同一口径的
+           * `em.quoteProvenance`）：逐标说明是「只有东财一个源且东财不可达（等它恢复）」
+           * 还是「所有源都试过、本次都没给价」。
+           *
+           * 为什么**新增字段**而不是把 `missing` 改成对象：`missing: string[]` 是客户端
+           * 已经在读的既有契约（`client/api.ts` 的 `quotes()`），改形状会让界面把 id 列表
+           * 渲染成 `[object Object]`。语义清楚的加法优于破坏性改名。
+           */
+          const reasons = em.quoteProvenance(detail).missing
+          send(res, 200, {
+            ts: Date.now(),
+            ...detail,
+            requested,
+            truncated,
+            ...(reasons.length === 0 ? {} : { missingReasons: reasons }),
+          })
         } catch (error) {
           fail(res, error)
         }
@@ -900,10 +964,32 @@ export function makeTradeRoutes(
             seen.add(id.toUpperCase())
             secids.push(id)
           }
-          const map = secids.length > 0 ? await em.fetchIndustryOverview(secids) : {}
-          send(res, 200, { map })
+          /**
+           * P0（AUDIT-IMPL70 §1）：行业板块**只有东财一个上游**（`f127`）。东财不可达时
+           * 以前是 `fetchIndustryOverview` 抛错 ⇒ 整条路由 503 ⇒ 客户端把整块行业标注判成"报错"。
+           * 现在：能拿到几只就返回几只，取不到的逐标给原因；**任何情况下都不升级为 5xx**。
+           */
+          let map: Record<string, { name: string; pct: number | null }> = {}
+          let failure: unknown = null
+          if (secids.length > 0) {
+            try {
+              map = await em.fetchIndustryOverview(secids)
+            } catch (error) {
+              failure = error
+            }
+          }
+          const missing: MissingField[] = secids
+            .filter((id) => map[id] === undefined)
+            .map((id) => ({
+              what: id,
+              why: failure === null ? ('no-source' as const) : ('transient' as const),
+              note: failure === null
+                ? `行业板块未取到：东财可达但没有返回该标的的板块归属（非 A股，或上游没有这个标的）`
+                : `行业板块未取到：行业归属只有东财一个上游，而东财本次不可达（${shortError(failure)}）`,
+            }))
+          replyBatch(res, { map }, partialOutcomeOf(secids.length, Object.keys(map).length), missing)
         } catch (error) {
-          fail(res, error)
+          fail(res, error, '行业板块')
         }
       },
     },
@@ -915,10 +1001,30 @@ export function makeTradeRoutes(
         try {
           const secid = String(queryOf(req).get('secid') ?? '').trim()
           if (!SECID_RE.test(secid)) throw new HttpError('secid 非法', 400)
-          const industry = await em.fetchIndustryOf(secid)
-          send(res, 200, { industry })
+          // 单标的也是同一条纪律（P0）：拿不到就给 `industry: null` + 原因，不把整条路由变成 503
+          let industry: { name: string; pct: number | null } | null = null
+          let failure: unknown = null
+          try {
+            industry = await em.fetchIndustryOf(secid)
+          } catch (error) {
+            failure = error
+          }
+          send(res, 200, {
+            industry,
+            ...(industry === null
+              ? {
+                  missing: [{
+                    what: secid,
+                    why: failure === null ? 'no-source' : 'transient',
+                    note: failure === null
+                      ? `行业板块未取到：该标的不是 A股，或东财没有它的板块归属`
+                      : `行业板块未取到：行业归属只有东财一个上游，而东财本次不可达（${shortError(failure)}）`,
+                  }],
+                }
+              : {}),
+          })
         } catch (error) {
-          fail(res, error)
+          fail(res, error, '行业板块')
         }
       },
     },
@@ -930,12 +1036,32 @@ export function makeTradeRoutes(
         try {
           const secid = String(queryOf(req).get('secid') ?? '').trim()
           if (!SECID_RE.test(secid)) throw new HttpError('secid 非法', 400)
-          // 注意：上游**抛错**时保持原有语义（503 + retry-after，熔断期"快速失败不要重试"），
-          // 只有"上游可达但这个标的没有详情字段"（返回 null 而不抛）才补原因。
-          const detail = await em.fetchStockDetail(secid)
-          send(res, 200, { detail, ...(detail === null ? { missing: [em.detailMissingReason()] } : {}) })
+          /**
+           * P0（AUDIT-IMPL70 §1）：**上游抛错不再升级成 503**。
+           *
+           * 旧注释写着"上游抛错时保持 503 + retry-after"—— 但那正是用户看到的
+           * 「route error (503): 上游暂时不可用（熔断中，约 2 分钟后自动重试）」：
+           * 详情（开高低收/量额/市值）只有东财一个上游，东财一挂，抽屉整块变成"报错"，
+           * 而同一只标的的价格其实腾讯/新浪已经给了（`/quotes` 是 200）。
+           * 现在：`detail: null` + `missing[]` 写明"只有东财一个上游 + 本次不可达"，
+           * 界面照常显示价格与其余字段，只在详情区标"未取到 + 原因"。
+           */
+          let detail: Awaited<ReturnType<typeof em.fetchStockDetail>> = null
+          let failure: unknown = null
+          try {
+            detail = await em.fetchStockDetail(secid)
+          } catch (error) {
+            failure = error
+          }
+          const reason = em.detailMissingReason(failure === null ? {} : { emDown: true })
+          send(res, 200, {
+            detail,
+            ...(detail === null
+              ? { missing: [{ ...reason, what: secid, ...(failure === null ? {} : { note: `${reason.note}（${shortError(failure)}）` }) }] }
+              : {}),
+          })
         } catch (error) {
-          fail(res, error)
+          fail(res, error, '行情详情')
         }
       },
     },
@@ -991,7 +1117,21 @@ export function makeTradeRoutes(
           const data = await em.fetchBoard(scope as 'industry' | 'concept' | 'etf', sort as 'pct' | 'money' | 'amount', pn, pz)
           send(res, 200, data)
         } catch (error) {
-          fail(res, error)
+          /**
+           * 板块榜单是**聚合表**（没有"逐标的"可言）：东财拿不到就是整表拿不到，
+           * 这里**允许** 503 —— 但必须写清「哪个上游 × 哪个范围」，
+           * 而不是一句"上游暂时不可用"（用户无法判断该等谁、等到什么时候）。
+           */
+          if (httpStatusOf(error) >= 500) {
+            fail(res, new TotalUpstreamError({
+              upstreams: ['东财 push2delay/push2.eastmoney.com（板块榜单唯一上游）'],
+              scope: '板块榜单',
+              subjects: [],
+              reason: shortError(error),
+            }), '板块榜单')
+            return
+          }
+          fail(res, error, '板块榜单')
         }
       },
     },

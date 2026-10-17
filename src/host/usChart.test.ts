@@ -18,7 +18,7 @@ import { join } from 'node:path'
 import { usWallToEpoch, newYorkParts, lastUsCloseBoundary, inUsSession, isUsSettledOffline } from './time.ts'
 import { parseTencentUsStamp } from './tencent.ts'
 import { positionRefusal, US_NO_FQ_WHY, positionOfBars } from './position.ts'
-import { tabUnavailableReason } from '../client/chartCache.ts'
+
 import { caliberDeviates } from '../client/chipsView.ts'
 
 /** 隔离：必须在 `em.ts` 首次加载之前钉住 DSH_HOME（K 线缓存、归档都会写这里） */
@@ -147,29 +147,46 @@ test('②b 五日：新浪 5 分钟是真多日源（不是本地拼接）；不
   assert.equal(t.source, undefined, '真实多日源不标 local-stitch（那是本地归档拼接的标记）')
 })
 
-test('③ 周期：美股只禁 周/月/年，且界面确实禁用（注入：允许点击 ⇒ 必败）', async () => {
-  const tabs = ['trend', '5d', 'day', 'week', 'month', 'year'] as const
-  const blocked = tabs.filter((t) => tabUnavailableReason('106.FRO', t) !== null)
-  assert.deepEqual(blocked, ['week', 'month', 'year'], `美股只允许 分时/五日/日K（实得被禁 ${JSON.stringify(blocked)}）`)
-  // 反例：判据一旦被删（任何 tab 都返回 null），上面那条 deepEqual 立刻红；
-  // 这里再钉住"原因必须说清上游"，避免有人把理由改成一句空话
-  assert.ok(String(tabUnavailableReason('106.FRO', 'week')).includes('日线'), '原因要说清"上游只有日线"')
-  assert.equal(tabUnavailableReason('106.FRO', 'week') === null, false, '⚠ 返回 null 就是"允许点击"')
-  // 非美股不受影响（回归）
-  for (const t of tabs) assert.equal(tabUnavailableReason('1.600519', t), null, `A股 ${t} 不该被禁`)
-  assert.equal(tabUnavailableReason('116.00700', 'week'), null)
-  // 界面接线：按钮必须真的 disabled（不是点了才报错）
-  const { readFileSync } = await import('node:fs')
-  const drawer = readFileSync(new URL('../client/QuoteDrawer.tsx', import.meta.url), 'utf8')
-  assert.ok(drawer.includes('tabUnavailableReason(secid, t)'), '抽屉必须按标的算禁用档')
-  assert.ok(drawer.includes('disabled: off'), '禁用档必须落到按钮的 disabled（点了不会有任何事）')
-  assert.ok(drawer.includes("'aria-disabled'"), '禁用档必须对读屏可见')
-  // 宿主管线也要挡住：klt≠101 直接 null + no-source 原因（否则点了才报错）
+test('③ 三档解禁：周/月/年由日线聚合出数（注入：仍返回 null 或仍 disabled ⇒ 必败）', async () => {
   const em = await import('./em.ts')
-  assert.equal(await em.fetchKline('106.FRO', 102, 10, 1), null)
-  const why = em.klineMissingReason('106.FRO', 102)
-  assert.equal(why.why, 'no-source')
-  assert.ok(why.note.includes('不提供'))
+  const { readFileSync } = await import('node:fs')
+  // 宿主：三档都必须给数据（上一批是"直接 null + no-source"，本轮反转）
+  for (const [klt, period] of [[102, 'week'], [103, 'month'], [104, 'year']] as const) {
+    const k = await withStubs({ daily: SINA_DAILY }, () => em.fetchKline('106.FRO', klt, 10, 1)) as {
+      days: Array<{ date: string; close: number }>
+      aggregated?: { period: string; note: string }
+      fqt: number
+      fqSupported: boolean
+    } | null
+    assert.notEqual(k, null, `klt=${klt}（${period}）必须出数 —— 注入：仍返回 null ⇒ 必败`)
+    assert.ok((k?.days.length ?? 0) >= 1, `klt=${klt} 至少一根`)
+    assert.equal(k?.aggregated?.period, period, '聚合档必须自报周期')
+    assert.ok(String(k?.aggregated?.note ?? '').includes('由日线聚合'), `口径必须写"由日线聚合"（实得 ${String(k?.aggregated?.note)}）`)
+    assert.ok(String(k?.aggregated?.note ?? '').includes('未复权'), '口径必须写"未复权"')
+    // 聚合**不代表**复权可得：口径仍是不复权
+    assert.equal(k?.fqt, 0)
+    assert.equal(k?.fqSupported, false, '聚合出周/月/年 ≠ 复权可得（注入：顺手置 true ⇒ 必败）')
+  }
+  // 周K 的根数：夹具 2026-10-08/09（同一周）+ 10-12..10-16（同一周）⇒ 2 根
+  const wk = await withStubs({ daily: SINA_DAILY }, () => em.fetchKline('106.FRO', 102, 10, 1)) as { days: unknown[] } | null
+  assert.equal(wk?.days.length, 2, '周K 应聚合成 2 根（10-05 那周 + 10-12 那周）')
+  // 宿主不再说"本插件不提供美股周K"
+  const why = em.klineMissingReason('106.FRO', 102, { emDown: true })
+  assert.equal(/不提供美股的周K/.test(why.note), false, '三档已提供 ⇒ 不许再说"本插件不提供"')
+
+  // 客户端：解禁必须落到代码（不是只改了测试）
+  const chartCache = readFileSync(new URL('../client/chartCache.ts', import.meta.url), 'utf8')
+  const drawer = readFileSync(new URL('../client/QuoteDrawer.tsx', import.meta.url), 'utf8')
+  const styles = readFileSync(new URL('../client/styles.ts', import.meta.url), 'utf8')
+  assert.equal(chartCache.includes('tabUnavailableReason'), false, '禁用判据必须删掉（注入：留着 ⇒ 必败）')
+  assert.equal(drawer.includes('tabUnavailableReason'), false)
+  assert.equal(drawer.includes('disabled: off'), false, '周期按钮不许再 disabled')
+  assert.equal(/aria-disabled/.test(drawer), false, 'aria-disabled 判据必须反转掉')
+  assert.equal(/aria-disabled=true/.test(styles), false, '禁用态样式也要删')
+  // 图上要有拆股标记位（宿主 splits → 图 splitBars）
+  const kline = readFileSync(new URL('../client/kline.tsx', import.meta.url), 'utf8')
+  assert.ok(kline.includes('splitBars'), '图表必须接收拆股标记位')
+  assert.ok(drawer.includes('splitBars'), '抽屉必须把宿主的 splits 传给图')
 })
 
 test('④ 复权缺失 ⇒ 筹码/位置不给结论（注入：照算 ⇒ 必败）', async () => {
@@ -194,6 +211,13 @@ test('④ 复权缺失 ⇒ 筹码/位置不给结论（注入：照算 ⇒ 必�
   // 筹码：不支持时的文案必须点明美股是"上游只给未复权价"（不是"不适用"）
   const chipsWhy = caliberDeviates({ decay: 'turnover', decayReason: null, fqSupported: false, why: null, samples: 0, window: 45 })
   assert.ok(String(chipsWhy).includes('美股'), `筹码不提供的文案要能对上美股（实得 ${String(chipsWhy)}）`)
+
+  // ⚠ 本轮（AUDIT-IMPL69）聚合出周/月/年之后，**不许顺手放开**这两处：
+  const wk = await withStubs({ daily: SINA_DAILY }, () => em.fetchKline('106.FRO', 102, 10, 1)) as { fqSupported: boolean } | null
+  assert.notEqual(wk, null, '构造生效：周K 已能取到')
+  assert.equal(wk?.fqSupported, false, '入库第 5 条：聚合 ≠ 复权可得 ⇒ fqSupported 仍必须 false')
+  assert.equal(em.fqSupported('106.FRO'), false, '注入：把 fqSupported 置 true ⇒ 必败')
+  assert.equal(positionRefusal('106.FRO'), US_NO_FQ_WHY, '注入：取消 positionRefusal（改成 null）⇒ 必败')
 })
 
 test('⑤ 时区：美股时间戳按美东解析，且与宿主 TZ 无关', () => {

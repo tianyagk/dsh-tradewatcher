@@ -1401,7 +1401,9 @@ export async function fetchQuoteSource(
   opts: { minReuseMs?: number } = {},
 ): Promise<{ rows: Record<string, RescueQuoteRow>; source: QuoteSource }> {
   // M5：采样器按**自己的 tick**复用槽（否则 30s/15s 的间隔每次都刚好撞上 12s 的槽 TTL ⇒ 命中率 0%）
-  const shared = await loadQuoteRowsShared(secids, { minReuseMs: opts.minReuseMs ?? 0 })
+  // emFields：护盘评分要 `superNet/mainNet`，这两个字段**只有东财给** ⇒ 这条链路允许东财先行
+  // （AUDIT-IMPL70 P1：行情链已把东财降为兜底，不显式声明就会让超大单因子在东财健康时也变全 null）
+  const shared = await loadQuoteRowsShared(secids, { minReuseMs: opts.minReuseMs ?? 0, emFields: true })
   const rows: Record<string, RescueQuoteRow> = {}
   let sawEm = false
   let live = 0

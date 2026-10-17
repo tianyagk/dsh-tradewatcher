@@ -16,6 +16,7 @@
  *   - `finally` 必 `releaseProbe()`（半开探针不会泄漏）。
  */
 import { breakerFor } from './breaker.ts'
+import { noteHostFailure, noteHostSkipped, noteHostSuccess } from './degrade.ts'
 
 /** 主机正在熔断冷却/半开探测中（这一轮**没有**发出上游请求） */
 export class UpstreamCoolingError extends Error {
@@ -33,8 +34,15 @@ export class UpstreamCoolingError extends Error {
 /** 把一次主机请求（含解析）纳入 per-host 熔断记账 */
 export async function withHostBreaker<T>(host: string, run: () => Promise<T>): Promise<T> {
   const breaker = breakerFor(host)
-  if (!breaker.allow()) throw new UpstreamCoolingError(host, '熔断冷却中')
-  if (!breaker.claimProbe()) throw new UpstreamCoolingError(host, '半开探测中（已有探针在跑）')
+  if (!breaker.allow()) {
+    // 「本轮没发请求」与「请求失败」是两件事：健康簿分开记（见 degrade.noteHostSkipped）
+    noteHostSkipped(host, '熔断冷却中')
+    throw new UpstreamCoolingError(host, '熔断冷却中')
+  }
+  if (!breaker.claimProbe()) {
+    noteHostSkipped(host, '半开探测中（已有探针在跑）')
+    throw new UpstreamCoolingError(host, '半开探测中（已有探针在跑）')
+  }
   try {
     const out = await run()
     /**
@@ -46,13 +54,18 @@ export async function withHostBreaker<T>(host: string, run: () => Promise<T>): P
     if (res !== null && typeof res === 'object' && typeof res.ok === 'boolean' && res.ok === false) {
       const failure = new Error(`HTTP ${String(res.status ?? '?')} from ${host}`)
       breaker.recordFailure(failure)
+      noteHostFailure(host, failure)
       throw failure
     }
     breaker.recordSuccess()
+    noteHostSuccess(host)
     return out
   } catch (error) {
     // 已在上面记过账的 HTTP 失败不要重复计数（recordFailure 会累加 fails/trips）
-    if (!(error instanceof Error) || !/^HTTP \d+ from /.test(error.message)) breaker.recordFailure(error)
+    if (!(error instanceof Error) || !/^HTTP \d+ from /.test(error.message)) {
+      breaker.recordFailure(error)
+      noteHostFailure(host, error)
+    }
     throw error
   } finally {
     breaker.releaseProbe()

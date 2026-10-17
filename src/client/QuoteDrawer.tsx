@@ -24,7 +24,6 @@ import {
   rememberedTab,
   rememberFq,
   rememberTab,
-  tabUnavailableReason,
   type ChartPayload,
   type ChartTab,
 } from './chartCache.ts'
@@ -88,19 +87,8 @@ export function QuoteDrawer(props: {
   const { secid, name, redUp, onClose } = props
   // 记住上次看的周期：关掉再打开、换一只标的时不必重新点一次
   const [tab, setTab] = useState<ChartTab>(rememberedTab())
-  /** 美股（东财 105/106/107）：口径文案要按事实说（上游只给未复权价 / 只有日线） */
+  /** 美股（东财 105/106/107）：口径文案要按事实说（上游只给未复权价 / 周月年由日线聚合） */
   const usMarket = /^10[567]\./.test(secid.trim())
-  /**
-   * 该标的不可用的周期：**不许停在禁用档**。
-   * 理由：`rememberedTab` 是全局记忆（上次看的是周K），换到美股时若照记忆去请求，
-   * 就会对着一个禁用按钮发请求、并收到一条"本插件不提供"的错误 —— 那不是"禁用并给原因"。
-   */
-  useEffect(() => {
-    if (tabUnavailableReason(secid, tab) !== null) {
-      rememberTab('day')
-      setTab('day')
-    }
-  }, [secid, tab])
   // 复权口径：默认前复权，按标的记忆（见 chartCache.ts 的 fqFor/rememberFq）
   const [fqt, setFqt] = useState<FqMode>(() => fqFor(secid))
   const [payload, setPayload] = useState<ChartPayload | null>(null)
@@ -404,10 +392,16 @@ export function QuoteDrawer(props: {
     const klineMarkers: CandleMarker[] = trades
       .filter((tr) => bars.length > 0 && tr.ts >= Date.parse(`${bars[0].date}T00:00:00`) - 86_400_000 * 8)
       .map((tr) => ({ date: shDayText(tr.ts), kind: tr.verb, qty: tr.qty, price: tr.price }))
+    // 拆股/合股：宿主已把断层映射到**所属聚合根**（周/月/年）或断层当天（日K）⇒ 直接定位
+    const splitBars = (payload.kline.splits ?? []).map((sp) => ({
+      date: sp.date,
+      title: `${sp.label} · ${sp.day}（未复权原始价：这是拆股/合股造成的价格断层，不是涨跌）`,
+    }))
     return React.createElement(KlineChart, {
       key: tab,
       bars,
       markers: klineMarkers,
+      splitBars,
       width,
       redUp,
       klt: plan.klt,
@@ -537,12 +531,18 @@ export function QuoteDrawer(props: {
         ? '不复权（美股上游只给原始价：拆股/分红未调整）'
         : '不复权（该标的不适用）'
       : FQ_LABEL[(k.fqt ?? fqt) as FqMode]
+    /**
+     * 美股周/月/年是由**日线聚合**出来的（宿主 `aggregated`），且日线未复权 ⇒ 拆股处有断层。
+     * 这两件事都必须写进**口径行**（不是脚注）：聚合来源 + 检测到几处不可比的价格断层。
+     */
+    const aggNote = k.aggregated === undefined ? '' : ` · ${k.aggregated.note}`
+    const splitNote = Array.isArray(k.splits) && k.splits.length > 0 ? ` · 已标注 ${k.splits.length} 处` : ''
     const tail = k.cached === true
       ? '已收盘定稿'
       : k.barOpen === true
         ? `当根未收盘，MA/MACD 已含未收盘当根（${last !== undefined ? last.date.slice(5) : '—'}）`
         : '当根已收盘'
-    return `${mode} · klt ${plan.klt} · ${fq} · 截至 ${at}（${tail}）`
+    return `${mode} · klt ${plan.klt} · ${fq}${aggNote}${splitNote} · 截至 ${at}（${tail}）`
   }
   const caliber = caliberLine()
   /**
@@ -620,25 +620,18 @@ export function QuoteDrawer(props: {
       { className: 'tw-drawer', onMouseDown: (e: React.MouseEvent) => e.stopPropagation() },
       React.createElement('div', { className: 'tw-drawer-head' }, headerRows()),
       React.createElement('div', { className: 'tw-tabs', style: { justifyContent: 'flex-start' } },
-        (Object.keys(TAB_LABEL) as ChartTab[]).map((t) => {
-          // 不支持的周期：**禁用并给原因**（不是点了才报错）；title 与 aria 都要能读到原因
-          const why = tabUnavailableReason(secid, t)
-          const off = why !== null
-          return React.createElement('button', {
+        (Object.keys(TAB_LABEL) as ChartTab[]).map((t) =>
+          React.createElement('button', {
             key: t,
             className: 'tw-tab',
-            title: off ? `${TAB_LABEL[t]} · 不提供 —— ${why}` : TAB_LABEL[t],
+            title: TAB_LABEL[t],
             'data-on': tab === t,
-            'aria-disabled': off ? 'true' : undefined,
-            disabled: off,
-            onClick: off
-              ? undefined
-              : () => {
-                  rememberTab(t)
-                  setTab(t)
-                },
-          }, TAB_LABEL[t])
-        }),
+            onClick: () => {
+              rememberTab(t)
+              setTab(t)
+            },
+          }, TAB_LABEL[t]),
+        ),
         React.createElement('span', { style: { flex: 1, minWidth: 4 } }),
         fqControl(),
       ),

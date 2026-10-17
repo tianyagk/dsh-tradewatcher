@@ -17,6 +17,7 @@ import { MISSING_TIER_ADVICE, SECID_RE, normalizeTrendSeries } from '../shared/m
 import { BREADTH_HS_A_FS, BREADTH_PAGE_SIZE, type CountPage } from './breadthCount.ts'
 import { isMultiDayTrend, stitchTrendDays } from '../shared/trendStitch.ts'
 import { TREND_ARCHIVE_KEEP_DAYS, archiveTrendDays, loadTrendArchive, type TrendArchiveEntry } from './trendArchive.ts'
+import { aggregateUsDaily, detectUsSplits, splitMarksOf, usAggCaliber, usBucketOf, type UsAggPeriod, type UsSplit } from './usAggregate.ts'
 import { mkdir, readdir, readFile, rm, stat } from 'node:fs/promises'
 import { writeFileAtomic } from './atomic.ts'
 import { updateJsonLocked, withFileLock } from './lock.ts'
@@ -27,6 +28,7 @@ import { join } from 'node:path'
 import { dataHome } from './store.ts'
 import { hhmmOf, dayOf, inSession, isSettledOffline, shanghaiParts, usDayOf, inUsSession, isUsSettledOffline } from './time.ts'
 import { UpstreamCoolingError, withHostBreaker } from './breakerFetch.ts'
+import { noteDegraded, noteHostFailure, noteHostSkipped, noteHostSuccess, shortError } from './degrade.ts'
 import { normalizeVolUnits, tencentVolToHands } from './klineUnits.ts'
 
 export { UpstreamCoolingError }
@@ -120,13 +122,17 @@ export async function fetchAny(hosts: readonly string[], pathAndQuery: string, t
   // 熔断冷却期内跳过该主机；整组都在冷却才快速失败（重试只会加重上游对本机 IP 的封锁）
   const live = hostsAllowed(hosts)
   if (live.length === 0) {
+    // 「本轮没发请求」只记"跳过"，不记失败（否则健康摘要会把熔断期的零请求读成"越来越坏"）
+    for (const host of hosts) noteHostSkipped(host, '熔断冷却中')
     throw new Error(`上游暂时不可用（熔断中，约 ${minutesToRecover(hosts)} 分钟后自动重试）`)
   }
   // 半开期只放行一个探针，其余调用快速失败走兜底
   const claimed = live.filter((h) => breakerFor(h).claimProbe())
   if (claimed.length === 0) {
+    for (const host of live) noteHostSkipped(host, '半开探测中（已有探针在跑）')
     throw new Error(`上游熔断半开探测中（约 ${minutesToRecover(hosts)} 分钟后重试）`)
   }
+  for (const host of hosts) if (!claimed.includes(host)) noteHostSkipped(host, '熔断冷却中')
   const deadline = Date.now() + FETCH_DEADLINE_MS
   let lastError: unknown = null
   /** 本次调用中从未成功过的主机 —— 只对它们记失败，避免误熔健康主机 */
@@ -145,6 +151,7 @@ export async function fetchAny(hosts: readonly string[], pathAndQuery: string, t
         try {
           const ok = await fetchFromHost(host, pathAndQuery, Math.min(timeoutMs, left))
           breakerFor(host).recordSuccess()
+          noteHostSuccess(host)
           neverSucceeded.delete(host)
           return ok
         } catch (error) {
@@ -163,13 +170,27 @@ export async function fetchAny(hosts: readonly string[], pathAndQuery: string, t
     // 整轮都是"立刻被关闭"：这不是抖动而是封锁，第二轮只会再烧掉 1–2 秒退避。
     // 抖动仍由本轮内的两次尝试覆盖（实测瞬时失败率 20–75%，两次尝试足以救回单次抖动）。
     if (!anySlowFailure && round === 0 && FETCH_ROUNDS > 1) {
-      console.warn('[tradewatcher] upstream fast-fail (connection reset) on', hosts.join('/'), '— 跳过第二轮重试')
+      // 降级到 debug：这条每个失败轮都会打一次，是"上游封锁"期间最吵的两行之一（见 P2）
+      noteDegraded('em-fast-fail', {
+        label: '东财连接被立刻关闭（跳过第二轮重试）',
+        subject: hosts.join('/'),
+        reason: `pass 1 整轮 ${String(lastError).slice(0, 40)}`,
+        detail: `${hosts.join('/')} 第 1 轮三次尝试均 <300ms 失败：${String(lastError).slice(0, 120)}`,
+      })
       break
     }
   }
   // 只对「本次尝试中从未成功过」的主机记失败
-  for (const host of neverSucceeded) breakerFor(host).recordFailure(lastError)
-  console.warn('[tradewatcher] upstream failed', hosts.join('/'), String(lastError).slice(0, 120))
+  for (const host of neverSucceeded) {
+    breakerFor(host).recordFailure(lastError)
+    noteHostFailure(host, lastError)
+  }
+  noteDegraded('em-upstream-failed', {
+    label: '东财上游不可达',
+    subject: hosts.join('/'),
+    reason: shortError(lastError, 40),
+    detail: `${hosts.join('/')}（${neverSucceeded.size} 台从未成功）：${String(lastError).slice(0, 160)}`,
+  })
   throw lastError instanceof Error ? lastError : new Error(String(lastError))
   } finally {
     for (const host of claimed) breakerFor(host).releaseProbe()
@@ -408,25 +429,32 @@ export function quoteProvenance(detail: QuoteProvenance, opts: { emDown?: boolea
     sources,
     missing: detail.missing.map((secid) => {
       const noFallback = !hasQuoteFallback(secid)
+      /**
+       * 两个分支**同源判定**：`hasQuoteFallback` 已改为直接读能力表（`quoteSourcesOf`），
+       * 因此"只能靠东财"与"能力表里只有 em"不可能分叉 —— 分叉会让 `why` 说反
+       * （把"等东财恢复"写成"重试无效"，agent 会据此放弃等待）。
+       */
       if (noFallback && emDown) {
         return {
           what: secid,
           why: 'transient' as const,
           // 「等东财恢复」是**原因对象**（具体等谁），不是 tier 建议句：S19 要求"差异只在原因对象上另加半句"
-          note: `东财行情主机本次不可用（熔断中或整批失败），而该标的没有腾讯/新浪备用源映射（等东财恢复就会有）—— ${MISSING_TIER_ADVICE.transient}`,
+          note: `该品种只有东财一个行情源（腾讯/新浪无映射），而东财行情主机本次不可用（熔断中或整批失败）—— 等东财恢复就会有。${MISSING_TIER_ADVICE.transient}`,
         }
       }
       if (noFallback) {
         return {
           what: secid,
           why: 'no-source' as const,
-          note: `该标的无腾讯/新浪备用源映射（东财之外的源不提供它），且东财本次可正常取数 —— ${MISSING_TIER_ADVICE['no-source']}`,
+          note: `该品种只有东财一个行情源（腾讯/新浪无映射），而东财本次可达却没有返回它 —— ${MISSING_TIER_ADVICE['no-source']}`,
         }
       }
       return {
         what: secid,
         why: 'transient' as const,
-        note: `东财与备用源本次都未给出可用价格（限流或超时）—— ${MISSING_TIER_ADVICE.transient}`,
+        // 前缀「东财与备用源」是既有文案契约（usQuote.test.ts ⑧ 断言它）；后半句补上来源顺序，
+        // 让读者知道"两边"具体是谁（腾讯/新浪优先、东财兜底）。
+        note: `东财与备用源本次都未给出可用价格（腾讯/新浪优先、东财兜底都已试过；限流、超时或该品种本轮上游无数据）—— ${MISSING_TIER_ADVICE.transient}`,
       }
     }),
     // 这一批是否"休市定稿零回源"：定稿时 asOf 会停在收盘时刻，且没有任何兜底行
@@ -438,14 +466,14 @@ export function quoteProvenance(detail: QuoteProvenance, opts: { emDown?: boolea
  * 把行情 + 新鲜度一起取回的便捷入口。
  * 工具层此前用 `fetchQuotes`（丢掉全部出处信息），改用这个即可满足 P0-1。
  */
-export async function fetchQuotesWithProvenance(secids: string[]): Promise<{
+export async function fetchQuotesWithProvenance(secids: string[], opts: QuoteLoadOptions = {}): Promise<{
   items: Record<string, QuoteRow>
   provenance: DataProvenance
   /** 有价行数 / 总行数（供调用方判断"是不是整批空"） */
   priced: number
   rows: number
 }> {
-  const detail = await fetchQuotesDetailed(secids)
+  const detail = await fetchQuotesDetailed(secids, opts)
   return {
     items: detail.items,
     provenance: quoteProvenance(detail),
@@ -651,7 +679,17 @@ async function rawQuotes(list: string[]): Promise<Map<string, QuoteRow>> {
       // 记下"东财这会儿不可用"：missing[] 的归因要用它区分结构性缺失与瞬时故障
       lastEmBatchFailed = true
       lastEmBatchFailAt = Date.now()
-      console.warn('[tradewatcher] quotes batch failed', `pass ${pass + 1}`, `${missing.length} symbols`, String(error).slice(0, 120))
+      /**
+       * P2（AUDIT-IMPL70）：这条原先**每次批量失败打一行**，而一轮 `/quotes` + `/ytd` + `/badge`
+       * 会让它连打 3 行、标的数还各不相同（"12 symbols"/"26 symbols"），事实上是同一件事。
+       * 改为进聚合桶（同轮同原因只出 1 行），逐标的明细降到 debug 级。
+       */
+      noteDegraded('quotes-batch', {
+        label: '东财行情批量失败',
+        subject: missing.join(','),
+        reason: `pass ${pass + 1}（${shortError(error, 30)}）`,
+        detail: `pass ${pass + 1} ${missing.length} 只（${missing.slice(0, 8).join(',')}${missing.length > 8 ? '…' : ''}）：${String(error).slice(0, 160)}`,
+      })
       break
     }
     // 拿到回包（哪怕 diff 为空）说明东财可达 → 清掉失败标记
@@ -917,7 +955,102 @@ function normalizeQuoteList(secids: readonly string[]): string[] {
   return out.sort((a, b) => (a.toUpperCase() < b.toUpperCase() ? -1 : a.toUpperCase() > b.toUpperCase() ? 1 : 0))
 }
 
-async function loadQuotes(secids: string[], minReuseMs = 0): Promise<Map<string, QuoteRow>> {
+/**
+ * ── 行情来源能力表与取数顺序（P1，`docs/AUDIT-IMPL70.md` §2）────────────────────
+ *
+ * 背景（实测，见报告 §2 的矩阵与命令）：本机到 `push2delay/push2.eastmoney.com` **长期**
+ * `UND_ERR_SOCKET`（curl 能通、Node 的 undici 不通），而腾讯对新浪对 A股/港股/美股/期货/商品
+ * 都有覆盖。旧的取数顺序把东财摆在**第一位**，于是每一轮行情都先付一次必败的东财尝试
+ * （实测 1.2 s + 一串失败日志），拿到 0 行后才去问腾讯/新浪 —— 顺序反了。
+ *
+ * 现在的顺序：**腾讯 → 新浪 → 东财（兜底）**，按下面的能力表逐品种决定"谁会接活"。
+ * 东财只在两种情况下被提前：
+ *   · 调用方要的是东财**独占字段**（`f8/f10/f62/f66/f104-f106`：换手率/量比/主力净额/
+ *     超大单净额/涨跌家数）——`opts.emFields`；且东财此刻还有主机不在熔断；
+ *   · 腾讯/新浪都拿不到该标的（期货/商品的美股没有覆盖的品种）⇒ 自动落到兜底这一环。
+ */
+export type QuoteSourceId = 'tencent' | 'sina' | 'em'
+
+/** 品种能力：`full` = 该源有该品种的行情映射；`none` = 代码层就没有（不是"这次失败"） */
+export type SourceCapability = 'full' | 'none'
+
+/**
+ * 「品种 × 来源」能力（**只看映射是否存在**，不看这一次通不通）。
+ *
+ * 判据一律复用各源自己的映射函数 —— 不在这里抄第二份表：抄一份就会在有人更新映射时
+ * 悄悄分叉，表现为"capability 说没有、实际能取到"（或反过来）。
+ * 实测矩阵（含命令与回包）见 `docs/AUDIT-IMPL70.md` §2。
+ */
+export function sourceCapabilityOf(source: QuoteSourceId, secid: string): SourceCapability {
+  if (source === 'em') return SECID_RE.test(secid) ? 'full' : 'none'
+  if (source === 'tencent') return tencentQuoteCode(secid) === null ? 'none' : 'full'
+  return sinaQuoteSymbol(secid) === null ? 'none' : 'full'
+}
+
+/** 该标的能用哪些源（顺序＝优先级：腾讯 → 新浪 → 东财） */
+export function quoteSourcesOf(secid: string): QuoteSourceId[] {
+  const out: QuoteSourceId[] = []
+  for (const source of ['tencent', 'sina', 'em'] as const) {
+    if (sourceCapabilityOf(source, secid) === 'full') out.push(source)
+  }
+  return out
+}
+
+/** 至少有一台东财行情主机没在熔断（**纯读熔断器状态，不发请求**） */
+export function emQuotesWorthTrying(): boolean {
+  return QUOTE_HOSTS.some((host) => breakerFor(host).allow())
+}
+
+export interface QuoteSourcePlan {
+  /** 取数顺序。东财**默认是最后一位**（兜底），只有 `emFields` 时被提前 */
+  order: QuoteSourceId[]
+  /** 该批标的的可用来源（品种能力表快照，供 missing 归因与测试断言） */
+  coverage: Record<string, QuoteSourceId[]>
+  /** **没有任何非东财映射**的标的：东财一挂就必然缺 —— reason 必须写清"等东财恢复" */
+  emOnly: string[]
+}
+
+/**
+ * 决定一批标的的取数顺序。
+ *
+ * `emFields: true` 只给**真的需要东财独占字段**的调用方（护盘采样器要 f62/f66、
+ * 涨跌家数要 f104/f105/f106）：对它们把东财提前，才能保住这些字段；
+ * 其余调用方（行情条/自选/持仓/徽标/YTD）拿不到独占字段也不影响显示，一律腾讯/新浪先。
+ */
+export function quoteSourcePlan(secids: readonly string[], opts: { emFields?: boolean } = {}): QuoteSourcePlan {
+  const emFirst = opts.emFields === true && emQuotesWorthTrying()
+  const order: QuoteSourceId[] = emFirst ? ['em', 'tencent', 'sina'] : ['tencent', 'sina', 'em']
+  const coverage: Record<string, QuoteSourceId[]> = {}
+  const emOnly: string[] = []
+  for (const secid of secids) {
+    const sources = quoteSourcesOf(secid)
+    coverage[secid] = sources
+    if (sources.length === 1 && sources[0] === 'em') emOnly.push(secid)
+  }
+  return { order, coverage, emOnly }
+}
+
+/** 一批行情里**还没有可用价格**的标的 */
+function unpricedOf(list: readonly string[], rows: Map<string, QuoteRow>): string[] {
+  return list.filter((secid) => {
+    const row = rows.get(secid)
+    return row === undefined || row.price === null
+  })
+}
+
+export interface QuoteLoadOptions {
+  /**
+   * 需要东财**独占字段**（`f8` 换手率 / `f10` 量比 / `f62` 主力净额 / `f66` 超大单净额 /
+   * `f104-106` 涨跌家数）⇒ 允许把东财提前到取数顺序第一位。
+   *
+   * 只有两个调用方需要它：护盘采样器（f62/f66）与涨跌家数（f104-106）。
+   * 界面行情条/自选/持仓/徽标/YTD 都不需要 ⇒ 让它们走腾讯/新浪先，东财只做兜底。
+   * **默认 false**：默认值必须是"界面能最快看到价"的那条路，不是"字段最全"的那条。
+   */
+  emFields?: boolean
+}
+
+async function loadQuotes(secids: string[], minReuseMs = 0, opts: QuoteLoadOptions = {}): Promise<Map<string, QuoteRow>> {
   const list = normalizeQuoteList(secids)
   if (list.length === 0) return new Map()
   await loadLastGood()
@@ -964,9 +1097,39 @@ async function loadQuotes(secids: string[], minReuseMs = 0): Promise<Map<string,
   if (still.length > 0) {
     const ttl = quoteSlotTtlMs()
     const batch = (async () => {
-      const got = await rawQuotes(still)
-      // 东财整体不可用或部分丢码时，用腾讯/新浪把缺口补上
+      const got = new Map<string, QuoteRow>()
+      /**
+       * P1（AUDIT-IMPL70 §2）：**腾讯/新浪优先，东财兜底**。
+       *
+       * 旧顺序是"东财批量（两轮）→ 腾讯 → 新浪"。本机东财长期 `UND_ERR_SOCKET`，
+       * 于是每一轮都先付一次必败尝试（实测 ~1.2 s，且带一串失败日志），才有兜底源上场。
+       * 现在反过来；`emFields` 的调用方（护盘 f62/f66、涨跌家数 f104-106）仍把东财提前，
+       * 因为那些字段只有东财提供 —— 不提前就拿不到，等于用一个顺序换掉一个功能。
+       */
+      const plan = quoteSourcePlan(still, opts)
+      const emFirst = plan.order[0] === 'em'
+      if (emFirst) {
+        for (const [secid, row] of await rawQuotes(still)) got.set(secid, row)
+      }
+      // 腾讯 → 新浪（品种能力表决定谁接活；只补仍缺的标的，不重复请求）
       await fillFromFallbacks(still, got)
+      /**
+       * 东财兜底：只对**仍没有价**的标的。
+       *
+       * 东财"本轮完全没被试"只发生在两种情形：① 腾讯/新浪已经把所有标的供上了（不需要它）；
+       * ② 它的行情主机全在熔断（发出去也只会立刻失败）。这两种情形下 `missing[]` 的归因仍然正确：
+       * `emUnavailableNow()` 的第一条判据就是"QUOTE_HOSTS 全部 !allow()" ⇒ 逐标原因会写
+       * transient（等东财恢复），不会被误写成 no-source（重试无效）。
+       */
+      if (!emFirst) {
+        const needEm = unpricedOf(still, got)
+        if (needEm.length > 0 && emQuotesWorthTrying()) {
+          for (const [secid, row] of await rawQuotes(needEm)) {
+            const cur = got.get(secid)
+            if (cur === undefined || cur.price === null) got.set(secid, row)
+          }
+        }
+      }
       const at = Date.now()
       for (const [secid, row] of got) quoteSlots.set(secid.toUpperCase(), { exp: at + ttl, at, row })
       // Map 保持插入序：超限时从最旧的开始丢（正被使用的槽会被重新 set 而回到队尾）
@@ -1009,8 +1172,11 @@ async function loadQuotes(secids: string[], minReuseMs = 0): Promise<Map<string,
  * 行情 + 真实新鲜度。`asOf` 是数据被观测到的时刻，`stale` 表示至少一行是兜底/过期值 ——
  * 二者都由行内的 `at`/`source` 推导，不依赖响应生成时间（见 summarizeQuoteProvenance）。
  */
-export async function fetchQuotesDetailed(secids: string[]): Promise<QuoteProvenance & { items: Record<string, QuoteRow> }> {
-  const rows = await loadQuotes(secids)
+export async function fetchQuotesDetailed(
+  secids: string[],
+  opts: QuoteLoadOptions = {},
+): Promise<QuoteProvenance & { items: Record<string, QuoteRow> }> {
+  const rows = await loadQuotes(secids, 0, opts)
   const items = rowsToRecord(rows)
   // 大小写无关地判定"这一项到底有没有价"：调用方可能混用写法，归一到大写再比对
   const priced = new Set<string>()
@@ -1028,8 +1194,8 @@ export async function fetchQuotesDetailed(secids: string[]): Promise<QuoteProven
 }
 
 /** 只要行情的调用方用这个（tools 等）；需要新鲜度信息的用 fetchQuotesDetailed */
-export async function fetchQuotes(secids: string[]): Promise<Record<string, QuoteRow>> {
-  return rowsToRecord(await loadQuotes(secids))
+export async function fetchQuotes(secids: string[], opts: QuoteLoadOptions = {}): Promise<Record<string, QuoteRow>> {
+  return rowsToRecord(await loadQuotes(secids, 0, opts))
 }
 
 /**
@@ -1048,12 +1214,16 @@ export async function fetchQuotes(secids: string[]): Promise<Record<string, Quot
  * 每次回来槽都刚好过期，**命中率 0%**（复核实测：间隔 20s 时第二次请求数仍 = 1）。
  * 采样器传 `minReuseMs = tick*0.8` 后：窗口内直接复用同一条槽（值本身仍由行情条的轮询更新），
  * 既不额外打上游，也不会让界面看到更旧的数据（界面走的是自己的 `/quotes` 路径）。
+ *
+ * `emFields`（AUDIT-IMPL70 P1）：护盘评分要 `superNet/mainNet`、涨跌家数要 `f104-106`，
+ * 这些**只有东财提供** ⇒ 这条链路必须允许把东财提前；否则东财一降为兜底，
+ * 健康主机上的护盘超大单因子会静默变成全 null（"功能还在、数据没了"）。
  */
 export async function loadQuoteRowsShared(
   secids: string[],
-  opts: { minReuseMs?: number } = {},
+  opts: { minReuseMs?: number; emFields?: boolean } = {},
 ): Promise<Map<string, QuoteRow>> {
-  return loadQuotes(secids, opts.minReuseMs ?? 0)
+  return loadQuotes(secids, opts.minReuseMs ?? 0, { emFields: opts.emFields === true })
 }
 
 /** Detail card for one stock/ETF (extra fundamentals; indices return what the feed has). */
@@ -1512,10 +1682,16 @@ async function fetchTrendSingleDay(secid: string, opts: TrendOptions = {}): Prom
 
 /** 该标的是否有备用源（腾讯或新浪报价映射）；用于搜索结果与工具输出如实标注"仅东财源"。 */
 export function hasQuoteFallback(secid: string): boolean {
-  // 用 tencentQuoteCode（沪深/港股 + 国际指数 + 美股）：国际指数已改由腾讯兜底，
-  // 新浪 int_* 整族停用（陈旧快照 + 无时间戳，见 sina.ts 文件头）；美股两侧都有映射
-  // （腾讯 `us<TICKER>` / 新浪 `gb_<ticker>`，AUDIT-IMPL67）
-  return tencentQuoteCode(secid) !== null || sinaQuoteSymbol(secid) !== null
+  /**
+   * 判据**只此一处**：直接读品种能力表（`quoteSourcesOf`），不再自己拼一遍"腾讯||新浪"。
+   *
+   * AUDIT-IMPL70 §2：以前这里是一份手写的映射判定，与取数顺序里的映射调用各写一遍 ——
+   * 两份一起改没问题，只改一份就会出现"顺序上真去问了腾讯、归因却说它没有映射"。
+   * 能力表用 `tencentQuoteCode`（沪深/港股 + 国际指数 + 美股）与
+   * `sinaSymbol`（美股 `gb_*` / 国内期货 `nf_*` / 外盘商品与贵金属 `hf_*`）：
+   * 新浪 `int_*` 整族停用（陈旧快照 + 无时间戳，见 sina.ts 文件头）。
+   */
+  return quoteSourcesOf(secid).length > 1
 }
 
 /** 东财 secid → 新浪代码（仅 A股/深沪 ETF；港股/美股接口不适用）。 */
@@ -1799,9 +1975,10 @@ export function normalizeFq(secid: string, fqt: unknown): FqMode {
   const n = Number(fqt)
   return n === 0 || n === 2 ? (n as FqMode) : 1
 }
-const KLINE_FULL_LMT: Record<number, number> = { 101: 800, 102: 400, 103: 240 }
-const KLINE_RECENT_LMT: Record<number, number> = { 101: 10, 102: 5, 103: 3 }
-const KLINE_CAP: Record<number, number> = { 101: 1200, 102: 800, 103: 600 }
+// 104 只有美股会用到（年K 由日线聚合）；A股/港股的年K 仍是"月K 本地重采样"，不进这几张表
+const KLINE_FULL_LMT: Record<number, number> = { 101: 800, 102: 400, 103: 240, 104: 20 }
+const KLINE_RECENT_LMT: Record<number, number> = { 101: 10, 102: 5, 103: 3, 104: 2 }
+const KLINE_CAP: Record<number, number> = { 101: 1200, 102: 800, 103: 600, 104: 80 }
 
 interface KlineEntry {
   bars: DayBar[]
@@ -1822,6 +1999,11 @@ interface KlineEntry {
    * 或按同日报价校正过绝对量纲时给出；null = 没动过。界面与回包直接显示这句话。
    */
   unitNote: string | null
+  /**
+   * 美股：检测到的**疑似拆股/合股**（未复权断层）。随缓存落盘 ——
+   * 否则"休市定稿免回源"那一轮拿不到日线，标记会凭空消失（图上一会儿有、一会儿没有）。
+   */
+  splits: UsSplit[]
 }
 
 const klineMem = new Map<string, KlineEntry>()
@@ -2016,13 +2198,13 @@ async function loadKlineCache(secid: string, klt: number, fqt: FqMode): Promise<
   const entry: KlineEntry = hit ?? {
     bars: [], loaded: false, updatedAt: 0, partial: false,
     fileBars: 0, refusedReason: null, degradedReason: null, droppedLast: false,
-    unitNote: null,
+    unitNote: null, splits: [],
   }
   const paths = klineCacheFileNames(secid, klt, fqt).map((name) => join(dataHome(), 'klines', name))
   for (const path of paths) {
     try {
       const raw = await readFile(path, 'utf8')
-      const parsed = JSON.parse(raw) as { bars?: DayBar[]; updatedAt?: number; v?: number; partial?: boolean }
+      const parsed = JSON.parse(raw) as { bars?: DayBar[]; updatedAt?: number; v?: number; partial?: boolean; splits?: UsSplit[] }
       const bars = Array.isArray(parsed.bars)
         ? parsed.bars.filter((b) => b !== null && typeof b.date === 'string' && Number.isFinite(b.close))
         : []
@@ -2033,15 +2215,32 @@ async function loadKlineCache(secid: string, klt: number, fqt: FqMode): Promise<
       entry.degradedReason = decision.degradedReason
       entry.droppedLast = decision.adopt && decision.dropLast
       if (!decision.adopt) {
-        console.warn('[tradewatcher] 跳过 K 线缓存:', path, decision.refusedReason,
-          `文件里 ${decision.fileBars} 根、可用 ${decision.usableBars} 根 < ${decision.minBars}`)
+        noteDegraded('kline-cache-skip', {
+          label: 'K 线缓存被判不可用（跳过）',
+          subject: path,
+          reason: shortError(decision.refusedReason, 40),
+          detail: `${path}：${decision.refusedReason}（文件里 ${decision.fileBars} 根、可用 ${decision.usableBars} 根 < ${decision.minBars}）`,
+        })
         continue
       }
       if (decision.refusedReason !== null) {
-        console.warn('[tradewatcher] 降级采用 K 线缓存:', path, decision.degradedReason)
+        /**
+         * P2（AUDIT-IMPL70）：这条原先**每标的每轮一行** —— 用户实测"几十行刷屏"就是它
+         * （自选 26 只 + 行业/详情链路会让同一原因重复几十次）。改为聚合：同轮 N 只只出 1 行
+         * （「K 线缓存降级采用 27 个（未完成 bar 已超过 60s TTL ⇒ 回源重取 ×27）；样例：…」），
+         * 逐标的完整原因降到 debug 级。
+         */
+        noteDegraded('kline-cache', {
+          label: 'K 线缓存降级采用',
+          subject: path.slice(path.lastIndexOf('/') + 1),
+          reason: shortError(decision.degradedReason, 48),
+          detail: `${path}：${decision.degradedReason}`,
+        })
       }
       entry.bars = decision.dropLast ? bars.slice(0, -1) : bars
       entry.updatedAt = typeof parsed.updatedAt === 'number' ? parsed.updatedAt : 0
+      // 拆股标记随缓存一起读回（老文件没有这个键 ⇒ 空数组，下次回源时重算）
+      entry.splits = Array.isArray(parsed.splits) ? parsed.splits.filter((x) => typeof x?.day === 'string' && typeof x?.label === 'string') : []
       // 丢掉那根未完成 bar 之后，最后一根就是**已完成**的 ⇒ partial 必须跟着变成 false
       entry.partial = decision.dropLast ? false : parsed.partial === true
       // 量纲归一（只改 vol）：缓存里"腾讯段（股）+ 东财段（手）"并存时会留下 ≈100× 的断层，
@@ -2084,6 +2283,7 @@ async function saveKlineCacheRepair(
       klineFile(secid, klt, fqt),
       (disk) => {
         const old = (disk !== null && typeof disk === 'object' ? (disk as { bars?: DayBar[] }).bars : undefined) ?? []
+        const diskSplits = (disk !== null && typeof disk === 'object' ? (disk as { splits?: UsSplit[] }).splits : undefined) ?? []
         return {
           v: KLINE_CACHE_V,
           secid,
@@ -2091,6 +2291,8 @@ async function saveKlineCacheRepair(
           fqt,
           updatedAt,
           partial,
+          // 量纲修复只改 vol：拆股标记必须原样带回去（否则这条修复路径会把图上的标记抹掉）
+          ...(diskSplits.length > 0 ? { splits: diskSplits } : {}),
           bars: mergeBars(old, bars, KLINE_CAP[klt] ?? Math.max(old.length, bars.length)),
         }
       },
@@ -2102,7 +2304,7 @@ async function saveKlineCacheRepair(
   }
 }
 
-async function saveKlineCache(secid: string, klt: number, fqt: FqMode, bars: DayBar[]): Promise<void> {  try {
+async function saveKlineCache(secid: string, klt: number, fqt: FqMode, bars: DayBar[], splits?: UsSplit[]): Promise<void> {  try {
     await mkdir(join(dataHome(), 'klines'), { recursive: true })
     // 落盘时判定最后一根：盘中抓到的当日 bar 标 partial（读侧按 60s TTL 决定是否回源）
     const last = bars.length > 0 ? bars[bars.length - 1] : null
@@ -2114,6 +2316,11 @@ async function saveKlineCache(secid: string, klt: number, fqt: FqMode, bars: Day
       klineFile(secid, klt, fqt),
       (disk) => {
         const old = (disk !== null && typeof disk === 'object' ? (disk as { bars?: DayBar[] }).bars : undefined) ?? []
+        const diskSplits = (disk !== null && typeof disk === 'object' ? (disk as { splits?: UsSplit[] }).splits : undefined) ?? []
+        // 拆股标记随缓存落盘（定稿免回源那一轮也要能标注）。
+        // ⚠ 优先用**本次内存里刚算出来的**（`splits`），否则保留磁盘上的 ——
+        //    只读磁盘那次（首写时磁盘还没有）会把第一次算出来的标记丢掉（真机踩过）。
+        const nextSplits = splits !== undefined && splits.length > 0 ? splits : diskSplits
         return {
           v: KLINE_CACHE_V,
           secid,
@@ -2121,6 +2328,7 @@ async function saveKlineCache(secid: string, klt: number, fqt: FqMode, bars: Day
           fqt,
           updatedAt: Date.now(),
           partial,
+          ...(nextSplits.length > 0 ? { splits: nextSplits } : {}),
           bars: mergeBars(old, bars, KLINE_CAP[klt] ?? Math.max(old.length, bars.length)),
         }
       },
@@ -2308,16 +2516,43 @@ async function fetchHostThroughBreaker(host: string, pathAndQuery: string, timeo
  * 为什么要单独一个 TTL 槽：这个接口一次回整段历史（FRO 504 KB / AAPL 941 KB），
  * 而 `refreshKline` 的增量刷新每 2 分钟就会来一趟 —— 不缓存等于每次浏览都重下几百 KB。
  */
-async function requestKlineFromSinaUs(secid: string, fqt: FqMode): Promise<DayBar[]> {
-  if (fqt !== 0) return [] // 美股只有未复权口径；要复权就是"没有"，不拿原始价冒充
+async function usDailyBars(secid: string): Promise<DayBar[]> {
   const ticker = secid.slice(secid.indexOf('.') + 1)
   const bars = await ttlCache<SinaBar[]>(`kline-us:${ticker.toUpperCase()}`, 10 * 60_000, () => fetchSinaUsDaily(ticker))
-  if (bars.length === 0) return []
   return bars.map((b, i) => {
     const prev = i > 0 ? bars[i - 1].close : null
     const pct = prev !== null && prev > 0 ? Math.round(((b.close - prev) / prev) * 10000) / 100 : null
-    return { date: b.date, open: b.open, close: b.close, high: b.high, low: b.low, vol: b.vol, pct }
+    return { date: b.date, open: b.open, close: b.close, high: b.high, low: b.low, vol: b.vol, pct, amount: b.amount ?? null }
   })
+}
+
+/** K 线周期号 → 聚合周期（美股周/月/年由日线聚合；101 = 日线本身，不聚合） */
+function usAggPeriodOfKlt(klt: number): UsAggPeriod | null {
+  return klt === 102 ? 'week' : klt === 103 ? 'month' : klt === 104 ? 'year' : null
+}
+
+/**
+ * 美股一轮 K 线取数：
+ *   · `klt=101` ⇒ 日线原样（新浪全历史）；
+ *   · `klt=102/103/104` ⇒ **由日线聚合**（自然周/月/年，按美东交易日日期分组），口径：
+ *     OHLC = 首/极值/极值/末，量额 = 求和（任一日缺失 ⇒ 该根 null）。**不改价**。
+ *   · 未复权口径以外一律空（美股没有复权序列，不拿原始价冒充）。
+ */
+async function requestKlineFromSinaUs(secid: string, klt: number, fqt: FqMode): Promise<DayBar[]> {
+  if (fqt !== 0) return [] // 美股只有未复权口径；要复权就是"没有"，不拿原始价冒充
+  const daily = await usDailyBars(secid)
+  if (daily.length === 0) return []
+  const period = usAggPeriodOfKlt(klt)
+  return period === null ? daily : aggregateUsDaily(daily, period)
+}
+
+/** 日线 TTL 槽里的原始序列（**不触发请求**）：给拆股检测用，避免"定稿免回源"那一轮拿不到日线 */
+function usDailyFromCache(secid: string): SinaBar[] | null {
+  const ticker = secid.slice(secid.indexOf('.') + 1).toUpperCase()
+  const slot = cache.get(`kline-us:${ticker}`)
+  if (slot === undefined || Date.now() >= slot.exp) return null
+  const value = slot.value as SinaBar[] | undefined
+  return Array.isArray(value) ? value : null
 }
 
 /** 单主机取 K 线；空数组视为失败（push2delay/push2 会返回 200 + 空）。优先腾讯。 */
@@ -2331,7 +2566,7 @@ async function requestKlineRaw(secid: string, klt: number, lmt: number, fqt: FqM
    */
   if (isUsSecid(secid)) {
     try {
-      const us = await requestKlineFromSinaUs(secid, fqt)
+      const us = await requestKlineFromSinaUs(secid, klt, fqt)
       if (us.length > 0) return us
       replied = true // 新浪可达但没这个标的的日线 ⇒ 结构性缺失（no-source），不是网络故障
     } catch (error) {
@@ -2404,14 +2639,12 @@ export async function fetchKline(
   fqt: FqMode = 1,
 ): Promise<(KlineData & { staleReason?: string }) | null> {
   if (!SECID_RE.test(secid)) return null
-  const baseKlt = klt === 104 ? 103 : klt
   const us = isUsSecid(secid)
   /**
-   * 美股**只提供日线**：上游（新浪）只有 `getDailyK`；周/月/年要么没有源、要么只能拿日线重采样。
-   * 我们没有重采样（避免"用别的周期冒充"，见 AUDIT-IMPL68 §5）；界面上这三档对美股**禁用并给原因**。
-   * 这里直接返回 null，让 `/kline` 带 `missing`（原因由 `klineMissingReason` 按市场给出）。
+   * ⚠ 美股的年K **不**走"A股那条 103→104 重采样"：美股的周/月/年统一由**日线聚合**（AUDIT-IMPL69），
+   * 所以 `baseKlt` 保留 104 本身（聚合出来的年根直接进 104 的缓存文件）。
    */
-  if (us && baseKlt !== 101) return null
+  const baseKlt = klt === 104 && !us ? 103 : klt
   const supported = fqSupported(secid)
   const mode = normalizeFq(secid, fqt)
   const entry = await loadKlineCache(secid, baseKlt, mode)
@@ -2429,7 +2662,18 @@ export async function fetchKline(
   const lastDate = days[days.length - 1]?.date ?? ''
   const todayOf = us ? usDayOf : dayOf
   const inSessionOf = us ? inUsSession : inSession
-  const barOpen = !settled && lastDate !== '' && lastDate === todayOf(Date.now()) && inSessionOf()
+  /**
+   * 当根是否仍未收盘：
+   *   · 日K/A股：`最后一根的日期 === 今天`；
+   *   · **美股的聚合档**：聚合根的 `date` 是"该周/月/年的首个交易日"，所以比的是**所属周期**是否等于
+   *     今天所在周期（否则周K 在周三永远显示"当根已收盘"）。
+   */
+  const usPeriod = us ? usAggPeriodOfKlt(baseKlt) : null
+  const barOpen = !settled && lastDate !== '' && (
+    usPeriod === null
+      ? lastDate === todayOf(Date.now()) && inSessionOf()
+      : usBucketOf(lastDate, usPeriod) === usBucketOf(usDayOf(Date.now()), usPeriod) && inUsSession()
+  )
   // 降级复用的说明（只在"用了被判需要回源的缓存 且 回源没拿到新数据"时给；正常/定稿都不给）
   const staleReason = klineStaleNoteOf({
     settled,
@@ -2446,10 +2690,24 @@ export async function fetchKline(
     ? entry.unitNote
     : (entry.unitNote === null ? usUnitNote : `${usUnitNote}；${entry.unitNote}`)
   const reason = unitNote === null ? staleReason : (staleReason === null ? unitNote : `${staleReason}；${unitNote}`)
+  /**
+   * 美股聚合档与拆股标记（AUDIT-IMPL69）：
+   *   · `aggregated` 让界面口径行写出「由日线聚合（非上游原生）」（这是口径，不是脚注）；
+   *   · `splits` 是**未复权断层**的标注位置（图上标该根 + 口径行写"检测到 N 处"）。
+   *     ⚠ 我们**不改价**去抹平它 —— 那等于伪造复权。
+   */
+  const aggregated = usPeriod === null ? undefined : { period: usPeriod, note: usAggCaliber(usPeriod, entry.splits) }
+  const splits = us
+    ? (usPeriod === null
+        ? entry.splits.map((sp) => ({ date: sp.day, day: sp.day, label: sp.label }))
+        : splitMarksOf(entry.splits, entry.bars))
+    : undefined
   return {
     secid,
     days,
     stale,
+    ...(aggregated === undefined ? {} : { aggregated }),
+    ...(splits === undefined || splits.length === 0 ? {} : { splits }),
     ...(reason === null ? {} : { staleReason: reason }),
     ...(unitNote === null ? {} : { unitNote }),
     fqt: mode,
@@ -2559,17 +2817,9 @@ export function klineMissingReason(
 ): UpstreamReason {
   const label = klt === 101 ? '日K' : klt === 102 ? '周K' : klt === 103 ? '月K' : '年K'
   /**
-   * 美股**只有日K**：上游（新浪 `US_MinKService.getDailyK`）只给日线；周/月/年没有源。
-   * 这一条必须排在最前面 —— 否则"东财不可达"会把结论带成 transient（好像等一等就有），
-   * 而事实是**本插件不提供**该周期（no-source，重试无用；界面该档位已禁用并说明）。
+   * 美股周/月/年：**由日线聚合**（AUDIT-IMPL69），所以这里不再有"该周期不提供"的分支。
+   * 取不到只可能是：日线本身没取到（上游故障）或日线不足以聚合 ⇒ 按普通 transient / no-source 出结论。
    */
-  if (isUsSecid(secid) && klt !== 101) {
-    return {
-      what: label,
-      why: 'no-source',
-      note: `本插件不提供美股的${label}：美股上游只有日线（新浪 US_MinKService.getDailyK），周/月/年要么没有源、要么只能由日线重采样 —— 我们不拿重采样冒充该周期 —— ${MISSING_TIER_ADVICE['no-source']}`,
-    }
-  }
   // 腾讯对美股**故意不使用**（它的 day 只有 2 根"首尾"），所以美股不能算"腾讯覆盖"
   const tencentKline = tencentSymbol(secid) !== null && !isUsSecid(secid)
   const down = opts.emDown ?? (upstreamFailedRecently('kline') || hostsUnavailable(HISTORY_HOSTS) || emUnavailableNow())
@@ -2717,11 +2967,16 @@ async function refreshKline(secid: string, baseKlt: number, fqt: FqMode, entry: 
     const beforeLast = entry.bars[entry.bars.length - 1]?.date ?? ''
     entry.bars = mergeBars(entry.bars, fetched, KLINE_CAP[baseKlt])
     entry.updatedAt = Date.now()
+    // 美股：拆股标记来自**日线**（聚合档也一样）。日线 TTL 槽这一轮刚填过 ⇒ 不额外发请求。
+    if (isUsSecid(secid)) {
+      const daily = usDailyFromCache(secid)
+      if (daily !== null) entry.splits = detectUsSplits(daily)
+    }
     const afterLast = entry.bars[entry.bars.length - 1]?.date ?? ''
     // 内存里同步标出最后一根是否未完成（盘中），并把标记落盘（读侧按 TTL 决定是否回源）
     const lastNow = entry.bars.length > 0 ? entry.bars[entry.bars.length - 1] : null
     entry.partial = lastNow !== null && isPartialBar(lastNow.date, Date.now())
-    if (before !== entry.bars.length || beforeLast !== afterLast) void saveKlineCache(secid, baseKlt, fqt, entry.bars)
+    if (before !== entry.bars.length || beforeLast !== afterLast || entry.splits.length > 0) void saveKlineCache(secid, baseKlt, fqt, entry.bars, entry.splits)
     return false
   }
   return true

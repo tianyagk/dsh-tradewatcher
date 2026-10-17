@@ -189,15 +189,52 @@ test('错误语义：参数 400 / 请求体 413 / 非 JSON 400 / 类型 415', as
   }
 })
 
-test('错误语义：上游熔断 → 503 且带 retry-after（无备用源的路由）', async () => {
+/**
+ * AUDIT-IMPL70 P0 改变了这条语义：**逐标的路由在上游熔断时不再 503**。
+ *
+ * 旧断言（`/detail` 熔断 ⇒ 503 + retry-after）描述的正是用户看到的
+ * 「route error (503): 上游暂时不可用（熔断中，约 2 分钟后自动重试）」：
+ * 详情只有东财一个上游，东财一挂，抽屉整块变成"报错" —— 而同一只标的的价格
+ * 腾讯/新浪明明能给（`/quotes` 那时是 200）。
+ * 现在：逐标的路由 200 + `missing[]`（写清"只有东财一个上游 + 本次不可达"）；
+ * 只有**聚合类**路由（板块榜单，没有"部分结果"可言）才 503，且消息必须点名
+ * 「哪个上游 × 哪个范围」。
+ */
+test('错误语义：上游熔断 ⇒ 逐标/批量路由 200 + 原因；聚合路由才可能 503（点名上游与范围）', async () => {
   const h = await harness()
   const hosts = [...QUOTE_HOSTS, ...HISTORY_HOSTS]
   try {
     for (const host of hosts) for (let i = 0; i < 3; i++) breakerFor(host).recordFailure(new Error('selftest: fetch failed'))
+
+    // ① 逐标的路由：不 503，带逐标原因
     const res = await h.call('/tradewatcher/detail', '/tradewatcher/detail?secid=1.600519')
-    assert.equal(res.code, 503)
-    assert.ok(Number(res.headers['retry-after']) > 0, `retry-after 应为正秒数，实际 ${res.headers['retry-after']}`)
-    assert.match(String(res.body.error), /熔断|不可用/)
+    assert.equal(res.code, 200, '逐标的路由在上游熔断时仍须 200（页面不得整块报错）')
+    assert.equal(res.body.detail, null, '拿不到详情就如实 null，不编字段')
+    const miss = (res.body.missing as Array<{ what: string; why: string; note: string }> | undefined) ?? []
+    assert.equal(miss.length, 1, '必须给逐标原因')
+    assert.equal(miss[0].what, '1.600519')
+    assert.equal(miss[0].why, 'transient', '等上游恢复 ⇒ transient（不是"重试无效"）')
+    assert.match(miss[0].note, /东财/, '原因里必须点名是哪个上游')
+    assert.equal(res.headers['retry-after'], undefined, '200 不该带 retry-after')
+
+    // ② 逐标的批量路由（行业归属只有东财）：仍是 200 + 逐标原因
+    const inds = await h.call('/tradewatcher/industries', '/tradewatcher/industries?secids=1.600519,1.000300')
+    assert.equal(inds.code, 200, '批量路由同样不得因为上游挂掉变成 5xx')
+    const indMiss = (inds.body.missing as Array<{ what: string; why: string; note: string }> | undefined) ?? []
+    assert.equal(indMiss.length, 2, '两只都必须给逐标原因')
+    assert.match(indMiss[0].note, /东财/, '原因里必须点名是哪个上游')
+
+    // ③ 聚合类路由（板块榜单）：有备用源就 200；真到 5xx 时必须点名上游与范围
+    const board = await h.call('/tradewatcher/board', '/tradewatcher/board?scope=industry')
+    if (board.code === 200) {
+      // 腾讯板块排行兜住了（本机实测可达）—— 这正是"只要还有源能服务就 200"
+      assert.ok(Array.isArray(board.body.rows), '200 必须真的有行')
+    } else {
+      assert.equal(board.code, 503, `聚合路由要么 200（有备用源），要么 503（写清上游与范围），实得 ${board.code}`)
+      assert.ok(Number(board.headers['retry-after']) > 0, `retry-after 应为正秒数，实际 ${board.headers['retry-after']}`)
+      assert.match(String(board.body.error), /东财/, '必须写清哪个上游')
+      assert.match(String(board.body.error), /板块榜单/, '必须写清哪个范围')
+    }
     // 熔断中应该快速失败，而不是继续打上游
   } finally {
     for (const host of hosts) breakerFor(host).recordSuccess()

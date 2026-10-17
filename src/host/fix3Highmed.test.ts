@@ -98,10 +98,23 @@ test('H1 熔断收口：腾讯/日历/新浪那些主机必须**记账**（失�
 
 test('H1 回归防线：`src/host` 里不得再出现"不过熔断器"的裸 fetch（白名单只有低层 helper）', () => {
   const HERE = dirname(fileURLToPath(import.meta.url))
-  /** 允许清单：低层 helper 自身（**它的所有调用方**都已过熔断器，见源码注释） */
-  const ALLOW: Array<{ file: string; line: number; why: string }> = [
-    { file: 'em.ts', line: 89, why: '`fetchFromHost` 是低层单主机 helper：调用方只有 `fetchAny`（已 allow/probe/记账）与 `fetchHostThroughBreaker`（同一套）' },
+  /**
+   * 允许清单：低层 helper 自身（**它的所有调用方**都已过熔断器，见源码注释）。
+   *
+   * ⚠ 判据按**所在函数**而不是行号：行号一被上面插一行（哪怕只是加个 import）就失效，
+   * 那时红的是"白名单过期"而不是"真的有人绕过熔断"—— 噪音会训练人直接改数字（v0.103.0 实测踩到）。
+   */
+  const ALLOW: Array<{ file: string; fn: string; why: string }> = [
+    { file: 'em.ts', fn: 'fetchFromHost', why: '`fetchFromHost` 是低层单主机 helper：调用方只有 `fetchAny`（已 allow/probe/记账）与 `fetchHostThroughBreaker`（同一套）' },
   ]
+  /** 该行所在的函数名（向上找最近的 `function NAME(` 声明；找不到返回 null） */
+  const enclosingFnOf = (lines: string[], at: number): string | null => {
+    for (let i = at; i >= 0; i -= 1) {
+      const m = /(?:^|\s)(?:export\s+)?(?:async\s+)?function\s+([A-Za-z_$][\w$]*)\s*\(/.exec(lines[i] ?? '')
+      if (m !== null) return m[1]
+    }
+    return null
+  }
   const offenders: string[] = []
   const walk = (dir: string): void => {
     for (const name of readdirSync(dir)) {
@@ -109,13 +122,13 @@ test('H1 回归防线：`src/host` 里不得再出现"不过熔断器"的裸 fet
       if (statSync(p).isDirectory()) walk(p)
       else if (p.endsWith('.ts') && !p.endsWith('.test.ts') && !p.endsWith('.child.ts')) {
         const rel = relative(HERE, p)
-        readFileSync(p, 'utf8')
-          .split('\n')
-          .forEach((line, i) => {
-            if (!/await fetch\(|\breturn fetch\(/.test(line)) return
-            if (ALLOW.some((a) => a.file === rel && a.line === i + 1)) return
-            offenders.push(`${rel}:${i + 1} ${line.trim().slice(0, 100)}`)
-          })
+        const lines = readFileSync(p, 'utf8').split('\n')
+        lines.forEach((line, i) => {
+          if (!/await fetch\(|\breturn fetch\(/.test(line)) return
+          const fn = enclosingFnOf(lines, i)
+          if (ALLOW.some((a) => a.file === rel && a.fn === fn)) return
+          offenders.push(`${rel}:${i + 1} ${fn ?? '(顶层)'} ${line.trim().slice(0, 100)}`)
+        })
       }
     }
   }

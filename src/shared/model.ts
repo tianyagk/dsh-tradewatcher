@@ -304,6 +304,12 @@ export interface DayBar {
   low: number
   vol: number | null
   pct: number | null
+  /**
+   * 成交额（**原币**：美股为美元）。目前只有美股链路提供（新浪日线 `a` 段），
+   * A股/港股走东财时该字段缺省（`undefined`）。
+   * 聚合根（周/月/年）的 amount = 覆盖日内求和；**任一日缺失 ⇒ null**（不得 0 顶替）。
+   */
+  amount?: number | null
 }
 
 /**
@@ -352,6 +358,17 @@ export interface KlineData {
    * null/缺省 = 没动过（绝大多数标的）。
    */
   unitNote?: string
+  /**
+   * 美股：该周期是**由日线聚合**出来的（非上游原生周线/月线/年线）。
+   * `note` 是给人看的完整口径句（由 `host/usAggregate.ts` 产出，界面原样显示）。
+   */
+  aggregated?: { period: 'week' | 'month' | 'year'; note: string }
+  /**
+   * 检测到的**疑似拆股/合股**（未复权原始价上的断层）。
+   * 用于：① 图上标注该根；② 口径行写"检测到 N 处疑似拆股/合股（未复权，价差不可比）"。
+   * ⚠ 我们**不改价**去"抹平"它 —— 那等于伪造复权。
+   */
+  splits?: Array<{ date: string; day: string; label: string }>
 }
 
 /** ── 年初至今（YTD）────────────────────────────────────────────────────── */

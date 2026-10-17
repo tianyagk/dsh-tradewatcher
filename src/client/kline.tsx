@@ -18,6 +18,9 @@ const PAD_TOP = 8
 const AXIS_H = 16
 const GAP = 6
 
+/** 拆股/合股标记色（与 MA/涨跌色都区分开） */
+const SPLIT_COLOR = '#d98c1f'
+
 const MA_STYLE: Array<{ period: number; color: string }> = [
   { period: 5, color: '#e8a33d' },
   { period: 10, color: '#4d9cf6' },
@@ -484,6 +487,12 @@ function defaultWindow(klt: 101 | 102 | 103 | 104): number {
 export function KlineChart(props: {
   bars: Array<{ date: string; open: number; close: number; high: number; low: number; vol: number | null }>
   markers?: CandleMarker[]
+  /**
+   * **拆股/合股标记位**（美股：日线是未复权原始价，拆股当天价格会腰斩/翻倍）。
+   * 画一根竖虚线 + 顶部「拆」角标，悬停给出「4:1 拆股 · 2020-08-31」这类说明。
+   * ⚠ 只做标注：**不改价**去把曲线"抹平"（那等于伪造复权）。
+   */
+  splitBars?: Array<{ date: string; title: string }>
   width: number
   redUp: boolean
   klt: 101 | 102 | 103 | 104
@@ -577,6 +586,23 @@ export function KlineChart(props: {
     }
     return lo2
   }
+  // ── 拆股/合股标记（美股未复权断层）：竖虚线 + 顶部「拆」角标 + 悬停说明
+  for (const [i, sp] of (props.splitBars ?? []).entries()) {
+    const idx = idxOfDate(sp.date)
+    const sx = xAt(idx)
+    children.push(React.createElement('g', { key: `sp${i}` },
+      React.createElement('title', null, sp.title),
+      React.createElement('line', {
+        x1: sx, y1: PAD_TOP, x2: sx, y2: PAD_TOP + mainH,
+        style: { stroke: SPLIT_COLOR }, strokeWidth: 1, strokeDasharray: '3 3', opacity: 0.85,
+      }),
+      React.createElement('text', {
+        x: sx, y: PAD_TOP + 10, textAnchor: 'middle',
+        style: { fill: SPLIT_COLOR, fontSize: 12, fontWeight: 700, paintOrder: 'stroke', stroke: 'var(--tw-card)', strokeWidth: 2.5 },
+      }, '拆'),
+    ))
+  }
+
   /**
    * 买卖点去噪 + 明细（P1-2）。
    *
