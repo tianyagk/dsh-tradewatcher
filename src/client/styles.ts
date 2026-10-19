@@ -498,6 +498,12 @@ color-scheme:dark}
 .tw-rescue-pool{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:3px 10px;font-size:12px}
 .tw-rescue-pool-item{display:flex;align-items:center;gap:5px;color:var(--tw-muted);cursor:pointer}
 .tw-rescue-pool-item[data-on=true]{color:var(--tw-text)}
+/* 覆盖广度短标记（阶段一）：常驻只有「3 族 · 5/6」或「—」；口径全在 title/aria，不占版面 */
+.tw-rescue-cov{font-size:12px;font-variant-numeric:tabular-nums;letter-spacing:0}
+/* 跨日信号收件箱：静态列表 —— 不做推送/红点/闪烁，所以这里没有 animation/transition */
+.tw-rescue-inbox{display:flex;flex-direction:column;gap:2px;max-height:186px;overflow:auto}
+.tw-rescue-inbox-row{display:flex;align-items:center;gap:6px;font-size:12px;padding:3px 5px;border-radius:6px}
+.tw-rescue-inbox-row:hover{background:var(--tw-hover)}
 
 /* 右上角小圆形提示 icon（替代"详情不可用 + 重试"长条）：常驻只有一个字符 */
 .tw-noteicon{position:absolute;top:6px;right:8px;width:18px;height:18px;border-radius:50%;

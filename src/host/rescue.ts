@@ -3,11 +3,15 @@
 import { mkdir, readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import type {
-  DailyBarLite, RescueActiveWindow, RescueBottomLane, RescueConfig, RescueDaySummary, RescueEtfMeta, RescueEtfView,
+  DailyBarLite, RescueActiveWindow, RescueBottomLane, RescueConfig, RescueCoverage, RescueCoverageConfirm1,
+  RescueCoverageFamily, RescueDaySummary, RescueEtfMeta, RescueEtfView,
   RescueBreadthMoment, RescueCardSeries, RescueFactor, RescueIntradayChannel, RescueIntradayPoint, RescueLevel,
   RescueSignalEvent, RescueSnapshot, RescueThresholdSource,
 } from '../shared/model.ts'
-import { RESCUE_CORE_OUTFLOW_VETO, RESCUE_CORE_INDEXES, RESCUE_PERIPHERAL_FLOW_DISCOUNT, rescueUniverseMeta } from '../shared/model.ts'
+import {
+  RESCUE_BOND_30Y_NAME_HINTS, RESCUE_BOND_30Y_SECIDS, RESCUE_COVERAGE_FAMILY_LABEL, RESCUE_COVERAGE_FAMILY_OF_INDEX,
+  RESCUE_CORE_OUTFLOW_VETO, RESCUE_CORE_INDEXES, RESCUE_PERIPHERAL_FLOW_DISCOUNT, rescueUniverseMeta,
+} from '../shared/model.ts'
 import { RESCUE_CALIBRATION } from './rescue-thresholds.ts'
 import { hostsAllowed } from './breaker.ts'
 import { QUOTE_HOSTS as EM_QUOTE_HOSTS, HISTORY_HOSTS as EM_HISTORY_HOSTS, fetchAny as fetchAnyJson, loadQuoteRowsShared } from './em.ts'
@@ -172,14 +176,18 @@ interface PersistedSnapshot {
   flowSource?: RescueSnapshot['flowSource']
   /**最近一次采样失败时刻（与 ts 严格分开） */
   lastFailTs?: RescueSnapshot['lastFailTs']
+  /** 覆盖广度（阶段一：只记录 + 展示；重启后界面照样能显示）＋开关状态 */
+  coverage?: RescueSnapshot['coverage']
+  coverageWhy?: RescueSnapshot['coverageWhy']
+  coverageEnabled?: RescueSnapshot['coverageEnabled']
 }
 
 /**导出供自检：确认落盘时保留了"数据来源"与"失败时刻"这类诚实性字段 */
 export function stripSnapshot(s: RescueSnapshot): PersistedSnapshot {
   // flowSource / lastFailTs 也要落盘：收盘后重启时面板才能说明"这份数据来自备用源
   // （所以缺分单资金流因子）"与"最近一次采样失败于何时"，而不是只剩一个时间戳
-  const { ts, level, score, summary, factors, etfs, indexPct, indexName, timeCoef, continuous, continuousPercentile, continuousPercentileN, continuousPercentileWhy, etfSeries, resonance, pulseBand, completeness, thresholdSource, selfSampleDays, config, activeIntervalSec, flowSource, lastFailTs } = s
-  return { ts, level, score, summary, factors, etfs, indexPct, indexName, timeCoef, continuous, continuousPercentile, continuousPercentileN, continuousPercentileWhy, etfSeries, resonance, pulseBand, completeness, thresholdSource, selfSampleDays, config, activeIntervalSec, flowSource, lastFailTs }
+  const { ts, level, score, summary, factors, etfs, indexPct, indexName, timeCoef, continuous, continuousPercentile, continuousPercentileN, continuousPercentileWhy, etfSeries, resonance, pulseBand, completeness, thresholdSource, selfSampleDays, config, activeIntervalSec, flowSource, lastFailTs, coverage, coverageWhy, coverageEnabled } = s
+  return { ts, level, score, summary, factors, etfs, indexPct, indexName, timeCoef, continuous, continuousPercentile, continuousPercentileN, continuousPercentileWhy, etfSeries, resonance, pulseBand, completeness, thresholdSource, selfSampleDays, config, activeIntervalSec, flowSource, lastFailTs, coverage, coverageWhy, coverageEnabled }
 }
 
 /**
@@ -261,6 +269,15 @@ interface ScoreLogEntry {
   /**评分引擎版本：口径改动后旧条目仍能说明"当时用的是哪套权重" */
   engine: string
   factors: Array<{ id: string; score: number; weight: number; actual: string; threshold: string; hit: boolean }>
+  /**
+   * 覆盖广度读数（每条出分记录都有，**与日志同寿命** —— 跟着 `scoreLog` 的 60 天/240 条裁剪走，
+   * 不另设一套保留规则）。阶段一：只记录 + 展示；`coverageBonus` 恒 0。
+   */
+  coverage?: RescueCoverage | null
+  /** 覆盖广度的缺失原因（`confirm2` 未取到等）；空数组 = 没有缺失 */
+  coverageWhy?: string[]
+  /** 覆盖广度**附加分**（阶段一恒 0；阶段二 0–10，已加进 `rawScore`） */
+  coverageBonus?: number
 }
 
 interface DayLog {
@@ -561,6 +578,179 @@ export function inTradingSession(hhmm: string): boolean {
   return (mins >= 570 && mins <= 690) || (mins >= 780 && mins <= 900)
 }
 
+/** ── 覆盖广度（阶段一：只记录 + 展示；阶段二：附加分，默认关闭）────────────────────────
+ *
+ * 为什么要有它：量能因子取的是**六通道里最强的那个 z** ⇒ "一条通道暴量"与"整片宽基放量"
+ * 在评分上完全等价。覆盖广度把这件事拆出来：**几条通道触发、命中几个族、方向一致不一致**。
+ *
+ * 触发判据**只有一条**：该通道同刻度 `z ≥ RESCUE_COVERAGE_Z_HIT`（与量能因子同一套 `sameSlotZ` 基线，
+ * **不另造阈值**）。数据全部来自本拍已经取回的那批行情 ⇒ **零新增上游请求**。
+ */
+
+/** 通道算"触发"的同刻度 z 门槛（用户口径：z ≥ 2；与量能因子同一套刻度，不另造） */
+export const RESCUE_COVERAGE_Z_HIT = 2
+/** 阶梯生效的前提：命中族数 ≥ 2 **且** 触发通道数 ≥ 3（单族/单通道的放量不叫"覆盖广度"） */
+export const RESCUE_COVERAGE_MIN_FAMILIES = 2
+export const RESCUE_COVERAGE_MIN_ETFS = 3
+/** 阶梯：1 族 0 / 2 族 3 / 3 族 6（族数上限 3 ⇒ 用 `≥3` 兜住异常输入） */
+export const RESCUE_COVERAGE_FAMILY_LADDER: Record<1 | 2 | 3, number> = { 1: 0, 2: 3, 3: 6 }
+/** confirm1 加分：一致 2 / 强一致 4 / 不一致 0；`confirm2` **永不加分** */
+export const RESCUE_COVERAGE_CONFIRM1_BONUS: Record<RescueCoverageConfirm1, number> = { mixed: 0, same: 2, strong: 4 }
+/** 附加分合计上限（M=3 + 强一致 = 6 + 4 = 10，不得 11） */
+export const RESCUE_COVERAGE_BONUS_MAX = 10
+/** 方向判定的"平"阈值（%）：|涨跌幅| < 0.005 视为 0.00%（没有方向，不算同向也不算反向） */
+const COVERAGE_FLAT_PCT = 0.005
+
+/** 覆盖广度**进评分**的那三个字段（展示字段刻意不在此类型里 ⇒ 想混进评分就编译失败/断言失败） */
+export interface RescueCoverageScoreInput {
+  nEtf: number
+  nFamily: number
+  confirm1: RescueCoverageConfirm1
+}
+
+/**
+ * 覆盖广度附加分（**唯一实现**）：开关关闭 ⇒ 恒 0（阶段一），与输入无关。
+ *
+ * 口径（用户批准，不得改）：
+ *   · 阶梯：1 族 0 / 2 族 3 / 3 族 6；且必须**同时** `nFamily ≥ 2` 且 `nEtf ≥ 3`；
+ *   · confirm1：一致 2 / 强一致 4 / 不一致 0；`confirm2` **永不加分**；
+ *   · 合计上限 10；结果**加进 `raw`**（会改等级），**不重新归一化四个因子的权重**。
+ */
+export function rescueCoverageBonusOf(covered: RescueCoverageScoreInput, enabled: boolean): number {
+  if (enabled !== true) return 0
+  const nEtf = Number.isFinite(covered.nEtf) ? covered.nEtf : 0
+  const nFamily = Number.isFinite(covered.nFamily) ? covered.nFamily : 0
+  if (nEtf < RESCUE_COVERAGE_MIN_ETFS || nFamily < RESCUE_COVERAGE_MIN_FAMILIES) return 0
+  const familyPart = RESCUE_COVERAGE_FAMILY_LADDER[(nFamily >= 3 ? 3 : 2) as 2 | 3]
+  const confirmPart = RESCUE_COVERAGE_CONFIRM1_BONUS[covered.confirm1] ?? 0
+  return Math.min(RESCUE_COVERAGE_BONUS_MAX, familyPart + confirmPart)
+}
+
+/** 涨跌幅方向（`flat` = 读数四舍五入到 0.00%，方向无从判断） */
+function coverageDirection(pct: number | null): 'up' | 'down' | 'flat' | null {
+  if (pct === null || !Number.isFinite(pct)) return null
+  if (Math.abs(pct) < COVERAGE_FLAT_PCT) return 'flat'
+  return pct > 0 ? 'up' : 'down'
+}
+
+/** 一个监测通道（覆盖广度视角）：数据就是本拍行情里的那些字段，不额外取数 */
+export interface RescueCoverageChannelInput {
+  secid: string
+  name: string
+  /** 所属宽基指数（`RESCUE_ETF_CATALOG` 里的 index；自定义通道通常为"自定义"） */
+  index: string
+  /** 当日涨跌幅（%）；`null` = 未取到（**不写 0**） */
+  pct: number | null
+  /** 同刻度 z；`null` = 该通道基线不足（不是"没有放量"） */
+  volumeZ: number | null
+  /** 是否在护盘评分池内（宽基）。`false` = 自定义通道：只参与 confirm2 的国债查询，不参与族/触发/方向 */
+  scoring: boolean
+}
+
+export interface RescueCoverageBuildInput {
+  /** 沪深300 指数当日涨跌幅（%）；`null` = 未取到 */
+  indexPct: number | null
+  channels: readonly RescueCoverageChannelInput[]
+}
+
+export interface RescueCoverageBuildResult {
+  coverage: RescueCoverage
+  /**
+   * 缺失与口径说明（空数组 = 本次没有缺失）。
+   * 典型：30 年国债 ETF 不在本拍行情里、沪深300 涨跌幅未取到 ⇒ 方向一致性记 `mixed`（0 分）。
+   */
+  why: string[]
+}
+
+/** 通道是否 30 年国债 ETF（secid 白名单 + 名称兜底；大小写/前缀不敏感） */
+function isBond30y(channel: RescueCoverageChannelInput): boolean {
+  const code = channel.secid.trim().toUpperCase()
+  if (RESCUE_BOND_30Y_SECIDS.some((s) => s.toUpperCase() === code)) return true
+  const name = channel.name.replace(/\s+/g, '')
+  return RESCUE_BOND_30Y_NAME_HINTS.some((hint) => name.includes(hint.replace(/\s+/g, '')))
+}
+
+/**
+ * 算一条覆盖广度读数（纯函数：不读时钟、不发请求、不写盘）。
+ *
+ * `confirm1`（沪深300 与宽基 ETF 的方向一致性）：
+ *   · 有方向读数的通道**全部**与沪深300 同向，且至少 3 条读数 ⇒ `strong`；
+ *   · 同向数 > 反向数（严格多数）⇒ `same`；
+ *   · 其余 / 数据缺失 / 指数读数为 0.00% ⇒ `mixed`（0 分，**绝不抬高**）+ 原因。
+ *
+ * `confirm2`（30 年国债 ETF 的反向读数 = −涨跌幅%）：**只展示、永不进评分**；
+ * 本次行情批次里没有它 ⇒ `null` + 原因（**不写 0**，也不为它单独发请求）。
+ */
+export function buildRescueCoverage(input: RescueCoverageBuildInput): RescueCoverageBuildResult {
+  const why: string[] = []
+  const broad = input.channels.filter((c) => c.scoring)
+  // ── 触发（同刻度 z ≥ 2）与族归类：数据全部来自本拍 `etfs`，零新增请求 ──
+  const withZ = broad.filter((c) => c.volumeZ !== null && Number.isFinite(c.volumeZ))
+  const hit = withZ.filter((c) => (c.volumeZ as number) >= RESCUE_COVERAGE_Z_HIT)
+  const familyOrder: RescueCoverageFamily[] = ['large', 'mid', 'growth']
+  const hitFamilies = new Set<RescueCoverageFamily>()
+  for (const c of hit) {
+    const family = RESCUE_COVERAGE_FAMILY_OF_INDEX[c.index]
+    if (family !== undefined) hitFamilies.add(family)
+  }
+  const families = familyOrder.filter((f) => hitFamilies.has(f)).map((f) => RESCUE_COVERAGE_FAMILY_LABEL[f])
+  const unclassified = hit.filter((c) => RESCUE_COVERAGE_FAMILY_OF_INDEX[c.index] === undefined)
+  if (unclassified.length > 0) {
+    why.push(`有 ${unclassified.length} 条触发通道的指数不在三族映射里（${unclassified.map((c) => `${c.name}/${c.index}`).join('、')}）⇒ 不计入族数（不会凭空多出一族）`)
+  }
+  if (broad.length > 0 && withZ.length === 0) why.push('宽基通道都没有同刻度基线（< 20 日或 σ 不可用）⇒ 覆盖广度记 0/0（不是"没有放量"）')
+
+  // ── confirm1：方向一致性（只用已有涨跌幅） ──
+  const dirChannels = broad.filter((c) => coverageDirection(c.pct) !== null)
+  const indexDir = coverageDirection(input.indexPct)
+  const counts = { up: 0, down: 0 }
+  for (const c of dirChannels) {
+    const d = coverageDirection(c.pct)
+    if (d === 'up') counts.up += 1
+    else if (d === 'down') counts.down += 1
+  }
+  let confirm1: RescueCoverageConfirm1 = 'mixed'
+  const confirm1N = indexDir === 'up' ? counts.up : indexDir === 'down' ? counts.down : 0
+  if (dirChannels.length === 0) {
+    why.push('本拍宽基通道都没有涨跌幅读数 ⇒ 方向一致性无从判断，记 mixed（0 分，不抬高）')
+  } else if (input.indexPct === null || !Number.isFinite(input.indexPct)) {
+    why.push('沪深300 涨跌幅未取到 ⇒ 方向一致性无从判断，记 mixed（0 分，不抬高）')
+  } else if (indexDir === 'flat') {
+    why.push('沪深300 涨跌幅为 0.00%（无方向）⇒ 方向一致性无从判断，记 mixed（0 分，不抬高）')
+  } else {
+    const sameCount = confirm1N
+    const opposite = dirChannels.length - sameCount
+    const unanimous = opposite === 0 && sameCount === dirChannels.length && dirChannels.length >= 3
+    if (unanimous) confirm1 = 'strong'
+    else if (sameCount > opposite) confirm1 = 'same'
+    else confirm1 = 'mixed'
+  }
+
+  // ── confirm2：30 年国债 ETF 的反向读数（只展示；批次里没有就给 null + 原因） ──
+  const bond = input.channels.find((c) => !c.scoring && isBond30y(c)) ?? input.channels.find((c) => isBond30y(c)) ?? null
+  let confirm2: number | null = null
+  if (bond === null) {
+    why.push('本次行情批次里没有 30 年国债 ETF（它不在护盘通道池；不为此单独取数）⇒ confirm2 未取到')
+  } else if (bond.pct === null || !Number.isFinite(bond.pct)) {
+    why.push(`30 年国债 ETF（${bond.name}）本次没有涨跌幅读数 ⇒ confirm2 未取到`)
+  } else {
+    confirm2 = Math.round(-bond.pct * 100) / 100
+  }
+
+  return {
+    coverage: {
+      nEtf: hit.length,
+      nEtfWithData: withZ.length,
+      nFamily: families.length,
+      families,
+      confirm1,
+      confirm1N,
+      confirm2,
+    },
+    why,
+  }
+}
+
 /**
  * 连续评分（0–100，可跨样本比较）：`raw ÷ 权重合计 × 100`。
  *
@@ -633,6 +823,19 @@ export interface RescueFactorInput {
   bandLabel?: string
   /**交易阶段（用于脉冲命名与完整度说明） */
   phase?: RescuePhase
+  /**
+   * 本拍的覆盖广度读数（阶段一默认只记录 + 展示）。
+   * 进评分的只有 `nEtf` / `nFamily` / `confirm1`；其余字段（`nEtfWithData`/`confirm1N`/`families`/`confirm2`）
+   * **只用于展示**，不得进 `raw`。
+   */
+  coverage?: RescueCoverage | null
+  /** 覆盖广度的缺失/口径原因（展示用；**不参与评分**） */
+  coverageWhy?: readonly string[]
+  /**
+   * 覆盖广度附加分开关（单一配置项 `rescueCoverageEnabled`，默认 `false`）。
+   * `false` / 缺省 ⇒ 附加分**恒 0**（阶段一）；`true` ⇒ 阶梯 + confirm1 加进 `raw`（合计上限 10）。
+   */
+  coverageEnabled?: boolean
 }
 
 /**因子可用度：数据缺失（如冷启动回填失败）时如实标注，不假装完整 */
@@ -680,6 +883,18 @@ export interface RescueScoreResult {
    * 不能读作"有资金在托底"。
    */
   contradiction: string | null
+  /**
+   * 本拍的覆盖广度读数（阶段一：只记录 + 展示）。缺省 ⇒ `null`（老快照/纯函数调用方）。
+   * 与 `coverageBonus` 一起给出：界面能直接读到"这次有没有加分、加了多少"。
+   */
+  coverage: RescueCoverage | null
+  /** 覆盖广度的缺失/口径原因（空数组 = 没有缺失；**不参与评分**） */
+  coverageWhy: string[]
+  /**
+   * 覆盖广度**附加分**（0–10）：开关关闭（默认）⇒ 恒 0。
+   * 它已加进 `raw`（会改等级），但**不改变四个因子的权重**（合计仍是 0.717，绝不重新归一化）。
+   */
+  coverageBonus: number
 }
 
 const fmt = (v: number | null, unit: string, digits = 2): string => (v === null ? '—' : `${v.toFixed(digits)}${unit}`)
@@ -762,7 +977,18 @@ export function scoreRescue(input: RescueFactorInput): RescueScoreResult {
     },
   ]
 
-  const raw = factors.reduce((a, f) => a + f.weight * f.score, 0)
+  /**
+   * **覆盖广度附加分**（阶段二，默认关闭）：只加进 `raw`，**不动四个因子的权重**。
+   *
+   * 红线（历史教训）：这里**不许**重新归一化 `RESCUE_WEIGHTS`（也不许把等级线按权重合计缩放）。
+   * 归一化实测把 8 天里 7 天的等级抬高一级 —— 那就是假信号。
+   * 开关 `false`（默认）⇒ `rescueCoverageBonusOf` 恒返回 0，覆盖广度只记录 + 展示。
+   */
+  const coverage = input.coverage ?? null
+  const coverageBonus = coverage === null ? 0 : rescueCoverageBonusOf(coverage, input.coverageEnabled === true)
+  const rawFactors = factors.reduce((a, f) => a + f.weight * f.score, 0)
+  // 附加分**相加**（不是相乘、不重新分配权重）；关闭时 coverageBonus === 0 ⇒ raw === rawFactors（逐样本等价）
+  const raw = rawFactors + coverageBonus
   /**
    * **时点系数降级为兜底**（用户口径 v0.17.0）：基线可用时它**不参与**（系数按 1 算 ⇒ 等级线就是 35/55，
    * 早盘不再被抬到 87.5/137.5 那种不可达的位置）；只有基线不足时（冷启动/σ 不可用）才照旧参与。
@@ -776,6 +1002,8 @@ export function scoreRescue(input: RescueFactorInput): RescueScoreResult {
    * 并据此算近 N 个样本的分位（样本 < 5 ⇒ null，不编）。
    */
   // raw 的单位是"分×权重"（上限 = 权重合计 × 100 = 71.7）⇒ 除以权重合计即回到 0–100 的稳定刻度
+  // ⚠ 覆盖广度附加分开到 10 时，raw 上限变成 81.7 ⇒ 连续评分理论上限 113.9，由这里的 clamp 收在 100
+  // （不是口径错：连续评分本就是"相对刻度"，触顶意味着"比历史上绝大多数样本都强"）
   const continuous = Math.max(0, Math.min(100, raw / RESCUE_WEIGHT_SUM))
   /** 跨日样本（宿主从出分日志取，最近 ≤20 条；客户端**不**参与计算） */
   const pctHistory = (input.recentContinuous ?? []).filter((x) => Number.isFinite(x))
@@ -827,6 +1055,11 @@ export function scoreRescue(input: RescueFactorInput): RescueScoreResult {
       percentileN: 0,
       percentileWhy: '非交易时段：这次不出等级、也不算连续评分与分位',
       contradiction: null,
+      // 覆盖广度读数照常给出（它是"这一拍的读数"，不是判据）；但**非交易时段不评分** ⇒ 附加分记 0，
+      // 不用"加了但没用上"这种会让人误以为加过分的结果
+      coverage,
+      coverageWhy: [...(input.coverageWhy ?? [])],
+      coverageBonus: 0,
     }
   }
 
@@ -912,7 +1145,14 @@ export function scoreRescue(input: RescueFactorInput): RescueScoreResult {
     ? `量能放大（同时点倍数 ${input.timeAdjMult.toFixed(2)}x ≥ P90 ${RESCUE_CALIBRATION.f1.high}x）但超大单读数 ≤ 0（${flowSign.toFixed(3)}x）⇒ 可能是拆单/算法单或纯被动成交，不能读作"有资金托底"`
     : null
   const contraNote = contradiction === null ? '' : `；⚠ 内部矛盾：${contradiction}`
-  const summary = `${base}${caps.length > 0 ? ` —— ${caps.join('；')}` : ''}（评分 ${score}，${contNote}${incomplete}${advisory}${removedNote}）${contraNote}`
+  /**
+   * 覆盖广度一句话（进归因，也进悬停）：**读数照常写，加分与否由开关决定**。
+   * 阶段一（开关关）必须能读到"附加 0（开关关闭）" —— 否则读者会以为这块根本没算。
+   */
+  const coverageNote = coverage === null
+    ? ''
+    : `；覆盖广度 ${coverage.nEtf}/${coverage.nEtfWithData} 通道 · ${coverage.nFamily} 族${coverage.families.length > 0 ? `（${coverage.families.join('/')}）` : ''} · 方向 ${coverage.confirm1}（同向 ${coverage.confirm1N}）· 附加 ${coverageBonus}${input.coverageEnabled === true ? '' : '（开关关闭：只记录不评分）'}`
+  const summary = `${base}${caps.length > 0 ? ` —— ${caps.join('；')}` : ''}（评分 ${score}，${contNote}${incomplete}${advisory}${removedNote}）${coverageNote}${contraNote}`
   return {
     score, level, factors, summary, completeness,
     timeCoef: coef, rawScore: raw, levelLines: lines,
@@ -924,6 +1164,9 @@ export function scoreRescue(input: RescueFactorInput): RescueScoreResult {
         : `跨日样本不足（${pctHistory.length} < 5）—— 不编分位，也不用 0 顶替`)
       : null,
     contradiction,
+    coverage,
+    coverageWhy: [...(input.coverageWhy ?? [])],
+    coverageBonus,
   }
 }
 
@@ -948,6 +1191,9 @@ export function snapshotContractFields(scored: RescueScoreResult): Pick<RescueSn
  * 存在的理由：此前只给总分与六因子，用户看到 `评分 68` 与 `量能 ×2.1`、`超大单 ×0.3`
  * 无法判断"这一分到底是谁加的"——是量能撑起来的，还是背离（跌出来的）撑起来的，
  * 两者的操作含义完全相反。贡献度列把总分拆开，且求和可复算（见 selftest）。
+ *
+ * ⚠ 覆盖广度附加分（阶段二）**不是因子**，因此不在这个列表里：开关打开时
+ * `Σ 贡献度 + coverageBonus = 总分`（阶段一附加分恒 0 ⇒ 与历史口径逐样本等价）。
  */
 export function factorContributions(
   factors: readonly RescueFactor[],
@@ -1542,7 +1788,9 @@ export class RescueMonitor {
 
   constructor(dir: string = dataHome(), config?: RescueConfig) {
     this.dir = dir
-    this.config = config ?? { enabled: true, intervalSec: 30, tailIntervalSec: 15, tailFrom: '14:30', universe: [] }
+    // 覆盖广度附加分**默认关闭**（阶段一：只记录 + 展示）：显式写 false，不靠 undefined 兜底 ——
+    // 配置缺键时 `rescueCoverageBonusOf` 也是恒 0，但快照里的 `coverageEnabled` 必须是明确的 true/false
+    this.config = config ?? { enabled: true, intervalSec: 30, tailIntervalSec: 15, tailFrom: '14:30', universe: [], rescueCoverageEnabled: false }
   }
 
   private path(): string {
@@ -1965,6 +2213,19 @@ export class RescueMonitor {
         volumeZ,
       })
     }
+    /**
+     * **覆盖广度**（阶段一：只记录 + 展示）：数据就是上面这一拍 `etfs` 里已经有的字段
+     * （`volumeZ` 与 `pct`）＋ 本拍的 `indexPct` ⇒ **零新增上游请求**（红线，见 impl80 断言 ⑥）。
+     * 自定义通道（`scoring === false`）不参与族归类/触发计数/方向一致性，只用于查 30 年国债 ETF。
+     */
+    const coverageBuilt = buildRescueCoverage({
+      indexPct,
+      channels: etfs.map((e) => ({
+        secid: e.secid, name: e.name, index: e.index, pct: e.pct,
+        volumeZ: e.volumeZ ?? null,
+        scoring: scoring.has(e.secid),
+      })),
+    })
     const anchors = this.f2Anchors()
     const scored = scoreRescue({
       timeAdjMult: maxMult,
@@ -1985,6 +2246,10 @@ export class RescueMonitor {
       // A-1 交易时段闸门：非交易时段不出等级（收盘后/午休/盘前），也不计入当日最高等级
       inSession: inTradingSession(hhmmOf(ts)),
       recentContinuous: this.recentContinuous(),
+      // 覆盖广度：读数照常给（落盘 + 展示）；开关默认 false ⇒ 附加分恒 0
+      coverage: coverageBuilt.coverage,
+      coverageWhy: coverageBuilt.why,
+      coverageEnabled: this.config.rescueCoverageEnabled === true,
     })
     etfs.sort((a, b) => b.activity - a.activity)
     /**
@@ -2014,6 +2279,9 @@ export class RescueMonitor {
           breadth: breadth.moment,
           breadthWhy: breadth.why,
           breadthSource: breadth.source,
+          // 覆盖广度随事件落盘（跨日回看也读得到；缺失原因在 coverageWhy，不写 0）
+          coverage: scored.coverage,
+          coverageWhy: scored.coverageWhy,
         })
         if (this.today.events.length > 60) this.today.events.splice(0, this.today.events.length - 60)
         this.lastLevel = scored.level
@@ -2078,6 +2346,10 @@ export class RescueMonitor {
       },
       completeness: scored.completeness,
       flowSource: source,
+      // 覆盖广度（阶段一：只记录 + 展示）+ 开关状态：界面要能直接读出"为什么这里没有加分"
+      coverage: scored.coverage,
+      coverageWhy: scored.coverageWhy,
+      coverageEnabled: this.config.rescueCoverageEnabled === true,
       bottom: this.buildBottom(etfs),
       thresholdSource: this.f2Source(), selfSampleDays: this.selfSampleDays(),
       calibratedAt: RESCUE_CALIBRATION.generatedAt,
@@ -2345,6 +2617,10 @@ export class RescueMonitor {
       factors: scored.factors.map((f) => ({
         id: f.id, score: f.score, weight: f.weight, actual: f.actual, threshold: f.threshold, hit: f.hit,
       })),
+      // 覆盖广度：**每条记录都写**（阶段一只记录，附加分恒 0）；跟着 scoreLog 一起裁剪，不另设保留规则
+      coverage: scored.coverage,
+      coverageWhy: scored.coverageWhy,
+      coverageBonus: scored.coverageBonus,
     }
     // 同一 5 分钟刻度内只保留最后一条（tick 与事件两条路径可能在同一刻度各写一次）
     const mark = entry.hhmm.slice(0, 15)
@@ -2395,6 +2671,10 @@ export class RescueMonitor {
         continuousPercentile: p.continuousPercentile ?? null,
         continuousPercentileN: p.continuousPercentileN ?? 0,
         continuousPercentileWhy: p.continuousPercentileWhy ?? '上次快照（旧版本）里没有跨日分位字段 ⇒ 本次显示原因而不是现算',
+        // 老快照（v0.110.0 之前）没有覆盖广度 ⇒ 显式补 null + 原因（**不写 0**，也不用 false 冒充"开关关"）
+        coverage: p.coverage ?? null,
+        coverageWhy: p.coverageWhy ?? (p.coverage == null ? ['上次快照（旧版本）里没有覆盖广度字段 ⇒ 本次显示原因而不是现算'] : []),
+        coverageEnabled: p.coverageEnabled ?? (this.config.rescueCoverageEnabled === true),
         today: [...this.today.events].reverse(), intraday: [...this.today.intraday],
         sampleCount: this.today.samples,
         note: `本会话尚未采样（如收盘后重启），显示上次成功采样（${hhmmOf(p.ts)}）的数据`,

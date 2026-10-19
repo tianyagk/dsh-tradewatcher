@@ -716,6 +716,14 @@ export interface PortPrefs {
   portSort: SortState<PortSortKey>
   /** 护盘信号监测配置 */
   rescue: RescueConfig
+  /**
+   * 护盘「跨日信号收件箱」的**已读状态**：`键 = 信号 id（当日 hhmm，如 '1016-1425'）→ 值 = 已读时刻（epoch ms）`。
+   *
+   * 为什么放 prefs 而不是 rescue-log：rescue-log 是**行情/出分日志**（60 天滚动、按采样裁剪），
+   * 「我看过哪条」是用户偏好 —— 混进去会被日志裁剪连坐，也会让"日志体积"随阅读行为变化。
+   * 归一是**宽容**的（非对象⇒`{}`、值非有限数丢弃、键数上界 2000 按最旧丢），坏数据不得 500。
+   */
+  rescueInboxRead?: Record<string, number>
   /** 视图档位（P0-8）：Alt+M 轮换，持久化 */
   viewMode?: ViewMode
   /**
@@ -764,7 +772,7 @@ export const DEFAULT_PREFS: PortPrefs = {
   costBasis: 'diluted',
   watchSort: { key: 'default', desc: true },
   portSort: { key: 'default', desc: true },
-  rescue: { enabled: true, intervalSec: 30, tailIntervalSec: 15, tailFrom: '14:30', universe: [] },
+  rescue: { enabled: true, intervalSec: 30, tailIntervalSec: 15, tailFrom: '14:30', universe: [], rescueCoverageEnabled: false },
   viewMode: 'full',
   panelOpacity: 1,
   blurDigits: false,
@@ -776,6 +784,8 @@ export const DEFAULT_PREFS: PortPrefs = {
   chipsDecay: 1.5,
   chipsSpread: 'triangle',
   splitRatio: 0.62,
+  /** 跨日信号收件箱的已读状态（老 profile 无此键 ⇒ 全部未读；键数上界见 normalizeRescueInboxRead） */
+  rescueInboxRead: {},
 }
 
 /**
@@ -1588,6 +1598,74 @@ export interface RescueEtfView {
   flowDirection?: 'in' | 'out' | 'flat' | 'unknown'
 }
 
+/**
+ * 覆盖广度（护盘「覆盖广度」，v0.110.0）：**这一波放量是一条通道，还是整片宽基**。
+ *
+ * 触发判据只有一条：该通道**同刻度 z ≥ 2**（与量能因子同一套 `sameSlotZ` 基线，**不另造阈值**）。
+ * 族内任一通道触发即该族命中，族数上限 3（大盘 / 中小盘 / 成长）。
+ *
+ * ⚠ 阶段一（`rescueCoverageEnabled = false`，默认）：**只记录 + 展示，附加分恒 0**；
+ * 阶段二打开开关后，覆盖广度会作为**附加分**（0–10）加进 `raw`（会改等级），
+ * 但**四个因子的权重合计仍是 0.717、绝不重新归一化**（历史教训：归一化把 8 天里 7 天的等级抬高一级）。
+ */
+export type RescueCoverageFamily = 'large' | 'mid' | 'growth'
+
+/** 族名（展示用）：固定顺序 大盘 → 中小盘 → 成长 */
+export const RESCUE_COVERAGE_FAMILY_LABEL: Record<RescueCoverageFamily, string> = {
+  large: '大盘',
+  mid: '中小盘',
+  growth: '成长',
+}
+
+/**
+ * 通道的「指数 → 族」映射（**唯一来源**：宿主归类与界面文案共用）。
+ *
+ * 用户口径：大盘＝沪深300＋上证50；中小盘＝中证500＋中证1000；成长＝科创50＋创业板。
+ * ⚠ 科创50/创业板属于**成长**，不是大盘 —— 归错会让"3 族覆盖"在大盘独涨时凭空成立。
+ */
+export const RESCUE_COVERAGE_FAMILY_OF_INDEX: Record<string, RescueCoverageFamily> = {
+  沪深300: 'large',
+  上证50: 'large',
+  中证500: 'mid',
+  中证1000: 'mid',
+  科创50: 'growth',
+  创业板指: 'growth',
+}
+
+/**
+ * `confirm1`：沪深300 指数与本拍宽基 ETF 的**方向**一致性（只用已有行情，零新增请求）。
+ *  - `strong` 强一致：有方向读数的通道**全部**与沪深300 同向（且至少 3 条读数）；
+ *  - `same`   一致：严格多数同向（同向数 > 反向数）；
+ *  - `mixed`  不一致 / 无从判断（数据缺失或指数读数 0.00%）：按 0 分，**绝不抬高**。
+ */
+export type RescueCoverageConfirm1 = 'strong' | 'same' | 'mixed'
+
+/**
+ * 一条采样记录的覆盖广度读数（与出分日志同寿命）。
+ *
+ * 进评分的只有 `nEtf` / `nFamily` / `confirm1`（阶梯 0/3/6 + 一致 2/4，合计上限 10）；
+ * `nEtfWithData` / `confirm1N` / `families` / `confirm2` **只用于展示**，任何一项都不得进 `raw`。
+ */
+export interface RescueCoverage {
+  /** 本拍**触发**的宽基通道数：该通道同刻度 z ≥ 2 */
+  nEtf: number
+  /** 本拍**取到同刻度 z**（基线可用）的宽基通道数 ⇒ `nEtf` 的诚实分母（0 = 基线不足，不是"没有通道"） */
+  nEtfWithData: number
+  /** 命中族数 0–3；族内任一通道触发即命中 */
+  nFamily: number
+  /** 命中的**族名**（固定顺序，长度恒 == `nFamily`；取值只有 大盘/中小盘/成长） */
+  families: string[]
+  /** 沪深300 与宽基 ETF 的方向一致性（进评分：strong=4 / same=2 / mixed=0） */
+  confirm1: RescueCoverageConfirm1
+  /** 与沪深300 **同向**的通道数（展示用；分母 = 有方向读数的通道数，默认 6） */
+  confirm1N: number
+  /**
+   * 30 年国债 ETF 的**反向**读数 = −(当日涨跌幅%)：负 = 债涨（避险），正 = 债跌（风偏回升）。
+   * 仅展示、**永不进评分**；`null` = 本次行情批次里没有它（原因见同级 `coverageWhy`，**不写 0**）。
+   */
+  confirm2: number | null
+}
+
 export interface RescueSignalEvent {
   ts: number
   /** HH:mm */
@@ -1597,6 +1675,13 @@ export interface RescueSignalEvent {
   reason: string
   /** 记录该事件的引擎版本；缺失表示旧口径（评分逻辑与当前不同） */
   engine?: string
+  /**
+   * 触发瞬间的**覆盖广度**读数（阶段一：只记录 + 展示；附加分恒 0）。
+   * 缺失（老日志）⇒ 界面显示 `—` + 原因，不写 0。
+   */
+  coverage?: RescueCoverage | null
+  /** 覆盖广度的缺失/口径原因（空数组 = 本次没有缺失）；confirm2 未取到时写在这里 */
+  coverageWhy?: string[]
   /**
    * **触发瞬间的全市场家数快照**（v0.18.0）：搭车落盘，**不为它发任何上游请求**。
    *
@@ -1717,6 +1802,14 @@ export interface RescueConfig {
   universe: string[]
   /** 用户添加的自定义通道（板块 ETF 等），不计入护盘评分 */
   custom?: RescueCustomChannel[]
+  /**
+   * **覆盖广度附加分**开关（**唯一**开关，默认 `false` = 阶段一）。
+   *
+   * `false` ⇒ 附加分**恒 0**：覆盖广度照常计算、落盘、展示，但一分都不加进 `raw`；
+   * `true`  ⇒ 阶段二：阶梯（2 族 3 / 3 族 6，且必须 M≥2 且 N≥3）+ confirm1（一致 2 / 强一致 4），
+   *          合计上限 10，加进 `raw`（**会改等级**）；四因子权重合计仍是 0.717，**绝不重新归一化**。
+   */
+  rescueCoverageEnabled?: boolean
 }
 
 export interface RescueEtfMeta {
@@ -1741,6 +1834,17 @@ export const RESCUE_ETF_CATALOG: RescueEtfMeta[] = [
   { secid: '0.159919', name: '沪深300ETF嘉实', index: '沪深300', core: false, group: 'core' },
   { secid: '1.588080', name: '科创50ETF易方达', index: '科创50', core: false, group: 'peripheral' },
 ]
+
+/**
+ * 30 年国债 ETF —— `confirm2`「反向读数」的取数目标。
+ *
+ * 它**不在**护盘通道池里，宿主**不会**为它单独发上游请求（红线：覆盖广度零新增请求）。
+ * 只有当它出现在**本次行情批次**里（典型做法：用户把它加进「自定义通道」）才有读数；
+ * 否则 `confirm2 = null` + `coverageWhy` 写原因（**不写 0**：0 会被读成"债不动"）。
+ */
+export const RESCUE_BOND_30Y_SECIDS: readonly string[] = ['1.511090', '1.511130']
+/** 名称兜底：自定义通道名里含这些片段也算（不同基金公司的 secid 可能不同） */
+export const RESCUE_BOND_30Y_NAME_HINTS: readonly string[] = ['30年国债', '30 年国债', '三十年国债']
 
 /**
  * 监测通道 = 选中的宽基（参与护盘评分） + 用户自定义通道（仅展示，不计入评分）。
@@ -1816,6 +1920,18 @@ export interface RescueSnapshot {
   completeness?: RescueCompleteness
   /** 快照数据来源：em = 含分单资金流；tencent = 仅量能与价格（备用源） */
   flowSource?: 'em' | 'tencent'
+  /**
+   * **本拍的覆盖广度**（阶段一：只记录 + 展示）。缺失（老快照/本会话还没采样）⇒ `null` + `coverageWhy` 原因。
+   */
+  coverage?: RescueCoverage | null
+  /** 覆盖广度的缺失/口径原因（空数组 = 本次没有缺失）；`confirm2` 未取到时写在这里 */
+  coverageWhy?: string[]
+  /**
+   * 覆盖广度**附加分开关**的当前状态（单一配置项 `RescueConfig.rescueCoverageEnabled`，默认 false）。
+   * `false` ⇒ 附加分恒 0（阶段一），但 `coverage` 字段照常计算、落盘与展示。
+   * 单独放一份而不只靠 `config`：界面要显示"为什么这里没有加分"，不该去解构配置对象。
+   */
+  coverageEnabled?: boolean
   /** 底部位置 / 形态 / 概率（核心通道 + 最强通道） */
   bottom?: RescueBottomView
   thresholdSource: RescueThresholdSource

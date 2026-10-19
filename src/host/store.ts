@@ -364,7 +364,14 @@ function prefsFrom(loaded: Partial<PortPrefs>): PortPrefs {
   return {
     ...DEFAULT_PREFS,
     ...loaded,
-    rescue: { ...DEFAULT_PREFS.rescue, ...(loaded.rescue ?? {}) },
+    rescue: {
+      ...DEFAULT_PREFS.rescue,
+      ...(loaded.rescue ?? {}),
+      // 覆盖广度开关来自明文文件（可被手改）⇒ 装载时按 `=== true` 收敛：坏值一律当关闭（阶段一）
+      rescueCoverageEnabled: (loaded.rescue?.rescueCoverageEnabled === true),
+    },
+    // 已读状态同理由：手改出来的坏值不得带进运行时（也避免 `Object.entries(null)` 这类崩溃）
+    rescueInboxRead: normalizeRescueInboxRead(loaded.rescueInboxRead),
     // 排序偏好来自明文文件（可被手改）：装载时按白名单收敛，非法键回退默认而不是带进界面
     watchSort: safeSortPref(loaded.watchSort, WATCH_SORT_KEYS, DEFAULT_PREFS.watchSort),
     portSort: safeSortPref(loaded.portSort, PORT_SORT_KEYS, DEFAULT_PREFS.portSort),
@@ -1219,6 +1226,9 @@ export class DataStore {
     if (patch.watchSort !== undefined) this.prefs.watchSort = normalizeSortPref(patch.watchSort, WATCH_SORT_KEYS, this.prefs.watchSort, 'watchSort')
     if (patch.portSort !== undefined) this.prefs.portSort = normalizeSortPref(patch.portSort, PORT_SORT_KEYS, this.prefs.portSort, 'portSort')
     if (patch.rescue !== undefined) this.prefs.rescue = normalizeRescuePrefs(patch.rescue, this.prefs.rescue)
+    // 护盘「跨日信号收件箱」的已读状态：宽容归一（非对象⇒{}、值非有限数丢弃、键数上界）。
+    // 不加这个分支，客户端发来的 rescueInboxRead 会被**静默丢弃**（回 200 但值不落盘）—— 与 stripCfg 同族的老问题。
+    if (patch.rescueInboxRead !== undefined) this.prefs.rescueInboxRead = normalizeRescueInboxRead(patch.rescueInboxRead)
     // 行情卡片配置：**存隐藏集合**。宽容过滤（非数组⇒空、混入非字符串丢掉、去重、上界 400），
     // 不抛错 —— 与 fxRates/rescue 的"宽容归一"同族；全仓曾漏掉这个分支，导致客户端发来的
     // stripCfg 被静默丢弃（刷新后配置全丢，P0）。
@@ -1333,5 +1343,33 @@ export function normalizeRescuePrefs(patch: Partial<RescueConfig>, base: RescueC
     const picked = patch.universe.map(String).filter((s) => allowed.has(s))
     out.universe = picked
   }
+  // 覆盖广度附加分开关（**唯一**开关，默认 false = 阶段一：只记录 + 展示）。
+  // 宽容归一：非 true 一律 false —— 这个开关会改等级，绝不允许"字符串 'false' 被当真"这类隐式转换。
+  if (patch.rescueCoverageEnabled !== undefined) out.rescueCoverageEnabled = patch.rescueCoverageEnabled === true
+  return out
+}
+
+/**
+ * 「跨日信号收件箱」已读状态的**宽容归一**（`PortPrefs.rescueInboxRead`）。
+ *
+ * 为什么不抛错：这是用户偏好，坏一条不该让整个 prefs 写入 500（客户端会静默丢配置）。
+ * 规则：非对象/数组 ⇒ `{}`；键必须是非空字符串（≤ 64 字）；值必须是有限数（毫秒时间戳）⇒ 否则丢弃；
+ * 键数上界 `RESCUE_INBOX_READ_MAX` ⇒ 超出按**时间戳最旧**丢（最近读过的留在里面）。
+ */
+export const RESCUE_INBOX_READ_MAX = 2000
+export function normalizeRescueInboxRead(raw: unknown): Record<string, number> {
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return {}
+  const entries: Array<[string, number]> = []
+  for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
+    const k = String(key).trim()
+    if (k === '' || k.length > 64) continue
+    if (typeof value !== 'number' || !Number.isFinite(value)) continue
+    entries.push([k, Math.round(value)])
+  }
+  // 上界按时间戳最旧丢（值小的更早读过）；同值按键名稳定排序，结果与输入顺序无关
+  entries.sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+  const kept = entries.slice(0, RESCUE_INBOX_READ_MAX)
+  const out: Record<string, number> = {}
+  for (const [k, v] of kept) out[k] = v
   return out
 }

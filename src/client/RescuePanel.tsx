@@ -20,7 +20,14 @@ import { Btn, ErrorNote, Field, Modal, Skeleton } from './ui'
 import { fmtStamp } from './format.ts'
 import { TREND_MIN_INTERVAL_MS, dueByInterval } from './pacing.ts'
 import { isUsableBaseline } from './trendView.ts'
-import { shClockText, shDayText } from './marketTime.ts'
+import { shClockText, shDayText, shToday } from './marketTime.ts'
+import { coverageBadgeOf, latestCoverageOf } from './rescueCoverage.ts'
+import type { RescueCoverageLike } from './rescueCoverage.ts'
+import {
+  INBOX_CALIBER, INBOX_MIN_LEVEL, INBOX_RETAIN_DAYS, INBOX_SHORT_HINT,
+  inboxEntryTitleOf, inboxReadMapOf, inboxViewOf, markInboxRead, pruneInboxRead,
+} from './rescueInbox.ts'
+import type { InboxEntry, InboxEvent } from './rescueInbox.ts'
 
 /** 「同时点量能」的极端档阈值（= 标定 f1.extreme = P95 = 1.92x；见上方注释的同步断言） */
 const RESCUE_F1_EXTREME = 1.92
@@ -352,6 +359,50 @@ function FactorTable(props: {
 }
 
 
+/**
+ * 覆盖广度**短标记**（主线 / 今日时间线 / 历史回看共用的唯一实现）。
+ *
+ * 常驻只有 `cov.marker`（`3 族 · 5/6`，算不出来就是 `—`）；完整口径 —— 三族归属、`z ≥ 2` 阈值、
+ * 确认档 1（方向一致性）与确认档 2（30 年国债 ETF 反向读数）的读数、「当前未计入评分（阶段一）」这句
+ * 状态、以及缺失原因 —— 全部在 `title` / `aria-label` 里（悬停与键盘读屏都能拿到，版面不占）。
+ */
+function CoverageMark(props: {
+  cov: RescueCoverageLike | null | undefined
+  why?: readonly string[] | null
+  enabled?: boolean | null
+}): React.ReactElement {
+  const badge = coverageBadgeOf({ coverage: props.cov ?? null, why: props.why ?? null, enabled: props.enabled ?? null })
+  return React.createElement('span', {
+    className: 'tw-badge tw-rescue-cov',
+    'data-role': 'rescue-coverage-badge',
+    title: badge.title,
+    'aria-label': `覆盖广度 ${badge.marker} —— ${badge.title}`,
+    tabIndex: 0,
+    role: 'note',
+    style: { cursor: 'help' },
+  }, badge.marker)
+}
+
+/** 收件箱的一行：等级 + 时间 + 合并计数 + 窗口内最高分 + 「已读」 */
+function InboxRow(props: { entry: InboxEntry; onRead: () => void }): React.ReactElement {
+  const e = props.entry
+  const note = inboxEntryTitleOf(e)
+  return React.createElement('div', { className: 'tw-rescue-inbox-row', title: note },
+    React.createElement('span', { className: 'tw-badge', style: { color: LEVEL_COLOR[e.level], borderColor: LEVEL_COLOR[e.level] } }, RESCUE_LEVEL_LABEL[e.level]),
+    React.createElement('span', { style: { fontFamily: 'var(--tw-mono)', fontSize: 12 } }, `${e.day.slice(5)} ${e.startHhmm}`),
+    e.count > 1
+      ? React.createElement('span', { className: 'tw-badge', title: note }, `×${e.count}`)
+      : null,
+    React.createElement('span', { style: { flex: 1 } }),
+    React.createElement('span', { className: 'tw-muted', style: { fontSize: 12 }, title: note }, `${e.score} 分`),
+    React.createElement(Btn, { onClick: props.onRead, title: '标为已读：只写偏好（prefs），不写行情日志' }, '已读'),
+  )
+}
+
+/** 已读状态没能落盘时的如实说明（不假装成功；列表会退回未读，原因写在这） */
+const READ_PERSIST_FAIL_NOTE = '已读状态本次未存盘（宿主未接受该偏好）'
+
+
 export function RescuePanel(props: {
   prefs: PortPrefs
   redUp: boolean
@@ -372,6 +423,19 @@ export function RescuePanel(props: {
   const [dayDetail, setDayDetail] = React.useState<{ events: RescueSignalEvent[]; intraday: RescueIntradayPoint[] } | null>(null)
   /** 历史回看**失败原因**（P1-9）：失败时 detail 保持 null（=未取到），绝不拿空事件数组冒充"当日无信号" */
   const [dayErr, setDayErr] = React.useState<string | null>(null)
+  /**
+   * 收件箱的跨日事件（按天缓存）：只取 30 天窗口内 `maxLevel ≥ 入箱门槛` 的那几天
+   * —— `maxLevel < 门槛` 的天**不可能**有入箱事件，取它只是白花一次请求。
+   */
+  const [inboxDays, setInboxDays] = React.useState<Record<string, RescueSignalEvent[]>>({})
+  /** 没取到的天 → 原因（重试可清；失败必须可见，不能把统计缺口藏起来） */
+  const [inboxFail, setInboxFail] = React.useState<Record<string, string>>({})
+  /** 已发起过请求的天（避免每次轮询重复打同一批） */
+  const inboxAsked = React.useRef<Set<string>>(new Set())
+  /** 组件卸载标记：在飞的请求回来时不再 setState（不用 effect 清理当取消 —— 那会把在飞结果丢掉且永不重取） */
+  const aliveRef = React.useRef(true)
+  /** 已读状态是否真的落盘（宿主未接受该偏好时如实说，不假装成功） */
+  const [readPersistNote, setReadPersistNote] = React.useState<string | null>(null)
 
   const config: RescueConfig = props.prefs.rescue
   const snapshot = data?.snapshot ?? null
@@ -380,6 +444,11 @@ export function RescuePanel(props: {
    * 常驻区只渲染 `label` 一行，三段原文进 `title`/`aria-label`（见 `rescueView.caliberEntryOf`）。
    */
   const caliberEntry = caliberEntryOf(snapshot?.bottom?.model)
+  /**
+   * 本拍的覆盖广度（阶段一）：优先 `snapshot.coverage`，老宿主退回最新一条带该字段的事件。
+   * 缺失时不补 0 —— `coverageBadgeOf` 会给 `—` + 原因。
+   */
+  const covNow = latestCoverageOf(snapshot)
   /**
    * 当日抽样峰值（**唯一实现**）：总分的"与最近相比"参照与下方"最高评分"那行共用它
    * —— 两处各算一次迟早会漂移。契约里只有"当日抽样"（`intraday`），跨日分位不在快照里。
@@ -509,6 +578,105 @@ export function RescuePanel(props: {
   const rescueEmpty = snapshot !== null && snapshot.etfs.length === 0
   // 取数失败/无通道（etfs 为空）时不许默认展开空壳 —— 塌成一行即可，空壳只会挡住下面的内容
   const expanded = manualOpen ?? (level >= 2 && snapshot !== null && snapshot.etfs.length > 0)
+  // 卸载后就别再 setState（在飞的 `?day=` 请求会在卸载后回来）
+  React.useEffect(() => () => {
+    aliveRef.current = false
+  }, [])
+
+  /**
+   * 收件箱的候选天：30 天历史里 `maxLevel ≥ 入箱门槛` 的天（**不含今天** —— 今天用快照里的 `today`，
+   * 它比再发一次 `?day=` 更新）。`maxLevel < 门槛` 的天不可能有入箱事件 ⇒ 不取。
+   */
+  const inboxDayList = React.useMemo(() => {
+    const today = shToday()
+    return (data?.history ?? [])
+      .filter((h) => h.day !== today && h.maxLevel >= INBOX_MIN_LEVEL)
+      .map((h) => h.day)
+  }, [data?.history])
+  const inboxDayKey = inboxDayList.join(',')
+
+  /**
+   * 按天取历史事件（串行，一次一个；只取"还没取过且没失败过"的天）。
+   * 失败 ⇒ 记进 `inboxFail`（原因可见 + 「重试」），**不**静默当成"那天没有信号"。
+   */
+  React.useEffect(() => {
+    if (!expanded) return
+    const todo = inboxDayList.filter((d) => inboxDays[d] === undefined && inboxFail[d] === undefined && !inboxAsked.current.has(d))
+    if (todo.length === 0) return
+    void (async () => {
+      for (const day of todo) {
+        if (!aliveRef.current) return
+        // 两轮 effect 可能同时在跑（上一次还没 await 完），这里再挡一次，避免同一天打两遍
+        if (inboxAsked.current.has(day)) continue
+        inboxAsked.current.add(day)
+        try {
+          const r = await api.rescueDay(day)
+          if (!aliveRef.current) return
+          setInboxDays((prev) => ({ ...prev, [day]: r.dayEvents ?? [] }))
+        } catch (e) {
+          if (!aliveRef.current) return
+          setInboxFail((prev) => ({ ...prev, [day]: (e as Error).message }))
+        }
+      }
+    })()
+  }, [expanded, inboxDayKey, inboxDays, inboxFail, inboxDayList])
+
+  /** 收件箱的事件流：今天来自快照，历史来自按天缓存 */
+  const inboxEvents = React.useMemo<InboxEvent[]>(() => {
+    const today = shToday()
+    const out: InboxEvent[] = []
+    for (const e of snapshot?.today ?? []) out.push({ day: today, ts: e.ts, hhmm: e.hhmm, level: e.level, score: e.score })
+    for (const [day, list] of Object.entries(inboxDays)) {
+      for (const e of list) out.push({ day, ts: e.ts, hhmm: e.hhmm, level: e.level, score: e.score })
+    }
+    return out
+  }, [snapshot?.today, inboxDays])
+
+  /** 已读状态（存 prefs；读侧宽容归一，坏数据不让面板崩） */
+  const inboxRead = React.useMemo(() => inboxReadMapOf(props.prefs.rescueInboxRead), [props.prefs.rescueInboxRead])
+  const inbox = React.useMemo(
+    () =>
+      inboxViewOf({
+        events: inboxEvents,
+        read: inboxRead,
+        today: shToday(),
+        coveredDays: data?.history.length ?? 0,
+      }),
+    [inboxEvents, inboxRead, data?.history.length],
+  )
+  /**
+   * 还有几天历史没回来。**空态必须等它归零**：历史还在路上时报「最近一次信号在 30 天前以外」
+   * 是一句假否定（比"系统坏了"更糟 —— 它会让人真的以为这一个月没事）。
+   */
+  const inboxPending = expanded
+    ? inboxDayList.filter((d) => inboxDays[d] === undefined && inboxFail[d] === undefined).length
+    : 0
+
+  /**
+   * 标为已读：**乐观更新 + 回读校验**。
+   * 只写偏好（`prefs`），绝不写 `rescue-log`；宿主没接受这个键时如实说"本次未存盘"
+   * （列表会退回未读），不假装成功。
+   */
+  const markRead = (ids: string[]): void => {
+    if (ids.length === 0) return
+    const next = pruneInboxRead(markInboxRead(inboxRead, ids, Date.now()), shToday())
+    props.onPrefs?.({ ...props.prefs, rescueInboxRead: next })
+    api
+      .setPrefs({ rescueInboxRead: next })
+      .then((r) => {
+        const saved = inboxReadMapOf(r.prefs.rescueInboxRead)
+        setReadPersistNote(ids.every((id) => saved[id] !== undefined) ? null : READ_PERSIST_FAIL_NOTE)
+        props.onPrefs?.(r.prefs)
+      })
+      .catch((e: Error) => setReadPersistNote(`已读状态本次未存盘：${e.message}`))
+  }
+
+  /** 重试没取到的那些天（清掉失败标记与"已问过"标记） */
+  const retryInboxDays = (): void => {
+    for (const day of Object.keys(inboxFail)) inboxAsked.current.delete(day)
+    setInboxFail({})
+  }
+
   const lanes: RescueEtfMeta[] = rescueUniverseMeta(config.universe)
   const laneBase = snapshot?.etfs.find((e) => e.secid === lane)?.avgAmt20 ?? null
 
@@ -524,6 +692,10 @@ export function RescuePanel(props: {
       React.createElement('span', { className: 't' }, '护盘信号'),
       snapshot !== null
         ? React.createElement('span', { className: 'tw-badge', style: { color: LEVEL_COLOR[level], borderColor: LEVEL_COLOR[level] } }, levelText)
+        : null,
+      // 覆盖广度短标记（`3 族 · 5/6`）：与等级并排，**只有短标记**；口径全在悬停/读屏里
+      snapshot !== null
+        ? React.createElement(CoverageMark, { cov: covNow.coverage, why: covNow.why, enabled: snapshot.coverageEnabled === true })
         : null,
       snapshot !== null
         ? React.createElement('span', {
@@ -898,6 +1070,8 @@ export function RescuePanel(props: {
                       React.createElement('div', { key: `${e.ts}-${e.level}`, className: 'tw-rescue-tl-row' },
                         React.createElement('span', { style: { fontFamily: 'var(--tw-mono)', color: LEVEL_COLOR[e.level] } }, e.hhmm),
                         React.createElement('span', { className: 'tw-badge', style: { color: LEVEL_COLOR[e.level], borderColor: LEVEL_COLOR[e.level] } }, RESCUE_LEVEL_LABEL[e.level]),
+                        // 时间线每条也给同一枚覆盖广度短标记（缺字段 ⇒ `—` + 原因，不写 0 顶替）
+                        React.createElement(CoverageMark, { cov: e.coverage, why: e.coverageWhy, enabled: snapshot.coverageEnabled === true }),
                         e.engine === undefined
                           ? React.createElement('span', { className: 'tw-badge', title: '该事件由更早的评分口径记录（因子构成与当前不同，仅作历史留痕）' }, '旧口径')
                           : null,
@@ -920,7 +1094,66 @@ export function RescuePanel(props: {
                   ),
             ),
             React.createElement('div', null,
-              React.createElement('div', { className: 'tw-sub-h' }, `历史回看（${data?.history.length ?? 0} 天，自采样器上线起）`),
+              /**
+               * 跨日「信号收件箱」（用户 2026-10-19）：把 30 天护盘历史里**未读的疑似护盘及以上**
+               * 收在一处。不做推送/红点/闪烁；已读写 prefs（不写 rescue-log）。
+               * 空态**不许**只写"无信号"—— 必须给「最近一次信号在 X 天前」+ 本期统计，
+               * 否则"今天没有"和"系统坏了"读起来一样。
+               */
+              React.createElement('div', { className: 'tw-sub-h', title: INBOX_CALIBER },
+                `信号收件箱（未读 ${inbox.unread} · 近 ${INBOX_RETAIN_DAYS} 天）`,
+                React.createElement('span', { style: { flex: 1 } }),
+                inbox.unread > 0
+                  ? React.createElement(Btn, {
+                      onClick: () => markRead(inbox.entries.map((e) => e.id)),
+                      title: '把当前未读的条目全部标为已读（只写偏好 prefs，不写行情日志）',
+                    }, '全部已读')
+                  : null,
+              ),
+              // 口径提示放在列表**之前**：先说明"只列疑似护盘及以上"，空态那句"最近一次信号在 X 天前"
+              // 才不会被读成"连资金异动都没有"
+              React.createElement('div', { className: 'tw-hint', style: { fontSize: 12 }, title: INBOX_CALIBER },
+                shortReason(INBOX_SHORT_HINT, 60)),
+              inboxPending > 0 && inbox.entries.length > 0
+                ? React.createElement('div', { className: 'tw-hint', style: { fontSize: 12 }, title: INBOX_CALIBER },
+                    `还有 ${inboxPending} 天历史未回，统计会补齐`)
+                : null,
+              readPersistNote !== null
+                ? React.createElement('div', {
+                    className: 'tw-hint',
+                    style: { fontSize: 12, color: 'var(--tw-warn)' },
+                    tabIndex: 0,
+                    role: 'note',
+                    title: readPersistNote,
+                    'aria-label': readPersistNote,
+                  }, shortReason(readPersistNote))
+                : null,
+              Object.keys(inboxFail).length > 0
+                ? React.createElement('div', { className: 'tw-hint', style: { fontSize: 12 } },
+                    `历史事件未取到 ${Object.keys(inboxFail).length} 天（本期统计可能偏小）`,
+                    React.createElement(Btn, { onClick: retryInboxDays, title: '重试取回没取到的那几天' }, '重试'),
+                  )
+                : null,
+              inbox.entries.length > 0
+                ? React.createElement('div', { className: 'tw-rescue-inbox' },
+                    ...inbox.entries.map((it) =>
+                      React.createElement(InboxRow, { key: it.id, entry: it, onRead: () => markRead([it.id]) }),
+                    ),
+                  )
+                : inboxPending > 0
+                  // 历史还在路上：先给"取数中"，**不报空态**（否则会先说"30 天前以外"，假否定）
+                  ? React.createElement('div', { className: 'tw-hint', style: { fontSize: 12 }, title: INBOX_CALIBER },
+                      `收件箱取数中（还剩 ${inboxPending} 天历史未回）…`)
+                  : React.createElement('div', {
+                      className: 'tw-hint',
+                      style: { padding: '6px 2px', fontSize: 12 },
+                      // 空态整句（最近一次信号在 X 天前 · 本期统计）是唯一实现，来自 `inbox.emptyText`
+                      title: `${inbox.emptyText}\n${INBOX_CALIBER}`,
+                      tabIndex: 0,
+                      role: 'note',
+                      'data-role': 'rescue-inbox-empty',
+                    }, inbox.emptyText),
+              React.createElement('div', { className: 'tw-sub-h', style: { marginTop: 8 } }, `历史回看（${data?.history.length ?? 0} 天，自采样器上线起）`),
               (data?.history.length ?? 0) === 0
                 ? React.createElement('div', { className: 'tw-hint', style: { padding: '6px 2px' } },
                     '尚无历史记录：host 采样器已启动，交易时段会自动累积（免费源无 ETF 资金流历史，历史回看只能从上线日算起）。')
@@ -961,7 +1194,14 @@ export function RescuePanel(props: {
         })
       : null,
     openDay !== null
-      ? React.createElement(DayModal, { day: openDay, detail: dayDetail, err: dayErr, onRetry: () => openHistory(openDay), onClose: () => setOpenDay(null) })
+      ? React.createElement(DayModal, {
+          day: openDay,
+          detail: dayDetail,
+          err: dayErr,
+          coverageEnabled: snapshot?.coverageEnabled === true,
+          onRetry: () => openHistory(openDay),
+          onClose: () => setOpenDay(null),
+        })
       : null,
     React.createElement('div', { className: 'tw-hint', style: { fontSize: 12, padding: '4px 10px 0' } },
       '口径说明：识别的是「符合国家队历史行为模式的宽基 ETF 放量 + 超大单净流入」，' +
@@ -1094,6 +1334,8 @@ function DayModal(props: {
   detail: { events: RescueSignalEvent[]; intraday: RescueIntradayPoint[] } | null
   /** 取数失败原因（非 null ⇒ 只显示原因 + 重试，**不显示"无信号/无抽样"**） */
   err: string | null
+  /** 覆盖广度附加分开关（阶段一/阶段二）：只影响悬停里那句状态，不影响读数 */
+  coverageEnabled?: boolean | null
   onRetry: () => void
   onClose: () => void
 }): React.ReactElement {
@@ -1124,6 +1366,8 @@ function DayModal(props: {
                 React.createElement('div', { key: `${e.ts}-${e.level}`, className: 'tw-rescue-tl-row' },
                   React.createElement('span', { style: { fontFamily: 'var(--tw-mono)', color: LEVEL_COLOR[e.level] } }, e.hhmm),
                   React.createElement('span', { className: 'tw-badge', style: { color: LEVEL_COLOR[e.level], borderColor: LEVEL_COLOR[e.level] } }, RESCUE_LEVEL_LABEL[e.level]),
+                  // 历史回看每条同样给短标记（与主线/时间线同一实现）
+                  React.createElement(CoverageMark, { cov: e.coverage, why: e.coverageWhy, enabled: props.coverageEnabled === true }),
                   React.createElement('span', { className: 'tw-muted', style: { fontSize: 12, flex: 1, minWidth: 0 } }, `${e.score} 分 · ${e.reason}`),
                 ),
               ),
