@@ -56,6 +56,46 @@ export function abnormalColorOf(score: number | null): string {
 }
 
 /**
+ * 「口径与边界」常驻入口（IMPL-79，用户 2026-10-19 要求）。
+ *
+ * 用户的诉求是**面板太吵**：护盘面板「底部位置 / 形态 / 触发后对照」表下方有三段常驻文字
+ * （宿主算的 `model` 口径句 + 两段红线披露）。处置不是删掉，而是**搬进悬停/读屏**：
+ * 常驻区只留一行入口，三段原文原样进 `title` + `aria-label`。
+ *
+ * ⚠ 红线（为什么不能直接删）：这三段是**我们自己的诚实性披露** ——
+ *   · 「历史同类情形的出现频率」（口径，`build.mjs` 锁定片段，防被当成预测）；
+ *   · 「95% 区间是 Wilson 区间」+「**不是**胜率、概率或预测」（统计含义，`build.mjs` 锁定片段）；
+ *   · 「日内形态不参与概率校准」+「位置低 ≠ 见底」（能力边界与误读防线）。
+ * 事实必须仍然可读到，只是默认不占版面。
+ */
+export const RESCUE_CALIBER_ENTRY = '口径与边界（悬停查看）'
+
+/** 第二/三段（客户端静态披露，原样保留；`build.mjs` 的两条锁定片段都在这里） */
+export const RESCUE_CALIBER_DISCLOSURE =
+  '口径说明：这里是「历史同类情形的出现频率」的对照片段，不是胜率、概率或预测；给出的 95% 区间是 Wilson 区间，样本越小区间越宽 —— 区间跨过基线时，这个差异不具备可辨识性。' +
+  '日内形态（回升/下影线/收回前低）没有可回算的历史分钟数据，因此「不参与概率校准」，只作实时修正参考。' +
+  '位置低 ≠ 见底：护盘也可能发生在下跌半程，请结合资金流与量价背离一起判断。'
+
+/**
+ * 悬停/读屏里的完整披露：宿主口径句（`model`，第一段）+ 客户端两段，**拼起来原样可读**。
+ * `model` 为空（老宿主/降级）时只给客户端两段 —— 不补编一句假口径。
+ */
+export function caliberHoverTextOf(model: string | null | undefined): string {
+  const head = typeof model === 'string' ? model.trim() : ''
+  return head === '' ? RESCUE_CALIBER_DISCLOSURE : `${head}\n\n${RESCUE_CALIBER_DISCLOSURE}`
+}
+
+/**
+ * 常驻入口的渲染参数（唯一实现，便于断言）：
+ *   · `label`：常驻区**唯一**可见文本（不含任何披露句）；
+ *   · `title` / `ariaLabel`：完整披露（鼠标悬停 / 键盘聚焦读屏各取一个）。
+ */
+export function caliberEntryOf(model: string | null | undefined): { label: string; title: string; ariaLabel: string } {
+  const title = caliberHoverTextOf(model)
+  return { label: RESCUE_CALIBER_ENTRY, title, ariaLabel: title }
+}
+
+/**
  * 表头「触发后对照 +X%/N日」的唯一实现（P3-3）。
  *
  * 旧写法是 `(targets.at(-1)?.targetPct ?? 0.02) * 100` —— `targets` 为空时**编造**一个

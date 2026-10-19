@@ -61,6 +61,13 @@ test('② 刻度文案只描述「异常程度」，且中性色阶与买卖方�
 
 test('② 接线：分数旁有环形、量能条带标定阈值线；且界面**不出现**买卖/胜率字样', () => {
   const ui = strip(read('RescuePanel.tsx'))
+  /**
+   * IMPL-79：三段常驻披露（口径 / Wilson / 不是胜率概率）搬进「口径与边界」悬停，
+   * 文案的唯一来源挪到 `rescueView.ts` 的 `RESCUE_CALIBER_DISCLOSURE`（面板只剩一行入口）。
+   * ⇒ 诚实边界的检查必须**同时**扫这两个文件（文案在哪，判据就扫到哪）。
+   */
+  const view = strip(read('rescueView.ts'))
+  const visible = `${ui}\n${view}`
   assert.ok(ui.includes("'data-role': 'score-ring'"), '总分旁必须有环形进度条')
   assert.ok(ui.includes('ringDashOf(snapshot.score)'), '环的参数必须来自纯函数（不现算）')
   assert.ok(ui.includes("'data-role': 'threshold-line'"), '进度条必须带阈值线标记')
@@ -70,17 +77,17 @@ test('② 接线：分数旁有环形、量能条带标定阈值线；且界面*
   // 「胜率/概率」只掐**带数字的肯定式声明**——"不是胜率、概率或预测""概率性信号而非身份确认"
   // 这类**否定/解释**句是我们要的诚实边界，必须留着。
   for (const forbidden of ['强烈买入', '建议买入', '建议卖出', '买入信号', '卖出信号', '建议仓位']) {
-    assert.equal(ui.includes(forbidden), false, `界面不许出现「${forbidden}」`)
+    assert.equal(visible.includes(forbidden), false, `界面不许出现「${forbidden}」`)
   }
   const quantified = /(胜率|上涨概率|下跌概率|买入概率)\s*[:：]?\s*\d/
-  assert.equal(quantified.test(ui), false, '不许把历史频率写成带数字的胜率/概率声明')
+  assert.equal(quantified.test(visible), false, '不许把历史频率写成带数字的胜率/概率声明')
   // 而"否定式"的诚实说明应当存在（既有的触发后对照必须保留、但不得呈现为概率）
   // 诚实边界：必须**明说**这不是胜率/概率（措辞可有多种，判据认语义）
-  assert.ok(/不是\*\*胜率|不是\*胜率|不是.*胜率.*概率|非胜率\/概率/.test(ui), '必须明说这不是胜率/概率（诚实边界）')
+  assert.ok(/不是\*\*胜率|不是\*胜率|不是.*胜率.*概率|非胜率\/概率/.test(visible), '必须明说这不是胜率/概率（诚实边界；现由「口径与边界」悬停文案承载）')
   assert.ok(ui.includes('触发后对照'), '既有「触发后对照」保留（只改措辞，不删功能）')
   assert.equal(ui.includes('概率 +'), false, '⚠ 旧的「概率 +x%/N日」展示标签必须已改掉')
   // 反例注入：把一条肯定式买卖文案塞回界面 ⇒ 判据必须失败
-  const injected = `${ui}\nconst bad = '强烈买入'\n`
+  const injected = `${visible}\nconst bad = '强烈买入'\n`
   assert.throws(
     () => assert.equal(injected.includes('强烈买入'), false, '反例上"不许出现买卖结论"必须失败'),
     /反例上/,

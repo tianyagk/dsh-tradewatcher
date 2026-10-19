@@ -1,7 +1,7 @@
 /**
  */
 import * as React from 'react'
-import { abnormalColorOf, abnormalLabelOf, calibrationHeaderOf, dayHistoryStateOf, ringDashOf } from './rescueView.ts'
+import { abnormalColorOf, abnormalLabelOf, calibrationHeaderOf, caliberEntryOf, dayHistoryStateOf, ringDashOf } from './rescueView.ts'
 import { breakerBadgeOf } from './rescueView.ts'
 import type {
   PortPrefs, RescueConfig, RescueDaySummary, RescueEtfMeta, RescueEtfView, RescueFactor,
@@ -375,6 +375,11 @@ export function RescuePanel(props: {
 
   const config: RescueConfig = props.prefs.rescue
   const snapshot = data?.snapshot ?? null
+  /**
+   * 「口径与边界」常驻入口（IMPL-79）：三段披露（宿主口径句 + 两段红线）的**唯一来源**，
+   * 常驻区只渲染 `label` 一行，三段原文进 `title`/`aria-label`（见 `rescueView.caliberEntryOf`）。
+   */
+  const caliberEntry = caliberEntryOf(snapshot?.bottom?.model)
   /**
    * 当日抽样峰值（**唯一实现**）：总分的"与最近相比"参照与下方"最高评分"那行共用它
    * —— 两处各算一次迟早会漂移。契约里只有"当日抽样"（`intraday`），跨日分位不在快照里。
@@ -870,14 +875,17 @@ export function RescuePanel(props: {
                       React.createElement('span', null, `期间最大回撤中位数 ${snapshot.bottom.lanes[0].calibration.medianDrawdown === null ? '—' : (snapshot.bottom.lanes[0].calibration.medianDrawdown * 100).toFixed(2) + '%'}`),
                     )
                   : null,
-                React.createElement('div', { className: 'tw-hint', style: { fontSize: 12, marginTop: 4 } },
-                  snapshot.bottom.model,
-                ),
-                React.createElement('div', { className: 'tw-hint', style: { fontSize: 12 } },
-                  '口径说明：这里是「历史同类情形的出现频率」的对照片段，**不是**胜率、概率或预测；给出的 95% 区间是 Wilson 区间，样本越小区间越宽 —— 区间跨过基线时，这个差异不具备可辨识性。' +
-                  '日内形态（回升/下影线/收回前低）没有可回算的历史分钟数据，因此「不参与概率校准」，只作实时修正参考。' +
-                  '位置低 ≠ 见底：护盘也可能发生在下跌半程，请结合资金流与量价背离一起判断。',
-                ),
+                // IMPL-79（用户要求）：这三段披露（宿主口径句 + 两段红线）不再常驻占版面，
+                // 收进**一行**入口：鼠标悬停读 title、键盘 Tab 到读 aria-label（事实一条不少）。
+                React.createElement('div', {
+                  className: 'tw-hint tw-rescue-caliber-entry',
+                  tabIndex: 0,
+                  role: 'note',
+                  'data-role': 'rescue-caliber',
+                  title: caliberEntry.title,
+                  'aria-label': caliberEntry.ariaLabel,
+                  style: { fontSize: 12, marginTop: 4, cursor: 'help' },
+                }, caliberEntry.label),
               )
             : null,
           React.createElement('div', { className: 'tw-rescue-split' },
