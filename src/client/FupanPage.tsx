@@ -11,6 +11,11 @@
  *  ② 写失败 ⇒ 原因就地显示（`role="alert"`），不许 `catch(() => {})`；
  *  ③ 宿主的 `dropped`（超上限丢最旧）⇒ 必须显示，不许静默当成功。
  *
+ * 文案口径（v0.115.0，用户要求「简洁有效：可标记可不标记的一律不标」）：
+ *  · 数据源串、交易日口径长段、两处空态说明段、底部上限说明段**都不常驻**；
+ *  · 空态各留一行短句（`本月暂无笔记` / `这一天还没有笔记`），不带说明句；
+ *  · 交易日判定的口径披露（含"法定调休/临时休市可能被判成交易日"）只挂图例的 `title`/`aria-label`。
+ *
  * 交易侧三条口径（用户决定，别加回来）：
  *  · 月历标记**只用形状**（`●` 笔记 / `▲n` 交易），颜色留给涨跌；读取失败 ⇔ 不画三角；
  *  · 汇总行**只有**「买入 N 笔 · 卖出 M 笔」—— 不写净买入/净卖出/净额；当日盈亏只给数值；
@@ -28,8 +33,8 @@ import {
   FUPAN_DOW, FUPAN_GRID_LABEL,
   cellAriaOf, cellInfoOf, charCountTextOf, dayListStateOf,
   emptyDayTextOf, emptyMonthTextOf, fupanGridOf, missingTextOf, monthFailHintOf, monthFailTextOf,
-  monthBodyStateOf, monthLabelOf, monthNoteTotalOf, monthTotalsTextOf, monthTradingStateOf, moveCellFocus, noteBodyOf,
-  notesOfDay, pinBadgeOf, quarantineTextOf, shiftYm, tradingDaysTextOf, tradingLabelOf, tradingNoteTextOf,
+  monthBodyStateOf, monthLabelOf, monthNoteTotalOf, monthTotalsTextOf, moveCellFocus, noteBodyOf,
+  notesOfDay, pinBadgeOf, quarantineTextOf, shiftYm, tradingDaysTextOf, tradingLabelOf, TRADING_CALIBER_HINT,
   unreadableReasonOf, unreadableTextOf, weekdayLabelOf,
   writeFailTextOf, writeInputProblems, writeOkTextOf, writeVerbOf, writeWarningsOf, ymOf,
   type WriteInput,
@@ -195,7 +200,6 @@ export function FupanPage(): React.ReactElement {
     pinned: dayNotes.pinned.length,
     notesUnreadable: unreadable,
   })
-  const tradingState = monthTradingStateOf(month)
   const total = monthNoteTotalOf(month)
   /** 月历主体该画什么（`failed` 永远压过 `empty`：取数失败时"有没有笔记"是未知的） */
   const bodyState = monthBodyStateOf({ loading, loadErr, hasData: month !== null, total, notesUnreadable: unreadable })
@@ -396,9 +400,17 @@ export function FupanPage(): React.ReactElement {
       loading ? null : React.createElement(Btn, { onClick: () => load(ym) }, '重试'),
     ),
     // 图例：交易日 / 休市 / 未知三档必须能一眼分开（不能只靠 tooltip）。
-    // v0.114.0 起这三项**不再带形状**：`●` 已经统一表示"笔记"（见月历下方那一行图例），
+    // 这三项**不带形状**：`●` 已经统一表示"笔记"（见月历下方那一行图例），
     // 同一个形状两种含义必然误读；交易日/休市本身在格子里已有「休市」文字与虚线边框。
-    React.createElement('div', { className: 'tw-fp-legend' },
+    // ⚠ 交易日判定口径（含"法定调休/临时休市可能被判成交易日"）**只挂在 title/aria-label**：
+    //    用户要求常驻文案精简（可标可不标的一律不标），但这条属口径披露，不能连读屏也读不到。
+    React.createElement('div', {
+      className: 'tw-fp-legend',
+      role: 'note',
+      tabIndex: 0,
+      title: TRADING_CALIBER_HINT,
+      'aria-label': `图例：交易日、休市、交易日未知。${TRADING_CALIBER_HINT}`,
+    },
       React.createElement('span', { className: 'tw-fp-legend-item', 'data-kind': 'trading' }, '交易日'),
       React.createElement('span', { className: 'tw-fp-legend-item', 'data-kind': 'closed' }, '休市'),
       React.createElement('span', { className: 'tw-fp-legend-item', 'data-kind': 'unknown' }, '交易日未知'),
@@ -407,21 +419,7 @@ export function FupanPage(): React.ReactElement {
         ? null
         : React.createElement('span', { className: 'tw-fp-meta' }, tradingDaysTextOf(month) as string),
       React.createElement('span', { className: 'tw-fp-meta' }, monthTotalsTextOf(month)),
-      typeof month?.source === 'string' && month.source !== ''
-        ? React.createElement('span', { className: 'tw-fp-meta', title: '数据口径（由宿主给出）' }, `· ${month.source}`)
-        : null,
     ),
-    // 交易日信息怎么来的 / 为什么可能是未知 —— 常驻一行，不塞进 tooltip
-    // （首取中先不占版面：这时"未知"的原因是"还没拿到"，没有增量信息）
-    loading && month === null
-      ? null
-      : React.createElement('div', {
-          className: 'tw-hint',
-          tabIndex: 0,
-          role: 'note',
-          'aria-label': tradingNoteTextOf(month),
-          'data-state': tradingState.kind,
-        }, tradingNoteTextOf(month)),
     missingTextOf(month?.missing, missingTier) === null
       ? null
       : React.createElement('div', { className: 'tw-hint', tabIndex: 0, role: 'note' }, missingTextOf(month?.missing, missingTier) as string),
@@ -446,10 +444,9 @@ export function FupanPage(): React.ReactElement {
               ? React.createElement(ErrorNote, { error: loadErr })
               : null,
             bodyState === 'empty'
-              // 空态：一句"没有" ＋ 一句"怎么加"（不得只写空）
+              // 空态：**只留一行短句**（v0.115.0 用户口径：可标可不标的一律不标 —— "怎么加"的说明段已删）
               ? React.createElement(EmptyHint, null,
                   React.createElement('span', { style: { fontWeight: 600, display: 'block' } }, emptyMonthTextOf().title),
-                  React.createElement('span', { style: { display: 'block' } }, emptyMonthTextOf().hint),
                 )
               : null,
             bodyState === 'blank'
@@ -554,7 +551,6 @@ export function FupanPage(): React.ReactElement {
     listState === 'empty'
       ? React.createElement(EmptyHint, null,
           React.createElement('span', { style: { fontWeight: 600, display: 'block' } }, emptyDayTextOf().title),
-          React.createElement('span', { style: { display: 'block' } }, emptyDayTextOf().hint),
         )
       : null,
     dayNotes.own.length > 0
@@ -619,8 +615,6 @@ export function FupanPage(): React.ReactElement {
         React.createElement('span', { style: { flex: 1 } }),
         React.createElement(Btn, { primary: true, disabled: busy, onClick: submitDraft }, busy ? '保存中…' : '保存'),
       ),
-      React.createElement('div', { className: 'tw-fp-meta' },
-        '上限由宿主把关：单条字数超限会直接拒绝并给出原因（不会静默截断）；每月条数/体积超限时，宿主会从最旧开始丢并回报丢弃条数。'),
     ),
   )
 

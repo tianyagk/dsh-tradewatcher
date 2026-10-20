@@ -158,7 +158,19 @@ export function monthTradingStateOf(month: FupanMonthPayload | null): TradingMon
 }
 
 /**
+ * 图例的**口径披露**（只进 `title`/`aria-label`，不常驻显示）。
+ *
+ * 用户口径：常驻文案精简（可标可不标的一律不标），但"交易日判定可能把调休/临时休市算成交易日"
+ * 属**口径披露** —— 不能连悬停与读屏都读不到，所以搬到图例的 `title` / `aria-label` 上。
+ */
+export const TRADING_CALIBER_HINT =
+  '交易日与休市按宿主交易日历判定：外部日历未覆盖该月时，法定调休/临时休市可能被判成交易日'
+
+/**
  * 月历下方那行口径文字（交易日/休市怎么来的、为什么可能是未知）。
+ *
+ * ⚠ v0.115.0 起**不再常驻渲染**（用户要求精简）：页面只把 `TRADING_CALIBER_HINT` 挂到图例上。
+ * 这个函数保留为纯逻辑（`impl83.test.ts` 仍在断言"未知必须给原因"的措辞），哪天要看详细口径可直接接回去。
  *
  * `calendarWhy` 非 null 时**原样**带上（宿主说"外部交易日历未覆盖该月、已回退内置表"），
  * 不写成 0 / 空串。
@@ -322,18 +334,16 @@ export function monthBodyStateOf(input: {
 
 // ── 空态（「没有」与「没取到」分开写） ─────────────────────────────────
 
-export function emptyMonthTextOf(): { title: string; hint: string } {
-  return {
-    title: '本月暂无笔记',
-    hint: '点月历里任意一天，在右侧写一条并点「保存」；保存后那天的格子会显示条数。想把某天的结论留到别的日子看 ⇒ 在编辑器里选「钉到」。',
-  }
+/**
+ * 空态文案：**只有一行短句**（用户口径：可标可不标的一律不标 —— 操作说明不再常驻）。
+ * 「怎么加一条」「怎么钉到」由界面本身的控件承担，不再写说明段。
+ */
+export function emptyMonthTextOf(): { title: string } {
+  return { title: '本月暂无笔记' }
 }
 
-export function emptyDayTextOf(): { title: string; hint: string } {
-  return {
-    title: '这一天还没有笔记',
-    hint: '在下方写一条并点「保存」（也可以选一个「钉到」的日期，让它出现在将来的那天）。',
-  }
+export function emptyDayTextOf(): { title: string } {
+  return { title: '这一天还没有笔记' }
 }
 
 // ── 失败 / 丢弃 / 缺失 ─────────────────────────────────────────────────
