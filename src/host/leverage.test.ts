@@ -3,8 +3,10 @@
  *
  * 八条判据（**每条都配反例注入**，证明断言非恒真 —— 见 `docs/AUDIT-LEVERAGE-HOST.md` §4）：
  *   ① 字段齐备 + 三组数组等长 + dates 升序
- *   ② `temperature` = **锚定基准年（2024-01-01）之后**的样本分位（1 位小数）—— 改回全历史必须变
- *   ③ 锚定样本 < 250 ⇒ `temperature: null`（写 0 ⇒ 必败）；④ 锚定日之前的行不参与分位
+ *   ① 全周期无 null（除样本 <250 的头部）—— 2024 之前也有值
+ *   ② 温度 = clamp(全历史分位 − P0 + 50)：基准年（2024）**整段落在 50**（各日温度中位 = 50）
+ *   ③ 无前视（逐点与"只喂到该日"重算一致）；④ 全历史样本 < 250 ⇒ null（写 0 ⇒ 必败）
+ *   ⑤ 与"删 2024 前"旧口径的形状不同；⑥ 契约不变
  *   ④ **每天最多 1 次**上游（计数断言；两个实例共用一份文件也只 1 次）
  *   ⑤ 缺字段 ⇒ `null` 不 0（`?? 0` 注入 ⇒ 必败）
  *   ⑥ 路由**永远 200**：上游抛错也 200 + 全 null 空壳
@@ -28,13 +30,16 @@ import {
   LeverageStore,
   buildLeveragePayload,
   emptyLeveragePayload,
-  anchoredPercentiles,
+  baselinePercentile,
+  baselineTemperatures,
   expandingPercentiles,
+  medianOf,
   mergeLeverageRows,
   needsDailyFetch,
   parseLeverageFile,
   parseLeverageRange,
   percentileRank,
+  round1,
   sliceLeverageWindow,
   type LeveragePage,
   type LeveragePageRequest,
@@ -73,9 +78,9 @@ function mkRow(d: string, o: Partial<LeverageRow> = {}): LeverageRow {
   return { d, rzye: 2_453_374_239_917, rqye: 29_167_627_323, ltsz: 92_416_865_855_823.71, rzyezb: 2.6547, rzjme: -6_331_355_686, ...o }
 }
 
-/** 均匀序列（`rzyezb` 从 `from` 线性到 `to`） */
-function rampRows(n: number, from = 1.6, to = 2.6): LeverageRow[] {
-  const days = daysEndingAt(n)
+/** 均匀序列（`rzyezb` 从 `from` 线性到 `to`；`end` 可指定，便于覆盖 2024 基准年） */
+function rampRows(n: number, from = 1.6, to = 2.6, end = '2026-10-19'): LeverageRow[] {
+  const days = daysEndingAt(n, end)
   return days.map((d, i) => mkRow(d, { rzyezb: from + ((to - from) * i) / Math.max(1, n - 1) }))
 }
 
@@ -146,95 +151,123 @@ function routesWith(service: LeverageService): ReadonlyArray<{ path: string; han
 test('① 回包字段齐备、三组数组与 dates 等长、dates 升序（契约冻结，少一个字段客户端就崩）', async () => {
   const dir = tempDir()
   const store = new LeverageStore(dir)
-  await store.save(rampRows(300))
-  const routes = leverageRoutes(new LeverageService(store, { now: () => NOW_MS, fetchPage: fakeUpstream().fetchPage, fetchSzse: async () => null }, {}), dir)
+  const seed = rampRows(900, 1.6, 2.6)
+  await store.save(seed)
+  const routes = leverageRoutes(new LeverageService(store, { now: () => NOW_MS, fetchPage: fakeUpstream({ rows: seed }).fetchPage, fetchSzse: async () => null }, {}), dir)
   const res = await callRoute(routes, '/tradewatcher/leverage', '/tradewatcher/leverage?range=all')
   assert.equal(res.code, 200)
-  assert.deepEqual(leveragePayloadProblems(res.body as unknown as LeveragePayload, { window: 300, samples: 300 }), [])
+  assert.deepEqual(leveragePayloadProblems(res.body as unknown as LeveragePayload, { window: 900, samples: 900 }), [])
   const dates = (res.body as unknown as LeveragePayload).dates
   assert.deepEqual([...dates].sort(), dates, 'dates 必须升序')
   rmSync(dir, { recursive: true, force: true })
 })
 
-// ── ② 温度 = 锚定样本分位（1 位小数） ──────────────────────────────────
+// ── ② 温度 = 以 2024 为基准线重标定（全周期、无前视） ───────────────────
 
-test('② temperature = 锚定样本（d ≥ 2024-01-01）分位，1 位小数；改回全历史必须变（注入反例）', async () => {
-  // 锚定窗口内：200 天高位(3.0) + 99 天低位(1.0) + 今天(2.0) ⇒ 锚定分位 = 100/300 = 33.3
-  const inside = daysEndingAt(300)
-  // 锚定日**之前**的 500 天，值一律 0.5 —— 若把它们也算进去，分位会变成 600/800 = 75.0
-  const before = daysEndingAt(500, '2023-12-29')
-  assert.equal(before[before.length - 1] < '2024-01-01', true, '前置条件：这批日期必须早于锚定日')
-  const series: LeverageRow[] = [
-    ...before.map((d) => mkRow(d, { rzyezb: 0.5 })),
-    ...inside.map((d, i) => mkRow(d, { rzyezb: i < 200 ? 3 : i < 299 ? 1 : 2 })),
-  ]
-  const payload = buildLeveragePayload(series, 'all')
-  const anchoredSamples = series.filter((r) => r.d >= '2024-01-01').map((r) => r.rzyezb)
-  assert.equal(payload.temperature, percentileRank(2, anchoredSamples), '温度必须是锚定样本分位')
-  assert.equal(payload.temperature, 33.3, `锚定分位应为 33.3（实得 ${payload.temperature}）`)
-  assert.equal(Math.abs((payload.temperature as number) * 10 - Math.round((payload.temperature as number) * 10)) < 1e-9, true, '必须 1 位小数')
-  // 反例注入：改回"全历史"（anchor 退到 0000-01-01）⇒ 75.0 ≠ 33.3
-  const legacy = buildLeveragePayload(series, 'all', { anchor: '0000-01-01' })
-  assert.equal(legacy.temperature, 75)
-  assert.notEqual(legacy.temperature, payload.temperature, '⚠ 反例（改回全历史）必须与锚定口径不同')
-  // `temp[]` 最后一点与 temperature 恒等；锚定日之前的点必须是 null
-  assert.equal(payload.temp[payload.temp.length - 1], payload.temperature)
-  const preAnchorIdx = series.findIndex((r) => r.d >= '2024-01-01') - 1
-  assert.equal(payload.temp[preAnchorIdx], null, '锚定日之前的点不给读数（null，不是 0）')
+/** 平稳序列：所有样本按 `1.0 / 2.0 / 3.0` 三等分循环 ⇒ 任意时刻分位都稳定在 1/3、2/3、100% */
+function stationaryRows(total: number, end = '2026-10-19'): LeverageRow[] {
+  const days = daysEndingAt(total, end)
+  return days.map((d, i) => mkRow(d, { rzyezb: [1, 2, 3][i % 3] as number }))
+}
+
+test('② 基准线：2024 各日温度的中位 = 50（±0.5）；改回旧 P0（全历史分位轴上取值）⇒ 必败', () => {
+  // 单调上升序列：2024 那段的 P[i] 恒为 100（每天都是历史最大）⇒
+  //   · 新 P0 = median(P over 2024) = 100 ⇒ 2024 段温度 ≈ 50 ✓
+  //   · 旧 P0 = P(2024 中位比例) ≈ 50 ⇒ 2024 段温度 ≈ 100 ✗（必败注入）
+  const rows = rampRows(900, 1, 3)
+  const p0 = baselinePercentile(rows) as number
+  assert.equal(p0, 100, `基准年各日分位的中位应为 100（实得 ${p0}）`)
+  const { baseline, temp } = baselineTemperatures(rows)
+  assert.equal(baseline, p0)
+  const in2024 = rows.map((r, i) => [r, i] as const).filter(([r]) => r.d.startsWith('2024-'))
+  assert.equal(in2024.length > 200, true, `前置条件：2024 样本要够多（实得 ${in2024.length}）`)
+  const med = medianOf(in2024.map(([, i]) => temp[i] as number)) as number
+  assert.equal(Math.abs(med - 50) <= 0.5, true, `2024 各日温度的中位应≈50（±0.5，实得 ${med}）`)
+  // 旧定义（P0 = 2024 中位比例在全历史分位轴上的位置）⇒ 2024 段中位远离 50
+  const ratios = rows.map((r) => r.rzyezb)
+  const medRatio = medianOf(in2024.map(([r]) => r.rzyezb)) as number
+  const legacyP0 = percentileRank(medRatio, ratios, 1) as number
+  assert.notEqual(legacyP0, p0, '⚠ 两种 P0 定义在这份构造上必须不同')
+  const legacyTemps = baselineTemperatures(rows).p.map((v) =>
+    v === null ? null : round1(Math.min(100, Math.max(0, v - legacyP0 + 50))),
+  )
+  const legacyMed = medianOf(in2024.map(([, i]) => legacyTemps[i] as number)) as number
+  assert.notEqual(legacyMed, med, '⚠ 反例（改回旧 P0 = 48.5 那版定义）必须让 2024 段中位变化')
+  assert.equal(Math.abs(legacyMed - 100) <= 0.5, true, `⚠ 旧定义下 2024 段中位应≈100（实得 ${legacyMed}）`)
 })
 
-// ── ③ 锚定样本 < 250 ⇒ null ────────────────────────────────────────────
+test('① 全周期无 null（除样本 <250 的头部）：2024 之前也必须有温度（注入"删 2024 前"必败）', () => {
+  const rows = stationaryRows(1800)
+  const payload = buildLeveragePayload(rows, 'all')
+  assert.equal(payload.temp.length, 1800, 'all 档点数 = 行数')
+  assert.deepEqual(fullPeriodProblems(payload, LEVERAGE_MIN_SAMPLES), [])
+  assert.equal(payload.temp[LEVERAGE_MIN_SAMPLES - 2], null, '第 249 个点（下标 248）样本不足 ⇒ null')
+  assert.equal(typeof payload.temp[LEVERAGE_MIN_SAMPLES - 1], 'number', '第 250 个点起必须有温度')
+  // 2024 之前的点也必须有温度（这是本版与"锚定删数据"版的核心区别）
+  const before2024 = rows.map((r, i) => [r.d, i] as const).filter(([d]) => d < '2024-01-01' && d >= '2021-01-01')
+  assert.equal(before2024.length > 100, true, `前置条件：2021–2023 要有足够多的行（实得 ${before2024.length}）`)
+  assert.equal(before2024.every(([, i]) => typeof payload.temp[i] === 'number'), true, '2021–2023 的每个点都必须有温度')
+  // 反例注入：退回上一版（2024 之前一律 null）⇒ 判据必败
+  const legacy = { ...payload, temp: payload.temp.map((v, i) => (rows[i].d < '2024-01-01' ? null : v)) }
+  assert.notDeepEqual(fullPeriodProblems(legacy, LEVERAGE_MIN_SAMPLES), [], '⚠ 反例（把 2024 前设成 null）必须被抓到')
+})
 
-test('③ 锚定样本 < 250 ⇒ temperature 为 null（写 0 ⇒ 必败）；锚定日之前再多样本也不算数', () => {
-  const before = daysEndingAt(500, '2023-12-29').map((d) => mkRow(d, { rzyezb: 1 }))
-  // 锚定窗口内只有 249 个交易日 ⇒ 不够（前置的 500 个锚定日之前的行不得凑数）
-  const short = [...before, ...rampRows(LEVERAGE_MIN_SAMPLES - 1)]
-  const payload = buildLeveragePayload(short, 'all')
-  assert.equal(payload.temperature, null, '锚定样本不足必须 null，不能给 0 或 50')
+test('③ 无前视：分位只用当日及以前的数据；温度 = clamp(分位 − P0 + 50)', () => {
+  const rows = stationaryRows(900)
+  const ratios = rows.map((r) => r.rzyezb)
+  const payload = buildLeveragePayload(rows, 'all')
+  const p0 = baselinePercentile(rows) as number
+  const full = expandingPercentiles(ratios, LEVERAGE_MIN_SAMPLES)
+  for (const idx of [LEVERAGE_MIN_SAMPLES + 5, 500, rows.length - 1]) {
+    // ① 分位本身无前视：只喂 `[0..idx]` 重算，末值必须与整段序列的下标 idx 一模一样
+    const prefix = expandingPercentiles(ratios.slice(0, idx + 1), LEVERAGE_MIN_SAMPLES)
+    assert.equal(prefix[prefix.length - 1], full[idx], `下标 ${idx} 的分位只能依赖该日及以前的数据`)
+    // ② 温度 = clamp(分位 − P0 + 50, 0, 100)，1 位小数（P0 是基准年定出的**常量**，不是逐日重算）
+    const expect = round1(Math.min(100, Math.max(0, (full[idx] as number) - p0 + 50)))
+    assert.equal(payload.temp[idx], expect, `下标 ${idx} 的温度必须由该日分位与常量 P0 决定`)
+  }
+  // 反例注入：若温度用"全样本分位"（有前视），第一天就会与扩张分位不同
+  const lookAhead = ratios.map((v) => percentileRank(v, ratios, LEVERAGE_MIN_SAMPLES))
+  assert.notEqual(lookAhead[LEVERAGE_MIN_SAMPLES - 1], full[LEVERAGE_MIN_SAMPLES - 1], '⚠ 反例（用全样本分位 = 有前视）必须与无前视口径不同')
+})
+
+test('④ 全历史样本 < 250 ⇒ temperature 为 null（写 0 ⇒ 必败）', () => {
+  const rows = stationaryRows(LEVERAGE_MIN_SAMPLES - 1)
+  const payload = buildLeveragePayload(rows, 'all')
+  assert.equal(payload.temperature, null, '全历史样本不足必须 null，不能给 0 或 50')
+  assert.equal(payload.temp.every((v) => v === null), true, '每个点都该 null（样本不足）')
   assert.equal(typeof payload.ratioPct, 'number', '比例读数与温度无关，必须照常给')
-  const anchoredCount = short.filter((r) => r.d >= '2024-01-01').length
-  assert.equal(anchoredCount, LEVERAGE_MIN_SAMPLES - 1, `前置条件：锚定样本只有 ${anchoredCount} 行（锚定日之前的不算）`)
-  assert.deepEqual(leveragePayloadProblems(payload, { window: short.length, samples: anchoredCount }), [])
-  // 反例注入：把 null 换成 0（最常见的实现）
+  assert.deepEqual(leveragePayloadProblems(payload, { window: rows.length, samples: rows.length }), [])
   const zeroed = { ...payload, temperature: 0 }
-  assert.notDeepEqual(leveragePayloadProblems(zeroed, { window: short.length, samples: anchoredCount }), [], '⚠ 反例（样本不足写 0）必须被抓到')
-  // 边界反证：锚定样本正好 250 ⇒ 必须给数
-  const exactly = buildLeveragePayload([...before, ...rampRows(LEVERAGE_MIN_SAMPLES)], 'all')
-  assert.notEqual(exactly.temperature, null, `锚定样本正好 ${LEVERAGE_MIN_SAMPLES} 行必须给温度`)
+  assert.notDeepEqual(leveragePayloadProblems(zeroed, { window: rows.length, samples: rows.length }), [], '⚠ 反例（样本不足写 0）必须被抓到')
+  // 边界反证：正好 250 行（且覆盖基准年）⇒ 必须给数
+  const exactly = buildLeveragePayload(stationaryRows(LEVERAGE_MIN_SAMPLES, '2024-12-31'), 'all')
+  assert.notEqual(exactly.temperature, null, `全历史正好 ${LEVERAGE_MIN_SAMPLES} 行必须给温度`)
 })
 
-// ── ③b 锚定日之前的行不参与分位 ─────────────────────────────────────────
-
-test('③b 锚定日（2024-01-01）之前的行**不参与**分位：只改前置历史 ⇒ 温度必须一字不变（注入必败）', () => {
-  const inside = daysEndingAt(400).map((d, i) => mkRow(d, { rzyezb: i < 200 ? 3 : 1 + (i % 7) / 10 }))
-  const base = daysEndingAt(300, '2023-12-29')
-  const lowHistory = [...base.map((d) => mkRow(d, { rzyezb: 0.5 })), ...inside]
-  const highHistory = [...base.map((d) => mkRow(d, { rzyezb: 9.9 })), ...inside]
-  const a = buildLeveragePayload(lowHistory, 'all')
-  const b = buildLeveragePayload(highHistory, 'all')
-  assert.notEqual(a.temperature, null, '前置条件：锚定样本足够（400 行）')
-  assert.equal(a.temperature, b.temperature, '锚定窗口完全相同 ⇒ 温度必须相同（前置历史不得影响）')
-  // 反例注入：把锚定关掉（= 全历史）⇒ 两份样本立刻不同 ⇒ 证明排除是真的在起作用
-  const aLegacy = buildLeveragePayload(lowHistory, 'all', { anchor: '0000-01-01' })
-  const bLegacy = buildLeveragePayload(highHistory, 'all', { anchor: '0000-01-01' })
-  assert.notEqual(aLegacy.temperature, bLegacy.temperature, '⚠ 反例（把 2010 起的 700 天也算进去）必须让两份样本分位不同')
+test('⑤ 口径形状：全周期有值、2024 段围绕 50（与"删 2024 前"版形状不同）', () => {
+  const rows = stationaryRows(1245)
+  const payload = buildLeveragePayload(rows, 'all')
+  const valid = payload.temp.filter((v) => v !== null).length
+  assert.equal(valid, rows.length - (LEVERAGE_MIN_SAMPLES - 1), `有效点 = 行数 − ${LEVERAGE_MIN_SAMPLES - 1}（实得 ${valid}）`)
+  const in2024 = payload.temp.filter((_, i) => rows[i].d.startsWith('2024-'))
+  const outOf2024 = in2024.filter((v) => v !== null).length
+  assert.equal(outOf2024, in2024.length, '2024 段不该有 null')
+  // 与"锚定删数据"版的形状差异：那一版 2024 之前的点全是 null（这里全有值）
+  const legacyShape = payload.temp.map((v, i) => (rows[i].d < '2024-01-01' ? null : v))
+  assert.equal(legacyShape.filter((v) => v !== null).length < valid, true, '⚠ 旧形状（2024 前 null）的有效点必须更少')
 })
 
-// ── ③c 契约字段与形状不变 ───────────────────────────────────────────────
-
-test('③c 口径换了、**契约不变**：字段名与形状逐字一致（改名/加字段 ⇒ 必败）', () => {
-  const payload = buildLeveragePayload(rampRows(300), 250)
-  assert.deepEqual(leveragePayloadProblems(payload, { window: 250, samples: 300 }), [])
-  // 反例注入 ①：多一个字段
-  const extra = { ...payload, anchorDate: '2024-01-01' } as unknown as LeveragePayload
-  assert.notDeepEqual(leveragePayloadProblems(extra, { window: 250, samples: 300 }), [], '⚠ 反例（回包多带口径字段）必须被抓到')
-  // 反例注入 ②：改名
+test('⑥ 契约不变：字段名与形状逐字一致（改名/加字段/删字段 ⇒ 必败）', () => {
+  const payload = buildLeveragePayload(stationaryRows(900), 250)
+  assert.deepEqual(leveragePayloadProblems(payload, { window: 250, samples: 900 }), [])
+  const extra = { ...payload, baseline: 66.7 } as unknown as LeveragePayload
+  assert.notDeepEqual(leveragePayloadProblems(extra, { window: 250, samples: 900 }), [], '⚠ 反例（回包多带基准字段）必须被抓到')
   const renamed = { ...payload, temperaturePct: payload.temperature } as unknown as LeveragePayload
-  assert.notDeepEqual(leveragePayloadProblems(renamed, { window: 250, samples: 300 }), [], '⚠ 反例（字段改名）必须被抓到')
-  // 反例注入 ③：少了字段
+  assert.notDeepEqual(leveragePayloadProblems(renamed, { window: 250, samples: 900 }), [], '⚠ 反例（字段改名）必须被抓到')
   const missing = { ...payload } as unknown as Record<string, unknown>
   delete missing.netBuy
-  assert.notDeepEqual(leveragePayloadProblems(missing as unknown as LeveragePayload, { window: 250, samples: 300 }), [], '⚠ 反例（少字段）必须被抓到')
+  assert.notDeepEqual(leveragePayloadProblems(missing as unknown as LeveragePayload, { window: 250, samples: 900 }), [], '⚠ 反例（少字段）必须被抓到')
 })
 
 // ── ④ 每天最多 1 次上游 ─────────────────────────────────────────────────
@@ -417,8 +450,8 @@ test('⑧ range 切片正确：all = 全历史、750/250 = 最近 N 天、非法
 
 test('首次：历史为空 ⇒ 先给当日读数 + temperature null；后台回填完成后有温度', async () => {
   const dir = tempDir()
-  const rows = rampRows(300)
-  const up = fakeUpstream({ rows, pages: 2, perPage: 200 })
+  const rows = rampRows(800, 1.6, 2.6, '2024-12-31')
+  const up = fakeUpstream({ rows, pages: 4, perPage: 200 })
   const store = new LeverageStore(dir)
   const service = new LeverageService(store, { now: () => NOW_MS, fetchPage: up.fetchPage, fetchSzse: async () => null })
   const first = await service.payload('all')
@@ -428,10 +461,10 @@ test('首次：历史为空 ⇒ 先给当日读数 + temperature null；后台�
   await service.startBackfill()
   const second = await service.payload('all')
   assert.notEqual(second.temperature, null, '回填完成后必须能给温度')
-  assert.equal(second.dates.length, 300, '回填后 all 给全历史')
+  assert.equal(second.dates.length, 800, '回填后 all 给全历史')
   // 取数次数：1 次日取数 + 2 页回填；第二次回包不再打上游
   assert.equal(up.calls.filter((c) => c.order === 'desc').length, 1)
-  assert.equal(up.calls.filter((c) => c.order === 'asc').length, 2)
+  assert.equal(up.calls.filter((c) => c.order === 'asc').length, 4)
   rmSync(dir, { recursive: true, force: true })
 })
 
@@ -535,6 +568,22 @@ export function nullFieldProblems(payload: LeveragePayload, fields: ReadonlyArra
   return bad
 }
 
+/**
+ * 「全周期无 null」判据：**除头部样本不足的 `minSamples − 1` 个点**，其余每个点都必须是数字。
+ * 上一版口径（删掉 2024 之前的数据）会把 2024 之前全部设成 null ⇒ 这里必败。
+ */
+export function fullPeriodProblems(payload: LeveragePayload, minSamples = LEVERAGE_MIN_SAMPLES): string[] {
+  const bad: string[] = []
+  if (payload.temp.length !== payload.dates.length) bad.push('temp 与 dates 不等长')
+  for (let i = minSamples - 1; i < payload.temp.length; i += 1) {
+    if (payload.temp[i] === null) {
+      bad.push(`下标 ${i}（${payload.dates[i] ?? '?'}）不应为 null —— 全周期都该有温度`)
+      break
+    }
+  }
+  return bad
+}
+
 /** 一天最多一次上游 */
 export function dailyFetchProblems(count: number): string[] {
   return count <= 1 ? [] : [`一天最多 1 次上游取数（实得 ${count} 次）`]
@@ -562,11 +611,10 @@ test('分位/合并/切片三个纯函数的边界', () => {
   assert.equal(percentileRank(2, [1, 2, 3], 4), null, '样本不足 ⇒ null')
   assert.equal(percentileRank(2, [1, 2, 3], 3), 66.7, '≤ 的样本数 ÷ 总数 ⇒ 2/3')
   assert.deepEqual(expandingPercentiles([1, 2, 3], 3), [null, null, 100], '扩张窗口：样本不足给 null')
-  assert.deepEqual(
-    anchoredPercentiles([{ d: '2023-12-29', v: 9 }, { d: '2024-01-02', v: 1 }, { d: '2024-01-03', v: 2 }], '2024-01-01', 2),
-    [null, null, 100],
-    '锚定版：锚定日之前的点既不给值也不进样本',
-  )
+  assert.equal(medianOf([3, 1, 2]), 2, '奇数个取中间')
+  assert.equal(medianOf([1, 2, 3, 4]), 2.5, '偶数个取中间两个的均值')
+  assert.equal(baselinePercentile([mkRow('2023-12-29', { rzyezb: 1 })]), null, '没有基准年样本 ⇒ 基准值 null（不给 0）')
+  assert.equal(baselineTemperatures([mkRow('2023-12-29', { rzyezb: 1 })]).temp[0], null, '基准值 null ⇒ 温度 null')
   const merged = mergeLeverageRows([mkRow('2026-10-18')], [mkRow('2026-10-18', { rzyezb: 7 }), mkRow('2026-10-19')])
   assert.equal(merged.rows.length, 2)
   assert.equal(merged.added, 1)

@@ -15,17 +15,18 @@
  * 文案不能说"今日"。这也决定了两件事：**一天最多打一次上游**（当天数据不会中途变），
  * 以及 `pageSize` 实测被上游截到 **800 行/页** ⇒ 全历史（4018 交易日）要 **6 页**回填。
  *
- * ## 温度怎么算（唯一允许的口径：**锚定基准年**）
- * `temperature = RZYEZB 当前值在「d ≥ LEVERAGE_ANCHOR（2024-01-01）」样本内的扩张窗口百分位 × 100`，
- * 1 位小数。锚定样本 < `LEVERAGE_MIN_SAMPLES`（250）⇒ `null`（**不给 0**）。
+ * ## 温度怎么算（唯一允许的口径：**以 2024 为基准线重标定**）
+ * 样本是**全历史**（2010-03-31 起 4018 行，**不删任何年份**），三步：
+ *   1. `P(ratio)` = `RZYEZB` 的**全历史扩张窗口分位**（0–100，1 位小数，无前视）；
+ *   2. `P0` = **基准年（`LEVERAGE_ANCHOR = 2024-01-01`）各日 `P[i]` 的中位**（分位轴上的常量）
+ *      ⇒ **2024 整段落在 50 上**，温度的含义 = "相对 2024 年的水平"；
+ *   3. `temperature = clamp(P(ratio) − P0 + 50, 0, 100)`。
+ * 全历史样本 < `LEVERAGE_MIN_SAMPLES`（250）⇒ `null`（**不给 0**）；样本够时**全周期都有温度**
+ * （曲线只在最前面 249 个交易日为 `null`，因为那时窗口样本不足）。
  *
- * 为什么锚定（用户决定，v0.116.x）：全历史样本跨越两次制度断点（2014-09-22 起两融总量并入
- * "调出标的"、2023 年北交所并入合计）⇒ 早期读数系统性偏低、今天的位置**略偏高**；
- * 锚定到 2024-01-01 后样本落在同一口径内，曲线与阈值线可跨版本比较。代价是曲线前段
- * （锚定后前 250 个交易日）为 `null`。
- *
- * 逐点同规则：第 i 天只用「锚定日 ≤ d ≤ 第 i 天」的样本 ⇒ **无前视**，历史点不会被今天改写；
- * 最后一点与 `temperature` 恒等。
+ * 为什么不是"直接拿全历史分位当温度"：那样早年永远低位、近期永远高位（样本越攒越多，位置只会往上爬），
+ * 读不出"现在比 2024 年典型水平热多少"；也不是"只算 2024 之后的样本"（那会把全周期砍掉一半）。
+ * 逐点同规则 ⇒ 历史点不会被今天改写；最后一点与 `temperature` 恒等。
  *
  * ## 落盘
  * `<DSH_HOME>/dsh-tradewatcher/leverage.json`：`{v,lastFetchDay,lastAttemptAt,cross,rows[]}`，
@@ -61,19 +62,32 @@ export type LeverageRange = (typeof LEVERAGE_RANGES)[number]
 export type LeverageWindow = number | 'all'
 export const LEVERAGE_DEFAULT_RANGE: LeverageRange = 750
 /**
- * **锚定基准年**：温度只在 `d >= 2024-01-01` 的样本内做分位（用户决定，v0.116.x）。
+ * **基准年标识：`2024-01-01`；2024 年整段落在 50（段中位 = 50），含义 = "相对 2024 年的水平"**
+ * （用户裁决 B，v0.119.x；此前的三种口径见报告 §9.6）。
  *
- * 为什么要有锚定：全历史分位跨越了两次制度断点（2014-09-22 起两融总量并入"调出标的"、
- * 2023 年北交所并入合计 ⇒ 早期读数系统性偏低），旧口径下今天的位置因此**略微偏高**。
- * 锚定到 2024-01-01 之后，样本全部落在同一口径内（沪深北合并、含调出标的），
- * 曲线与阈值线因此**可跨版本比较**。
+ * ⚠ 它**不是**"删掉 2024 年之前的数据"：样本始终是**全历史**（2010-03-31 起 4018 行），
+ * 全周期都有温度；2024 只是**定基准线** —— 把"2024 年的典型水平"放到温度轴的 **50** 上，
+ * 于是早年和今天都相对这条基准线上下浮动（见 `baselineTemperatures`）。
  *
- * ⚠ 由此带来的取舍（写在这里免得后人再问）：锚定样本只有 2024-01 起的约 674 个交易日，
- * 前 250 个交易日样本不足 ⇒ 曲线前段是 `null`（`—`），不是 0。
- * ⚠ 唯一真源：任何地方要"锚定窗口内的 P80/P95 比例等价值"，必须用**同一批锚定样本**算；
+ * 为什么需要基准：全历史分位跨越两次制度断点（2014-09-22 起两融总量并入"调出标的"、
+ * 2023 年北交所并入合计 ⇒ 早期读数系统性偏低、今天的位置略偏高）。固定一条"以 2024 为 50"
+ * 的基准线后，曲线的**相对高低**可跨版本比较，而样本仍然是全周期。
+ *
+ * ⚠ 唯一真源：任何地方要"基准年 P80/P95 的比例等价值"，必须用**同一批全历史样本**算；
  * 客户端两条阈值线固定在温度轴 80 / 95，所以回包里的 `thresholds` 仍是常量 `{p80:80,p95:95}`。
  */
 export const LEVERAGE_ANCHOR = '2024-01-01'
+/** 基准值取法：`year-median`（默认）= 基准年**各日分位的中位**；`first-day` = 基准年首个交易日的分位 */
+export type BaselineMode = 'year-median' | 'first-day'
+/**
+ * 基准值取法（默认 `year-median`）。
+ *
+ * 两种取法**都在分位轴上取值**（不是比例轴上），只影响基准值 `P0`：
+ *   · `year-median`：基准年**各日 `P[i]` 的中位** ⇒ **基准年整段落在 50**（段中位 = 50），
+ *     含义 = "相对 2024 年的水平"（用户裁决，v0.119.x）；
+ *   · `first-day` ：基准年**首个交易日的 `P[i]`** ⇒ 更"点位化"，会被单日噪音带偏（留作备选）。
+ */
+export const LEVERAGE_BASELINE_MODE: BaselineMode = 'year-median'
 /** 图上的两条阈值线（**温度轴**口径，不是比例口径；比例等价值见 `LEVERAGE_ANCHOR` 的注释） */
 export const LEVERAGE_THRESHOLDS = { p80: 80, p95: 95 } as const
 /** 上游单页上限（实测：`pageSize=2000` 仍只回 800 行，且 `pages` 按 800 折算） */
@@ -147,9 +161,11 @@ export interface LeveragePayload {
   /** 截至交易日 `YYYY-MM-DD`；**没有可用数据时是空串**（不是 null：客户端会 slice/格式化它） */
   asOf: string
   /**
-   * 温度 0–100（1 位小数）= `RZYEZB` 在**锚定基准年（`LEVERAGE_ANCHOR`，2024-01-01）之后**样本内的
-   * 扩张窗口百分位；锚定样本 < `LEVERAGE_MIN_SAMPLES`（250）⇒ null。
-   * 口径换过（v0.116.x 从"全历史"改为"锚定"），**字段名与形状不变**。
+   * 温度 0–100（1 位小数）= `clamp(全历史扩张窗口分位 − P0 + 50, 0, 100)`，
+   * 其中 `P0` = 基准年（`LEVERAGE_ANCHOR`，2024）**各日分位的中位** ⇒ **2024 整段落在 50 上**。
+   * **样本是全历史**（2010-03-31 起），全周期都有值；全历史样本 < `LEVERAGE_MIN_SAMPLES`（250）⇒ null。
+   * 口径换过三次（v0.116 全历史 → v0.116.x 锚定删数据[废弃] → v0.119-A 比例轴基准[同日被 B 取代]
+   * → v0.119-B 分位轴基准 = 现行），**字段名与形状始终不变**。
    */
   temperature: number | null
   /** `RZYEZB` 原值（%），2 位小数 */
@@ -284,19 +300,109 @@ export function expandingPercentiles(
 }
 
 /**
- * **锚定版**扩张窗口分位：锚定日之前的点一律 `null`，且**不进入样本**。
+ * 基准年样本（`anchor` 的年份内、且 `d >= anchor` 的行）。
  *
- * 这就是温度的唯一口径（用户决定：锚定基准年 = `LEVERAGE_ANCHOR`）。逐日逐点同一规则：
- * 第 i 天只用"锚定日 ≤ d ≤ 当天"的样本 ⇒ 无前视；前 250 个锚定交易日的样本不足 ⇒ `null`。
+ * "基准年"是**定基准线用的**，不是"只算这几年"：样本集永远是全历史，这里只挑出
+ * 用来算基准值 `P0` 的那一段。
  */
-export function anchoredPercentiles(
-  points: ReadonlyArray<{ d: string; v: number | null }>,
-  anchor: string = LEVERAGE_ANCHOR,
-  minSamples = LEVERAGE_MIN_SAMPLES,
-): Array<number | null> {
-  // 锚定日之前的点：既不给读数，也不进样本（把 `null` 占位传下去，底层会跳过它）
-  const values = points.map((p) => (p.d < anchor ? null : p.v))
-  return expandingPercentiles(values, minSamples)
+export function baselineYearRows(rows: readonly LeverageRow[], anchor: string = LEVERAGE_ANCHOR): LeverageRow[] {
+  const year = anchor.slice(0, 4)
+  return [...rows].sort(byDay).filter((r) => r.d >= anchor && r.d.slice(0, 4) === year)
+}
+
+function isNum(v: number | null): v is number {
+  return typeof v === 'number' && Number.isFinite(v)
+}
+
+/** 中位数（偶数个取中间两个的均值；空数组 ⇒ null） */
+export function medianOf(values: readonly number[]): number | null {
+  const v = values.filter((x) => Number.isFinite(x)).sort((a, b) => a - b)
+  if (v.length === 0) return null
+  const mid = (v.length - 1) / 2
+  const lo = Math.floor(mid)
+  const hi = Math.ceil(mid)
+  return (v[lo] + v[hi]) / 2
+}
+
+/**
+ * **基准值 `P0`**：把"基准年的水平"落到**分位轴**上的位置（0–100，1 位小数）。
+ *
+ * 口径（`LEVERAGE_BASELINE_MODE`，两种都在**分位轴**上取值）：
+ *   · `year-median`（默认）：`P0 = median{ P[i] | i ∈ 基准年 }` ⇒ **基准年整段落在 50**，
+ *     温度的含义 = "**相对 2024 年的水平**"（用户裁决，v0.119.x）；
+ *   · `first-day` ：`P0 = P[基准年首个交易日]`。
+ *
+ * 无基准年样本 ⇒ `null`（温度整列随之 `null`，**不给 0**）。
+ * 注意：`P[i]` 自己是**扩张窗口分位**（无前视），所以这里取的是"基准年那段时间当时的分位"的中位，
+ * 而不是"基准年中位比例放到全历史分位轴上"——后者会让基准年整段偏到 50 之上（见报告 §9.2）。
+ */
+export function baselinePercentile(
+  rows: readonly LeverageRow[],
+  opts: { anchor?: string; mode?: BaselineMode; minSamples?: number } = {},
+): number | null {
+  const ordered = [...rows].sort(byDay)
+  const minSamples = opts.minSamples ?? LEVERAGE_MIN_SAMPLES
+  const p = expandingPercentiles(ordered.map((r) => r.rzyezb), minSamples)
+  return baselineFromSeries(ordered, p, opts)
+}
+
+/** 基准值的内部实现（复用已经算好的分位序列，避免重复 O(n log n)） */
+function baselineFromSeries(
+  ordered: readonly LeverageRow[],
+  p: ReadonlyArray<number | null>,
+  opts: { anchor?: string; mode?: BaselineMode } = {},
+): number | null {
+  const anchor = opts.anchor ?? LEVERAGE_ANCHOR
+  const mode = opts.mode ?? LEVERAGE_BASELINE_MODE
+  const pos = new Map<string, number>()
+  ordered.forEach((r, i) => pos.set(r.d, i))
+  const yearRows = baselineYearRows(ordered, anchor)
+  if (yearRows.length === 0) return null
+  if (mode === 'first-day') {
+    const first = pos.get(yearRows[0].d)
+    return first === undefined ? null : (p[first] ?? null)
+  }
+  const yearP = yearRows.map((r) => p[pos.get(r.d) ?? -1]).filter(isNum)
+  const med = medianOf(yearP)
+  return med === null ? null : round1(med)
+}
+
+function clamp(v: number, lo: number, hi: number): number {
+  return Math.min(hi, Math.max(lo, v))
+}
+
+export interface BaselineSeries {
+  /** 逐日**全历史扩张窗口**分位（0–100，1 位小数；前 249 天窗口不足 ⇒ null） */
+  p: Array<number | null>
+  /** 基准值 `P0`（基准年典型水平落在分位轴上的位置）；null ⇒ 温度整列为 null */
+  baseline: number | null
+  /** 逐日温度 = clamp(P − P0 + 50, 0, 100)，1 位小数 ⇒ **基准年典型水平 = 50** */
+  temp: Array<number | null>
+}
+
+/**
+ * **温度序列（唯一口径）**：以 `LEVERAGE_ANCHOR`（2024）为基准线，全周期相对它上下浮动。
+ *
+ * 三步，逐点在**全历史**上算（**不删任何年份**）：
+ *   1. `p[i]` = `RZYEZB[i]` 在「第 0 天 … 第 i 天」里的百分位（扩张窗口 ⇒ **无前视**）；
+ *   2. `P0` = 基准年典型水平（默认中位比例）落在**全历史**分位轴上的位置（常量）；
+ *   3. `temp[i] = clamp(p[i] − P0 + 50, 0, 100)` ⇒ 基准年典型水平 = **50**（基准线）。
+ *
+ * 为什么减 P0 再加 50：直接把分位当温度会让"早年"永远显示低位、近期永远高位（样本只会越攒越多）；
+ * 减去基准年后，读数的含义变成"**相对 2024 年典型水平**偏热/偏冷多少"，全周期可比。
+ */
+export function baselineTemperatures(
+  rows: readonly LeverageRow[],
+  opts: { anchor?: string; mode?: BaselineMode; minSamples?: number } = {},
+): BaselineSeries {
+  const minSamples = opts.minSamples ?? LEVERAGE_MIN_SAMPLES
+  const ordered = [...rows].sort(byDay)
+  const p = expandingPercentiles(ordered.map((r) => r.rzyezb), minSamples)
+  const baseline = baselineFromSeries(ordered, p, opts)
+  const temp = p.map((v) =>
+    v === null || baseline === null ? null : round1(clamp(v - baseline + 50, 0, 100)),
+  )
+  return { p, baseline, temp }
 }
 
 // ── 纯函数：窗口切片 / 回包组装 ──────────────────────────────────────────
@@ -325,20 +431,19 @@ export function sliceLeverageWindow(rows: readonly LeverageRow[], range: Leverag
 export function buildLeveragePayload(
   rows: readonly LeverageRow[],
   range: LeverageWindow,
-  opts: { minSamples?: number; anchor?: string } = {},
+  opts: { minSamples?: number; anchor?: string; mode?: BaselineMode } = {},
 ): LeveragePayload {
   const min = opts.minSamples ?? LEVERAGE_MIN_SAMPLES
-  const anchor = opts.anchor ?? LEVERAGE_ANCHOR
   const ordered = [...rows].sort(byDay)
   const window = sliceLeverageWindow(ordered, range)
-  // 温度口径：**锚定基准年之后的扩张窗口分位**（曲线上的每一天都按同一规则）
-  const pcts = anchoredPercentiles(ordered.map((r) => ({ d: r.d, v: r.rzyezb })), anchor, min)
+  // 温度口径：全历史扩张窗口分位 − 基准年基准值 P0 + 50（基准年典型水平 = 50，全周期都有值）
+  const { temp: temps } = baselineTemperatures(ordered, { anchor: opts.anchor, mode: opts.mode, minSamples: min })
   const posOf = new Map<string, number>()
   ordered.forEach((r, i) => posOf.set(r.d, i))
 
   const last = ordered.length > 0 ? ordered[ordered.length - 1] : null
   const lastIdx = ordered.length - 1
-  const temperature = last === null ? null : (pcts[lastIdx] ?? null)
+  const temperature = last === null ? null : (temps[lastIdx] ?? null)
   const ratioPct = last === null ? null : round2(last.rzyezb)
   const ratioWithShortPct =
     last === null || last.rzye === null || last.rqye === null || last.ltsz === null || last.ltsz <= 0
@@ -356,7 +461,7 @@ export function buildLeveragePayload(
     netBuy: last === null ? null : last.rzjme,
     thresholds: { ...LEVERAGE_THRESHOLDS },
     dates: window.map((r) => r.d),
-    temp: window.map((r) => pcts[posOf.get(r.d) ?? -1] ?? null),
+    temp: window.map((r) => temps[posOf.get(r.d) ?? -1] ?? null),
     ratio: window.map((r) => round2(r.rzyezb)),
     net: window.map((r) => r.rzjme),
   }
