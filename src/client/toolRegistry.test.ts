@@ -32,6 +32,7 @@ import {
 import * as ToolReg from './toolRegistry.ts'
 import * as ToolText from './toolText.ts'
 import { cakeTool } from './tools/cake.ts'
+import { leverageTool } from './tools/leverage.ts'
 import { FACT_TOPICS, factCoverageProblems, missingFactTopics, topicInLine } from './toolFacts.ts'
 // ⚠ 从宿主读窗口集合：工具档位必须与宿主允许的窗口一致（两处漂移是"切档拿到不存在的窗口"的根因）
 import { FLOW_BOUNDARY, FLOW_CURVE_WINDOWS } from '../host/globalFlow.ts'
@@ -52,6 +53,8 @@ test('① 目录页模型：卡片齐全（chip / 标题 / 一句话说明）—
   // v0.116.0（杠杆温度计）：目录从 1 张卡变成 2 张 —— 新增工具只**追加**（顺序见 ⑤ 号用例）
   assert.equal(model.cards.length, 2, `目录页必须恰好 2 张卡片（蛋糕 + 杠杆温度计；实得 ${model.cards.length}）`)
   assert.deepEqual(model.cards.map((c) => c.id), ['cake', 'leverage'], '卡片顺序 = 注册顺序（新工具追加在末尾）')
+  // v0.119.0（R5）：目录名带口径括号 —— 与工具条目**同源**（逐字断言在 leverageHeader.test.ts，这里只核一致性）
+  assert.equal(model.cards[1]?.title, leverageTool.name, '第二张卡的标题必须等于工具条目的 name（单一来源）')
   const card = model.cards[0]
   assert.equal(card.id, cakeTool.id, '卡片 id 必须指向注册里的那个工具')
   assert.equal(card.chip, cakeTool.chip)

@@ -9,6 +9,7 @@
  *
  * 页面元素（顺序即渲染顺序；`data-role` 是断言的锚点）：
  *   ⓪ 顶行：左上角回目录按钮 + 右上角窗口三档（原来放在大字区右侧，大字搬走后挪到这里 —— **不留空位**）；
+ *   ⓪′ 工具名标题（`leverage-title`，整页仅一处；卡片行之上、顶行之下）；
  *   ① `leverage-cards`：**两行 × 四列、共 8 张**摘要卡 ——
  *      第一行：温度（原大字搬进卡片，带 `/ 100` 与 `截至 …`）/ 显性融资 / 杠杆率 / 当日融资净买入；
  *      第二行：融资余额 / 融券余额 / 流通市值 / 窗口累计净买入（随窗口变）；
@@ -45,6 +46,7 @@ import {
 } from './toolDetailTheme.ts'
 import {
   DASH,
+  LEVERAGE_CARD_VALUE_PX,
   LEVERAGE_DEFAULT_RANGE,
   LEVERAGE_LEGEND,
   LEVERAGE_PLOT_HEIGHT,
@@ -163,7 +165,7 @@ const READOUT_BOX_W = 196
  * · 柱色来自模型（正 = `--tw-up`、负 = `--tw-down`），此处不碰颜色语义；
  * · 悬停只给读数框（三个数 + 日期），**没有十字光标、没有解释文字**。
  */
-function LeveragePlot(props: { payload: LeveragePayloadDto | null }): React.ReactElement {
+function LeveragePlot(props: { payload: LeveragePayloadDto | null; label: string }): React.ReactElement {
   const box = useRef<HTMLDivElement | null>(null)
   const size = useChartBox(box)
   const [hover, setHover] = useState<number | null>(null)
@@ -196,7 +198,7 @@ function LeveragePlot(props: { payload: LeveragePayloadDto | null }): React.Reac
         viewBox: `0 0 ${chart.width} ${chart.height}`,
         style: { display: 'block', width: '100%', height: '100%' },
         role: 'img',
-        'aria-label': '杠杆温度计',
+        'aria-label': props.label,
       },
       // 水平线：网格（浅色虚线）/ 阈值（虚线）/ 柱图零轴（实线）—— 颜色与虚线与否都来自模型
       chart.lines.map((line, i) =>
@@ -349,7 +351,7 @@ function rangeSwitch(range: LeverageRange, onPick: (next: LeverageRange) => void
 /**
  * 详情页本体。`back` 是左上角的回目录控件（由工具箱页注入 ⇒ 回目录按钮仍然只有一份实现）。
  */
-export function LeverageDetail(props: { back?: React.ReactNode }): React.ReactElement {
+export function LeverageDetail(props: { back?: React.ReactNode; title: string }): React.ReactElement {
   const [range, setRange] = useState<LeverageRange>(LEVERAGE_DEFAULT_RANGE)
   const [attempt, setAttempt] = useState(0)
   const { payload, error } = useLeverageFetch(range, attempt)
@@ -370,7 +372,9 @@ export function LeverageDetail(props: { back?: React.ReactNode }): React.ReactEl
       props.back ?? null,
       React.createElement('span', { style: { marginLeft: 'auto' } }, rangeSwitch(range, setRange)),
     ),
-    // ── ① 两行 × 四列、共 8 张卡（缺值就是 `—`）──────────────────────────────────
+    // ── ① 工具名标题（卡片行之上、顶行之下；单行左对齐，复用 section 标题层级）──────
+    React.createElement('h2', { 'data-role': 'leverage-title', style: { margin: 0, ...CHART_TYPE.cardTitle } }, props.title),
+    // ── ② 两行 × 四列、共 8 张卡（缺值就是 `—`）──────────────────────────────────
     React.createElement(
       'div',
       { 'data-role': 'leverage-cards', className: 'tw-lev-cards', style: { gap: TOOL_SPACE.tileGap } },
@@ -385,6 +389,8 @@ export function LeverageDetail(props: { back?: React.ReactNode }): React.ReactEl
               'data-role': 'leverage-card-value',
               style: {
                 ...SUMMARY_TYPE.value,
+                // R4：整体降一档（温度仍是最大的 28px，其余 26px；两者都是展示级）
+                fontSize: card.key === 'temperature' ? LEVERAGE_CARD_VALUE_PX.temperature : LEVERAGE_CARD_VALUE_PX.other,
                 fontVariantNumeric: 'tabular-nums',
                 color: card.value === DASH ? 'var(--tw-muted)' : 'var(--tw-text)',
                 display: 'flex',
@@ -402,9 +408,6 @@ export function LeverageDetail(props: { back?: React.ReactNode }): React.ReactEl
                   card.suffix,
                 ),
           ),
-          card.note === undefined
-            ? null
-            : React.createElement('div', { 'data-role': 'leverage-card-note', style: SUMMARY_TYPE.note }, card.note),
         ),
       ),
     ),
@@ -426,7 +429,7 @@ export function LeverageDetail(props: { back?: React.ReactNode }): React.ReactEl
                 { key: 'loading', style: { height: LEVERAGE_PLOT_HEIGHT, display: 'flex', alignItems: 'center', justifyContent: 'center' } },
                 React.createElement(Skeleton, { lines: 3 }),
               )
-            : React.createElement(LeveragePlot, { key: 'plot', payload }),
+            : React.createElement(LeveragePlot, { key: 'plot', payload, label: props.title }),
       ),
       error === null
         ? null

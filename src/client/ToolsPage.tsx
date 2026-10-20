@@ -237,7 +237,7 @@ export function ToolsPage(): React.ReactElement {
     entry === null
       ? catalogView(model, { category, setCategory, onOpen: setOpenId })
       : entry.page === 'leverage'
-        ? React.createElement(LeverageDetail, { back: backToCatalog })
+        ? React.createElement(LeverageDetail, { back: backToCatalog, title: entry.name })
         : detailView(detailModel(entry, data), () => setOpenId(null), {
             loading: loader !== undefined && data === null && loadError === null,
             step,

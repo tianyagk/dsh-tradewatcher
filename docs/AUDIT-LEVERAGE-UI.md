@@ -349,3 +349,93 @@ npm run check                                                                  #
 3. **窄屏折两列用 CSS 媒体查询**（`max-width:760px`），不在 TS 里算：8 张卡在 4 列时要保持同一行，
    `auto-fit` 在宽屏上会变成 8 列，与"两行 × 四列"冲突。
 4. 触屏没有 hover ⇒ 悬停读数框不出现（与 R2 一致，未改）。
+
+---
+
+# R4 追加：删日期小字 / 卡片值字号降档 / 工具名标题
+
+> 用户三条（只在 `src/client/**`）：① 删掉温度卡里的日期小字（那个词页面上**不再出现**，`asOf` 仍留在数据里不渲染）；
+> ② 卡片值字号整体降一档（温度 28px、其余 26px，**不得低于 26**）；③ 卡片行上方加工具名标题（单行左对齐、
+> 复用既有 section 标题层级、**整页只出现一次**）。追加断言 `src/client/leverageHeader.test.ts`（5 条，逐条配反例注入）。
+> **口径仍未改**：数据契约、缺值 `—`、窗口只换参数、无动画、无新依赖、色值走 token 全部原样。
+
+## §16 三项落地
+
+| # | 用户口径 | 改法 | 判据 |
+|---|---|---|---|
+| ① | 删温度卡的日期小字 | **整条渲染链删除**：`ASOF_PREFIX` 常量、`leverageAsOfText()` 函数、`LeverageCard.note` 字段、页面 `leverage-card-note` 锚点全部移除。`asOf` 仍在 `LeveragePayloadDto` 里（宿主照回，客户端不渲染） | `asofRenderProblems()`：页面 + 视图模块（剥注释）里 `截至` **0 处**、无 `ASOF_PREFIX`、无小字锚点 |
+| ② | 卡片值字号降一档 | 新增 `LEVERAGE_CARD_VALUE_PX = { temperature: 28, other: 26 }`（**通用 `SUMMARY_TYPE.value` 34px 没动** —— 蛋糕工具还在用它）；页面按 `card.key === 'temperature'` 取 | `leverageCardValueSizeProblems()`：温度 > 其余、两者 ≥ `LEVERAGE_CARD_VALUE_MIN_PX`(26)、都 < 40；另用 `typeScaleProblems` 证明两者是展示级（≥15，不受密集阶梯约束） |
+| ③ | 卡片行上方加工具名标题 | 页面在顶行之下、卡片行之上渲染 `<h2 data-role="leverage-title">`，样式 `{ margin: 0, ...CHART_TYPE.cardTitle }`（17px/700，**没新造 class**）；文案来自 `ToolEntry.name`（`ToolsPage` 传 `title={entry.name}`），**页面里 0 处写死工具名**（连 svg 的 `aria-label` 也改成 `props.title`） | `titleWiringProblems()`：恰好 1 处、位置在卡片行与主图卡**之前**、必须是 `h2`、必须用 `CHART_TYPE.cardTitle`、必须无 `className`、子节点必须是 `props.title` |
+
+## §17 断言 + 注入证据（R4）
+
+新增 `src/client/leverageHeader.test.ts`（5 条）：① 无「截至」/`ASOF_PREFIX` ② 8 张卡回归 ③ 值字号 28/26
+④ 标题恰好一次且在卡片行之前 ⑤ 仍无口径/解释文字。连同另外三个套件（9 + 7 + 6 条）一起跑。
+
+**12 条真源码注入 ⇒ 12/12 RED**（改完立刻复原）：
+
+| 注入 | 结果 | 被哪条抓住 |
+|---|---|---|
+| 视图里加回 `ASOF_PREFIX` + 「截至」 | **RED** | R4 ①（并发旧 ②、⑤） |
+| 卡片加回 `note` 字段（日期） | **RED** | R4 ①（并发旧 ②⑤） |
+| 页面加回 `leverage-card-note` 锚点 | **RED** | R4 ①（并发旧 ②⑦） |
+| 少一张卡（7 张） | **RED** | R4 ②（并发 R3 ①③④⑤） |
+| 温度值改回 34px | **RED** | R4 ③ |
+| 其余值降到 24px（低于下限） | **RED** | R4 ③ |
+| 页面写死 `fontSize: 34` | **RED** | R4 ③（并发旧 ⑨） |
+| 标题挪到主图下面 | **RED** | R4 ④（并发旧 ⑨） |
+| 标题写两遍 | **RED** | R4 ④ |
+| 标题文案写死（不走 `props.title`） | **RED** | R4 ④ |
+| 标题新造 `className` | **RED** | R4 ④ |
+| 给流通市值卡加一句说明 | **RED** | R4 ⑤（并发 R3 ①②⑦） |
+
+**R4 结束门禁读数**：`npm run check` 两轮 **1001/1001**（996 基线 + 新增 5）+ selftest + 构建 **73 项**，`EXIT=0`。
+
+## §18 R4 未做项 / 取舍
+
+1. **`asOf` 变成"只进不出"的契约字段**：宿主照回、客户端不渲染，也没有别的地方用它 —— 这是用户"留在数据里"的明确要求，
+   不是漏接；`LeveragePayloadDto.asOf` 的注释已写明。
+2. **卡片值字号没有挤进 `SUMMARY_TYPE`**：那是通用摘要卡令牌（34px），改它会连带改蛋糕工具；
+   本工具的降档值单独放在 `LEVERAGE_CARD_VALUE_PX`，判据里连"下限 26"一起钉住，避免下一次"顺手再降一档"。
+3. **标题文案来自 `ToolEntry.name`**（不是页面常量）：改名只需改 `tools/leverage.ts` 一处；
+   代价是页面必须接一个 `title` prop（`ToolsPage` 传 `entry.name`）。
+4. 触屏没有 hover ⇒ 悬停读数框不出现（与前两轮一致，未改）。
+
+---
+
+# R5 追加：工具名带口径括号（`杠杆温度计（锚定 2024）`）
+
+> 用户决定：标题带口径括号 —— 显示 `杠杆温度计（锚定 2024）`，括号用**全角**。
+> 只改 `src/client/**`；**单一来源**在 `tools/leverage.ts` 的 `name`，目录卡与详情页标题一起变，页面里仍**不得写死**。
+
+## §19 改了哪几处
+
+| 文件 | 改动 |
+|---|---|
+| `src/client/tools/leverage.ts` | `name: '杠杆温度计'` → **`杠杆温度计（锚定 2024）`**（全角括号；注释里写明它同时是详情页标题的唯一来源） |
+| `src/client/toolRegistry.test.ts` | 追加一致性断言：`model.cards[1].title === leverageTool.name`（目录卡标题与工具条目**同源**，不另抄一份字面量）；导入 `leverageTool` |
+| `src/client/leverageTool.test.ts` | ① 的逐字断言同步到新名（含"半角括号"反例注入）；⑦ 的文案白名单**删掉旧名**（留着等于给"页面写死工具名"开后门） |
+| `src/client/leverageHeader.test.ts` | 新增 R5 ①②③ 两条用例；⑤ 的白名单同样删掉旧名 |
+| `build.mjs` | **未动**：新名字没有命中任何锁定片段（`grep '杠杆温度计\|锚定' build.mjs` = 0 命中，73 项不变） |
+
+详情页与 svg 的 `aria-label` 都不含字面量：`ToolsPage` 传 `title={entry.name}`，页面渲染 `props.title`。
+
+## §20 断言 + 注入证据（R5）
+
+新增/同步的判据（`src/client/leverageHeader.test.ts`，7 条；`leverageTool.test.ts` 9 条；`toolRegistry.test.ts` 同步 1 条）：
+
+| # | 断言 | 注入（改真源码） | 结果 |
+|---|---|---|---|
+| R5 ① | 目录卡名字**逐字**等于 `杠杆温度计（锚定 2024）`、括号全角且恰好一对、`leverageTool.name` 同源 | 改半角括号 / 少括号（旧名）/ 年份改错 | **RED ×3** |
+| R5 ② | 标题与目录名**同源**：`ToolsPage` 传 `entry.name`；页面里不含 `杠杆温度计` / `锚定` / `2024` | 页面写死标题文案 / `ToolsPage` 改成写死字符串 | **RED ×2** |
+| R5 ③ | 标题仍**恰好一处** | 标题写两遍 | **RED** |
+| 负对照 | 把名字写进**注释**不算渲染（剥注释后扫描） | 页面注释里写 `杠杆温度计（锚定 2024）` | **GREEN（预期）** |
+
+**R5 结束门禁读数**：`npm run check` 两轮 **1005/1005** + selftest + 构建 **73 项**，`EXIT=0`
+（本轮新增 2 条 R5 用例；用例总数比 R4 的 1001 多 4 —— 另外 2 条是**宿主那一路并行加的**，不是本批的写入面）。
+
+## §21 R5 未做项
+
+1. **没有改宿主/共享层的任何字符串**：宿主回包与工具描述里仍叫「杠杆温度计」（那是另一路的名字，不在本批写入面）。
+2. **没有把括号内容做成配置项**（例如 `anchoredYear`）：用户只要求"名字带括号"，做成字段会让"目录名/详情页标题/工具条目名"三处再多一条同步链。
+3. 目录卡标题变长（`杠杆温度计（锚定 2024）`）后仍单行不换行溢出：卡片标题是 12.5px/600，最窄两列布局下也放得下；未新增截断逻辑。

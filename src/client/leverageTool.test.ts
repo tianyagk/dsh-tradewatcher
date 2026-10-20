@@ -45,7 +45,6 @@ import {
   fmtNetYi,
   fmtRatioPct,
   fmtTemperature,
-  leverageAsOfText,
   leverageCards,
   leverageChart,
   leverageChartProblems,
@@ -86,14 +85,14 @@ function fixture(over: Partial<LeveragePayloadDto> = {}): LeveragePayloadDto {
 
 /* ────────────────────────────── ① 目录项 ────────────────────────────── */
 
-test('① 目录出现「杠杆温度计」且副标题逐字「A股融资杠杆热度」—— 反例注入必败', () => {
+test('① 目录出现「杠杆温度计（锚定 2024）」（全角括号）且副标题逐字「A股融资杠杆热度」—— 反例注入必败', () => {
   const catalog = catalogModel()
   const card = catalog.cards.find((c) => c.id === 'leverage')
   assert.notEqual(card, undefined, '目录里必须有 leverage 这张卡（只在工具目录新增一项，不加顶部页签）')
-  assert.equal(card?.title, '杠杆温度计', `卡片标题必须逐字等于「杠杆温度计」（实得 ${JSON.stringify(card?.title)}）`)
+  assert.equal(card?.title, '杠杆温度计（锚定 2024）', `卡片标题必须逐字等于「杠杆温度计（锚定 2024）」（实得 ${JSON.stringify(card?.title)}）`)
   assert.equal(card?.blurb, 'A股融资杠杆热度', `目录副标题必须逐字等于「A股融资杠杆热度」（实得 ${JSON.stringify(card?.blurb)}）`)
   // 工具文件里也必须是同一份字面量（防止只改卡片模型、不改条目）
-  assert.equal(leverageTool.name, '杠杆温度计')
+  assert.equal(leverageTool.name, '杠杆温度计（锚定 2024）')
   assert.equal(leverageTool.blurb, 'A股融资杠杆热度')
   assert.equal(leverageTool.page, 'leverage', '工具项必须声明专用版式（通用三段式与"唯一说明文字"冲突）')
   assert.equal(leverageTool.load, undefined, '专用详情页自己取数（走通用 load() 会拿到通用骨架的语义）')
@@ -105,43 +104,36 @@ test('① 目录出现「杠杆温度计」且副标题逐字「A股融资杠杆
   assert.equal(/entry\.id === 'leverage'/.test(page), false, '不许按 id 硬编码版式（下一个人会继续抄分支）')
   // 反例注入：改名 ⇒ 逐字断言必须失败
   assert.throws(() => assert.equal({ ...card, blurb: '两融热度' }.blurb, 'A股融资杠杆热度', '反例上必须失败'), /反例上/, '⚠ 反例（改副标题）必须让断言失败')
-  assert.throws(() => assert.equal({ ...card, title: '杠杆' }.title, '杠杆温度计', '反例上必须失败'), /反例上/, '⚠ 反例（改工具名）必须让断言失败')
+  assert.throws(() => assert.equal({ ...card, title: '杠杆温度计(锚定 2024)' }.title, '杠杆温度计（锚定 2024）', '反例上必须失败'), /反例上/, '⚠ 反例（半角括号）必须让断言失败')
 })
 
-/* ────────────────────────────── ② 大字 + 唯一的「截至」 ────────────────────────────── */
+/* ────────────────────────────── ② 温度卡（无日期小字） ────────────────────────────── */
 
-test('② 温度卡 = 1 位小数 + `/ 100` + `截至`；页面唯一的说明文字就是它', () => {
+test('② 温度卡 = 1 位小数 + `/ 100`（R4：日期小字已删，页面不出现「截至」）', () => {
   const payload = fixture()
   assert.equal(fmtTemperature(payload.temperature), '91.2', '温度必须是 1 位小数')
   assert.match(fmtTemperature(payload.temperature), /^\d+\.\d$/, '温度只允许「整数.一位小数」这一种形态')
   assert.equal(fmtTemperature(null), DASH, '温度缺 ⇒ `—`（不写 0）')
-  assert.equal(leverageAsOfText(payload), '截至 2026-10-19', '唯一的说明文字必须逐字是「截至 YYYY-MM-DD」')
-  // `asOf` 为空串 = 整块不可用（宿主约定）⇒ **只给 `—`**，页面上不出现「截至」二字
-  assert.equal(leverageAsOfText(fixture({ asOf: '' })), DASH, '`asOf` 为空 ⇒ 只显示 `—`（**不渲染「截至 」**）')
-  assert.equal(leverageAsOfText(null), DASH, '没有载荷同样只给 `—`')
-  assert.equal(leverageAsOfText(fixture({ asOf: '' })).includes('截至'), false, '`asOf` 为空时不许出现「截至」字样')
-  // 温度卡带着后缀与小字（R3：原大字搬进卡片行）
+  // 温度卡只有三个文案位：标签 / 值 / 后缀
   const temp = leverageCards(payload)[0]
   assert.equal(temp.key, 'temperature')
+  assert.equal(temp.label, '温度')
   assert.equal(temp.value, '91.2')
   assert.equal(temp.suffix, '/ 100', '后缀必须是 `/ 100`')
-  assert.equal(temp.note, '截至 2026-10-19', '卡内小字就是「截至 …」')
-  assert.equal(leverageCards(fixture({ asOf: '' }))[0]?.note, DASH, '`asOf` 空 ⇒ 卡内小字只给 `—`')
-  // 页面源码：后缀与截至小字各一处；`截至` 只来自模型（页面不另写一份）
+  assert.deepEqual(Object.keys(temp).sort(), ['key', 'label', 'suffix', 'value'], '温度卡不许有第四个文案字段（日期小字已删）')
+  // 页面源码：`/ 100` 来自模型；后缀锚点唯一；大字区已删除
   const page = strip(read(PAGE))
   assert.equal(page.includes("'/ 100'"), false, '`/ 100` 必须来自模型（页面不另写一份文案）')
   assert.equal((page.match(/leverage-card-suffix/g) ?? []).length, 1, '后缀只有一个锚点')
-  assert.equal((page.match(/leverage-card-note/g) ?? []).length, 1, '`截至 …` 小字只有一个锚点')
   assert.equal(page.includes('leverage-hero'), false, '大字区必须已删除（R3：搬进卡片行）')
+  // 「截至」与日期小字整条链路都已删除（R4）—— 注入：加回来 ⇒ 必败
   const sources = `${strip(read(PAGE))}\n${strip(read(VIEW))}`
-  assert.equal((sources.match(/截至/g) ?? []).length, 1, `「截至」在整个工具面上只允许出现一次（实得 ${(sources.match(/截至/g) ?? []).length}）`)
-  // 反例注入 ①：asOf 为空时照渲染「截至 」⇒ 必败（日期缺失却硬写一个"截至"）
-  const alwaysPrefix = (day: string): string => `截至 ${day}`
-  assert.match(alwaysPrefix(''), /^截至 $/, '⚠ 反例（空日期也渲染「截至 」）确实产出了 `截至 `')
-  assert.notEqual(alwaysPrefix(''), DASH, '⚠ 上一条反例必须与「只给 `—`」的期望不同')
-  // 反例注入 ②：再写一句说明（例如「上一交易日」）⇒ "只出现一次"的判据必然失败
-  const injected = `${sources}\nconst more = \`截至 \${payload.asOf}（上一交易日）\``
-  assert.throws(() => assert.equal((injected.match(/截至/g) ?? []).length, 1, '反例上必须失败'), /反例上/, '⚠ 反例（多一处「截至」）必须让断言失败')
+  const hits = (sources.match(/截至/g) ?? []).length
+  assert.equal(hits, 0, `「截至」在整个工具面上必须 0 处（实得 ${hits}）`)
+  assert.equal(sources.includes('ASOF_PREFIX'), false, '`ASOF_PREFIX` 不许再出现（渲染链已整条删除）')
+  assert.equal(/evaluation-card-note|leverage-card-note/.test(sources), false, '卡片小字锚点已删除')
+  const injected = `${sources}\nconst back = \`截至 \${payload.asOf}\``
+  assert.throws(() => assert.equal((injected.match(/截至/g) ?? []).length, 0, '反例上必须失败'), /反例上/, '⚠ 反例（加回「截至」）必须让断言失败')
 })
 
 /* ────────────────────────────── ③ 三张摘要卡 ────────────────────────────── */
@@ -218,7 +210,7 @@ test('⑤ 任何数值缺失 ⇒ `—`（不加文字、不进悬停、不写 0�
   const blankValues = leverageCards(blank).map((c) => c.value)
   assert.deepEqual(blankValues.slice(0, 4), [DASH, DASH, DASH, DASH], '第一行的四张卡缺值全部是 `—`')
   assert.equal(blankValues[7], DASH, '窗口累计净买入：窗口里有 `null` ⇒ `—`')
-  assert.equal(leverageAsOfText(blank), DASH, '`asOf` 为空 ⇒ 只给 `—`（不是「截至 —」）')
+  assert.equal(JSON.stringify(leverageCards(blank)).includes('截至'), false, '`asOf` 不参与渲染（R4）')
   // 柱：该日缺值就不画柱（三天里只有两天有净买入）
   const chart = leverageChart(blank, 960, 320)
   assert.equal(chart.bars.length, 2, '缺值那天没有柱子')
@@ -291,7 +283,7 @@ test('⑥ 窗口三档只换 `range` 查询参数（另发新接口 / 多一个�
  */
 const COPY_ALLOW = new Set([
   // 工具名 / 卡片标签 / 图例名 / 档位标签 / 唯一的说明文字 / 控件与错误态文案
-  '杠杆温度计', '显性融资', '杠杆率', '当日融资净买入', '温度', '显性融资比例', '净买入',
+  '显性融资', '杠杆率', '当日融资净买入', '温度', '显性融资比例', '净买入',
   '融资余额', '融券余额', '流通市值', '窗口累计净买入',
   '1 年', '3 年', '全历史', '截至', '窗口', '重试',
   // 金额单位（不是说明文字）
@@ -364,7 +356,9 @@ test('⑧ 悬停只给读数框：无十字光标、无 title 悬停说明（R2 
   for (const token of ["'data-role': 'leverage-readout'", 'onMouseMove', 'onMouseLeave', 'leverageReadout(', 'leverageIndexAt(']) {
     assert.equal(page.includes(token), true, `悬停读数框缺少 ${JSON.stringify(token)}`)
   }
-  for (const gone of ['tool-crosshair', 'leverage-crosshair', 'tool-hover-tip', 'title:']) {
+  // ⚠ 只查**元素属性**形态：`'title':`（对象键）与 ` title=`（JSX 属性）。
+  //   不能直接查 `title:` —— 组件签名里的 `title: string` 会被误判（实测踩到）。
+  for (const gone of ['tool-crosshair', 'leverage-crosshair', 'tool-hover-tip', "'title':", ' title=']) {
     assert.equal(page.includes(gone), false, `不许出现 ${JSON.stringify(gone)}（R2：无十字光标、无悬停说明）`)
   }
   // 模型里也没有十字线这种图元（水平线只有三种角色）
@@ -398,7 +392,9 @@ test('⑨ 字号落在密集阶梯、间距落在 1px 刻度、几何全部复�
     'CHART_TYPE.legend',
     'SUMMARY_TYPE.label',
     'SUMMARY_TYPE.value',
-    'SUMMARY_TYPE.note',
+    'CHART_TYPE.cardTitle',
+    'LEVERAGE_CARD_VALUE_PX.temperature',
+    'LEVERAGE_CARD_VALUE_PX.other',
     'CARD_SURFACE',
     'LEGEND_ROW',
     'LEGEND_DOT',

@@ -93,12 +93,11 @@ test('② 温度卡在第一行第一张，含 `/ 100` 与 `截至` —— 注�
   assert.equal(temp?.label, '温度')
   assert.equal(temp?.value, '90.4', '主值 1 位小数')
   assert.equal(temp?.suffix, '/ 100', '卡内后缀 `/ 100`')
-  assert.equal(temp?.note, `截至 ${payload.dates[payload.dates.length - 1]}`, '卡内小字 `截至 YYYY-MM-DD`')
-  // 除这三样外不许有其他文字（卡片模型只有 label/value/suffix/note 四个文案位）
-  assert.deepEqual(Object.keys(temp ?? {}).sort(), ['key', 'label', 'note', 'suffix', 'value'], '温度卡不许有第五个文案字段')
-  // `asOf` 空 ⇒ 小字只 `—`（不出现「截至」）
-  assert.equal(leverageCards({ ...payload, asOf: '' })[0]?.note, DASH)
-  assert.equal(String(leverageCards({ ...payload, asOf: '' })[0]?.note).includes('截至'), false, '`asOf` 空时不许出现「截至」')
+  assert.equal('note' in (temp ?? {}), false, 'R4：温度卡不再有日期小字（note 字段已删除）')
+  // 除这三样外不许有其他文字（卡片模型只有 label/value/suffix 三个文案位）
+  assert.deepEqual(Object.keys(temp ?? {}).sort(), ['key', 'label', 'suffix', 'value'], '温度卡不许有第四个文案字段')
+  // `asOf` 不再渲染（R4）⇒ 换掉 asOf 也不影响任何一张卡的文案
+  assert.deepEqual(leverageCards({ ...payload, asOf: '' }), leverageCards(payload), '`asOf` 不参与渲染（缺它也不会有日期小字）')
   // 注入：把温度卡挪到末尾 ⇒ 顺序判据必败
   const moved = [...cards.slice(1), cards[0] as LeverageCard]
   assert.match(leverageCardsProblems(moved).join(' ／'), /第 1 张卡必须是 temperature/, '⚠ 反例（温度卡搬家）必须被抓住')
@@ -174,12 +173,12 @@ test('⑥ 窗口内只要有一个 `null` ⇒ 累计显示 `—`（不静默少�
 
 /* ────────────────────────────── ⑦ 页面无口径/解释文字 ────────────────────────────── */
 
-test('⑦ 卡片行不得出现口径/解释文字（只有标签 + 数值 + 温度卡的后缀与小字）—— 注入必败', () => {
+test('⑦ 卡片行不得出现口径/解释文字（只有标签 + 数值 + 温度卡的后缀 `/ 100`）—— 注入必败', () => {
   const cards = leverageCards(shape(750, 1e8))
   assert.deepEqual(leverageCardsProblems(cards), [], `卡片行判据：${leverageCardsProblems(cards).join(' ／ ')}`)
-  // 注入 ①：给第二行某张卡加一句说明 ⇒ 必败
-  const noted = cards.map((c, i) => (i === 4 ? { ...c, note: '近 3 年' } : c))
-  assert.match(leverageCardsProblems(noted).join(' ／'), /不许带小字/, '⚠ 反例（余额卡加说明）必须被抓住')
+  // 注入 ①：给第二行某张卡加一句说明（R4 起用后缀位塞文字）⇒ 必败
+  const noted = cards.map((c, i) => (i === 4 ? { ...c, suffix: '近 3 年' } : c))
+  assert.match(leverageCardsProblems(noted).join(' ／'), /不许带后缀/, '⚠ 反例（余额卡加说明）必须被抓住')
   // 注入 ②：给净买入卡加后缀（例如 `亿元`）⇒ 必败
   const suffixed = cards.map((c, i) => (i === 3 ? { ...c, suffix: '亿元' } : c))
   assert.match(leverageCardsProblems(suffixed).join(' ／'), /不许带后缀/, '⚠ 反例（净买入卡加后缀）必须被抓住')
@@ -188,6 +187,8 @@ test('⑦ 卡片行不得出现口径/解释文字（只有标签 + 数值 + 温
   assert.match(leverageCardsProblems(explained).join(' ／'), /数值形态不符/, '⚠ 反例（数值变文案）必须被抓住')
   // 页面侧：卡片区不许出现 `tw-hint`（紧凑/隐身档会藏）或任何额外文案位
   const page = strip(read(PAGE))
-  assert.equal(page.includes("'data-role': 'leverage-card-suffix'") && page.includes("'data-role': 'leverage-card-note'"), true, '卡片必须有后缀与小字两个锚点')
-  assert.equal((page.match(/card\.suffix/g) ?? []).length >= 1 && (page.match(/card\.note/g) ?? []).length >= 1, true, '后缀与小字必须来自模型（页面不另写文案）')
+  assert.equal(page.includes("'data-role': 'leverage-card-suffix'"), true, '卡片必须有后缀锚点（R4：小字锚点已删除）')
+  assert.equal(page.includes("'data-role': 'leverage-card-note'"), false, '卡片小字锚点必须已删除')
+  assert.equal((page.match(/card\.suffix/g) ?? []).length >= 1, true, '后缀必须来自模型（页面不另写文案）')
+  assert.equal((page.match(/card\.note/g) ?? []).length, 0, '页面不许再渲染卡片小字（R4）')
 })

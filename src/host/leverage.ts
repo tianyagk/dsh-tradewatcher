@@ -15,12 +15,17 @@
  * 文案不能说"今日"。这也决定了两件事：**一天最多打一次上游**（当天数据不会中途变），
  * 以及 `pageSize` 实测被上游截到 **800 行/页** ⇒ 全历史（4018 交易日）要 **6 页**回填。
  *
- * ## 温度怎么算（唯一允许的口径）
- * `temperature = RZYEZB 当前值在**全历史**（2010-03-31 起全部交易日）里的百分位 × 100`，1 位小数。
- * **不是**"近 3 年分位"（那样 2026-10 会从 90.4% 变成 90.2%，两个窗口的 P95 差 0.23 个百分点），
- * 也不是"最近 N 天分位"——窗口写死在 `LEVERAGE_MIN_SAMPLES` 之上（样本 < 250 ⇒ `null`，**不给 0**）。
- * 图上的 `temp[]` 用**扩张窗口**（第 i 天只用第 i 天及以前的数据）⇒ 曲线不会因为今天的新数据
- * 把历史点改写（无前视）；最后一点与 `temperature` 恒等。
+ * ## 温度怎么算（唯一允许的口径：**锚定基准年**）
+ * `temperature = RZYEZB 当前值在「d ≥ LEVERAGE_ANCHOR（2024-01-01）」样本内的扩张窗口百分位 × 100`，
+ * 1 位小数。锚定样本 < `LEVERAGE_MIN_SAMPLES`（250）⇒ `null`（**不给 0**）。
+ *
+ * 为什么锚定（用户决定，v0.116.x）：全历史样本跨越两次制度断点（2014-09-22 起两融总量并入
+ * "调出标的"、2023 年北交所并入合计）⇒ 早期读数系统性偏低、今天的位置**略偏高**；
+ * 锚定到 2024-01-01 后样本落在同一口径内，曲线与阈值线可跨版本比较。代价是曲线前段
+ * （锚定后前 250 个交易日）为 `null`。
+ *
+ * 逐点同规则：第 i 天只用「锚定日 ≤ d ≤ 第 i 天」的样本 ⇒ **无前视**，历史点不会被今天改写；
+ * 最后一点与 `temperature` 恒等。
  *
  * ## 落盘
  * `<DSH_HOME>/dsh-tradewatcher/leverage.json`：`{v,lastFetchDay,lastAttemptAt,cross,rows[]}`，
@@ -55,7 +60,21 @@ export type LeverageRange = (typeof LEVERAGE_RANGES)[number]
 /** 纯函数接受的窗口（数字 = 最近 N 个交易日；测试与将来的其它窗口也走这里） */
 export type LeverageWindow = number | 'all'
 export const LEVERAGE_DEFAULT_RANGE: LeverageRange = 750
-/** 图上的两条阈值线（分位口径，不是比例口径） */
+/**
+ * **锚定基准年**：温度只在 `d >= 2024-01-01` 的样本内做分位（用户决定，v0.116.x）。
+ *
+ * 为什么要有锚定：全历史分位跨越了两次制度断点（2014-09-22 起两融总量并入"调出标的"、
+ * 2023 年北交所并入合计 ⇒ 早期读数系统性偏低），旧口径下今天的位置因此**略微偏高**。
+ * 锚定到 2024-01-01 之后，样本全部落在同一口径内（沪深北合并、含调出标的），
+ * 曲线与阈值线因此**可跨版本比较**。
+ *
+ * ⚠ 由此带来的取舍（写在这里免得后人再问）：锚定样本只有 2024-01 起的约 674 个交易日，
+ * 前 250 个交易日样本不足 ⇒ 曲线前段是 `null`（`—`），不是 0。
+ * ⚠ 唯一真源：任何地方要"锚定窗口内的 P80/P95 比例等价值"，必须用**同一批锚定样本**算；
+ * 客户端两条阈值线固定在温度轴 80 / 95，所以回包里的 `thresholds` 仍是常量 `{p80:80,p95:95}`。
+ */
+export const LEVERAGE_ANCHOR = '2024-01-01'
+/** 图上的两条阈值线（**温度轴**口径，不是比例口径；比例等价值见 `LEVERAGE_ANCHOR` 的注释） */
 export const LEVERAGE_THRESHOLDS = { p80: 80, p95: 95 } as const
 /** 上游单页上限（实测：`pageSize=2000` 仍只回 800 行，且 `pages` 按 800 折算） */
 export const LEVERAGE_PAGE_SIZE = 800
@@ -127,7 +146,11 @@ export interface LeverageFile {
 export interface LeveragePayload {
   /** 截至交易日 `YYYY-MM-DD`；**没有可用数据时是空串**（不是 null：客户端会 slice/格式化它） */
   asOf: string
-  /** 全历史分位 0–100（1 位小数）；样本 < `LEVERAGE_MIN_SAMPLES` ⇒ null */
+  /**
+   * 温度 0–100（1 位小数）= `RZYEZB` 在**锚定基准年（`LEVERAGE_ANCHOR`，2024-01-01）之后**样本内的
+   * 扩张窗口百分位；锚定样本 < `LEVERAGE_MIN_SAMPLES`（250）⇒ null。
+   * 口径换过（v0.116.x 从"全历史"改为"锚定"），**字段名与形状不变**。
+   */
   temperature: number | null
   /** `RZYEZB` 原值（%），2 位小数 */
   ratioPct: number | null
@@ -260,6 +283,22 @@ export function expandingPercentiles(
   return out
 }
 
+/**
+ * **锚定版**扩张窗口分位：锚定日之前的点一律 `null`，且**不进入样本**。
+ *
+ * 这就是温度的唯一口径（用户决定：锚定基准年 = `LEVERAGE_ANCHOR`）。逐日逐点同一规则：
+ * 第 i 天只用"锚定日 ≤ d ≤ 当天"的样本 ⇒ 无前视；前 250 个锚定交易日的样本不足 ⇒ `null`。
+ */
+export function anchoredPercentiles(
+  points: ReadonlyArray<{ d: string; v: number | null }>,
+  anchor: string = LEVERAGE_ANCHOR,
+  minSamples = LEVERAGE_MIN_SAMPLES,
+): Array<number | null> {
+  // 锚定日之前的点：既不给读数，也不进样本（把 `null` 占位传下去，底层会跳过它）
+  const values = points.map((p) => (p.d < anchor ? null : p.v))
+  return expandingPercentiles(values, minSamples)
+}
+
 // ── 纯函数：窗口切片 / 回包组装 ──────────────────────────────────────────
 
 /** `?range=` → 合法窗口；非法/缺省一律默认值（**路由永不因此 4xx**） */
@@ -286,12 +325,14 @@ export function sliceLeverageWindow(rows: readonly LeverageRow[], range: Leverag
 export function buildLeveragePayload(
   rows: readonly LeverageRow[],
   range: LeverageWindow,
-  opts: { minSamples?: number } = {},
+  opts: { minSamples?: number; anchor?: string } = {},
 ): LeveragePayload {
   const min = opts.minSamples ?? LEVERAGE_MIN_SAMPLES
+  const anchor = opts.anchor ?? LEVERAGE_ANCHOR
   const ordered = [...rows].sort(byDay)
   const window = sliceLeverageWindow(ordered, range)
-  const pcts = expandingPercentiles(ordered.map((r) => r.rzyezb), min)
+  // 温度口径：**锚定基准年之后的扩张窗口分位**（曲线上的每一天都按同一规则）
+  const pcts = anchoredPercentiles(ordered.map((r) => ({ d: r.d, v: r.rzyezb })), anchor, min)
   const posOf = new Map<string, number>()
   ordered.forEach((r, i) => posOf.set(r.d, i))
 

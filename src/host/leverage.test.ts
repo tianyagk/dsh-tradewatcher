@@ -3,8 +3,8 @@
  *
  * 八条判据（**每条都配反例注入**，证明断言非恒真 —— 见 `docs/AUDIT-LEVERAGE-HOST.md` §4）：
  *   ① 字段齐备 + 三组数组等长 + dates 升序
- *   ② `temperature` = **全历史**分位（1 位小数）—— 换成"近 250 天分位"必须变
- *   ③ 样本 < 250 ⇒ `temperature: null`（写 0 ⇒ 必败）
+ *   ② `temperature` = **锚定基准年（2024-01-01）之后**的样本分位（1 位小数）—— 改回全历史必须变
+ *   ③ 锚定样本 < 250 ⇒ `temperature: null`（写 0 ⇒ 必败）；④ 锚定日之前的行不参与分位
  *   ④ **每天最多 1 次**上游（计数断言；两个实例共用一份文件也只 1 次）
  *   ⑤ 缺字段 ⇒ `null` 不 0（`?? 0` 注入 ⇒ 必败）
  *   ⑥ 路由**永远 200**：上游抛错也 200 + 全 null 空壳
@@ -28,6 +28,7 @@ import {
   LeverageStore,
   buildLeveragePayload,
   emptyLeveragePayload,
+  anchoredPercentiles,
   expandingPercentiles,
   mergeLeverageRows,
   needsDailyFetch,
@@ -155,41 +156,85 @@ test('① 回包字段齐备、三组数组与 dates 等长、dates 升序（契
   rmSync(dir, { recursive: true, force: true })
 })
 
-// ── ② 温度 = 全历史分位（1 位小数） ─────────────────────────────────────
+// ── ② 温度 = 锚定样本分位（1 位小数） ──────────────────────────────────
 
-test('② temperature = 全历史分位（1 位小数）：换成"最近 N 天分位"必须变（注入反例）', async () => {
-  // 构造"全历史 ≠ 近 250 天"的样本：200 天高位(3.0) + 99 天低位(1.0) + 今天(2.0)
-  const days = daysEndingAt(300)
-  const series: LeverageRow[] = days.map((d, i) => mkRow(d, { rzyezb: i < 200 ? 3 : i < 299 ? 1 : 2 }))
+test('② temperature = 锚定样本（d ≥ 2024-01-01）分位，1 位小数；改回全历史必须变（注入反例）', async () => {
+  // 锚定窗口内：200 天高位(3.0) + 99 天低位(1.0) + 今天(2.0) ⇒ 锚定分位 = 100/300 = 33.3
+  const inside = daysEndingAt(300)
+  // 锚定日**之前**的 500 天，值一律 0.5 —— 若把它们也算进去，分位会变成 600/800 = 75.0
+  const before = daysEndingAt(500, '2023-12-29')
+  assert.equal(before[before.length - 1] < '2024-01-01', true, '前置条件：这批日期必须早于锚定日')
+  const series: LeverageRow[] = [
+    ...before.map((d) => mkRow(d, { rzyezb: 0.5 })),
+    ...inside.map((d, i) => mkRow(d, { rzyezb: i < 200 ? 3 : i < 299 ? 1 : 2 })),
+  ]
   const payload = buildLeveragePayload(series, 'all')
-  const all = series.map((r) => r.rzyezb)
-  assert.equal(payload.temperature, percentileRank(2, all), '温度必须是全历史分位')
-  assert.equal(payload.temperature, 33.3, `全历史分位应为 33.3（实得 ${payload.temperature}）`)
+  const anchoredSamples = series.filter((r) => r.d >= '2024-01-01').map((r) => r.rzyezb)
+  assert.equal(payload.temperature, percentileRank(2, anchoredSamples), '温度必须是锚定样本分位')
+  assert.equal(payload.temperature, 33.3, `锚定分位应为 33.3（实得 ${payload.temperature}）`)
   assert.equal(Math.abs((payload.temperature as number) * 10 - Math.round((payload.temperature as number) * 10)) < 1e-9, true, '必须 1 位小数')
-  // 反例注入：近 250 天分位 → 40.0 ≠ 33.3 ⇒ 判据非恒真
-  const recent = percentileRank(2, all.slice(-250), 1)
-  assert.equal(recent, 40)
-  assert.notEqual(recent, payload.temperature, '⚠ 反例（用近 250 天分位）必须与全历史分位不同')
-  // `temp[]` 最后一点与 temperature 恒等（同一口径），且早期样本不足时是 null
+  // 反例注入：改回"全历史"（anchor 退到 0000-01-01）⇒ 75.0 ≠ 33.3
+  const legacy = buildLeveragePayload(series, 'all', { anchor: '0000-01-01' })
+  assert.equal(legacy.temperature, 75)
+  assert.notEqual(legacy.temperature, payload.temperature, '⚠ 反例（改回全历史）必须与锚定口径不同')
+  // `temp[]` 最后一点与 temperature 恒等；锚定日之前的点必须是 null
   assert.equal(payload.temp[payload.temp.length - 1], payload.temperature)
-  assert.equal(payload.temp[0], null, `前 ${LEVERAGE_MIN_SAMPLES - 1} 天样本不足 ⇒ null（实得 ${payload.temp[0]}）`)
-  assert.equal(payload.temp[LEVERAGE_MIN_SAMPLES - 1] !== null, true, `第 ${LEVERAGE_MIN_SAMPLES} 天起给分位`)
+  const preAnchorIdx = series.findIndex((r) => r.d >= '2024-01-01') - 1
+  assert.equal(payload.temp[preAnchorIdx], null, '锚定日之前的点不给读数（null，不是 0）')
 })
 
-// ── ③ 样本 < 250 ⇒ null ────────────────────────────────────────────────
+// ── ③ 锚定样本 < 250 ⇒ null ────────────────────────────────────────────
 
-test('③ 样本 < 250 ⇒ temperature 为 null（写 0 ⇒ 必败）；其余读数照常给', () => {
-  const rows = rampRows(LEVERAGE_MIN_SAMPLES - 1)
-  const payload = buildLeveragePayload(rows, 'all')
-  assert.equal(payload.temperature, null, '样本不足必须 null，不能给 0 或 50')
+test('③ 锚定样本 < 250 ⇒ temperature 为 null（写 0 ⇒ 必败）；锚定日之前再多样本也不算数', () => {
+  const before = daysEndingAt(500, '2023-12-29').map((d) => mkRow(d, { rzyezb: 1 }))
+  // 锚定窗口内只有 249 个交易日 ⇒ 不够（前置的 500 个锚定日之前的行不得凑数）
+  const short = [...before, ...rampRows(LEVERAGE_MIN_SAMPLES - 1)]
+  const payload = buildLeveragePayload(short, 'all')
+  assert.equal(payload.temperature, null, '锚定样本不足必须 null，不能给 0 或 50')
   assert.equal(typeof payload.ratioPct, 'number', '比例读数与温度无关，必须照常给')
-  assert.deepEqual(leveragePayloadProblems(payload, { window: rows.length, samples: rows.length }), [])
+  const anchoredCount = short.filter((r) => r.d >= '2024-01-01').length
+  assert.equal(anchoredCount, LEVERAGE_MIN_SAMPLES - 1, `前置条件：锚定样本只有 ${anchoredCount} 行（锚定日之前的不算）`)
+  assert.deepEqual(leveragePayloadProblems(payload, { window: short.length, samples: anchoredCount }), [])
   // 反例注入：把 null 换成 0（最常见的实现）
   const zeroed = { ...payload, temperature: 0 }
-  assert.notDeepEqual(leveragePayloadProblems(zeroed, { window: rows.length, samples: rows.length }), [], '⚠ 反例（样本不足写 0）必须被抓到')
-  // 边界反证：正好 250 个样本必须给数（否则判据恒真）
-  const exactly = buildLeveragePayload(rampRows(LEVERAGE_MIN_SAMPLES), 'all')
-  assert.notEqual(exactly.temperature, null, `正好 ${LEVERAGE_MIN_SAMPLES} 个样本必须给温度`)
+  assert.notDeepEqual(leveragePayloadProblems(zeroed, { window: short.length, samples: anchoredCount }), [], '⚠ 反例（样本不足写 0）必须被抓到')
+  // 边界反证：锚定样本正好 250 ⇒ 必须给数
+  const exactly = buildLeveragePayload([...before, ...rampRows(LEVERAGE_MIN_SAMPLES)], 'all')
+  assert.notEqual(exactly.temperature, null, `锚定样本正好 ${LEVERAGE_MIN_SAMPLES} 行必须给温度`)
+})
+
+// ── ③b 锚定日之前的行不参与分位 ─────────────────────────────────────────
+
+test('③b 锚定日（2024-01-01）之前的行**不参与**分位：只改前置历史 ⇒ 温度必须一字不变（注入必败）', () => {
+  const inside = daysEndingAt(400).map((d, i) => mkRow(d, { rzyezb: i < 200 ? 3 : 1 + (i % 7) / 10 }))
+  const base = daysEndingAt(300, '2023-12-29')
+  const lowHistory = [...base.map((d) => mkRow(d, { rzyezb: 0.5 })), ...inside]
+  const highHistory = [...base.map((d) => mkRow(d, { rzyezb: 9.9 })), ...inside]
+  const a = buildLeveragePayload(lowHistory, 'all')
+  const b = buildLeveragePayload(highHistory, 'all')
+  assert.notEqual(a.temperature, null, '前置条件：锚定样本足够（400 行）')
+  assert.equal(a.temperature, b.temperature, '锚定窗口完全相同 ⇒ 温度必须相同（前置历史不得影响）')
+  // 反例注入：把锚定关掉（= 全历史）⇒ 两份样本立刻不同 ⇒ 证明排除是真的在起作用
+  const aLegacy = buildLeveragePayload(lowHistory, 'all', { anchor: '0000-01-01' })
+  const bLegacy = buildLeveragePayload(highHistory, 'all', { anchor: '0000-01-01' })
+  assert.notEqual(aLegacy.temperature, bLegacy.temperature, '⚠ 反例（把 2010 起的 700 天也算进去）必须让两份样本分位不同')
+})
+
+// ── ③c 契约字段与形状不变 ───────────────────────────────────────────────
+
+test('③c 口径换了、**契约不变**：字段名与形状逐字一致（改名/加字段 ⇒ 必败）', () => {
+  const payload = buildLeveragePayload(rampRows(300), 250)
+  assert.deepEqual(leveragePayloadProblems(payload, { window: 250, samples: 300 }), [])
+  // 反例注入 ①：多一个字段
+  const extra = { ...payload, anchorDate: '2024-01-01' } as unknown as LeveragePayload
+  assert.notDeepEqual(leveragePayloadProblems(extra, { window: 250, samples: 300 }), [], '⚠ 反例（回包多带口径字段）必须被抓到')
+  // 反例注入 ②：改名
+  const renamed = { ...payload, temperaturePct: payload.temperature } as unknown as LeveragePayload
+  assert.notDeepEqual(leveragePayloadProblems(renamed, { window: 250, samples: 300 }), [], '⚠ 反例（字段改名）必须被抓到')
+  // 反例注入 ③：少了字段
+  const missing = { ...payload } as unknown as Record<string, unknown>
+  delete missing.netBuy
+  assert.notDeepEqual(leveragePayloadProblems(missing as unknown as LeveragePayload, { window: 250, samples: 300 }), [], '⚠ 反例（少字段）必须被抓到')
 })
 
 // ── ④ 每天最多 1 次上游 ─────────────────────────────────────────────────
@@ -517,6 +562,11 @@ test('分位/合并/切片三个纯函数的边界', () => {
   assert.equal(percentileRank(2, [1, 2, 3], 4), null, '样本不足 ⇒ null')
   assert.equal(percentileRank(2, [1, 2, 3], 3), 66.7, '≤ 的样本数 ÷ 总数 ⇒ 2/3')
   assert.deepEqual(expandingPercentiles([1, 2, 3], 3), [null, null, 100], '扩张窗口：样本不足给 null')
+  assert.deepEqual(
+    anchoredPercentiles([{ d: '2023-12-29', v: 9 }, { d: '2024-01-02', v: 1 }, { d: '2024-01-03', v: 2 }], '2024-01-01', 2),
+    [null, null, 100],
+    '锚定版：锚定日之前的点既不给值也不进样本',
+  )
   const merged = mergeLeverageRows([mkRow('2026-10-18')], [mkRow('2026-10-18', { rzyezb: 7 }), mkRow('2026-10-19')])
   assert.equal(merged.rows.length, 2)
   assert.equal(merged.added, 1)

@@ -96,17 +96,8 @@ export function fmtNetYi(v: number | null | undefined): string {
   return `${sign}${Math.abs(zeroed).toFixed(2)} ${unit.name}`
 }
 
-/** 唯一的说明文字前缀（**只写一次**：格式化与判据都从这里拼，避免"两处各写一遍"） */
-const ASOF_PREFIX = '截至'
-
-/**
- * `截至 YYYY-MM-DD`（**页面上唯一的说明文字**，现在显示在温度卡的小字里）。
- * ⚠ `asOf` 为空串 = 整块不可用（宿主约定）⇒ **只给 `—`**：一个没有日期的时间标记既不是读数也不是时间。
- */
-export function leverageAsOfText(payload: LeveragePayloadDto | null): string {
-  const day = payload === null ? '' : String(payload.asOf ?? '').trim()
-  return day === '' ? DASH : `${ASOF_PREFIX} ${day}`
-}
+// ⚠ R4：`asOf` 仍在契约里（宿主照常回），但**页面不再渲染任何日期小字** ——
+//   温度卡只剩「/ 100」一个后缀，页面上不再出现时间前缀（用户口径：那一行删掉）。
 
 /**
  * 余额/市值类金额（元 → 亿 / 万亿，2 位小数，**不带正负号**）。
@@ -143,7 +134,8 @@ export function windowNetSum(payload: LeveragePayloadDto | null): number | null 
  * 第一行：温度（原大字搬进卡片，带 `/ 100` 后缀与 `截至 …` 小字）/ 显性融资 / 杠杆率 / 当日融资净买入
  * 第二行：融资余额 / 融券余额 / 流通市值 / 窗口累计净买入
  *
- * `suffix` 与 `note` **只有温度卡有**：其余卡片的说明文字一律为空（页面规格：不加字）。
+ * `suffix` **只有温度卡有**（`/ 100`）；其余卡片的说明文字一律为空（页面规格：不加字）。
+ * ⚠ R4 起 `note` 字段整条删除（温度卡的日期小字已按用户要求删掉）。
  */
 /** 八张卡的键与标签（**唯一来源**：页面渲染与断言都从这里取；顺序 = 两行 × 四列的从左到右） */
 export const LEVERAGE_CARD_KEYS = ['temperature', 'ratio', 'leverage', 'net', 'margin', 'short', 'float', 'windowNet'] as const
@@ -154,13 +146,12 @@ export interface LeverageCard {
   label: string
   value: string
   suffix?: string
-  note?: string
 }
 
 export function leverageCards(payload: LeveragePayloadDto | null): LeverageCard[] {
   return [
     // 第一行
-    { key: 'temperature', label: '温度', value: fmtTemperature(payload?.temperature ?? null), suffix: '/ 100', note: leverageAsOfText(payload) },
+    { key: 'temperature', label: '温度', value: fmtTemperature(payload?.temperature ?? null), suffix: '/ 100' },
     { key: 'ratio', label: '显性融资', value: fmtRatioPct(payload?.ratioPct ?? null) },
     { key: 'leverage', label: '杠杆率', value: fmtRatioPct(payload?.ratioWithShortPct ?? null) },
     { key: 'net', label: '当日融资净买入', value: fmtNetYi(payload?.netBuy ?? null) },
@@ -740,9 +731,6 @@ const CARD_VALUE_SHAPES: readonly RegExp[] = [
   /^(?:[+-]?\d+\.\d{2} (?:亿|万亿)|—)$/, // 7 窗口累计净买入（带符号）
 ]
 
-/** 温度卡小字只允许「前缀 + YYYY-MM-DD」或 `—`（前缀从 `ASOF_PREFIX` 拼，不写第二份） */
-const CARD_NOTE_SHAPE = new RegExp(`^(?:${ASOF_PREFIX} \\d{4}-\\d{2}-\\d{2}|—)$`)
-
 /**
  * 卡片行判据（**唯一实现**）：两行 × 四列共 8 张、顺序与标签逐字、只有温度卡带后缀/小字、
  * 每个槽位的数值形态固定（任何解释文案都会被这里拒掉）。
@@ -765,11 +753,33 @@ export function leverageCardsProblems(cards: readonly LeverageCard[]): string[] 
     if (shape !== undefined && !shape.test(card.value)) bad.push(`第 ${i + 1} 张卡的数值形态不符：${JSON.stringify(card.value)}`)
     if (i === 0) {
       if (card.suffix !== '/ 100') bad.push(`温度卡必须带后缀 / 100（实得 ${JSON.stringify(card.suffix)}）`)
-      if (card.note === undefined || !CARD_NOTE_SHAPE.test(card.note)) bad.push(`温度卡小字只允许「${ASOF_PREFIX} YYYY-MM-DD」或 —（实得 ${JSON.stringify(card.note)}）`)
-    } else {
-      if (card.suffix !== undefined) bad.push(`第 ${i + 1} 张卡不许带后缀（除温度卡外不加字）`)
-      if (card.note !== undefined) bad.push(`第 ${i + 1} 张卡不许带小字（除温度卡外不加字）`)
+    } else if (card.suffix !== undefined) {
+      bad.push(`第 ${i + 1} 张卡不许带后缀（除温度卡外不加字）`)
     }
   })
+  return bad
+}
+
+/* ────────────────────────────── 4c. 卡片值字号判据（唯一实现） ────────────────────────────── */
+
+/**
+ * 卡片值字号（R4 用户口径：整体降一档 —— 温度仍为最大 28px、其余 26px）。
+ *
+ * 两者都 ≥ 15 ⇒ 属于**展示级**，不参与密集阶梯（`TYPE_SCALE` 只约束 12–14 的密集文本）；
+ * 但用户明确"不得低于 26px"，所以下限写进判据里，避免下一次"顺手再降一档"降到 24。
+ */
+export const LEVERAGE_CARD_VALUE_PX = { temperature: 28, other: 26 } as const
+
+/** 卡片值字号的**下限**（用户口径：不得低于 26px） */
+export const LEVERAGE_CARD_VALUE_MIN_PX = 26
+
+/** 卡片值字号判据（唯一实现）：温度最大、其余整齐、都不低于下限、都是展示级 */
+export function leverageCardValueSizeProblems(sizes: { temperature: number; other: number }): string[] {
+  const bad: string[] = []
+  const { temperature, other } = sizes
+  if (!(temperature >= LEVERAGE_CARD_VALUE_MIN_PX)) bad.push(`温度值字号不得低于 ${LEVERAGE_CARD_VALUE_MIN_PX}px（实得 ${temperature}）`)
+  if (!(other >= LEVERAGE_CARD_VALUE_MIN_PX)) bad.push(`其余卡片值字号不得低于 ${LEVERAGE_CARD_VALUE_MIN_PX}px（实得 ${other}）`)
+  if (!(temperature > other)) bad.push(`温度仍是最大的那个值（实得温度 ${temperature} / 其余 ${other}）`)
+  if (!(temperature < 40) || !(other < 40)) bad.push(`卡片值字号必须在展示级区间（< 40px；实得 ${temperature} / ${other}）`)
   return bad
 }
