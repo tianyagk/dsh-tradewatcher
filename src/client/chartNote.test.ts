@@ -44,10 +44,61 @@ test('E1：日期不可知时退到短形（仍能与"新鲜数据"区分）', (
 
 test('P1-2：不是今天的数据必须写出来（节假日上游回节前那天的分时）', () => {
   const expired = cacheNoteOf({ kind: 'trend', trend: { points: [{ label: '2026-10-01 09:30' }], sessionDay: '2026-10-01' } })
-  assert.equal(expired, ' · 非当日数据（10-01）')
-  assert.equal(nonSessionNote('2026-10-01'), ' · 非当日数据（10-01）')
+  // AUDIT-IMPL84：写**全年份**（跨年/长期归档时 MM-DD 认不出年份）
+  assert.equal(expired, ' · 非当日数据（2026-10-01）')
+  assert.equal(nonSessionNote('2026-10-01'), ' · 非当日数据（2026-10-01）')
   // 是今天 ⇒ 什么都不写
   assert.equal(cacheNoteOf({ kind: 'trend', trend: { points: [{ label: '2026-10-09 10:00' }] } }), '')
+})
+
+/**
+ * AUDIT-IMPL84（真机复现）：当日分时落进 LKG 时，旧实现先输出「上次成功数据（10-19 15:00）」
+ * 再跟一长串兜底库保留口径 —— 而图头写着「昨收 … · 09:30 ~ 15:00」，读者整体读成"今天的图"。
+ * 现在：只要宿主说"这不是今天的序列"，第一句必须是「非当日数据（YYYY-MM-DD）」+ 原因。
+ */
+test('AUDIT-IMPL84 ①：非当日 + 原因必须排在「上次成功数据」之前（LKG 场景）', () => {
+  const stale = cacheNoteOf({
+    kind: 'trend',
+    trend: {
+      points: [{ label: '2026-10-19 09:30' }, { label: '2026-10-19 15:00' }],
+      sessionDay: '2026-10-19',
+      nonSession: { day: '2026-10-19', reason: '当日分时未取到，显示本地兜底快照' },
+      staleAt: Date.parse('2026-10-19T17:38:11+08:00'),
+    },
+  })
+  assert.equal(stale, ' · 非当日数据（2026-10-19）：当日分时未取到，显示本地兜底快照')
+  assert.ok(!stale.includes('上次成功数据'), '非当日时不许先说「上次成功数据」（那是"今天的图慢了一点"的读法）')
+  assert.ok(!stale.includes('本地兜底（trends-lkg.d/'), '兜底库保留口径不得挤掉"非当日"这一句')
+  // 老宿主（只有 sessionDay、没有 nonSession）也照样写出日期，只是没有原因半句
+  assert.equal(
+    cacheNoteOf({ kind: 'trend', trend: { points: [{ label: '2026-10-19 15:00' }], sessionDay: '2026-10-19', staleAt: 1 } }),
+    ' · 非当日数据（2026-10-19）',
+  )
+})
+
+/** 反例注入（必败）：把优先级恢复成"上次成功数据先"（= 修复前的顺序）⇒ 上面那条断言必须失败 */
+test('AUDIT-IMPL84 ① 反例：非当日退回 staleAt 之后 ⇒ 断言必败', () => {
+  const payload = {
+    kind: 'trend' as const,
+    trend: {
+      points: [{ label: '2026-10-19 15:00' }],
+      sessionDay: '2026-10-19',
+      nonSession: { day: '2026-10-19', reason: '当日分时未取到，显示本地兜底快照' },
+      staleAt: 1,
+    },
+  }
+  // 修复前的顺序（等价于 oldCacheNoteOf）：先看 staleAt，非当日放在后面
+  const oldCacheNoteOf = (p: { trend: { points: Array<{ label: string }>; sessionDay?: string; staleAt?: number } }): string =>
+    p.trend.staleAt !== undefined ? lastSuccessNote(p as never) : nonSessionNote(p.trend.sessionDay ?? '')
+  const oldNote = oldCacheNoteOf(payload)
+  assert.ok(oldNote.startsWith(' · 上次成功数据'), `修复前的实现必须被这条断言抓住（实际：${oldNote}）`)
+  assert.throws(
+    () => assert.equal(oldNote, ' · 非当日数据（2026-10-19）：当日分时未取到，显示本地兜底快照'),
+    /非当日数据/,
+    '⚠ 反例（非当日排到 staleAt 之后）必须让断言失败',
+  )
+  // 正确实现仍然给出完整那一句
+  assert.equal(cacheNoteOf(payload), ' · 非当日数据（2026-10-19）：当日分时未取到，显示本地兜底快照')
 })
 
 test('其它两种口径各自独立：定稿缓存 / 本地缓存不写成"上次成功数据"', () => {

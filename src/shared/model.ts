@@ -250,6 +250,30 @@ export interface TrendArchiveInfo {
   skipped: Array<{ day: string; reason: string }>
 }
 
+/** 分时序列的来源（见 `TrendData.source` 的口径表；**每一条都要能说清是哪个源**） */
+export type TrendSource =
+  | 'eastmoney-trends2'
+  | 'sina-minute'
+  | 'tencent-minute'
+  | 'sina-5min'
+  | 'tencent-5min'
+  | 'local-stitch'
+
+/**
+ * **非当日数据**的交代（AUDIT-IMPL84）：最后一个点属于 `day`，不是今天。
+ *
+ * `reason` 是一行短因（常驻脚注），`detail` 是完整链路（悬停/读屏）：
+ * 用户必须能分清"上游这会儿不可达（会自愈）"与"这个市场没有当日源（等也没用）"。
+ */
+export interface TrendNonSession {
+  /** 数据所属交易日 `YYYY-MM-DD` */
+  day: string
+  /** 一行短原因（常驻可见） */
+  reason: string
+  /** 完整原因（悬停/aria），可缺省 */
+  detail?: string
+}
+
 export interface TrendData {
   secid: string
   /** The feed's own previous-close/settlement baseline. */
@@ -267,11 +291,34 @@ export interface TrendData {
    */
   sessionDay?: string
   /**
-   * `'local-stitch'` = 多日序列是**本地归档拼接**出来的（不是真实多日源），
-   * 覆盖情况见 `coverage`；缺省表示来自上游（东财/腾讯/新浪）。
-   * 界面对两者必须给出不同说明：拼接是"从本版起累积"，不是"上游给了五日"。
+   * 这份序列**实际来自哪条链**（如实交代来源，不是猜的）：
+   *   · `eastmoney-trends2` — 东财分时（唯一给 VWAP + 每分钟成交额的源）
+   *   · `sina-minute` / `tencent-minute` — 当日分时的备用分钟源
+   *   · `sina-5min` / `tencent-5min` — 五日（多日分钟源）
+   *   · `local-stitch` — 多日序列是**本地归档拼接**出来的（不是真实多日源），覆盖情况见 `coverage`
+   * 界面对它们必须给出不同说明：拼接是"从本版起累积"，不是"上游给了五日"。
    */
-  source?: 'local-stitch'
+  source?: TrendSource
+  /**
+   * 这份数据的**观测时刻**（epoch ms）：上游/备用源成功取到的那一刻；
+   * 走本地兜底快照时 = 那份快照写入的时刻（此时同时给 `staleAt`）。
+   * ⚠ 它不是"响应生成时刻"，也不是"最后一个点的时刻" —— 三者必须能分开读。
+   */
+  asOf?: number
+  /**
+   * 这份数据不是"刚刚从上游拿到的"（LKG 兜底）。
+   * 与 `staleAt` 同时出现；界面沿用"上次成功数据（MM-DD HH:mm）"那一句。
+   */
+  stale?: boolean
+  /**
+   * **非当日数据**的结构化交代（AUDIT-IMPL84）：最后一个点所属交易日 ≠ 今天时必须给。
+   *
+   * 为什么单开一个字段而不是只靠 `sessionDay`：`sessionDay` 只说"是哪天"，
+   * 说不出"为什么今天没有数据" —— 用户看到昨天的曲线却不知道是该等（上游限流）
+   * 还是没得等（该市场无当日源）。界面必须把 `day` + `reason` 一起常驻显示，
+   * **不许**把非当日序列当当日分时静默展示。
+   */
+  nonSession?: TrendNonSession
   /**
    * 紧凑标签编码（AUDIT-IMPL77 第 2 项）：`labelFormat === 'hhmm'` 时，逐点的 `label` 只有 `HH:mm`
    * （日期挪到 `labelDay`），单日 242 点省 ≈4.8 KB。读侧必须走

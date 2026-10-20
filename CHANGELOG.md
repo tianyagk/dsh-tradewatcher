@@ -11,6 +11,53 @@
 
 ---
 
+## v0.112.0 — 修「当日分时显示昨日」：当日链补新浪源 + 非当日必须标注 + 缓存键带交易日 + 门控窗口修正
+
+报告 `docs/AUDIT-IMPL84.md`。`npm run check` **934 / 934 × 2 时区** + selftest + build（73 片段全过）；`build.mjs` 未改动。
+
+### 根因：两条链的**源集合不一致**，不是上游旧
+
+| 链 | 修前的源集合 |
+| --- | --- |
+| **当日分时** | 东财 `trends2` → 腾讯分钟（`web.ifzq.gtimg.cn`） |
+| 五日分时 | **新浪 5min**（`quotes.sina.cn`）→ 腾讯 5min（`proxy.finance.qq.com`） |
+
+真机现场（09:56–09:59）：东财三主机**全熔断**（`/health` `breaker.allOpen=true`，`fetch failed` ×12/22/24）+ 腾讯分钟域名被 **WAF 501** + **新浪可用** ⇒ 当日只剩昨日 LKG，五日拿到当日 ⇒ 同一时刻两个日期。
+
+**复现取证**：`ndays=1` ⇒ 242 点全 `2026-10-19`，`staleAt=2026-10-19 17:38:11`；同刻 `ndays=5` ⇒ 末点 `2026-10-20 10:00`。隔离环境可重放同一形状。
+
+**附带两条同源缺陷**：内存缓存键 `trend:<secid>:<ndays>` **不含交易日**（跨日可命中）；定稿门控从 **09:25** 起算 ⇒ 09:15–09:25 集合竞价把昨天判成「已定稿」并复用 300 秒。
+
+### 修法
+
+1. **补源（同源同序）**：`em.ts:1653` 新增 `fetchSinaMinuteBars`（唯一取数/解析，显式 `+08:00`）；`:1692` `sinaMinuteTrend`（新浪 1min → 当日分时，成交量股→手，`avg` 恒 `null` 不凑）；`:1749` `minuteFallbackSources()` = 新浪 → 腾讯；`:1432` 备用段改为**按源表逐个试并记录每源失败原因**（旧：只问腾讯一家）；`fetchSina5Min` 复用同一取数（顺带修掉无偏移 `Date.parse` 在 `TZ=UTC` 偏 8 小时）。
+2. **诚实性兜底**：`em.ts:1463` `annotate()` —— 非当日 ⇒ `sessionDay` + `nonSession{day, reason, detail}`；LKG ⇒ `stale/asOf`。`model.ts:268/307/312/321` 新增 `TrendNonSession` / `asOf` / `stale`，`source` 扩为可逐条归因。`chartNote.ts:125` 日期改**全年份**、`:135` `nonSessionOf()`、`:160` **非当日提到脚注第一句 + 原因**；`QuoteDrawer.tsx:437` 图头改口（单日 `10-19 09:30 ~ 15:00`、多日「末行为 2026-10-19」）。
+3. **缓存键带交易日**：`trendCacheKey(secid, ndays, now)` = `trend:<secid>:<ndays>:<day>`，缓存/定稿/在飞合并全改用它。
+4. **门控窗口**：`time.ts:183` 新增 `inMarketWindow`（工作日 **09:15–15:05**）；`isSettledOffline` 改用它 ⇒ **交易窗口内永不判定稿**（顺带修好 quotes/kline 的同类门控）；非交易时段行为不变。
+
+### 改前/改后（同标的、同一时刻，隔离）
+
+| 场景 | 改前 | 改后 |
+| --- | --- | --- |
+| 东财熔断 + 腾讯不可达 | 1 日 **10-19 09:30**，`staleAt` 10-19 17:38，**无** `source`/`nonSession` | 1 日 **10-20 10:07**，`source=sina-minute`，**脚注为空** |
+| 三源全灭 | 10-19，有 `sessionDay` **但无原因** | 10-19 + `nonSession{day, reason, detail}` + `stale=true`，脚注首句 **`· 非当日数据（2026-10-19）：当日分时未取到，显示本地兜底快照`** |
+
+### 验证
+
+`npm run check` **934 / 934 × 2 时区** + selftest + build（73 项）；新增 14 条（宿主 10 + 客户端 2 + 脚注 2）。
+注入全部变红：缓存键去日期（跨日命中 10-19）｜备用链只剩腾讯（1 日 = 10-19）｜摘掉 `nonSession`/`sessionDay`｜旧 09:25 门控（`settled=true`）｜UI 恒 `slice(11)` + 「末行为今日」｜脚注退回 `staleAt` 优先。
+**唯一改动的既有断言**是收紧：`非当日数据（10-01）` → `（2026-10-01）`（改全年份）。
+
+### ⚠ 现场是间歇性的
+
+10:04 腾讯偶发通过后宿主又恢复成 10-20（10:11 复读 1 日 = 10-20 10:05）。**结构性缺陷与诚实性缺口由测试与隔离复现钉住，不依赖现场运气**；真机复验需重启后看 `ndays=1` 的 `source` 是否为 `sina-minute` 或 `eastmoney-trends2`、末点为当日。
+
+### 未做（已记录）
+
+- 腾讯分钟换域名到 `proxy.finance.qq.com`（实测 200 当日；但护盘采样也用该域名，属另一条链行为变更）。
+- `mini.ts` 的 90 秒缩略图缓存键仍无日期（无文字承载面）。
+- `parseTrendRow` 的 `t` 无显式 `+08:00`（界面全走 `label`，未影响本问题）。
+
 ## v0.111.0 — 新增第 8 行 `fupan`（复盘）：月历 + 当日笔记 + 钉到未来日期
 
 概念参考第三方插件 `dsh-fupan`（MIT），**自行实现**、不引其代码/样式。报告 `docs/AUDIT-IMPL82/83.md`。`npm run check` **920 / 920 × 2 时区** + selftest + build（73 片段全过）；`build.mjs` 未改动。

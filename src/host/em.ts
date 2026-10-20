@@ -13,7 +13,7 @@ import type {
   TrendData,
   TrendPoint,
 } from '../shared/model.ts'
-import { MISSING_TIER_ADVICE, SECID_RE, normalizeTrendSeries } from '../shared/model.ts'
+import { MISSING_TIER_ADVICE, SECID_RE, normalizeTrendSeries, type TrendSource } from '../shared/model.ts'
 import { BREADTH_HS_A_FS, BREADTH_PAGE_SIZE, type CountPage } from './breadthCount.ts'
 import { isMultiDayTrend, stitchTrendDays } from '../shared/trendStitch.ts'
 import { TREND_ARCHIVE_KEEP_DAYS, archiveTrendDays, loadTrendArchive, type TrendArchiveEntry } from './trendArchive.ts'
@@ -28,7 +28,7 @@ import { fetchSinaEtfRanking, fetchSinaQuotes, fetchSinaUsDaily, fetchSinaUsMin,
 import { fetchTencentBoards, fetchTencentMinutes, fetchTencentQuoteRows, fetchTencentSuggest, minuteTrendPointsOf, tencentCode, tencentIndexCode, tencentQuoteCode, type TencentQuoteFull } from './tencent.ts'
 import { join } from 'node:path'
 import { dataHome } from './store.ts'
-import { hhmmOf, dayOf, inSession, isSettledOffline, shanghaiParts, usDayOf, inUsSession, isUsSettledOffline } from './time.ts'
+import { hhmmOf, dayOf, inSession, isSettledOffline, parseMarketStamp, shStampText, shanghaiParts, usDayOf, inUsSession, isUsSettledOffline } from './time.ts'
 import { UpstreamCoolingError, withHostBreaker } from './breakerFetch.ts'
 import { noteDegraded, noteHostFailure, noteHostSkipped, noteHostSuccess, shortError } from './degrade.ts'
 import { normalizeVolUnits, tencentVolToHands } from './klineUnits.ts'
@@ -1364,22 +1364,41 @@ export function __trendLkgMissingOf(): ReturnType<TrendLkgStore['missingOf']> {
  */
 const trendInflight = new Map<string, Promise<TrendData | null>>()
 
-/** 分时取数统一入口：内存新鲜缓存 → 休市定稿复用 → 上游（带重试）→ last-known-good */
+/** 失败原因的一行短形（只用于"为什么没取到"的文案，不参与判定） */
+function briefError(error: unknown, max = 48): string {
+  const text = error instanceof Error ? error.message : String(error)
+  const flat = text.replace(/\s+/g, ' ').trim()
+  return flat.length <= max ? flat : `${flat.slice(0, max)}…`
+}
+
+/**
+ * 分时（当日 + 五日）内存缓存的键：**必须带交易日**。
+ *
+ * 为什么：旧键是 `trend:<secid>:<ndays>`，不含日期。前一天 15:0x 存下的那份当日序列，
+ * 第二天 09:2x 用同一个键就会原样吐出来（`readFresh` 只看 TTL，不看"这是哪天的"）——
+ * 界面于是把**昨天的整场**当今天画（AUDIT-IMPL84 真机复现：09:56 仍是 10-19 的 242 点）。
+ * 带日期后，跨交易日自然 miss ⇒ 必然回源或走"非当日"兜底（且兜底会如实标注）。
+ */
+export function trendCacheKey(secid: string, ndays: number, now: number): string {
+  return `trend:${secid}:${ndays}:${dayOf(now)}`
+}
+
+/** 分时取数统一入口：内存新鲜缓存 → 休市定稿复用 → 上游（带重试）→ 活的备用源 → last-known-good */
 async function trendWithFallbackRaw(
   secid: string,
   ndays: number,
   loader: () => Promise<TrendData | null>,
   opts: TrendOptions = {},
 ): Promise<TrendData | null> {
+  const now = opts.now ?? Date.now()
   await loadTrendLkg()
-  const key = `trend:${secid}:${ndays}`
+  const key = trendCacheKey(secid, ndays, now)
   const fresh = readFresh<TrendData>(key)
   if (fresh !== undefined) return fresh
   // 休市且本地快照已越过最近一次收盘 → 当天的分时/五日序列不会再变，直接吃本地
-  // （进程重启后仍生效：分片兜底库是落盘的）。盘中 / 快照过期一律走上游。
+  // （进程重启后仍生效：分片兜底库是落盘的）。**交易窗口内（09:15–15:05）一律回源**。
   const settled = lkgStore.get(trendKey(secid, ndays))
-  // 休市定稿分支**不动**：那时当天的序列不会再变，复用本地是正确行为
-  if (settled !== undefined && settled.trend.points.length >= 2 && isSettledOffline(settled.at, opts.now ?? Date.now())) {
+  if (settled !== undefined && settled.trend.points.length >= 2 && isSettledOffline(settled.at, now)) {
     const reused: TrendData = { ...settled.trend, cached: true }
     cache.set(key, { exp: Date.now() + 300_000, value: reused })
     return reused
@@ -1387,20 +1406,44 @@ async function trendWithFallbackRaw(
   const pending = trendInflight.get(key)
   if (pending !== undefined) return pending
   const run = (async (): Promise<TrendData | null> => {
-    // ⚠ 顺序：**上游 → 活的备用源（腾讯分钟线）→ LKG**（判据见 pickTrendFallback）。
+    // ⚠ 顺序：**上游 → 活的备用源链 → LKG**（判据见 pickTrendFallback）。
     // 决不能在备用源之前吃 LKG：那会让"有昨日 LKG 的标的"在东财不可达时永远显示昨天。
     let upstream: TrendData | null = null
-    let upstreamThrew = false
+    let upstreamError: string | null = null
     try {
       upstream = await loader()
-    } catch {
-      upstreamThrew = true
+    } catch (error) {
+      upstreamError = briefError(error)
     }
+    const upstreamThrew = upstreamError !== null
+    /** 备用段逐源失败的原因（进"非当日"的 detail，用户能分清"会自愈"与"没得等"） */
+    const failures: string[] = []
     let backup: TrendData | null = null
     if (upstream === null || upstream.points.length < 2) {
-      backup = await (opts.fallbackSource ?? tencentTrend)(secid).catch(() => null)
+      if (upstream !== null) failures.push('东财：只回了 1 个点')
+      /**
+       * 备用段**按同一份源表依次尝试**（`minuteFallbackSources()`）：
+       * 旧实现只问腾讯一家 ⇒ 腾讯那次不可达（本机实测 WAF 拦回 501 页 / 连接被掐）就
+       * 直接掉到 LKG，而五日链走的是新浪 —— 同一时刻两条链给出**不同日期**（AUDIT-IMPL84）。
+       * 现在两条链共用同一组分钟源（新浪 → 腾讯），任一可用就能出当日数据。
+       */
+      const chain = opts.minuteSources
+        ?? (opts.fallbackSource !== undefined ? [injectedMinuteSource(opts.fallbackSource)] : minuteFallbackSources())
+      for (const source of chain) {
+        let got: TrendData | null = null
+        try {
+          got = await source.fetch(secid)
+        } catch (error) {
+          failures.push(`${source.label}：${briefError(error)}`)
+          continue
+        }
+        if (got !== null && got.points.length >= 2) {
+          backup = got
+          break
+        }
+        failures.push(`${source.label}：本次无数据`)
+      }
     }
-    const now = opts.now ?? Date.now()
     const picked = pickTrendFallback({ upstream, backup, lkg: await lastGoodTrend(secid, ndays), today: dayOf(now) })
     if (picked.data === null) {
       // 上游与备用源都没给数据 —— 记账（"东财被限流"与"该标的没有分时"必须能分开）
@@ -1408,16 +1451,42 @@ async function trendWithFallbackRaw(
       // 返回 null（路由回 200 + trend:null），客户端按"暂无分时"降级
       return null
     }
-    // 缓存 TTL 按来源区分：实时值 60s、备用源 30s、LKG 20s（LKG 是"可能过期"的数据，短 TTL 逼着重新回源试探；
-    // TTL 就是 TTL，不再有隐式宽限，见 readFresh 的说明）
-    // 方向二：**不是今天**的数据必须留下痕迹（节假日上游会回节前那天的分时）。
-    // `expired` 就是为此算的 —— 客户端拿它写「· 非当日数据（MM-DD）」，否则旧交易日会被读成今天。
-    const annotate = (data: TrendData): TrendData =>
-      picked.sessionDay !== null && (picked.expired || picked.from === 'lkg')
-        ? { ...data, sessionDay: picked.sessionDay }
-        : data
+    /**
+     * 诚实性兜底（AUDIT-IMPL84）：**不是今天的数据必须留下痕迹**，而且要带上原因。
+     *
+     * 旧实现只写 `sessionDay`（"是哪天"），说不出"为什么今天没有"；客户端那条
+     * "上次成功数据（MM-DD HH:mm）"又把措辞盖在前面 —— 真机上用户看到的仍是
+     * 「昨收 … · 09:30 ~ 15:00」，读成当日（红线：看着正常的错数）。
+     * 现在：非当日 ⇒ `sessionDay` + `nonSession{day,reason,detail}` 一起给，
+     * 由界面常驻写「非当日数据（YYYY-MM-DD）：<原因>」。
+     */
+    const annotate = (data: TrendData): TrendData => {
+      const sessionDay = picked.sessionDay
+      const asOf = picked.from === 'lkg' ? (typeof data.staleAt === 'number' ? data.staleAt : now) : now
+      const base: TrendData = { ...data, asOf }
+      if (picked.from === 'lkg') base.stale = true
+      if (sessionDay === null || sessionDay === dayOf(now)) return base
+      const sourceLabel = data.source ?? (picked.from === 'lkg' ? '本地兜底快照' : '上游')
+      const short = picked.from === 'lkg'
+        ? '当日分时未取到，显示本地兜底快照'
+        : `上游（${sourceLabel}）回的是 ${sessionDay} 的序列，今天暂无分时数据`
+      const tried = [
+        ...(upstreamError === null ? [] : [`东财 trends2：${upstreamError}`]),
+        ...failures,
+      ]
+      return {
+        ...base,
+        sessionDay,
+        nonSession: {
+          day: sessionDay,
+          reason: short,
+          detail: picked.from === 'lkg'
+            ? `当日分时未取到（${tried.length === 0 ? '上游与备用源本次都没有数据' : tried.join('；')}）⇒ 显示 ${typeof data.staleAt === 'number' ? shStampText(data.staleAt) : '上一次'} 取到的本地兜底快照`
+            : `来源 ${sourceLabel}；本次取数时刻 ${shStampText(now)}`,
+        },
+      }
+    }
     if (picked.from === 'lkg') {
-      // 兜底回 LKG：带上这份数据自己的交易日，界面据此写明"这是哪天的"
       const annotated = annotate(picked.data)
       cache.set(key, { exp: Date.now() + 20_000, value: annotated })
       return annotated
@@ -1451,8 +1520,14 @@ export interface TrendOptions {
   now?: number
   /** 注入上游取数（测试用；默认走东财 trends2 / 新浪·腾讯多日链） */
   upstream?: (secid: string, ndays: number) => Promise<TrendData | null>
-  /** 注入活的备用源（测试用；默认腾讯分钟线） */
+  /** 注入活的备用源（测试用；默认见 `minuteFallbackSources()`） */
   fallbackSource?: (secid: string) => Promise<TrendData | null>
+  /**
+   * 注入整条**备用分钟源链**（测试/诊断用；缺省 = `minuteFallbackSources()`，即新浪 → 腾讯）。
+   * 与 `fallbackSource` 的区别：这里能构造"第一源挂、第二源可用"这类多源现场 ——
+   * "两条链必须同源优先序"这条断言离线可测就靠它（AUDIT-IMPL84 §3）。
+   */
+  minuteSources?: readonly MinuteSource[]
   /**
    * 只给"验证上游多日能力"与将来接多日用：把东财 `trends2` 的 `ndays` 改成指定值。
    * 默认 1（既有行为不变，路由也不设置它）—— 上游到底认不认 `ndays`，用我们自己的取数链实测。
@@ -1555,8 +1630,139 @@ async function tencentTrend(secid: string): Promise<TrendData | null> {
     points: clean,
     last: clean[clean.length - 1]?.price ?? null,
     staleAt: undefined,
+    source: 'tencent-minute',
   }
 }
+
+/** 新浪分钟线的一根（`volume` 是**股**、`amount` 是该根的成交额（元），不是累计值） */
+interface SinaMinuteBar {
+  t: number
+  label: string
+  price: number
+  vol: number | null
+  amount: number | null
+}
+
+/**
+ * 新浪分钟线（`scale=1` / `scale=5`）——**当日分时**与五日分时共用同一个上游家族。
+ *
+ * 实测（2026-10-20 真机，A股/ETF）：`scale=1&datalen=1023` 回 1023 根、5 个交易日，
+ * 每个交易日 238 根（**09:31 → 15:00**，上游不给 09:30 那根）；`volume` 是**股**、
+ * `amount` 是**该根**成交额（元）——与腾讯"累计值"不同，不需要差分。
+ */
+async function fetchSinaMinuteBars(sym: string, scale: 1 | 5, datalen: number): Promise<SinaMinuteBar[]> {
+  const url = `https://quotes.sina.cn/cn/api/json_v2.php/CN_MarketDataService.getKLineData?symbol=${sym}&scale=${scale}&ma=no&datalen=${datalen}`
+  const res = await withHostBreaker('quotes.sina.cn', () =>
+    fetch(url, {
+      headers: { 'user-agent': UA, referer: 'https://finance.sina.com.cn' },
+      signal: AbortSignal.timeout(9000),
+    }),
+  )
+  if (!res.ok) throw new Error(`HTTP ${res.status} from sina`)
+  const rows = (await res.json()) as Array<{ day?: unknown; close?: unknown; volume?: unknown; amount?: unknown }>
+  if (!Array.isArray(rows)) return []
+  const out: SinaMinuteBar[] = []
+  for (const r of rows) {
+    if (typeof r.day !== 'string') continue
+    const label = r.day.slice(0, 16) // 上游给 `YYYY-MM-DD HH:mm:ss`（**北京墙上时间**）
+    const price = num(r.close)
+    if (price === null) continue
+    // ⚠ 北京墙上时间 ⇒ 显式 +08:00（无偏移的 Date.parse 在 TZ=UTC 宿主要偏 8 小时）
+    const t = parseMarketStamp(label)
+    if (!Number.isFinite(t)) continue
+    out.push({ t, label, price, vol: num(r.volume), amount: num(r.amount) })
+  }
+  return out
+}
+
+/**
+ * 新浪 1 分钟线 → **当日分时**（东财不可用时的备用源；与五日链同一个上游家族）。
+ *
+ * 为什么必须有它（AUDIT-IMPL84）：旧实现的当日链只有「东财 trends2 → 腾讯分钟」两个源，
+ * 而五日链走的是「新浪 5 分钟 → 腾讯 5 分钟」。腾讯那条在本机实测被 WAF 拦回 501 页，
+ * 于是同一时刻：五日有当日的 10-20，当日却只能吃昨日的本地兜底 —— 两条链给出**不同日期**。
+ * 补上新浪之后两条链的源集合一致，任一源可用就能出当日数据（同源优先序见 `minuteFallbackSources`）。
+ *
+ * 口径（都写进 `caliber`，界面照显示）：
+ *   · 只保留**最后一个交易日**的点（当日分时），前一天只用它的最后一根当**昨收的近似**；
+ *   · `vol` 由上游的**股**换算成**手**（÷100），与东财/腾讯分钟的口径一致；
+ *   · `amount` 是上游直给的**该根成交额**（元，不是差分推导值）；
+ *   · `avg` 恒为 `null` —— 新浪不给均价，**不拿价格凑**（不用虚构的 VWAP 冒充）。
+ */
+async function sinaMinuteTrend(secid: string): Promise<TrendData | null> {
+  const sym = sinaSymbol(secid)
+  if (sym === null) return null
+  // 520 根 ≈ 2.2 个交易日（每日 238 根）：最后一天当日用，前一天给昨收
+  const bars = await fetchSinaMinuteBars(sym, 1, 520)
+  if (bars.length < 5) return null
+  const days = [...new Set(bars.map((b) => b.label.slice(0, 10)))].sort()
+  const day = days[days.length - 1]
+  if (day === undefined) return null
+  const picked = bars.filter((b) => b.label.slice(0, 10) === day)
+  if (picked.length < 5) return null
+  const prevDay = days[days.length - 2] ?? null
+  const prevBars = prevDay === null ? [] : bars.filter((b) => b.label.slice(0, 10) === prevDay)
+  const points: TrendPoint[] = picked.map((b) => ({
+    t: b.t,
+    label: b.label,
+    price: b.price,
+    avg: null,
+    // 股 → 手（上游给的是股数；东财/腾讯分钟给的是手）
+    vol: b.vol === null ? null : Math.round(b.vol / 100),
+    amount: b.amount,
+  }))
+  const clean = normalizeTrendSeries(points)
+  return {
+    secid,
+    prePrice: prevBars.length === 0 ? null : prevBars[prevBars.length - 1].price,
+    points: clean,
+    last: clean[clean.length - 1]?.price ?? null,
+    source: 'sina-minute',
+    timeZone: 'Asia/Shanghai',
+    caliber: [
+      '来源：新浪 1 分钟线（当日分时的备用源）',
+      '时区：北京',
+      '不复权（分时序列无除权概念）',
+      '成交量单位：手（上游给股数，已 ÷100）',
+      '首根为 09:31（上游不给 09:30 那根）',
+      '无均价线（新浪不提供均价；不用价格凑）',
+      ...(prevDay === null ? [] : [`昨收＝${prevDay} 最后一根分钟收盘（非交易所官方收盘）`]),
+    ].join(' · '),
+  }
+}
+
+/** 备用分钟源（`source` 取值见 `TrendSource`） */
+export interface MinuteSource {
+  key: 'sina-minute' | 'tencent-minute' | 'injected'
+  /** 原因文案里的名字（"为什么没取到"要能指名道姓） */
+  label: string
+  fetch: (secid: string) => Promise<TrendData | null>
+}
+
+/**
+ * **当日分时的备用源表**（顺序 = 优先序）：新浪分钟 → 腾讯分钟。
+ *
+ * ⚠ 与五日链**同源同序**：五日链是「新浪 5 分钟 → 腾讯 5 分钟」(`multiDayMinuteSources`)。
+ * 两条链必须共用同一组分钟源 —— 否则一条链有当日数据、另一条只能吃昨日兜底，
+ * 同一时刻两个页签就给出不同日期（AUDIT-IMPL84 的真机现象）。
+ */
+export function minuteFallbackSources(): readonly MinuteSource[] {
+  return [
+    { key: 'sina-minute', label: '新浪分钟', fetch: sinaMinuteTrend },
+    { key: 'tencent-minute', label: '腾讯分钟', fetch: tencentTrend },
+  ]
+}
+
+/** 五日链的分钟源（与当日链同源、同序，粒度改 5 分钟）——判据在 `fetchMultiDayTrend` 里按它逐个试 */
+export function multiDayMinuteSources(): readonly TrendSource[] {
+  return ['sina-5min', 'tencent-5min']
+}
+
+/** 注入源（测试/诊断用）：与真实源同形，顺序不变（上游 → 注入的备用源 → LKG） */
+function injectedMinuteSource(fetch: (secid: string) => Promise<TrendData | null>): MinuteSource {
+  return { key: 'injected', label: '注入的备用源', fetch }
+}
+
 
 /**
  * 东财单日分时。
@@ -1599,7 +1805,7 @@ async function fetchTrendSingleDay(secid: string, opts: TrendOptions = {}): Prom
     const pre = rawPre !== null && rawPre > 0 ? rawPre : null
     // 缺失不许编码成 0：东财对国际指数/外盘商品一律回 avg/vol/amount = 0（见 normalizeTrendSeries）
     const clean = normalizeTrendSeries(points)
-    return { secid, prePrice: pre, points: clean, last: clean[clean.length - 1]?.price ?? null }
+    return { secid, prePrice: pre, points: clean, last: clean[clean.length - 1]?.price ?? null, source: 'eastmoney-trends2' as TrendSource }
   }, opts)
 }
 
@@ -1637,26 +1843,10 @@ interface MinuteBar {
 
 /** 新浪 5 分钟 K 线（一次可取多个交易日，用于「五日」视图）。 */
 async function fetchSina5Min(sym: string, datalen: number): Promise<MinuteBar[]> {
-  const url = `https://quotes.sina.cn/cn/api/json_v2.php/CN_MarketDataService.getKLineData?symbol=${sym}&scale=5&ma=no&datalen=${datalen}`
-  const res = await withHostBreaker('quotes.sina.cn', () =>
-    fetch(url, {
-      headers: { 'user-agent': UA, referer: 'https://finance.sina.com.cn' },
-      signal: AbortSignal.timeout(9000),
-    }),
-  )
-  if (!res.ok) throw new Error(`HTTP ${res.status} from sina`)
-  const rows = (await res.json()) as Array<{ day?: unknown; close?: unknown; volume?: unknown }>
-  if (!Array.isArray(rows)) return []
-  const out: MinuteBar[] = []
-  for (const r of rows) {
-    const label = typeof r.day === 'string' ? r.day.slice(0, 16) : null
-    const price = num(r.close)
-    if (label === null || price === null) continue
-    const t = Date.parse(label.replace(' ', 'T'))
-    if (!Number.isFinite(t)) continue
-    out.push({ t, label, price, vol: num(r.volume) })
-  }
-  return out
+  // 与当日分时的备用源**同一个上游、同一段解析**（`fetchSinaMinuteBars`）——
+  // 两处各写一份 URL/时间解析就会漂：这里曾用无偏移的 `Date.parse`，TZ=UTC 宿主会整体偏 8 小时。
+  const bars = await fetchSinaMinuteBars(sym, 5, datalen)
+  return bars.map((b) => ({ t: b.t, label: b.label, price: b.price, vol: b.vol }))
 }
 
 /** 腾讯 5 分钟 K 线（新浪失败时的兜底，仅 A股/ETF）。 */
@@ -1745,24 +1935,26 @@ async function fetchMultiDayTrend(secid: string, days: number): Promise<TrendDat
   const txSym = tencentCode(secid)
   if (sinaSym === null && txSym === null) return null
   const datalen = Math.min(1000, days * 48 + 24)
-  const bars = await ttlCache<MinuteBar[]>(`trend-md:${sinaSym ?? '-'}:${txSym ?? '-'}:${datalen}`, 90_000, async () => {
+  // 逐源尝试并**记住是谁答的**（`source` 要如实交代；顺序与当日链同源同序：新浪 → 腾讯）
+  const got = await ttlCache<{ bars: MinuteBar[]; source: TrendSource }>(`trend-md:${sinaSym ?? '-'}:${txSym ?? '-'}:${datalen}`, 90_000, async () => {
     if (sinaSym !== null) {
       try {
         const s = await fetchSina5Min(sinaSym, datalen)
-        if (s.length > 0) return s
+        if (s.length > 0) return { bars: s, source: 'sina-5min' as TrendSource }
       } catch {
         /* 换腾讯 */
       }
     }
     if (txSym !== null) {
       try {
-        return await fetchTencent5Min(txSym, datalen)
+        return { bars: await fetchTencent5Min(txSym, datalen), source: 'tencent-5min' as TrendSource }
       } catch {
-        return []
+        return { bars: [], source: 'tencent-5min' as TrendSource }
       }
     }
-    return []
+    return { bars: [], source: 'sina-5min' as TrendSource }
   })
+  const bars = got.bars
   if (bars.length === 0) return null
   const dates = [...new Set(bars.map((b) => b.label.slice(0, 10)))].sort()
   const keep = new Set(dates.slice(-days))
@@ -1771,7 +1963,7 @@ async function fetchMultiDayTrend(secid: string, days: number): Promise<TrendDat
     .map((b) => ({ t: b.t, label: b.label, price: b.price, avg: null, vol: b.vol }))
   if (points.length === 0) return null
   const clean = normalizeTrendSeries(points)
-  return { secid, prePrice: null, points: clean, last: clean[clean.length - 1]?.price ?? null }
+  return { secid, prePrice: null, points: clean, last: clean[clean.length - 1]?.price ?? null, source: got.source }
 }
 
  // 结论（task-50 实测）：**我们的两条多日渠道（新浪 5 分钟线、腾讯 5 分钟线）只覆盖沪/深**；
@@ -1784,7 +1976,9 @@ export async function fetchTrend(secid: string, ndays = 1, opts: TrendOptions = 
   if (days > 1) {
     // 1) 真实多日源（新浪 5 分钟线 → 腾讯 5 分钟线）：**只覆盖沪/深**
     const multi = await trendWithFallback(secid, days, async () => {
-      const got = await fetchMultiDayTrend(secid, days)
+      // 注入上游（测试/诊断用）：**多日链也认同一个注入点** ——
+      // 否则"同一时刻两条链的日期必须一致"这条断言没法在离线环境里构造（AUDIT-IMPL84 §3）。
+      const got = opts.upstream !== undefined ? await opts.upstream(secid, days) : await fetchMultiDayTrend(secid, days)
       return got !== null && got.points.length > 0 ? got : null
     }, opts)
     // ⚠ 判据是"**真有多天**"（不同日期数 ≥2），不是"点数 > 1"：

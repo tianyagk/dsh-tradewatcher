@@ -6,6 +6,12 @@ import { TREND_LKG_RETENTION_NOTE } from '../shared/trendRetention.ts'
 export interface NoteTrendLike {
   /** 序列最后一个点所属交易日（宿主在"不是今天"时才会给） */
   sessionDay?: string
+  /**
+   * **非当日数据**的结构化交代（AUDIT-IMPL84 起，宿主 `TrendData.nonSession`）：
+   * `{day, reason, detail}` —— 只说"是哪天"不够，必须说清"为什么今天没有"。
+   * 缺省（老宿主）时退回 `sessionDay`，仍然要写出日期。
+   */
+  nonSession?: { day: string; reason: string; detail?: string }
   staleAt?: number
   /** 宿主已把这份数据冻结（休市定稿，零回源） */
   cached?: boolean
@@ -110,9 +116,34 @@ export function visibleProvenanceOf(cn: string): string {
   return cn
 }
 
-/** `· 非当日数据（MM-DD）`：上游这次回的是**过去某个交易日**的序列（节假日/停市） */
+/**
+ * `· 非当日数据（YYYY-MM-DD）`：上游这次回的是**过去某个交易日**的序列（节假日/停市）。
+ *
+ * 为什么写**全年份**（`2026-10-19`）而不是只写 `10-19`：这条提示要能独立读，
+ * 跨年/长期不看的归档数据上 `10-19` 看不出是哪一年；用户要求的措辞也是完整日期。
+ */
 export function nonSessionNote(day: string): string {
-  return ` · 非当日数据（${day.slice(5)}）`
+  return ` · 非当日数据（${day}）`
+}
+
+/**
+ * 这份分时序列的"非当日"事实（有就返回，没有返回 null）。
+ *
+ * 判据**只看宿主给的字段**（`nonSession` 优先，其次 `sessionDay`）—— 客户端不自己算"今天"，
+ * 免得浏览器时区/时钟与宿主不一致时凭空造出（或掩盖）一条"非当日"。
+ */
+export function nonSessionOf(payload: NotePayloadLike): { day: string; reason: string; detail: string } | null {
+  if (payload.kind !== 'trend') return null
+  const t = payload.trend
+  if (t === undefined) return null
+  const ns = t.nonSession
+  if (ns !== undefined && typeof ns.day === 'string' && ns.day !== '') {
+    return { day: ns.day, reason: typeof ns.reason === 'string' ? ns.reason : '', detail: typeof ns.detail === 'string' ? ns.detail : '' }
+  }
+  // 老宿主只给 sessionDay（没有原因）—— 日期照样必须写出来，原因那半句如实省略
+  const day = t.sessionDay
+  if (typeof day === 'string' && day !== '') return { day, reason: '', detail: '' }
+  return null
 }
 
 /** 分时兜底时追加的"保留口径"后缀（K 线不走这份库 ⇒ 空串） */
@@ -120,19 +151,26 @@ function trendLkgNote(payload: NotePayloadLike): string {
   return payload.kind === 'trend' ? ` · ${TREND_LKG_RETENTION_NOTE}` : ''
 }
 
-/** 图表脚注的完整说明（顺序 = 事实的优先级：降级 > 非当日 > 定稿 > 本地缓存） */
+/** 图表脚注的完整说明（顺序 = 事实的优先级：非当日 > 降级 > 定稿 > 本地缓存） */
 export function cacheNoteOf(payload: NotePayloadLike | null): string {
   if (payload === null) return ''
   // "拿不到"没有缓存口径可谈（原因由 missing 说明，别在这里重复）
   if (payload.kind === 'unavailable') return ''
+  /**
+   * ★ **非当日数据排在最前**（AUDIT-IMPL84）。
+   *
+   * 之前它在 `staleAt` 后面：真机上落进 LKG 的那一刻，脚注先写成
+   * 「上次成功数据（10-19 15:00）」+ 一长串兜底库保留口径，而图头仍是「昨收 … · 09:30 ~ 15:00」
+   * —— 读者把这行读成"今天的图，只是刷新慢"。这类"看着正常的错数"是红线，
+   * 所以只要数据不是今天的，**第一句必须是「非当日数据（YYYY-MM-DD）」并给出原因**。
+   */
+  const nonSession = nonSessionOf(payload)
+  if (nonSession !== null) return nonSessionNote(nonSession.day) + (nonSession.reason === '' ? '' : `：${nonSession.reason}`)
   if (payload.fallback === true) return lastSuccessNote(payload) + trendLkgNote(payload)
   // 宿主自己标了降级（K 线的 `stale`）——这也是"上次成功数据"，必须带日期（E1）
   if (payload.kind === 'kline' && payload.kline?.stale === true) return lastSuccessNote(payload)
   // 宿主回了 last-known-good（staleAt 有值）⇒ 这是"上次成功数据"，必须把日期说清
   if (payload.trend?.staleAt !== undefined) return lastSuccessNote(payload) + trendLkgNote(payload)
-  // 宿主说"这份序列不是今天的"（节假日上游回节前分时）⇒ 必须写出来，否则会被读成今天
-  const sessionDay = payload.trend?.sessionDay
-  if (payload.kind === 'trend' && sessionDay !== undefined && sessionDay !== '') return nonSessionNote(sessionDay)
   if (settled(payload)) return ' · 休市定稿缓存（未回源）'
   if (payload.fromCache === true) return ' · 本地缓存'
   return ''

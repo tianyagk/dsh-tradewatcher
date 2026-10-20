@@ -149,6 +149,14 @@ export function shanghaiDayStart(ts: number): number {
 const CLOSE_HHMM = '15:05'
 /** 开盘时刻（北京时间 09:25，集合竞价结束） */
 const OPEN_HHMM = '09:25'
+/**
+ * 交易窗口起点（北京时间 09:15，**集合竞价开始**）。
+ *
+ * 为什么不是 09:25：09:15–09:25 这十分钟里交易所已经在撮合，**上游会开始产生当日数据**
+ * （开盘参考价、集合竞价成交）。把这段判成"休市"就会把昨天的快照当成"今天已定稿"复用，
+ * 直到 09:25 才回源 —— 那十分钟里界面显示的是昨天的图（AUDIT-IMPL84 复现的正是这一类）。
+ */
+const MARKET_WINDOW_OPEN_HHMM = '09:15'
 
 /**
  * 现在是否处于交易时段（工作日 09:25–15:05，北京时间）。
@@ -162,6 +170,21 @@ export function inSession(ts: number = Date.now()): boolean {
   if (wd === 0 || wd === 6) return false
   const { hhmm } = shanghaiParts(ts)
   return hhmm >= OPEN_HHMM && hhmm < CLOSE_HHMM
+}
+
+/**
+ * 现在是否落在**整个交易窗口**内（工作日 09:15–15:05，北京时间）。
+ *
+ * 与 `inSession` 的差别只有起点：09:15（集合竞价开始）而不是 09:25（集合竞价结束）。
+ * 这段窗口只给"能不能判定稿/能不能跳过回源"用 —— 判据必须覆盖集合竞价与收盘瞬时
+ * （09:15–09:25、15:00–15:05 上游都还可能给出新数据），午休也照旧算在窗口内
+ * （宁多回源一次，不把昨天的图当今天）。
+ */
+export function inMarketWindow(ts: number = Date.now()): boolean {
+  const wd = weekdayOf(ts)
+  if (wd === 0 || wd === 6) return false
+  const { hhmm } = shanghaiParts(ts)
+  return hhmm >= MARKET_WINDOW_OPEN_HHMM && hhmm < CLOSE_HHMM
 }
 
 /**
@@ -303,10 +326,14 @@ export function isUsSettledOffline(cacheUpdatedAt: number, ts: number = Date.now
 /**
  * 休市且本地缓存的更新时间已越过最近一次收盘 → 数据"已定稿"，可以不走上游。
  * 只有 ①休市 ②有缓存 ③缓存晚于最近收盘 三个条件同时成立才算 —— 凌晨/周末/
- * 节假日都成立，盘中永远不成立（回源逻辑保持原样）。
+ * 节假日都成立，**交易窗口内永远不成立**（回源逻辑保持原样）。
+ *
+ * ⚠ 判"休市"用的是 `inMarketWindow`（09:15–15:05），不是 `inSession`（09:25–15:05）：
+ * 09:15–09:25 集合竞价已经开始产生当日数据，这段里判"定稿"就会把**昨天的快照**当今天复用
+ * （AUDIT-IMPL84：真机 09:2x 复用到 09:3x，图上还是昨天的整场）。
  */
 export function isSettledOffline(cacheUpdatedAt: number, ts: number = Date.now()): boolean {
-  if (inSession(ts)) return false
+  if (inMarketWindow(ts)) return false
   if (!Number.isFinite(cacheUpdatedAt) || cacheUpdatedAt <= 0) return false
   return cacheUpdatedAt >= lastCloseBoundary(ts)
 }

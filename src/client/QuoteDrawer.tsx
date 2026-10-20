@@ -28,7 +28,7 @@ import {
   type ChartTab,
 } from './chartCache.ts'
 
-import { visibleProvenanceOf } from './chartNote.ts'
+import { nonSessionOf, visibleProvenanceOf } from './chartNote.ts'
 import { sessionOf } from './sessionAxis.ts'
 import { isUsableBaseline } from './trendView.ts'
 import { trendCaliberOf } from '../shared/trendCaliber.ts'
@@ -426,10 +426,19 @@ export function QuoteDrawer(props: {
       const dates = new Set(t.points.map((p) => p.label.slice(0, 10)))
       const first = t.points[0]
       const last = t.points[t.points.length - 1]
+      /**
+       * AUDIT-IMPL84：**不是今天的序列，时段与"末行为今日"都必须改口**。
+       *
+       * 旧文案对任何单日序列都写 `09:30 ~ 15:00`、对多日序列都写「末行为今日」——
+       * 真机上落进 LKG 的那份 10-19 序列就被读成"今天的 09:30~15:00"（看着正常的错数）。
+       * 现在：非当日 ⇒ 时段带上数据自己的日期（`10-19 09:30 ~ 15:00`）、
+       * 多日 ⇒ 写「末行为 10-19」。原因那一句由 `cacheNoteOf` 给（同一行常驻）。
+       */
+      const ns = nonSessionOf(payload)
       if (first !== undefined && last !== undefined) {
         note = dates.size <= 1
-          ? `昨收 ${isUsableBaseline(t.prePrice) ? fmtPrice(t.prePrice) : '—'} · ${first.label.slice(11)} ~ ${last.label.slice(11)}`
-          : `共 ${dates.size} 个交易日 · ${first.label.slice(5, 10)} ~ ${last.label.slice(5, 10)}（末行为今日）`
+          ? `昨收 ${isUsableBaseline(t.prePrice) ? fmtPrice(t.prePrice) : '—'} · ${ns === null ? first.label.slice(11) : first.label.slice(5)} ~ ${last.label.slice(11)}`
+          : `共 ${dates.size} 个交易日 · ${first.label.slice(5, 10)} ~ ${last.label.slice(5, 10)}（末行为${ns === null ? '今日' : ` ${ns.day}`}）`
       }
     }
     // 数据来源如实标注：本地缓存 / 休市定稿 / 本次刷新失败时的上次成功数据
