@@ -12,6 +12,7 @@
  * 由 `detailModel()` 统一生成 —— 页面里不许出现第二个"占位/默认值"来源。
  */
 import { cakeTool } from './tools/cake.ts'
+import { leverageTool } from './tools/leverage.ts'
 
 /** 详情页的五个区（顺序即渲染顺序；测试锁这个顺序） */
 export type ToolSectionKey = 'kpi' | 'curve' | 'pie' | 'market' | 'boundary'
@@ -53,6 +54,15 @@ export interface ToolEntry {
   hero?: { kicker: string; note: string }
   /** 曲线窗口档位与默认档（如 `{ options: [90, 180, 365], initial: 180 }`）；省略 ⇒ 不渲染时间范围控件 */
   ranges?: { options: readonly number[]; initial: number }
+  /**
+   * 详情页**版式**（唯一判别位）：省略 = 通用三段式（Hero → 摘要卡 → 图表卡 + 方法/边界散文）；
+   * `'leverage'` = 「杠杆温度计」的专用版式（大字 + `截至 …` + 三张卡 + 双轴主图 + 净买入柱 + 窗口三档）。
+   *
+   * 为什么要有判别位而不是在页面里看 `id`：**版式与"是哪个工具"是两件事** ——
+   * 按 id 硬编码会让下一个想要精简版式的工具继续抄一遍分支；做成字段后，
+   * 页面只问"这一项要不要专用版式"，新增工具仍然只改两处（工具文件 + 注册表一行）。
+   */
+  page?: 'leverage'
   /** 详情页各区（顺序即渲染顺序） */
   sections: readonly ToolSectionSpec[]
   /**
@@ -212,7 +222,7 @@ export const CATEGORY_TABS: ReadonlyArray<{ key: string; label: string }> = [{ k
  * 排序规则只此一条：**按注册顺序**，不按名称/分类/热度重排 —— 新增一个工具不许让既有卡片挪位
  * （`orderEntries` 是这条规则的唯一实现，`toolRegistry.test.ts` 锁它）。
  */
-export const TOOL_ENTRIES: readonly ToolEntry[] = [cakeTool]
+export const TOOL_ENTRIES: readonly ToolEntry[] = [cakeTool, leverageTool]
 
 /** 排序规则（唯一实现）：注册顺序即展示顺序 */
 export function orderEntries(entries: readonly ToolEntry[]): readonly ToolEntry[] {

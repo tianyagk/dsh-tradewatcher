@@ -208,6 +208,7 @@ bash scripts/install.sh
 | `~/.dsh/dsh-tradewatcher/global-flow.json` | 工具箱「全球资金流蛋糕模型」的每日份额快照：一天一条、保留 90 天（一天 ≈ 0.9KB）；**成分一变，旧快照整份作废并留痕**，不与新成分混用 |
 | `~/.dsh/dsh-tradewatcher/macro-log.json` | 工具箱「全球资金流蛋糕模型」的宏观两档**自采样**：每个交易日一条（广义美元指数 / 美国 10Y 收益率）+ **每源诊断留痕**（`diag`：本次各源是否可用、值、原因 —— 真机排障的现场证据），保留 120 天。用途：两个源都没有可无歧义解读的"昨收"字段 ⇒ 「较上日」与「5 日变化」只由本插件自采样算，绝不用来源不明的字段充当变化量；不足 ⇒ 界面显示「未取到」+ 原因，不写 0 |
 | `~/.dsh/dsh-tradewatcher/market-extras.json` | 大宗商品/债券等扩展行情缓存（last-known-good；上游失败时回退上次成功结果并标注时间） |
+| `~/.dsh/dsh-tradewatcher/leverage.json` | 工具箱「杠杆温度计」的两融历史：`{ v:1, lastFetchDay, lastAttemptAt, cross, rows:[{d,rzye,rqye,ltsz,rzyezb,rzjme}] }`（单位：元 / `%`）。**每天最多取一次上游**（两融 T+1，当天数据不会中途变）；首次 6 页回填 4018 个交易日（2010-03-31 起，≈610 KB），之后每天追加一行；上限 4500 行 / 1 MB（丢最旧的并留痕）。读不到 ≠ 没有（坏 JSON 先隔离保留原字节，不覆写）；`cross` 只内部记录深交所单市与合计的量级校验，**不进回包** |
 | `~/.dsh/dsh-tradewatcher/rescue-log.json` | 护盘信号：每日信号事件、5 分钟抽样、20 日均额基准、自建样本、出分日志（60 天滚动） |
 | `~/.dsh/dsh-tradewatcher/macro-archive.json` | 宏观**后台归档**（`npm run macro:archive`）：BIS 等官方长期序列（单次约 25 秒 ⇒ **只允许后台跑，不进交互路径**），带抓取时间与来源；同样走 `robots.txt` 门禁与「每主机 ≤5 次/小时」预算 |
 | `~/.dsh/dsh-tradewatcher/write-log.json` | 写操作日志（**目前只覆盖插件代写的日历事件新增**：`tradewatcher_calendar_add` 这类；持仓/流水的写入由侧边栏自己维护、不经这里）：每条记 `by`（会话 id）/反向操作/是否已撤销。撤销不删历史（撤销本身也留痕），保留最近 500 条。真机上若从未用工具写过日历，这个文件**不会存在**（不是漏了） |

@@ -21,6 +21,7 @@ import { TONE_MAX_IDS, computeTones } from './tonesService.ts'
 import { BREADTH_MIN_DAYS, BREADTH_WINDOW, BreadthStore, breadthUsable, percentileOf, upRatio } from './breadth.ts'
 import { BREADTH_METHODOLOGY, BREADTH_COUNT_CALIBER, BREADTH_CLIST_MAX_PAGES, BREADTH_PAGE_SIZE, BreadthCountCache, resolveBreadthCount } from './breadthCount.ts'
 import * as extras from './marketExtras.ts'
+import { emptyLeveragePayload, LeverageService, parseLeverageRange } from './leverage.ts'
 import { dayOf } from './time.ts'
 import { distributionBinsOf } from '../client/breadthView.ts'
 import { log, type PluginWebRoute } from './context.ts'
@@ -287,6 +288,14 @@ export function makeTradeRoutes(
    * 生产路径由 core 行传入**内核里的那一个实例**（`CoreKernel.fupan`），避免每行各建一个。
    */
   fupan: FupanStore = new FupanStore(),
+  /**
+   * 杠杆温度计（两融杠杆热度；`/tradewatcher/leverage`）。
+   *
+   * 缺省自建一个（老调用点/单测不传也照常工作）：它**没有后台定时器**，首次历史回填是
+   * 请求触发的后台 Promise（`startBackfill`）。取数一天最多一次（`needsDailyFetch`），
+   * 与面板现有的两融读取（`marketExtras.marginCross`）是两条独立路径，互不缓存。
+   */
+  leverage: LeverageService = new LeverageService(),
 ): TradeRoutes {
   const gate = (req: IncomingMessage): boolean => isTrustedApiRequest(req, trustedHosts)
   /** 上游主机组：503 时用它给出 retry-after，并聚合展示熔断明细（去重后 3 台） */
@@ -714,6 +723,31 @@ export function makeTradeRoutes(
           send(res, 200, { limits, margin, forecast, asOf: Date.now() })
         } catch (error) {
           fail(res, error)
+        }
+      },
+    },
+    {
+      /**
+       * 杠杆温度计（`GET /tradewatcher/leverage?range=250|750|all`，默认 750）。
+       *
+       * **契约（已冻结，客户端按同一份编码）**：这条路由**永远 200**，缺数据一律 `null`：
+       *   · 整块不可用（上游挂掉/本地没有历史）⇒ 200 + 全 `null` 的空壳，**不是 5xx、不是 {}**；
+       *   · `range` 非法 ⇒ 回落默认 750（不 400）——它是画图参数，不是用户输入错误。
+       * 温度 = `RZYEZB`（融资余额÷流通市值）在**全历史**里的百分位；样本 < 250 ⇒ `null`（不给 0）。
+       * 取数一天最多一次、历史回填在后台跑（细节见 `src/host/leverage.ts` 文件头）。
+       * 唯一非 200 的来源是既有围栏（`needGate`）：那不是数据路径，是全站一致的鉴权行为。
+       */
+      kind: 'exact',
+      path: '/tradewatcher/leverage',
+      handler: async (req, res) => {
+        if (!needGate(req, res)) return
+        const range = parseLeverageRange(queryOf(req).get('range'))
+        try {
+          send(res, 200, await leverage.payload(range))
+        } catch (error) {
+          // 契约兜底：连 service 自己的兜底都失败了，也要给形状完整的空回包（客户端不必判 5xx）
+          log(`leverage route fallback: ${error instanceof Error ? error.message : String(error)}`)
+          send(res, 200, emptyLeveragePayload(range))
         }
       },
     },

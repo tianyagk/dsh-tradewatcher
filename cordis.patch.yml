@@ -11,7 +11,9 @@
 #   tradewatcher-cloudmap  → row: cloudmap   纯客户端 iframe（host 侧无独占路由/工具，只贡献 activeRows）
 #   tradewatcher-tools     → row: tools      **工具箱**（工具目录页 + 工具详情页）+
 #                                            `/tradewatcher/tools/global-flow`（五市场蛋糕的数据；**只被工具箱页消费**
-#                                            ⇒ 按 §2.2 判据归本行，v0.72.0 起它确实独占了一条路由）。
+#                                            ⇒ 按 §2.2 判据归本行，v0.72.0 起它确实独占了一条路由）+
+#                                            `/tradewatcher/leverage`（杠杆温度计；只被工具页的 leverage 详情消费，
+#                                            v0.116.0 起归本行；契约：永远 200、缺数据一律 null）。
 #                                            本行不带 agent 工具；与 cloudmap 一样贡献 activeRows ⇒ 页签门控照常工作。
 #   tradewatcher-fupan     → row: fupan      **复盘**（第 8 行，v0.111.0）：复盘页签（月历 + 当日笔记 + 钉到未来日期
 #                                            + 当日交易记录）+

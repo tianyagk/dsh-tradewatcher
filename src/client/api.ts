@@ -175,6 +175,49 @@ export interface GlobalFlowPayloadDto {
   missing: Array<{ what: string; why: 'no-source' | 'transient'; note: string }>
 }
 
+// ── 杠杆温度计（工具箱 → 工具②）：与宿主侧**冻结契约**同形（字段名逐字锁定，客户端只消费） ──
+
+/**
+ * 窗口三档：`250` = 1 年 / `750` = 3 年 / `all` = 全历史。
+ * ⚠ 切档**只换这个查询参数**（同一个接口），不新增别的路由 —— 判据见 `leverageTool.test.ts` ⑥。
+ */
+export type LeverageRange = '250' | '750' | 'all'
+
+/**
+ * 杠杆温度计的载荷。
+ *
+ * 红线：这里的每个数值都可能是 `null`（上游没给 / 宿主尚未落地这个字段）⇒ 界面一律显示 `—`，
+ * **不用 0 顶替**、也不写缺失原因（该工具的页面规格只有一行说明文字：`截至 YYYY-MM-DD`）。
+ */
+export interface LeveragePayloadDto {
+  /** 数据截止日 `YYYY-MM-DD`（两融 T+1 ⇒ 页面写「截至」而不写「今日」） */
+  asOf: string
+  /** 杠杆温度（0–100） */
+  temperature: number | null
+  /** 显性融资比例（融资余额 ÷ 流通市值，%） */
+  ratioPct: number | null
+  /** 杠杆率（含融券口径，%） */
+  ratioWithShortPct: number | null
+  /** 融资余额（元） */
+  marginBalance: number | null
+  /** 融券余额（元） */
+  shortBalance: number | null
+  /** A 股流通市值合计（元） */
+  floatMv: number | null
+  /** 当日融资净买入（元；正负号有意义） */
+  netBuy: number | null
+  /** 温度轴上的两条阈值（80 / 95）；上游没给 ⇒ `null` ⇒ 不画那条线（不写 0） */
+  thresholds: { p80: number | null; p95: number | null }
+  /** 序列日期（旧 → 新） */
+  dates: string[]
+  /** 温度序列（0–100） */
+  temp: Array<number | null>
+  /** 显性融资比例序列（%） */
+  ratio: Array<number | null>
+  /** 当日融资净买入序列（元） */
+  net: Array<number | null>
+}
+
 import type { ToneRow as ToneRowDto } from './stripTone.ts'
 /** Same-origin JSON calls to the /tradewatcher/* host routes. */
 import type {
@@ -464,6 +507,15 @@ export const api = {
    */
   globalFlow(source: 'auto' | 'snapshot' = 'auto'): Promise<GlobalFlowPayloadDto> {
     return request(`/tradewatcher/tools/global-flow${source === 'snapshot' ? '?source=snapshot' : ''}`)
+  },
+  /**
+   * 杠杆温度计（工具箱 → 工具②）。
+   *
+   * ⚠ 窗口切换**只换 `range` 这一个查询参数**（`250` = 1 年 / `750` = 3 年 / `all` = 全历史），
+   * 宿主对三档都回 200 ⇒ 页面不需要第二条接口、也不需要本地切片。
+   */
+  leverage(range: LeverageRange = '750'): Promise<LeveragePayloadDto> {
+    return request(`/tradewatcher/leverage?range=${range}`)
   },
   /** 导出备份（P0-9）：GET /tradewatcher/backup */
   exportBackup(): Promise<{ ok: boolean; bundle: unknown; unreadable: string[] }> {

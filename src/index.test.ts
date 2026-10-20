@@ -74,6 +74,8 @@ const FUNCTION_OWNED_PATHS = [
   '/tradewatcher/fupan/note',
   // v0.113.x：当日持仓交易记录（只读；同样只被复盘页消费）
   '/tradewatcher/fupan/trades',
+  // v0.116.0 第 7 行：杠杆温度计（只被工具页的 leverage 详情消费 ⇒ 归 tools 行，core 必须交出去）
+  '/tradewatcher/leverage',
 ] as const
 
 // 隔离数据目录：**绝不能在测试里碰用户的 ~/.dsh**（store.init 会读写真实文件）
@@ -234,10 +236,15 @@ test('第 7 行 tools（工具箱）：只贡献 activeRows，无独占路由/�
   const on = gateTabs(TABS, new Set([...coreKernel()!.activeRows, 'calendar']), 'calendar')
   assert.deepEqual(on.visible.map((t) => t.key), ['calendar', 'tools'], '开启后工具页签出现')
   // v0.72.0：工具箱有了**只被它消费**的数据路由 ⇒ 按 §2.2 判据归本行（上一轮是空数组，注释里已预告）
-  assert.deepEqual(tools.routes, ['/tradewatcher/tools/global-flow'], '五市场数据路由只被工具箱页消费 ⇒ 归 tools 行')
+  // v0.116.0：再加一条 `杠杆温度计`（只被工具页的 leverage 详情消费）
+  assert.deepEqual(tools.routes, ['/tradewatcher/tools/global-flow', '/tradewatcher/leverage'], '五市场数据路由 + 杠杆温度计都只被工具箱页消费 ⇒ 归 tools 行')
   assert.deepEqual(tools.tools, [], 'tools 行不带 agent 工具（工具目录/详情是纯 UI）')
-  assert.deepEqual(ROW_ROUTES_FOR_TEST.tools, ['/tradewatcher/tools/global-flow'], '独占表：工具箱独有的那条数据路由（精确路径，与其它行同款）')
-  assert.deepEqual(tools.routes.filter((p) => !p.startsWith('/tradewatcher/tools/')), [], '工具箱行不许顺带拿走别人的路由（只准注册自己的前缀）')
+  assert.deepEqual(ROW_ROUTES_FOR_TEST.tools, ['/tradewatcher/tools/global-flow', '/tradewatcher/leverage'], '独占表：工具箱独有的数据路由（精确路径，与其它行同款）')
+  assert.deepEqual(
+    tools.routes.filter((p) => !p.startsWith('/tradewatcher/tools/')),
+    ['/tradewatcher/leverage'],
+    '工具箱行除自己的前缀之外，只准注册**已宣告**的那一条（杠杆温度计）；不许顺带拿走别人的路由',
+  )
   // rowOf 必须认这个行名（认不出会静默回退 all ⇒ 该行关不掉还多注册一遍）
   assert.equal(rowOf({ row: 'tools' }), 'tools', 'rowOf 必须认识 tools（否则该行回退成 all）')
   stopMonitor()
@@ -342,8 +349,8 @@ const ROW_ROUTES_FOR_TEST: Record<string, readonly string[]> = {
   market: ['/tradewatcher/breadth', '/tradewatcher/rescue', '/tradewatcher/board', '/tradewatcher/market-extras'],
   watchlist: ['/tradewatcher/watch', '/tradewatcher/industries', '/tradewatcher/anomaly'],
   portfolio: ['/tradewatcher/portfolio', '/tradewatcher/ledger'],
-  // 第 7 行（工具箱）：独占五市场蛋糕的数据路由（单一消费方 ⇒ 该行）
-  tools: ['/tradewatcher/tools/global-flow'],
+  // 第 7 行（工具箱）：五市场蛋糕的数据路由 + 杠杆温度计（都单一消费方 ⇒ 该行）
+  tools: ['/tradewatcher/tools/global-flow', '/tradewatcher/leverage'],
   // 第 8 行（复盘）：整月视图 + 写一条笔记 + 当日交易记录（都只被 FupanPage 消费 ⇒ 该行）
   fupan: ['/tradewatcher/fupan/month', '/tradewatcher/fupan/note', '/tradewatcher/fupan/trades'],
 }

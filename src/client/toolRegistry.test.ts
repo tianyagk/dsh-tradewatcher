@@ -44,12 +44,14 @@ function fixture(id: string, name: string, blurb: string, chip: string, category
 const CAKE_LIKE = fixture('cake', '蛋糕示例', '把五个市场的宽基 ETF 规模切成一块蛋糕', '蛋糕', 'flow')
 const OTHER = fixture('zeta', '估值快照', '看一眼估值与位置', '估值', 'valuation')
 
-test('① 目录页模型：1 张卡片且字段齐全（chip / 标题 / 一句话说明）', () => {
+test('① 目录页模型：卡片齐全（chip / 标题 / 一句话说明）—— v0.116.0 起两个工具', () => {
   const model = catalogModel()
   // ② 搜索框已删（v0.81.0）：模型里不许再留搜索字段（留字段 = 下一个人一定会把它渲染回来）
   assert.equal('searchPlaceholder' in model, false, '目录页模型不许再有 searchPlaceholder（搜索框已按用户要求删除）')
   assert.equal('query' in model, false, '目录页模型不许再有 query 字段')
-  assert.equal(model.cards.length, 1, `本批只有蛋糕工具 ⇒ 目录页必须恰好 1 张卡片（实得 ${model.cards.length}）`)
+  // v0.116.0（杠杆温度计）：目录从 1 张卡变成 2 张 —— 新增工具只**追加**（顺序见 ⑤ 号用例）
+  assert.equal(model.cards.length, 2, `目录页必须恰好 2 张卡片（蛋糕 + 杠杆温度计；实得 ${model.cards.length}）`)
+  assert.deepEqual(model.cards.map((c) => c.id), ['cake', 'leverage'], '卡片顺序 = 注册顺序（新工具追加在末尾）')
   const card = model.cards[0]
   assert.equal(card.id, cakeTool.id, '卡片 id 必须指向注册里的那个工具')
   assert.equal(card.chip, cakeTool.chip)

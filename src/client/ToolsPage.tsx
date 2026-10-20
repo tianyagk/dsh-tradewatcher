@@ -23,6 +23,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import {
   CATEGORY_TABS,
+  DETAIL_BACK_ACTION,
   NOT_FETCHED,
   TOOL_ENTRIES,
   catalogModel,
@@ -64,6 +65,7 @@ import {
   plotX,
 } from './toolDetailTheme.ts'
 import { FLOW_SERIES_COLORS, hoverRowsOf } from './tools/globalFlowView.ts'
+import { LeverageDetail } from './leveragePage.tsx'
 import { EmptyHint } from './ui.tsx'
 import {
   BACK_BTN_FOCUS_STYLE,
@@ -227,21 +229,25 @@ export function ToolsPage(): React.ReactElement {
     return payload.at(step, selectedRange ?? undefined)
   }, [loader, loadError, payload, step, selectedRange])
 
+  // 详情页两条版式：`page` 判别位决定走专用页还是通用三段式（回目录按钮仍是同一份实现）
+  const backToCatalog = React.createElement(BackToCatalog, { onClick: () => setOpenId(null), label: DETAIL_BACK_ACTION })
   return React.createElement(
     'div',
     { className: 'tw-tools', style: { flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'auto' } },
     entry === null
       ? catalogView(model, { category, setCategory, onOpen: setOpenId })
-      : detailView(detailModel(entry, data), () => setOpenId(null), {
-          loading: loader !== undefined && data === null && loadError === null,
-          step,
-          maxStep: payload === null ? 0 : payload.replayMax,
-          onStep: setStep,
-          onRange: setRangeDays,
-          animOff: reduced,
-          playing,
-          onTogglePlay: () => setPlaying((prev) => !prev),
-        }),
+      : entry.page === 'leverage'
+        ? React.createElement(LeverageDetail, { back: backToCatalog })
+        : detailView(detailModel(entry, data), () => setOpenId(null), {
+            loading: loader !== undefined && data === null && loadError === null,
+            step,
+            maxStep: payload === null ? 0 : payload.replayMax,
+            onStep: setStep,
+            onRange: setRangeDays,
+            animOff: reduced,
+            playing,
+            onTogglePlay: () => setPlaying((prev) => !prev),
+          }),
   )
 }
 

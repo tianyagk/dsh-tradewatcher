@@ -66,8 +66,11 @@ export const ROW_ROUTES: Record<Exclude<RowId, 'core'>, readonly string[]> = {
    *   · 其余工具详情要用的持仓/行情数据仍由 core 与功能行提供（那些接口还有别的消费方 ⇒ 留在原行）。
    *   · 以后新增只被工具箱用的路由 ⇒ **逐条**写进本数组（与其它行同款：这里列的是精确路径，
    *     不是目录前缀）；被 ≥2 个行消费的 ⇒ 必须留 core。
+   *   · `/tradewatcher/leverage`（杠杆温度计，v0.116.0）：只被工具箱页的「杠杆温度计」详情
+   *     （`ToolsPage.tsx` → `leveragePage.tsx` → `api.leverage(range)`）消费 ⇒ 同样按判据归本行。
+   *     它是**契约冻结**的只读路由：永远 200、缺数据一律 `null`（见 `src/host/leverage.ts` 文件头）。
    */
-  tools: ['/tradewatcher/tools/global-flow'],
+  tools: ['/tradewatcher/tools/global-flow', '/tradewatcher/leverage'],
   /**
    * 复盘（第 8 行，v0.111.0）。
    *
