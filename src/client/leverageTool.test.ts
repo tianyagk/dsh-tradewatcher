@@ -20,11 +20,9 @@ import { fileURLToPath } from 'node:url'
 import type { LeveragePayloadDto } from './api.ts'
 import { TOOL_ENTRIES, catalogModel } from './toolRegistry.ts'
 import {
-  CARD_MIN_W,
   CARD_SURFACE,
   CHART_STACK,
   CHART_TYPE,
-  HERO_TYPE,
   LEGEND_DOT,
   LEGEND_ROW,
   PLOT,
@@ -112,22 +110,29 @@ test('① 目录出现「杠杆温度计」且副标题逐字「A股融资杠杆
 
 /* ────────────────────────────── ② 大字 + 唯一的「截至」 ────────────────────────────── */
 
-test('② 大字 = 温度（1 位小数）+ `/ 100`；页面唯一的说明文字是 `截至 YYYY-MM-DD`', () => {
+test('② 温度卡 = 1 位小数 + `/ 100` + `截至`；页面唯一的说明文字就是它', () => {
   const payload = fixture()
-  assert.equal(fmtTemperature(payload.temperature), '91.2', '大字必须是 1 位小数')
-  assert.match(fmtTemperature(payload.temperature), /^\d+\.\d$/, '大字只允许「整数.一位小数」这一种形态')
+  assert.equal(fmtTemperature(payload.temperature), '91.2', '温度必须是 1 位小数')
+  assert.match(fmtTemperature(payload.temperature), /^\d+\.\d$/, '温度只允许「整数.一位小数」这一种形态')
   assert.equal(fmtTemperature(null), DASH, '温度缺 ⇒ `—`（不写 0）')
   assert.equal(leverageAsOfText(payload), '截至 2026-10-19', '唯一的说明文字必须逐字是「截至 YYYY-MM-DD」')
   // `asOf` 为空串 = 整块不可用（宿主约定）⇒ **只给 `—`**，页面上不出现「截至」二字
   assert.equal(leverageAsOfText(fixture({ asOf: '' })), DASH, '`asOf` 为空 ⇒ 只显示 `—`（**不渲染「截至 」**）')
   assert.equal(leverageAsOfText(null), DASH, '没有载荷同样只给 `—`')
   assert.equal(leverageAsOfText(fixture({ asOf: '' })).includes('截至'), false, '`asOf` 为空时不许出现「截至」字样')
-  // 页面源码：大字与 `/ 100` 各一处；`截至` 只来自模型（页面不另写一份）
+  // 温度卡带着后缀与小字（R3：原大字搬进卡片行）
+  const temp = leverageCards(payload)[0]
+  assert.equal(temp.key, 'temperature')
+  assert.equal(temp.value, '91.2')
+  assert.equal(temp.suffix, '/ 100', '后缀必须是 `/ 100`')
+  assert.equal(temp.note, '截至 2026-10-19', '卡内小字就是「截至 …」')
+  assert.equal(leverageCards(fixture({ asOf: '' }))[0]?.note, DASH, '`asOf` 空 ⇒ 卡内小字只给 `—`')
+  // 页面源码：后缀与截至小字各一处；`截至` 只来自模型（页面不另写一份）
   const page = strip(read(PAGE))
-  assert.equal((page.match(/leverage-temperature/g) ?? []).length, 1, '大字只有一个锚点')
-  assert.equal((page.match(/leverage-scale/g) ?? []).length, 1, '`/ 100` 只有一个锚点')
-  assert.equal(page.includes("'/ 100'"), true, '`/ 100` 必须是页面上的固定单位文本')
-  assert.equal((page.match(/leverage-asof/g) ?? []).length, 1, '`截至 …` 只有一处')
+  assert.equal(page.includes("'/ 100'"), false, '`/ 100` 必须来自模型（页面不另写一份文案）')
+  assert.equal((page.match(/leverage-card-suffix/g) ?? []).length, 1, '后缀只有一个锚点')
+  assert.equal((page.match(/leverage-card-note/g) ?? []).length, 1, '`截至 …` 小字只有一个锚点')
+  assert.equal(page.includes('leverage-hero'), false, '大字区必须已删除（R3：搬进卡片行）')
   const sources = `${strip(read(PAGE))}\n${strip(read(VIEW))}`
   assert.equal((sources.match(/截至/g) ?? []).length, 1, `「截至」在整个工具面上只允许出现一次（实得 ${(sources.match(/截至/g) ?? []).length}）`)
   // 反例注入 ①：asOf 为空时照渲染「截至 」⇒ 必败（日期缺失却硬写一个"截至"）
@@ -141,13 +146,12 @@ test('② 大字 = 温度（1 位小数）+ `/ 100`；页面唯一的说明文�
 
 /* ────────────────────────────── ③ 三张摘要卡 ────────────────────────────── */
 
-test('③ 三张卡：显性融资 / 杠杆率 / 当日融资净买入（亿/万亿、2 位小数、正负号；不要第四张）', () => {
+test('③ 第一行其余三张：显性融资 / 杠杆率 / 当日融资净买入（亿/万亿、2 位小数、正负号）', () => {
   const cards = leverageCards(fixture())
-  assert.deepEqual(cards.map((c) => c.label), ['显性融资', '杠杆率', '当日融资净买入'], '卡片标签与顺序是用户口径')
-  assert.equal(cards.length, 3, '**不要第四张**（多一张就是多一处用户没要的读数）')
-  assert.equal(cards[0].value, '2.65%', '显性融资 = ratioPct，2 位小数 + %')
-  assert.equal(cards[1].value, '2.69%', '杠杆率 = ratioWithShortPct，2 位小数 + %')
-  assert.equal(cards[2].value, '-63.31 亿', '净买入 = netBuy（元→亿，2 位小数，带负号）')
+  assert.deepEqual(cards.slice(1, 4).map((c) => c.label), ['显性融资', '杠杆率', '当日融资净买入'], '第一行第 2–4 张的标签与顺序是用户口径')
+  assert.equal(cards[1].value, '2.65%', '显性融资 = ratioPct，2 位小数 + %')
+  assert.equal(cards[2].value, '2.69%', '杠杆率 = ratioWithShortPct，2 位小数 + %')
+  assert.equal(cards[3].value, '-63.31 亿', '净买入 = netBuy（元→亿，2 位小数，带负号）')
   // 单位阶梯与符号：亿 / 万亿 / 正 / 零
   assert.equal(fmtNetYi(1.5e12), '+1.50 万亿', '≥1 万亿改用「万亿」，保留正号')
   assert.equal(fmtNetYi(3.2e8), '+3.20 亿')
@@ -156,7 +160,7 @@ test('③ 三张卡：显性融资 / 杠杆率 / 当日融资净买入（亿/万
   assert.equal(fmtRatioPct(2.6), '2.60%', '2 位小数补零')
   // 反例注入：去掉正负号 ⇒ 上面的逐字断言必败
   const unsigned = (v: number): string => `${Math.abs(v / 1e8).toFixed(2)} 亿`
-  assert.notEqual(unsigned(-6331355686), cards[2].value, '⚠ 反例（丢了负号）必须与期望值不同')
+  assert.notEqual(unsigned(-6331355686), cards[3].value, '⚠ 反例（丢了负号）必须与期望值不同')
 })
 
 /* ────────────────────────────── ④ 双轴 + 两条线 + 阈值数字 ────────────────────────────── */
@@ -211,7 +215,9 @@ test('④ 主图：双轴（左温度 0–100 / 右比例 %）+ 温度与比例�
 test('⑤ 任何数值缺失 ⇒ `—`（不加文字、不进悬停、不写 0）；注入 `?? 0` 必败', () => {
   const blank = fixture({ asOf: '', temperature: null, ratioPct: null, ratioWithShortPct: null, netBuy: null })
   assert.equal(fmtTemperature(blank.temperature), DASH)
-  assert.deepEqual(leverageCards(blank).map((c) => c.value), [DASH, DASH, DASH], '三张卡缺值全部是 `—`')
+  const blankValues = leverageCards(blank).map((c) => c.value)
+  assert.deepEqual(blankValues.slice(0, 4), [DASH, DASH, DASH, DASH], '第一行的四张卡缺值全部是 `—`')
+  assert.equal(blankValues[7], DASH, '窗口累计净买入：窗口里有 `null` ⇒ `—`')
   assert.equal(leverageAsOfText(blank), DASH, '`asOf` 为空 ⇒ 只给 `—`（不是「截至 —」）')
   // 柱：该日缺值就不画柱（三天里只有两天有净买入）
   const chart = leverageChart(blank, 960, 320)
@@ -286,6 +292,7 @@ test('⑥ 窗口三档只换 `range` 查询参数（另发新接口 / 多一个�
 const COPY_ALLOW = new Set([
   // 工具名 / 卡片标签 / 图例名 / 档位标签 / 唯一的说明文字 / 控件与错误态文案
   '杠杆温度计', '显性融资', '杠杆率', '当日融资净买入', '温度', '显性融资比例', '净买入',
+  '融资余额', '融券余额', '流通市值', '窗口累计净买入',
   '1 年', '3 年', '全历史', '截至', '窗口', '重试',
   // 金额单位（不是说明文字）
   '亿', '万亿',
@@ -325,7 +332,7 @@ test('⑦ 页面不得出现口径/解释性长文案（唯一的说明文字是
   const files = { page: read(PAGE), view: read(VIEW) }
   assert.deepEqual(explanatoryProblems(files), [], `文案判据：${explanatoryProblems(files).join(' ／ ')}`)
   // 用户可见文案集合就是这几处（卡片标签 / 图例名 / 档位标签 / 唯一的说明文字）
-  assert.deepEqual(leverageCards(null).map((c) => c.label), ['显性融资', '杠杆率', '当日融资净买入'])
+  assert.deepEqual(leverageCards(null).map((c) => c.label), ['温度', '显性融资', '杠杆率', '当日融资净买入', '融资余额', '融券余额', '流通市值', '窗口累计净买入'])
   assert.deepEqual(LEVERAGE_LEGEND.map((l) => l.name), ['温度', '显性融资比例', '净买入'])
   assert.deepEqual(LEVERAGE_RANGES.map((o) => o.label), ['1 年', '3 年', '全历史'])
   // 反例注入：加一段口径说明（页面里）⇒ 必败
@@ -387,12 +394,11 @@ test('⑨ 字号落在密集阶梯、间距落在 1px 刻度、几何全部复�
   // 几何令牌：页面必须**真的用上**同一批常量（只 import 不算），且这些常量本身仍是详情页的契约值
   const used = stripImports(read(PAGE))
   for (const token of [
-    'HERO_TYPE.title',
-    'CHART_TYPE.asOf',
     'CHART_TYPE.tileValue',
     'CHART_TYPE.legend',
     'SUMMARY_TYPE.label',
     'SUMMARY_TYPE.value',
+    'SUMMARY_TYPE.note',
     'CARD_SURFACE',
     'LEGEND_ROW',
     'LEGEND_DOT',
@@ -405,18 +411,15 @@ test('⑨ 字号落在密集阶梯、间距落在 1px 刻度、几何全部复�
     'LEVERAGE_PLOT_HEIGHT',
     'TOOL_SPACE.sectionGap',
     'TOOL_SPACE.cardHeadGap',
-    'TOOL_SPACE.heroInnerGap',
     'TOOL_SPACE.tileGap',
-    'CARD_MIN_W',
     'CHART_STACK',
+    'tw-lev-cards',
   ]) {
     assert.equal(used.includes(token), true, `页面必须真的用上 toolDetailTheme 的 ${token}`)
   }
   // 令牌本身的值（详情页的几何契约，本页面的"专门化"不许把它们改掉）
-  assert.equal(HERO_TYPE.title.fontSize, 46, '大字沿用 Hero 大标题的展示级字号')
-  assert.equal(SUMMARY_TYPE.value.fontSize, 34, '摘要卡数值沿用既有层级')
+  assert.equal(SUMMARY_TYPE.value.fontSize, 34, '卡片数值沿用既有层级（温度搬进卡片后也用它）')
   assert.equal(SUMMARY_TYPE.label.fontSize, 12.5)
-  assert.equal(CHART_TYPE.asOf.fontSize, 12)
   assert.equal(CHART_TYPE.tileValue.fontSize, 20)
   assert.equal(CHART_TYPE.legend.fontSize, 12)
   assert.equal(CARD_SURFACE.border, '1px solid var(--tw-border-strong)', '摘要卡边框 = 既有卡片表面令牌')
@@ -433,7 +436,6 @@ test('⑨ 字号落在密集阶梯、间距落在 1px 刻度、几何全部复�
     true,
     '主图卡必须按 CHART_STACK 渲染（顺序的唯一来源，不许在页面里另写一份）',
   )
-  assert.equal(CARD_MIN_W, 148, '自适应卡片最小宽')
   assert.equal(PLOT.heightCss, 'clamp(280px, 26vh, 380px)')
   assert.equal(LEVERAGE_PLOT_HEIGHT, 'min(58vh, 520px)', 'R2 ①：主图高度 = min(58vh, 520px)')
   // 不新增依赖：页面的外部模块只能是 react（其余一律相对路径）

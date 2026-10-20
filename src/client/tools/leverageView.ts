@@ -96,27 +96,79 @@ export function fmtNetYi(v: number | null | undefined): string {
   return `${sign}${Math.abs(zeroed).toFixed(2)} ${unit.name}`
 }
 
+/** 唯一的说明文字前缀（**只写一次**：格式化与判据都从这里拼，避免"两处各写一遍"） */
+const ASOF_PREFIX = '截至'
+
 /**
- * `截至 YYYY-MM-DD`（**页面上唯一的说明文字**）。
- * ⚠ `asOf` 为空串 = 整块不可用（宿主约定）⇒ **只给 `—`**：一个没有日期的「截至」既不是读数也不是时间。
+ * `截至 YYYY-MM-DD`（**页面上唯一的说明文字**，现在显示在温度卡的小字里）。
+ * ⚠ `asOf` 为空串 = 整块不可用（宿主约定）⇒ **只给 `—`**：一个没有日期的时间标记既不是读数也不是时间。
  */
 export function leverageAsOfText(payload: LeveragePayloadDto | null): string {
   const day = payload === null ? '' : String(payload.asOf ?? '').trim()
-  return day === '' ? DASH : `截至 ${day}`
+  return day === '' ? DASH : `${ASOF_PREFIX} ${day}`
 }
 
-/** 三张摘要卡（**只有三张**，顺序即渲染顺序；值全部来自载荷，缺 ⇒ `—`） */
+/**
+ * 余额/市值类金额（元 → 亿 / 万亿，2 位小数，**不带正负号**）。
+ * 余额与市值没有"方向"，加 `+` 反而会被读成涨跌；缺 ⇒ `—`。
+ */
+export function fmtAmountYi(v: number | null | undefined): string {
+  if (!finite(v)) return DASH
+  const unit = Math.abs(v) >= 1e12 ? { div: 1e12, name: '万亿' } : { div: 1e8, name: '亿' }
+  return `${(v / unit.div).toFixed(2)} ${unit.name}`
+}
+
+/**
+ * **窗口累计净买入**（元）：把当前窗口的 `net` 求和。
+ *
+ * ⚠ 口径（用户明确要求）：窗口内**只要有一个 `null` ⇒ 返回 `null`**（界面显示 `—`），
+ * 绝不"跳过缺的那天照算" —— 静默少算会让"累计"变成一个无法解释的数。
+ * 空窗口同样 `null`（不写 0）。
+ */
+export function windowNetSum(payload: LeveragePayloadDto | null): number | null {
+  if (payload === null) return null
+  const nets = payload.net ?? []
+  if (nets.length === 0) return null
+  let sum = 0
+  for (const v of nets) {
+    if (!finite(v)) return null
+    sum += v
+  }
+  return sum
+}
+
+/**
+ * 卡片模型（**两行 × 四列，共 8 张**，顺序即渲染顺序；值全部来自载荷，缺 ⇒ `—`）。
+ *
+ * 第一行：温度（原大字搬进卡片，带 `/ 100` 后缀与 `截至 …` 小字）/ 显性融资 / 杠杆率 / 当日融资净买入
+ * 第二行：融资余额 / 融券余额 / 流通市值 / 窗口累计净买入
+ *
+ * `suffix` 与 `note` **只有温度卡有**：其余卡片的说明文字一律为空（页面规格：不加字）。
+ */
+/** 八张卡的键与标签（**唯一来源**：页面渲染与断言都从这里取；顺序 = 两行 × 四列的从左到右） */
+export const LEVERAGE_CARD_KEYS = ['temperature', 'ratio', 'leverage', 'net', 'margin', 'short', 'float', 'windowNet'] as const
+export const LEVERAGE_CARD_LABELS = ['温度', '显性融资', '杠杆率', '当日融资净买入', '融资余额', '融券余额', '流通市值', '窗口累计净买入'] as const
+
 export interface LeverageCard {
-  key: 'ratio' | 'leverage' | 'net'
+  key: (typeof LEVERAGE_CARD_KEYS)[number]
   label: string
   value: string
+  suffix?: string
+  note?: string
 }
 
 export function leverageCards(payload: LeveragePayloadDto | null): LeverageCard[] {
   return [
+    // 第一行
+    { key: 'temperature', label: '温度', value: fmtTemperature(payload?.temperature ?? null), suffix: '/ 100', note: leverageAsOfText(payload) },
     { key: 'ratio', label: '显性融资', value: fmtRatioPct(payload?.ratioPct ?? null) },
     { key: 'leverage', label: '杠杆率', value: fmtRatioPct(payload?.ratioWithShortPct ?? null) },
     { key: 'net', label: '当日融资净买入', value: fmtNetYi(payload?.netBuy ?? null) },
+    // 第二行
+    { key: 'margin', label: '融资余额', value: fmtAmountYi(payload?.marginBalance ?? null) },
+    { key: 'short', label: '融券余额', value: fmtAmountYi(payload?.shortBalance ?? null) },
+    { key: 'float', label: '流通市值', value: fmtAmountYi(payload?.floatMv ?? null) },
+    { key: 'windowNet', label: '窗口累计净买入', value: fmtNetYi(windowNetSum(payload)) },
   ]
 }
 
@@ -671,5 +723,53 @@ export function leverageChartProblems(chart: LeverageChart, payload: LeveragePay
   for (const line of chart.lines) {
     if (![line.x1, line.y1, line.x2, line.y2].every((n) => Number.isFinite(n))) bad.push(`线段坐标必须是有限数：${JSON.stringify(line)}`)
   }
+  return bad
+}
+
+/* ────────────────────────────── 4b. 卡片行判据（唯一实现） ────────────────────────────── */
+
+/** 每个卡片槽位允许的**数值形态**（第 0 张温度、1–2 比例、3/7 带符号金额、4–6 金额） */
+const CARD_VALUE_SHAPES: readonly RegExp[] = [
+  /^(?:\d+\.\d|—)$/, // 0 温度：1 位小数
+  /^(?:\d+\.\d{2}%|—)$/, // 1 显性融资
+  /^(?:\d+\.\d{2}%|—)$/, // 2 杠杆率
+  /^(?:[+-]?\d+\.\d{2} (?:亿|万亿)|—)$/, // 3 当日融资净买入（带符号）
+  /^(?:\d+\.\d{2} (?:亿|万亿)|—)$/, // 4 融资余额
+  /^(?:\d+\.\d{2} (?:亿|万亿)|—)$/, // 5 融券余额
+  /^(?:\d+\.\d{2} (?:亿|万亿)|—)$/, // 6 流通市值
+  /^(?:[+-]?\d+\.\d{2} (?:亿|万亿)|—)$/, // 7 窗口累计净买入（带符号）
+]
+
+/** 温度卡小字只允许「前缀 + YYYY-MM-DD」或 `—`（前缀从 `ASOF_PREFIX` 拼，不写第二份） */
+const CARD_NOTE_SHAPE = new RegExp(`^(?:${ASOF_PREFIX} \\d{4}-\\d{2}-\\d{2}|—)$`)
+
+/**
+ * 卡片行判据（**唯一实现**）：两行 × 四列共 8 张、顺序与标签逐字、只有温度卡带后缀/小字、
+ * 每个槽位的数值形态固定（任何解释文案都会被这里拒掉）。
+ */
+export function leverageCardsProblems(cards: readonly LeverageCard[]): string[] {
+  const bad: string[] = []
+  if (cards.length !== LEVERAGE_CARD_KEYS.length) {
+    bad.push(`卡片必须恰好 ${LEVERAGE_CARD_KEYS.length} 张（两行 × 四列；实得 ${cards.length}）`)
+  }
+  cards.forEach((card, i) => {
+    const key = LEVERAGE_CARD_KEYS[i]
+    const label = LEVERAGE_CARD_LABELS[i]
+    if (key === undefined || label === undefined) {
+      bad.push(`第 ${i + 1} 张卡超出了布局契约（多出来的卡片必须删掉）`)
+      return
+    }
+    if (card.key !== key) bad.push(`第 ${i + 1} 张卡必须是 ${key}（实得 ${card.key}）`)
+    if (card.label !== label) bad.push(`第 ${i + 1} 张卡的标签必须逐字是「${label}」（实得 ${JSON.stringify(card.label)}）`)
+    const shape = CARD_VALUE_SHAPES[i]
+    if (shape !== undefined && !shape.test(card.value)) bad.push(`第 ${i + 1} 张卡的数值形态不符：${JSON.stringify(card.value)}`)
+    if (i === 0) {
+      if (card.suffix !== '/ 100') bad.push(`温度卡必须带后缀 / 100（实得 ${JSON.stringify(card.suffix)}）`)
+      if (card.note === undefined || !CARD_NOTE_SHAPE.test(card.note)) bad.push(`温度卡小字只允许「${ASOF_PREFIX} YYYY-MM-DD」或 —（实得 ${JSON.stringify(card.note)}）`)
+    } else {
+      if (card.suffix !== undefined) bad.push(`第 ${i + 1} 张卡不许带后缀（除温度卡外不加字）`)
+      if (card.note !== undefined) bad.push(`第 ${i + 1} 张卡不许带小字（除温度卡外不加字）`)
+    }
+  })
   return bad
 }

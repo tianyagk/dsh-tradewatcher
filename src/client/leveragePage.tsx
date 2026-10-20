@@ -8,10 +8,11 @@
  *     （`range=250|750|all`），切档要重新取数 ⇒ 控件与语义都不一样。
  *
  * 页面元素（顺序即渲染顺序；`data-role` 是断言的锚点）：
- *   ① `leverage-hero`：大字温度（1 位小数）+ `/ 100` + `截至 …`（唯一的说明文字；`asOf` 空 ⇒ 只给 `—`）
- *      + 右上角窗口三档；
- *   ② `leverage-cards`：**三张**摘要卡（显性融资 / 杠杆率 / 当日融资净买入）；没有第四张；
- *   ③ `leverage-chart-card`：图例（温度 / 显性融资比例 / 净买入）→ 主图
+ *   ⓪ 顶行：左上角回目录按钮 + 右上角窗口三档（原来放在大字区右侧，大字搬走后挪到这里 —— **不留空位**）；
+ *   ① `leverage-cards`：**两行 × 四列、共 8 张**摘要卡 ——
+ *      第一行：温度（原大字搬进卡片，带 `/ 100` 与 `截至 …`）/ 显性融资 / 杠杆率 / 当日融资净买入；
+ *      第二行：融资余额 / 融券余额 / 流通市值 / 窗口累计净买入（随窗口变）；
+ *   ② `leverage-chart-card`：图例（温度 / 显性融资比例 / 净买入）→ 主图
  *      （**双轴 + 两条线 + 阈值右端胶囊 + 水平网格线 + ≥6 个 X 刻度 + 柱区独立小轴**），
  *      悬停时给一个**紧凑读数框**（该日三个数），**没有十字光标、没有解释文字**。
  *
@@ -29,11 +30,9 @@ import type { LeveragePayloadDto, LeverageRange } from './api.ts'
 import { api } from './api.ts'
 import { createRequestGen } from './requestGen.ts'
 import {
-  CARD_MIN_W,
   CARD_SURFACE,
   CHART_STACK,
   CHART_TYPE,
-  HERO_TYPE,
   LEGEND_DOT,
   LEGEND_ROW,
   PLOT,
@@ -50,8 +49,6 @@ import {
   LEVERAGE_LEGEND,
   LEVERAGE_PLOT_HEIGHT,
   LEVERAGE_RANGES,
-  fmtTemperature,
-  leverageAsOfText,
   leverageCards,
   leverageChart,
   leverageIndexAt,
@@ -357,8 +354,6 @@ export function LeverageDetail(props: { back?: React.ReactNode }): React.ReactEl
   const [attempt, setAttempt] = useState(0)
   const { payload, error } = useLeverageFetch(range, attempt)
   const cards = leverageCards(payload)
-  const asOf = leverageAsOfText(payload)
-  const temperature = fmtTemperature(payload?.temperature ?? null)
   const loading = payload === null && error === null
 
   return React.createElement(
@@ -368,43 +363,21 @@ export function LeverageDetail(props: { back?: React.ReactNode }): React.ReactEl
       className: 'tw-tool-detail',
       style: { display: 'flex', flexDirection: 'column', gap: TOOL_SPACE.sectionGap, padding: '12px 16px 24px' },
     },
-    props.back ?? null,
-    // ── ① Hero：大字温度 + `/ 100` + `截至 …`；右上角窗口三档 ─────────────────────
+    // ── ⓪ 顶行：回目录 + 窗口三档（大字搬进卡片后不留空位）────────────────────
     React.createElement(
       'div',
-      { 'data-role': 'leverage-hero', className: 'tw-tool-hero' },
-      React.createElement(
-        'div',
-        { className: 'tw-tool-hero-main', style: { gap: TOOL_SPACE.heroInnerGap } },
-        React.createElement(
-          'div',
-          { style: { display: 'flex', alignItems: 'baseline', gap: 8 } },
-          React.createElement(
-            'span',
-            { 'data-role': 'leverage-temperature', style: { ...HERO_TYPE.title, fontVariantNumeric: 'tabular-nums' } },
-            temperature,
-          ),
-          React.createElement(
-            'span',
-            { 'data-role': 'leverage-scale', style: { ...CHART_TYPE.tileValue, fontWeight: 500, color: 'var(--tw-muted)' } },
-            '/ 100',
-          ),
-        ),
-        React.createElement('span', { 'data-role': 'leverage-asof', style: CHART_TYPE.asOf }, asOf),
-      ),
-      rangeSwitch(range, setRange),
+      { 'data-role': 'leverage-top', style: { display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' } },
+      props.back ?? null,
+      React.createElement('span', { style: { marginLeft: 'auto' } }, rangeSwitch(range, setRange)),
     ),
-    // ── ② 三张摘要卡（**只有三张**；缺值就是 `—`）────────────────────────────────
+    // ── ① 两行 × 四列、共 8 张卡（缺值就是 `—`）──────────────────────────────────
     React.createElement(
       'div',
-      {
-        'data-role': 'leverage-cards',
-        style: { display: 'grid', gridTemplateColumns: `repeat(auto-fit, minmax(${CARD_MIN_W}px, 1fr))`, gap: TOOL_SPACE.tileGap },
-      },
+      { 'data-role': 'leverage-cards', className: 'tw-lev-cards', style: { gap: TOOL_SPACE.tileGap } },
       cards.map((card) =>
         React.createElement(
           'div',
-          { key: card.key, 'data-role': 'leverage-card', className: 'tw-tool-card', style: { ...CARD_SURFACE, display: 'flex', flexDirection: 'column', gap: 6 } },
+          { key: card.key, 'data-role': 'leverage-card', 'data-key': card.key, className: 'tw-tool-card', style: { ...CARD_SURFACE, display: 'flex', flexDirection: 'column', gap: 6, minWidth: 0 } },
           React.createElement('div', { 'data-role': 'leverage-card-label', style: SUMMARY_TYPE.label }, card.label),
           React.createElement(
             'div',
@@ -414,14 +387,28 @@ export function LeverageDetail(props: { back?: React.ReactNode }): React.ReactEl
                 ...SUMMARY_TYPE.value,
                 fontVariantNumeric: 'tabular-nums',
                 color: card.value === DASH ? 'var(--tw-muted)' : 'var(--tw-text)',
+                display: 'flex',
+                alignItems: 'baseline',
+                gap: 4,
+                flexWrap: 'wrap',
               },
             },
             card.value,
+            card.suffix === undefined
+              ? null
+              : React.createElement(
+                  'span',
+                  { 'data-role': 'leverage-card-suffix', style: { ...CHART_TYPE.tileValue, fontWeight: 500, color: 'var(--tw-muted)' } },
+                  card.suffix,
+                ),
           ),
+          card.note === undefined
+            ? null
+            : React.createElement('div', { 'data-role': 'leverage-card-note', style: SUMMARY_TYPE.note }, card.note),
         ),
       ),
     ),
-    // ── ③ 主图卡：图例在上、画布在下（顺序的唯一来源 = CHART_STACK）────────────────
+    // ── ② 主图卡：图例在上、画布在下（顺序的唯一来源 = CHART_STACK）────────────────
     React.createElement(
       'div',
       {

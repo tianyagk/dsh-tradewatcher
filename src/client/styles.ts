@@ -669,6 +669,9 @@ color-scheme:dark}
 .tw-tool-range>button{padding:4px 10px;border-radius:8px;font-size:12.5px;color:var(--tw-muted);transition:background .15s,color .15s,border-color .15s}
 .tw-tool-range>button[data-on=true]{background:var(--tw-card);border:1px solid var(--tw-border-strong);color:var(--tw-text);font-weight:600}
 .tw-tool-tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(148px,1fr));gap:10px}
+/* 杠杆温度计：两行 × 四列卡片（窄侧栏折成两列，**不**折成纵向长列表；间距由内联令牌给） */
+.tw-lev-cards{display:grid;grid-template-columns:repeat(4,minmax(0,1fr))}
+@media (max-width:760px){.tw-lev-cards{grid-template-columns:repeat(2,minmax(0,1fr))}}
 .tw-tool-plot{position:relative;width:100%}
 .tw-tool-plot>svg{display:block;width:100%;height:100%}
 .tw-tool-plot .tw-tool-cross{pointer-events:none}
