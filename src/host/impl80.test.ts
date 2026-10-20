@@ -17,7 +17,6 @@ import assert from 'node:assert/strict'
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { RescueConfig } from '../shared/model.ts'
 
 /**
@@ -27,7 +26,6 @@ import type { RescueConfig } from '../shared/model.ts'
 process.env.DSH_HOME = mkdtempSync(join(tmpdir(), 'tw-impl80-home-'))
 
 const RESCUE_SRC = readFileSync(new URL('./rescue.ts', import.meta.url), 'utf8')
-const STORE_SRC = readFileSync(new URL('./store.ts', import.meta.url), 'utf8')
 
 /** 判据"必须失败"的断言（反例注入的载体：注入后的行为喂给同一条判据必须抛错） */
 function mustFail(run: () => void, why: string): void {
@@ -517,119 +515,17 @@ test('⑩ 采样路径：coverage 进快照/事件/出分日志；开关 false �
   assert.deepEqual(foreign, [], `国债通道的请求必须全部来自既有管线（不许有 coverage 专用路径）：${JSON.stringify(foreign)}`)
 })
 
-// ── ⑪ prefs：rescueInboxRead 白名单 + 宽容归一 + 上界 ────────────────────
-
-async function prefsHarness(): Promise<{
-  call: (url: string, init?: { method?: string; body?: string }) => Promise<{ code: number; body: Record<string, unknown> }>
-  store: InstanceType<typeof import('./store.ts').DataStore>
-  monitor: InstanceType<typeof import('./rescue.ts').RescueMonitor>
-  close: () => void
-}> {
-  const { DataStore } = await import('./store.ts')
-  const { CalendarStore } = await import('./calendar.ts')
-  const { RescueMonitor } = await import('./rescue.ts')
-  const { makeTradeRoutes } = await import('./routes.ts')
-  const dir = mkdtempSync(join(tmpdir(), 'tw-impl80-prefs-'))
-  const store = new DataStore(dir)
-  await store.init()
-  const monitor = new RescueMonitor(dir, { enabled: false, intervalSec: 30, tailIntervalSec: 15, tailFrom: '14:30', universe: [] })
-  const routes = makeTradeRoutes(store, [], new CalendarStore(dir), monitor).routes
-  const find = (path: string) => {
-    const route = routes.find((r) => r.path === path)
-    assert.ok(route !== undefined, `未找到路由 ${path}`)
-    return route as unknown as { handler: (req: IncomingMessage, res: ServerResponse) => void }
-  }
-  const call = (url: string, init: { method?: string; body?: string } = {}) =>
-    new Promise<{ code: number; body: Record<string, unknown> }>((resolve) => {
-      const body = init.body
-      const req = {
-        url,
-        method: init.method ?? 'GET',
-        headers: { host: '127.0.0.1:3080', ...(body === undefined ? {} : { 'content-type': 'application/json' }) },
-        async *[Symbol.asyncIterator]() {
-          if (body !== undefined) yield Buffer.from(body)
-        },
-      } as unknown as IncomingMessage
-      let code = 0
-      const res = {
-        writeHead(c: number) { code = c },
-        end(payload: string) { resolve({ code, body: payload === '' ? {} : (JSON.parse(payload) as Record<string, unknown>) }) },
-      } as unknown as ServerResponse
-      find('/tradewatcher/prefs').handler(req, res)
-    })
-  return { call, store, monitor, close: () => undefined }
-}
-
-test('⑪ prefs：rescueInboxRead 写入后 GET /prefs 原样读回；非白名单键被丢弃（注入：删分支 ⇒ 必败）', async () => {
-  const h = await prefsHarness()
-  try {
-    // 前置（这条就是"删掉白名单分支"的等价注入）：未登记键会被**静默丢弃**
-    const dropped = await h.call('/tradewatcher/prefs', { method: 'POST', body: JSON.stringify({ patch: { notARealPref: 123 } }) })
-    assert.equal(dropped.code, 200)
-    assert.equal('notARealPref' in (dropped.body.prefs as object), false, '前置：未登记键确实会被静默丢弃（删分支的注入就是这个形状）')
-
-    // 源码级：白名单分支必须真的在（否则就是"回 200 但值不落盘"）
-    assert.ok(STORE_SRC.includes('if (patch.rescueInboxRead !== undefined) this.prefs.rescueInboxRead = normalizeRescueInboxRead(patch.rescueInboxRead)'), 'applyPrefsPatch 必须有 rescueInboxRead 分支')
-    const written = await h.call('/tradewatcher/prefs', {
-      method: 'POST',
-      body: JSON.stringify({ patch: { rescueInboxRead: { '1016-1425': 1760000000000, '1017-0935': 1760000300000 } } }),
-    })
-    assert.equal(written.code, 200)
-    const read = await h.call('/tradewatcher/prefs')
-    assert.deepEqual(
-      (read.body.prefs as { rescueInboxRead?: Record<string, number> }).rescueInboxRead,
-      { '1016-1425': 1760000000000, '1017-0935': 1760000300000 },
-      '写入后 GET 必须原样读回（回 200 但值不落盘 = 白名单缺分支）',
-    )
-  } finally {
-    h.close()
-  }
-})
-
-test('⑫ prefs：非法值被宽容丢弃且不 500；键数超上界按最旧裁剪（注入：强转 / 不裁 ⇒ 必败）', async () => {
-  const { normalizeRescueInboxRead, RESCUE_INBOX_READ_MAX } = await import('./store.ts')
-  // 非对象 ⇒ {}（不抛错）
-  assert.deepEqual(normalizeRescueInboxRead('nope'), {})
-  assert.deepEqual(normalizeRescueInboxRead(null), {})
-  assert.deepEqual(normalizeRescueInboxRead([1, 2]), {})
-  // 值非有限数 / 空键 / 超长键 ⇒ 丢弃
-  const mixed = normalizeRescueInboxRead({ a: 1, b: '2', c: NaN, d: Infinity, '': 4, e: 5 })
-  assert.deepEqual(mixed, { a: 1, e: 5 }, `只保留有限数值的合法键（实得 ${JSON.stringify(mixed)}）`)
-  // 键数上界：保留最新的 RESCUE_INBOX_READ_MAX 条
-  const big: Record<string, number> = {}
-  for (let i = 0; i < RESCUE_INBOX_READ_MAX + 500; i += 1) big[`k${i}`] = i
-  const capped = normalizeRescueInboxRead(big)
-  assert.equal(Object.keys(capped).length, RESCUE_INBOX_READ_MAX, `键数必须被裁到 ${RESCUE_INBOX_READ_MAX}`)
-  assert.equal(capped.k0, undefined, '最旧的（时间戳最小）必须被丢掉')
-  assert.equal(capped[`k${RESCUE_INBOX_READ_MAX + 499}`], RESCUE_INBOX_READ_MAX + 499, '最新的必须留下')
-  // HTTP：非法输入不得 500
-  const h = await prefsHarness()
-  try {
-    const bad = await h.call('/tradewatcher/prefs', { method: 'POST', body: JSON.stringify({ patch: { rescueInboxRead: 'not-an-object' } }) })
-    assert.equal(bad.code, 200, '非对象不得 500（宽容归一）')
-    assert.deepEqual((bad.body.prefs as { rescueInboxRead?: unknown }).rescueInboxRead, {}, '非对象 ⇒ {}')
-  } finally {
-    h.close()
-  }
-  // 注入：强转（不做归一）会把 '2' / NaN 带进运行时 ⇒ 同一判据必须失败
-  const mutant = (raw: unknown) => raw as Record<string, number>
-  mustFail(() => assert.deepEqual(mutant({ b: '2', c: NaN }), { a: 1, e: 5 }), '⚠ 反例（强转）必须让判据失败')
-  // 注入：不裁剪 ⇒ 键数超过上界
-  mustFail(() => assert.equal(Object.keys(mutant(big)).length, RESCUE_INBOX_READ_MAX), '⚠ 反例（不裁剪）必须让判据失败')
-})
-
-test('⑬ prefs 装载：手改坏值不阻断启动（rescueInboxRead 非对象 ⇒ {}；开关坏值 ⇒ false）', async () => {
+test('⑬ prefs 装载：手改坏值不阻断启动（开关坏值 ⇒ false）', async () => {
   const { DataStore } = await import('./store.ts')
   const dir = mkdtempSync(join(tmpdir(), 'tw-impl80-load-'))
   writeFileSync(join(dir, 'prefs.json'), JSON.stringify({
     theme: 'dark',
     rescue: { enabled: true, intervalSec: 30, tailIntervalSec: 15, tailFrom: '14:30', universe: [], rescueCoverageEnabled: 'yes' },
-    rescueInboxRead: 'broken',
   }), 'utf8')
   const store = new DataStore(dir)
   await store.init()
   const prefs = store.getPrefs()
-  assert.deepEqual(prefs.rescueInboxRead, {}, '坏值被归一到 {}（不是原样带进界面）')
+  assert.equal(prefs.theme, 'dark', '合法偏好必须原样装载（判据不许空跑）')
   assert.equal(prefs.rescue.rescueCoverageEnabled, false, '开关坏值一律当 false（阶段一：绝不因为手改而悄悄加分）')
   // 开关的合法值可以落盘并被快照带出
   const mon = new (await import('./rescue.ts')).RescueMonitor(dir, prefs.rescue as never)

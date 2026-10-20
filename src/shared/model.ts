@@ -763,14 +763,6 @@ export interface PortPrefs {
   portSort: SortState<PortSortKey>
   /** 护盘信号监测配置 */
   rescue: RescueConfig
-  /**
-   * 护盘「跨日信号收件箱」的**已读状态**：`键 = 信号 id（当日 hhmm，如 '1016-1425'）→ 值 = 已读时刻（epoch ms）`。
-   *
-   * 为什么放 prefs 而不是 rescue-log：rescue-log 是**行情/出分日志**（60 天滚动、按采样裁剪），
-   * 「我看过哪条」是用户偏好 —— 混进去会被日志裁剪连坐，也会让"日志体积"随阅读行为变化。
-   * 归一是**宽容**的（非对象⇒`{}`、值非有限数丢弃、键数上界 2000 按最旧丢），坏数据不得 500。
-   */
-  rescueInboxRead?: Record<string, number>
   /** 视图档位（P0-8）：Alt+M 轮换，持久化 */
   viewMode?: ViewMode
   /**
@@ -831,8 +823,6 @@ export const DEFAULT_PREFS: PortPrefs = {
   chipsDecay: 1.5,
   chipsSpread: 'triangle',
   splitRatio: 0.62,
-  /** 跨日信号收件箱的已读状态（老 profile 无此键 ⇒ 全部未读；键数上界见 normalizeRescueInboxRead） */
-  rescueInboxRead: {},
 }
 
 /**

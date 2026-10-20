@@ -11,6 +11,45 @@
 
 ---
 
+## v0.113.0 — 移除护盘「跨日信号收件箱」
+
+用户判断该功能无用。报告 `docs/AUDIT-IMPL85.md`。`npm run check` **933 / 933 × 2 时区** + selftest + build（73 片段全过）；`build.mjs` 未改动。
+
+### 移除（7 文件，+30 / −949）
+
+| 文件 | 内容 |
+| --- | --- |
+| `src/client/rescueInbox.ts` | **整文件删除**（−317）：合并、排序、已读映射、空态文案、日期工具、`INBOX_*` 常量 |
+| `src/client/RescuePanel.tsx`（−196） | 收件箱 import 与类型、按天取数 effect、已读写入、整个渲染区块（标题、列表上方声明、「全部已读」、「还有 N 天」、未存盘提示、列表、空态、`rescue-inbox-empty`） |
+| `src/shared/model.ts`（−10） | `PortPrefs.rescueInboxRead` 与默认值 |
+| `src/host/store.ts`（−30） | 装载归一、`applyPrefsPatch` 分支、上限与归一函数 |
+| `src/client/styles.ts`（−4） | `.tw-rescue-inbox*` 三个类 |
+| `src/client/impl81.test.ts`（+27/−286） | **逐条甄别**：删掉只服务收件箱的 5 条与相关夹具；**保留**覆盖广度 4 条，并把第八条收窄到 `.tw-rescue-cov` / `rescueCoverage.ts`，另补 2 条反例注入（强度不降） |
+| `src/host/impl80.test.ts`（+2/−106） | 删掉只服务收件箱的 2 条与 `prefsHarness()`；第 13 条去收件箱夹具并补 `prefs.theme` 判据防空跑；①–⑩ 一字未改 |
+
+### 保留（各有守门判据）
+
+- **今日信号时间线**：结构判据 + **真实数据链路**（钉时间到 2026-10-19 10:00 北京 + 种 `rescue-log.json` ⇒ `snapshot().today.length === 2`、`hhmm = ['09:55','09:45']`、`today[0].level === 2`；空日志反例必败）。
+- **`?day=` 历史回看**链路。
+- **覆盖广度徽标与悬停**（`rescueCoverage.ts` 未被触碰）。
+- 等级、连续评分近 20 日分位、当日峰、口径入口 `data-role: rescue-caliber`、5 分钟抽样。
+- 阶段一附加分恒 0、权重 0.717、零新增请求（impl80 ①–⑩ 未动）。
+
+### 验证
+
+`npm run check` **933 / 933 × 2 时区** + selftest + build（73 项）；两轮 exit 0。
+**先查锁定片段**：`grep "收件箱|最近一次信号|只列疑似|未存盘|rescueInbox" build.mjs` ⇒ **未命中**，锁定表无需改。
+新增 6 条守卫（客户端 4 + 宿主 2），**真源码注入全部变红**：
+- ① 源码 + 产物**零残留**（8 条特征串，扫 134 个源文件 + `lib/index.js` + `lib/client.js`）⇒ 命中 **0**；注入 A（往 `RescuePanel` 塞回「收件箱」）、D（往 `store.ts` 塞回归一）、E（**只**往产物 `lib/client.js` 塞）全部变红。
+- ② 今日时间线结构 + 数据双判据；删标题/容器/渲染循环 ⇒ 红；空日志 ⇒ `today=0` 且必败。
+- ③ 覆盖广度：删 `rescue-coverage-badge` + `CoverageMark` ⇒ 红。
+- ④ **旧 prefs 键宽容**：老 `prefs.json` 带着死键 ⇒ init 不抛错、`setPrefs` 正常；老客户端带死键请求 ⇒ 不 reject 且新值生效；反例 `theme:'bogus'` ⇒ 必须 rejects（证明「不抛错」有来源）。
+
+### 未做（已记录）
+
+- 老 `prefs.json` 里的死键**不清理**：`prefsFrom` 用 `{...DEFAULT_PREFS, ...loaded}`，死键留在明文但不被读取。清它需在运行时源码点名该键（与「源码零残留」冲突），通用未知键裁剪又有前向兼容风险 ⇒ 按「宽容忽略」保留。
+- 历史审计 `AUDIT-IMPL80/81` 与旧 CHANGELOG **不改写**（仍描述收件箱），指向本文件。
+
 ## v0.112.0 — 修「当日分时显示昨日」：当日链补新浪源 + 非当日必须标注 + 缓存键带交易日 + 门控窗口修正
 
 报告 `docs/AUDIT-IMPL84.md`。`npm run check` **934 / 934 × 2 时区** + selftest + build（73 片段全过）；`build.mjs` 未改动。
