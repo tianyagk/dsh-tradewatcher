@@ -21,6 +21,7 @@ import { isMoneyMasked, setMoneyMask } from './format.ts'
 import { Toast, useToast } from './ui.tsx'
 import { badgeToneColor } from './theme.ts'
 import { gateTabs } from './tabsGate.ts'
+import { subscribeTradeJump } from './tradeJump.ts'
 
 /** 侧栏图标与主面板共用的 id（`sidebar.panellist` 的 id == `main` 的 key）。 */
 const PANEL_ID = 'tradewatcher'
@@ -256,6 +257,13 @@ function Dashboard(): React.ReactElement {
   const goPage = useCallback((next: PageKey): void => {
     setPage(next)
   }, [])
+  /**
+   * 复盘页点某笔 ⇒ 切到持仓页的「交易流水」（用户口径：状态只在**内存**，不改 URL、不写偏好）。
+   *
+   * 分工：`FupanPage` 只发请求（`requestTradeJump`），这里只切页，`PortfolioPage` 挂载时
+   * 自己把高亮目标取走 —— 谁也不需要知道对方的内部状态。
+   */
+  useEffect(() => subscribeTradeJump(() => goPage('portfolio')), [goPage])
   /** 活跃行（null = 端点不可达 ⇒ 失败放行）。core 行永远在，所以老 profile 里是 {'core'}。 */
   const [rowsEnabled, setRowsEnabled] = useState<Set<string> | null>(null)
   const [prefs, setPrefsState] = useState<PortPrefs | null>(null)

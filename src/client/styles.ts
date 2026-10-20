@@ -347,6 +347,8 @@ color-scheme:dark}
 /* watch rows */
 .tw-wrow{display:flex;align-items:center;gap:8px;padding:6px 10px;border-top:1px solid var(--tw-border);transition:background .1s;cursor:pointer}
 .tw-wrow:hover{background:var(--tw-card2)}
+/* 从复盘页点过来的那一笔：流水列表里的**静态**底色条（无动效、无闪烁；切页即消失） */
+.tw-wrow[data-focus=true]{background:var(--tw-accent-soft);border-radius:6px}
 .tw-wrow .nm{flex:1;min-width:0}
 .tw-wrow .nm b{font-size:12px;font-weight:600}
 .tw-wrow .nm small{display:block;color:var(--tw-muted);font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -713,7 +715,8 @@ color-scheme:dark}
 .tw-fp-cell[data-kind=closed] .tw-fp-dom{color:var(--tw-muted)}
 .tw-fp-cell[data-kind=unknown]{border-style:dashed}
 .tw-fp-dom{display:flex;align-items:center;gap:4px;font-size:12px;font-family:var(--tw-mono);color:var(--tw-dim)}
-.tw-fp-count{margin-left:auto;font-size:12px;font-family:var(--tw-mono);color:var(--tw-accent);border:1px solid var(--tw-accent-soft);background:var(--tw-accent-soft);border-radius:8px;padding:0 5px}
+/* 月历格子里的标记：笔记 = ●，交易 = ▲+笔数（只用形状；颜色留给涨跌，所以这里一律 var(--tw-text)） */
+.tw-fp-marks{display:flex;align-items:center;gap:6px;font-size:12px;font-family:var(--tw-mono);color:var(--tw-text)}
 .tw-fp-pinmark{font-size:12px;color:var(--tw-warn);border:1px solid var(--tw-warn);border-radius:6px;padding:0 3px;line-height:1.3}
 .tw-fp-unknown{font-size:12px;color:var(--tw-warn)}
 .tw-fp-closed{font-size:12px;color:var(--tw-muted)}
@@ -734,6 +737,14 @@ color-scheme:dark}
 .tw-fp-ok{font-size:12px;padding:2px 0}
 .tw-fp-warn{font-size:12px;color:var(--tw-warn);background:var(--tw-bg2);border:1px solid var(--tw-warn);border-radius:8px;padding:4px 8px;margin:4px 0}
 .tw-fp-fail{display:flex;flex-direction:column;gap:4px}
+/* 当日交易（只读）：逐笔一行一个 button（键盘可达）；点一下切到持仓页的流水并静态高亮那一笔 */
+.tw-fp-trades-block{border-top:1px dashed var(--tw-border);padding-top:8px;display:flex;flex-direction:column;gap:6px}
+.tw-fp-trades{display:flex;flex-direction:column;gap:2px;max-height:220px;overflow:auto}
+.tw-fp-trade{display:grid;grid-template-columns:auto minmax(0,1fr) auto auto auto auto;gap:8px;align-items:center;width:100%;font-size:12px;font-family:var(--tw-mono);color:var(--tw-text);background:none;border:1px solid transparent;border-radius:6px;padding:3px 5px;text-align:left;cursor:pointer;outline:none}
+.tw-fp-trade:hover{background:var(--tw-hover);border-color:var(--tw-border)}
+.tw-fp-trade:focus-visible{border-color:var(--tw-accent);box-shadow:0 0 0 3px var(--tw-ring)}
+.tw-fp-trade-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tw-fp-trade-fee{color:var(--tw-muted)}
 @media (max-width:760px){
   .tw-fp-wrap{flex-direction:column}
   .tw-fp-cal,.tw-fp-side{flex:1 1 auto;width:100%}

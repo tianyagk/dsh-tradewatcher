@@ -49,7 +49,7 @@ const EXPECTED_ROWS: ReadonlyArray<{ id: string; row: string }> = [
   { id: 'tradewatcher-cloudmap', row: 'cloudmap' },
   // 第 7 行（v0.71）：工具箱（工具目录 + 工具详情），客户端半区；host 侧无独占路由/工具
   { id: 'tradewatcher-tools', row: 'tools' },
-  // 第 8 行（v0.111）：复盘（月历 + 当日笔记）；host 侧独占两条本地存储路由，无 agent 工具
+  // 第 8 行（v0.111）：复盘（月历 + 当日笔记 + 当日交易记录）；host 侧独占三条本机路由，无 agent 工具
   { id: 'tradewatcher-fupan', row: 'fupan' },
 ]
 
@@ -69,9 +69,11 @@ const FUNCTION_OWNED_PATHS = [
   '/tradewatcher/market-extras',
   // v0.71.0 第 7 行：工具箱独占的蛋糕数据路由（此前漏在本清单外 —— 新断言「并集必须相等」抓到，REVIEW-6 §2.3 D5）
   '/tradewatcher/tools/global-flow',
-  // v0.111.0 第 8 行：复盘独占的两条（整月视图 / 写一条笔记）—— core 必须交出去，否则复盘行关不掉
+  // v0.111.0 第 8 行：复盘独占的三条（整月视图 / 写一条笔记 / 当日交易记录）—— core 必须交出去，否则复盘行关不掉
   '/tradewatcher/fupan/month',
   '/tradewatcher/fupan/note',
+  // v0.113.x：当日持仓交易记录（只读；同样只被复盘页消费）
+  '/tradewatcher/fupan/trades',
 ] as const
 
 // 隔离数据目录：**绝不能在测试里碰用户的 ~/.dsh**（store.init 会读写真实文件）
@@ -342,8 +344,8 @@ const ROW_ROUTES_FOR_TEST: Record<string, readonly string[]> = {
   portfolio: ['/tradewatcher/portfolio', '/tradewatcher/ledger'],
   // 第 7 行（工具箱）：独占五市场蛋糕的数据路由（单一消费方 ⇒ 该行）
   tools: ['/tradewatcher/tools/global-flow'],
-  // 第 8 行（复盘）：整月视图 + 写一条笔记（都只被 FupanPage 消费 ⇒ 该行）
-  fupan: ['/tradewatcher/fupan/month', '/tradewatcher/fupan/note'],
+  // 第 8 行（复盘）：整月视图 + 写一条笔记 + 当日交易记录（都只被 FupanPage 消费 ⇒ 该行）
+  fupan: ['/tradewatcher/fupan/month', '/tradewatcher/fupan/note', '/tradewatcher/fupan/trades'],
 }
 const ROW_TOOLS_FOR_TEST: Record<string, readonly string[]> = {
   calendar: ['calendar', 'calendar_add'],
@@ -493,7 +495,7 @@ function fupanMirrorProblems(input: {
   same('cordis.patch.yml 行注释', input.patch)
   if (input.rows !== undefined) {
     const row = input.rows.find((r) => r.row === 'fupan')
-    if (row === undefined) fail.push('manifest 里没有 config: { row: fupan } 的行（第 8 行未注册 ⇒ 复盘页与它的两条路由都不会装载）')
+    if (row === undefined) fail.push('manifest 里没有 config: { row: fupan } 的行（第 8 行未注册 ⇒ 复盘页与它的三条路由都不会装载）')
     else {
       if (row.id !== 'tradewatcher-fupan') fail.push(`manifest 行 id 应为 tradewatcher-fupan（实得 ${row.id}）`)
       if (row.name !== 'dsh-tradewatcher/rows/fupan') fail.push(`manifest 行 name 应为 dsh-tradewatcher/rows/fupan（实得 ${row.name}）—— 功能行给裸包名会与 core 抢同一个 client source（AUDIT-IMPL36）`)
@@ -509,13 +511,13 @@ function rowRoutesOf(indexSrc: string, row: string): string[] | null {
 }
 
 /**
- * 第 8 行的路由**归属**判据：两条路由必须恰好声明在 `fupan` 行，且不出现在任何别的行。
+ * 第 8 行的路由**归属**判据：三条路由必须恰好声明在 `fupan` 行，且不出现在任何别的行。
  * 反例（"把路由塞进 core"的形态）就是把它们从 `fupan` 行删掉 —— core 会兜底注册所有没被声明的路径。
  */
 function fupanOwnershipProblems(indexSrc: string): string[] {
-  const want = ['/tradewatcher/fupan/month', '/tradewatcher/fupan/note']
+  const want = ['/tradewatcher/fupan/month', '/tradewatcher/fupan/note', '/tradewatcher/fupan/trades']
   const own = rowRoutesOf(indexSrc, 'fupan')
-  if (own === null) return ['ROW_ROUTES 里没有 fupan 行（两条复盘路由会被 core 兜底注册 ⇒ 复盘行关不掉）']
+  if (own === null) return ['ROW_ROUTES 里没有 fupan 行（三条复盘路由会被 core 兜底注册 ⇒ 复盘行关不掉）']
   const bad: string[] = []
   for (const p of want) if (!own.includes(p)) bad.push(`${p} 未声明在 fupan 行（删掉即归 core）`)
   for (const row of ['calendar', 'watchlist', 'portfolio', 'market', 'cloudmap', 'tools']) {
@@ -538,7 +540,7 @@ test('第 8 行 fupan：四处镜像一致（真表 / patch 行注释 / 文档 �
   }
   const realFail = fupanMirrorProblems(base)
   assert.deepEqual(realFail, [], `真实四处必须一致（失败项：${realFail.join(' ／ ')}）`)
-  assert.deepEqual([...base.real], ['/tradewatcher/fupan/month', '/tradewatcher/fupan/note'], '真表：第 8 行只独占这两条（精确路径，与其它行同款）')
+  assert.deepEqual([...base.real], ['/tradewatcher/fupan/month', '/tradewatcher/fupan/note', '/tradewatcher/fupan/trades'], '真表：第 8 行独占这三条（精确路径，与其它行同款）')
   assert.deepEqual(REAL_ROW_TOOLS.fupan, [], '第 8 行不带 agent 工具（月历/笔记是纯 UI）')
   // 反例：**只改一处** ⇒ 必须红（四处各注入一次 + manifest 的两个字段各注入一次）
   const injections: Array<{ name: string; mutate: (i: typeof base) => typeof base; hit: RegExp }> = [
@@ -555,11 +557,14 @@ test('第 8 行 fupan：四处镜像一致（真表 / patch 行注释 / 文档 �
   }
 })
 
-test('第 8 行 fupan：两条路由归属 = fupan（core 不兜底、别的行不抢）；把路由塞进 core 的形态必败', () => {
+test('第 8 行 fupan：三条路由归属 = fupan（core 不兜底、别的行不抢）；把路由塞进 core 的形态必败', () => {
   const src = readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'index.ts'), 'utf8')
-  assert.deepEqual(fupanOwnershipProblems(src), [], '真实源码：两条复盘路由只属于 fupan 行')
+  assert.deepEqual(fupanOwnershipProblems(src), [], '真实源码：三条复盘路由只属于 fupan 行')
   // 反例 ①：从 fupan 行删掉 ⇒ core 兜底（= 复盘行关不掉，路由照样 200）
-  const toCore = src.replace("  fupan: ['/tradewatcher/fupan/month', '/tradewatcher/fupan/note'],", '  fupan: [],')
+  const toCore = src.replace(
+    "  fupan: ['/tradewatcher/fupan/month', '/tradewatcher/fupan/note', '/tradewatcher/fupan/trades'],",
+    '  fupan: [],',
+  )
   assert.notEqual(toCore, src, '注入必须真的改到了源码（否则这条证明无效）')
   assert.notDeepEqual(fupanOwnershipProblems(toCore), [], '⚠ 反例（归 core）必须被判据抓住')
   // 反例 ②：塞进 market 行 ⇒ 同一路由两行声明（关一行另一行还在注册）
@@ -569,14 +574,18 @@ test('第 8 行 fupan：两条路由归属 = fupan（core 不兜底、别的行�
   )
   assert.notEqual(intoMarket, src, '注入必须真的改到了源码')
   assert.notDeepEqual(fupanOwnershipProblems(intoMarket), [], '⚠ 反例（塞进 market 行）必须被判据抓住')
-  // 运行时：只开 core ⇒ 两条都不注册（404）；开 fupan 行 ⇒ 恰好这两条
+  // 运行时：只开 core ⇒ 三条都不注册（404）；开 fupan 行 ⇒ 恰好这三条
   setKernel(null)
   const core = fakeCtx()
   apply(core.ctx, { row: 'core' })
   assert.equal(core.routes.some((x) => x.startsWith('/tradewatcher/fupan')), false, 'core 不许注册 /tradewatcher/fupan 前缀下的任何路径（否则复盘行关不掉）')
   const fupanRow = fakeCtx()
   apply(fupanRow.ctx, { row: 'fupan' })
-  assert.deepEqual([...fupanRow.routes].sort(), ['/tradewatcher/fupan/month', '/tradewatcher/fupan/note'], 'fupan 行只注册自己那两条')
+  assert.deepEqual(
+    [...fupanRow.routes].sort(),
+    ['/tradewatcher/fupan/month', '/tradewatcher/fupan/note', '/tradewatcher/fupan/trades'],
+    'fupan 行只注册自己那三条',
+  )
   assert.deepEqual(fupanRow.tools, [], 'fupan 行不带 agent 工具')
   assert.equal(coreKernel()?.activeRows.has('fupan'), true, '开启后 activeRows 应含 fupan（页签门控的唯一依据）')
   assert.equal(rowOf({ row: 'fupan' }), 'fupan', 'rowOf 必须认识 fupan（认不出会静默回退 all）')

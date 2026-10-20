@@ -1,6 +1,9 @@
 /**
  * 复盘页（第 7 个页签）的**纯逻辑**：月历网格、交易日/休市判定、钉住标注、失败与丢弃原因。
  *
+ * 当日交易的月历标记（`●` / `▲n`）、汇总行、当日盈亏、截断披露在 `fupanTrades.ts`
+ * （同一层的另一个文件：那边只认交易回包，这边只认笔记/交易日）。
+ *
  * 为什么单独一层：本仓库没有 DOM 测试环境（见 `toolsPage.test.ts` 文件头），页面里的规则只有
  * 下沉成纯函数才可断言；`FupanPage.tsx` 只做接线与渲染。行为判据在 `impl83.test.ts`。
  *
@@ -175,6 +178,11 @@ export interface FupanCellInfo {
   hasPinned: boolean
   kind: TradingKind
   closedReason: string | null
+  /**
+   * 该日交易笔数（页面把 `monthTradeCountOf` / 按日惰性取数的结果并进来）。
+   * `null` / `undefined` = 未取到或读取失败 ⇒ **不写进读屏文本**（不画 `▲0`）。
+   */
+  trades?: number | null
 }
 
 export function cellInfoOf(month: FupanMonthPayload | null, date: string): FupanCellInfo {
@@ -188,10 +196,12 @@ export function cellInfoOf(month: FupanMonthPayload | null, date: string): Fupan
   }
 }
 
-/** 月历格的读屏文本（日期 / 星期 / 交易日或休市 / 条数 / 是否有钉住） */
+/** 月历格的读屏文本（日期 / 星期 / 交易日或休市 / 条数 / 交易笔数 / 是否有钉住） */
 export function cellAriaOf(cell: FupanCell, info: FupanCellInfo, selected: boolean): string {
   const parts = [cell.date, weekdayLabelOf(cell.date), tradingLabelOf(info.kind, info.closedReason)]
   parts.push(info.count === null ? '条数未知' : `${info.count} 条笔记`)
+  // 交易笔数未知/读取失败 ⇒ 这一句整个不出现（`▲0` 那种假数据不许进读屏文本）
+  if (typeof info.trades === 'number' && Number.isFinite(info.trades) && info.trades > 0) parts.push(`${info.trades} 笔交易`)
   if (info.hasPinned) parts.push('含钉到该日的条目')
   if (selected) parts.push('已选中')
   return parts.filter((p) => p !== '').join('，')

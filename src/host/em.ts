@@ -1201,6 +1201,27 @@ export async function fetchQuotes(secids: string[], opts: QuoteLoadOptions = {})
 }
 
 /**
+ * **零上游请求**的行情读取：只读共用槽 + LKG 银行，缺的就是缺（不回源、不等待在飞批量）。
+ *
+ * 给"必须为零新增请求"的调用方用（复盘行的持仓交易记录要复用持仓核算的当日盈亏，
+ * 但不能为了它多打一次上游）。行内 `at`/`source` 照旧如实标注这条读数有多旧、从哪来。
+ */
+export function peekQuotes(secids: readonly string[]): Record<string, QuoteRow> {
+  const out: Record<string, QuoteRow> = {}
+  const now = Date.now()
+  for (const raw of secids) {
+    const secid = raw.trim()
+    if (secid === '') continue
+    const key = secid.toUpperCase()
+    const slot = quoteSlots.get(key)
+    const row = slot !== undefined && now - slot.at <= QUOTE_SERVE_STALE_MS ? slot.row : lastGood.get(key)
+    if (row === undefined) continue
+    out[secid] = row.secid === secid ? row : { ...row, secid }
+  }
+  return out
+}
+
+/**
  * **共用行情槽**的批量读取出口（护盘采样器等后台取数方用；不经过路由）。
  *
  * 契约：与 `/quotes`（顶部行情条/自选/持仓）读的是**同一份**逐标的槽 + 同一个在飞合并

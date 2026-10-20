@@ -71,13 +71,14 @@ export const ROW_ROUTES: Record<Exclude<RowId, 'core'>, readonly string[]> = {
   /**
    * 复盘（第 8 行，v0.111.0）。
    *
-   * 归属判据（§2.2）：这两条路由**只被复盘页消费**（`src/client/FupanPage.tsx` → `api.fupanMonth/fupanNote`）
+   * 归属判据（§2.2）：这三条路由**只被复盘页消费**（`src/client/FupanPage.tsx` → `api.fupanMonth/fupanNote/fupanTrades`）
    * ⇒ 归本行；关掉复盘行时它们随之 404，其它页面一个都不受影响（`FupanPage` 也只被本行加载）。
    *   · `/tradewatcher/fupan/month`  整月视图（每天是否有笔记 + 该日是否交易日）
    *   · `/tradewatcher/fupan/note`   新增/更新/删除一条笔记（GET 与 POST 不同路径，各自独立）
-   * 存储是本地 `fupan.json`；零新增上游请求（细节见 `src/host/fupan.ts` 文件头）。
+   *   · `/tradewatcher/fupan/trades` 某一天的持仓交易记录（逐笔 + 汇总 + 当日盈亏，只读）
+   * 存储是本地 `fupan.json` + 既有流水；零新增上游请求（细节见 `src/host/fupan.ts`、`src/host/fupanTrades.ts` 文件头）。
    */
-  fupan: ['/tradewatcher/fupan/month', '/tradewatcher/fupan/note'],
+  fupan: ['/tradewatcher/fupan/month', '/tradewatcher/fupan/note', '/tradewatcher/fupan/trades'],
 }
 
 /** 行 → 该行独占的 agent 工具名（不含前缀）；同为**唯一事实源**（见上） */

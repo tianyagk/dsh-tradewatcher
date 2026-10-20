@@ -404,6 +404,8 @@ export class DataStore {
    * 键是文件名（与 `persist(file, …)` 同一个口径）。
    */
   private readonly readGuard = new ReadGuard()
+  /** 流水落盘后的失效订阅（见 `onLedgerWrite`） */
+  private readonly ledgerListeners = new Set<() => void>()
 
   constructor(dir: string = dataHome()) {
     this.dir = dir
@@ -523,6 +525,29 @@ export class DataStore {
   }
 
   /**
+   * 流水**落盘之后**的失效钩子（复盘行的交易记录缓存挂在上面）：返回取消订阅。
+   *
+   * 为什么挂在写路径而不是让读取方定时核对：核对要么漏（两次核对之间改了就用到旧值）、
+   * 要么变成轮询。写成功的那一刻通知，缓存当场清空。
+   */
+  onLedgerWrite(fn: () => void): () => void {
+    this.ledgerListeners.add(fn)
+    return () => {
+      this.ledgerListeners.delete(fn)
+    }
+  }
+
+  private notifyLedgerWrite(): void {
+    for (const fn of this.ledgerListeners) {
+      try {
+        fn()
+      } catch {
+        /* 订阅方的异常不该让写盘失败 */
+      }
+    }
+  }
+
+  /**
    * 跨进程互斥的"读最新 → 改 → 写回"（本轮数据安全修复的核心，见 `lock.ts` 的协议说明）。
    *
    * 为什么必须**整个**读-改-写都在锁里，而不是只把 `writeJsonAtomic` 包起来：
@@ -588,6 +613,7 @@ export class DataStore {
         const target = join(this.dir, file)
         await withFileLocks([target], () => this.persist(file, value), { note: `store:${file}` })
       }
+      if (writes.some(([file]) => file === 'ledger.json')) this.notifyLedgerWrite()
     })
     this.writeChain = run.catch(() => undefined)
     return run
@@ -680,6 +706,7 @@ export class DataStore {
       await this.reloadPort()
       await this.reloadLedger()
       await this.reloadPrefs()
+      this.notifyLedgerWrite()
       return { backedUp }
     })
   }

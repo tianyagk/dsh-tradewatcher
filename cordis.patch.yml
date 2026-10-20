@@ -13,10 +13,11 @@
 #                                            `/tradewatcher/tools/global-flow`（五市场蛋糕的数据；**只被工具箱页消费**
 #                                            ⇒ 按 §2.2 判据归本行，v0.72.0 起它确实独占了一条路由）。
 #                                            本行不带 agent 工具；与 cloudmap 一样贡献 activeRows ⇒ 页签门控照常工作。
-#   tradewatcher-fupan     → row: fupan      **复盘**（第 8 行，v0.111.0）：复盘页签（月历 + 当日笔记 + 钉到未来日期）+
-#                                            `/tradewatcher/fupan/month` `/tradewatcher/fupan/note`
-#                                            （只被复盘页消费 ⇒ 按 §2.2 判据归本行；数据是本地笔记文件，
-#                                            零新增上游请求；本行同样不带 agent 工具）。
+#   tradewatcher-fupan     → row: fupan      **复盘**（第 8 行，v0.111.0）：复盘页签（月历 + 当日笔记 + 钉到未来日期
+#                                            + 当日交易记录）+
+#                                            `/tradewatcher/fupan/month` `/tradewatcher/fupan/note` `/tradewatcher/fupan/trades`
+#                                            （只被复盘页消费 ⇒ 按 §2.2 判据归本行；数据是本地笔记文件、
+#                                            既有交易日历与既有流水，零新增上游请求；本行同样不带 agent 工具）。
 #
 # ⚠ **历史归因纠正（这一条要读，前一轮的结论是错的）** —— 这段说的是当时的**六行**形态，七行是同机制加一行。
 # v0.50.0 曾把"（六行）装载失败"归因成"同一 package 多个活跃 Loader 源 = composition error"，
@@ -77,7 +78,8 @@
     - id: tradewatcher-tools
       name: 'dsh-tradewatcher/rows/tools'
       config: { row: tools }
-    # 复盘（第 8 行）：复盘页签 + 本地笔记存储的两条路由（`/tradewatcher/fupan/month`、`/tradewatcher/fupan/note`）
+    # 复盘（第 8 行）：复盘页签 + 本地笔记与当日交易记录的三条路由
+    # （`/tradewatcher/fupan/month`、`/tradewatcher/fupan/note`、`/tradewatcher/fupan/trades`）
     - id: tradewatcher-fupan
       name: 'dsh-tradewatcher/rows/fupan'
       config: { row: fupan }

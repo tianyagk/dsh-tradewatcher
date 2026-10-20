@@ -319,6 +319,12 @@ export interface FupanDateDto {
   trading?: boolean
   /** `trading === false` 的原因：`周末` / 假日名 / `外部日历（手工维护）` */
   closedReason?: string | null
+  /**
+   * 该日交易笔数。宿主**当前不带**（复盘月历与交易是两条路由）⇒ 缺省；界面按「按日惰性取数」
+   * 走 `GET /tradewatcher/fupan/trades`，只有打开过的日子才知道笔数。
+   * 哪天宿主带上了，整月就能直接画 `▲n`（界面不用改）。⚠ 缺失 ⇒ 不画，**不写 0**。
+   */
+  trades?: number
 }
 
 /** 一条复盘笔记（`pinnedTo` = 钉到的日子；`at` = 写入时刻） */
@@ -396,6 +402,58 @@ export interface FupanNoteResult {
   /** 写入后若笔记文件读不到 ⇒ 原因（写成功但读不到，必须说清） */
   notesUnreadable?: string | { reason?: string } | null
   notesQuarantined?: string | null
+}
+
+/**
+ * 复盘页的一笔交易（宿主从持仓流水里按日筛出；**只读展示**，点一下跳到持仓页的流水并高亮）。
+ * 数量/价格/费用可能为 `null`（未填）⇒ 界面写「未取到」，不写 0。
+ */
+export interface FupanTradeDto {
+  /** 台账流水 id（跳转后用它在流水列表里定位并静态高亮那一行） */
+  ledgerId?: string
+  /** 记账时刻（epoch ms）；`time` 缺省时界面用它在**北京时间**下格式化 */
+  ts?: number | null
+  /** 宿主给的时刻文本（`09:31` / `HH:mm:ss`） */
+  time?: string | null
+  name?: string | null
+  /** `buy` / `sell` / `adjust`（与台账 verb 同源；其它取值原样显示，不猜） */
+  side?: string | null
+  /** 中文方向（买/卖/调整）：`side` 缺失时用它 */
+  direction?: string | null
+  qty?: number | null
+  price?: number | null
+  fee?: number | null
+}
+
+/**
+ * `GET /tradewatcher/fupan/trades?day=YYYY-MM-DD` 的回包（客户端只消费，不重算）。
+ *
+ * ⚠ 两种回包形状都认（本字段清单同时兼容"简报口径 `{buys,sells}`"与宿主最终口径
+ * `{buy:{count},sell:{count}}`）：解释层在 `fupanTrades.ts`，那里对缺失项一律给「未取到」。
+ */
+export interface FupanTradesPayload {
+  /** 该日逐笔（宿主上限 500/日；超出部分由 `total` / `truncated` 如实披露） */
+  trades?: FupanTradeDto[]
+  /** 该日**计入笔数**（不受截断影响）；缺省 ⇒ 用 `trades[]` 长度 */
+  total?: number
+  /** 当日汇总：只有买卖笔数有用（界面不写净买入/净卖出/净额） */
+  summary?: {
+    buys?: number
+    sells?: number
+    buy?: { count?: number }
+    sell?: { count?: number }
+  } | null
+  /** 当日盈亏（与持仓页同源）；`null` / 缺省 ⇒ 界面写「未取到」（**不写 0**） */
+  dayPnl?: number | null
+  /** 读不到的**旧名**原因（界面不显示：用户口径「当日盈亏不加口径句」） */
+  dayPnlWhy?: string | null
+  /** 读不到的原因（宿主最终口径；同样不显示） */
+  dayPnlReason?: string | null
+  truncated?: { shown?: number; total?: number } | null
+  /** 台账读取失败（HTTP 仍 200）：界面按「未取到」处理，月历**不画三角** */
+  readFailed?: boolean
+  readFailedReason?: string | null
+  asOf?: number | null
 }
 
 export const api = {
@@ -613,6 +671,15 @@ export const api = {
   /** 复盘页的写入（`{ op:'upsert'|'delete', … }`；请求体由 fupanView.ts 的 `noteBodyOf` 单一构造） */
   fupanNote(body: Record<string, unknown>): Promise<FupanNoteResult> {
     return request('/tradewatcher/fupan/note', { method: 'POST', body: JSON.stringify(body) })
+  },
+  /**
+   * 复盘页的**当日交易**（只读：持仓流水按日筛出 + 当日盈亏）。
+   *
+   * 归属：只被 `FupanPage.tsx` 消费 ⇒ `ROW_ROUTES.fupan`（行关掉 ⇒ 404，页面按「交易记录未取到」显示）。
+   * ⚠ 本方法里**只许**这一条路由字面量（行归属按"函数体里第一个路由字面量"推导，见 `rowOwnership.test.ts`）。
+   */
+  fupanTrades(day: string): Promise<FupanTradesPayload> {
+    return request(`/tradewatcher/fupan/trades?day=${encodeURIComponent(day)}`)
   },
   industry(secid: string): Promise<{ industry: { name: string; pct: number | null } | null }> {
     return request(`/tradewatcher/industry?secid=${encodeURIComponent(secid)}`)

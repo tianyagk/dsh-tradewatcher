@@ -29,6 +29,7 @@ import { CHIPS_DISPLAY, CHIPS_DISPLAY_MAX, CHIPS_MIN_SAMPLES, CHIPS_WINDOW, CHIP
 import { alignVolUnitWithQuote } from './klineUnits.ts'
 import { globalFlowPayload } from './globalFlow.ts'
 import { FUPAN_DROP_TEXT, FupanStore, fupanMonthView, notesInMonth, notesOnDay, parseFupanMonth, parseFupanOp } from './fupan.ts'
+import { parseFupanDay, readFupanMonthTrades, readFupanTrades } from './fupanTrades.ts'
 import { unreadableMissing } from './readGuard.ts'
 
 /**
@@ -1387,10 +1388,11 @@ export function makeTradeRoutes(
     },
     {
       /**
-       * 复盘（第 8 行 `fupan`）：整月视图 —— 每天是否有笔记 + 该日是否交易日。
+       * 复盘（第 8 行 `fupan`）：整月视图 —— 每天是否有笔记 + 该日是否交易日 + **该日交易笔数**。
        *
        * **零新增上游请求**：笔记读本地 `fupan.json`，休市日读本地 `trading-calendar.json` 并走
-       * 既有判定链 `tradingDayState`（`fupan.ts` 里一个 fetch 都没有）。
+       * 既有判定链 `tradingDayState`，笔数读本地流水（`fupanTrades.tradeCountsOfMonth`，
+       * 与 `/fupan/trades` 同一份过滤/归属）。一个 fetch 都没有。
        * 归属：只被复盘页消费 ⇒ `ROW_ROUTES.fupan`（关掉该行 ⇒ 本路由随行 404）。
        */
       kind: 'exact',
@@ -1400,20 +1402,33 @@ export function makeTradeRoutes(
         try {
           const ym = parseFupanMonth(queryOf(req).get('ym'))
           await fupan.init()
+          await store.init()
           const state = fupan.readState()
           const view = await fupanMonthView(state.notes, ym)
           const notes = notesInMonth(state.notes, ym)
+          // 每天的计入笔数（0 只能来自"那天真的没有"；读不到就是 null，界面据此不画 ▲n）
+          const monthTrades = readFupanMonthTrades(store, ym)
+          const dates = view.dates.map((d) => ({
+            ...d,
+            trades: monthTrades.counts === null ? null : (monthTrades.counts[d.date] ?? 0),
+          }))
           // 「读不到」≠「没有」：读失败时 notes 是空数组，但这句必须跟着回去
-          const missing: MissingField[] = state.unreadable === null
-            ? []
-            : unreadableMissing([{ file: fupan.path(), reason: state.unreadable }], '复盘笔记文件')
+          const missing: MissingField[] = [
+            ...(state.unreadable === null
+              ? []
+              : unreadableMissing([{ file: fupan.path(), reason: state.unreadable }], '复盘笔记文件')),
+            ...monthTrades.missing,
+          ]
           send(res, 200, {
             ym,
             asOf: Date.now(),
             source: view.source,
             stale: false,
             notes,
-            dates: view.dates,
+            dates,
+            // 流水读不到 ⇒ 每格 trades 为 null（不是 0）；显示层按 readFailed 不画三角
+            readFailed: monthTrades.readFailed,
+            readFailedReason: monthTrades.readFailedReason,
             totals: {
               // 该月**可见**的笔记数 = 写在本月的 + 被钉到本月的（与下面 two 个分项能对上账）
               notes: notes.length,
@@ -1486,6 +1501,32 @@ export function makeTradeRoutes(
             notesQuarantined: state.quarantined,
             missing,
           })
+        } catch (error) {
+          fail(res, error)
+        }
+      },
+    },
+    {
+      /**
+       * 复盘（第 8 行 `fupan`）：**某一天的持仓交易记录** —— 逐笔 + 汇总 + 当日盈亏（只读）。
+       *
+       * 归属日按流水 `ts` 的**北京日**算（`fupanTrades.ts`，与宿主 TZ 无关）；只计入
+       * buy/sell/adjust。当日盈亏**取持仓核算**（与持仓页同一来源），不按逐笔重算。
+       * **零新增上游请求**：行情只读本地槽（`em.peekQuotes`），取不到就如实缺。
+       * 读取失败按用户显式决定回"0 笔 + readFailed 标记"（HTTP 200，不抛错）。
+       */
+      kind: 'exact',
+      path: '/tradewatcher/fupan/trades',
+      handler: async (req, res) => {
+        if (!needGate(req, res)) return
+        try {
+          if (req.method !== 'GET') {
+            send(res, 405, { error: 'method not allowed' })
+            return
+          }
+          const day = parseFupanDay(queryOf(req).get('day'))
+          await store.init()
+          send(res, 200, readFupanTrades(store, day))
         } catch (error) {
           fail(res, error)
         }

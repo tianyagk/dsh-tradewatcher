@@ -1,22 +1,29 @@
 /**
- * 复盘页（第 7 个页签）：月历（每天显示笔记条数 / 是否钉住 / 交易日或休市）+ 当日笔记（增 / 改 / 删 / 钉到未来）。
+ * 复盘页（第 7 个页签）：月历（每天显示笔记 / 交易标记 / 是否钉住 / 交易日或休市）+ 当日笔记
+ * （增 / 改 / 删 / 钉到未来）+ 当日交易（**只读**：逐笔列表 + 买卖笔数 + 当日盈亏）。
  *
  * 分工：本文件只做**接线与渲染**。所有规则（交易日判定、钉自标注、失败与丢弃原因、键盘移动、
- * 请求体）都在 `fupanView.ts` 的纯函数里，判据在 `impl83.test.ts`（本仓库没有 DOM 测试环境，
- * 规则留在页面里就不可断言 —— 见 `toolsPage.test.ts` 文件头）。
+ * 请求体）都在 `fupanView.ts` 的纯函数里；交易侧的标记/汇总/盈亏/截断在 `fupanTrades.ts`。
+ * 判据在 `impl83.test.ts`（笔记）与 `impl87.test.ts`（交易），本仓库没有 DOM 测试环境。
  *
  * 三条界面红线：
  *  ① 取数失败 ⇒ **原因 + 重试**，绝不渲染"本月暂无笔记"（失败与空是两件事）；
  *  ② 写失败 ⇒ 原因就地显示（`role="alert"`），不许 `catch(() => {})`；
  *  ③ 宿主的 `dropped`（超上限丢最旧）⇒ 必须显示，不许静默当成功。
  *
+ * 交易侧三条口径（用户决定，别加回来）：
+ *  · 月历标记**只用形状**（`●` 笔记 / `▲n` 交易），颜色留给涨跌；读取失败 ⇔ 不画三角；
+ *  · 汇总行**只有**「买入 N 笔 · 卖出 M 笔」—— 不写净买入/净卖出/净额；当日盈亏只给数值；
+ *  · **不接隐身档**：本页数字永远明文（不读遮蔽开关，也不加「已隐藏」占位）；
+ *    点某笔 ⇒ 切持仓页 → 交易流水并静态高亮（状态只在内存：不改 URL、不改偏好、不闪烁）。
+ *
  * 保活（`src/client/index.tsx` 的 `KEEP_ALIVE` 里有 `'fupan'`）：本页**零轮询** —— 只在挂载 /
- * 换月 / 写成功后取数，所以"切页不卸载"的收益（月份、选中日期、正在写的草稿都保住）
- * 明显大于风险，与「日历」同款。
+ * 换月 / 写成功后取数（交易是**按日惰性取数**：打开某日才取那一天的），所以"切页不卸载"的收益
+ * （月份、选中日期、正在写的草稿、已经看过的交易）明显大于风险，与「日历」同款。
  */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { MISSING_TIER_LABEL } from '../shared/model.ts'
-import { api, type FupanMonthPayload, type FupanNoteDto } from './api.ts'
+import { api, type FupanMonthPayload, type FupanNoteDto, type FupanTradeDto, type FupanTradesPayload } from './api.ts'
 import {
   FUPAN_DOW, FUPAN_GRID_LABEL,
   cellAriaOf, cellInfoOf, charCountTextOf, dayListStateOf,
@@ -27,9 +34,19 @@ import {
   writeFailTextOf, writeInputProblems, writeOkTextOf, writeVerbOf, writeWarningsOf, ymOf,
   type WriteInput,
 } from './fupanView.ts'
+import {
+  FUPAN_TRADE_LEGEND, dayMarksTextOf, dayPnlTextOf, daySummaryTextOf, monthTradeCountOf, moreTextOf,
+  tradeCountOf, tradeListFailTextOf, tradeListOf, tradeRowTextsOf, tradesFailReasonOf, tradesFailTextOf,
+} from './fupanTrades.ts'
+import { requestTradeJump } from './tradeJump.ts'
 import { Btn, EmptyHint, ErrorNote, Skeleton } from './ui.tsx'
 import { fmtStamp } from './format.ts'
 import { shToday } from './marketTime.ts'
+
+/** 某一天的交易取数结果（`failed` = 这次没取到：笔数按"未取到"处理，月历不画三角） */
+type DayTrades =
+  | { kind: 'ok'; payload: FupanTradesPayload }
+  | { kind: 'failed'; reason: string }
 
 /** `missing[].why` → 人话（与日历页同一份标签，缺失分"上游没有"与"本次失败"两档） */
 function missingTier(why: string): string {
@@ -59,6 +76,12 @@ export function FupanPage(): React.ReactElement {
   const pinInputId = `${React.useId()}-pin`
   /** 键盘移动后把焦点落到新格子上（跨月移动要等重渲染，所以走 effect） */
   const [focusTick, setFocusTick] = useState(0)
+  /**
+   * 当日交易（**按日惰性取数**）：宿主 `month` 回包不带每天的交易笔数，所以只有"打开过的那一天"
+   * 才知道笔数 —— 月历上的 `▲n` 也只画已知的（未知/失败一律不画，不写 `▲0`）。
+   * 缓存留在内存里：同一个月里来回点日期不会重复取数。
+   */
+  const [tradesByDay, setTradesByDay] = useState<Record<string, DayTrades>>({})
 
   /**
    * 取月历。`silent` = 写成功后的重取：**保留**当前数据（写入已经落盘，别把可见内容清空），
@@ -83,6 +106,31 @@ export function FupanPage(): React.ReactElement {
   useEffect(() => {
     load(ym)
   }, [ym, load])
+
+  /**
+   * 当日交易：**打开哪一天才取哪一天**（宿主月历不带笔数）。失败也记一条（不是 0 笔）——
+   * 月历据此不画三角，日面板给一句「交易记录未取到」。
+   */
+  useEffect(() => {
+    if (tradesByDay[selected] !== undefined) return
+    let alive = true
+    api.fupanTrades(selected).then(
+      (r) => {
+        if (alive) setTradesByDay((prev) => ({ ...prev, [selected]: { kind: 'ok', payload: r } }))
+      },
+      (e: unknown) => {
+        if (alive) {
+          setTradesByDay((prev) => ({
+            ...prev,
+            [selected]: { kind: 'failed', reason: e instanceof Error ? e.message : String(e) },
+          }))
+        }
+      },
+    )
+    return () => {
+      alive = false
+    }
+  }, [selected, tradesByDay])
 
   useEffect(() => {
     if (focusTick === 0) return
@@ -151,6 +199,52 @@ export function FupanPage(): React.ReactElement {
   const total = monthNoteTotalOf(month)
   /** 月历主体该画什么（`failed` 永远压过 `empty`：取数失败时"有没有笔记"是未知的） */
   const bodyState = monthBodyStateOf({ loading, loadErr, hasData: month !== null, total, notesUnreadable: unreadable })
+
+  /** 某日的交易笔数：宿主月历带了就用它，否则用按日缓存（都没 ⇒ `null` ⇒ 不画三角） */
+  const tradeCountIn = (date: string): number | null => {
+    const fromMonth = monthTradeCountOf(month, date)
+    if (fromMonth !== null) return fromMonth
+    const cached = tradesByDay[date]
+    return cached === undefined || cached.kind === 'failed' ? null : tradeCountOf(cached.payload)
+  }
+  const dayTrades = tradesByDay[selected]
+  /**
+   * 当日交易面板：`pending`（还没取到）**什么都不画** —— 画「未取到」再换成列表会闪一下；
+   * `failed` = 这次没取到（读取失败也是它）；`ok` 才渲染汇总 + 逐笔。
+   */
+  const tradeState: 'pending' | 'failed' | 'ok' =
+    dayTrades === undefined
+      ? 'pending'
+      : dayTrades.kind === 'failed' || dayTrades.payload.readFailed === true ? 'failed' : 'ok'
+  const tradePayload = dayTrades !== undefined && dayTrades.kind === 'ok' ? dayTrades.payload : null
+  const tradeList = tradeListOf(tradePayload)
+  const tradeMoreText = tradeList === null ? null : moreTextOf(tradeList.more)
+  /** 失败原因只进 `title`（界面上留一句短话，完整原因悬停可读） */
+  const tradeFailReason = dayTrades === undefined
+    ? null
+    : dayTrades.kind === 'failed' ? dayTrades.reason : tradesFailReasonOf(dayTrades.payload)
+
+  /**
+   * 逐笔一行：原生 `<button>` ⇒ 回车/空格天然可触发（键盘可达不用另写 keydown）。
+   * 点一下 ⇒ 切到持仓页 → 交易流水，并静态高亮这一笔（内存态，见 `tradeJump.ts`）。
+   */
+  const tradeRow = (trade: FupanTradeDto, index: number): React.ReactElement => {
+    const row = tradeRowTextsOf(trade, index)
+    return React.createElement('button', {
+      key: row.key,
+      type: 'button',
+      className: 'tw-fp-trade',
+      'aria-label': row.aria,
+      onClick: () => requestTradeJump({ ledgerId: row.ledgerId, day: selected }),
+    },
+      React.createElement('span', null, row.time),
+      React.createElement('span', { className: 'tw-fp-trade-name' }, row.name),
+      React.createElement('span', null, row.side),
+      React.createElement('span', null, row.qty),
+      React.createElement('span', null, row.price),
+      React.createElement('span', { className: 'tw-fp-trade-fee' }, row.fee),
+    )
+  }
 
   /**
    * 写入的**唯一入口**：本地校验 → POST → 成功回执 + dropped / 失败原因。
@@ -301,11 +395,13 @@ export function FupanPage(): React.ReactElement {
         typeof month?.asOf === 'number' ? `数据时刻 ${fmtStamp(month.asOf)}` : '数据时刻未取到'),
       loading ? null : React.createElement(Btn, { onClick: () => load(ym) }, '重试'),
     ),
-    // 图例：交易日 / 休市 / 未知三档必须能一眼分开（不能只靠 tooltip）
+    // 图例：交易日 / 休市 / 未知三档必须能一眼分开（不能只靠 tooltip）。
+    // v0.114.0 起这三项**不再带形状**：`●` 已经统一表示"笔记"（见月历下方那一行图例），
+    // 同一个形状两种含义必然误读；交易日/休市本身在格子里已有「休市」文字与虚线边框。
     React.createElement('div', { className: 'tw-fp-legend' },
-      React.createElement('span', { className: 'tw-fp-legend-item', 'data-kind': 'trading' }, '● 交易日'),
-      React.createElement('span', { className: 'tw-fp-legend-item', 'data-kind': 'closed' }, '○ 休市'),
-      React.createElement('span', { className: 'tw-fp-legend-item', 'data-kind': 'unknown' }, '◇ 交易日未知'),
+      React.createElement('span', { className: 'tw-fp-legend-item', 'data-kind': 'trading' }, '交易日'),
+      React.createElement('span', { className: 'tw-fp-legend-item', 'data-kind': 'closed' }, '休市'),
+      React.createElement('span', { className: 'tw-fp-legend-item', 'data-kind': 'unknown' }, '交易日未知'),
       React.createElement('span', { style: { flex: 1 } }),
       tradingDaysTextOf(month) === null
         ? null
@@ -372,7 +468,9 @@ export function FupanPage(): React.ReactElement {
               ...chunks(cells, 7).map((week, wi) =>
                 React.createElement('div', { className: 'tw-fp-row', role: 'row', key: `w${wi}` },
                   ...week.map((cell) => {
-                    const ci = cellInfoOf(month, cell.date)
+                    // 交易笔数由 `tradeCountIn` 并进来（宿主月历带了就用它，否则看这一天的按日缓存）
+                    const ci = { ...cellInfoOf(month, cell.date), trades: tradeCountIn(cell.date) }
+                    const marks = dayMarksTextOf({ noteCount: ci.count, tradeCount: ci.trades })
                     const on = cell.date === selected
                     return React.createElement('div', {
                       key: cell.date,
@@ -398,9 +496,6 @@ export function FupanPage(): React.ReactElement {
                     },
                       React.createElement('div', { className: 'tw-fp-dom' },
                         String(cell.dom),
-                        ci.count !== null && ci.count > 0
-                          ? React.createElement('span', { className: 'tw-fp-count' }, String(ci.count))
-                          : null,
                         ci.hasPinned === true
                           ? React.createElement('span', { className: 'tw-fp-pinmark', title: '有笔记被钉到这一天', 'aria-hidden': 'true' }, '钉')
                           : null,
@@ -408,6 +503,11 @@ export function FupanPage(): React.ReactElement {
                           ? React.createElement('span', { className: 'tw-fp-unknown', title: '该日交易日信息未取到', 'aria-hidden': 'true' }, '?')
                           : null,
                       ),
+                      // 标记只用形状（`●` 笔记 / `▲n` 交易）：颜色留给涨跌，所以这里一个颜色都不挂。
+                      // 读屏文本已含条数与笔数 ⇒ 标记本身 aria-hidden（不重复读）。
+                      marks === ''
+                        ? null
+                        : React.createElement('div', { className: 'tw-fp-marks', 'aria-hidden': 'true' }, marks),
                       ci.kind === 'closed'
                         ? React.createElement('div', { className: 'tw-fp-closed' }, '休市')
                         : null,
@@ -417,6 +517,11 @@ export function FupanPage(): React.ReactElement {
               ),
             ),
           ),
+    // 月历下方**一行图例**：笔记 = 实心圆点，交易 = 实心三角 + 笔数（只用形状区分，颜色留给涨跌）
+    React.createElement('div', { className: 'tw-fp-legend' },
+      ...FUPAN_TRADE_LEGEND.map((item) =>
+        React.createElement('span', { key: item.label, className: 'tw-fp-legend-item' }, `${item.mark} ${item.label}`)),
+    ),
   )
 
   // ── 当日笔记卡片 ────────────────────────────────────────────────────────
@@ -461,6 +566,30 @@ export function FupanPage(): React.ReactElement {
           React.createElement('div', { className: 'tw-fp-notes' }, ...dayNotes.pinned.map(noteCard)),
         )
       : null,
+    // 当日交易（只读）：逐笔 + 「买入 N 笔 · 卖出 M 笔」+ 当日盈亏。
+    // 点某笔 ⇒ 切持仓页 → 交易流水并静态高亮（状态只在内存，见 tradeJump.ts）。
+    tradeState === 'pending'
+      ? null
+      : React.createElement('div', { className: 'tw-fp-trades-block' },
+          tradeState === 'failed'
+            // 整份回包取不到（路由失败 / readFailed）⇒ 一句话。这**不是**"这一天没有交易"。
+            ? React.createElement('div', { className: 'tw-hint', role: 'note', tabIndex: 0, title: tradeFailReason ?? undefined }, tradesFailTextOf())
+            : React.createElement(React.Fragment, null,
+                React.createElement('div', { className: 'tw-fp-metarow' },
+                  React.createElement('span', { className: 'tw-fp-meta' }, daySummaryTextOf(tradePayload?.summary)),
+                  React.createElement('span', { className: 'tw-fp-meta' }, `当日盈亏 ${dayPnlTextOf(tradePayload?.dayPnl)}`),
+                ),
+                tradeList === null
+                  // 回包只有汇总、没有 trades[] ⇒ 明细未取到（不许画成"这一天没有交易"）
+                  ? React.createElement('div', { className: 'tw-hint', role: 'note' }, tradeListFailTextOf())
+                  : tradeList.rows.length === 0
+                    ? null
+                    : React.createElement('div', { className: 'tw-fp-trades' }, ...tradeList.rows.map(tradeRow)),
+                tradeMoreText === null
+                  ? null
+                  : React.createElement('div', { className: 'tw-fp-meta' }, tradeMoreText),
+              ),
+        ),
     React.createElement('div', { className: 'tw-fp-editor' },
       React.createElement('div', { className: 'tw-fp-metarow' },
         React.createElement('span', { className: 'tw-fp-label' }, `在 ${selected} 新增一条`),

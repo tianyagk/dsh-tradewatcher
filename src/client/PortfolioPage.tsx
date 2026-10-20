@@ -28,6 +28,7 @@ import { useYtd } from './useYtd.ts'
 import { ytdText, ytdTooltip } from './ytdView.ts'
 import { isUsableBaseline } from './trendView.ts'
 import { shClockText, shToday } from './marketTime.ts'
+import { takeTradeFocus, type TradeFocus } from './tradeJump.ts'
 
 // 与宿主共用一份（shared/model.ts）——此前两边各写一份逐字相同的映射
 const VERB_LABEL: Record<LedgerEntry['verb'], string> = LEDGER_VERB_LABEL
@@ -104,6 +105,13 @@ export function PortfolioPage(props: {
   const [modal, setModal] = useState<ModalState>(null)
   const [ledgerTarget, setLedgerTarget] = useState<LedgerTarget>(null)
   const [ledgerEntries, setLedgerEntries] = useState<LedgerView[] | null>(null)
+  /**
+   * 复盘页点过来的那一笔（`tradeJump.ts` 的**内存态**）：挂载后读一次并清空。
+   * ① 只读一次 ⇒ 切页（本组件卸载）后回来不会再弹一次流水；
+   * ② 放在 effect 里而不是 `useState` 初值：渲染期不产生副作用（StrictMode 双渲染也不会吃掉它）；
+   * ③ 不改 URL、不写偏好 —— 高亮的生命周期就等于本组件的生命周期。
+   */
+  const [jumpFocus, setJumpFocus] = useState<TradeFocus | null>(null)
   const miniIds = React.useMemo(() => {
     const ids = new Set<string>()
     for (const p of view?.positions ?? []) ids.add(p.secid)
@@ -186,10 +194,23 @@ export function PortfolioPage(props: {
     if (target === null) return
     setLedgerEntries(null)
     api
-      .ledger(target.mode === 'group' ? target.id : undefined, target.mode === 'pos' ? target.id : undefined, 500)
+      // `all` 是复盘页跳过来的：要高亮的那笔可能不在最近 500 条里 ⇒ 直接要宿主上限（1000）
+      .ledger(target.mode === 'group' ? target.id : undefined, target.mode === 'pos' ? target.id : undefined, target.mode === 'all' ? 1000 : 500)
       .then((r) => setLedgerEntries(r.entries))
       .catch((e: Error) => setError(e.message))
   }
+
+  /**
+   * 复盘页点了某笔 ⇒ 直接开「交易流水」（`all`：那一笔可能属于任何分组/持仓，不能筛）。
+   * 只在挂载后跑一次：从内存里取走高亮目标（`takeTradeFocus` 读一次就清空，退订语义同款）。
+   */
+  useEffect(() => {
+    const focus = takeTradeFocus()
+    if (focus === null) return
+    setJumpFocus(focus)
+    openLedger({ mode: 'all', id: '', title: '交易流水' })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   /**
    * 首屏守卫（P0-1）：**加载中**与**失败**必须分成两条路。
@@ -545,7 +566,18 @@ export function PortfolioPage(props: {
       redUp,
     }),
     ledgerTarget !== null
-      ? React.createElement(LedgerModal, { target: ledgerTarget, entries: ledgerEntries, redUp, diluted, onClose: () => openLedger(null) })
+      ? React.createElement(LedgerModal, {
+        target: ledgerTarget,
+        entries: ledgerEntries,
+        redUp,
+        diluted,
+        focusId: jumpFocus?.ledgerId ?? null,
+        // 关掉弹窗 = 用户的下一次动作 ⇒ 高亮随之作废（否则从分组入口再开一次流水还会亮着旧那一笔）
+        onClose: () => {
+          setJumpFocus(null)
+          openLedger(null)
+        },
+      })
       : null,
     modal !== null
       ? React.createElement(PortModalHost, {
@@ -566,7 +598,11 @@ type ModalState =
   /** 批量粘贴录入（P2-9）：入口在分组「…」菜单里，不占常驻按钮 */
   | { kind: 'bulk'; groupId: string }
 
-type LedgerTarget = { mode: 'group' | 'pos'; id: string; title: string; row?: PositionRow } | null
+/**
+ * 流水弹窗的目标：`group`/`pos` 是页面内的两个既有入口；`all` 是**复盘页跳过来**的那种
+ * （点某笔 ⇒ 不筛分组/持仓，直接看全量流水并高亮那一笔）。
+ */
+type LedgerTarget = { mode: 'group' | 'pos' | 'all'; id: string; title: string; row?: PositionRow } | null
 
 /** Modal switch — every branch is its own component so hooks are stable. */
 function PortModalHost(props: {
@@ -917,8 +953,21 @@ function PosEditModal(props: {
   )
 }
 
-function LedgerModal(props: { target: { mode: string; id: string; title: string; row?: PositionRow }; entries: LedgerView[] | null; redUp: boolean; diluted: boolean; onClose: () => void }): React.ReactElement {
+function LedgerModal(props: {
+  target: { mode: string; id: string; title: string; row?: PositionRow }
+  entries: LedgerView[] | null
+  redUp: boolean
+  diluted: boolean
+  /** 复盘页跳过来时要高亮的那一笔（内存态；空 = 不高亮）。只影响底色，不改任何数据 */
+  focusId?: string | null
+  onClose: () => void
+}): React.ReactElement {
   const rows = props.entries ?? []
+  const focusRef = useRef<HTMLDivElement | null>(null)
+  // 高亮那一笔可能在 500 条里靠后：开弹窗后把它滚进视野（`nearest` ⇒ 本来就在视野内就不动）
+  useEffect(() => {
+    focusRef.current?.scrollIntoView?.({ block: 'nearest' })
+  }, [props.focusId, props.entries])
   const r = props.target.row
   const redUp = props.redUp
   const diluted = props.diluted
@@ -960,8 +1009,17 @@ function LedgerModal(props: { target: { mode: string; id: string; title: string;
       : rows.length === 0
         ? React.createElement('div', { className: 'tw-muted' }, '暂无记录。')
         : React.createElement('div', { className: 'tw-scroll', style: { maxHeight: '58vh', overflow: 'auto' } },
-            rows.map((r) =>
-              React.createElement('div', { key: r.id, className: 'tw-wrow', style: { borderTop: '1px solid var(--tw-border)', padding: '5px 2px' } },
+            rows.map((r) => {
+              // 静态高亮：只加底色条（`data-focus`）+ 读屏的 aria-current，无动效、不闪烁
+              const focused = typeof props.focusId === 'string' && props.focusId !== '' && r.id === props.focusId
+              return React.createElement('div', {
+                key: r.id,
+                ref: focused ? focusRef : undefined,
+                className: 'tw-wrow',
+                'data-focus': focused ? 'true' : undefined,
+                'aria-current': focused ? 'true' : undefined,
+                style: { borderTop: '1px solid var(--tw-border)', padding: '5px 2px' },
+              },
                 React.createElement('div', { className: 'nm' },
                   React.createElement('b', null,
                     React.createElement('span', { className: `tw-chg-chip ${VERB_CHIP}`, 'data-verb': r.verb }, verbLabel(r.verb)),
@@ -979,8 +1037,8 @@ function LedgerModal(props: { target: { mode: string; id: string; title: string;
                 r.note !== undefined && r.note !== null && r.note !== ''
                   ? React.createElement('span', { className: 'tw-muted', style: { flex: 'none', maxWidth: 180, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, r.note)
                   : null,
-              ),
-            ),
+              )
+            }),
           ),
     React.createElement('div', { style: { display: 'flex', justifyContent: 'flex-end', marginTop: 8 } },
       React.createElement(Btn, { onClick: props.onClose }, '关闭'),
