@@ -8,10 +8,12 @@
  *     （`range=250|750|all`），切档要重新取数 ⇒ 控件与语义都不一样。
  *
  * 页面元素（顺序即渲染顺序；`data-role` 是断言的锚点）：
- *   ① `leverage-hero`：大字温度（1 位小数）+ `/ 100` + `截至 …`（唯一的说明文字）+ 右上角窗口三档；
+ *   ① `leverage-hero`：大字温度（1 位小数）+ `/ 100` + `截至 …`（唯一的说明文字；`asOf` 空 ⇒ 只给 `—`）
+ *      + 右上角窗口三档；
  *   ② `leverage-cards`：**三张**摘要卡（显性融资 / 杠杆率 / 当日融资净买入）；没有第四张；
- *   ③ `leverage-chart-card`：图例（温度 / 显性融资比例 / 净买入）→ 主图（双轴 + 两条线 + 阈值线 80/95
- *      + 底部净买入柱）；**没有**水平网格线、**没有**浮框与十字光标、**没有**悬停说明。
+ *   ③ `leverage-chart-card`：图例（温度 / 显性融资比例 / 净买入）→ 主图
+ *      （**双轴 + 两条线 + 阈值右端胶囊 + 水平网格线 + ≥6 个 X 刻度 + 柱区独立小轴**），
+ *      悬停时给一个**紧凑读数框**（该日三个数），**没有十字光标、没有解释文字**。
  *
  * 数据：`api.leverage(range)`（宿主 `/tradewatcher/leverage`）。取数三件套沿用既有做法 ——
  *   · **单飞**：同一个窗口在飞时不再发第二次（`inFlight` 集合）；
@@ -19,8 +21,8 @@
  *   · **代号丢弃旧响应**：`createRequestGen()`（`requestGen.ts` 的既有实现），旧代响应整体丢弃。
  * 每个窗口取到后进本地缓存 ⇒ 切回去命中缓存、**零请求零闪烁**（画布不卸载、不重挂载）。
  *
- * 缺失：任何数值缺失 ⇒ `—`（破折号），不加文字、不进悬停、不写 0（判据见 `tools/leverageView.ts`）。
- * 失败：显示 `ErrorNote` + 可点的「重试」（`data-role="leverage-retry"`），保留已取到的图。
+ * 缺失：任何数值缺失 ⇒ `—`（破折号），不加文字、不写 0（判据见 `tools/leverageView.ts`）。
+ * 失败：显示 `ErrorNote` + 可点的「重试」（`data-verb="leverage-retry"`），保留已取到的图。
  */
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import type { LeveragePayloadDto, LeverageRange } from './api.ts'
@@ -46,12 +48,17 @@ import {
   DASH,
   LEVERAGE_DEFAULT_RANGE,
   LEVERAGE_LEGEND,
+  LEVERAGE_PLOT_HEIGHT,
   LEVERAGE_RANGES,
   fmtTemperature,
   leverageAsOfText,
   leverageCards,
   leverageChart,
+  leverageIndexAt,
+  leverageReadout,
+  leverageXAt,
   type LeverageChart,
+  type LeverageReadout,
 } from './tools/leverageView.ts'
 import { Btn, ErrorNote, Skeleton } from './ui.tsx'
 
@@ -121,10 +128,12 @@ function useLeverageFetch(range: LeverageRange, attempt: number): LeverageFetch 
 
 /**
  * 绘图区尺寸 = **容器真实像素**（与详情页同一套做法：ResizeObserver 量盒子后按像素坐标绘制，
- * 线宽/文字不缩放；量不到时退回 `PLOT` 的回退画布 ⇒ 高度下限在任何情形下都成立）。
+ * 线宽/文字不缩放；量不到时退回 `PLOT` 的回退画布 ⇒ 首帧就有合理画布，不塌陷）。
+ *
+ * 高度契约由 `LEVERAGE_PLOT_HEIGHT`（`min(58vh, 520px)`）给 —— 图 1 的绘图区约占整页 55–60%。
  */
 function useChartBox(ref: React.RefObject<HTMLDivElement | null>): { w: number; h: number } {
-  const [size, setSize] = useState<{ w: number; h: number }>({ w: PLOT.fallbackWidth, h: PLOT.fallbackHeight })
+  const [size, setSize] = useState<{ w: number; h: number }>({ w: PLOT.fallbackWidth, h: 520 })
   useEffect(() => {
     const el = ref.current
     if (el === null || typeof ResizeObserver === 'undefined') return
@@ -144,25 +153,42 @@ function useChartBox(ref: React.RefObject<HTMLDivElement | null>): { w: number; 
 /* ────────────────────────────── 主图 ────────────────────────────── */
 
 /**
- * 主图：把 `leverageChart()` 的纯数据画成 SVG。
+ * 读数框的**夹取用宽度**（px）：`minWidth` 176 + 左右内边距 16 + 4 余量。
+ * 只用于把框夹在画布内（真实 DOM 宽度不参与计算 ⇒ 不会因为排版抖动而抖）。
+ */
+const READOUT_BOX_W = 196
+
+/**
+ * 主图：把 `leverageChart()` 的纯数据画成 SVG，并在悬停时叠一个**紧凑读数框**。
  *
  * · 双轴：左 = 温度 0–100（刻度 0 / 50 / 100），右 = 比例 %（由数据定域）；
- * · 水平线只有两种来源：阈值线（虚线）与柱图零轴（实线）—— **没有网格线**（模型里就没有这一档角色）；
+ * · 水平线三种：网格（每 25，浅色虚线）/ 阈值（虚线 + 右端彩色胶囊）/ 柱图零轴（实线）；
  * · 柱色来自模型（正 = `--tw-up`、负 = `--tw-down`），此处不碰颜色语义；
- * · 没有鼠标事件 ⇒ 没有浮框、没有十字光标（用户口径：删掉）。
+ * · 悬停只给读数框（三个数 + 日期），**没有十字光标、没有解释文字**。
  */
 function LeveragePlot(props: { payload: LeveragePayloadDto | null }): React.ReactElement {
   const box = useRef<HTMLDivElement | null>(null)
   const size = useChartBox(box)
+  const [hover, setHover] = useState<number | null>(null)
   const chart: LeverageChart = useMemo(() => leverageChart(props.payload, size.w, size.h), [props.payload, size.w, size.h])
+  const readout: LeverageReadout | null = hover === null ? null : leverageReadout(props.payload, hover)
+  // 读数框跟随鼠标（x 与主图同一套映射）：靠右时夹在画布内（不越界、不压右轴刻度）
+  const count = (props.payload?.dates ?? []).length
+  const hoverX = hover === null ? 0 : leverageXAt(hover, count, chart.width)
+  const readoutLeft = Math.min(Math.max(4, hoverX + 14), Math.max(4, chart.width - READOUT_BOX_W - 4))
   return React.createElement(
     'div',
     {
       'data-role': 'leverage-plot',
       ref: box,
       className: 'tw-tool-plot',
-      // 高度契约与详情页同一条（`clamp(280px, 26vh, 380px)`）：有下限，不许塌陷
-      style: { position: 'relative', width: '100%', height: PLOT.heightCss },
+      // 高度契约：图 1 的绘图区约占整页 55–60%（判据 = leveragePlotHeightProblems）
+      style: { position: 'relative', width: '100%', height: LEVERAGE_PLOT_HEIGHT },
+      onMouseMove: (e: React.MouseEvent<HTMLDivElement>) => {
+        const rect = e.currentTarget.getBoundingClientRect()
+        setHover(leverageIndexAt(e.clientX - rect.left, count, chart.width))
+      },
+      onMouseLeave: () => setHover(null),
     },
     React.createElement(
       'svg',
@@ -175,17 +201,18 @@ function LeveragePlot(props: { payload: LeveragePayloadDto | null }): React.Reac
         role: 'img',
         'aria-label': '杠杆温度计',
       },
+      // 水平线：网格（浅色虚线）/ 阈值（虚线）/ 柱图零轴（实线）—— 颜色与虚线与否都来自模型
       chart.lines.map((line, i) =>
         React.createElement('line', {
-          key: `line-${i}`,
-          'data-role': line.role === 'threshold' ? 'leverage-threshold' : 'leverage-zero',
+          key: `line-${line.role}-${i}`,
+          'data-role': `leverage-${line.role}`,
           x1: line.x1,
           x2: line.x2,
           y1: line.y1,
           y2: line.y2,
-          stroke: line.role === 'zero' ? 'var(--tw-border-strong)' : 'var(--tw-border)',
+          stroke: line.color,
           strokeWidth: line.role === 'zero' ? 1 : 0.8,
-          strokeDasharray: line.dash ? '3 3' : undefined,
+          strokeDasharray: line.dash ? (line.role === 'grid' ? '2 4' : '3 3') : undefined,
         }),
       ),
       chart.bars.map((bar, i) =>
@@ -197,6 +224,20 @@ function LeveragePlot(props: { payload: LeveragePayloadDto | null }): React.Reac
           width: bar.w,
           height: bar.h,
           fill: bar.color,
+        }),
+      ),
+      // 阈值胶囊（右端彩色药丸）：数字写在它里面
+      chart.capsules.map((cap, i) =>
+        React.createElement('rect', {
+          key: `cap-${i}`,
+          'data-role': 'leverage-threshold-capsule',
+          x: cap.x,
+          y: cap.y,
+          width: cap.w,
+          height: cap.h,
+          rx: cap.h / 2,
+          ry: cap.h / 2,
+          fill: cap.fill,
         }),
       ),
       chart.paths.map((path) =>
@@ -215,20 +256,51 @@ function LeveragePlot(props: { payload: LeveragePayloadDto | null }): React.Reac
         React.createElement(
           'text',
           {
-            key: `text-${i}`,
+            key: `text-${text.role}-${i}`,
             'data-role': `leverage-${text.role}`,
             x: text.x,
             y: text.y,
             fontSize: 12,
-            fill: 'var(--tw-muted)',
+            fill: text.role === 'threshold-label' ? 'var(--tw-card)' : 'var(--tw-muted)',
+            fontWeight: text.role === 'threshold-label' ? 600 : undefined,
             textAnchor: text.anchor,
           },
           text.text,
         ),
       ),
     ),
+    readout === null
+      ? null
+      : React.createElement(
+          'div',
+          {
+            'data-role': 'leverage-readout',
+            className: 'tw-chart-tip tw-glass',
+            'data-open': 'true',
+            style: { left: readoutLeft, top: 8, minWidth: 176 },
+          },
+          React.createElement(
+            'div',
+            { className: 'tw-chart-tip-row' },
+            React.createElement('span', { className: 'tw-chart-tip-k' }, readout.day),
+          ),
+          readout.rows.map((row) =>
+            React.createElement(
+              'div',
+              { key: row.name, className: 'tw-chart-tip-row' },
+              React.createElement(
+                'span',
+                { className: 'tw-chart-tip-k', style: { display: 'inline-flex', alignItems: 'center', gap: 4 } },
+                React.createElement('span', { 'data-role': 'leverage-readout-dot', style: { ...LEGEND_DOT, width: 7, height: 7, background: row.color } }),
+                row.name,
+              ),
+              React.createElement('span', { className: `tw-chart-tip-v${row.text === DASH ? ' tw-muted' : ''}` }, row.text),
+            ),
+          ),
+        ),
   )
 }
+
 
 /* ────────────────────────────── 图例 / 窗口控件 ────────────────────────────── */
 
@@ -364,7 +436,7 @@ export function LeverageDetail(props: { back?: React.ReactNode }): React.ReactEl
             ? // 骨架也占住同一份高度契约 ⇒ 首屏与加载完成之间没有高度跳变（不闪）
               React.createElement(
                 'div',
-                { key: 'loading', style: { height: PLOT.heightCss, display: 'flex', alignItems: 'center', justifyContent: 'center' } },
+                { key: 'loading', style: { height: LEVERAGE_PLOT_HEIGHT, display: 'flex', alignItems: 'center', justifyContent: 'center' } },
                 React.createElement(Skeleton, { lines: 3 }),
               )
             : React.createElement(LeveragePlot, { key: 'plot', payload }),

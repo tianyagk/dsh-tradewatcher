@@ -41,6 +41,7 @@ import { leverageTool } from './tools/leverage.ts'
 import {
   DASH,
   LEVERAGE_DEFAULT_RANGE,
+  LEVERAGE_PLOT_HEIGHT,
   LEVERAGE_LEGEND,
   LEVERAGE_RANGES,
   fmtNetYi,
@@ -50,6 +51,7 @@ import {
   leverageCards,
   leverageChart,
   leverageChartProblems,
+  leverageReadout,
   netBarColor,
 } from './tools/leverageView.ts'
 
@@ -178,6 +180,14 @@ test('④ 主图：双轴（左温度 0–100 / 右比例 %）+ 温度与比例�
   assert.ok(thrLines[0].y1 > thrLines[1].y1, '80 的线必须在 95 下方（温度轴上越低越冷）')
   // 阈值线画在温度轴上（与左轴同一套映射）⇒ 两条线都必须落在绘图区内
   for (const line of thrLines) assert.ok(line.y1 > 0 && line.y1 < 320, `阈值线必须落在绘图区内（实得 y=${line.y1}）`)
+  // R2 ②：阈值数字写在**右端胶囊**里，且胶囊在绘图区右缘、远离左轴刻度
+  const capsules = chart.capsules.filter((c) => c.role === 'threshold-capsule')
+  assert.equal(capsules.length, 2, '两条阈值线各带一个胶囊')
+  const plotRight = 960 - 58
+  for (const cap of capsules) {
+    assert.ok(cap.x + cap.w >= plotRight - 4, `胶囊必须右端对齐（实得 x+w=${Math.round(cap.x + cap.w)} / 右缘=${plotRight}）`)
+    assert.ok(cap.x > 960 * 0.8, `胶囊不许落在左半区（会压左轴刻度；实得 x=${Math.round(cap.x)}）`)
+  }
   // 反例注入 ①：给阈值线加文字标签 ⇒ 必败
   const labelled = {
     ...chart,
@@ -185,6 +195,9 @@ test('④ 主图：双轴（左温度 0–100 / 右比例 %）+ 温度与比例�
   }
   assert.notDeepEqual(leverageChartProblems(labelled, payload), [], '⚠ 反例（阈值带文字）必须被抓住')
   assert.match(leverageChartProblems(labelled, payload).join(' ／'), /阈值线只许标数字/, '⚠ 报的原因要能指认"只标数字"')
+  // 反例注入 ①b：把阈值数字放回左轴旁 ⇒ 胶囊判据必败（R2 ② 的核心回归）
+  const backToAxis = { ...chart, texts: chart.texts.map((t) => (t.role === 'threshold-label' ? { ...t, x: 34 } : t)) }
+  assert.match(leverageChartProblems(backToAxis, payload).join(' ／'), /阈值数字必须写在胶囊里/, '⚠ 反例（阈值放回左轴）必须被抓住')
   // 反例注入 ②：删掉右轴 ⇒ 双轴缺一条 ⇒ 必败
   const singleAxis = { ...chart, texts: chart.texts.filter((t) => t.role !== 'right-tick') }
   assert.match(leverageChartProblems(singleAxis, payload).join(' ／'), /右轴/, '⚠ 反例（单轴）必须被抓住')
@@ -326,28 +339,32 @@ test('⑦ 页面不得出现口径/解释性长文案（唯一的说明文字是
   assert.notDeepEqual(explanatoryProblems(withMissing), [], '⚠ 反例（缺值写成「未取到」）必须被抓住')
 })
 
-/* ────────────────────────────── ⑧ 无网格线 / 无浮框 ────────────────────────────── */
+/* ────────────────────────────── ⑧ 读数框 / 无十字光标 ────────────────────────────── */
 
-test('⑧ 没有水平网格线、没有浮框与十字光标（模型级 + 源码级；注入必败）', () => {
+test('⑧ 悬停只给读数框：无十字光标、无 title 悬停说明（R2 ③ 的源码侧）', () => {
   const payload = fixture()
   const chart = leverageChart(payload, 960, 320)
-  assert.deepEqual([...new Set(chart.lines.map((l) => l.role))].sort(), ['threshold', 'zero'], '水平线只有阈值线与柱图零轴')
-  // 反例注入：塞一条网格线 ⇒ 必败
-  const withGrid = { ...chart, lines: [...chart.lines, { role: 'grid' as never, x1: 34, y1: 120, x2: 900, y2: 120, dash: false }] }
-  assert.match(leverageChartProblems(withGrid, payload).join(' ／'), /水平网格线必须删除/, '⚠ 反例（网格线）必须被抓住')
-  // 源码级：没有浮框 / 十字光标 / 任何鼠标事件（所以也不可能有悬停说明）
+  // 悬停读数：该日三个数（缺值仍 `—`），行名与图例同源
+  const readout = leverageReadout(payload, 2)
+  assert.notEqual(readout, null)
+  assert.deepEqual(readout?.rows.map((r) => r.name), LEVERAGE_LEGEND.map((l) => l.name), '读数框行名必须与图例同源（不新增文案）')
+  assert.deepEqual(readout?.rows.map((r) => r.text), ['91.2', '2.65%', '-63.31 亿'])
+  const blank = leverageReadout(fixture({ temp: [null, null, null], ratio: [null, null, null], net: [null, null, null] }), 1)
+  assert.deepEqual(blank?.rows.map((r) => r.text), [DASH, DASH, DASH], '读数框缺值同样只给 `—`')
+  assert.equal(leverageReadout(null, 0), null, '没有载荷就没有读数框')
+  // 源码级：页面必须有读数框与鼠标事件；**不许**有十字光标，也不许把文案挂到 title
   const page = strip(read(PAGE))
-  for (const gone of ['tool-hover-tip', 'tool-crosshair', 'tw-chart-tip', 'tw-glass', 'onMouseMove', 'onMouseEnter', 'onMouseLeave', 'title:']) {
-    assert.equal(page.includes(gone), false, `专用页不许出现 ${JSON.stringify(gone)}（浮框/十字光标/悬停说明都已按用户口径删除）`)
+  for (const token of ["'data-role': 'leverage-readout'", 'onMouseMove', 'onMouseLeave', 'leverageReadout(', 'leverageIndexAt(']) {
+    assert.equal(page.includes(token), true, `悬停读数框缺少 ${JSON.stringify(token)}`)
   }
-  // 反例注入：把浮框加回来 ⇒ 上面的检查必然抓到
-  assert.equal(`${page}\nconst tip = { 'data-role': 'tool-hover-tip' }\n`.includes('tool-hover-tip'), true, '⚠ 反例（加回浮框）必须能被抓到')
-  // 柱图零轴：有柱必有零轴（规格 7 保留的那一条水平线）
-  assert.equal(chart.lines.filter((l) => l.role === 'zero').length, 1, '有柱时恰好一条零轴')
-  // 没有柱（那天没有净买入）就不画零轴
-  const noNet = leverageChart(fixture({ net: [null, null, null] }), 960, 320)
-  assert.equal(noNet.bars.length, 0)
-  assert.equal(noNet.lines.filter((l) => l.role === 'zero').length, 0, '没有柱就不该有零轴')
+  for (const gone of ['tool-crosshair', 'leverage-crosshair', 'tool-hover-tip', 'title:']) {
+    assert.equal(page.includes(gone), false, `不许出现 ${JSON.stringify(gone)}（R2：无十字光标、无悬停说明）`)
+  }
+  // 模型里也没有十字线这种图元（水平线只有三种角色）
+  assert.equal([...new Set(chart.lines.map((l) => l.role))].every((r) => ['grid', 'threshold', 'zero'].includes(r)), true, '水平线只有网格 / 阈值 / 零轴')
+  // 反例注入：把读数框删掉 ⇒ 上面的源码判据必败
+  const withoutReadout = page.split("'data-role': 'leverage-readout'").join("'data-role': 'leverage-x'")
+  assert.equal(withoutReadout.includes("'data-role': 'leverage-readout'"), false, '⚠ 反例（删读数框）必须能被抓到')
 })
 
 /* ────────────────────────────── ⑨ 字号 / 间距 / 令牌 ────────────────────────────── */
@@ -383,9 +400,9 @@ test('⑨ 字号落在密集阶梯、间距落在 1px 刻度、几何全部复�
     'RANGE_ON',
     'RANGE_OFF',
     'RANGE_TYPE',
-    'PLOT.heightCss',
     'PLOT.fallbackWidth',
     'PLOT.heightMin',
+    'LEVERAGE_PLOT_HEIGHT',
     'TOOL_SPACE.sectionGap',
     'TOOL_SPACE.cardHeadGap',
     'TOOL_SPACE.heroInnerGap',
@@ -418,6 +435,7 @@ test('⑨ 字号落在密集阶梯、间距落在 1px 刻度、几何全部复�
   )
   assert.equal(CARD_MIN_W, 148, '自适应卡片最小宽')
   assert.equal(PLOT.heightCss, 'clamp(280px, 26vh, 380px)')
+  assert.equal(LEVERAGE_PLOT_HEIGHT, 'min(58vh, 520px)', 'R2 ①：主图高度 = min(58vh, 520px)')
   // 不新增依赖：页面的外部模块只能是 react（其余一律相对路径）
   const specs = [...read(PAGE).matchAll(/from '([^']+)'/g)].map((m) => m[1])
   assert.ok(specs.length >= 4, '页面应当有若干 import（否则扫描是空跑）')
@@ -428,14 +446,14 @@ test('⑨ 字号落在密集阶梯、间距落在 1px 刻度、几何全部复�
   assert.notDeepEqual(spaceScaleProblems(11.5, '注入'), [], '⚠ 反例（11.5px 间距）必须被抓到')
   // 绘图区高度契约：既有 clamp(280–380) 那一份，不许写死/塌陷
   assert.equal(PLOT.heightCss, 'clamp(280px, 26vh, 380px)')
-  // 绘图区（不是骨架占位）必须走同一条高度契约：`position: relative` + `width: 100%` + `height: PLOT.heightCss`
+  // 绘图区走**本工具自己的**高度契约（R2 ①：占整页 55–60%）；详情页通用的 PLOT.heightCss 不许被改
   assert.equal(
-    /position:\s*'relative',\s*width:\s*'100%',\s*height:\s*PLOT\.heightCss/.test(strip(read(PAGE))),
+    /position:\s*'relative',\s*width:\s*'100%',\s*height:\s*LEVERAGE_PLOT_HEIGHT/.test(strip(read(PAGE))),
     true,
-    '绘图区高度必须走 PLOT.heightCss（写死像素或让高度由宽度决定都要被拦住）',
+    '绘图区高度必须走 LEVERAGE_PLOT_HEIGHT（写死像素要被拦住）',
   )
   assert.equal(
-    /style:\s*\{\s*height:\s*PLOT\.heightCss/.test(strip(read(PAGE))),
+    /style:\s*\{\s*height:\s*LEVERAGE_PLOT_HEIGHT/.test(strip(read(PAGE))),
     true,
     '加载骨架也必须占住同一份高度契约（否则骨架→图之间会跳一下）',
   )
