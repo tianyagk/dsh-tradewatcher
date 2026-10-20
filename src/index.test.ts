@@ -39,7 +39,7 @@ function parseManifestRows(): Array<{ id: string; name: string; row: string }> {
   return parseRowsFromText(readFileSync(join(ROOT, 'cordis.patch.yml'), 'utf8'))
 }
 
-/** 七行的期望集合（id ↔ config.row 一一对应；顺序即 manifest 顺序） */
+/** 八行的期望集合（id ↔ config.row 一一对应；顺序即 manifest 顺序） */
 const EXPECTED_ROWS: ReadonlyArray<{ id: string; row: string }> = [
   { id: 'tradewatcher-core', row: 'core' },
   { id: 'tradewatcher-calendar', row: 'calendar' },
@@ -49,6 +49,8 @@ const EXPECTED_ROWS: ReadonlyArray<{ id: string; row: string }> = [
   { id: 'tradewatcher-cloudmap', row: 'cloudmap' },
   // 第 7 行（v0.71）：工具箱（工具目录 + 工具详情），客户端半区；host 侧无独占路由/工具
   { id: 'tradewatcher-tools', row: 'tools' },
+  // 第 8 行（v0.111）：复盘（月历 + 当日笔记）；host 侧独占两条本地存储路由，无 agent 工具
+  { id: 'tradewatcher-fupan', row: 'fupan' },
 ]
 
 /** manifest 里**不许**被 core 注册的路径（功能行独占；core 注册了就等于关不掉该行） */
@@ -67,6 +69,9 @@ const FUNCTION_OWNED_PATHS = [
   '/tradewatcher/market-extras',
   // v0.71.0 第 7 行：工具箱独占的蛋糕数据路由（此前漏在本清单外 —— 新断言「并集必须相等」抓到，REVIEW-6 §2.3 D5）
   '/tradewatcher/tools/global-flow',
+  // v0.111.0 第 8 行：复盘独占的两条（整月视图 / 写一条笔记）—— core 必须交出去，否则复盘行关不掉
+  '/tradewatcher/fupan/month',
+  '/tradewatcher/fupan/note',
 ] as const
 
 // 隔离数据目录：**绝不能在测试里碰用户的 ~/.dsh**（store.init 会读写真实文件）
@@ -138,9 +143,9 @@ test('apply 幂等：同进程 apply 三次，一次性副作用只跑一次', a
   // 只 apply"不同行各一次"时，`started` 守卫根本不需要就会被满足（验证员 V-2：那种断言不敏感）。
   apply(a.ctx)
   apply(a.ctx)
-  for (const row of ['calendar', 'cloudmap', 'market', 'watchlist', 'portfolio', 'tools']) apply(a.ctx, { row })
+  for (const row of ['calendar', 'cloudmap', 'market', 'watchlist', 'portfolio', 'tools', 'fupan']) apply(a.ctx, { row })
   await waitForCondition(() => __kernelStats.starts === 1) // 等 store.init() 落定（有界）
-  assert.equal(__kernelStats.applies, 8, 'apply 共八次（core 两次 + 六个功能行各一次）')
+  assert.equal(__kernelStats.applies, 9, 'apply 共九次（core 两次 + 七个功能行各一次）')
   assert.equal(__kernelStats.inits, 1, 'store.init() 只跑一次')
   assert.equal(coreKernel()?.starts, 1, 'rescue.start() 只跑一次（采样器只有一个）')
   // 幂等的范围就是"一次性副作用"：init/start 各一次、采样器一个。
@@ -236,7 +241,7 @@ test('第 7 行 tools（工具箱）：只贡献 activeRows，无独占路由/�
   stopMonitor()
 })
 
-test('task-6：七行 manifest —— id ↔ config.row 一一对应，且与代码的行集合一致（防漂移）', () => {
+test('task-6：八行 manifest —— id ↔ config.row 一一对应，且与代码的行集合一致（防漂移）', () => {
   const raw = readFileSync(join(ROOT, 'cordis.patch.yml'), 'utf8')
   // 注释里也会出现 `- id: …`（说明文字）⇒ 先剥掉注释行再抓
   const text = raw.split('\n').filter((l) => !l.trim().startsWith('#')).join('\n')
@@ -248,9 +253,9 @@ test('task-6：七行 manifest —— id ↔ config.row 一一对应，且与代
   assert.deepEqual(
     rows.map((r) => ({ id: r.id, row: r.row })),
     EXPECTED_ROWS.map((r) => ({ id: r.id, row: r.row })),
-    '七行必须齐、顺序不变、每行的 config.row 与自己 id 的后缀对应',
+    '八行必须齐、顺序不变、每行的 config.row 与自己 id 的后缀对应',
   )
-  // 七行仍指向**同一个 npm 包**（只是六个功能行用了本包的 /rows/<row> 子路径来让标题可区分，见 task-8）；
+  // 八行仍指向**同一个 npm 包**（只是七个功能行用了本包的 /rows/<row> 子路径来让标题可区分，见 task-8）；
   // 不许出现别的包名（那才是"拆成六个包"）
   const names = [...new Set(rows.map((r) => r.name))]
   for (const n of names) assert.equal(n === BARE_PKG || n.startsWith(`${BARE_PKG}/rows/`), true, `行名必须属于本包（裸名或其 /rows 子路径），实得 ${n}`)
@@ -293,7 +298,7 @@ test('P3：market 行只注册独占前缀；/tradewatcher/industry 留在 core�
   stopMonitor()
 })
 
-test('P4：六个功能行（calendar/cloudmap/market/watchlist/portfolio/tools）关闭时三处都不在', async () => {
+test('P4：七个功能行（calendar/cloudmap/market/watchlist/portfolio/tools/fupan）关闭时三处都不在', async () => {
   const { gateTabs } = await import('./client/tabsGate.ts')
   const TABS = [
     { key: 'watch' as const, label: '自选', full: '自选', row: 'watchlist' },
@@ -302,9 +307,10 @@ test('P4：六个功能行（calendar/cloudmap/market/watchlist/portfolio/tools�
     { key: 'cloud' as const, label: '云图', full: '云图', row: 'cloudmap' },
     { key: 'calendar' as const, label: '日历', full: '日历', row: 'calendar' },
     { key: 'tools' as const, label: '工具', full: '工具箱', row: 'tools' },
+    { key: 'fupan' as const, label: '复盘', full: '复盘（月历 + 当日笔记）', row: 'fupan' },
   ]
   // 每个功能行关闭一次的期望：该行的 tab 消失，其余照常（core 与其它行不受影响）
-  for (const row of ['calendar', 'cloudmap', 'market', 'watchlist', 'portfolio', 'tools'] as const) {
+  for (const row of ['calendar', 'cloudmap', 'market', 'watchlist', 'portfolio', 'tools', 'fupan'] as const) {
     setKernel(null)
     const core = fakeCtx()
     apply(core.ctx, { row: 'core' })
@@ -336,6 +342,8 @@ const ROW_ROUTES_FOR_TEST: Record<string, readonly string[]> = {
   portfolio: ['/tradewatcher/portfolio', '/tradewatcher/ledger'],
   // 第 7 行（工具箱）：独占五市场蛋糕的数据路由（单一消费方 ⇒ 该行）
   tools: ['/tradewatcher/tools/global-flow'],
+  // 第 8 行（复盘）：整月视图 + 写一条笔记（都只被 FupanPage 消费 ⇒ 该行）
+  fupan: ['/tradewatcher/fupan/month', '/tradewatcher/fupan/note'],
 }
 const ROW_TOOLS_FOR_TEST: Record<string, readonly string[]> = {
   calendar: ['calendar', 'calendar_add'],
@@ -344,6 +352,8 @@ const ROW_TOOLS_FOR_TEST: Record<string, readonly string[]> = {
   watchlist: ['watchlist', 'group_rank'],
   portfolio: ['portfolio', 'ledger'],
   tools: [],
+  // 复盘行不带 agent 工具（月历/笔记是纯 UI）
+  fupan: [],
 }
 
 /**
@@ -436,7 +446,7 @@ test('归属表三处镜像必须与代码一致（代码 = 唯一事实源；�
   }
   // ② 文档 §2.1 表
   const doc = parseDocOwnership(readFileSync(join(ROOT, 'docs/DESIGN-SUBPLUGINS.md'), 'utf8'))
-  assert.deepEqual(Object.keys(doc).sort(), Object.keys(real).sort(), '文档 §2.1 表的行集合必须与真表一致（含第 7 行 tools）')
+  assert.deepEqual(Object.keys(doc).sort(), Object.keys(real).sort(), '文档 §2.1 表的行集合必须与真表一致（含第 7 行 tools、第 8 行 fupan）')
   for (const row of Object.keys(real)) {
     assert.deepEqual(doc[row].routes, real[row].routes, `文档 §2.1 的路由与真表不一致：${row}（缺/多了哪条看 diff）`)
     assert.deepEqual(doc[row].tools, real[row].tools, `文档 §2.1 的工具与真表不一致：${row}`)
@@ -448,6 +458,129 @@ test('归属表三处镜像必须与代码一致（代码 = 唯一事实源；�
     assert.deepEqual(patch[row].routes, real[row].routes, `patch 行注释的路由与真表不一致：${row}`)
     assert.deepEqual(patch[row].tools, real[row].tools, `patch 行注释的工具与真表不一致：${row}`)
   }
+})
+
+/**
+ * 第 8 行 `fupan`（复盘，v0.111.0）的**四处镜像**一致性判据。
+ *
+ * 任务卡要求"四处必须同时一致，只改一处 ⇒ 必败"：
+ *   ① 真表 `src/index.ts` 的 `ROW_ROUTES.fupan`（唯一事实源）；
+ *   ② `cordis.patch.yml` 的行注释；
+ *   ③ 本文件的期望副本 `ROW_ROUTES_FOR_TEST.fupan`；
+ *   ④ `docs/DESIGN-SUBPLUGINS.md` §2.1 表；
+ * 另加 ⑤ manifest 里那一行本身（`id` / `config.row` / **客户端源 specifier**）—— 本插件历史上踩过
+ * 「子路径 specifier 不是客户端源」的坑（core 必须留裸包名，见 AUDIT-IMPL36），所以功能行的
+ * `name` 必须是 `dsh-tradewatcher/rows/<row>`：写成裸包名会让两行抢同一个 client source。
+ *
+ * 返回失败原因列表（空 = 四处一致）；同一份判据既跑真实文件（必须空）也跑注入（必须非空）⇒ 断言非恒真。
+ */
+function fupanMirrorProblems(input: {
+  real: readonly string[]
+  copy?: readonly string[]
+  doc?: readonly string[]
+  patch?: readonly string[]
+  rows?: Array<{ id: string; name: string; row: string }>
+}): string[] {
+  const fail: string[] = []
+  const same = (label: string, got?: readonly string[]): void => {
+    if (got === undefined) return
+    const a = [...got].sort()
+    const b = [...input.real].sort()
+    if (JSON.stringify(a) !== JSON.stringify(b)) fail.push(`${label} 与真表不一致（实得 ${JSON.stringify([...got])}，真表 ${JSON.stringify([...input.real])}）`)
+  }
+  same('测试副本 ROW_ROUTES_FOR_TEST.fupan', input.copy)
+  same('文档 §2.1 表', input.doc)
+  same('cordis.patch.yml 行注释', input.patch)
+  if (input.rows !== undefined) {
+    const row = input.rows.find((r) => r.row === 'fupan')
+    if (row === undefined) fail.push('manifest 里没有 config: { row: fupan } 的行（第 8 行未注册 ⇒ 复盘页与它的两条路由都不会装载）')
+    else {
+      if (row.id !== 'tradewatcher-fupan') fail.push(`manifest 行 id 应为 tradewatcher-fupan（实得 ${row.id}）`)
+      if (row.name !== 'dsh-tradewatcher/rows/fupan') fail.push(`manifest 行 name 应为 dsh-tradewatcher/rows/fupan（实得 ${row.name}）—— 功能行给裸包名会与 core 抢同一个 client source（AUDIT-IMPL36）`)
+    }
+  }
+  return fail
+}
+
+/** 从 `src/index.ts` 源码里取某一行的路由清单（不另抄一份表） */
+function rowRoutesOf(indexSrc: string, row: string): string[] | null {
+  const m = new RegExp(`\\n  ${row}: \\[([^\\]]*)\\]`).exec(indexSrc)
+  return m === null ? null : [...m[1].matchAll(/'([^']+)'/g)].map((x) => x[1])
+}
+
+/**
+ * 第 8 行的路由**归属**判据：两条路由必须恰好声明在 `fupan` 行，且不出现在任何别的行。
+ * 反例（"把路由塞进 core"的形态）就是把它们从 `fupan` 行删掉 —— core 会兜底注册所有没被声明的路径。
+ */
+function fupanOwnershipProblems(indexSrc: string): string[] {
+  const want = ['/tradewatcher/fupan/month', '/tradewatcher/fupan/note']
+  const own = rowRoutesOf(indexSrc, 'fupan')
+  if (own === null) return ['ROW_ROUTES 里没有 fupan 行（两条复盘路由会被 core 兜底注册 ⇒ 复盘行关不掉）']
+  const bad: string[] = []
+  for (const p of want) if (!own.includes(p)) bad.push(`${p} 未声明在 fupan 行（删掉即归 core）`)
+  for (const row of ['calendar', 'watchlist', 'portfolio', 'market', 'cloudmap', 'tools']) {
+    const list = rowRoutesOf(indexSrc, row) ?? []
+    for (const p of want) if (list.includes(p)) bad.push(`${p} 同时出现在 ${row} 行（同一路由两行声明 ⇒ 关一行另一行还在注册）`)
+  }
+  return bad
+}
+
+test('第 8 行 fupan：四处镜像一致（真表 / patch 行注释 / 文档 §2.1 / 测试副本）+ manifest 行；只改一处必败', () => {
+  const raw = readFileSync(join(ROOT, 'cordis.patch.yml'), 'utf8')
+  const doc = parseDocOwnership(readFileSync(join(ROOT, 'docs/DESIGN-SUBPLUGINS.md'), 'utf8'))
+  const patch = parsePatchOwnership(raw)
+  const base = {
+    real: [...REAL_ROW_ROUTES.fupan],
+    copy: ROW_ROUTES_FOR_TEST.fupan,
+    doc: doc.fupan?.routes,
+    patch: patch.fupan?.routes,
+    rows: parseRowsFromText(raw),
+  }
+  const realFail = fupanMirrorProblems(base)
+  assert.deepEqual(realFail, [], `真实四处必须一致（失败项：${realFail.join(' ／ ')}）`)
+  assert.deepEqual([...base.real], ['/tradewatcher/fupan/month', '/tradewatcher/fupan/note'], '真表：第 8 行只独占这两条（精确路径，与其它行同款）')
+  assert.deepEqual(REAL_ROW_TOOLS.fupan, [], '第 8 行不带 agent 工具（月历/笔记是纯 UI）')
+  // 反例：**只改一处** ⇒ 必须红（四处各注入一次 + manifest 的两个字段各注入一次）
+  const injections: Array<{ name: string; mutate: (i: typeof base) => typeof base; hit: RegExp }> = [
+    { name: '只改测试副本（少一条）', mutate: (i) => ({ ...i, copy: ['/tradewatcher/fupan/month'] }), hit: /测试副本/ },
+    { name: '只改文档 §2.1（清空该行）', mutate: (i) => ({ ...i, doc: [] }), hit: /文档 §2\.1/ },
+    { name: '只改 patch 行注释（多一条 import 路由）', mutate: (i) => ({ ...i, patch: [...i.real, '/tradewatcher/fupan/import'] }), hit: /cordis\.patch\.yml/ },
+    { name: '只改 manifest 的 config.row（该行会静默回退 all）', mutate: (i) => ({ ...i, rows: i.rows.map((r) => (r.row === 'fupan' ? { ...r, row: 'fupanx' } : r)) }), hit: /没有 config: \{ row: fupan \} 的行/ },
+    { name: '功能行写成裸包名（与 core 抢同一个 client source）', mutate: (i) => ({ ...i, rows: i.rows.map((r) => (r.row === 'fupan' ? { ...r, name: 'dsh-tradewatcher' } : r)) }), hit: /dsh-tradewatcher\/rows\/fupan/ },
+  ]
+  for (const { name, mutate, hit } of injections) {
+    const fail = fupanMirrorProblems(mutate(base))
+    assert.ok(fail.length > 0, `注入「${name}」必须被抓到（一条都没报 ⇒ 断言恒真）`)
+    assert.match(fail.join(' ／ '), hit, `注入「${name}」报的原因应是预期的：${JSON.stringify(fail)}`)
+  }
+})
+
+test('第 8 行 fupan：两条路由归属 = fupan（core 不兜底、别的行不抢）；把路由塞进 core 的形态必败', () => {
+  const src = readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'index.ts'), 'utf8')
+  assert.deepEqual(fupanOwnershipProblems(src), [], '真实源码：两条复盘路由只属于 fupan 行')
+  // 反例 ①：从 fupan 行删掉 ⇒ core 兜底（= 复盘行关不掉，路由照样 200）
+  const toCore = src.replace("  fupan: ['/tradewatcher/fupan/month', '/tradewatcher/fupan/note'],", '  fupan: [],')
+  assert.notEqual(toCore, src, '注入必须真的改到了源码（否则这条证明无效）')
+  assert.notDeepEqual(fupanOwnershipProblems(toCore), [], '⚠ 反例（归 core）必须被判据抓住')
+  // 反例 ②：塞进 market 行 ⇒ 同一路由两行声明（关一行另一行还在注册）
+  const intoMarket = src.replace(
+    "market: ['/tradewatcher/breadth', '/tradewatcher/rescue', '/tradewatcher/board', '/tradewatcher/market-extras']",
+    "market: ['/tradewatcher/breadth', '/tradewatcher/rescue', '/tradewatcher/board', '/tradewatcher/market-extras', '/tradewatcher/fupan/month']",
+  )
+  assert.notEqual(intoMarket, src, '注入必须真的改到了源码')
+  assert.notDeepEqual(fupanOwnershipProblems(intoMarket), [], '⚠ 反例（塞进 market 行）必须被判据抓住')
+  // 运行时：只开 core ⇒ 两条都不注册（404）；开 fupan 行 ⇒ 恰好这两条
+  setKernel(null)
+  const core = fakeCtx()
+  apply(core.ctx, { row: 'core' })
+  assert.equal(core.routes.some((x) => x.startsWith('/tradewatcher/fupan')), false, 'core 不许注册 /tradewatcher/fupan 前缀下的任何路径（否则复盘行关不掉）')
+  const fupanRow = fakeCtx()
+  apply(fupanRow.ctx, { row: 'fupan' })
+  assert.deepEqual([...fupanRow.routes].sort(), ['/tradewatcher/fupan/month', '/tradewatcher/fupan/note'], 'fupan 行只注册自己那两条')
+  assert.deepEqual(fupanRow.tools, [], 'fupan 行不带 agent 工具')
+  assert.equal(coreKernel()?.activeRows.has('fupan'), true, '开启后 activeRows 应含 fupan（页签门控的唯一依据）')
+  assert.equal(rowOf({ row: 'fupan' }), 'fupan', 'rowOf 必须认识 fupan（认不出会静默回退 all）')
+  stopMonitor()
 })
 
 test('路由账目：声明数 = 真表并集；文档里的行-路由计数必须与代码一致', () => {
@@ -607,7 +740,7 @@ async function drainForeignStarts(): Promise<void> {
   assert.ok(stable >= 3, `前置内核的 store.init() 迟迟不落定（starts=${__kernelStats.starts}）—— 测试环境异常，别把不稳定当通过`)
 }
 
-test('task-6：七行装载（manifest 驱动）—— 幂等各 1 次、每行只注册自己那段、跨行零重复、并集 == 老单行', async () => {
+test('task-6：八行装载（manifest 驱动）—— 幂等各 1 次、每行只注册自己那段、跨行零重复、并集 == 老单行', async () => {
   const tick = (): Promise<void> => new Promise((r) => setTimeout(r, 50))
   /**
    * 等到条件成立（有界）。
@@ -629,7 +762,7 @@ test('task-6：七行装载（manifest 驱动）—— 幂等各 1 次、每行�
   __kernelStats.rows.length = 0
   __kernelStats.routeRegs.length = 0
 
-  // —— ① 幂等：core 行 apply 两次（同一行出现两条 fiber）+ 六个功能行各一次 = 真实七行装载 ——
+  // —— ① 幂等：core 行 apply 两次（同一行出现两条 fiber）+ 七个功能行各一次 = 真实八行装载 ——
   const twice = fakeCtx()
   apply(twice.ctx, { row: 'core' })
   apply(twice.ctx, { row: 'core' })
@@ -659,12 +792,12 @@ test('task-6：七行装载（manifest 驱动）—— 幂等各 1 次、每行�
     }
   }
   await settle()
-  assert.equal(__kernelStats.applies, 8, 'apply 共八次（core 两次 + 六个功能行各一次）')
-  assert.equal(__kernelStats.inits, 1, 'store.init() 只跑一次（七个 fiber 共用一个内核）')
+  assert.equal(__kernelStats.applies, 9, 'apply 共九次（core 两次 + 七个功能行各一次）')
+  assert.equal(__kernelStats.inits, 1, 'store.init() 只跑一次（八个 fiber 共用一个内核）')
   assert.equal(coreKernel()?.starts, 1, 'rescue.start() 只跑一次（采样器只能有一个）')
   assert.equal((coreKernel()?.rescue as unknown as { running?: boolean }).running, true, '采样器处于运行态')
 
-  // —— ② 分工：manifest 声明的那七行，每行一条 fiber，一条不多一条不少 ——
+  // —— ② 分工：manifest 声明的那八行，每行一条 fiber，一条不多一条不少 ——
   const coreCtx = fakeCtx()
   apply(coreCtx.ctx, { row: 'core' })
   const perRow: Array<[string, FakeCtx]> = [['core', coreCtx]]
@@ -734,14 +867,14 @@ test('task-6：七行装载（manifest 驱动）—— 幂等各 1 次、每行�
   }
   assert.equal(coreCtx.routes.includes('/tradewatcher/board'), false, '/tradewatcher/board 不再由 core 兜底')
 
-  // —— ④ 七行的并集必须与老的单行全量**逐字一致**（不多、不少）——
+  // —— ④ 八行的并集必须与老的单行全量**逐字一致**（不多、不少）——
   // 这是"用户重启 dsh web 后不掉功能"的判据，也是回退成单行不会丢东西的判据。
   const all = fakeCtx()
   apply(all.ctx) // 无 config ⇒ row=all（向后兼容路径，老 profile 靠它）
   await tick()
   assert.equal(all.routes.length, new Set(all.routes).size, '单行全量自己不许有重复路径')
-  assert.deepEqual([...new Set(all.routes)].sort(), [...owner.keys()].sort(), '七行注册的路径并集 == 单行全量注册的路径集合')
-  assert.deepEqual([...new Set(all.tools)].sort(), [...toolOwner.keys()].sort(), '七行的工具并集 == 单行全量的工具集合')
+  assert.deepEqual([...new Set(all.routes)].sort(), [...owner.keys()].sort(), '八行注册的路径并集 == 单行全量注册的路径集合')
+  assert.deepEqual([...new Set(all.tools)].sort(), [...toolOwner.keys()].sort(), '八行的工具并集 == 单行全量的工具集合')
   stopMonitor()
 })
 
@@ -820,7 +953,7 @@ function localeMetaViolations(entries: readonly LocaleEntry[]): string[] {
   return fail
 }
 
-test('task-8/9：七行标题各自可区分 + 标题必须英文（两语都是）、中文只留在 zh 描述行', () => {
+test('task-8/9：八行标题各自可区分 + 标题必须英文（两语都是）、中文只留在 zh 描述行', () => {
   const rows = parseRowsFromText(readFileSync(join(ROOT, 'cordis.patch.yml'), 'utf8'))
   const pkg = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')) as { name: string; exports: Record<string, unknown>; files: string[] }
   // ① `readPluginMeta` 的入口是 `<specifier>/locale/en.json`（@deepseek-ai/dsh-app-boot 的 readPluginMeta）⇒
@@ -846,11 +979,11 @@ test('task-8/9：七行标题各自可区分 + 标题必须英文（两语都是
   assert.deepEqual(fail, [], `locale 元数据检查未通过（失败项：${fail.join(' ／ ')}）`)
   // ③ **zh 的 title 也必须是英文** —— 解析是 `text.zh ?? text.en`，中文环境取的是 zh 键（最容易漏的一条）
   for (const e of entries) assert.equal(CJK_RE.test(e.title), false, `${e.dir}/${e.lang}.json 的 title 必须是英文`)
-  // ④ 七行标题**互不相同**；其中 **core 的标题 = 插件名**（两者同一个 specifier，见 TITLE_NAME_OK 的注释）
-  assert.equal(titles.size, rows.length, '七行都要有自己的标题')
-  assert.equal(new Set(titles.values()).size, rows.length, `七行标题必须互不相同（实得 ${JSON.stringify([...titles.values()])}）`)
+  // ④ 八行标题**互不相同**；其中 **core 的标题 = 插件名**（两者同一个 specifier，见 TITLE_NAME_OK 的注释）
+  assert.equal(titles.size, rows.length, '八行都要有自己的标题')
+  assert.equal(new Set(titles.values()).size, rows.length, `八行标题必须互不相同（实得 ${JSON.stringify([...titles.values()])}）`)
   assert.equal(titles.get('core'), pkg.name, `core 行标题必须等于包名（头部显示的就是它）：${titles.get('core')} vs ${pkg.name}`)
-  for (const row of ['calendar', 'watchlist', 'portfolio', 'market', 'cloudmap', 'tools']) {
+  for (const row of ['calendar', 'watchlist', 'portfolio', 'market', 'cloudmap', 'tools', 'fupan']) {
     assert.equal(titles.get(row), `${pkg.name}-${row}`, `${row} 行标题应是 <包名>-<row>：${titles.get(row)}`)
   }
   // ⑤ 发布清单要带上 locale（否则打包后标题解析不到）

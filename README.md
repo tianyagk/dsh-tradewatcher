@@ -204,6 +204,7 @@ bash scripts/install.sh
 | `~/.dsh/dsh-tradewatcher/breadth.json` | 涨跌家数每日快照：**收盘后**（15:05 起，15:30 后定稿）记录当日涨/跌/平家数与两市成交额，保留 60 日窗口 + 30 天余量 |
 | `~/.dsh/dsh-tradewatcher/calendar.json` | 财经日历事件库（自动同步 + 手动维护，含改期留痕） |
 | `~/.dsh/dsh-tradewatcher/trading-calendar.json` | 交易日历缓存（`npm run calendar:check` 与跨市场休市判断用；按年缓存，缺失时按规则推算并标注） |
+| `~/.dsh/dsh-tradewatcher/fupan.json` | 复盘笔记（第 8 行 `fupan`）：`{ v:1, notes:[{id,date,text,pinnedTo?,source,at}] }`，`at` = 最后一次写入时刻。有界：单条正文 ≤4000 字、≤2000 条、序列化后 ≤512 KB；条数/体积超限时按「最久未更新」丢弃并在回包 `dropped` 段**逐条**留痕（置顶的最后才丢），单条超长直接 400 **不截断**。读不到（权限/磁盘）≠ 没有笔记 ⇒ 本次启动拒绝写回并如实披露；坏 JSON 先隔离保留原字节再从容开始 |
 | `~/.dsh/dsh-tradewatcher/global-flow.json` | 工具箱「全球资金流蛋糕模型」的每日份额快照：一天一条、保留 90 天（一天 ≈ 0.9KB）；**成分一变，旧快照整份作废并留痕**，不与新成分混用 |
 | `~/.dsh/dsh-tradewatcher/macro-log.json` | 工具箱「全球资金流蛋糕模型」的宏观两档**自采样**：每个交易日一条（广义美元指数 / 美国 10Y 收益率）+ **每源诊断留痕**（`diag`：本次各源是否可用、值、原因 —— 真机排障的现场证据），保留 120 天。用途：两个源都没有可无歧义解读的"昨收"字段 ⇒ 「较上日」与「5 日变化」只由本插件自采样算，绝不用来源不明的字段充当变化量；不足 ⇒ 界面显示「未取到」+ 原因，不写 0 |
 | `~/.dsh/dsh-tradewatcher/market-extras.json` | 大宗商品/债券等扩展行情缓存（last-known-good；上游失败时回退上次成功结果并标注时间） |

@@ -1,8 +1,8 @@
 # 设计：一个 bundle 内的多行子组件（可独立开关）+ 迁移路径
 
-**状态：已落地（v0.59.0 / `a2066e1`；v0.71.0 加第 7 行 `tools`）**。`cordis.patch.yml:53-75` 是**七行**（`tradewatcher-core`/`-calendar`/`-watchlist`/`-portfolio`/`-market`/`-cloudmap`，全部启用、每行 `config: { row: … }`、`name`：**core 行用裸包名 `dsh-tradewatcher`**（保住浏览器半区，见 §归因纠正）、**另六行用 `dsh-tradewatcher/rows/<row>`**（标题可区分）；无 config 的 `all` 语义保留给老 profile）；`src/index.test.ts` 的清单断言锁**七行**。
-静态验证（锚真实产物 `lib/index.js`）见 `docs/AUDIT-IMPL35.md`：`inits/starts` 各 1、跨行零重复、路由账 26 = core 15 + calendar 1 + watchlist 3 + portfolio 2 + market 4 + cloudmap 0 + tools 1、七行并集 == 单行全量。
-**最后一公里**（重启 `dsh web` 后的真实装载：插件列表六行 `fiberPhase=active`、`/tradewatcher/rows` 六项、关一行后 404）**待装机验证**。
+**状态：已落地（v0.59.0 / `a2066e1`；v0.71.0 加第 7 行 `tools`；v0.111.0 加第 8 行 `fupan`）**。`cordis.patch.yml` 是**八行**（`tradewatcher-core`/`-calendar`/`-watchlist`/`-portfolio`/`-market`/`-cloudmap`/`-tools`/`-fupan`，全部启用、每行 `config: { row: … }`、`name`：**core 行用裸包名 `dsh-tradewatcher`**（保住浏览器半区，见 §归因纠正）、**另七行用 `dsh-tradewatcher/rows/<row>`**（标题可区分）；无 config 的 `all` 语义保留给老 profile）；`src/index.test.ts` 的清单断言锁**八行**。
+静态验证（锚真实产物 `lib/index.js`）见 `docs/AUDIT-IMPL35.md`：`inits/starts` 各 1、跨行零重复、路由账 28 = core 15 + calendar 1 + watchlist 3 + portfolio 2 + market 4 + cloudmap 0 + tools 1 + fupan 2、八行并集 == 单行全量。
+**最后一公里**（重启 `dsh web` 后的真实装载：插件列表八行 `fiberPhase=active`、`/tradewatcher/rows` 八项、关一行后 404）**待装机验证**。
 > ⚠ **归因纠正（重要）**：本文件此前写着"六行装载失败：同一 package 多个活跃 Loader 源 + 带客户端半区 ⇒ `dsh-client-modules` 判为 composition error"——**这个归因是错的**（2026-10 纠正）。真原文是 *"distinct active Loader **sources** for that package are a composition error"*，指的是**不同的加载源**（`sourceKey = baseUrl + "\0" + loaderName`），**不是"同一个源的多个 row"**；而当年真正的失败原因是 `apply` 读了未 inject 的 `ctx.config`（Cordis Proxy 直接抛），**该 bug 与行数无关：1 行和 6 行同样被打死**。完整证据与纠正后的记录见文末「归因纠正与恢复记录」。
 **目标（方案）**：把 `dsh-tradewatcher` 从单行插件改成「core + 功能行」的多行 bundle，使【实时行情条】【自选】【持仓】【大盘】【云图】【日历】各自可开关。**只读设计**（设计轮次当时的约束：不改代码、不改 profile、未安装任何 bundle）。
 **现状（v0.59.0 起）**：六行 bundle 已生效；行映射（`ROW_ROUTES`/`ROW_TOOLS`）与 `/tradewatcher/rows` 端点**已在用**（前端 tab 按活跃行过滤）。
@@ -52,8 +52,8 @@
 ## 2. 行怎么切（选定方案）
 
 **core 行（必需，不可关）**：`tradewatcher-core` —— host：`DataStore`（watch/positions/ledger/prefs）、`em` 取数 + LKG、`/health` `/prefs` `/backup` `/quotes` `/badge` `/tones` `/trend` `/kline` `/detail` `/suggest` `/ytd` `/undo`、`quotes`/`search`/`position`/`ytd` 工具；另持有 **`/tradewatcher/rows`**（活跃行清单）。client：外壳 + 顶部行情条 + 详情抽屉 + 侧栏图标/徽标 + 样式表 + **全部 Slot 注册**。
-**功能行（可关）**：`watchlist`（`/watch` `/ledger` `/trades`、`watchlist`/`group_rank` 工具、自选 tab）｜`portfolio`（`/portfolio`、`portfolio`/`ledger` 工具、持仓 tab）｜`market`（`/breadth` `/board` `/rescue` `/anomaly` `/industries` `/industry`、`rescue` 工具、大盘 tab + 护盘面板）｜`cloudmap`（**无 host 路由**，纯客户端 iframe，云图 tab）｜`calendar`（`/calendar`、`calendar`/`calendar_add` 工具，日历 tab）。
-**总行数（目标形态）**：core + 6 = 7 行（v0.71.0 起含 `tools`）；**当前 manifest 只装 1 行**（`cordis.patch.yml:15-17`）；【实时行情条】不单独成行（它是 core 的外壳组件，拆出去会让 core 空转且抽屉依赖它）。若用户坚持要"行情条"也能关：加第 7 行 `strip`，client 侧仅 gate 该组件（代价：core 仍持有行情引擎）。
+**功能行（可关）**：`watchlist`（`/watch` `/ledger` `/trades`、`watchlist`/`group_rank` 工具、自选 tab）｜`portfolio`（`/portfolio`、`portfolio`/`ledger` 工具、持仓 tab）｜`market`（`/breadth` `/board` `/rescue` `/anomaly` `/industries` `/industry`、`rescue` 工具、大盘 tab + 护盘面板）｜`cloudmap`（**无 host 路由**，纯客户端 iframe，云图 tab）｜`calendar`（`/calendar`、`calendar`/`calendar_add` 工具，日历 tab）｜`fupan`（`/fupan/month` `/fupan/note`、无 agent 工具，复盘 tab —— 本地笔记存储，零新增上游请求）。
+**总行数（目标形态）**：core + 7 = 8 行（v0.71.0 起含 `tools`，v0.111.0 起含 `fupan`）；**当前 manifest 只装 1 行**（`cordis.patch.yml:15-17`）；【实时行情条】不单独成行（它是 core 的外壳组件，拆出去会让 core 空转且抽屉依赖它）。若用户坚持要"行情条"也能关：加第 7 行 `strip`，client 侧仅 gate 该组件（代价：core 仍持有行情引擎）。
 ### 2.1 最终归属（P1–P4 落地后复核，含工具与共享面）
 
 > **权威性**：本表是 `src/index.ts` 的 `ROW_ROUTES`/`ROW_TOOLS` 的**镜像**，冲突以代码为准；
@@ -70,6 +70,7 @@
 | `watchlist` | `/watch` `/industries` `/anomaly` | `watchlist` `group_rank` | `group_rank` 的数据来源是自选分组 ⇒ 归此行；`/industries`（`WatchlistPage.tsx:89`）与 `/anomaly`（`alerts.ts:69` ← 只被自选页引用）按 §2.2 判据归本行；`/trades` 因被抽屉共用而移回 core |
 | `portfolio` | `/portfolio` `/ledger` | `portfolio` `ledger` | `/ledger` 只有持仓页的流水弹窗用；`dayTrades` 随 `portfolio` 工具 |
 | `tools` | `/tradewatcher/tools/global-flow` | **无** | 第 7 行（v0.71.0）：工具目录页 + 工具详情页都是纯 UI；蛋糕数据只被工具箱页消费（`ToolsPage.tsx` → `tools/cake.ts` 的 loader）⇒ 单一消费方归本行。本行不带 agent 工具（与 `cloudmap` 一样只贡献 activeRows ⇒ 页签门控照常） |
+| `fupan` | `/tradewatcher/fupan/month` `/tradewatcher/fupan/note` | **无** | 第 8 行（v0.111.0）：复盘页签（月历 + 当日笔记 + 钉到未来日期）。两条路由只被 `FupanPage.tsx` 消费（`api.fupanMonth`/`api.fupanNote`）⇒ 单一消费方归本行；数据是本地 `fupan.json` + 既有交易日历（**零新增上游请求**）；本行不带 agent 工具 |
 
 ### 2.2 判据（task-60 定稿）：**按实测调用方定归属**
 
@@ -84,6 +85,8 @@
 | `/tradewatcher/rescue` | 大盘页/护盘面板 | 1 | market |
 | `/tradewatcher/trades` | `QuoteDrawer.tsx:79`（core 的抽屉） | 1（core） | core |
 | `/tradewatcher/industry` | `QuoteDrawer.tsx:78`（core 的抽屉） | 1（core） | core |
+| `/tradewatcher/fupan/month` | 只有 `FupanPage.tsx`（`api.fupanMonth`） | 1 | **fupan**（v0.111.0 第 8 行新路由；`src/rowOwnership.test.ts` 按调用点推导） |
+| `/tradewatcher/fupan/note` | 只有 `FupanPage.tsx`（`api.fupanNote`） | 1 | **fupan**（同上） |
 
 **修正的动机（验证员原话的后果）**：`/industries`/`/anomaly` 若留在 market ⇒ 关掉大盘 ⇒ **自选页行业列与告警扫描 404**。
 都是诚实失败，但不是我们要的。
@@ -116,7 +119,7 @@
 
 - **host 用 `inject` + service（不用 import 直连）**：core 行 `provide` 一个 `tradewatcher.core`（`{store, calendar, rescue, prefs, rows}`），功能行 `inject: ['tradewatcher.core']`。理由：① Loader 的行挂载顺序由 inject 保证（`dsh-web-app/cordis.patch.yml:8-9` 的做法）；② import 直连会让功能行**各自 `new DataStore()`**，多实例并发写同一份 JSON —— 我们已有原子写与 `writeChain`，多实例会互踩（`src/host/store.ts` 的 `persist`）。**判据：任何 `new DataStore()` 只允许出现在 core 行**。
 - **client 不能用行级 inject**：包级单 client 入口 + "manifest package name 唯一"（§1.2）⇒ 浏览器侧只有一个实例。gate 由 core 的 `rows` 端点完成；**所有 `ctx.slots.register` 只允许出现在 core 的 client 路径里**，功能行不得各自注册 Slot（否则一旦多行共享同包，注册会冲突或重复）。
-- **单 bundle 一次安装 > 多个 bundle**：① 用户截图就是前者；② 多包会让 core 被各功能包重复依赖、版本漂移；③ 多包 = 多份 `DataStore`/定时器（`RescueMonitor` 采样循环）⇒ 数据竞争，**这才是硬理由**。故：**一个 npm 包、一个 client bundle、七条 Loader 行**。
+- **单 bundle 一次安装 > 多个 bundle**：① 用户截图就是前者；② 多包会让 core 被各功能包重复依赖、版本漂移；③ 多包 = 多份 `DataStore`/定时器（`RescueMonitor` 采样循环）⇒ 数据竞争，**这才是硬理由**。故：**一个 npm 包、一个 client bundle、八条 Loader 行**。
 
 ## 5. 迁移路径（每阶段可独立验证、可随时停）
 
@@ -165,7 +168,7 @@
 
 1. **v0.50.0**：六行形态在用户端表现异常（所有 `/tradewatcher/*` 404、面板"插件服务异常"），处置是 `cordis.patch.yml` 回退为**单行** `- id: tradewatcher`（不带 config ⇒ `all`）。
 2. **当时的归因（"同一 package 多个活跃 Loader 源 ⇒ `dsh-client-modules` 判为 composition error ⇒ 同包六行会被整体拒绝"）是错的**，v0.59.0 纠正。当年那条结论来自源码注释的一句话，且**从未实测**。
-3. **v0.59.0 恢复六行、v0.71.0 起为七行**：`cordis.patch.yml:53-75`（七个 `tradewatcher-*` id，全部启用，每行 `config: { row: … }`）。静态验证（锚真实产物 `lib/index.js`）见 `docs/AUDIT-IMPL35.md`：`inits`/`starts` 各 1、**跨行零重复**、路由账 26 = core 15 + calendar 1 + watchlist 3 + portfolio 2 + market 4 + cloudmap 0 + tools 1、**七行并集 == 单行全量**。最后一公里（重启 `dsh web` 的真实装载）待装机验证。
+3. **v0.59.0 恢复六行、v0.71.0 起为七行、v0.111.0 起为八行**：`cordis.patch.yml`（八个 `tradewatcher-*` id，全部启用，每行 `config: { row: … }`）。静态验证（锚真实产物 `lib/index.js`）见 `docs/AUDIT-IMPL35.md`：`inits`/`starts` 各 1、**跨行零重复**、路由账 28 = core 15 + calendar 1 + watchlist 3 + portfolio 2 + market 4 + cloudmap 0 + tools 1 + fupan 2、**八行并集 == 单行全量**。最后一公里（重启 `dsh web` 的真实装载）待装机验证。
 
 ### 为什么"同包多行"本来就合法（代码级证据）
 

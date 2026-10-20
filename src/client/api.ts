@@ -289,6 +289,115 @@ function request<T>(path: string, init?: RequestInit): Promise<T> {
   return requestWithTimeout<T>(path, init)
 }
 
+// ── 复盘页（第 7 个页签）的线缆契约：两条 fupan 路由 ─────────────────────────
+//
+// ⚠ 本文件里任何**在 api 对象之前**的注释都不许出现路由字面量：
+// src/rowOwnership.test.ts 按「api 函数体里第一个路由字面量」推归属，而它的函数切分正则
+// 会因"空行 + 下一行缩进"把函数起点提前；提前后的函数体里若先出现**另一条**路由字面量，
+// 归属就会被算到别处（实测把 globalFlow 的归属算成了别条前缀，直接红）。
+//
+// 形状由宿主定（`src/host/fupan*.ts`）。**除 `ym`/`asOf` 之外全部可选**：老宿主/回包不完整时
+// 界面必须落到「未知 + 原因」，而不是拿默认值（0 / 交易日）顶替 —— 缺失语义的判据在
+// `fupanView.ts`，那里是唯一的解释层，页面只渲染。
+
+/** 交易日历的元信息（`covered=false` ⇒ 外部日历未覆盖该月，宿主已回退内置表） */
+export interface FupanCalendarInfo {
+  covered?: boolean
+  source?: string
+  warning?: string | null
+  months?: string[]
+}
+
+/** 月历里的一天（宿主契约：该月**每一天**一条） */
+export interface FupanDateDto {
+  date: string
+  /** 该日**自己写的**笔记条数（缺失 ⇒ 界面写"未知"，不写 0） */
+  count?: number
+  /** 是否有一条笔记被钉到这一天 */
+  hasPinned?: boolean
+  /** 是否交易日（缺失 ⇒ `unknown`，**绝不默认 true**） */
+  trading?: boolean
+  /** `trading === false` 的原因：`周末` / 假日名 / `外部日历（手工维护）` */
+  closedReason?: string | null
+}
+
+/** 一条复盘笔记（`pinnedTo` = 钉到的日子；`at` = 写入时刻） */
+export interface FupanNoteDto {
+  id: string
+  /** 写在哪一天（YYYY-MM-DD） */
+  date: string
+  text: string
+  pinnedTo?: string | null
+  source?: string
+  at?: number | null
+}
+
+export interface FupanMissing {
+  what: string
+  why: string
+  note?: string
+}
+
+/** 超上限后从最旧开始丢的如实回报（界面必须显示，不许当成功无事） */
+export interface FupanDropped {
+  notes?: unknown[]
+  count?: number
+  reasons?: string[]
+}
+
+export interface FupanMonthPayload {
+  ym?: string
+  asOf?: number | null
+  /** 口径（纯本地文件 + 既有交易日历，零新增上游请求） */
+  source?: string
+  stale?: boolean
+  calendar?: FupanCalendarInfo | null
+  /** 非 null = 外部交易日历未覆盖该月（回退内置表）⇒ 界面原样显示这句 */
+  calendarWhy?: string | null
+  dates?: FupanDateDto[]
+  /** 该月**全部**笔记（含被钉到别处的） */
+  notes?: FupanNoteDto[]
+  totals?: {
+    notes?: number
+    pinned?: number
+    days?: number
+    daysWithNotes?: number
+    daysWithPinned?: number
+    /** 该月交易日数（宿主算出来的；`0` 只可能来自"真的没有交易日"，不能当"不知道"） */
+    tradingDays?: number
+  }
+  missing?: FupanMissing[]
+  /** 读失败（权限/磁盘）时宿主给的原因：**不许**当成"没有笔记" */
+  notesUnreadable?: { reason?: string } | string | null
+  /** 读到了但内容坏 ⇒ 已隔离的原件路径（原字节保留，可人工恢复） */
+  notesQuarantined?: string | null
+  /** 形状不合法被跳过的条目数（宿主披露，不许静默） */
+  invalidEntries?: number
+}
+
+export interface FupanNoteResult {
+  ok?: boolean
+  asOf?: number | null
+  source?: string
+  /** 实际执行的动作（`upsert` / `delete`） */
+  op?: string
+  id?: string | null
+  /** 删除/更新实际影响的条数（删除时为 1） */
+  removed?: number
+  /** 本次写入涉及的那一天 */
+  date?: string
+  ym?: string | null
+  /** 该日**自己写的**笔记（写入后的快照；钉到该日的别天笔记不在这里） */
+  notes?: FupanNoteDto[]
+  dropped?: FupanDropped
+  /** 写入后的月历摘要（`dates[]` 用它与界面同步；`null` = 定位不到月份） */
+  month?: { ym?: string | null; dates?: FupanDateDto[]; calendar?: FupanCalendarInfo | null; calendarWhy?: string | null } | null
+  missing?: FupanMissing[]
+  /** 写入后若笔记文件读不到 ⇒ 原因（写成功但读不到，必须说清） */
+  notesUnreadable?: string | { reason?: string } | null
+  notesQuarantined?: string | null
+}
+
 export const api = {
   /**
    * 全球五市场（工具箱 → 全球资金流蛋糕模型）。
@@ -490,6 +599,20 @@ export const api = {
   },
   trades(secid: string): Promise<{ trades: TradeMark[] }> {
     return request(`/tradewatcher/trades?secid=${encodeURIComponent(secid)}`)
+  },
+  /**
+   * 复盘页（第 7 个页签）的月历（`ym` 形如 2026-10）。
+   *
+   * ⚠ 本方法里**只许**这一条路由字面量：行归属是按"api 函数体里第一个路由字面量"推导的
+   * （`src/rowOwnership.test.ts`），塞第二条会把归属算错。同理，这两条路由的**唯一**调用方
+   * 必须是 `FupanPage.tsx` 可达的模块（页面本体），不许在 `index.tsx`/`TopBar.tsx` 里调用。
+   */
+  fupanMonth(ym: string): Promise<FupanMonthPayload> {
+    return request(`/tradewatcher/fupan/month?ym=${encodeURIComponent(ym)}`)
+  },
+  /** 复盘页的写入（`{ op:'upsert'|'delete', … }`；请求体由 fupanView.ts 的 `noteBodyOf` 单一构造） */
+  fupanNote(body: Record<string, unknown>): Promise<FupanNoteResult> {
+    return request('/tradewatcher/fupan/note', { method: 'POST', body: JSON.stringify(body) })
   },
   industry(secid: string): Promise<{ industry: { name: string; pct: number | null } | null }> {
     return request(`/tradewatcher/industry?secid=${encodeURIComponent(secid)}`)

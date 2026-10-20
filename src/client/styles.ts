@@ -692,6 +692,59 @@ color-scheme:dark}
 @media (max-width:760px){
   .tw-tool-hero{flex-direction:column}
 }
+/* ── 复盘页（第 7 个页签）：月历 + 当日笔记 ─────────────────────────────────
+   只订 12/13 两档字号（密集阶梯），颜色全走既有 token（不硬编码色值，
+   隐身档由 [data-view=incognito] 统一灰化）。状态只用 data-kind 区分：
+   交易日 = 实线卡片；休市 = 暗底 + 灰字 + 「休市」；未知 = **虚线**（不许画成交易日）。
+   ⚠ 这段必须写在玻璃浮层那段**之前**：.tw-glass 依赖"后写者胜"才盖得住浮层的底/描边。
+   ⚠ 注释里不许出现反引号：这里是模板字面量内部，反引号会提前结束 TW_CSS。 */
+.tw-fp-wrap{display:flex;gap:8px;align-items:flex-start;flex-wrap:wrap}
+.tw-fp-cal{flex:1 1 460px;min-width:0}
+.tw-fp-side{flex:1 1 340px;min-width:0}
+.tw-fp-legend{display:flex;align-items:center;gap:10px;flex-wrap:wrap;font-size:12px;color:var(--tw-muted);padding:0 0 4px}
+.tw-fp-legend-item[data-kind=trading]{color:var(--tw-text)}
+.tw-fp-legend-item[data-kind=closed]{color:var(--tw-fg-dim)}
+.tw-fp-legend-item[data-kind=unknown]{color:var(--tw-warn)}
+.tw-fp-grid{display:flex;flex-direction:column;gap:4px}
+.tw-fp-row{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:4px}
+.tw-fp-dow{text-align:center;font-size:12px;color:var(--tw-muted);padding:2px 0}
+.tw-fp-cell{min-height:56px;border:1px solid var(--tw-border);border-radius:8px;background:var(--tw-card);padding:3px 5px;display:flex;flex-direction:column;gap:2px;cursor:pointer;outline:none;transition:border-color .12s,background .12s}
+.tw-fp-cell:hover{border-color:var(--tw-accent);background:var(--tw-hover)}
+.tw-fp-cell:focus-visible{border-color:var(--tw-accent);box-shadow:0 0 0 3px var(--tw-ring)}
+.tw-fp-cell[data-out=true]{opacity:.45}
+.tw-fp-cell[data-on=true]{border-color:var(--tw-accent);box-shadow:inset 0 0 0 1px var(--tw-accent-soft)}
+.tw-fp-cell[data-kind=closed]{background:var(--tw-bg2)}
+.tw-fp-cell[data-kind=closed] .tw-fp-dom{color:var(--tw-muted)}
+.tw-fp-cell[data-kind=unknown]{border-style:dashed}
+.tw-fp-dom{display:flex;align-items:center;gap:4px;font-size:12px;font-family:var(--tw-mono);color:var(--tw-dim)}
+.tw-fp-count{margin-left:auto;font-size:12px;font-family:var(--tw-mono);color:var(--tw-accent);border:1px solid var(--tw-accent-soft);background:var(--tw-accent-soft);border-radius:8px;padding:0 5px}
+.tw-fp-pinmark{font-size:12px;color:var(--tw-warn);border:1px solid var(--tw-warn);border-radius:6px;padding:0 3px;line-height:1.3}
+.tw-fp-unknown{font-size:12px;color:var(--tw-warn)}
+.tw-fp-closed{font-size:12px;color:var(--tw-muted)}
+.tw-fp-meta{font-size:12px;color:var(--tw-muted);font-variant-numeric:tabular-nums}
+.tw-fp-label{font-size:12px;color:var(--tw-dim)}
+.tw-fp-notes{display:flex;flex-direction:column;gap:6px}
+.tw-fp-note{border:1px solid var(--tw-border);border-left:3px solid var(--tw-accent);border-radius:8px;background:var(--tw-card2);padding:6px 8px;display:flex;flex-direction:column;gap:5px}
+.tw-fp-note[data-foreign=true]{border-left-color:var(--tw-warn)}
+.tw-fp-text{font-size:13px;line-height:1.6;color:var(--tw-text);white-space:pre-wrap;word-break:break-word}
+.tw-fp-meta-row{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.tw-fp-pinlabel{font-size:12px;color:var(--tw-warn);border:1px solid var(--tw-warn);border-radius:8px;padding:0 5px}
+.tw-fp-pinlabel[data-kind=to]{color:var(--tw-fg-dim);border-color:var(--tw-border)}
+.tw-fp-split{font-size:12px;color:var(--tw-muted);padding:5px 0 3px;border-top:1px dashed var(--tw-border)}
+.tw-fp-editor{border-top:1px dashed var(--tw-border);padding-top:8px;display:flex;flex-direction:column;gap:6px}
+.tw-fp-metarow{display:flex;align-items:center;gap:8px}
+.tw-fp-editrow{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.tw-fp-date{width:auto;font-size:12px}
+.tw-fp-ok{font-size:12px;padding:2px 0}
+.tw-fp-warn{font-size:12px;color:var(--tw-warn);background:var(--tw-bg2);border:1px solid var(--tw-warn);border-radius:8px;padding:4px 8px;margin:4px 0}
+.tw-fp-fail{display:flex;flex-direction:column;gap:4px}
+@media (max-width:760px){
+  .tw-fp-wrap{flex-direction:column}
+  .tw-fp-cal,.tw-fp-side{flex:1 1 auto;width:100%}
+}
+@media (prefers-reduced-motion:reduce){
+  .tw-fp-cell{transition:none!important}
+}
 /* ── 玻璃浮层（采纳竞品"半透明 + 背景模糊 + 饱和度"的做法；值来自本主题的 --tw-glass-*） ──
    ⚠ 这段必须放在**样式表末尾**：.tw-glass 与 .tw-pop / .tw-chart-tip 同特异性，
    靠"后写者胜"才能让玻璃的底/描边/模糊真正生效（判据见 toolDetailTheme.motionCssProblems + uiuxDiscipline.test.ts）。

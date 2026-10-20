@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "dsh-tradewatcher-fupan",
+    "description": "复盘：交易日月历 + 当日笔记 + 钉到未来日期（笔记存本地，零上游请求）"
+  }
+}

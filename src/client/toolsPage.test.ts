@@ -74,9 +74,10 @@ const INDEX_SRC = readSrc('src/client/index.tsx')
 const TABS: Array<TabLike<string>> = tabsFromSource(INDEX_SRC).map((t) => ({ ...t, full: t.label }))
 
 test('页签：工具箱在「日历」之后，标签「工具」，归属行 `tools`', () => {
-  assert.equal(TABS.length, 6, `必须能抽出 6 个页签（锚点变了？实得 ${TABS.length}）`)
+  // v0.110.0（AUDIT-IMPL83）：第 7 个页签「复盘」追加在「工具」之后 ⇒ 页签总数 6 → 7
+  assert.equal(TABS.length, 7, `必须能抽出 7 个页签（锚点变了？实得 ${TABS.length}）`)
   const keys = TABS.map((t) => t.key)
-  assert.deepEqual(keys, ['watch', 'portfolio', 'market', 'cloud', 'calendar', 'tools'], `页签集合/顺序不对：${JSON.stringify(keys)}`)
+  assert.deepEqual(keys, ['watch', 'portfolio', 'market', 'cloud', 'calendar', 'tools', 'fupan'], `页签集合/顺序不对：${JSON.stringify(keys)}`)
   const tools = TABS.find((t) => t.key === 'tools')
   assert.equal(tools?.label, '工具', '工具箱页签的标签必须是「工具」')
   assert.equal(tools?.row, 'tools', '工具箱页签归属 tools 行（门控靠它）')
@@ -85,20 +86,20 @@ test('页签：工具箱在「日历」之后，标签「工具」，归属行 `
 
 test('门控：`rows` 含 tools ⇒ 渲染该页签；不含 ⇒ 不渲染（沿用既有 gateTabs 逻辑）', () => {
   // 七行全开（manifest 的默认形态）
-  const on = gateTabs(TABS, new Set(['core', 'calendar', 'watchlist', 'portfolio', 'market', 'cloudmap', 'tools']), 'watch')
+  const on = gateTabs(TABS, new Set(['core', 'calendar', 'watchlist', 'portfolio', 'market', 'cloudmap', 'tools', 'fupan']), 'watch')
   assert.equal(on.visible.some((t) => t.key === 'tools'), true, 'rows 含 tools ⇒ 工具页签必须出现')
-  assert.equal(on.visible.length, 6, '七行全开时六个页签都在')
+  assert.equal(on.visible.length, 7, '全部行都开时七个页签都在')
   // profile 层 `- id: tradewatcher-tools` + `disabled: true` ⇒ /rows 不含 tools
-  const off = gateTabs(TABS, new Set(['core', 'calendar', 'watchlist', 'portfolio', 'market', 'cloudmap']), 'watch')
+  const off = gateTabs(TABS, new Set(['core', 'calendar', 'watchlist', 'portfolio', 'market', 'cloudmap', 'fupan']), 'watch')
   assert.equal(off.visible.some((t) => t.key === 'tools'), false, '⚠ 门控：rows 不含 tools ⇒ **不渲染**工具页签')
-  assert.equal(off.visible.length, 5, '关掉工具箱不影响其余五个页签')
+  assert.equal(off.visible.length, 6, '关掉工具箱不影响其余六个页签')
   assert.equal(off.fallback, null, '当前页仍可用 ⇒ 不回退')
   // 当前页就是工具箱、而该行被关掉 ⇒ 回退到首个可见页（不许白屏）
   const gone = gateTabs(TABS, new Set(['core', 'calendar']), 'tools')
   assert.deepEqual(gone.visible.map((t) => t.key), ['calendar'], '只开日历 ⇒ 只剩日历页签')
   assert.equal(gone.fallback, 'calendar', '当前页（工具）被停用 ⇒ 必须回退')
   // 端点不可达（rows = null）⇒ 失败放行：与其余页签同款（抖动不该让界面整块消失）
-  assert.equal(gateTabs(TABS, null, 'watch').visible.length, 6, '失败放行：六个页签都在')
+  assert.equal(gateTabs(TABS, null, 'watch').visible.length, 7, '失败放行：七个页签都在')
 })
 
 /**

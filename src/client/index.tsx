@@ -14,6 +14,7 @@ import { MarketPage } from './MarketPage.tsx'
 import { CloudMap } from './CloudMap.tsx'
 import { CalendarPage } from './CalendarPage.tsx'
 import { ToolsPage } from './ToolsPage.tsx'
+import { FupanPage } from './FupanPage.tsx'
 import { QuoteDrawer } from './QuoteDrawer.tsx'
 import { ensureCss } from './styles.ts'
 import { isMoneyMasked, setMoneyMask } from './format.ts'
@@ -227,13 +228,16 @@ function PanelIcon(props: { size?: number; active?: boolean }): React.ReactEleme
 
 /** 徽标底色在 `theme.ts` 的 `badgeToneColor`（按 `redUp` 取涨跌色；隐身视图下 tone 恒为 flat） */
 
-type PageKey = 'watch' | 'portfolio' | 'market' | 'cloud' | 'calendar' | 'tools'
+type PageKey = 'watch' | 'portfolio' | 'market' | 'cloud' | 'calendar' | 'tools' | 'fupan'
 
 /**
- * 保活页（P2-7）：切走不卸载。先只放"无轮询、纯本地状态"的两页 ——
- * 其余页涉及高频取数，必须先接 `active` 门控（下一批），否则会变成"六页同时轮询"。
+ * 保活页（P2-7）：切走不卸载。只放"无轮询、纯本地状态"的页 ——
+ * 其余页涉及高频取数，必须先接 `active` 门控（下一批），否则会变成"多页同时轮询"。
+ *
+ * `fupan`（复盘）加入的判据与日历同款：它**零轮询** —— 只在挂载 / 换月 / 写成功后取一次，
+ * 所以保活的收益（月份、选中的日期、正在写的草稿都不丢）明显大于风险。
  */
-const KEEP_ALIVE: readonly PageKey[] = ['calendar', 'tools']
+const KEEP_ALIVE: readonly PageKey[] = ['calendar', 'tools', 'fupan']
 
 function Dashboard(): React.ReactElement {
   /**
@@ -448,6 +452,8 @@ function Dashboard(): React.ReactElement {
    */
   const keepAliveEl = (key: PageKey): React.ReactNode => {
     if (key === 'calendar') return React.createElement(CalendarPage, { prefs: prefs ?? DEFAULT_PREFS })
+    // 复盘：月历 + 当日笔记（第 7 个页签；零轮询，与日历同款保活）
+    if (key === 'fupan') return React.createElement(FupanPage)
     // 工具箱：目录页 + 工具详情页都在 ToolsPage 里（v0.81.0 起它不接 props）
     return React.createElement(ToolsPage)
   }
@@ -462,6 +468,9 @@ function Dashboard(): React.ReactElement {
     { key: 'calendar', label: '日历', full: '财经日历（宏观/IPO/财报/分红）', row: 'calendar' },
     // 工具箱（第 7 行）：工具目录 + 工具详情；行被停用 ⇒ 这个页签不渲染（门控与其余页签同一套）
     { key: 'tools', label: '工具', full: '工具箱（工具目录与工具详情）', row: 'tools' },
+    // 复盘（第 8 行，第 7 个页签）：月历 + 当日笔记。行被停用 ⇒ 按既有门控隐藏；
+    // 行在启用但路由取不到（宿主尚未落地/宿主报错）⇒ 页面本身给「原因 + 重试」，不空白。
+    { key: 'fupan', label: '复盘', full: '复盘（月历 + 当日笔记）', row: 'fupan' },
   ]
   useEffect(() => {
     let alive = true

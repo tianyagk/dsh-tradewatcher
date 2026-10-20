@@ -5,7 +5,7 @@
  * 靠 `id` + `config.row` 区分；**每行的 host 半区是独立 fiber ⇒ `apply` 会被调用 N 次**
  * （N = 行数）。因此：
  *  ① 一次性副作用（`store.init()`、`rescue.start()`、采样循环、watch）必须**只跑一次** ——
- *     否则 7 行就是 7 个采样器并发写同一个 `rescue-log.json`；
+ *     否则 8 行就是 8 个采样器并发写同一个 `rescue-log.json`；
  *  ② 内核实例走**模块级单例**并按 `provide('tradewatcher.core')` 暴露 ⇒ **功能行不许自己 new DataStore()**；
  *  ③ 功能行只注册自己那一段路由/工具（行未激活 ⇒ 三者都不注册，路由天然 404）。
  *
@@ -16,6 +16,7 @@ import { makeAgentTools, servicesOf } from './host/tools.ts'
 import { DataStore, dataHome } from './host/store.ts'
 import { CalendarStore } from './host/calendar.ts'
 import { RescueMonitor } from './host/rescue.ts'
+import { FupanStore } from './host/fupan.ts'
 import { setQuoteFreshnessMs } from './host/em.ts'
 import { log, type PluginContext, type PluginWebRoute } from './host/context.ts'
 
@@ -26,7 +27,7 @@ export const name = 'dsh-tradewatcher'
 export const inject = ['webServer', 'webRuntime']
 
 /** 行标识（配置里写 `config: { row: watchlist }`） */
-export type RowId = 'core' | 'calendar' | 'watchlist' | 'portfolio' | 'market' | 'cloudmap' | 'tools'
+export type RowId = 'core' | 'calendar' | 'watchlist' | 'portfolio' | 'market' | 'cloudmap' | 'tools' | 'fupan'
 
 /**
  * 行 → 该行独占的路由前缀（core 注册**其余全部**；P2–P4 再把别的行兑现）。
@@ -67,6 +68,16 @@ export const ROW_ROUTES: Record<Exclude<RowId, 'core'>, readonly string[]> = {
    *     不是目录前缀）；被 ≥2 个行消费的 ⇒ 必须留 core。
    */
   tools: ['/tradewatcher/tools/global-flow'],
+  /**
+   * 复盘（第 8 行，v0.111.0）。
+   *
+   * 归属判据（§2.2）：这两条路由**只被复盘页消费**（`src/client/FupanPage.tsx` → `api.fupanMonth/fupanNote`）
+   * ⇒ 归本行；关掉复盘行时它们随之 404，其它页面一个都不受影响（`FupanPage` 也只被本行加载）。
+   *   · `/tradewatcher/fupan/month`  整月视图（每天是否有笔记 + 该日是否交易日）
+   *   · `/tradewatcher/fupan/note`   新增/更新/删除一条笔记（GET 与 POST 不同路径，各自独立）
+   * 存储是本地 `fupan.json`；零新增上游请求（细节见 `src/host/fupan.ts` 文件头）。
+   */
+  fupan: ['/tradewatcher/fupan/month', '/tradewatcher/fupan/note'],
 }
 
 /** 行 → 该行独占的 agent 工具名（不含前缀）；同为**唯一事实源**（见上） */
@@ -78,6 +89,8 @@ export const ROW_TOOLS: Record<Exclude<RowId, 'core'>, readonly string[]> = {
   cloudmap: [],
   // tools 行：本批不带 agent 工具（工具目录/详情是纯 UI）。下一批若加"工具"类 agent 工具 ⇒ 写进本数组
   tools: [],
+  // 复盘行：同样不带 agent 工具（月历 + 当日笔记是纯 UI；写作接口只给界面用）
+  fupan: [],
 }
 
 /**
@@ -90,6 +103,14 @@ export interface CoreKernel {
   store: DataStore
   calendar: CalendarStore
   rescue: RescueMonitor
+  /**
+   * 复盘笔记存储（第 8 行 `fupan` 的独占数据面）。
+   *
+   * 放在内核里（而不是让 fupan 行自己 new）的理由与 store/calendar 同款：
+   * `apply` 会被调用 N 次，多个实例会各自持一份内存镜像；写入虽走 `updateJsonLocked`
+   * 仍不会丢数据，但读取会看到旧镜像 ⇒ 同一进程里只允许一个实例。
+   */
+  fupan: FupanStore
   /** 当前活跃行（`/tradewatcher/rows` 的数据源） */
   activeRows: Set<RowId>
   /** 一次性启动是否已完成（幂等标记） */
@@ -135,7 +156,7 @@ export function rowOf(config: unknown, ctxConfig?: unknown): RowId | 'all' {
   const pick = (src: unknown): unknown => (typeof src === 'object' && src !== null ? (src as { row?: unknown }).row : undefined)
   const raw = pick(config) ?? pick(ctxConfig) ?? 'all'
   const row = typeof raw === 'string' ? raw.trim() : 'all'
-  return (['core', 'calendar', 'watchlist', 'portfolio', 'market', 'cloudmap', 'tools'] as const).includes(row as RowId)
+  return (['core', 'calendar', 'watchlist', 'portfolio', 'market', 'cloudmap', 'tools', 'fupan'] as const).includes(row as RowId)
     ? (row as RowId)
     : 'all'
 }
@@ -157,7 +178,7 @@ export function setKernel(value: CoreKernel | null): void {
 function applyCore(ctx: PluginContext, full = false): void {
   const first = kernel === null
   if (first) {
-    kernel = { store: new DataStore(), calendar: new CalendarStore(), rescue: new RescueMonitor(), activeRows: new Set<RowId>(['core']), started: false, starts: 0 }
+    kernel = { store: new DataStore(), calendar: new CalendarStore(), rescue: new RescueMonitor(), fupan: new FupanStore(), activeRows: new Set<RowId>(['core']), started: false, starts: 0 }
   }
   const k = kernel as CoreKernel
   const provide = ctxSafe<(name: string, value: unknown) => void>(ctx, 'provide')
@@ -194,7 +215,7 @@ function applyCore(ctx: PluginContext, full = false): void {
   }
 
   ctx.effect(() => {
-    const { routes: all } = makeTradeRoutes(k.store, ctx.webRuntime.trustedHosts, k.calendar, k.rescue, undefined, undefined, () => [...k.activeRows])
+    const { routes: all } = makeTradeRoutes(k.store, ctx.webRuntime.trustedHosts, k.calendar, k.rescue, undefined, undefined, () => [...k.activeRows], k.fupan)
     // core 注册**除功能行独占前缀之外**的全部路由（老 profile 只有 core ⇒ 与拆分前逐字一致）
     const owned = full ? [] : Object.values(ROW_ROUTES).flat()
     const mine = all.filter((r) => !owned.some((p) => r.path.startsWith(p)))
@@ -250,7 +271,7 @@ function applyFeatureRow(ctx: PluginContext, row: Exclude<RowId, 'core'>): void 
   const prefixes = ROW_ROUTES[row]
   const tools = ROW_TOOLS[row]
   ctx.effect(() => {
-    const { routes: all } = makeTradeRoutes(k.store, ctx.webRuntime.trustedHosts, k.calendar, k.rescue, undefined, undefined, () => [...k.activeRows])
+    const { routes: all } = makeTradeRoutes(k.store, ctx.webRuntime.trustedHosts, k.calendar, k.rescue, undefined, undefined, () => [...k.activeRows], k.fupan)
     const mine = all.filter((r) => prefixes.some((p) => r.path.startsWith(p)))
     const disposers = mine.map((route: PluginWebRoute) => {
       try {
@@ -291,10 +312,10 @@ export function apply(ctx: PluginContext, config?: unknown): void {
     return () => log(`row「${row}」unmounted`)
   }, `dsh-tradewatcher: row ${row}`)
   if (row === 'all') {
-    // 老单行装载：全量注册（与拆分前逐字一致），并把六个功能行都标为活跃 ⇒ 客户端 gate 显示全部 tab
+    // 老单行装载：全量注册（与拆分前逐字一致），并把七个功能行都标为活跃 ⇒ 客户端 gate 显示全部 tab
     applyCore(ctx, true)
     const k = kernel as CoreKernel | null
-    if (k !== null) for (const r of ['calendar', 'watchlist', 'portfolio', 'market', 'cloudmap', 'tools'] as const) k.activeRows.add(r)
+    if (k !== null) for (const r of ['calendar', 'watchlist', 'portfolio', 'market', 'cloudmap', 'tools', 'fupan'] as const) k.activeRows.add(r)
   } else if (row === 'core') applyCore(ctx)
   else applyFeatureRow(ctx, row)
 }
