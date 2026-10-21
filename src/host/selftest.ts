@@ -1183,7 +1183,7 @@ async function main(): Promise<void> {
 
   try {
     // 【棱镜】输入探针（live soft）：美股分钟 5/1/30、沪深五档 micro-price、港股只有价
-    const { fetchSinaUsBars, fetchFiveLevelBook } = await import('./prismFeed.ts')
+    const { fetchSinaUsBars, fetchFiveLevelBook, fetchFiveMinuteBars } = await import('./prismFeed.ts')
     for (const type of [1, 5, 30] as const) {
       const feed = await fetchSinaUsBars('105.AAPL', type)
       softOk(
@@ -1192,6 +1192,14 @@ async function main(): Promise<void> {
         `bars=${feed.bars.length} source=${feed.source} volUnit=${feed.volUnit} last=${feed.bars[feed.bars.length - 1]?.label ?? '—'}`,
       )
     }
+    const hkFeed = await fetchFiveMinuteBars('116.00700')
+    softOk(
+      hkFeed.error === '港股无分钟线源（需授权行情）',
+      '棱镜 港股无分钟线原因按市场分列',
+      `error=${String(hkFeed.error)}`,
+    )
+    const idxFeed = await fetchFiveMinuteBars('100.KOSPI200')
+    softOk(idxFeed.error === '指数无分钟线', '棱镜 指数无分钟线原因', `error=${String(idxFeed.error)}`)
     const bookA = await fetchFiveLevelBook('1.600519')
     softOk(
       bookA.available && bookA.levels === 5 && bookA.microPrice !== null && bookA.quoteMid === null,

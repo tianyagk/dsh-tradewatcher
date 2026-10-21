@@ -20,6 +20,79 @@ export type PrismFreq = (typeof PRISM_FREQS)[number]
 
 /** 每个频率至少要有多少根 bar 才算"输入可得"（5 分钟 × 24 = 2 小时） */
 export const PRISM_MIN_SAMPLES = 24
+/** 默认/回退标的一个有分钟线的 A股（无自选 A股时用它） */
+export const PRISM_FALLBACK_SECID = '1.600519'
+
+/** 标的所属市场（决定"有没有分钟源"与原因文案；**按 secid 前缀**判定，不看名字） */
+export type PrismMarket = 'a' | 'hk' | 'us' | 'index' | 'commodity' | 'other'
+
+/** secid → 市场。`0/1` = 深/沪（有分钟源）；`116` 港股；`100` 指数；`101/113/114/115` 商品/期货；`105/106/107` 美股 */
+export function prismMarketOf(secid: string): PrismMarket {
+  const m = /^(\d+)\./.exec(secid.trim())
+  if (m === null) return 'other'
+  const market = m[1] as string
+  if (market === '0' || market === '1') return 'a'
+  if (market === '116') return 'hk'
+  if (market === '100') return 'index'
+  if (market === '101' || market === '113' || market === '114' || market === '115') return 'commodity'
+  if (market === '105' || market === '106' || market === '107') return 'us'
+  return 'other'
+}
+
+/** 该市场在本插件里**有没有分钟源**（有：沪深、美股；无：港股/指数/商品/其它） */
+export function prismHasMinuteSource(market: PrismMarket): boolean {
+  return market === 'a' || market === 'us'
+}
+
+/**
+ * 无分钟源市场的**原因文案**（按市场分列；断言钉住，注入"笼统一句"⇒ 必败）。
+ * 美股有源，只有取数失败时用 `PRISM_US_FAIL_REASON`。
+ */
+export const PRISM_MARKET_REASON: Record<PrismMarket, string> = {
+  a: '',
+  hk: '港股无分钟线源（需授权行情）',
+  index: '指数无分钟线',
+  commodity: '该品种无 5 分钟源',
+  other: '该品种无 5 分钟源',
+  us: '美股分钟线取数失败',
+}
+/** 美股取数失败的原因前缀（成功时用不到；失败时带细节，例如 `美股分钟线取数失败（上游回空）`） */
+export const PRISM_US_FAIL_REASON = '美股分钟线取数失败'
+
+/** 市场的短名（回退提示用） */
+export const PRISM_MARKET_LABEL: Record<PrismMarket, string> = {
+  a: 'A股', hk: '港股', us: '美股', index: '指数', commodity: '商品/期货', other: '该品种',
+}
+
+/** 回退时选哪个 A股：自选里第一个 A股（**尽量不等于配对 B**），没有就用 `PRISM_FALLBACK_SECID` */
+export function prismFallbackSecid(
+  universe: ReadonlyArray<{ secid: string }>,
+  exclude: string | null = null,
+): string {
+  const firstA = universe.map((u) => u.secid).find((s) => prismMarketOf(s) === 'a' && s !== exclude)
+  if (firstA !== undefined) return firstA
+  // 自选里唯一的 A股正好是配对 B ⇒ 用兜底常量，避免 A===B 让价差恒 0
+  return PRISM_FALLBACK_SECID === exclude ? (universe.map((u) => u.secid).find((s) => prismMarketOf(s) === 'a') ?? PRISM_FALLBACK_SECID) : PRISM_FALLBACK_SECID
+}
+
+/**
+ * 解析「实际使用的 A 标的」：有分钟源的市场照用；否则回退到自选里的第一个 A股
+ * （**尽量不等于配对 B**），没有 A股就用 `PRISM_FALLBACK_SECID`。
+ * `fellBack` 为 true 时页面必须显示**实际**标的。
+ */
+export function resolvePairA(
+  requested: string,
+  universe: ReadonlyArray<{ secid: string }>,
+  exclude: string | null = null,
+): { secid: string; fellBack: boolean; reason: string | null } {
+  const req = requested.trim()
+  if (req !== '' && prismHasMinuteSource(prismMarketOf(req))) return { secid: req, fellBack: false, reason: null }
+  const secid = prismFallbackSecid(universe, exclude)
+  const reason = req === ''
+    ? `未指定标的 ⇒ 使用默认 A股 ${secid}`
+    : `所选标的（${PRISM_MARKET_LABEL[prismMarketOf(req)]}）无分钟源 ⇒ 已回退到 ${secid}`
+  return { secid, fellBack: true, reason }
+}
 /** 一次最多取多少根 5 分钟 bar（新浪 scale=5 实测上限 1023；留余量） */
 export const PRISM_BARS_MAX = 720
 
@@ -252,6 +325,11 @@ export interface PrismPayload {
   downgrade: { requested: PrismFreq; attempts: Array<{ freq: PrismFreq; samples: number; usable: boolean }>; reason: string | null } | null
   /** 回显全部生效参数（页面据此渲染常驻参数行） */
   params: PrismParams
+  /**
+   * 实际使用的标的发生过回退时非 null（`requested` = 用户所选，`actual` = 实际使用）。
+   * 页面必须把参数框同步成 `actual`（断言 ③：回退但不更新显示 ⇒ 必败）。
+   */
+  fallback: { requested: string; actual: string; reason: string } | null
   symbols: { a: string; b: string | null }
   /** 自选清单（页面用来选配对；空 = 自选为空/读不到 —— 页面仍允许手输代码） */
   universe: Array<{ secid: string; name: string }>

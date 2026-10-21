@@ -27,7 +27,7 @@ Monte Carlo ≥1 万次、固定种子可复现、四条假设逐条上屏；结
 | 客户端接线 | `src/client/index.tsx`、`src/client/api.ts` | `PageKey` 加 `prism`；tabs 末尾加 `{ key: 'prism', label: '棱镜', row: 'prism' }`；`api.prism(params)` 只有一条路由字面量 |
 | 行归属 | `src/index.ts`、`cordis.patch.yml`、`package.json`、`locale/rows/prism/{en,zh}.json` | `RowId` 加 `prism`；`ROW_ROUTES.prism = ['/tradewatcher/prism']`；`ROW_TOOLS.prism = []`；manifest 第 9 行；exports 两条 |
 | 文档 | `docs/DESIGN-SUBPLUGINS.md`、`README.md` | 行数 8→9、页签 7→8、路由账 30→31（含 `prism 1`）、§2.1/§2.2 各加一行 |
-| 断言 | `src/host/prism.test.ts`、`src/client/prismView.test.ts`、`src/readmeCounts.test.ts` ⑤（新） | 16 + 10 + 1 = 27 条用例，每条都配反例注入 |
+| 断言 | `src/host/prism.test.ts`、`src/client/prismView.test.ts`、`src/readmeCounts.test.ts` ⑤（新） | 21 + 12 + 1 = 34 条用例，每条都配反例注入 |
 | 镜像同步 | `src/index.test.ts`、`src/rowOwnership.test.ts`、`src/readmeCounts.test.ts`、`src/client/toolsPage.test.ts`、`src/client/impl83.test.ts`、`src/client/impl78.test.ts` | 行/页签/保活字面量的既有期望值同步（9 行、8 页签、`KEEP_ALIVE` 四项） |
 
 ## 2. 输入实测（2026-10-21 13:05–13:20 Asia/Shanghai，本机）
@@ -118,9 +118,9 @@ Monte Carlo ≥1 万次、固定种子可复现、四条假设逐条上屏；结
 
 ## 6. 门禁
 
-- `npm run check`（typecheck + 两时区测试 + selftest + build）：**1078 项 × 2 时区全绿**，
-  `built lib/index.js + lib/client.js （v0.123.0，客户端片段校验通过：73 项）`（读数见 §6.1）。
-  基线 1051 × 2 → 新增 **16**（宿主 `prism.test.ts`）+ **10**（页面判据 `prismView.test.ts`）+ **1**（README 注解清理）= **27 条/每时区**。
+- `npm run check`（typecheck + 两时区测试 + selftest + build）：**1085 项 × 2 时区全绿**，
+  `built lib/index.js + lib/client.js （v0.124.0，客户端片段校验通过：73 项）`（读数见 §6.1）。
+  基线 1051 × 2 → 新增 **21**（宿主 `prism.test.ts`）+ **12**（页面判据 `prismView.test.ts`）+ **1**（README 注解清理）= **34 条/每时区**。
 - `npm run selftest`：`ALL HOST CHECKS PASSED (live probes soft)`（隔离 `DSH_HOME=/tmp/prism-selftest`）。
 - `build.mjs` **未改动**（73 项片段校验照旧通过）。
 
@@ -260,12 +260,57 @@ Monte Carlo ≥1 万次、固定种子可复现、四条假设逐条上屏；结
 live 探针（selftest，soft）：`棱镜 美股 type=1/5/30 分钟 ≥240 根` / `棱镜 沪深 600519 五档 micro-price` /
 `棱镜 港股 00700 只有价（quoteMid，无 micro）` —— 本次三条全 PASS。
 
+## 12. 修复：默认标的为港股导致六块全空（2026-10-21 用户报）
+
+### 12.1 复现（修复前，真实请求）
+
+| 请求 | bars | 六块 |
+| --- | --- | --- |
+| `pairA=116.00148&pairB=1.601118&freq=30`（用户截图） | **0 根**、`source:null`、`reason: 腾讯 5 分钟回空` | **六块全空**；bayes/edge/stoikov/kelly/mc 都写「腾讯 5 分钟回空」，spread 写「对齐后只有 0 根」 |
+| `pairA=1.600519&pairB=1.601118&freq=30` | **120 根**、`source:tencent-m5` | **六块全有值**：bayes p=0.2619、edge「不下结论」EV=−14.23bps、spread z≠null、stoikov s=1306.6（micro-price）、kelly=0、mc ruin=0 |
+
+⇒ **A股 没有第二个 bug**；问题在"默认选了无分钟源的港股" + 原因文案笼统。
+另：`116.00148` 与 `116.00700` 的映射实测分别是 `rt_hk00148` / `rt_hk00700`（**没有截断成同值**）。
+
+### 12.2 根因与修复
+
+| # | 根因 | 修复 |
+| --- | --- | --- |
+| 1 | 页面默认取**自选首项**（用户自选首项是港股 `116.00148`）⇒ 港股无分钟线 ⇒ 六块全空 | 宿主侧统一解析（`resolvePairA`）：优先自选第一个 **A股**（**尽量不等于配对 B**，避免 A===B 让价差恒 0），没有则 `PRISM_FALLBACK_SECID=1.600519`；A 真取不到 bar 时再回退一次并继续算（`prismResponse` ②段）。payload 带 `fallback{requested,actual,reason}`，页面把参数框同步成实际标的 |
+| 2 | 原因文案笼统（所有市场都「腾讯 5 分钟回空」） | `PRISM_MARKET_REASON` 按市场分列：港股 `港股无分钟线源（需授权行情）`、指数 `指数无分钟线`、商品/其它 `该品种无 5 分钟源`；美股只有真失败才 `美股分钟线取数失败（…）`；沪深失败 `沪深分钟线取数失败（…）` |
+| 3 | 配对 B 无 bar 时整页无值 | B 的 bar 只影响 Spread：`spreadBlock(..., pairBReason)` 给「配对 B（…）无分钟线：…」；其余五块只看 A（断言 ④） |
+| 4 | 顶部只写「30 分钟（5 分钟聚合 6 根）」，看不出数据是否有效 | 页面改用 `dataLine`：`30 分钟 · 120 根` / `30 分钟 · 6 根（样本不足）`；不新增解释段落 |
+| 5 | 回退后参数框可能仍显示所选标的 | 页面 effect 把 `payload.params.pairA`（实际值）同步进参数框，并在参数区显示 `实际标的 …（已从 … 回退）`（`fallbackText`）；客户端超时放宽到 25s（慢网下给回退重试留时间） |
+
+### 12.3 修复后实测（同一组真实请求）
+
+| 请求 | 解析 | bars | 六块 |
+| --- | --- | --- | --- |
+| 默认（自选首项=港股，`pairB=1.601118`） | `"" → 1.600519`（回退：未指定标的 ⇒ 默认 A股） | 120 根（tencent-m5） | **6/6 有值**：spread z=0.754、stoikov s=1306.12（micro-price） |
+| 手动选 `116.00148`（HK） | `116.00148 → 1.600519`（回退：所选标的（港股）无分钟源） | 120 根 | **6/6 有值** |
+| `pairA=1.600519` | 不回退 | 120 根 | **6/6 有值** |
+
+原因文案实测：`116.00148` / `116.00700` ⇒ `港股无分钟线源（需授权行情）`；`100.KOSPI200` ⇒ `指数无分钟线`；
+`101.CL00Y` ⇒ `该品种无 5 分钟源`；美股失败 ⇒ `美股分钟线取数失败（…）`。
+
+### 12.4 断言 + 反例注入（必败）
+
+| # | 判据 | 用例 | 注入 |
+| --- | --- | --- | --- |
+| ① | 默认是 A股（自选首个 A股 → `1.600519`），首屏 ≥4 块有数值 | `host/prism.test.ts` ① | 默认改回自选首项（港股）+ 不回退 ⇒ 六块全空、断言失败 |
+| ② | 港股原因 = `港股无分钟线源（需授权行情）`；指数/商品各自原因 | 同上 ② | 写成「腾讯 5 分钟回空」⇒ 失败 |
+| ③ | A 无 bar ⇒ 自动回退并继续算；payload 写实际标的 | 同上 ③ | 回退发生但 `params.pairA` 仍写请求值 ⇒ 失败 |
+| ②′ | 回退后参数框显示实际标的 | `client/prismView.test.ts` ③（`pairASyncProblems`） | 删同步赋值 / 只在首次打开同步 ⇒ 非空 |
+| ④ | 配对 B 无 bar ⇒ 只 Spread 给原因，其余五块仍有值 | `host/prism.test.ts` ④ | 把 A 也当无 bar（整页清空）⇒ 五块不再有值 |
+| ⑤ | `116.00148` 与 `116.00700` 映射到不同标的 | 同上 ⑤ | 截断成同值（`00000`）⇒ 失败 |
+| ⑥ | 顶部数据行看得出样本是否有效 | `client/prismView.test.ts` ⑦ | 去掉「（样本不足）」⇒ 失败 |
+
 ## 门禁读数
 
 | 轮次 | 命令 | 结果 |
 | --- | --- | --- |
-| 第 1 轮（最终代码：美股/港股输入已接） | `DSH_HOME=/tmp/prism2-checkK npm run check` | **1078 × 2 全绿**（`duration_ms` 19,095 / 18,346）；selftest `ALL HOST CHECKS PASSED`（含 5 条棱镜 live 探针）；构建 `73 项`（v0.123.0） |
-| 第 2 轮（最终代码：同上） | `DSH_HOME=/tmp/prism2-checkL npm run check` | **1078 × 2 全绿**（`duration_ms` 18,941 / 17,513）；selftest / 构建同第 1 轮 |
+| 第 1 轮（最终代码：默认/回退修复） | `DSH_HOME=/tmp/prism3-checkM npm run check` | **1085 × 2 全绿**（`duration_ms` 18,573 / 18,971）；selftest `ALL HOST CHECKS PASSED`（含 7 条棱镜 live 探针）；构建 `73 项`（v0.124.0） |
+| 第 2 轮（最终代码：同上） | `DSH_HOME=/tmp/prism3-checkN npm run check` | **1085 × 2 全绿**（`duration_ms` 18,606 / 17,900）；selftest / 构建同第 1 轮 |
 
-> 更早的几轮（`check` / `check2` / `-checkC` / `-checkD` / `-checkG` / `-checkH` / `-checkI` / `-checkJ`）也是全绿，
-> 但之后又接了美股分钟与港股价对（新增 7 条判据）⇒ 不作数，**以 K/L 两轮为准**（同一份源码、零改动）。
+> 更早的几轮（`check` / `check2` / `-checkC` … `-checkL`）也是全绿，但之后又修了"默认标的为港股导致六块全空"
+> 并新增 7 条判据 ⇒ 不作数，**以 M/N 两轮为准**（同一份源码、零改动）。

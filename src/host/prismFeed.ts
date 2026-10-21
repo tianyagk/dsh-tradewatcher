@@ -26,7 +26,15 @@
  * 所有请求都过既有的 `withHostBreaker`（按主机熔断记账），与其它宿主取数同款；
  * `fetchText` 可注入（测试用，不联网）。三个探针都**永不抛**：失败变成一句原因。
  */
-import { PRISM_BARS_MAX, PRISM_INPUT_NAME, type PrismBook, type PrismBookLevel } from '../shared/prism.ts'
+import {
+  PRISM_BARS_MAX,
+  PRISM_INPUT_NAME,
+  PRISM_MARKET_REASON,
+  PRISM_US_FAIL_REASON,
+  prismMarketOf,
+  type PrismBook,
+  type PrismBookLevel,
+} from '../shared/prism.ts'
 import { withHostBreaker } from './breakerFetch.ts'
 import { sinaSymbol } from './sina.ts'
 import { tencentCode, tencentQuoteCode } from './tencent.ts'
@@ -242,7 +250,7 @@ export async function fetchSinaUsBars(secid: string, type: PrismUsMinType, deps:
     const text = await (deps.fetchText ?? defaultFetchText)(usMinuteUrl(ticker, type), { referer: 'https://finance.sina.com.cn' })
     const all = parseUsMinuteText(text)
     if (all.length === 0) {
-      return put(BAR_CACHE, key, { bars: [], source: null, volUnit: null, error: `新浪美股分钟回空（type=${type}）` })
+      return put(BAR_CACHE, key, { bars: [], source: null, volUnit: null, error: `${PRISM_US_FAIL_REASON}（上游回空，type=${type}）` })
     }
     return put(BAR_CACHE, key, {
       bars: all.slice(-PRISM_US_KEEP_BARS),
@@ -255,7 +263,7 @@ export async function fetchSinaUsBars(secid: string, type: PrismUsMinType, deps:
       bars: [],
       source: null,
       volUnit: null,
-      error: `新浪美股分钟失败（${String(error).slice(0, 80)}）`,
+      error: `${PRISM_US_FAIL_REASON}（${String(error).slice(0, 80)}）`,
     })
   }
 }
@@ -266,8 +274,13 @@ export async function fetchSinaUsBars(secid: string, type: PrismUsMinType, deps:
  * **永不抛**：路由的契约是"永远 200"，上游的失败必须变成一句原因。
  */
 export async function fetchFiveMinuteBars(secid: string, datalen = PRISM_BARS_MAX, deps: PrismFeedDeps = {}): Promise<PrismFeed> {
+  // 按市场分列：无分钟源的市场直接给**各自**的原因（不再笼统说"腾讯回空"）
+  const market = prismMarketOf(secid)
+  if (market === 'hk' || market === 'index' || market === 'commodity' || market === 'other') {
+    return { bars: [], source: null, volUnit: null, error: PRISM_MARKET_REASON[market] }
+  }
   // 美股：独立链（分钟粒度固定 5；1/30 由 `fetchSinaUsBars` 直接给断言/诊断用）
-  if (sinaUsTicker(secid) !== null) return fetchSinaUsBars(secid, 5, deps)
+  if (market === 'us') return fetchSinaUsBars(secid, 5, deps)
   const n = Math.max(24, Math.min(PRISM_BARS_MAX, Math.round(datalen) || PRISM_BARS_MAX))
   const key = `${secid}:${n}`
   const cached = ttl(BAR_CACHE, key, BAR_TTL_MS)
@@ -279,7 +292,7 @@ export async function fetchFiveMinuteBars(secid: string, datalen = PRISM_BARS_MA
       bars: [],
       source: null,
       volUnit: null,
-      error: '该标的没有 5 分钟源（本插件的分钟线只覆盖沪深/港股/美股）',
+      error: '该标的没有 5 分钟源（本插件的分钟线只覆盖沪深/美股）',
     })
   }
   const fetchText = deps.fetchText ?? defaultFetchText
@@ -308,7 +321,12 @@ export async function fetchFiveMinuteBars(secid: string, datalen = PRISM_BARS_MA
       errors.push(`腾讯 5 分钟失败（${String(error).slice(0, 60)}）`)
     }
   }
-  return put(BAR_CACHE, key, { bars: [], source: null, volUnit: null, error: errors.join('；') || '两条 5 分钟源都没有数据' })
+  return put(BAR_CACHE, key, {
+    bars: [],
+    source: null,
+    volUnit: null,
+    error: `沪深分钟线取数失败（${errors.join('；') || '两条 5 分钟源都没有数据'}）`,
+  })
 }
 
 /* ────────────────────────────── 盘口（两种形态，互斥） ────────────────────────────── */

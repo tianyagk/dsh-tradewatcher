@@ -36,10 +36,11 @@ import {
   fmtP,
   fmtPct,
   fmtPrice,
-  freqLine,
   freqParamOnlyProblems,
   inputNameProblems,
   mcAssumptionProblems,
+  dataLine,
+  pairASyncProblems,
   paramsVisibleProblems,
   prismParamRowText,
   prismParamRows,
@@ -271,9 +272,9 @@ test('展示：缺失一律 `—`（不写 0）、越阈只描述位置、五档
   assert.equal(spreadStateText({ ...spread, beyond: null }), '未越阈（|z| ≤ 2）')
   assert.match(bookText(spread.book), /5 档/)
   assert.match(bookText({ ...spread.book, available: false, reason: '腾讯五档失败（HTTP 403）' }), /五档失败/)
-  // 回包级：`barsLine` / `freqLine` 不编数
+  // 回包级：`barsLine` / `dataLine` 不编数；数据行必须能看出样本是否够
   assert.equal(barsLine(null), DASH)
-  assert.equal(freqLine(null), DASH)
+  assert.equal(dataLine(null), DASH)
 })
 
 function bookOfTest() {
@@ -292,6 +293,7 @@ function payloadOf(edge: PrismEdgeBlock): PrismPayload {
     freqNote: '5 分钟（原始档）',
     downgrade: null,
     params: { ...PRISM_DEFAULT_PARAMS, pairA: '1.600519' },
+    fallback: null,
     symbols: { a: '1.600519', b: null },
     universe: [],
     bars: { n: 0, from: null, to: null, lastPartial: false, source: null, reason: '测试' },
@@ -360,4 +362,34 @@ test('⑥ 输入名必须上屏：s / mid 标出 micro-price 还是盘口中点�
   }
   assert.deepEqual(bookContractProblems(quoteOnly), [])
   assert.notDeepEqual(bookContractProblems({ ...quoteOnly, microPrice: 401.1 }), [], '⚠ 反例（mid 塞进 microPrice）必须被抓到')
+})
+
+test('⑦ 顶部数据行：看得见样本是否有效（30 分钟 · 6 根（样本不足））', () => {
+  const base = payloadOf({
+    available: false, reason: '测试', samples: 0, p: null, avgWinBps: null, avgLossBps: null,
+    feeBps: 0, slipBps: 0, latencyPenaltyBps: null, costBps: null, evBps: null, thresholdBps: 0,
+    stance: '不下结论', stanceWhy: '测试', targets: [],
+  })
+  const short = { ...base, freq: 30 as const, bars: { ...base.bars, n: 6 } }
+  assert.equal(dataLine(short), '30 分钟 · 6 根（样本不足）')
+  const ok = { ...base, freq: 30 as const, bars: { ...base.bars, n: 120 } }
+  assert.equal(dataLine(ok), '30 分钟 · 120 根')
+  const down = { ...ok, downgrade: { requested: 5 as const, attempts: [], reason: 'x' } }
+  assert.match(dataLine(down), /已降频/)
+  // 反例注入：把"样本不足"去掉 ⇒ 判据必须失败
+  const broken = (p: typeof short): string => `${p.freq} 分钟 · ${p.bars.n} 根`
+  assert.equal(broken(short).includes('样本不足'), false, '⚠ 反例（不标样本不足）')
+  assert.throws(() => assert.equal(broken(short), '30 分钟 · 6 根（样本不足）', '反例'), /反例/, '⚠ 反例注入必须让断言失败')
+})
+
+test('③ 回退后参数框同步显示实际标的（回退但不更新 ⇒ 必败）', () => {
+  assert.deepEqual(pairASyncProblems(PAGE), [], `同步判据必须通过：${JSON.stringify(pairASyncProblems(PAGE))}`)
+  assert.ok(PAGE.includes('fallbackText(payload)'), '回退足迹必须上屏（参数区）')
+  // 反例注入：删掉同步赋值 ⇒ 必败
+  const noSync = PAGE.replace('pairA: actual', 'pairA: params.pairA')
+  assert.notEqual(noSync, PAGE, '注入必须真的改到源码')
+  assert.notDeepEqual(pairASyncProblems(noSync), [], '⚠ 反例（回退但不更新显示）必须被抓到')
+  // 反例注入：只在首次打开同步（回退时不触发）⇒ 必败
+  const noFallbackSync = PAGE.replace('payload.fallback !== null', 'false')
+  assert.notDeepEqual(pairASyncProblems(noFallbackSync), [], '⚠ 反例（回退时不触发同步）必须被抓到')
 })

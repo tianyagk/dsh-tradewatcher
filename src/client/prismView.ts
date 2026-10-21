@@ -19,6 +19,7 @@
  */
 import {
   PRISM_BLOCK_KEYS,
+  PRISM_MIN_SAMPLES,
   type PrismBook,
   PRISM_DEFAULT_PARAMS,
   PRISM_FREQS,
@@ -180,12 +181,37 @@ export function asOfText(payload: PrismPayload | null): string {
   return payload === null ? DASH : shClockText(payload.asOf)
 }
 
-/** 频率口径（含降频原因） */
-export function freqLine(payload: PrismPayload | null): string {
+/**
+ * 顶部数据行（**看得出数据是否有效**）：`30 分钟 · 6 根（样本不足）` / `30 分钟 · 120 根`。
+ *
+ * 不再写"（5 分钟聚合 6 根）"这种实现口径；样本不足时**明说**（用户裁决）。
+ */
+export function dataLine(payload: PrismPayload | null): string {
   if (payload === null) return DASH
-  const dg = payload.downgrade
-  const extra = dg === null || dg.reason === null ? '' : ` · ${dg.reason}`
-  return `${payload.freqNote}${extra}`
+  const n = payload.bars.n
+  const short = n >= PRISM_MIN_SAMPLES ? '' : '（样本不足）'
+  const downgraded = payload.downgrade === null ? '' : ' · 已降频'
+  return `${payload.freq} 分钟 · ${n} 根${short}${downgraded}`
+}
+
+/** 回退足迹的可见文本（空 = 无回退）：`实际标的 1.600519（已从 116.00148 回退）` */
+export function fallbackText(payload: PrismPayload | null): string {
+  const f = payload?.fallback ?? null
+  if (f === null) return ''
+  return `实际标的 ${f.actual}（已从 ${f.requested === '' ? '空' : f.requested} 回退）`
+}
+
+/**
+ * 断言 ③：回退后**参数框必须显示实际标的**（不是"回退了但显示还是所选的那个"）。
+ * 源码锚点：页面从回包取 `payload.params.pairA`，并在 `pairA === ''` 或 `fallback !== null` 时同步。
+ */
+export function pairASyncProblems(src: string): string[] {
+  const bad: string[] = []
+  if (!src.includes('const actual = payload.params.pairA')) bad.push('页面没有从回包取实际标的（payload.params.pairA）')
+  if (!src.includes('pairA: actual')) bad.push('回退后没有把参数框同步成实际标的')
+  if (!src.includes('payload.fallback !== null')) bad.push('回退时没有触发同步（只看首次打开）')
+  if (!src.includes('fallbackText(payload)')) bad.push('回退足迹没有上屏（参数区看不到实际标的）')
+  return bad
 }
 
 /** 样本口径（`n 根 from → to`；缺 from/to 就不写，不编） */

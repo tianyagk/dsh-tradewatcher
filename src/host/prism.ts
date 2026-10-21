@@ -38,6 +38,8 @@ import {
   PRISM_FREQS,
   PRISM_INPUT_NAME,
   PRISM_MIN_SAMPLES,
+  prismFallbackSecid,
+  resolvePairA,
   type PrismAssumption,
   type PrismBayesBlock,
   type PrismBlocks,
@@ -530,6 +532,7 @@ export function spreadBlock(
   params: PrismParams,
   bookA: PrismBook,
   bookB: PrismBook | null,
+  pairBReason: string | null = null,
 ): PrismSpreadBlock {
   const pairB = params.pairB
   const base: PrismSpreadBlock = {
@@ -548,8 +551,11 @@ export function spreadBlock(
     midReason: null,
     book: bookA,
   }
-  if (pairB === null || barsB === null) {
+  if (pairB === null) {
     return { ...base, reason: '未选择配对标的（pairB 为空）⇒ 价差不可算' }
+  }
+  if (barsB === null || barsB.length === 0) {
+    return { ...base, reason: pairBReason ?? `配对 B（${pairB}）无分钟线 ⇒ 价差不可算` }
   }
   const aligned = alignBars(barsA, barsB)
   if (aligned.length < params.zN + 1) {
@@ -828,6 +834,7 @@ export function emptyPrismPayload(
   reason: string,
   asOf = Date.now(),
   universe: Array<{ secid: string; name: string }> = [],
+  fallback: PrismPayload['fallback'] = null,
 ): PrismPayload {
   const blocks = emptyBlocks(reason, params)
   return {
@@ -836,6 +843,7 @@ export function emptyPrismPayload(
     freqNote: freqNoteOf(params.freq, false),
     downgrade: null,
     params,
+    fallback,
     symbols: { a: params.pairA, b: params.pairB },
     universe,
     bars: { n: 0, from: null, to: null, lastPartial: false, source: null, reason },
@@ -856,6 +864,8 @@ export interface PrismInput {
   asOf?: number
   /** 自选清单（只用于页面选标的；不参与任何计算） */
   universe?: Array<{ secid: string; name: string }>
+  /** 实际标的回退足迹（宿主解析后传入；无回退 ⇒ null） */
+  fallback?: PrismPayload['fallback']
 }
 
 /**
@@ -915,7 +925,12 @@ export function buildPrismPayload(input: PrismInput): PrismPayload {
   const sSource = sInput.label ?? '—'
   const stoikov = barReason === null ? stoikovBlock(bars, patch, s, sSource) : unavailableStoikov(barReason, patch)
   const kelly = barReason === null ? kellyBlock(bayes.p, edge.avgWinBps, edge.avgLossBps, patch, edge.samples) : unavailableKelly(barReason, patch)
-  const spread = spreadBlock(bars, input.feedB?.bars ?? null, patch, bookA, input.bookB ?? null)
+  const pairBReason = input.feedB === null
+    ? null
+    : input.feedB.bars.length > 0
+      ? null
+      : `配对 B（${params.pairB ?? '—'}）无分钟线：${input.feedB.error ?? '上游回空'}`
+  const spread = spreadBlock(bars, input.feedB?.bars ?? null, patch, bookA, input.bookB ?? null, pairBReason)
   const mc = barReason === null
     ? mcBlock(bayes.p, edge.avgWinBps, edge.avgLossBps, patch, edge.latencyPenaltyBps)
     : unavailableMc(barReason, patch)
@@ -931,6 +946,7 @@ export function buildPrismPayload(input: PrismInput): PrismPayload {
     freqNote: freqNoteOf(freq, downgraded),
     downgrade,
     params: patch,
+    fallback: input.fallback ?? null,
     symbols: { a: params.pairA, b: params.pairB },
     universe: input.universe ?? [],
     bars: {
@@ -1015,23 +1031,46 @@ export async function prismResponse(
   universe: Array<{ secid: string; name: string }> = [],
 ): Promise<{ status: 200; body: PrismPayload }> {
   const d: PrismDeps = { ...DEFAULT_DEPS, ...deps }
-  const params = parsePrismQuery(new URLSearchParams(rawQuery))
+  const requested = parsePrismQuery(new URLSearchParams(rawQuery))
+  let params = requested
+  let fallback: PrismPayload['fallback'] = null
   try {
-    if (params.pairA === '') {
-      return { status: 200, body: emptyPrismPayload(params, '未指定标的（pairA 为空）⇒ 六块都不可算', d.now(), universe) }
+    // ① 默认/回退：无分钟源的市场（港股/指数/商品）一律换成一个**有源**的 A股
+    const resolved = resolvePairA(requested.pairA, universe, requested.pairB)
+    params = { ...requested, pairA: resolved.secid }
+    if (resolved.fellBack) {
+      fallback = { requested: requested.pairA, actual: resolved.secid, reason: resolved.reason ?? '所选标的无分钟源 ⇒ 已回退' }
     }
-    const [feedA, feedB, bookA, bookB] = await Promise.all([
-      safeFeed(d, params.pairA),
+    // ② A 先取 bar（有源市场也可能真失败）⇒ 仍为空时回退到兜底 A股并继续算
+    let feedA = await safeFeed(d, params.pairA)
+    const retrySecid = prismFallbackSecid(universe, params.pairB)
+    if (feedA.bars.length === 0 && params.pairA !== retrySecid) {
+      const alt = await safeFeed(d, retrySecid)
+      if (alt.bars.length > 0) {
+        fallback = {
+          requested: requested.pairA,
+          actual: retrySecid,
+          reason: `所选标的无分钟线（${feedA.error ?? '上游回空'}）⇒ 已回退`,
+        }
+        params = { ...params, pairA: retrySecid }
+        feedA = alt
+      }
+    }
+    // ③ B 的 bar 只影响 Spread（其余五块只看 A）—— 取不到就给原因，不拖累整页
+    const [feedB, bookA, bookB] = await Promise.all([
       params.pairB === null ? Promise.resolve(null) : safeFeed(d, params.pairB),
       safeBook(d, params.pairA),
       params.pairB === null ? Promise.resolve(null) : safeBook(d, params.pairB),
     ])
     return {
       status: 200,
-      body: buildPrismPayload({ params, feedA, feedB, bookA, bookB, asOf: d.now(), universe }),
+      body: buildPrismPayload({ params, feedA, feedB, bookA, bookB, asOf: d.now(), universe, fallback }),
     }
   } catch (error) {
     log(`prism response fallback: ${error instanceof Error ? error.message : String(error)}`)
-    return { status: 200, body: emptyPrismPayload(params, `回包组装异常（${String(error).slice(0, 80)}）`, d.now(), universe) }
+    return {
+      status: 200,
+      body: emptyPrismPayload(params, `回包组装异常（${String(error).slice(0, 80)}）`, d.now(), universe, fallback),
+    }
   }
 }

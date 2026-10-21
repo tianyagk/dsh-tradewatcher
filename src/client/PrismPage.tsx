@@ -33,13 +33,14 @@ import {
   actionOf,
   asOfText,
   barsLine,
+  dataLine,
+  fallbackText,
   bookText,
   fmtBps,
   fmtNum,
   fmtP,
   fmtPct,
   fmtPrice,
-  freqLine,
   prismParamRowText,
   prismParamRows,
   prismQueryOf,
@@ -159,15 +160,15 @@ export function PrismPage(props: { active?: boolean }): React.ReactElement {
     setParams((prev) => ({ ...prev, [key]: value }))
   }
 
-  // 首次拿到自选清单 ⇒ 自动选前两个标的（只发生在 pairA 为空时；用户随时可改）
-  // 为什么放在这里：`/tradewatcher/watch` 归 watchlist 行，棱镜页**不许**消费别的行的路由
-  // （否则那一行关掉会把本页弄坏，`rowOwnership.test.ts` 也会红）⇒ 清单随本页回包一起给。
+  // 宿主已做默认/回退解析：`payload.params.pairA` 是**实际使用**的标的（首次打开或选到无源市场时）。
+  // 把它同步进参数框（断言 ③：回退但不更新显示 ⇒ 必败）；用户正在输入时不打扰。
   useEffect(() => {
-    if (payload === null || params.pairA !== '') return
-    const a = payload.universe[0]
-    if (a === undefined) return
-    const b = payload.universe.find((u) => u.secid !== a.secid)
-    setParams((prev) => (prev.pairA !== '' ? prev : { ...prev, pairA: a.secid, pairB: b?.secid ?? null }))
+    if (payload === null) return
+    const actual = payload.params.pairA
+    if (actual === '' || actual === params.pairA) return
+    if (params.pairA === '' || payload.fallback !== null) {
+      setParams((prev) => ({ ...prev, pairA: actual }))
+    }
   }, [payload, params.pairA])
 
   const rows = prismParamRows(params)
@@ -234,7 +235,7 @@ export function PrismPage(props: { active?: boolean }): React.ReactElement {
         'div',
         { className: 'tw-panel-h' },
         React.createElement('span', { style: { fontWeight: 600, fontSize: 14 } }, '棱镜'),
-        React.createElement('span', { style: { fontSize: 12, color: 'var(--tw-muted)' } }, `数据 ${asOfText(payload)} · ${freqLine(payload)}`),
+        React.createElement('span', { style: { fontSize: 12, color: 'var(--tw-muted)' } }, `数据 ${asOfText(payload)} · ${dataLine(payload)}`),
         React.createElement('span', { style: { flex: 1 } }),
         React.createElement('button', { className: 'tw-iconbtn', onClick: () => setAttempt((n) => n + 1) }, '重算'),
       ),
@@ -270,7 +271,8 @@ export function PrismPage(props: { active?: boolean }): React.ReactElement {
         param('mcFill', [0.5, 0.75, 1].map((n) => btn(Math.abs(params.mcFill - n) < 1e-9, `${Math.round(n * 100)}%`, () => set('mcFill', n), String(n)))),
         param('mcPErr', [0.02, 0.05, 0.1].map((n) => btn(Math.abs(params.mcPErr - n) < 1e-9, `±${n.toFixed(2)}`, () => set('mcPErr', n), String(n)))),
       ),
-      React.createElement('div', { style: { fontSize: 12, color: 'var(--tw-muted)', marginTop: 2 } }, barsLine(payload)),
+      React.createElement('div', { style: { fontSize: 12, color: 'var(--tw-muted)', marginTop: 2 } },
+        `${barsLine(payload)}${fallbackText(payload) === '' ? '' : ` · ${fallbackText(payload)}`}`),
     ),
 
     // ① Bayes 认知

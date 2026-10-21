@@ -15,6 +15,9 @@ import { fileURLToPath } from 'node:url'
 import {
   PRISM_DEFAULT_PARAMS,
   PRISM_BLOCK_KEYS,
+  PRISM_FALLBACK_SECID,
+  prismMarketOf,
+  resolvePairA,
   type PrismBook,
   type PrismParams,
 } from '../shared/prism.ts'
@@ -35,7 +38,9 @@ import {
   PRISM_US_KEEP_BARS,
   PRISM_US_TYPES,
   fetchFiveLevelBook,
+  fetchFiveMinuteBars,
   fetchSinaUsBars,
+  hkQuoteSymbol,
   parseSinaHkQuote,
   parseTencentDepthBook,
   parseUsMinuteText,
@@ -330,10 +335,16 @@ test('⑩ 回包永远 200：缺参数/上游抛错/空回包都是 200 + 六块
   assert.deepEqual(prismPayloadProblems(r1.body), [], `抛错回包也必须形状完整：${JSON.stringify(prismPayloadProblems(r1.body))}`)
   assert.equal(r1.body.blocks.bayes.available, false)
   assert.match(String(r1.body.blocks.bayes.reason), /异常|失败|不可算/)
-  // 缺 pairA ⇒ 200 + 原因（不 400）
-  const r2 = await prismResponse('', {})
+  // 缺 pairA ⇒ 解析成默认 A股（回退）后仍是 200；六块给"无源"原因
+  const r2 = await prismResponse('', {
+    loadBars: async () => ({ bars: [], source: null, volUnit: null, error: '测试无源' }),
+    loadBook: async () => bookOf(null),
+    now: () => 1,
+  })
   assert.equal(r2.status, 200)
-  assert.match(String(r2.body.missing[0]), /pairA/)
+  assert.equal(r2.body.params.pairA, PRISM_FALLBACK_SECID, '未指定标的 ⇒ 默认 A股')
+  assert.match(String(r2.body.fallback?.reason), /默认 A股/)
+  assert.match(String(r2.body.missing[0]), /测试无源/)
   // 空回包：六块都在、每块都有原因、没有任何 0 冒充
   const empty = emptyPrismPayload(PRISM_DEFAULT_PARAMS, '测试原因')
   assert.deepEqual(prismPayloadProblems(empty), [])
@@ -530,4 +541,113 @@ test('⑥ 沪深回归：腾讯五档仍是 5 档 micro-price，且 quoteMid 必
   assert.equal(index.available, false)
   assert.equal(index.microPrice, null)
   assert.match(String(index.reason), /买一\/卖一数量/)
+})
+
+
+/* ────────────────────────────── 默认标的 / 回退 / 原因按市场分列 ────────────────────────────── */
+
+test('① 默认标的是 A股（自选首个 A股 → 1.600519），首屏至少四块有数值（默认港股 ⇒ 必败）', async () => {
+  const universe = [{ secid: '116.00148', name: '港股测试' }, { secid: '1.601118', name: '中国建筑' }]
+  const loader = async (secid: string): Promise<PrismFeed> =>
+    secid.startsWith('116.')
+      ? { bars: [], source: null, volUnit: null, error: '港股无分钟线源（需授权行情）' }
+      : feedOf(mkBars(60))
+  const r = await prismResponse('', { loadBars: loader, loadBook: async () => bookOf(100), now: () => 1 }, universe)
+  assert.equal(r.body.params.pairA, '1.601118', '默认必须取自选里第一个 A股（不是港股）')
+  const available = (['bayes', 'edge', 'spread', 'stoikov', 'kelly', 'mc'] as const).filter((k) => r.body.blocks[k].available)
+  assert.ok(available.length >= 4, `首屏至少四块有数值（实得 ${available.length}：${available.join(',')}）`)
+  // 自选里没有 A股 ⇒ 兜底 1.600519
+  const r2 = await prismResponse('', { loadBars: loader, loadBook: async () => bookOf(100), now: () => 1 }, [{ secid: '116.00148', name: '港股测试' }])
+  assert.equal(r2.body.params.pairA, PRISM_FALLBACK_SECID)
+  // 反例注入：还原"默认直接用自选首项（港股）+ 不回退"的旧行为 ⇒ 六块全空
+  const brokenDefault = (u: Array<{ secid: string }>): string => u[0]?.secid ?? PRISM_FALLBACK_SECID
+  assert.equal(brokenDefault(universe), '116.00148')
+  const badPayload = buildPrismPayload({
+    params: { ...PRISM_DEFAULT_PARAMS, pairA: brokenDefault(universe) },
+    feedA: { bars: [], source: null, volUnit: null, error: '港股无分钟线源（需授权行情）' },
+    feedB: null,
+    bookA: bookOf(null),
+    bookB: null,
+    asOf: 1,
+  })
+  const badAvailable = (['bayes', 'edge', 'spread', 'stoikov', 'kelly', 'mc'] as const).filter((k) => badPayload.blocks[k].available)
+  assert.ok(badAvailable.length < 4, `⚠ 反例（默认港股、不回退）必须让"至少四块"失败（实得 ${badAvailable.length}）`)
+  assert.throws(() => assert.ok(badAvailable.length >= 4, '反例'), /反例/)
+})
+
+test('② 原因按市场分列：港股/指数/商品各说各的（写成"腾讯 5 分钟回空" ⇒ 必败）', async () => {
+  const cases: Array<[string, string]> = [
+    ['116.00700', '港股无分钟线源（需授权行情）'],
+    ['116.00148', '港股无分钟线源（需授权行情）'],
+    ['100.KOSPI200', '指数无分钟线'],
+    ['101.CL00Y', '该品种无 5 分钟源'],
+  ]
+  for (const [secid, want] of cases) {
+    const feed = await fetchFiveMinuteBars(secid)
+    assert.equal(feed.bars.length, 0)
+    assert.equal(feed.error, want, `${secid} 的原因必须是「${want}」（实得「${String(feed.error)}」）`)
+    assert.notEqual(feed.error, '腾讯 5 分钟回空')
+  }
+  assert.equal(prismMarketOf('116.00148'), 'hk')
+  assert.equal(prismMarketOf('1.600519'), 'a')
+  // 美股：只有真失败时才说"美股分钟线取数失败"
+  const usFail = await fetchSinaUsBars('105.TSLA', 5, { fetchText: async () => { throw new Error('boom') } })
+  assert.match(String(usFail.error), /^美股分钟线取数失败/)
+  // 反例注入：把港股原因写成旧文案 ⇒ 判据必须失败
+  assert.throws(
+    () => assert.equal('腾讯 5 分钟回空', '港股无分钟线源（需授权行情）', '反例'),
+    /反例/,
+    '⚠ 反例注入（笼统原因）必须让断言失败',
+  )
+})
+
+test('③ A 无 bar ⇒ 自动回退到有源标的并继续算；payload 写实际标的（回退但不更新显示 ⇒ 必败）', async () => {
+  const loader = async (secid: string): Promise<PrismFeed> =>
+    secid === PRISM_FALLBACK_SECID
+      ? feedOf(mkBars(200))
+      : { bars: [], source: null, volUnit: null, error: '港股无分钟线源（需授权行情）' }
+  const r = await prismResponse('pairA=116.00148&pairB=1.601118', { loadBars: loader, loadBook: async () => bookOf(100), now: () => 1 })
+  assert.equal(r.body.params.pairA, PRISM_FALLBACK_SECID, 'A 无 bar ⇒ 回退到兜底 A股')
+  assert.equal(r.body.fallback?.requested, '116.00148')
+  assert.equal(r.body.fallback?.actual, PRISM_FALLBACK_SECID)
+  assert.match(String(r.body.fallback?.reason), /回退/)
+  assert.equal(r.body.blocks.bayes.available, true, '回退后必须继续算（不是六块全空）')
+  // 反例注入：回退发生了但 params 仍写请求值 ⇒ "参数框显示实际标的"失败
+  const notSynced = { ...r.body, params: { ...r.body.params, pairA: '116.00148' } }
+  assert.notEqual(notSynced.params.pairA, notSynced.fallback?.actual)
+  assert.throws(() => assert.equal(notSynced.params.pairA, notSynced.fallback?.actual, '反例'), /反例/)
+})
+
+test('④ 配对 B 无 bar：只影响 Spread（其余五块仍有值）；整页清空 ⇒ 必败', async () => {
+  const loader = async (secid: string): Promise<PrismFeed> =>
+    secid === '1.601118'
+      ? { bars: [], source: null, volUnit: null, error: '沪深分钟线取数失败（测试）' }
+      : feedOf(mkBars(200))
+  const r = await prismResponse('pairA=1.600519&pairB=1.601118', { loadBars: loader, loadBook: async () => bookOf(100), now: () => 1 })
+  assert.equal(r.body.blocks.spread.available, false, 'B 无 bar ⇒ Spread 不可算')
+  assert.match(String(r.body.blocks.spread.reason), /配对 B/)
+  for (const key of ['bayes', 'edge', 'stoikov', 'kelly', 'mc'] as const) {
+    assert.equal(r.body.blocks[key].available, true, `${key} 不能因为配对 B 无 bar 而变空`)
+  }
+  // 反例注入：把 A 也当无 bar（整页清空）⇒ 五块不再有值
+  const cleared = await prismResponse('pairA=1.600519&pairB=1.601118', {
+    loadBars: async () => ({ bars: [], source: null, volUnit: null, error: 'x' }),
+    loadBook: async () => bookOf(null),
+    now: () => 1,
+  })
+  assert.ok((['bayes', 'edge', 'stoikov', 'kelly', 'mc'] as const).some((k) => !cleared.body.blocks[k].available), '⚠ 反例（整页清空）必须被抓到')
+})
+
+test('⑤ secid 解析：116.00148 与 116.00700 必须是不同标的（截断成同值 ⇒ 必败）', () => {
+  assert.equal(hkQuoteSymbol('116.00148'), 'rt_hk00148')
+  assert.equal(hkQuoteSymbol('116.00700'), 'rt_hk00700')
+  assert.notEqual(hkQuoteSymbol('116.00148'), hkQuoteSymbol('116.00700'))
+  assert.equal(prismMarketOf('116.00148'), prismMarketOf('116.00700'), '同属港股，但代码不同')
+  // 默认解析也不许把两者混用
+  assert.equal(resolvePairA('116.00148', []).secid, PRISM_FALLBACK_SECID)
+  assert.equal(resolvePairA('116.00700', []).secid, PRISM_FALLBACK_SECID)
+  // 反例注入：截断成同值（两者首字符都是 0 ⇒ 00000）⇒ 判据必须失败
+  const broken = (secid: string): string => `rt_hk${(secid.split('.')[1] ?? '').slice(0, 1).padStart(5, '0')}`
+  assert.equal(broken('116.00148'), broken('116.00700'))
+  assert.throws(() => assert.notEqual(broken('116.00148'), broken('116.00700'), '反例'), /反例/, '⚠ 反例注入（截断成同值）必须让断言失败')
 })

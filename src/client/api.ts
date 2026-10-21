@@ -527,7 +527,8 @@ export const api = {
    * 回包契约：永远 200，缺数据一律 `null` + `reason`（细节见 `src/host/prism.ts` 文件头）。
    */
   prism(params: PrismParams): Promise<PrismPayload> {
-    return request(`/tradewatcher/prism?${prismQueryOf(params)}`)
+    // 棱镜可能串行取 A 的 bar（含回退）再取盘口 ⇒ 给 25s（默认 15s 在慢网下会把"回退重试"挤掉）
+    return requestWithTimeout(`/tradewatcher/prism?${prismQueryOf(params)}`, undefined, 25_000)
   },
   /** 导出备份（P0-9）：GET /tradewatcher/backup */
   exportBackup(): Promise<{ ok: boolean; bundle: unknown; unreadable: string[] }> {
