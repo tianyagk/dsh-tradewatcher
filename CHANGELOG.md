@@ -11,6 +11,36 @@
 
 ---
 
+## v0.126.0 — 移除【棱镜】组件（完整回滚 + 冗余文件清理）
+
+`npm run check` **1052 / 1052 × 2 时区**（1085 − 33 条棱镜用例）+ selftest + build（73 片段全过）；`build.mjs` 未改；无新增依赖。
+
+### 删除文件（11）
+
+`src/shared/prism.ts`、`src/host/prism.ts`、`src/host/prismFeed.ts`、`src/host/prism.test.ts`、`src/client/PrismPage.tsx`、`src/client/prismView.ts`、`src/client/prismView.test.ts`、`locale/rows/prism/en.json`、`locale/rows/prism/zh.json`、`docs/AUDIT-PRISM.md`、`docs/PROBE-PRISM-FEED.md`。
+
+### 回改集成点（14）
+
+`src/index.ts`（`RowId` / `ROW_ROUTES` / `ROW_TOOLS` / `rowOf` / `all`）、`src/client/index.tsx`（`PageKey` / tabs / `KEEP_ALIVE`）、`src/client/api.ts`（方法与 DTO 导入）、`src/host/routes.ts`（`/tradewatcher/prism`）、`src/host/selftest.ts`（7 条棱镜探针）、`src/index.test.ts`、`src/rowOwnership.test.ts`、`src/client/impl78.test.ts`、`src/client/impl83.test.ts`、`src/client/toolsPage.test.ts`、`src/readmeCounts.test.ts`（仅回改棱镜计数，**保留** README 免责措辞判据）、`cordis.patch.yml`（**9 → 8 行**）、`docs/DESIGN-SUBPLUGINS.md`（**路由账 31 → 30**，§2.1/§2.2 删行）、`package.json`（删两条 `exports`）、`README.md`（**页签 8 → 7**、**行 9 → 8**、删棱镜整节）。
+
+### 保留（成果仍在代码里，文档不删）
+
+`docs/RECON-WORKBENCHES.md`、`docs/DESIGN-ADOPT-WORKBENCHES.md`、`docs/AUDIT-IMPL89.md`；`CHANGELOG.md` 的**历史条目不改写**。
+
+### 复核读数（脚本实测，非手算）
+
+| 项 | 读数 |
+| --- | --- |
+| `git ls-files \| grep -i prism` | **空** |
+| `grep -rn "棱镜\|prism" src/ docs/ cordis.patch.yml README.md` | **无命中** |
+| README 页签 / 代码 | 声明「七」、`PageKey` + tabs = **7** |
+| README 行 / 代码 | 声明「八」、`ROW_ROUTES + core` = **8**、`cordis.patch.yml` id = **8** |
+| 路由账 | **30** |
+
+### 验证
+
+`npm run check` **1052 / 1052 × 2 时区** + selftest + build（73 项）；O/P 两轮干净复跑。
+
 ## v0.125.0 — 棱镜：修复「六块全空」；默认标的与回退改到有源市场
 
 报告 `docs/AUDIT-PRISM.md` §12。`npm run check` **1085 / 1085 × 2 时区**（1078 → 1085）+ selftest + build（73 片段全过）。

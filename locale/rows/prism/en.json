@@ -1,6 +1,0 @@
-{
-  "meta": {
-    "title": "dsh-tradewatcher-prism",
-    "description": "Prism: read-only sandbox for six inference blocks (Bayes, edge, spread z, simulated reserve price, simulated Kelly fraction, Monte Carlo risk). Simplified models, not investment advice"
-  }
-}

@@ -74,7 +74,7 @@ export function parseRowClaim(text: string): CountClaim | null {
 
 /** `src/client/index.tsx` 里 tabs 的 label 序列（锚定 `{ key: '<page>', label: '<中文>'` 这种形状） */
 export function tabLabelsOf(src: string): string[] {
-  return [...src.matchAll(/\{ key: '(?:watch|portfolio|market|cloud|calendar|tools|fupan|prism)', label: '([^']+)'/g)].map((m) => m[1] as string)
+  return [...src.matchAll(/\{ key: '(?:watch|portfolio|market|cloud|calendar|tools|fupan)', label: '([^']+)'/g)].map((m) => m[1] as string)
 }
 
 /** `type PageKey = 'watch' | 'portfolio' | …` 的成员数 */
@@ -131,19 +131,18 @@ test('④ README 的行数 == ROW_ROUTES 键数 + 1（core）== cordis.patch.yml
   assert.deepEqual([...claim.items].sort(), ['core', ...Object.keys(ROW_ROUTES)].sort(), `README 的行清单必须与代码的行清单是同一组：${claim.items.join(' / ')}`)
 })
 
-test('⚠ 反例注入：把 README 改回「七个页签」/「八行」⇒ 判据必红（证明它不是恒真）', () => {
-  // v0.123.0：第 9 行「棱镜」落地后计数是「八个页签 / 九行」；反例注入同步改成上一版数字
-  const tabsBack = README.replace('八个页签', '七个页签')
+test('⚠ 反例注入：把 README 改回「六个页签」/「七行」⇒ 判据必红（证明它不是恒真）', () => {
+  const tabsBack = README.replace('七个页签', '六个页签')
   assert.notEqual(tabsBack, README, '注入必须真的改到那句')
   const tabClaim = parseTabClaim(tabsBack) as CountClaim
   assert.equal(tabClaim.count === tabClaim.items.length, false, '「六个」+ 七个名字 ⇒ 必须自相矛盾（否则判据没锁住）')
   assert.throws(() => assert.equal(tabClaim.count, tabClaim.items.length, '反例'), /反例/, '⚠ 反例下必须失败')
 
-  const rowsBack = README.replace('九行', '八行')
+  const rowsBack = README.replace('八行', '七行')
   assert.notEqual(rowsBack, README, '注入必须真的改到那句')
   const rowClaim = parseRowClaim(rowsBack) as CountClaim
-  assert.equal(rowClaim.count, 8)
-  assert.throws(() => assert.equal(rowClaim.count, 9, '反例'), /反例/, '⚠ 行数改回旧值必须失败')
+  assert.equal(rowClaim.count, 7)
+  assert.throws(() => assert.equal(rowClaim.count, 8, '反例'), /反例/, '⚠ 行数改回旧值必须失败')
   // 同时证明：清单里少列 fupan 也会被 ③ 抓住
   const dropped = README.replace(' / fupan', '')
   const droppedClaim = parseRowClaim(dropped) as CountClaim

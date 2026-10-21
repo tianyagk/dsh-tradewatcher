@@ -27,7 +27,7 @@ export const name = 'dsh-tradewatcher'
 export const inject = ['webServer', 'webRuntime']
 
 /** 行标识（配置里写 `config: { row: watchlist }`） */
-export type RowId = 'core' | 'calendar' | 'watchlist' | 'portfolio' | 'market' | 'cloudmap' | 'tools' | 'fupan' | 'prism'
+export type RowId = 'core' | 'calendar' | 'watchlist' | 'portfolio' | 'market' | 'cloudmap' | 'tools' | 'fupan'
 
 /**
  * 行 → 该行独占的路由前缀（core 注册**其余全部**；P2–P4 再把别的行兑现）。
@@ -82,16 +82,6 @@ export const ROW_ROUTES: Record<Exclude<RowId, 'core'>, readonly string[]> = {
    * 存储是本地 `fupan.json` + 既有流水；零新增上游请求（细节见 `src/host/fupan.ts`、`src/host/fupanTrades.ts` 文件头）。
    */
   fupan: ['/tradewatcher/fupan/month', '/tradewatcher/fupan/note', '/tradewatcher/fupan/trades'],
-  /**
-   * 棱镜（第 9 行，v0.123.0）：只读推演页（六块：Bayes / Edge / Spread / Stoikov / Kelly / Monte Carlo）。
-   *
-   * 归属判据（§2.2）：这条路由**只被棱镜页消费**（`src/client/PrismPage.tsx` → `api.prism(...)`）
-   * ⇒ 归本行；关掉棱镜行时它随之 404，其它页面一个都不受影响（`PrismPage` 也只被本行加载）。
-   * 契约冻结（见 `src/host/prism.ts` 文件头）：**永远 200**、缺数据一律 `null` + `reason`；
-   * 频率 5/10/30 **只换 `freq` 查询参数**（同一接口），10/30 由 5 分钟聚合。
-   * 本行不带 agent 工具（推演页是纯 UI；工具类入口另开批次）。
-   */
-  prism: ['/tradewatcher/prism'],
 }
 
 /** 行 → 该行独占的 agent 工具名（不含前缀）；同为**唯一事实源**（见上） */
@@ -105,8 +95,6 @@ export const ROW_TOOLS: Record<Exclude<RowId, 'core'>, readonly string[]> = {
   tools: [],
   // 复盘行：同样不带 agent 工具（月历 + 当日笔记是纯 UI；写作接口只给界面用）
   fupan: [],
-  // 棱镜行：不带 agent 工具（只读推演页是纯 UI；路由只给页面用）
-  prism: [],
 }
 
 /**
@@ -172,7 +160,7 @@ export function rowOf(config: unknown, ctxConfig?: unknown): RowId | 'all' {
   const pick = (src: unknown): unknown => (typeof src === 'object' && src !== null ? (src as { row?: unknown }).row : undefined)
   const raw = pick(config) ?? pick(ctxConfig) ?? 'all'
   const row = typeof raw === 'string' ? raw.trim() : 'all'
-  return (['core', 'calendar', 'watchlist', 'portfolio', 'market', 'cloudmap', 'tools', 'fupan', 'prism'] as const).includes(row as RowId)
+  return (['core', 'calendar', 'watchlist', 'portfolio', 'market', 'cloudmap', 'tools', 'fupan'] as const).includes(row as RowId)
     ? (row as RowId)
     : 'all'
 }
@@ -331,7 +319,7 @@ export function apply(ctx: PluginContext, config?: unknown): void {
     // 老单行装载：全量注册（与拆分前逐字一致），并把七个功能行都标为活跃 ⇒ 客户端 gate 显示全部 tab
     applyCore(ctx, true)
     const k = kernel as CoreKernel | null
-    if (k !== null) for (const r of ['calendar', 'watchlist', 'portfolio', 'market', 'cloudmap', 'tools', 'fupan', 'prism'] as const) k.activeRows.add(r)
+    if (k !== null) for (const r of ['calendar', 'watchlist', 'portfolio', 'market', 'cloudmap', 'tools', 'fupan'] as const) k.activeRows.add(r)
   } else if (row === 'core') applyCore(ctx)
   else applyFeatureRow(ctx, row)
 }

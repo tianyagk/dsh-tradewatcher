@@ -1181,41 +1181,6 @@ async function main(): Promise<void> {
     softOk(false, 'board fetch', e instanceof Error ? e.message : String(e))
   }
 
-  try {
-    // 【棱镜】输入探针（live soft）：美股分钟 5/1/30、沪深五档 micro-price、港股只有价
-    const { fetchSinaUsBars, fetchFiveLevelBook, fetchFiveMinuteBars } = await import('./prismFeed.ts')
-    for (const type of [1, 5, 30] as const) {
-      const feed = await fetchSinaUsBars('105.AAPL', type)
-      softOk(
-        feed.bars.length >= 240,
-        `棱镜 美股 type=${type} 分钟 ≥240 根`,
-        `bars=${feed.bars.length} source=${feed.source} volUnit=${feed.volUnit} last=${feed.bars[feed.bars.length - 1]?.label ?? '—'}`,
-      )
-    }
-    const hkFeed = await fetchFiveMinuteBars('116.00700')
-    softOk(
-      hkFeed.error === '港股无分钟线源（需授权行情）',
-      '棱镜 港股无分钟线原因按市场分列',
-      `error=${String(hkFeed.error)}`,
-    )
-    const idxFeed = await fetchFiveMinuteBars('100.KOSPI200')
-    softOk(idxFeed.error === '指数无分钟线', '棱镜 指数无分钟线原因', `error=${String(idxFeed.error)}`)
-    const bookA = await fetchFiveLevelBook('1.600519')
-    softOk(
-      bookA.available && bookA.levels === 5 && bookA.microPrice !== null && bookA.quoteMid === null,
-      '棱镜 沪深 600519 五档 micro-price（quoteMid 必须为 null）',
-      `available=${String(bookA.available)} levels=${bookA.levels} micro=${String(bookA.microPrice)} quoteMid=${String(bookA.quoteMid)}`,
-    )
-    const bookHk = await fetchFiveLevelBook('116.00700')
-    softOk(
-      bookHk.available === false && bookHk.microPrice === null && bookHk.quoteMid !== null && bookHk.quoteSource !== null && bookHk.quoteAt !== null,
-      '棱镜 港股 00700 只有价（quoteMid，无 micro）',
-      `available=${String(bookHk.available)} quoteMid=${String(bookHk.quoteMid)} at=${String(bookHk.quoteAt)} reason=${bookHk.reason ?? '—'}`,
-    )
-  } catch (e) {
-    softOk(false, '棱镜输入探针', e instanceof Error ? e.message : String(e))
-  }
-
   console.log(failures === 0 ? '\nALL HOST CHECKS PASSED (live probes soft)' : `\n${failures} FAILURES`)
   if (failures > 0) process.exitCode = 1
 }

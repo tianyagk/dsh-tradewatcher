@@ -246,8 +246,6 @@ import type {
   YtdPayload,
 } from '../shared/model.ts'
 import { SUGGEST_FULL_COUNT } from '../shared/model.ts'
-import { prismQueryOf } from './prismView.ts'
-import type { PrismPayload, PrismParams } from '../shared/prism.ts'
 
 export class ApiError extends Error {
   status: number
@@ -518,17 +516,6 @@ export const api = {
    */
   leverage(range: LeverageRange = '750'): Promise<LeveragePayloadDto> {
     return request(`/tradewatcher/leverage?range=${range}`)
-  },
-  /**
-   * 【棱镜】只读推演（第 9 行 `prism`）。
-   *
-   * ⚠ 切换频率**只换 `freq` 这一个查询参数**（5 / 10 / 30），宿主对三档都回 200
-   * ⇒ 页面不需要第二条接口（判据见 `prismView.test.ts` 的 `freqParamOnlyProblems`）。
-   * 回包契约：永远 200，缺数据一律 `null` + `reason`（细节见 `src/host/prism.ts` 文件头）。
-   */
-  prism(params: PrismParams): Promise<PrismPayload> {
-    // 棱镜可能串行取 A 的 bar（含回退）再取盘口 ⇒ 给 25s（默认 15s 在慢网下会把"回退重试"挤掉）
-    return requestWithTimeout(`/tradewatcher/prism?${prismQueryOf(params)}`, undefined, 25_000)
   },
   /** 导出备份（P0-9）：GET /tradewatcher/backup */
   exportBackup(): Promise<{ ok: boolean; bundle: unknown; unreadable: string[] }> {
