@@ -747,3 +747,40 @@ export function motionCssProblems(css: string): string[] {
   }
   return bad
 }
+
+/* ────────────────────────── 6. 曲线规模上限（本轮新增） ────────────────────────── */
+
+/**
+ * 曲线序列与标记的上限（**安全边界**：超限整块不画，见 `curveContractProblems`）。
+ *
+ * 为什么要有上限：`curveChart` 会为每条序列画一条 path、为每个标记画一个圆点，图例也逐条渲染；
+ * 条数一旦失控（例如某个工具把"每只持仓"当一条线），图例撑爆、绘制成本线性上涨，
+ * 而用户看到的仍是"一张图"——**没有任何提示说明它画的是什么**。参考实现把上限写进协议
+ * （Capital `chart/spec.d.ts`：≤6 条序列、≤50 个 marker），我们照这个量级定，但**值按我们的图例宽度定**：
+ * 图例一行（`LEGEND_ROW`，`gap: 14`）在 1280px 宽的详情页里大约能容 6 个中文序列名。
+ *
+ * 超限的处置是**整块不绘制 + 给原因**，不是截断：截断等于悄悄少画一条线，读者会把缺线读成"那条线没有数据"。
+ */
+export const CURVE_MAX_SERIES = 6
+/** 标记上限（实测日圆点/阈值胶囊这类点缀；超了图变成"一串珠子"，且每个点都是一个 SVG 节点） */
+export const CURVE_MAX_MARKS = 50
+
+/** 判据只认结构，不 import 工具注册表（避免"注册表 → 主题 → 注册表"的环） */
+export interface CurveSeriesLike {
+  name: string
+  points: ReadonlyArray<number | null>
+}
+
+/**
+ * 曲线规模判据（**唯一实现**）：返回问题清单，空数组 = 可以画。
+ * 这是**纯模型层**判据：调用方（`toolRegistry.detailModel`）据此决定"画 / 不画 + 给原因"。
+ */
+export function curveContractProblems(
+  series: readonly CurveSeriesLike[],
+  marks: readonly { index: number }[],
+): string[] {
+  const bad: string[] = []
+  if (series.length > CURVE_MAX_SERIES) bad.push(`${series.length} 条序列 > 上限 ${CURVE_MAX_SERIES}`)
+  if (marks.length > CURVE_MAX_MARKS) bad.push(`${marks.length} 个标记 > 上限 ${CURVE_MAX_MARKS}`)
+  return bad
+}

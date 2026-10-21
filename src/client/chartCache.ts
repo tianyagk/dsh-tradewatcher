@@ -97,6 +97,40 @@ const TTL_SETTLED_MS: Record<ChartTab, number> = {
 /** 请求失败时旧值的保底 TTL：图不空，但 20s 后会再试一次 */
 const TTL_FALLBACK_MS = 20_000
 
+/**
+ * 客户端图表缓存的**实测依据**（常量取值的唯一来源；数字全部来自本机只读测量，不是经验值）。
+ *
+ * 测量方法（2026-10-21，`~/.dsh/dsh-tradewatcher` 只读，未写任何文件）：
+ *  · `keysPerSecid`：`keyOf` 的取值空间 —— 分时 1 + 五日 1（二者不分复权口径）+ 4 个 K 线周期 × 3 个复权口径 = **14**；
+ *  · `universeSecids`：本机 `watch.json` 的 41 个 secid 与 `positions.json` 的 9 个取并集 = **45**；
+ *  · `klineBytesP95` / `trendBytesP95`：把真实缓存文件按**回包形状**（`wireSlim` 的紧凑编码：K 线丢 `pct:null`、
+ *    分时逐点 `label` 只留 `HH:mm`）重新序列化后取紧凑 JSON 的字节数 —— K 线 n=207（p50 70.1 KB / p95 88.5 KB /
+ *    max 140.4 KB），分时 n=553（p50 14.7 KB / p95 18.6 KB / max 54.7 KB）。
+ *
+ * 推论：本机自选 + 持仓全量浏览的上界 = 45 × 14 = **630 条**，按 K 线 p95 计约 **48 MB** JSON
+ * （解析成对象后的堆更大）—— 单个浏览器标签放不下，**所以必须有上限，且不能取"永不淘汰"的算法**。
+ * 上限本身是**预算**（不是测出来的最大值）：见 `CHART_CACHE_MAX_ENTRIES` 的推导。
+ */
+export const CHART_CACHE_EVIDENCE = {
+  measuredAt: '2026-10-21',
+  keysPerSecid: 14,
+  universeSecids: 45,
+  klineSamples: 207,
+  trendSamples: 553,
+  klineBytesP95: 88_524,
+  trendBytesP95: 18_565,
+} as const
+
+/**
+ * 缓存条目上限（超出后按"最早过期"= 最旧的数据淘汰）。
+ *
+ * **取值推导**（不抄经验值）：`160 × 88 524 B ≈ 13.8 MB`（按 K 线 p95 计，分时更小），
+ * 这是"能覆盖本机自选 45 行分时缩略线（45 条 × 18.6 KB ≈ 0.8 MB）之后，还剩 115 条给抽屉"的最小够用值
+ * —— 115 条 ≈ 9 只标的看全 14 个键。上限的**必要性**由 `CHART_CACHE_EVIDENCE` 的全量上界（630 条 / 48 MB）给出；
+ * 上限的**大小**是一条预算（13.8 MB JSON），断言把它钉在 ≤ 16 MB（`chartCache.test.ts`）。
+ */
+export const CHART_CACHE_MAX_ENTRIES = 160
+
 /** 单次请求：把 secid+tab(+复权口径) 变成一个 payload（宿主负责兜底与落盘缓存） */
 export async function fetchChartPayload(secid: string, tab: ChartTab, fqt: FqMode = 1): Promise<ChartPayload | null> {
   if (tab === 'trend' || tab === '5d') {
@@ -121,6 +155,10 @@ export interface ChartCacheStats {
   inflight: number
   /** 本实例累计发出的请求数（命中缓存的调用不计） */
   requests: number
+  /** 因超上限被淘汰的条目数（累计；正常浏览应当很少增长） */
+  evicted: number
+  /** 上限本身（断言与排障用；改上限必须同时看 `CHART_CACHE_EVIDENCE` 的推导） */
+  maxEntries: number
 }
 
 export interface ChartCache {
@@ -145,6 +183,37 @@ export function createChartCache(load: Loader = fetchChartPayload): ChartCache {
   const memo = new Map<string, { exp: number; value: ChartPayload | null }>()
   const inflight = new Map<string, Promise<ChartPayload | null>>()
   let requests = 0
+  let evicted = 0
+
+  /**
+   * 写入一条（**唯一的写入口**：正常命中与失败保底都走它，否则上限只在一条路径上生效）。
+   *
+   * 顺序：① 先清**已过期**的条目（它们本来就命中不了，占着位置只会把有用条目挤出去）；
+   * ② 仍超上限 ⇒ 按 `exp` 最小（= 最旧的数据）淘汰，**绝不淘汰正在写入的这条**；
+   * ③ 上限是"条数"而不是"字节"：条数的字节含义由 `CHART_CACHE_EVIDENCE` 的 p95 给出（判决在测试里守）。
+   */
+  const put = (key: string, value: ChartPayload | null, ttlMs: number): void => {
+    const now = Date.now()
+    for (const [k, slot] of memo) {
+      if (k !== key && now >= slot.exp) memo.delete(k)
+    }
+    const replacing = memo.has(key) ? 1 : 0
+    while (memo.size - replacing + 1 > CHART_CACHE_MAX_ENTRIES) {
+      let oldestKey: string | null = null
+      let oldestExp = Number.POSITIVE_INFINITY
+      for (const [k, slot] of memo) {
+        if (k === key) continue
+        if (slot.exp < oldestExp) {
+          oldestExp = slot.exp
+          oldestKey = k
+        }
+      }
+      if (oldestKey === null) break
+      memo.delete(oldestKey)
+      evicted += 1
+    }
+    memo.set(key, { exp: now + ttlMs, value })
+  }
 
   const keyOf = (secid: string, tab: ChartTab, fqt: FqMode): string =>
     // 复权口径只对 K 线有意义：分时/五日没有复权序列，共用同一个键，
@@ -171,14 +240,14 @@ export function createChartCache(load: Loader = fetchChartPayload): ChartCache {
       requests += 1
       const p = load(secid, tab, isKlineTab(tab) ? fqt ?? 1 : 1)
         .then((value) => {
-          memo.set(key, { exp: Date.now() + ttlOf(tab, value), value })
+          put(key, value, ttlOf(tab, value))
           return value
         })
         .catch((e: unknown) => {
           // 上游失败：保留上一份成功值（短 TTL），图不变空
           const prev = memo.get(key)?.value
           if (prev !== undefined && prev !== null) {
-            memo.set(key, { exp: Date.now() + TTL_FALLBACK_MS, value: prev })
+            put(key, prev, TTL_FALLBACK_MS)
             return { ...prev, fromCache: true, fallback: true } as ChartPayload
           }
           throw e
@@ -191,7 +260,7 @@ export function createChartCache(load: Loader = fetchChartPayload): ChartCache {
     },
 
     stats() {
-      return { entries: memo.size, inflight: inflight.size, requests }
+      return { entries: memo.size, inflight: inflight.size, requests, evicted, maxEntries: CHART_CACHE_MAX_ENTRIES }
     },
 
     clear() {

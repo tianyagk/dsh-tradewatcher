@@ -6,6 +6,9 @@ import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 import {
+  CHART_CACHE_EVIDENCE,
+  CHART_CACHE_MAX_ENTRIES,
+  FQ_ORDER,
   KLINE_PLAN,
   TAB_LABEL,
   cacheNoteOf,
@@ -246,4 +249,96 @@ test('复权记忆：按标的记住各自口径，新标的回到全局默认�
   rememberFq('0.300750', 2)
   assert.equal(fqFor('1.600519'), 0, '另一只标的的选择不被覆盖')
   rememberFq('0.300750', 1)
+})
+
+/* ────────────────────────── 容量上限（本轮新增，R4） ────────────────────────── */
+
+test('上限的依据：p95 字节 × 上限 ≤ 16 MB，而"全量浏览上界"必须超预算（否则上限没有意义）', () => {
+  const evidence = CHART_CACHE_EVIDENCE
+  // ① keysPerSecid 必须等于 keyOf 的真实取值空间（分时/五日不分口径 + 4 个 K 线周期 × 3 个复权口径）
+  const klineTabs = Object.keys(KLINE_PLAN).length
+  const nonKlineTabs = Object.keys(TAB_LABEL).length - klineTabs
+  assert.equal(nonKlineTabs, 2, '分时 + 五日 两个不分复权口径的键')
+  assert.equal(
+    evidence.keysPerSecid,
+    nonKlineTabs + klineTabs * FQ_ORDER.length,
+    `每标的最多键数必须与 keyOf 的取值空间一致（实得 ${evidence.keysPerSecid}）`,
+  )
+  // ② 上限 × K 线 p95 ⇒ 最坏字节预算
+  const worstBytes = CHART_CACHE_MAX_ENTRIES * evidence.klineBytesP95
+  assert.ok(worstBytes <= 16 * 1024 * 1024, `上限 ${CHART_CACHE_MAX_ENTRIES} 条 × K 线 p95 ${evidence.klineBytesP95} B = ${worstBytes} B，已超 16 MB 预算`)
+  // ③ 全量浏览上界（自选 + 持仓全看全周期）必须**显著**超上限、且超预算 —— 这是"必须有上限"的判据
+  const universe = evidence.universeSecids * evidence.keysPerSecid
+  assert.ok(universe > CHART_CACHE_MAX_ENTRIES * 2, `全量上界 ${universe} 条应显著大于上限 ${CHART_CACHE_MAX_ENTRIES}（否则这个上限在真实浏览里永不触发，等于没加）`)
+  assert.ok(
+    universe * evidence.klineBytesP95 > 16 * 1024 * 1024,
+    `全量上界 ${universe} 条按 p95 计 ${universe * evidence.klineBytesP95} B 必须超 16 MB —— 不超就不该有上限`,
+  )
+})
+
+test('上限：超出后按"最早过期"（最旧）淘汰，正在写入的那条不被淘汰', async () => {
+  await withFakeNow(async (advance) => {
+    const cache = createChartCache(async (secid: string) => ({
+      kind: 'kline',
+      tab: 'day',
+      kline: { ...klineOf(), secid },
+    }) as ChartPayload)
+    const secidAt = (i: number): string => `1.${String(600000 + i)}`
+    // 日K TTL 600s；每写一条推进 1s ⇒ `exp` 严格递增，淘汰顺序可判定
+    for (let i = 0; i < CHART_CACHE_MAX_ENTRIES + 5; i++) {
+      await cache.get(secidAt(i), 'day')
+      advance(1000)
+    }
+    const st = cache.stats()
+    assert.equal(st.maxEntries, CHART_CACHE_MAX_ENTRIES)
+    assert.equal(st.entries, CHART_CACHE_MAX_ENTRIES, '条目数必须被钉在上限')
+    assert.equal(st.evicted, 5, '多写 5 条 ⇒ 恰好淘汰 5 条（不是"整批清空"）')
+    assert.equal(cache.peek(secidAt(0), 'day'), null, '最早写入（最早过期）的那条必须先被淘汰')
+    assert.equal(cache.peek(secidAt(4), 'day'), null, '前 5 条都被淘汰')
+    assert.notEqual(cache.peek(secidAt(5), 'day'), null, '第 6 条还应在')
+    assert.notEqual(cache.peek(secidAt(CHART_CACHE_MAX_ENTRIES + 4), 'day'), null, '最后写入的那条绝不能被自己挤掉')
+  })
+})
+
+test('上限：先清"已过期"再谈淘汰 —— 清过期不计入 evicted（两种原因必须能分开）', async () => {
+  await withFakeNow(async (advance) => {
+    const cache = createChartCache(async (secid: string, tab: ChartTab) => (
+      tab === 'trend'
+        ? { kind: 'trend', tab: 'trend', trend: { ...trendOf(), secid } } as ChartPayload
+        : { kind: 'kline', tab: 'day', kline: klineOf() } as ChartPayload
+    ))
+    for (let i = 0; i < CHART_CACHE_MAX_ENTRIES; i++) await cache.get(`1.${String(600000 + i)}`, 'trend')
+    assert.equal(cache.stats().entries, CHART_CACHE_MAX_ENTRIES, '先写满')
+    advance(31_000) // 分时盘中 TTL = 30s ⇒ 全部过期
+    await cache.get('1.700000', 'trend')
+    const st = cache.stats()
+    assert.equal(st.entries, 1, '过期条目必须先被清掉（否则新条目要挤掉"还有用"的数据）')
+    assert.equal(st.evicted, 0, '清过期不是淘汰 —— 这个计数只反映"被上限挤掉"的条数')
+  })
+})
+
+test('上限：失败保留行为不变 —— 超限状态下刷新失败仍返回上一份成功值，且该条不被淘汰', async () => {
+  await withFakeNow(async (advance) => {
+    let fail = false
+    let calls = 0
+    const cache = createChartCache(async (secid: string) => {
+      calls += 1
+      if (fail) throw new Error('fetch failed')
+      return { kind: 'kline', tab: 'day', kline: { ...klineOf(), secid } } as ChartPayload
+    })
+    const secidAt = (i: number): string => `1.${String(600000 + i)}`
+    for (let i = 0; i < CHART_CACHE_MAX_ENTRIES; i++) {
+      await cache.get(secidAt(i), 'day')
+      advance(1000)
+    }
+    // 让第 0 条过期、并让"超限"同时成立：再写 3 条把容量压满
+    advance(600_000)
+    fail = true
+    const again = await cache.get(secidAt(0), 'day')
+    assert.equal(calls, CHART_CACHE_MAX_ENTRIES + 1, '过期后应重新请求一次')
+    assert.equal(again?.fallback, true, '失败时必须标注为上次成功数据（行为与加上限前一致）')
+    assert.equal(again?.fromCache, true)
+    assert.notEqual(cache.peek(secidAt(0), 'day'), null, '保底 20s 内该条必须还在（写入的那条永不被自己挤掉）')
+    assert.ok(cache.stats().entries <= CHART_CACHE_MAX_ENTRIES, '任何路径都不得突破上限')
+  })
 })

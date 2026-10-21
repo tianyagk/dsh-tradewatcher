@@ -34,6 +34,7 @@ import * as ToolText from './toolText.ts'
 import { cakeTool } from './tools/cake.ts'
 import { leverageTool } from './tools/leverage.ts'
 import { FACT_TOPICS, factCoverageProblems, missingFactTopics, topicInLine } from './toolFacts.ts'
+import { CURVE_MAX_MARKS, CURVE_MAX_SERIES, curveContractProblems } from './toolDetailTheme.ts'
 // ⚠ 从宿主读窗口集合：工具档位必须与宿主允许的窗口一致（两处漂移是"切档拿到不存在的窗口"的根因）
 import { FLOW_BOUNDARY, FLOW_CURVE_WINDOWS } from '../host/globalFlow.ts'
 
@@ -358,4 +359,67 @@ test('数据路径：给了 ToolData ⇒ 数值只来自数据；缺的格子仍
   // 边界声明 = 工具自己的（始终显示）+ 数据源附带的（可能含数字口径）
   assert.deepEqual(d.boundary.lines, [...cakeTool.boundary, '来自数据源的边界声明'])
   assert.notEqual(d.replay, null, '回放信息来自数据')
+})
+
+/* ─────────────────── 曲线规模闸门（本轮新增，R5：上限落在纯模型层） ─────────────────── */
+
+/** 造序列/标记：`points` 给有限的非空数值，保证"有值但条数超限"这一支被真的走到 */
+function seriesOf(count: number, points = 3): Array<{ name: string; points: Array<number | null> }> {
+  return Array.from({ length: count }, (_, i) => ({ name: `序列${i + 1}`, points: Array.from({ length: points }, (_, j) => j + i) }))
+}
+function marksOf(count: number): Array<{ index: number; label: string }> {
+  return Array.from({ length: count }, (_, i) => ({ index: i, label: `2026-10-${String(i + 1).padStart(2, '0')} 实测` }))
+}
+function curveData(series: ReturnType<typeof seriesOf>, marks: ReturnType<typeof marksOf>) {
+  return { status: '数据时刻 2026-10-12 21:05（北京时间）', curve: { days: ['2026-10-10', '2026-10-11', '2026-10-12'], series, marks } }
+}
+
+test('⑦ 曲线闸门：7 条序列 ⇒ **整块不绘制 + 给原因**（不是截断成 6 条）', () => {
+  const data = curveData(seriesOf(CURVE_MAX_SERIES + 1), [])
+  assert.equal(curveContractProblems(data.curve.series, data.curve.marks).length, 1, '判据必须报出 1 条问题')
+  const d = detailModel(cakeTool, data)
+  assert.deepEqual(d.curve.series, [], '超限必须清空序列 —— 页面靠 series.length 判空，清空即落到空态那一支')
+  assert.deepEqual(d.curve.marks, [], '标记也一并清空（画一半同样是"悄悄少画"）')
+  assert.equal(d.curve.days.length, 3, '日期轴保留（它不是被拒的对象）')
+  assert.equal(d.curve.empty.startsWith(NOT_FETCHED), true, `空态必须以「${NOT_FETCHED}」开头：${d.curve.empty}`)
+  assert.equal(d.curve.empty.includes('超过上限'), true, `空态必须说清是超限：${d.curve.empty}`)
+  assert.equal(d.curve.empty.includes(`${CURVE_MAX_SERIES + 1} 条序列`), true, `空态必须给出**真实条数**（数字来自本次数据，不是常量）：${d.curve.empty}`)
+  assert.equal(d.curve.empty.includes('截断'), true, '空态必须解释"为什么不截断"（否则下一个人会顺手改成截断）')
+})
+
+test('⑦′ 曲线闸门：51 个标记 ⇒ 同样整块不绘制（两条上限各自独立生效）', () => {
+  const data = curveData(seriesOf(2), marksOf(CURVE_MAX_MARKS + 1))
+  const d = detailModel(cakeTool, data)
+  assert.deepEqual(d.curve.series, [], '标记超限同样不画（否则图上是一串珠子）')
+  assert.equal(d.curve.empty.includes(`${CURVE_MAX_MARKS + 1} 个标记`), true, `空态必须给出真实标记数：${d.curve.empty}`)
+})
+
+test('⑦″ 曲线闸门：**恰好**上限必须放行（边界是 ">" 不是 ">="，否则 6 条的正确用法被误伤）', () => {
+  const data = curveData(seriesOf(CURVE_MAX_SERIES), marksOf(CURVE_MAX_MARKS))
+  assert.deepEqual(curveContractProblems(data.curve.series, data.curve.marks), [], '恰好上限不是问题')
+  const d = detailModel(cakeTool, data)
+  assert.equal(d.curve.series.length, CURVE_MAX_SERIES, '恰好 6 条必须原样放行')
+  assert.equal(d.curve.marks.length, CURVE_MAX_MARKS, '恰好 50 个标记必须原样放行')
+  assert.equal(d.curve.empty.includes('超过上限'), false, '放行时不许出现超限文案')
+})
+
+test('⚠ 反例注入：把"静默截断到上限"当成实现 ⇒ 上面的断言必败', () => {
+  // 模拟"顺手截断"的旧写法：只取前 6 条、且用普通空态文案（不带原因）
+  const silent = { series: seriesOf(CURVE_MAX_SERIES + 1).slice(0, CURVE_MAX_SERIES), empty: `${NOT_FETCHED}：${NO_DATA_WHY}` }
+  assert.throws(
+    () => assert.deepEqual(silent.series, [], '静默截断：序列必须为空（不截断）'),
+    /静默截断/,
+    '⚠ 这条反向断言证明"清空 vs 截断"是**可判定**的差别 —— 否则闸门等于没写',
+  )
+  assert.throws(
+    () => assert.equal(silent.empty.includes('超过上限'), true, '静默截断：空态必须说明超限'),
+    /静默截断/,
+    '⚠ 同时证明"给原因 vs 不给原因"也是可判定的',
+  )
+})
+
+test('⑦‴ 曲线闸门不许把上限数字带进"无数据"骨架（红线：骨架零阿拉伯数字）', () => {
+  const d = detailModel(cakeTool)
+  assert.equal(JSON.stringify(d).includes('上限'), false, '无数据时不该出现任何"上限"字样（那是数据路径的文案）')
+  assert.equal(/[0-9]/.test(d.curve.empty), false, `无数据时曲线空态不许含数字：${d.curve.empty}`)
 })

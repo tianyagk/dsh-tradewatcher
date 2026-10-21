@@ -26,6 +26,7 @@
  */
 import type { LeveragePayloadDto, LeverageRange } from '../api.ts'
 import { PLOT } from '../toolDetailTheme.ts'
+import type { GateInput, GateInvariant } from '../../shared/payloadGate.ts'
 
 /* ────────────────────────────── 1. 文案与格式化 ────────────────────────────── */
 
@@ -782,4 +783,55 @@ export function leverageCardValueSizeProblems(sizes: { temperature: number; othe
   if (!(temperature > other)) bad.push(`温度仍是最大的那个值（实得温度 ${temperature} / 其余 ${other}）`)
   if (!(temperature < 40) || !(other < 40)) bad.push(`卡片值字号必须在展示级区间（< 40px；实得 ${temperature} / ${other}）`)
   return bad
+}
+
+/* ────────────────────── 载荷闸门适配（R1：把载荷翻成闸门输入） ────────────────────── */
+
+/**
+ * 「杠杆温度计」的闸门输入（**纯函数**；判据与实现在 `src/shared/payloadGate.ts`）。
+ *
+ * ⚠ 这一屏是**唯一**走 `sourceScope: 'payload'` 的载荷，理由必须写在 `sourceScopeWhy` 里 ——
+ * 用户明确要求本页不写口径、也不显示日期小字（`leverageHeader.test.ts` ①：加回「截至」必败），
+ * 所以「每格读数各自带出处」在这里**不成立**，闸门不能把它当成缺陷去修（那会违反同一批用户口径）。
+ * 代价如实说：`source` 类检查在这一屏只剩"整屏有没有一条出处载体"这一条。
+ *
+ * 时间载体 = `payload.asOf`（两融 T+1 ⇒ 它是**上一交易日**；空串 = 契约里"没有可用数据"）。它不渲染，
+ * 但仍必须在契约里（`leverageHeader.test.ts` 断言 `asOf` 字段还在）—— 闸门校验的是"这个时刻存在"，
+ * 不是"它被画出来"。
+ */
+export function gateInputOfLeverage(payload: LeveragePayloadDto | null): GateInput {
+  const cards = leverageCards(payload)
+  const asOf = payload === null ? '' : String(payload.asOf ?? '').trim()
+  const noDataWhy = payload === null
+    ? '载荷没有取到（`/tradewatcher/leverage` 失败或尚未返回）⇒ 整屏只给 —（不写 0 顶替）'
+    : asOf === ''
+      ? '契约：没有可用数据时 `asOf` 是空串（空库/首次回填前）⇒ 整屏只给 —（不是 0，也不是 5xx）'
+      : null
+  const cellWhy = noDataWhy ?? '该读数上游本次没有给出（两融是 T+1 披露，窗口内可能尚未更新）—— 「—」不是 0'
+
+  const invariants: GateInvariant[] = [
+    { label: '卡片张数', actual: cards.length, expected: LEVERAGE_CARD_KEYS.length },
+  ]
+  // 三条序列必须与日期轴等长（宿主切片一处写错就会在这里露出来：图会画成"半条线"，而那根 bar 没有日期）
+  const seriesOf = (): Array<{ label: string; actual: number | null; expected: number | null }> => [
+    { label: '温度序列点数', actual: payload === null ? null : payload.temp.length, expected: payload === null ? null : payload.dates.length },
+    { label: '显性融资序列点数', actual: payload === null ? null : payload.ratio.length, expected: payload === null ? null : payload.dates.length },
+    { label: '净买入序列点数', actual: payload === null ? null : payload.net.length, expected: payload === null ? null : payload.dates.length },
+  ]
+  for (const item of seriesOf()) invariants.push({ ...item, why: payload === null ? (noDataWhy as string) : null })
+
+  return {
+    name: '杠杆温度计',
+    asOfText: asOf === '' ? null : asOf,
+    why: noDataWhy,
+    sourceScope: 'payload',
+    sourceScopeWhy: '用户明确要求本页不写口径/来源，也不显示日期小字（leverageHeader.test.ts ①：日期小字加回即必败）⇒ 出处只在载荷级（asOf + 阈值契约），不逐格标注',
+    cells: cards.map((card) => ({
+      where: `卡片 ${card.label}`,
+      value: card.value === DASH ? null : card.value,
+      source: null,
+      missingReason: card.value === DASH ? cellWhy : null,
+    })),
+    invariants,
+  }
 }

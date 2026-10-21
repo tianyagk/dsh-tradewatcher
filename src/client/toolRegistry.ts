@@ -212,6 +212,7 @@ import {
   PENDING_WHY,
   SECTION_EMPTY_WHY,
 } from './toolText.ts'
+import { curveContractProblems, type CurveSeriesLike } from './toolDetailTheme.ts'
 
 /** 分类标签行（本轮只有「全部」一个；工具条目自己的分类字段先落库，标签行下一批再加） */
 export const CATEGORY_TABS: ReadonlyArray<{ key: string; label: string }> = [{ key: 'all', label: '全部' }]
@@ -348,6 +349,21 @@ export function detailModel(entry: ToolEntry, data: ToolData | null = null): Det
   })
   const boundaryLines = data?.boundary === undefined ? [...entry.boundary] : [...entry.boundary, ...data.boundary]
   const ranges = [...(entry.ranges?.options ?? [])]
+  /**
+   * 曲线规模闸门（**模型层**，页面只渲染结论）：超限 ⇒ 序列与标记一并清空，`empty` 说明原因。
+   *
+   * 为什么在模型层而不是画图处：`ToolsPage.detailView` 的判据是 `series.length > 0 && days.length > 0`
+   * ⇒ 清空序列就会自然落到"渲染 `model.curve.empty`"那一支，页面不需要第二处特判。
+   * 为什么不截断到上限：少画一条线，读者会读成"那条线没有数据"——那是**改数据**，不是收敛。
+   * ⚠ 无数据（`data === null`）时天然 0 条序列 ⇒ 这里不产出任何数字，红线"骨架零阿拉伯数字"不受影响。
+   */
+  const curveSeries: readonly CurveSeriesLike[] = data?.curve?.series ?? []
+  const curveMarks = data?.curve?.marks ?? []
+  const curveProblems = curveContractProblems(curveSeries, curveMarks)
+  const curveDrawn = curveProblems.length === 0
+  const curveEmpty = curveDrawn
+    ? emptyOf()
+    : `${NOT_FETCHED}：这一屏的曲线超过上限（${curveProblems.join('；')}）⇒ 不绘制 —— 截断会悄悄少画，读者会把缺线读成"没有数据"`
   return {
     id: entry.id,
     title: entry.name,
@@ -372,9 +388,9 @@ export function detailModel(entry: ToolEntry, data: ToolData | null = null): Det
       title: curve.title,
       note: noteOf(curve, data, 'curve', fallback),
       days: data?.curve?.days ?? [],
-      series: data?.curve?.series ?? [],
-      marks: data?.curve?.marks ?? [],
-      empty: emptyOf(),
+      series: curveDrawn ? curveSeries.map((s) => ({ name: s.name, points: [...s.points] })) : [],
+      marks: curveDrawn ? curveMarks.map((m) => ({ index: m.index, label: m.label })) : [],
+      empty: curveEmpty,
     },
     pie: {
       title: pie.title,

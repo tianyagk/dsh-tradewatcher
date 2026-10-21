@@ -10,7 +10,7 @@
 
 ## 功能
 
-面板由六个页签组成：**自选 / 持仓 / 大盘（含护盘信号与底部位置分析）/ 云图 / 日历 / 工具箱**。下面按模块说明。
+面板由**七个页签**组成：**自选 / 持仓 / 大盘（含护盘信号与底部位置分析）/ 云图 / 日历 / 工具箱 / 复盘**。下面按模块说明。
 
 ### 行情条与详情图
 
@@ -385,10 +385,11 @@ bash scripts/install.sh
 
 ## 子组件与开关
 
-本插件在一个 bundle 内拆成**七行**（core / calendar / cloudmap / market / watchlist / portfolio / tools），**各自可独立开关**：
+本插件在一个 bundle 内拆成**八行**（core / calendar / cloudmap / market / watchlist / portfolio / tools / fupan），**各自可独立开关**：
 停用某一行 = 该行的**路由 404** + **工具从列表消失** + **侧栏 tab 消失**（不灰显、不留空壳）。
-**行清单的唯一权威处是本包的 `cordis.patch.yml`**（`cordis.patch.yml:53-75`，共七行：`tradewatcher-core`/`-calendar`/`-watchlist`/`-portfolio`/`-market`/`-cloudmap`，以及 v0.71.0 加入的 `tradewatcher-tools`，全部启用、每行 `config: { row: … }`）；
+**行清单的唯一权威处是本包的 `cordis.patch.yml`**（该文件的 `- insert:` 块，共八行：`tradewatcher-core`/`-calendar`/`-watchlist`/`-portfolio`/`-market`/`-cloudmap`/`-tools`（v0.71.0）/`-fupan`（v0.111.0），全部启用、每行 `config: { row: … }`）；
 行归属与设计见 `docs/DESIGN-SUBPLUGINS.md`，落地与验证记录见 `docs/AUDIT-IMPL35.md`。
+> 本节的行数与页签数、`cordis.patch.yml` 的行、`src/index.ts` 的 `ROW_ROUTES`、`src/client/index.tsx` 的 `tabs` 五处**由 `src/readmeCounts.test.ts` 锁死**（改一处不改另一处 ⇒ 测试红）。
 
 关闭某一行：**不改本包**，在 profile 层（`~/.dsh/profiles/<profile>/cordis.patch.yml`）按 id 覆盖即可 —— 只关日历就写：
 

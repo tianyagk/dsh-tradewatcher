@@ -14,6 +14,7 @@ import type { GlobalFlowMarketDto, GlobalFlowPayloadDto } from '../api.ts'
 // 否则 `toolRegistry → tools/cake → tools/globalFlowView → toolRegistry` 会成环（实测 TDZ 报错）。
 import { NOT_FETCHED } from '../toolText.ts'
 import type { ToolBarRow, ToolCurveSeries, ToolData, ToolKpiDatum, ToolPayload, ToolPieSlice } from '../toolRegistry.ts'
+import type { GateCell, GateInput, GateInvariant } from '../../shared/payloadGate.ts'
 
 /** 五个市场的画图配色：全部走主题 token（明暗两套都有定义，源码里不写死颜色） */
 export const FLOW_SERIES_COLORS: readonly string[] = [
@@ -183,7 +184,7 @@ export function flowBarsAt(payload: GlobalFlowPayloadDto, step: number, isLatest
       deltaKind,
       // 规模 / 偏好分 / 动量 / 排名 —— 一个都不许丢（回放日如实写「不适用（回放日）」）
       detail: `规模 ${fmtSizeCell(m.currency, aumNative, aumUsd, rateOf(payload, m.currency))}｜偏好分 ${fmtPref(m.pref)}｜动量 ${isLatest ? fmtMomentum(m.momentum) : '不适用（回放日）'}｜横截面排名 ${isLatest ? fmtRank(m.rank, rankedTotal === 0 ? payload.markets.length : rankedTotal) : '不适用（回放日）'}`,
-      note: rowReasonOf(m, aumNative, aumUsd),
+      note: rowReasonOf(m, aumNative, aumUsd, share),
     }
   })
 }
@@ -214,7 +215,7 @@ export function marketRowsAt(payload: GlobalFlowPayloadDto, step: number, isLate
       isLatest ? fmtMomentum(m.momentum) : '不适用（回放日）',
       isLatest ? fmtRank(m.rank, rankedTotal === 0 ? payload.markets.length : rankedTotal) : '不适用（回放日）',
     ])
-    rowNotes.push(rowReasonOf(m, aumNative, aumUsd))
+    rowNotes.push(rowReasonOf(m, aumNative, aumUsd, share))
   }
   return { rows, rowNotes }
 }
@@ -266,14 +267,27 @@ export function fmtSizeCell(currency: 'USD' | 'CNY' | 'HKD', aumNative: number |
 
 /**
  * 行级原因（渲染层必须消费：原因只在载荷 missing[] 里等于没给用户）。
- * 优先级：该市场自己的缺口 > 人民币市场"汇率缺 ⇒ 不折算"这条口径不一致。
+ * 优先级：该市场自己的缺口 > 人民币市场"汇率缺 ⇒ 不折算"这条口径不一致 > **有规模但算不出份额**。
+ *
+ * ⚠ 第三条是**载荷闸门**（`src/shared/payloadGate.ts`，R1）在真实快照上抓出来的：A股/港股的规模在、
+ * 但当日算不出偏好分（`preferenceOf` 需要该市场自己的日线）⇒ 份额 `—`，而当时这一行**没有任何原因**
+ * —— 读者只能看到"这一行没有份额"，分不清是上游没有还是这次失败。判据：`share === null && aumUsd !== null`。
  */
-export function rowReasonOf(m: Pick<GlobalFlowMarketDto, 'currency' | 'name' | 'missing'>, aumNative: number | null, aumUsd: number | null): string | null {
+export function rowReasonOf(
+  m: Pick<GlobalFlowMarketDto, 'currency' | 'name' | 'missing'>,
+  aumNative: number | null,
+  aumUsd: number | null,
+  share: number | null = null,
+): string | null {
   if (m.missing !== null && m.missing !== '') return m.missing
   if (m.currency !== 'USD' && aumNative !== null && aumUsd === null) {
     const native = m.currency === 'CNY' ? fmtCnyYi(aumNative) : fmtHkdYi(aumNative)
     const pair = m.currency === 'CNY' ? '美元/人民币（新浪 fx_susdcny）' : '美元/港元（新浪 fx_susdhkd）'
     return `${m.name} 规模 ${native}（${currencyLabel(m.currency)}）已取到，但本次汇率 ${pair} 未取到 ⇒ 这一行的"规模（美元）"不折算（其余照常）；偏好份额不受影响：权重来自无量纲的偏好分，与汇率无关`
+  }
+  if (share === null && aumUsd !== null) {
+    // 规模取到了、份额没有：份额来自**偏好分**（无量纲，需该市场自己的日线），不是规模占比
+    return `${m.name} 份额未取到：规模 ${fmtUsd(aumUsd)} 已取到，但当日偏好分算不出（区间分位与 5/20 日动量都要该市场自己的日线，快照里样本不足或缺该市场日线）⇒ 这一行不参与份额分母（不用 0 顶替）`
   }
   return null
 }
@@ -650,5 +664,94 @@ export function globalFlowToolPayload(payload: GlobalFlowPayloadDto): ToolPayloa
   return {
     replayMax: Math.max(0, days.length - 1),
     at: (step: number, rangeDays?: number) => globalFlowToolData(payload, step, rangeDays),
+  }
+}
+
+/* ────────────────────── 载荷闸门适配（R1：把模型翻成闸门输入） ────────────────────── */
+
+/**
+ * 「资金蛋糕」的闸门输入（**纯函数**；判据与实现在 `src/shared/payloadGate.ts`）。
+ *
+ * 出处覆盖面 = `cell`：这一屏的每一格读数本来就有各自的出处或口径行（
+ * KPI 磁贴的 `source`、饼图/曲线的区口径行 `notes.*`、市场表逐行 `note`），所以不必放弃逐格追溯。
+ *
+ * 数据时刻的载体 = 状态行那句「数据时刻 …（北京时间）」的**来源值**（`payload.asOf`）。
+ *
+ * `step` 与 `globalFlowToolData` 同义（0 = 最新一日）；模型里的 `rangeDays` 决定切片，
+ * 这里用**同一个切片规则**还原出"当前显示的那一天"，否则合计会拿全窗口去凑（`AUDIT-IMPL46 §1` 的教训）。
+ */
+export function gateInputOfCake(data: ToolData, payload: GlobalFlowPayloadDto, step = 0): GateInput {
+  const all = payload.curve.points
+  const range = data.rangeDays ?? all.length
+  const points = range > 0 && range < all.length ? all.slice(all.length - range) : all
+  const idx = pointIndexAt(points.length, step)
+  const point = points[idx]
+  const shares = point?.share ?? payload.markets.map(() => null)
+  const live = shares.filter((v): v is number => v !== null)
+
+  const cells: GateCell[] = []
+  for (const [label, datum] of Object.entries(data.kpi ?? {})) {
+    cells.push({
+      where: `KPI ${label}`,
+      value: datum.value === null ? null : datum.text,
+      source: datum.source ?? null,
+      // 缺数据的磁贴把原因放在 `source` 里（`macroTiles` 的 `nullTile`），所以这里取同一字段
+      missingReason: datum.value === null ? (datum.source ?? null) : null,
+    })
+  }
+  for (const slice of data.pie?.slices ?? []) {
+    cells.push({
+      where: `饼图 ${slice.label}`,
+      value: slice.value === null ? null : slice.text,
+      source: data.notes?.pie ?? null,
+      missingReason: slice.value === null ? (data.notes?.pie ?? null) : null,
+    })
+  }
+  for (const bar of data.market?.bars ?? []) {
+    cells.push({
+      where: `市场表 ${bar.name} 份额`,
+      value: bar.sharePct === null ? null : bar.shareText,
+      source: data.notes?.market ?? null,
+      missingReason: bar.sharePct === null ? bar.note : null,
+    })
+  }
+
+  // 曲线被"规模闸门"（R5）拦下时会**保留日期轴、清空序列** —— 那是合法状态，不能当成"条数不对"
+  const curveBlanked = data.curve.series.length === 0 && data.curve.days.length > 0
+  const invariants: GateInvariant[] = [
+    {
+      label: '份额合计',
+      actual: live.length === 0 ? null : shares.reduce<number>((sum, v) => sum + (v ?? 0), 0) * 100,
+      expected: live.length === 0 ? null : 100,
+      tolerance: 0.5,
+      why: live.length === 0 ? '这一天没有一个市场拿到规模 ⇒ 分母为空，份额合计无从谈起（不用 0 顶替）' : null,
+    },
+    {
+      label: '曲线序列条数',
+      actual: data.curve.series.length,
+      expected: curveBlanked ? null : points.length === 0 ? 0 : payload.markets.length,
+      why: curveBlanked ? '这一屏的曲线被规模闸门拦下（见 curve.empty），不绘制不是"少数据"' : null,
+    },
+    {
+      label: '日期轴长度',
+      actual: data.curve.days.length,
+      expected: points.length,
+    },
+  ]
+  for (const series of data.curve.series) {
+    invariants.push({
+      label: `曲线「${series.name}」点数`,
+      actual: series.points.length,
+      expected: data.curve.days.length,
+    })
+  }
+
+  return {
+    name: '资金蛋糕',
+    asOfText: payload.asOf === null ? null : fmtBeijing(payload.asOf, payload.day),
+    why: data.why ?? null,
+    sourceScope: 'cell',
+    cells,
+    invariants,
   }
 }
