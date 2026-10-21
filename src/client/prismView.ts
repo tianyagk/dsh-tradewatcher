@@ -19,6 +19,7 @@
  */
 import {
   PRISM_BLOCK_KEYS,
+  type PrismBook,
   PRISM_DEFAULT_PARAMS,
   PRISM_FREQS,
   PRISM_STANCES,
@@ -200,6 +201,54 @@ export function barsLine(payload: PrismPayload | null): string {
 export function bookText(book: PrismBlocks['spread']['book']): string {
   if (!book.available) return `${DASH}${book.reason === null ? '' : `（${book.reason}）`}`
   return `${book.levels} 档 · ${book.source ?? DASH}`
+}
+
+/**
+ * 「只有价」形态的可见文本：`401.10 · 13:38:00`（`quoteMid` 与它的数据时刻）。
+ * 没有 `quoteMid` ⇒ `—`（不拿收盘价凑）。
+ */
+export function quoteMidText(book: PrismBook): string {
+  if (book.quoteMid === null) return DASH
+  const at = book.quoteAt === null ? '' : ` · ${shClockText(book.quoteAt)}`
+  return `${fmtPrice(book.quoteMid)}${at}`
+}
+
+/**
+ * 断言 ④：盘口契约（`available:false` **不得**携带 `microPrice`）。
+ *
+ * 运行时锚点：`emptyBook` / `quoteOnlyBook` / `parseTencentDepthBook` 都走这条判据；
+ * 注入"把 mid 塞进 microPrice"⇒ 非空。
+ */
+export function bookContractProblems(book: PrismBook): string[] {
+  const bad: string[] = []
+  if (book.available) {
+    if (book.microPrice === null) bad.push('available:true 但没有 microPrice')
+    if (!(book.levels > 0)) bad.push('available:true 但 levels=0')
+    if (book.quoteMid !== null) bad.push('available:true 时 quoteMid 必须为 null（避免把真盘口与只有价混在一起）')
+    if (book.bids.length === 0 || book.asks.length === 0) bad.push('available:true 但没有买/卖档')
+  } else {
+    if (book.microPrice !== null) bad.push('available:false 却携带 microPrice（下游会分不清真盘口与只有价）')
+    if (book.levels !== 0) bad.push('available:false 时 levels 必须为 0')
+    if (book.quoteMid !== null) {
+      if (book.quoteSource === null || book.quoteSource.trim() === '') bad.push('quoteMid 必须带 quoteSource')
+      if (book.quoteAt === null) bad.push('quoteMid 必须带 quoteAt（数据时刻）')
+      if (!(book.quoteMid > 0)) bad.push('quoteMid 必须是正数')
+    }
+  }
+  return bad
+}
+
+/**
+ * 断言 ⑥：参数/输入行必须显示**输入名**（可追溯标签，不是注解）。
+ *
+ * Stoikov 的 `s` 与 Spread 的 `mid` 都可能来自 `micro-price（5 档）` 或 `盘口中点（1 档价）`，
+ * 页面必须把来源写出来；只显示数字等于让人猜。注入：删掉任一输入名 ⇒ 非空。
+ */
+export function inputNameProblems(src: string): string[] {
+  const bad: string[] = []
+  if (!src.includes('`s：${blocks.stoikov.sSource}`')) bad.push('Stoikov 卡没有显示 s 的输入名（s：micro-price（5 档）/ 盘口中点（1 档价））')
+  if (!src.includes('`mid：${blocks.spread.midSource}`')) bad.push('Spread 卡没有显示 mid 的输入名')
+  return bad
 }
 
 /* ────────────────────────────── 判据（回包层） ────────────────────────────── */

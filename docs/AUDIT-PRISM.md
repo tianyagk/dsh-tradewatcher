@@ -12,7 +12,7 @@
 **九行形态已落地**：页签「棱镜」在最右；宿主 `GET /tradewatcher/prism` 永远 200、六块齐全、缺数据一律 `null` + 原因；
 10/30 分钟由 5 分钟聚合（6 根 ⇒ 1 根，OHLC 与量逐项断言）；Stoikov 的 `T−t→0` 保护有断言钉住；
 Monte Carlo ≥1 万次、固定种子可复现、四条假设逐条上屏；结论三态且 Edge 不达标只走「不下结论」；
-**五档盘口实测可得**（沪深股票/ETF，腾讯 `qt.gtimg.cn`，micro-price 可算到 **5 档**），港股午休与指数不可得（已按"没有"处理并给原因）。
+**盘口实测**：沪深股票/ETF 与美股可算到 **5 档**（micro-price）；港股只有 **1 档价**（`quoteMid`，量结构性拿不到，按 `available:false` + `quoteMid` 的独立形态给）；指数无盘口。
 
 ## 1. 交付面（文件级）
 
@@ -27,7 +27,7 @@ Monte Carlo ≥1 万次、固定种子可复现、四条假设逐条上屏；结
 | 客户端接线 | `src/client/index.tsx`、`src/client/api.ts` | `PageKey` 加 `prism`；tabs 末尾加 `{ key: 'prism', label: '棱镜', row: 'prism' }`；`api.prism(params)` 只有一条路由字面量 |
 | 行归属 | `src/index.ts`、`cordis.patch.yml`、`package.json`、`locale/rows/prism/{en,zh}.json` | `RowId` 加 `prism`；`ROW_ROUTES.prism = ['/tradewatcher/prism']`；`ROW_TOOLS.prism = []`；manifest 第 9 行；exports 两条 |
 | 文档 | `docs/DESIGN-SUBPLUGINS.md`、`README.md` | 行数 8→9、页签 7→8、路由账 30→31（含 `prism 1`）、§2.1/§2.2 各加一行 |
-| 断言 | `src/host/prism.test.ts`、`src/client/prismView.test.ts`（新） | 10 + 9 = 19 条用例，每条都配反例注入 |
+| 断言 | `src/host/prism.test.ts`、`src/client/prismView.test.ts`、`src/readmeCounts.test.ts` ⑤（新） | 16 + 10 + 1 = 27 条用例，每条都配反例注入 |
 | 镜像同步 | `src/index.test.ts`、`src/rowOwnership.test.ts`、`src/readmeCounts.test.ts`、`src/client/toolsPage.test.ts`、`src/client/impl83.test.ts`、`src/client/impl78.test.ts` | 行/页签/保活字面量的既有期望值同步（9 行、8 页签、`KEEP_ALIVE` 四项） |
 
 ## 2. 输入实测（2026-10-21 13:05–13:20 Asia/Shanghai，本机）
@@ -38,6 +38,7 @@ Monte Carlo ≥1 万次、固定种子可复现、四条假设逐条上屏；结
 | --- | --- | --- |
 | `1.600519` | 腾讯 m5（新浪回空后兜底） | **720 根**，`2026-09-22 13:15 → 2026-10-21 13:10`，量纲「手」 |
 | `1.600519` 直连新浪（curl，`datalen=720`） | 新浪 | HTTP 200 / **103,981 字节**，OHLC + volume(股) + amount 齐全 |
+| `105.AAPL` / `106.FRO` | 新浪 `US_MinKService.getMinK`（**裸小写 ticker**） | 上游 **1023 根** → 本地 `slice(-240)`；`type=1/5/30` 各回 240 根；`d` 按 **ET** 收敛（实测 `2026-10-20 16:00` → `20:00Z`）；量单位**股** |
 
 > **实测注意**：路由一次并发取 A/B 两段 5 分钟线时，新浪有一次回**空数组**（日志串 `新浪 5 分钟回空`），
 > 腾讯 m5 兜底接住 —— 这正是"两条链"的价值；**不是**"上游没有"。
@@ -48,16 +49,17 @@ Monte Carlo ≥1 万次、固定种子可复现、四条假设逐条上屏；结
 | --- | --- | --- | --- |
 | `1.600519`（A股） | 买一 1311.94/1 手、卖一 1312.85/1 手……**5 档价量齐全** | `available: true`，`levels: 5` | ✅ 1312.44（5 档加权） |
 | `0.159915`（ETF） | 5 档价量齐全 | `available: true`，`levels: 5` | ✅ 2.7229 |
-| `116.00700`（港股） | 只有买一/卖一价 `402.400`，**五档量全为 0**，时间戳停在 `11:59:59`（13:07 与 13:40 两次复测都一样；`hkHSI`/`hk02800` 同样） | `available: false`（"没有"≠"价格 0"） | ❌ 给原因：腾讯 HK 行情的盘口量恒为 0（疑似结构性不提供）；新浪不覆盖港股 |
+| `116.00700`（港股） | 腾讯 `hk*`：**10 个量槽全 0 且 `f9=f19=现价`**（连两档价都不是真盘口）⇒ 腾讯港股盘口**整条弃用**；新浪 `rt_hk00700`：`f9/f10` = 买一/卖一**价**（与时间戳同一秒） | `available:false` + `microPrice:null` + `levels:0`，但带 **`quoteMid`**（(买一+卖一)/2）+ `quoteSource`/`quoteAt` | ✅ 1 档价可用（`quoteMid`），**量结构性拿不到** |
 | `1.000001`（上证指数） | 五档价/量**全为 0** | `available: false` | ❌ 指数没有盘口（不是缺源） |
 
-- **能算到哪一档**：沪深股票/ETF 可算到 **5 档**（深度加权 micro-price）；**港股 0 档**（腾讯 HK 行情的量字段恒为 0，
-  两次复测都在 `11:59:59`，属结构性不提供）；**指数 0 档**（没有盘口，不需要）。
-  ⇒ 港股的 micro-price 若要可用，**需要新数据源**：港交所 BBO/券商 L2 或另一家延迟行情（本轮没有自行接入）。
+- **能算到哪一档**（侦察后更新，见 §11）：沪深股票/ETF **5 档**（micro-price）；**美股 5 档**
+  （腾讯 `us*` 实测有量，`AAPL` micro=338.15）；**港股 1 档价**（新浪 `rt_hk*` 的买一/卖一价 ⇒ `quoteMid`；
+  量结构性拿不到 ⇒ `microPrice:null`）；**指数 0 档**（没有盘口，不需要）。
+  ⇒ 港股的 **micro-price** 仍需新数据源（港交所 BBO / 券商 L2）；但 `s`/`mid` 已可用 `quoteMid`，不再整个不可算。
 - 初版曾把 `0.00/0` 当成"价格为 0"的档 ⇒ micro-price 会算出 0（编数）。**已修**：`validLevel` 要求 `价>0 且量>0`，
   无效档不计入档数、不参与加权；全部无效 ⇒ `available:false` + 原因。这也是本轮"实测改代码"的一处。
-- 更差的情况（腾讯与新浪都拿不到）⇒ `available:false` + 两源各自的原因；`mid`/`s` 退回**最新收盘价**并在
-  `midSource`/`sSource` 里如实写明「最新收盘（无五档）」。
+- 更差的情况（盘口都拿不到）⇒ `mid`/`s` 依次退：`microPrice` → `quoteMid` → **给原因**
+  （不再拿收盘价冒充 mid；输入名 `mid：…` / `s：…` 常驻显示，可追溯）。
 
 ### 2.3 不覆盖的市场（如实给原因，不认输也不编）
 
@@ -74,7 +76,7 @@ Monte Carlo ≥1 万次、固定种子可复现、四条假设逐条上屏；结
 | ① Bayes 认知 | 同周期 bar 的 量能 z / 滚动位置 / 连续性（窗口 20） | ≥21 根、量能非缺、区间有波动 | ✅ `p = 0.419`（先验 0.5） | 「当根成交量缺失（上游没给量）⇒ 量能 z 不可算」「窗口内最高=最低（无波动）⇒ 价格位置不可算」 |
 | ② Edge 优势 | 同周期历史 bar 实测的平均盈利/亏损（上涨/下跌各 ≥5 根）+ 成本三项；目标价两条规则：`ATR×k`、`|bar 收益| 的 95 分位`（同一规则对看多/看空都成立） | p 可算、样本够、σ 可算 | ✅ `EV = −6.38bps` ⇒ **不下结论**（因此无目标价） | 「历史样本不足：上涨 3 根 / 下跌 2 根（各需 ≥ 5/5）」「收益波动 σ 不可算 ⇒ 延迟惩罚不可算」 |
 | ③ Spread 价差 | 两标的对齐后的 `S = ln(A/B)`，μ/σ 取前 zN 根 | 选配对、对齐 ≥ zN+1、σ>0 | ✅ `z = −1.12`、`mid = 4.742576`（micro-price，5 档）、未越阈 | 「未选择配对标的（pairB 为空）」「对齐后只有 12 根（zN=60 需要 ≥ 61 根）」「价差 σ=0（窗口内无波动）」 |
-| ④ Stoikov 保留价（模拟） | s（优先 micro-price，否则收盘）、σ²（bar 收益）、γ、q、T−t | s>0、收益 ≥5 根 | ✅ `s=1312.44`、`r=1289.42`、`protected=false` | 「中间价 s 不可得」「σ² 不可算（同周期收益不足 5 根）」 |
+| ④ Stoikov 保留价（模拟） | s（`microPrice` → `quoteMid` → 原因）、σ²（bar 收益）、γ、q、T−t | s>0、收益 ≥5 根 | ✅ `s=1312.44`（micro-price，5 档）、`r=1289.42`、`protected=false` | 「s 不可得：既没有 micro-price 也没有盘口中点」「σ² 不可算（同周期收益不足 5 根）」 |
 | ⑤ Kelly 仓位（模拟） | p、赔率 b = 平均盈利/平均亏损、分数系数 | p 与 b 都可算 | ✅ `f*=…`、`fScaled=0`（f*≤0 ⇒ 不押；标题与数值固定带「模拟」） | 「p 不可算」「平均盈利/亏损不可算 ⇒ 赔率 b 不可得」 |
 | ⑥ Monte Carlo 风控 | p ± 误差、成交率、滑点、延迟（→bps）、成本 | p 与平均盈亏可算 | ✅ 10000 次 × 240 笔；`MDD P50=10.93% / P95=13.11%`；`破产=0`；四条假设逐条上屏 | 「p 不可算」「平均盈利/亏损不可算」「延迟惩罚不可算」 |
 
@@ -116,9 +118,9 @@ Monte Carlo ≥1 万次、固定种子可复现、四条假设逐条上屏；结
 
 ## 6. 门禁
 
-- `npm run check`（typecheck + 两时区测试 + selftest + build）：**1070 项 × 2 时区全绿**，
-  `built lib/index.js + lib/client.js （v0.122.0，客户端片段校验通过：73 项）`（读数见 §6.1）。
-  基线 1051 × 2 → 新增 **10**（宿主 `prism.test.ts`）+ **9**（页面判据 `prismView.test.ts`）= **19 条/每时区**。
+- `npm run check`（typecheck + 两时区测试 + selftest + build）：**1078 项 × 2 时区全绿**，
+  `built lib/index.js + lib/client.js （v0.123.0，客户端片段校验通过：73 项）`（读数见 §6.1）。
+  基线 1051 × 2 → 新增 **16**（宿主 `prism.test.ts`）+ **10**（页面判据 `prismView.test.ts`）+ **1**（README 注解清理）= **27 条/每时区**。
 - `npm run selftest`：`ALL HOST CHECKS PASSED (live probes soft)`（隔离 `DSH_HOME=/tmp/prism-selftest`）。
 - `build.mjs` **未改动**（73 项片段校验照旧通过）。
 
@@ -128,14 +130,19 @@ Monte Carlo ≥1 万次、固定种子可复现、四条假设逐条上屏；结
 
 ## 7. 未做项 / 需要什么新数据源
 
-1. **美股 5 分钟源未接**：`105/106/107` 的分钟线只有新浪 `US_MinKService`（本仓库已有 `sinaUsTrend` 用于分时），
-   本轮未接进 `prismFeed`（会引入"美东时间轴 + 15 分钟延迟"的新口径决策）。⇒ 目前美股给
-   「新浪 5 分钟回空」，**需要新数据源**：稳定的美股分钟 OHLC（或复用 `sinaUsTrend` 并补 OHLC 字段）。
-2. **港股五档数量**：腾讯 `hk*` 行情的盘口量**恒为 0**（13:07 / 13:40 两次复测、`hk00700`/`hkHSI`/`hk02800` 都一样），
-   本轮按"没有"处理（不写 0）。⇒ 港股 micro-price **需要新数据源**：港交所 BBO 快照 / 券商 L2 / 另一家延迟行情。
+1. ~~**美股 5 分钟源未接 / 需要新数据源**~~ → **订正：根因是符号命名空间接错**（`gb_*` 被喂给了沪深 K 线服务；
+   实测 `sinaSymbol('105.FRO') = gb_fro` → 那条 URL 只回 `null`）。侦察：`docs/PROBE-PRISM-FEED.md` §1。
+   真源是新浪 `US_MinKService.getMinK`，只认**裸小写 ticker**（`105/106/107.X → x`）；已接（独立解析、
+   `usWallToEpoch(d)` 按 **ET** 收敛、`type=1|5|30`、上游 1023 根 → `slice(-240)`、单链无兜底）。实测见 §11。
+2. ~~**港股五档数量"量恒 0"**~~ → **订正：结构性无量 + 15 分钟延迟**（腾讯港股行情有约 15 分钟延迟；
+   新浪 `rt_hk*` 实测与时间戳同一秒）。腾讯 `hk*` 的 10 个量槽全 0，**且 `f9=f19=现价`（两档价也不可信）**
+   ⇒ 腾讯港股盘口整条弃用；改用新浪 `rt_hk*` 的买一/卖一**价**产出 `quoteMid`。港股 **micro-price**
+   仍需要新数据源（港交所 BBO / 券商 L2），但 `s`/`mid` 不再"整个不可算"。
 3. **挂单价 δ**：仍未提供 —— 本插件没有"可定价差的挂单数据"（无队列、无自身报单状态），
    按用户口径「只给 z、mid 与是否越阈」执行。
 4. **降频链的实际收益有限**（见 §4）：不新增源的前提下无法把"样本不足"救回来。
+4′. **港股 5 分钟 OHLC 仍缺**（腾讯 m5 对 `hk*` 报 `param error`、新浪 `HK_MinKService` 不支持）⇒
+   港股作 A 时六块因无 bar 给原因；港股盘口价（`quoteMid`）已接，但 `s`/`mid` 的实盘展示要等这条源。
 5. **隐身档的数字模糊**：页面的数值走内联样式而不是 `.tw-num` 类，`data-blur` 不会模糊它们（本轮无金额字段，未处理）。
 6. **未做版本号/CHANGELOG 变更**（不 commit；发版由 Lead 统一做）。
 
@@ -174,12 +181,91 @@ Monte Carlo ≥1 万次、固定种子可复现、四条假设逐条上屏；结
 保留（**属数据事实/口径，不是注解**）：缺数据 `—` + 原因、目标价规则短标签（`ATR×k` / `历史 P95`，可复算）、
 「不下结论」三态、Kelly/Stoikov 的「模拟」字样、`建议买入 / 建议卖出 / 不下结论` 三态本身。
 
+## 10. README 注解清理（2026-10-21，用户裁决追加）
+
+用户要求把 `README.md` 里**全站既有**的那句注解也删掉（"面向用户的那句"）；`docs/*.md` 里只记录决策的段落保留。
+`grep -n "不构成投资建议\|投资建议\|免责" README.md` 命中 4 处，全部处理：
+
+| 位置（删除前） | 原文（摘要） | 处理 |
+| --- | --- | --- |
+| `README.md:5` | 首段：「…仅作盯盘参考，**不构成投资建议**。」 | 删掉尾句 ⇒ 「…（非 L2），仅作盯盘参考。」（句子自然收尾） |
+| `README.md:397` | 棱镜段条目：「**免责类注解不上屏**（用户裁决）」 | 改写为「**注解类文案不上屏**（用户裁决）」（事实陈述，不含"免责"） |
+| `README.md:507` | 章节标题「## 已知边界与免责」 | 改为「## 已知边界」（该章其余条目一条未动） |
+| `README.md:521` | 清单条目「- 本插件不构成投资建议」 | 整条删除（它只有这一句；上一条与「## 变更记录」之间的空行已补齐） |
+
+- `docs/*.md` 的命中**全部保留**：它们是审计/设计记录（`AUDIT-IMPL46/47/50/HY4-1` 记的是**工具箱**边界声明那件事，
+  与 README 这句无关），按用户口径"只记录决策的保留"。
+- 判据（新增，`src/readmeCounts.test.ts` ⑤）：`README.md` 不得出现 `不构成投资建议 / 投资建议 / 免责`，
+  并要求删后句子通顺（不许留下悬空逗号、标题不许再挂"免责"）。注入三条（分别加回三种措辞）⇒ 每条都非空。
+- 未顺手改别的说明：页签数（八个）/ 行数（九行）/ 数据文件表 / 路由账等一字未动，`readmeCounts.test.ts` ①②③④ 仍绿。
+
+## 11. 美股分钟线 + 港股「只有价」（2026-10-21 侦察落地）
+
+> 侦察记录：`docs/PROBE-PRISM-FEED.md`（40 次请求 / 17 主机的只读实测）。本节是它的**落地结果**。
+
+用户裁决：**不得把 `available:false` 与「有 mid」混在一起** —— 下游必须能分清"真盘口"与"只有价"。
+
+### 11.1 美股分钟（根因是符号命名空间接错，不是缺源）
+
+- 真源：`https://stock.finance.sina.com.cn/usstock/api/jsonp_v2.php/x/US_MinKService.getMinK?symbol=<ticker>&type=1|5|30`
+  （JSONP：`/*<script>…*\/ x([{d,o,h,l,c,v,a},…])`）。
+- **符号**：只认**裸小写 ticker**；`105/106/107.X → x`（`sinaUsTicker`）。`gb_x`（新浪行情/日线）与 `usX`（腾讯行情）
+  都喂不进该服务 —— 拿错前缀时上游回空数组，**看起来像"美股没有分钟源"，其实是接错命名空间**。
+- **时间**：`d` 是 **ET 收盘时刻** ⇒ `usWallToEpoch(d)`（`Intl` 反解、含 DST）；收敛失败的那根直接丢弃（不按 UTC 硬解）。
+- **截尾**：上游固定回 **1023 根** ⇒ 本地 `slice(-240)`（`PRISM_US_KEEP_BARS`）。
+- **单链**：美股没有第二源，失败直接给原因，不假装有兜底；缓存复用 `BAR_CACHE` 45s（键 `us:<ticker>:<type>`）。
+- **实测**（`DSH_HOME=/tmp/prism2-probe`，2026-10-21 13:41）：
+
+| type | 返回根数 | 首根（ET） | 末根（ET） | 末根 UTC | 量纲 |
+| --- | --- | --- | --- | --- | --- |
+| 1 | **240** | 2026-10-20 12:01 | 2026-10-20 16:00 | `2026-10-20T20:00:00Z` | 股 |
+| 5 | **240** | 2026-10-15 15:35 | 2026-10-20 16:00 | `2026-10-20T20:00:00Z` | 股 |
+| 30 | **240** | 2026-09-24 13:30 | 2026-10-20 16:00 | `2026-10-20T20:00:00Z` | 股 |
+
+（`16:00 ET` → `20:00Z` = EDT（UTC−4）；若按 UTC 解会是 `16:00Z`，偏 4 小时。）
+
+### 11.2 港股：只接「盘口价」，用独立字段
+
+- **腾讯港股盘口整条弃用**：实测 `hk00700` / `hkHSI` / `hk02800` 的 10 个量槽**全为 0**，**且 `f9=f19=现价`**
+  （两档价也不是真盘口；时间戳还停在上一节拍）⇒ 不可信。
+- 改用新浪 `hq.sinajs.cn/list=rt_hk00700` 的 `f9`（买一价）/ `f10`（卖一价）：实测与 `f17+f18` 时间戳同一秒。
+- **契约**（`PrismBook` 注释 + `bookContractProblems` 断言）：
+  · `available:true` ⇔ 有量：`levels>0`、`microPrice≠null`，此时 `quoteMid` **必须为 null**；
+  · `available:false`：`microPrice` **必须为 null**、`levels=0`；可以带 `quoteMid` + `quoteSource` + `quoteAt`。
+- **实测**（13:41 HKT）：`available=false`、`levels=0`、`microPrice=null`、`quoteMid=400.70`、
+  `quoteAt=2026-10-21T05:41:09Z`（=13:41 HKT）、`quoteSource=盘口中点（1 档价） · 新浪港股盘口价（量不可用）`；
+  原因：「港股只有盘口价、没有可用的委托量 ⇒ 不给 micro-price（不拿 0 量凑）」。
+- **`s` / `mid` 的取数链**：`micro-price` → `盘口中点（1 档价）` → **都给原因**（不再拿收盘价凑）。
+  输入名常驻显示：`s：micro-price（5 档）` / `s：盘口中点（1 档价）`；配对标的两侧输入不同时逐标的写清
+  （`A micro-price（5 档） / B 盘口中点（1 档价）`）。
+- 美股盘口（顺带实测）：腾讯 `us*` 仍给**有量 5 档**（`AAPL` micro=338.15）⇒ 美股 `s` 走 micro-price。
+- ⚠ **港股分钟线仍无源**（本轮只接了"价"）：腾讯 `mkline?param=hk00700,m5` 报 `param error`、
+  新浪 `HK_MinKService` 报 `Service not valid`、`quotes.sina.cn` 5 分钟链不覆盖港股
+  （既有分时链的注释也写明"只覆盖沪/深"）。⇒ 港股作为 A 时，六块会因**没有 bar** 给原因；
+  `quoteMid` 的 `s`/`mid` 优先级已在单测与"配对 B"场景验证，屏幕上要等**港股 5 分钟 OHLC** 源。
+  **需要新数据源**：港股 5 分钟 OHLC（或港交所 BBO 同时给量，即可回到 micro-price）。
+
+### 11.3 断言 + 反例注入（必败）
+
+| # | 判据 | 用例 | 注入 |
+| --- | --- | --- | --- |
+| ① | 美股 5/1/30 各 ≥240 根、URL 用裸 ticker | `host/prism.test.ts` ① | 改回 `gb_` 前缀 ⇒ URL 断言失败 |
+| ② | `d` 按 ET 收敛（`16:00 ET → 20:00Z`） | 同上 ② | 按 UTC 解 ⇒ 偏 4 小时、断言失败 |
+| ③ | 上游 1023 根被 `slice(-240)` | 同上 ③ | 不截尾 ⇒ 长度 1023、断言失败 |
+| ④ | 港股 `available:false` ⇒ `microPrice===null`、`quoteMid` 有值且带 `source/at` | 同上 ④（+`bookContractProblems`） | 把 mid 塞进 `microPrice` ⇒ 非空 |
+| ⑤ | `mid`/`s` 优先 micro-price、其次 quoteMid、都没有才给原因 | 同上 ⑤（`midInputOf` + `spreadBlock` + `buildPrismPayload`） | 直接跳过 quoteMid ⇒ 空值、断言失败 |
+| ⑥ | 参数/输入行显示输入名 | `client/prismView.test.ts` ⑥ | 删掉 `s：` 或 `mid：` ⇒ 非空 |
+| ⑦ | 沪深仍走 5 档 micro-price、`quoteMid` 为 null | `host/prism.test.ts` ⑥ | 指数全 0 盘口 ⇒ 不可用 + 原因（不编 0） |
+
+live 探针（selftest，soft）：`棱镜 美股 type=1/5/30 分钟 ≥240 根` / `棱镜 沪深 600519 五档 micro-price` /
+`棱镜 港股 00700 只有价（quoteMid，无 micro）` —— 本次三条全 PASS。
+
 ## 门禁读数
 
 | 轮次 | 命令 | 结果 |
 | --- | --- | --- |
-| 第 1 轮（最终代码：已删两句） | `DSH_HOME=/tmp/prism-checkG npm run check` | **1070 × 2 全绿**（`duration_ms` 18,283 / 18,149）；selftest `ALL HOST CHECKS PASSED`；构建 `73 项` |
-| 第 2 轮（最终代码：同上） | `DSH_HOME=/tmp/prism-checkH npm run check` | **1070 × 2 全绿**（`duration_ms` 18,424 / 18,339）；selftest / 构建同第 1 轮 |
+| 第 1 轮（最终代码：美股/港股输入已接） | `DSH_HOME=/tmp/prism2-checkK npm run check` | **1078 × 2 全绿**（`duration_ms` 19,095 / 18,346）；selftest `ALL HOST CHECKS PASSED`（含 5 条棱镜 live 探针）；构建 `73 项`（v0.123.0） |
+| 第 2 轮（最终代码：同上） | `DSH_HOME=/tmp/prism2-checkL npm run check` | **1078 × 2 全绿**（`duration_ms` 18,941 / 17,513）；selftest / 构建同第 1 轮 |
 
-> 更早的几轮（`/tmp/prism-check`、`-check2`、`-checkC`、`-checkD`）也是全绿，但之后改过目标价 P95 口径、
-> 以及按用户裁决删除两句注解 ⇒ 不作数，**以 G/H 两轮为准**（同一份源码、零改动）。
+> 更早的几轮（`check` / `check2` / `-checkC` / `-checkD` / `-checkG` / `-checkH` / `-checkI` / `-checkJ`）也是全绿，
+> 但之后又接了美股分钟与港股价对（新增 7 条判据）⇒ 不作数，**以 K/L 两轮为准**（同一份源码、零改动）。

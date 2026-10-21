@@ -123,7 +123,24 @@ export interface PrismBookLevel {
   size: number | null
 }
 
-/** 五档盘口（腾讯 `qt.gtimg.cn` / 新浪 `hq.sinajs.cn` 都能给；拿不到 ⇒ available=false + 原因） */
+/**
+ * 盘口输入名（页面必须显示 —— 这是**可追溯标签**，不是注解）：
+ *   · `micro-price（5 档）`：有价有量，按 5 档深度加权；
+ *   · `盘口中点（1 档价）`：只有买一/卖一**价**、量拿不到（港股就是这种形态），取两者中点。
+ */
+export const PRISM_INPUT_NAME = {
+  micro: 'micro-price（5 档）',
+  quote: '盘口中点（1 档价）',
+} as const
+
+/**
+ * 盘口（腾讯 `qt.gtimg.cn` 的 5 档 / 新浪 `hq.sinajs.cn` 的 1 档价；拿不到 ⇒ `available:false` + 原因）。
+ *
+ * ⚠ **契约（下游靠它区分"真盘口"与"只有价"）**：
+ *   · `available === true` ⇔ 有量：`levels > 0`、`microPrice !== null`，且此时 `quoteMid` **必须为 null**；
+ *   · `available === false`：`microPrice` **必须为 null**；可以带 `quoteMid`（买一/卖一价的中点）+ 自己的 `quoteSource`/`quoteAt`。
+ *   判据：`bookContractProblems`（`src/client/prismView.ts`），注入"把 mid 塞进 microPrice"⇒ 必败。
+ */
 export interface PrismBook {
   available: boolean
   reason: string | null
@@ -132,8 +149,14 @@ export interface PrismBook {
   levels: number
   bids: PrismBookLevel[]
   asks: PrismBookLevel[]
-  /** 深度加权 micro-price（用 `levels` 档的价×量） */
+  /** 深度加权 micro-price（用 `levels` 档的价×量）；`available:false` 时必须为 null */
   microPrice: number | null
+  /** 只有盘口**价**时的中点 ((买一+卖一)/2)；有 microPrice 时必须为 null */
+  quoteMid: number | null
+  /** quoteMid 的来源（如「新浪港股盘口价（1 档价）」） */
+  quoteSource: string | null
+  /** quoteMid 的数据时刻（epoch ms；取不到 ⇒ null，但那时也不该有 quoteMid） */
+  quoteAt: number | null
 }
 
 export interface PrismSpreadBlock extends PrismBlockBase {
@@ -148,7 +171,10 @@ export interface PrismSpreadBlock extends PrismBlockBase {
   beyond: 'upper' | 'lower' | null
   /** 价差的最新值 S = ln(A/B)（本插件无买一/卖一"中间价"时的口径见 midSource） */
   mid: number | null
+  /** mid 的输入名（`micro-price（5 档）` / `盘口中点（1 档价）` / 混合时逐标的列出） */
   midSource: string
+  /** mid 不可算时的原因（如"配对标的两侧都没有盘口"） */
+  midReason: string | null
   /** A 的盘口（五档是否可得；Spread 的 mid 与 Stoikov 的 s 都用它） */
   book: PrismBook
 }

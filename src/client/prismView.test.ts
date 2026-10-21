@@ -29,6 +29,7 @@ import {
   PRISM_PARAM_KEYS,
   assumptionsOnScreenProblems,
   barsLine,
+  bookContractProblems,
   bookText,
   fmtBps,
   fmtNum,
@@ -37,6 +38,7 @@ import {
   fmtPrice,
   freqLine,
   freqParamOnlyProblems,
+  inputNameProblems,
   mcAssumptionProblems,
   paramsVisibleProblems,
   prismParamRowText,
@@ -262,7 +264,8 @@ test('展示：缺失一律 `—`（不写 0）、越阈只描述位置、五档
   assert.equal(fmtP(0.6234), '0.623')
   const spread = {
     available: true, reason: null, samples: 60, pairB: '0.000001', n: 60, z: 2.4, mu: 0, sigma: 1,
-    threshold: 2, beyond: 'upper' as const, mid: 0.001, midSource: 'micro-price（五档，A 5 档 / B 5 档）', book: bookOfTest(),
+    threshold: 2, beyond: 'upper' as const, mid: 0.001, midSource: 'micro-price（5 档）',
+    midReason: null, book: bookOfTest(),
   }
   assert.match(spreadStateText(spread), /越上阈/)
   assert.equal(spreadStateText({ ...spread, beyond: null }), '未越阈（|z| ≤ 2）')
@@ -274,7 +277,10 @@ test('展示：缺失一律 `—`（不写 0）、越阈只描述位置、五档
 })
 
 function bookOfTest() {
-  return { available: true, reason: null, source: '腾讯五档（量单位：手，可用 5 档）', levels: 5, bids: [], asks: [], microPrice: 100 }
+  return {
+    available: true, reason: null, source: '腾讯五档（量单位：手，可用 5 档）', levels: 5,
+    bids: [], asks: [], microPrice: 100, quoteMid: null, quoteSource: null, quoteAt: null,
+  }
 }
 
 /** 形状完整的最小 payload（只用于演示判据接线，不参与计算） */
@@ -292,7 +298,10 @@ function payloadOf(edge: PrismEdgeBlock): PrismPayload {
     blocks: {
       bayes: { ...base, prior: 0.5, p: null, series: [], features: { volZ: null, pos: null, streak: null } },
       edge,
-      spread: { ...base, pairB: null, n: 0, z: null, mu: null, sigma: null, threshold: 2, beyond: null, mid: null, midSource: DASH, book: bookOfTest() },
+      spread: {
+        ...base, pairB: null, n: 0, z: null, mu: null, sigma: null, threshold: 2, beyond: null,
+        mid: null, midSource: DASH, midReason: '测试', book: bookOfTest(),
+      },
       stoikov: { ...base, s: null, sSource: DASH, gamma: 0, sigmaSq: null, q: 0, ttBars: 0, reserve: null, protected: false, protectReason: null },
       kelly: { ...base, p: null, b: null, fStar: null, fScaled: null, frac: 0.5 },
       mc: {
@@ -330,4 +339,25 @@ test('② 回包判据：六块齐全/不可算给原因/MC 四条假设（反�
   )
   // MC 假设判据（纯函数层）
   assert.notDeepEqual(mcAssumptionProblems({ available: false, reason: 'x', samples: 0, runs: 0, trades: 0, assumptions: [], mddP50: null, mddP95: null, ruinProb: null, equity: [] }), [], '⚠ 反例（0 条假设）必须被抓到')
+})
+
+test('⑥ 输入名必须上屏：s / mid 标出 micro-price 还是盘口中点（删掉 ⇒ 必败）', () => {
+  assert.deepEqual(inputNameProblems(PAGE), [], `输入名判据必须通过：${JSON.stringify(inputNameProblems(PAGE))}`)
+  // 页面确实把 sSource / midSource 拼进可见文本
+  assert.ok(PAGE.includes('`s：${blocks.stoikov.sSource}`'), 'Stoikov 卡必须显示 `s：…`')
+  assert.ok(PAGE.includes('`mid：${blocks.spread.midSource}`'), 'Spread 卡必须显示 `mid：…`')
+  // 反例注入 A：删掉 s 的输入名 ⇒ 必败
+  const noS = PAGE.replace('`s：${blocks.stoikov.sSource}`', "'s'")
+  assert.notEqual(noS, PAGE, '注入必须真的改到源码')
+  assert.notDeepEqual(inputNameProblems(noS), [], '⚠ 反例（删掉 s 输入名）必须被抓到')
+  // 反例注入 B：删掉 mid 的输入名 ⇒ 必败
+  const noMid = PAGE.replace('`mid：${blocks.spread.midSource}`', "'mid'")
+  assert.notDeepEqual(inputNameProblems(noMid), [], '⚠ 反例（删掉 mid 输入名）必须被抓到')
+  // 盘口契约（页面侧同一份判据）：只有价形态不得携带 microPrice
+  const quoteOnly = {
+    available: false, reason: '港股只有盘口价', source: null, levels: 0, bids: [], asks: [],
+    microPrice: null, quoteMid: 401.1, quoteSource: '盘口中点（1 档价） · 新浪港股盘口价', quoteAt: 1,
+  }
+  assert.deepEqual(bookContractProblems(quoteOnly), [])
+  assert.notDeepEqual(bookContractProblems({ ...quoteOnly, microPrice: 401.1 }), [], '⚠ 反例（mid 塞进 microPrice）必须被抓到')
 })

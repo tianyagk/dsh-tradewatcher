@@ -156,3 +156,46 @@ test('README 不再引用 `cordis.patch.yml` 的**行号**（行号会随插入�
   assert.equal(stale, null, `README 不许再写 cordis.patch.yml 的具体行号（找到 ${stale?.[0]}）—— 改成引用「- insert:」块或章节名`)
   assert.equal(README.includes('`- insert:` 块'), true, '行清单那句话必须改成引用 `- insert:` 块')
 })
+
+/**
+ * README 里的**注解类措辞**必须为零（用户裁决，2026-10-21）。
+ *
+ * 被否决的不是"数据事实"（缺数据原因 / 规则名 / `模拟` 口径都保留），而是这一整类面向用户的
+ * 免责/提示句：`不构成投资建议`、`投资建议`、`免责`。删的时候要求句子仍然通顺
+ * （不能留下悬空的逗号/破折号/空括号）。同一判据既跑真实 README（必须空）也跑注入（必须非空）。
+ */
+const FORBIDDEN_README = ['不构成投资建议', '投资建议', '免责'] as const
+
+function readmeAnnotationProblems(text: string): string[] {
+  const bad: string[] = []
+  for (const phrase of FORBIDDEN_README) {
+    if (text.includes(phrase)) bad.push(`README 出现被否决的措辞「${phrase}」`)
+  }
+  return bad
+}
+
+test('⑤ README 不得出现「不构成投资建议 / 投资建议 / 免责」（注入 ⇒ 必败）', () => {
+  assert.deepEqual(readmeAnnotationProblems(README), [], `README 仍有注解类措辞：${JSON.stringify(readmeAnnotationProblems(README))}`)
+  // 删后句子必须通顺：首段自然收尾；标题里也不再挂"免责"
+  assert.ok(README.includes('仅作盯盘参考。'), '首段必须自然收尾（不是删一半留下悬空逗号）')
+  assert.equal(/仅作盯盘参考[，,]\s*。/.test(README), false, '不许留下悬空的逗号')
+  assert.equal(README.includes('## 已知边界与免责'), false, '章节标题不许再挂「免责」')
+  assert.ok(README.includes('## 已知边界'), '章节标题必须保留（改名为「已知边界」）')
+  // 反例注入：把任一种措辞加回 ⇒ 判据必须非空
+  const injections: Array<{ add: string; hit: RegExp }> = [
+    { add: '本插件不构成投资建议', hit: /不构成投资建议/ },
+    { add: '以上内容属于投资建议', hit: /投资建议/ },
+    { add: '免责声明：仅供参考', hit: /免责/ },
+  ]
+  for (const { add, hit } of injections) {
+    const bad = readmeAnnotationProblems(`${README}\n${add}\n`)
+    assert.ok(bad.length > 0, `注入「${add}」必须被抓到（一条都没报 ⇒ 判据恒真）`)
+    assert.match(bad.join(' ／ '), hit, `注入「${add}」报的原因应是预期的：${JSON.stringify(bad)}`)
+  }
+  const injected = `${README}\n本插件不构成投资建议\n`
+  assert.throws(
+    () => assert.deepEqual(readmeAnnotationProblems(injected), [], '反例'),
+    /反例/,
+    '⚠ 反例注入（加回免责句）必须让断言失败',
+  )
+})

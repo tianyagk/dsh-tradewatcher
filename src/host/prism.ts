@@ -36,6 +36,7 @@ import {
   PRISM_BLOCK_KEYS,
   PRISM_DEFAULT_PARAMS,
   PRISM_FREQS,
+  PRISM_INPUT_NAME,
   PRISM_MIN_SAMPLES,
   type PrismAssumption,
   type PrismBayesBlock,
@@ -500,6 +501,16 @@ export function edgeBlock(bars: readonly PrismBar[], p: number | null, params: P
   }
 }
 
+/**
+ * 盘口 → 中间价**输入**：优先 `microPrice`（有量的 5 档），没有则 `quoteMid`（只有价的 1 档），
+ * 两者都没有 ⇒ null（**不拿收盘价凑**；页面显示输入名，可追溯）。
+ */
+export function midInputOf(book: PrismBook): { value: number | null; label: string | null } {
+  if (book.available && book.microPrice !== null && book.microPrice > 0) return { value: book.microPrice, label: PRISM_INPUT_NAME.micro }
+  if (book.quoteMid !== null && book.quoteMid > 0) return { value: book.quoteMid, label: PRISM_INPUT_NAME.quote }
+  return { value: null, label: null }
+}
+
 /** 对齐两根 5 分钟线（同 label；只保留两侧都有、且非未收满的根） */
 export function alignBars(a: readonly PrismBar[], b: readonly PrismBar[]): Array<{ a: PrismBar; b: PrismBar }> {
   const index = new Map<string, PrismBar>()
@@ -534,6 +545,7 @@ export function spreadBlock(
     beyond: null,
     mid: null,
     midSource: '—',
+    midReason: null,
     book: bookA,
   }
   if (pairB === null || barsB === null) {
@@ -553,13 +565,21 @@ export function spreadBlock(
     return { ...base, samples: aligned.length, mu, sigma, reason: '价差 σ=0（窗口内无波动）⇒ z 不可算' }
   }
   const z = (current - mu) / sigma
-  const lastA = aligned[aligned.length - 1]?.a as PrismBar
-  const lastB = aligned[aligned.length - 1]?.b as PrismBar
-  const microA = bookA.microPrice
-  const microB = bookB?.microPrice ?? null
-  const useBook = microA !== null && microB !== null && microA > 0 && microB > 0
-  const mid = useBook ? Math.log((microA as number) / (microB as number)) : Math.log(lastA.close / lastB.close)
+  const aInput = midInputOf(bookA)
+  const bInput = bookB === null ? { value: null, label: null } : midInputOf(bookB)
   const beyond = z > params.zTh ? 'upper' : z < -params.zTh ? 'lower' : null
+  // mid 只由**盘口输入**给出（micro-price → 盘口中点）；两者都没有 ⇒ null + 原因（不拿收盘价凑）
+  let mid: number | null = null
+  let midSource = '—'
+  let midReason: string | null = null
+  if (aInput.value !== null && bInput.value !== null) {
+    mid = Math.log(aInput.value / bInput.value)
+    midSource = aInput.label === bInput.label
+      ? (aInput.label as string)
+      : `A ${aInput.label ?? '—'} / B ${bInput.label ?? '—'}`
+  } else {
+    midReason = `配对标的两侧都要有盘口：A ${aInput.label ?? '无盘口'} / B ${bInput.label ?? '无盘口'}`
+  }
   return {
     available: true,
     reason: null,
@@ -572,7 +592,8 @@ export function spreadBlock(
     threshold: params.zTh,
     beyond,
     mid,
-    midSource: useBook ? `micro-price（五档，A ${bookA.levels} 档 / B ${bookB?.levels ?? 0} 档）` : '最新收盘（无五档）',
+    midSource,
+    midReason,
     book: bookA,
   }
 }
@@ -598,7 +619,9 @@ export function stoikovBlock(bars: readonly PrismBar[], params: PrismParams, s: 
     protected: false,
     protectReason: null,
   }
-  if (s === null || !(s > 0)) return { ...base, reason: '中间价 s 不可得（收盘价与五档都没有）' }
+  if (s === null || !(s > 0)) {
+    return { ...base, reason: 's 不可得：既没有 micro-price（5 档）也没有盘口中点（1 档价）⇒ 不拿收盘价凑' }
+  }
   const sigmaSq = sigmaSqOf(bars, s)
   if (sigmaSq === null) return { ...base, reason: 'σ² 不可算（同周期收益不足 5 根）' }
   const raw = s - params.q * params.gamma * sigmaSq * params.ttBars
@@ -782,8 +805,11 @@ export function emptyBlocks(reason: string, params: PrismParams = PRISM_DEFAULT_
     spread: {
       ...unavailable(reason),
       pairB: null, n: 0, z: null, mu: null, sigma: null, threshold: 2, beyond: null, mid: null,
-      midSource: '—',
-      book: { available: false, reason, source: null, levels: 0, bids: [], asks: [], microPrice: null },
+      midSource: '—', midReason: reason,
+      book: {
+        available: false, reason, source: null, levels: 0, bids: [], asks: [], microPrice: null,
+        quoteMid: null, quoteSource: null, quoteAt: null,
+      },
     },
     stoikov: { ...unavailable(reason), s: null, sSource: '—', gamma: 0, sigmaSq: null, q: 0, ttBars: 0, reserve: null, protected: false, protectReason: null },
     kelly: { ...unavailable(reason), p: null, b: null, fStar: null, fScaled: null, frac: 0 },
@@ -884,8 +910,9 @@ export function buildPrismPayload(input: PrismInput): PrismPayload {
   const bayes = barReason === null ? bayesBlock(bars, patch) : unavailableBayes(barReason)
   const edge = barReason === null ? edgeBlock(bars, bayes.p, patch) : unavailableEdge(barReason, params)
   const bookA = input.bookA
-  const s = bookA.microPrice ?? bars.filter((b) => b.partial !== true).at(-1)?.close ?? null
-  const sSource = bookA.microPrice !== null ? `micro-price（${bookA.levels} 档）` : '最新收盘（无五档）'
+  const sInput = midInputOf(bookA)
+  const s = sInput.value
+  const sSource = sInput.label ?? '—'
   const stoikov = barReason === null ? stoikovBlock(bars, patch, s, sSource) : unavailableStoikov(barReason, patch)
   const kelly = barReason === null ? kellyBlock(bayes.p, edge.avgWinBps, edge.avgLossBps, patch, edge.samples) : unavailableKelly(barReason, patch)
   const spread = spreadBlock(bars, input.feedB?.bars ?? null, patch, bookA, input.bookB ?? null)
@@ -969,7 +996,10 @@ const safeBook = async (deps: PrismDeps, secid: string): Promise<PrismBook> => {
   try {
     return await deps.loadBook(secid)
   } catch (error) {
-    return { available: false, reason: `五档取数异常（${String(error).slice(0, 80)}）`, source: null, levels: 0, bids: [], asks: [], microPrice: null }
+    return {
+      available: false, reason: `盘口取数异常（${String(error).slice(0, 80)}）`, source: null, levels: 0,
+      bids: [], asks: [], microPrice: null, quoteMid: null, quoteSource: null, quoteAt: null,
+    }
   }
 }
 

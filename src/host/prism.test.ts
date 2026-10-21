@@ -24,13 +24,28 @@ import {
   emptyPrismPayload,
   freqNoteOf,
   mcBlock,
+  midInputOf,
   parsePrismQuery,
   prismBucketOf,
   prismResponse,
+  spreadBlock,
   stoikovBlock,
 } from './prism.ts'
-import type { PrismBar, PrismFeed } from './prismFeed.ts'
 import {
+  PRISM_US_KEEP_BARS,
+  PRISM_US_TYPES,
+  fetchFiveLevelBook,
+  fetchSinaUsBars,
+  parseSinaHkQuote,
+  parseTencentDepthBook,
+  parseUsMinuteText,
+  sinaUsTicker,
+  usMinuteUrl,
+  type PrismBar,
+  type PrismFeed,
+} from './prismFeed.ts'
+import {
+  bookContractProblems,
   mcAssumptionProblems,
   prismPayloadProblems,
   stanceProblems,
@@ -83,6 +98,23 @@ const bookOf = (microPrice: number | null): PrismBook => ({
   bids: [],
   asks: [],
   microPrice,
+  quoteMid: null,
+  quoteSource: null,
+  quoteAt: null,
+})
+
+/** 只有价的盘口（港股形态）：`available:false` + `microPrice:null` + `quoteMid` + source/at */
+const quoteBook = (quoteMid: number | null, reason = '港股只有盘口价、没有可用的委托量'): PrismBook => ({
+  available: false,
+  reason,
+  source: null,
+  levels: 0,
+  bids: [],
+  asks: [],
+  microPrice: null,
+  quoteMid,
+  quoteSource: quoteMid === null ? null : '盘口中点（1 档价） · 新浪港股盘口价（量不可用）',
+  quoteAt: quoteMid === null ? null : 1_761_020_280_000,
 })
 
 const paramsOf = (patch: Partial<PrismParams> = {}): PrismParams => ({ ...PRISM_DEFAULT_PARAMS, pairA: '1.600519', pairB: '0.000001', ...patch })
@@ -93,8 +125,9 @@ const payloadOf = (bars: PrismBar[], params: PrismParams = paramsOf()) =>
     feedA: feedOf(bars),
     // 配对 B 用另一段序列（同一个 base/seed 会让价差恒 0 ⇒ σ=0，那是"不可算"的正确形态）
     feedB: feedOf(mkBars(bars.length, 50, 11)),
-    bookA: bookOf(null),
-    bookB: bookOf(null),
+    // 可算路径用"有量"的盘口（A/B 给不同 mid ⇒ 价差 mid = ln(2)，z 仍由收盘价算）
+    bookA: bookOf(100),
+    bookB: bookOf(50),
     asOf: 1_700_000_000_000,
     universe: [{ secid: '1.600519', name: '贵州茅台' }],
   })
@@ -332,4 +365,169 @@ test('参数解析：非法值回落默认（不 400）、频率只认 5/10/30�
 
 test('六个块的键名固定（页面/断言共用一份顺序）', () => {
   assert.deepEqual([...PRISM_BLOCK_KEYS], ['bayes', 'edge', 'spread', 'stoikov', 'kelly', 'mc'])
+})
+
+
+/* ────────────────────────────── 新增：美股分钟 / 港股只有价 ────────────────────────────── */
+
+/**
+ * 造一份新浪美股分钟 JSONP 回包（**北京时间与美东无关**：这里直接按 ET 墙上时间生成）。
+ * 1023 根、每根 5 分钟（不模拟午休；解析与截尾都不依赖会话结构）。
+ */
+function usFixture(n: number): string {
+  const rows: Array<Record<string, string>> = []
+  const start = Date.UTC(2026, 9, 1, 13, 35) // 2026-10-01 09:35 EDT = 13:35Z
+  for (let i = 0; i < n; i += 1) {
+    const utc = start + i * 300_000
+    const et = new Date(utc - 4 * 3_600_000).toISOString() // EDT = UTC−4
+    const d = `${et.slice(0, 10)} ${et.slice(11, 19)}`
+    const px = (100 + i / 1000).toFixed(4)
+    rows.push({ d, o: px, h: px, l: px, c: px, v: '1000', a: '100000' })
+  }
+  return `/*<script>location.href='//sina.com';</script>*/\nx(${JSON.stringify(rows)})`
+}
+
+test('① 美股分钟：5/1/30 各 ≥240 根，符号必须是小写 ticker（gb_ 前缀 ⇒ 必败）', async () => {
+  const fixture = usFixture(1023)
+  const seen: string[] = []
+  const fetchText = async (url: string): Promise<string> => {
+    seen.push(url)
+    return fixture
+  }
+  assert.deepEqual([...PRISM_US_TYPES], [1, 5, 30], '美股分钟粒度就是 1/5/30 三档')
+  for (const type of PRISM_US_TYPES) {
+    const feed = await fetchSinaUsBars(type === 1 ? '105.AAPL' : type === 5 ? '106.FRO' : '107.MSFT', type, { fetchText })
+    assert.ok(feed.bars.length >= 240, `type=${type} 必须 ≥240 根（实得 ${feed.bars.length}）`)
+    assert.equal(feed.volUnit, '股', '美股分钟的量单位是股')
+    assert.equal(feed.source, 'sina-us-min')
+    assert.equal(feed.error, null)
+  }
+  assert.equal(seen.length, 3)
+  assert.equal(seen.every((u) => /symbol=(aapl|fro|msft)&type=(1|5|30)/.test(u)), true, `URL 必须是裸 ticker：${seen.join(' / ')}`)
+  // 反例注入：改回 gb_ 前缀（旧命名空间）⇒ 判据必须失败
+  assert.equal(sinaUsTicker('105.AAPL'), 'aapl')
+  const brokenUrl = usMinuteUrl('gb_aapl', 5)
+  assert.match(brokenUrl, /symbol=gb_aapl/, '旧命名空间会拼出 gb_ 前缀（那正是错的那一版）')
+  assert.throws(
+    () => assert.equal(/symbol=gb_|[?&]symbol=us[A-Z]/.test(brokenUrl), false, '反例'),
+    /反例/,
+    '⚠ 反例注入（gb_ 前缀）必须让断言失败',
+  )
+  assert.equal(sinaUsTicker('1.600519'), null, '非美股 secid 必须返回 null')
+})
+
+test('② 美股 d 是 ET 收盘时刻（按 UTC 解 ⇒ 偏 4–5 小时，必败）', () => {
+  const bars = parseUsMinuteText('x([{"d":"2026-10-21 16:00:00","o":"1","h":"1","l":"1","c":"1","v":"1","a":"1"}])')
+  assert.equal(bars.length, 1)
+  // 2026-10-21 16:00 EDT = 20:00Z
+  assert.equal(bars[0]?.t, Date.UTC(2026, 9, 21, 20, 0, 0), '必须按美东墙上时间收敛到 UTC')
+  const utcParsed = Date.parse('2026-10-21T16:00:00Z')
+  assert.equal(utcParsed, Date.UTC(2026, 9, 21, 16, 0, 0))
+  assert.notEqual(bars[0]?.t, utcParsed, '按 UTC 解会偏 4 小时 ⇒ 判据必须能区分')
+  assert.throws(
+    () => assert.equal(utcParsed, bars[0]?.t, '反例'),
+    /反例/,
+    '⚠ 反例注入（按 UTC 解）必须让断言失败',
+  )
+})
+
+test('③ 上游 1023 根 ⇒ 本地 slice(-240)（不截 ⇒ 必败）', async () => {
+  const fixture = usFixture(1023)
+  const all = parseUsMinuteText(fixture)
+  assert.equal(all.length, 1023, '解析层必须保留上游全部根（截尾是取数层的事）')
+  const feed = await fetchSinaUsBars('105.AAPL', 5, { fetchText: async () => fixture })
+  assert.equal(feed.bars.length, PRISM_US_KEEP_BARS, `取数层只留最近 ${PRISM_US_KEEP_BARS} 根`)
+  assert.equal(feed.bars[feed.bars.length - 1]?.label, all[all.length - 1]?.label, '留下的是**最新**的 240 根')
+  // 反例注入：不截尾 ⇒ 长度是 1023，断言必须失败
+  assert.throws(
+    () => assert.equal(all.length, PRISM_US_KEEP_BARS, '反例'),
+    /反例/,
+    '⚠ 反例注入（不截尾）必须让断言失败',
+  )
+})
+
+test('④ 港股只有价：available:false、microPrice=null、quoteMid 有值且带 source/at（塞进 microPrice ⇒ 必败）', async () => {
+  const hkText = 'var hq_str_rt_hk00700="TENCENT,腾讯控股,412.000,410.400,413.400,400.000,401.000,-9.400,-2.290,401.000,401.200,0,0,0.000,0.000,0.000,400.000,2026/10/21,13:38:00,30|3,N|Y|Y,0.000|0.000|0.000,0|||0.000|0.000|0.000, |0,Y";'
+  const q = parseSinaHkQuote(hkText)
+  assert.equal(q.bid, 401)
+  assert.equal(q.ask, 401.2)
+  assert.equal(q.at, Date.parse('2026-10-21T05:38:00Z') + 0, '2026-10-21 13:38 北京/香港 = 05:38Z')
+  const book = await fetchFiveLevelBook('116.00700', { fetchText: async (url) => {
+    assert.match(url, /rt_hk00700/, '港股只走新浪价对（腾讯盘口弃用）')
+    return hkText
+  } })
+  assert.equal(book.available, false)
+  assert.equal(book.levels, 0)
+  assert.equal(book.microPrice, null, 'available:false 时**不得**携带 microPrice')
+  assert.equal(book.quoteMid, 401.1, '(买一+卖一)/2')
+  assert.ok((book.quoteSource ?? '').length > 0, 'quoteMid 必须带来源')
+  assert.equal(book.quoteAt, Date.parse('2026-10-21T05:38:00Z'))
+  assert.deepEqual(bookContractProblems(book), [])
+  // 反例注入：把 mid 塞进 microPrice ⇒ 契约判据必须非空
+  const mixed = { ...book, microPrice: book.quoteMid }
+  assert.notDeepEqual(bookContractProblems(mixed), [], '⚠ 反例（mid 塞进 microPrice）必须被抓到')
+  assert.throws(
+    () => assert.deepEqual(bookContractProblems(mixed), [], '反例上"契约"必须失败'),
+    /反例上/,
+    '⚠ 反例注入（混用两种形态）必须让断言失败',
+  )
+})
+
+test('⑤ mid/s 输入优先 micro-price，其次盘口中点；两者都没有才给原因（跳过 quoteMid ⇒ 必败）', () => {
+  const micro = bookOf(100)
+  const quote = quoteBook(50)
+  assert.deepEqual(midInputOf(micro), { value: 100, label: 'micro-price（5 档）' })
+  assert.deepEqual(midInputOf(quote), { value: 50, label: '盘口中点（1 档价）' })
+  // 两个都有（非法构造）⇒ micro 优先
+  const both = { ...micro, quoteMid: 99, quoteSource: 'x', quoteAt: 1 }
+  assert.equal(midInputOf(both).label, 'micro-price（5 档）')
+  // 反例注入：直接跳过 quoteMid ⇒ 空值（判据必须失败）
+  const skipQuote = (b: PrismBook) => (b.microPrice !== null ? { value: b.microPrice, label: 'micro-price（5 档）' } : { value: null, label: null })
+  assert.equal(skipQuote(quote).value, null, '⚠ 反例（跳过 quoteMid）会丢掉港股唯一可用的输入')
+  assert.throws(() => assert.equal(skipQuote(quote).value, 50, '反例'), /反例/, '⚠ 反例注入（跳过 quoteMid）必须让断言失败')
+
+  const bars = mkBars(200)
+  const barsB = mkBars(200, 50, 11)
+  const spread = spreadBlock(bars, barsB, paramsOf(), micro, quote)
+  assert.equal(spread.midSource, 'A micro-price（5 档） / B 盘口中点（1 档价）', '混合输入必须逐标的写清')
+  assert.notEqual(spread.mid, null)
+  // Stoikov：A 只有价 ⇒ s = quoteMid，输入名必须写出来
+  const payload = buildPrismPayload({
+    params: paramsOf(), feedA: feedOf(bars), feedB: feedOf(barsB), bookA: quote, bookB: quote, asOf: 1,
+  })
+  assert.equal(payload.blocks.stoikov.s, 50)
+  assert.equal(payload.blocks.stoikov.sSource, '盘口中点（1 档价）', 's 的输入名必须如实')
+  assert.equal(payload.blocks.spread.midSource, '盘口中点（1 档价）')
+  // 两者都没有 ⇒ 给原因（不拿收盘价凑）
+  const none = quoteBook(null, '盘口拿不到（测试用）')
+  const payload2 = buildPrismPayload({
+    params: paramsOf(), feedA: feedOf(bars), feedB: feedOf(barsB), bookA: none, bookB: none, asOf: 1,
+  })
+  assert.equal(payload2.blocks.stoikov.available, false)
+  assert.match(String(payload2.blocks.stoikov.reason), /micro-price|盘口中点/)
+  assert.equal(payload2.blocks.spread.mid, null)
+  assert.match(String(payload2.blocks.spread.midReason), /盘口/)
+})
+
+test('⑥ 沪深回归：腾讯五档仍是 5 档 micro-price，且 quoteMid 必须为 null', () => {
+  const fields = [
+    '1', '贵州茅台', '600519', '1313.29', '1331.88', '1331.88', '15674', '7486', '8188',
+    '1312.61', '2', '1312.60', '2', '1312.58', '34', '1312.54', '1', '1312.50', '5',
+    '1313.28', '6', '1313.29', '2', '1313.81', '2', '1313.83', '2', '1313.85', '1', '',
+    '20261021125708',
+  ]
+  const book = parseTencentDepthBook(`v_sh600519="${fields.join('~')}"`)
+  assert.equal(book.available, true)
+  assert.equal(book.levels, 5)
+  assert.notEqual(book.microPrice, null)
+  assert.equal(book.quoteMid, null, '有量形态不许同时带 quoteMid')
+  assert.deepEqual(bookContractProblems(book), [])
+  assert.equal(midInputOf(book).label, 'micro-price（5 档）')
+  // 指数形态（价量全 0）⇒ 不可用 + 原因，不编 0
+  const zeros = [...fields]
+  for (let i = 9; i <= 28; i += 1) zeros[i] = '0.00'
+  const index = parseTencentDepthBook(`v_sh000001="${zeros.join('~')}"`)
+  assert.equal(index.available, false)
+  assert.equal(index.microPrice, null)
+  assert.match(String(index.reason), /买一\/卖一数量/)
 })
