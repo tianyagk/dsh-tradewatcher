@@ -609,6 +609,29 @@ export interface BoardRow {
 }
 
 /** Stock/ETF detail card data. */
+/**
+ * 竞价（集合竞价）四项：价格 / 量（手）/ 占全日量比（%）/ 相对昨收溢价（%）。
+ *
+ * 来源：腾讯 `m1` 当日第一根（09:30，O=H=L=C=日开，量为竞价量）。`state` 三态：
+ *   · `ok` —— 四项齐全；
+ *   · `not-open` —— 当日还没有 m1 根（未开盘）⇒ 界面只显示「竞价 —」，**不许拿昨日顶替**；
+ *   · `unavailable` —— m1 取不到/字段缺 ⇒ 「竞价 —（原因）」。
+ */
+export type AuctionState = 'ok' | 'not-open' | 'unavailable'
+
+export interface AuctionInfo {
+  state: AuctionState
+  price: number | null
+  /** 竞价量（手） */
+  volLots: number | null
+  /** 竞价量 ÷ 当日总量（%） */
+  volSharePct: number | null
+  /** 竞价价 ÷ 昨收 − 1（%）；带符号由展示层加 */
+  premiumPct: number | null
+  /** `unavailable` 时的一句原因；其余为 null */
+  reason: string | null
+}
+
 export interface StockDetail {
   secid: string
   code: string
@@ -630,6 +653,8 @@ export interface StockDetail {
   floatMv: number | null
   up: number | null
   down: number | null
+  /** 竞价四项（详情抽屉头部显示；不参与其它页面） */
+  auction: AuctionInfo
 }
 
 /** Watchlist group. */

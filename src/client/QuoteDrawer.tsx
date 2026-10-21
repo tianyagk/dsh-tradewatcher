@@ -9,6 +9,7 @@ import type { FqMode, MissingField, StockDetail, TradeMark } from '../shared/mod
 import { FQ_LABEL } from '../shared/model.ts'
 import { api } from './api.ts'
 import { dirClass, fmtAmt, fmtBig, fmtPct, fmtPrice, fmtSigned } from './format.ts'
+import { auctionText } from './auctionView.ts'
 import { Btn, Skeleton, useEscapeLayer } from './ui.tsx'
 import type { CandleMarker, SparkMarker } from './charts.tsx'
 import { KlineChart, TrendChart } from './kline.tsx'
@@ -266,6 +267,7 @@ export function QuoteDrawer(props: {
           board !== null && board.pct !== null ? dirClass(board.pct, redUp) : undefined,
           board !== null ? '行业板块及当日涨跌幅' : '仅 A股 提供行业板块'),
         kv('今开', fmtPrice(d.open)),
+        kv('竞价', auctionText(d.auction)),
         kv('昨收', fmtPrice(d.prev)),
         kv('换手率', d.turnover !== null ? `${d.turnover}%` : '—'),
         kv('最高', fmtPrice(d.high), dirClass(d.high !== null && d.prev !== null ? d.high - d.prev : 0, redUp)),

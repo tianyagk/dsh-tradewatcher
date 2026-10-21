@@ -26,6 +26,7 @@ import { updateJsonLocked, withFileLock } from './lock.ts'
 import { breakerFor, hostsAllowed, minutesToRecover } from './breaker.ts'
 import { fetchSinaEtfRanking, fetchSinaQuotes, fetchSinaUsDaily, fetchSinaUsMin, sinaSymbol as sinaQuoteSymbol, type SinaBar } from './sina.ts'
 import { fetchTencentBoards, fetchTencentMinutes, fetchTencentQuoteRows, fetchTencentSuggest, minuteTrendPointsOf, tencentCode, tencentIndexCode, tencentQuoteCode, type TencentQuoteFull } from './tencent.ts'
+import { fetchAuction } from './auction.ts'
 import { join } from 'node:path'
 import { dataHome } from './store.ts'
 import { hhmmOf, dayOf, inSession, isSettledOffline, parseMarketStamp, shStampText, shanghaiParts, usDayOf, inUsSession, isUsSettledOffline } from './time.ts'
@@ -1258,6 +1259,9 @@ export async function fetchStockDetail(secid: string): Promise<StockDetail | nul
   if (it === undefined) return null
   const code = String(it.f12 ?? '')
   const market = String(it.f13 ?? '')
+  const prev = num(it.f18)
+  // 竞价：复用既有腾讯 m1 链（当日第一根）；失败/未开盘都由 `fetchAuction` 归一成三态，不抛
+  const auction = await fetchAuction(`${market}.${code}`, prev)
   return {
     secid: `${market}.${code}`,
     code,
@@ -1268,7 +1272,7 @@ export async function fetchStockDetail(secid: string): Promise<StockDetail | nul
     open: num(it.f17),
     high: num(it.f15),
     low: num(it.f16),
-    prev: num(it.f18),
+    prev,
     vol: num(it.f5),
     amount: num(it.f6),
     turnover: num(it.f8),
@@ -1279,6 +1283,7 @@ export async function fetchStockDetail(secid: string): Promise<StockDetail | nul
     floatMv: num(it.f21),
     up: num(it.f104),
     down: num(it.f105),
+    auction,
   }
 }
 
