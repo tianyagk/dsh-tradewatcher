@@ -29,6 +29,7 @@ import { dayTradesOf } from './dayTrade.ts'
 import { CHIPS_DISPLAY, CHIPS_DISPLAY_MAX, CHIPS_MIN_SAMPLES, CHIPS_WINDOW, CHIPS_WINDOW_MAX, chipSeriesOf } from './chips.ts'
 import { alignVolUnitWithQuote } from './klineUnits.ts'
 import { globalFlowPayload } from './globalFlow.ts'
+import { prismResponse } from './prism.ts'
 import { FUPAN_DROP_TEXT, FupanStore, fupanMonthView, notesInMonth, notesOnDay, parseFupanMonth, parseFupanOp } from './fupan.ts'
 import { parseFupanDay, readFupanMonthTrades, readFupanTrades } from './fupanTrades.ts'
 import { unreadableMissing } from './readGuard.ts'
@@ -749,6 +750,27 @@ export function makeTradeRoutes(
           log(`leverage route fallback: ${error instanceof Error ? error.message : String(error)}`)
           send(res, 200, emptyLeveragePayload(range))
         }
+      },
+    },
+    {
+      /**
+       * 【棱镜】只读推演（第 9 行 `prism` 独占）：`GET /tradewatcher/prism?freq=5|10|30&pairA=…&pairB=…&…`。
+       *
+       * **契约（已冻结，客户端按同一份编码）**：这条路由**永远 200**，缺数据一律 `null` + `reason`：
+       *   · 参数非法/缺省 ⇒ 回落默认值（不 400 —— 它们是推演参数，不是用户输入错误）；
+       *   · 上游挂掉 / 没有 5 分钟源 / 没选配对标的 ⇒ 200 + 形状完整的空壳（六块都在，每块一句原因）；
+       *   · 六块的计算与口径全在 `src/host/prism.ts` 的文件头；本处**不做任何业务判断**。
+       * 唯一非 200 的来源是既有围栏（`needGate`）：不是数据路径，是全站一致的鉴权行为。
+       * 归属：只被 `PrismPage.tsx`（棱镜页）消费 ⇒ 按 §2.2 判据归 `prism` 行（关掉行 ⇒ 404）。
+       */
+      kind: 'exact',
+      path: '/tradewatcher/prism',
+      handler: async (req, res) => {
+        if (!needGate(req, res)) return
+        // 自选清单只用于页面选配对（不参与计算）；读不到就给空数组，页面仍可手输代码
+        const universe = store.watchData().items.map((i) => ({ secid: i.secid, name: i.name }))
+        const { status, body } = await prismResponse(queryOf(req).toString(), {}, universe)
+        send(res, status, body)
       },
     },
     {

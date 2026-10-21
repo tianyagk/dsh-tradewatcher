@@ -34,11 +34,13 @@ export const ROW_OF_FILE: Record<string, string> = {
   'ToolsPage.tsx': 'tools',
   // 第 8 行（v0.111.0）：复盘页。它是 fupan 两条路由的**唯一**消费者（`api.fupanMonth`/`api.fupanNote`）
   'FupanPage.tsx': 'fupan',
+  // 第 9 行（v0.123.0）：棱镜页。它是 `/tradewatcher/prism` 的**唯一**消费者（`api.prism`）
+  'PrismPage.tsx': 'prism',
   'index.tsx': 'core',
   'TopBar.tsx': 'core',
 }
 /** 实现里真正有路由的行（core 不持有 ROW_ROUTES 条目） */
-const ROW_KEYS = ['calendar', 'watchlist', 'portfolio', 'market', 'cloudmap', 'tools', 'fupan'] as const
+const ROW_KEYS = ['calendar', 'watchlist', 'portfolio', 'market', 'cloudmap', 'tools', 'fupan', 'prism'] as const
 
 export interface DeriveInput {
   /** 客户端文件（相对路径 → 源码） */

@@ -51,6 +51,8 @@ const EXPECTED_ROWS: ReadonlyArray<{ id: string; row: string }> = [
   { id: 'tradewatcher-tools', row: 'tools' },
   // 第 8 行（v0.111）：复盘（月历 + 当日笔记 + 当日交易记录）；host 侧独占三条本机路由，无 agent 工具
   { id: 'tradewatcher-fupan', row: 'fupan' },
+  // 第 9 行（v0.123）：棱镜（只读推演的六个块）；host 侧独占一条路由（永远 200），无 agent 工具
+  { id: 'tradewatcher-prism', row: 'prism' },
 ]
 
 /** manifest 里**不许**被 core 注册的路径（功能行独占；core 注册了就等于关不掉该行） */
@@ -76,6 +78,8 @@ const FUNCTION_OWNED_PATHS = [
   '/tradewatcher/fupan/trades',
   // v0.116.0 第 7 行：杠杆温度计（只被工具页的 leverage 详情消费 ⇒ 归 tools 行，core 必须交出去）
   '/tradewatcher/leverage',
+  // v0.123.0 第 9 行：棱镜（只被 PrismPage 消费 ⇒ 归 prism 行；core 必须交出去，否则棱镜行关不掉）
+  '/tradewatcher/prism',
 ] as const
 
 // 隔离数据目录：**绝不能在测试里碰用户的 ~/.dsh**（store.init 会读写真实文件）
@@ -147,9 +151,9 @@ test('apply 幂等：同进程 apply 三次，一次性副作用只跑一次', a
   // 只 apply"不同行各一次"时，`started` 守卫根本不需要就会被满足（验证员 V-2：那种断言不敏感）。
   apply(a.ctx)
   apply(a.ctx)
-  for (const row of ['calendar', 'cloudmap', 'market', 'watchlist', 'portfolio', 'tools', 'fupan']) apply(a.ctx, { row })
+  for (const row of ['calendar', 'cloudmap', 'market', 'watchlist', 'portfolio', 'tools', 'fupan', 'prism']) apply(a.ctx, { row })
   await waitForCondition(() => __kernelStats.starts === 1) // 等 store.init() 落定（有界）
-  assert.equal(__kernelStats.applies, 9, 'apply 共九次（core 两次 + 七个功能行各一次）')
+  assert.equal(__kernelStats.applies, 10, 'apply 共十次（core 两次 + 八个功能行各一次）')
   assert.equal(__kernelStats.inits, 1, 'store.init() 只跑一次')
   assert.equal(coreKernel()?.starts, 1, 'rescue.start() 只跑一次（采样器只有一个）')
   // 幂等的范围就是"一次性副作用"：init/start 各一次、采样器一个。
@@ -317,9 +321,10 @@ test('P4：七个功能行（calendar/cloudmap/market/watchlist/portfolio/tools/
     { key: 'calendar' as const, label: '日历', full: '日历', row: 'calendar' },
     { key: 'tools' as const, label: '工具', full: '工具箱', row: 'tools' },
     { key: 'fupan' as const, label: '复盘', full: '复盘（月历 + 当日笔记）', row: 'fupan' },
+    { key: 'prism' as const, label: '棱镜', full: '棱镜（只读推演）', row: 'prism' },
   ]
   // 每个功能行关闭一次的期望：该行的 tab 消失，其余照常（core 与其它行不受影响）
-  for (const row of ['calendar', 'cloudmap', 'market', 'watchlist', 'portfolio', 'tools', 'fupan'] as const) {
+  for (const row of ['calendar', 'cloudmap', 'market', 'watchlist', 'portfolio', 'tools', 'fupan', 'prism'] as const) {
     setKernel(null)
     const core = fakeCtx()
     apply(core.ctx, { row: 'core' })
@@ -353,6 +358,8 @@ const ROW_ROUTES_FOR_TEST: Record<string, readonly string[]> = {
   tools: ['/tradewatcher/tools/global-flow', '/tradewatcher/leverage'],
   // 第 8 行（复盘）：整月视图 + 写一条笔记 + 当日交易记录（都只被 FupanPage 消费 ⇒ 该行）
   fupan: ['/tradewatcher/fupan/month', '/tradewatcher/fupan/note', '/tradewatcher/fupan/trades'],
+  // 第 9 行（棱镜）：只读推演的回包路由（只被 PrismPage 消费；永远 200）
+  prism: ['/tradewatcher/prism'],
 }
 const ROW_TOOLS_FOR_TEST: Record<string, readonly string[]> = {
   calendar: ['calendar', 'calendar_add'],
@@ -363,6 +370,8 @@ const ROW_TOOLS_FOR_TEST: Record<string, readonly string[]> = {
   tools: [],
   // 复盘行不带 agent 工具（月历/笔记是纯 UI）
   fupan: [],
+  // 棱镜行不带 agent 工具（只读推演页是纯 UI）
+  prism: [],
 }
 
 /**
@@ -808,7 +817,7 @@ test('task-6：八行装载（manifest 驱动）—— 幂等各 1 次、每行�
     }
   }
   await settle()
-  assert.equal(__kernelStats.applies, 9, 'apply 共九次（core 两次 + 七个功能行各一次）')
+  assert.equal(__kernelStats.applies, 10, 'apply 共十次（core 两次 + 八个功能行各一次）')
   assert.equal(__kernelStats.inits, 1, 'store.init() 只跑一次（八个 fiber 共用一个内核）')
   assert.equal(coreKernel()?.starts, 1, 'rescue.start() 只跑一次（采样器只能有一个）')
   assert.equal((coreKernel()?.rescue as unknown as { running?: boolean }).running, true, '采样器处于运行态')
@@ -999,7 +1008,7 @@ test('task-8/9：八行标题各自可区分 + 标题必须英文（两语都是
   assert.equal(titles.size, rows.length, '八行都要有自己的标题')
   assert.equal(new Set(titles.values()).size, rows.length, `八行标题必须互不相同（实得 ${JSON.stringify([...titles.values()])}）`)
   assert.equal(titles.get('core'), pkg.name, `core 行标题必须等于包名（头部显示的就是它）：${titles.get('core')} vs ${pkg.name}`)
-  for (const row of ['calendar', 'watchlist', 'portfolio', 'market', 'cloudmap', 'tools', 'fupan']) {
+  for (const row of ['calendar', 'watchlist', 'portfolio', 'market', 'cloudmap', 'tools', 'fupan', 'prism']) {
     assert.equal(titles.get(row), `${pkg.name}-${row}`, `${row} 行标题应是 <包名>-<row>：${titles.get(row)}`)
   }
   // ⑤ 发布清单要带上 locale（否则打包后标题解析不到）

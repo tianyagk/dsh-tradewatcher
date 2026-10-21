@@ -10,7 +10,7 @@
 
 ## 功能
 
-面板由**七个页签**组成：**自选 / 持仓 / 大盘（含护盘信号与底部位置分析）/ 云图 / 日历 / 工具箱 / 复盘**。下面按模块说明。
+面板由**八个页签**组成：**自选 / 持仓 / 大盘（含护盘信号与底部位置分析）/ 云图 / 日历 / 工具箱 / 复盘 / 棱镜**。下面按模块说明。
 
 ### 行情条与详情图
 
@@ -383,11 +383,26 @@ bash scripts/install.sh
 
 识别的只是「符合国家队护盘行为模式的放量 + 超大单净流入」，**不能证明买入方是汇金/国新/诚通**（它们不披露日内成交），回答与展示都按**概率性信号**处理。超大单为东财按单笔金额的分类口径（非席位数据）；ETF 天量含做市双边报价与套利盘，故始终用超大单净额与量价背离交叉验证。免费源已无 ETF 资金流历史（东财 fflow 仅当日 1 行、push2his 常限流），故 F2 初期为经验锚点、历史回看自上线日起。
 
+### 棱镜（只读推演）
+
+- **六个块**（每块都给"输入 / 计算结果 / 不可算的原因"）：Bayes 认知（先验可调的简化对数几率更新）、
+  Edge 优势（`EV = p·平均盈利 − (1−p)·平均亏损 − 成本`，成本含手续费/滑点/延迟惩罚）、
+  Spread 价差（配对标的的 `z`、`mid` 与是否越阈；**不给挂单价**）、
+  Stoikov 模拟保留价（`T−t → 0` 时保护并标注）、Kelly 模拟仓位（分数系数可调）、
+  Monte Carlo 风控（≥1 万次，MDD P50/P95、破产概率、中位资金曲线；四条假设全部上屏）。
+- **参数可调且常驻可见**：频率 5 / 10 / 30 分钟（**只换同一个接口的 `freq` 参数**，10/30 由 5 分钟聚合）、
+  配对 A/B、z 窗口与阈值、先验、成本三项、γ/q/T−t、Kelly 分数、ATR×k、MC 次数与四条假设。
+- **结论三态**：`看多 / 看空 / 不下结论`；Edge 不达阈值一律「不下结论」，**不许硬给方向**。
+  目标价只能由可复算规则给出并标注规则名（`ATR×k`、`历史 P95`）+ 全部输入。
+- **免责类注解不上屏**（用户裁决）：页面只放数据事实（缺失原因 / 目标价规则名 / `模拟` 口径）；
+  Kelly 与 Stoikov 的标题与数值固定带「模拟」（防误读为实盘仓位，属口径而非注解）。
+- **只读**：不下单、不连券商、不写任何数据文件；缺数据一律 `—` + 一句原因（不写 0）。
+
 ## 子组件与开关
 
-本插件在一个 bundle 内拆成**八行**（core / calendar / cloudmap / market / watchlist / portfolio / tools / fupan），**各自可独立开关**：
+本插件在一个 bundle 内拆成**九行**（core / calendar / cloudmap / market / watchlist / portfolio / tools / fupan / prism），**各自可独立开关**：
 停用某一行 = 该行的**路由 404** + **工具从列表消失** + **侧栏 tab 消失**（不灰显、不留空壳）。
-**行清单的唯一权威处是本包的 `cordis.patch.yml`**（该文件的 `- insert:` 块，共八行：`tradewatcher-core`/`-calendar`/`-watchlist`/`-portfolio`/`-market`/`-cloudmap`/`-tools`（v0.71.0）/`-fupan`（v0.111.0），全部启用、每行 `config: { row: … }`）；
+**行清单的唯一权威处是本包的 `cordis.patch.yml`**（该文件的 `- insert:` 块，共九行：`tradewatcher-core`/`-calendar`/`-watchlist`/`-portfolio`/`-market`/`-cloudmap`/`-tools`（v0.71.0）/`-fupan`（v0.111.0）/`-prism`（v0.123.0），全部启用、每行 `config: { row: … }`）；
 行归属与设计见 `docs/DESIGN-SUBPLUGINS.md`，落地与验证记录见 `docs/AUDIT-IMPL35.md`。
 > 本节的行数与页签数、`cordis.patch.yml` 的行、`src/index.ts` 的 `ROW_ROUTES`、`src/client/index.tsx` 的 `tabs` 五处**由 `src/readmeCounts.test.ts` 锁死**（改一处不改另一处 ⇒ 测试红）。
 

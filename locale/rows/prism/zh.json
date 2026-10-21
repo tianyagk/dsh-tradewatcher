@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "dsh-tradewatcher-prism",
+    "description": "棱镜：只读推演沙盒（六块：Bayes 认知 / Edge 优势 / Spread 价差 / Stoikov 模拟保留价 / Kelly 模拟仓位 / Monte Carlo 风控）。参数可调，缺数据给原因，不给下单动作"
+  }
+}

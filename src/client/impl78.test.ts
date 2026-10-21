@@ -241,14 +241,14 @@ test('P2-6 点击型 span/div 键盘可达（日历胶囊/+N、自选异动徽�
 test('P2-7 保活：calendar / tools / fupan 切页不卸载（其余页仍卸载，避免多页同时轮询）', () => {
   const index = strip(read('index.tsx'))
   // v0.110.0（AUDIT-IMPL83）：复盘页零轮询 ⇒ 与日历同款保活（月份/选中日/草稿不随切页丢失）
-  assert.ok(/const KEEP_ALIVE: readonly PageKey\[\] = \['calendar', 'tools', 'fupan'\]/.test(index), '只保活无轮询的页')
+  assert.ok(/const KEEP_ALIVE: readonly PageKey\[\] = \['calendar', 'tools', 'fupan', 'prism'\]/.test(index), '只保活无轮询的页')
   assert.ok(/KEEP_ALIVE\.includes\(page\)\) return null/.test(index), '保活页不重复渲染')
   assert.ok(/'data-keepalive': key/.test(index), '保活容器要有可断言的标记')
   assert.ok(/page === key\s*\n?\s*\? \{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' \}/.test(index) || /display: 'none'/.test(index), '显隐用 display 切换（关闭即 display:none）')
   // 反例注入：把日历从保活里去掉 ⇒ 判据必须失败
-  const injected = index.replace("['calendar', 'tools', 'fupan']", "['tools', 'fupan']")
+  const injected = index.replace("['calendar', 'tools', 'fupan', 'prism']", "['tools', 'fupan', 'prism']")
   assert.notEqual(injected, index)
-  assert.equal(/readonly PageKey\[\] = \['calendar', 'tools', 'fupan'\]/.test(injected), false, '⚠ 反例（不保活日历）必须能被抓住')
+  assert.equal(/readonly PageKey\[\] = \['calendar', 'tools', 'fupan', 'prism'\]/.test(injected), false, '⚠ 反例（不保活日历）必须能被抓住')
 })
 
 // ══ P2-8 rAF 合并（K 线 mousemove） ═══════════════════════════════════════
