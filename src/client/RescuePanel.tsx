@@ -879,7 +879,18 @@ export function RescuePanel(props: {
                 ),
                 snapshot.bottom.lanes.length > 0
                   ? React.createElement('div', { className: 'tw-rescue-resonance', style: { marginTop: 6 } },
-                      React.createElement('span', { className: 'tw-muted' }, '历史频率'),
+                      // 区间口径的已知局限（R2 测量后上屏）：**只挂在 title / aria-label**，不占常驻行、
+                      // 不写任何数字。来源是校准结果上的 `intervalNote`（单一来源在 shared/model.ts），
+                      // 客户端不自己算、也不在这里编一句。
+                      React.createElement('span', {
+                        className: 'tw-muted',
+                        ...(snapshot.bottom.lanes[0].calibration.intervalNote === undefined || snapshot.bottom.lanes[0].calibration.intervalNote === ''
+                          ? {}
+                          : {
+                              title: snapshot.bottom.lanes[0].calibration.intervalNote,
+                              'aria-label': `历史频率：${snapshot.bottom.lanes[0].calibration.intervalNote}`,
+                            }),
+                      }, '历史频率'),
                       // P1-9：概率必须带 Wilson 95% 区间 —— 20 个样本的 80% 与 500 个样本的
                       // 80% 不是一回事，只给点估计会被读成"准确率"
                       ...snapshot.bottom.lanes[0].calibration.targets.map((t) => {

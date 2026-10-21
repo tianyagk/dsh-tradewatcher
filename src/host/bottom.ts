@@ -1,7 +1,7 @@
 /**
  *     统计其后 1/3/5/10 日的表现。概率必须与**样本量 N** 和**无条件基线**一起展示，
  */
-import type { DailyBarLite, RescueBottomLane, RescueBottomView } from '../shared/model.ts'
+import { BOTTOM_INTERVAL_CAVEAT, type DailyBarLite, type RescueBottomLane, type RescueBottomView } from '../shared/model.ts'
 import { isSmallSample, wilsonInterval } from '../shared/stats.ts'
 
 /** 位置特征：相对历史的位置（越低越"便宜"） */
@@ -166,6 +166,11 @@ export interface BottomCalibration {
   medianDrawdown: number | null
   /** 前向窗口天数 */
   horizon: number
+  /**
+   * 区间口径的已知局限（**单一来源** = `shared/model.ts` 的 `BOTTOM_INTERVAL_CAVEAT`）。
+   * 大盘页把它挂到「历史频率」的 `title`；工具详情页不消费它（断言锁住引用面）。
+   */
+  intervalNote: string
 }
 
 const medianOf = (arr: readonly number[]): number | null => {
@@ -288,6 +293,8 @@ export function calibratePooled(
     medianForward: medianOf(pooled.forwards),
     medianDrawdown: medianOf(pooled.draws),
     horizon,
+    // 区间偏窄的原因（同日多通道 + 相邻日窗口重叠）—— 界面只读这一句，不自己算
+    intervalNote: BOTTOM_INTERVAL_CAVEAT,
   }
 }
 

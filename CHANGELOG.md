@@ -11,6 +11,49 @@
 
 ---
 
+## v0.122.0 — 底部概率的区间口径声明（先测量、后上屏）
+
+报告 `docs/AUDIT-IMPL89.md` §9。`npm run check` **1051 / 1051 × 2 时区** + selftest + build（73 片段全过）。
+
+### 为什么上屏：先测量，再决定
+
+底部校准**没有独立落盘文件**（`stripSnapshot()` 不落 `bottom`；实测 `rescue-log.json` 的 `lastSnapshot.bottom` 为 `null`）⇒ 用**同一判据在同一份磁盘数据**上重算，并与宿主 `laneOutcomeStats()` **交叉校验 3/3 一致**（28=28 / 29=29 / 22=22）。
+
+| 指标 | 读数 |
+| --- | --- |
+| 同日 ≥2 通道命中 ÷ 可评估日（≥2 通道） | **29 / 255 = 11.4%** |
+| 同日 ≥2 通道命中 ÷ 命中日 | **29 / 42 = 69.0%** |
+| 命中日的连续段 | 17 段；最长 **6 日**；**83.3% 的命中日落在 ≥2 日连续段内** |
+| Wilson 用的样本量 | `N_raw = 79` ⇒ 去横截面重复 **`N_date = 42`（−46.8%）** ⇒ 再去前向窗口重叠 **`N_greedy = 15`（−81.0%）** |
+| Wilson 95% 宽度（+1% 目标，p=68.4%） | **20.1pp → 27.0pp → 43.1pp** |
+
+**判定依据**：① 按「占全部可评估日」读落在 10–20 带（单看只能给建议），但**「去重后 N 下降 ≥20%」独立成立**（−46.8% / −81.0%）⇒ 按裁决的「或」关系支持上屏；另一侧证据同向（83.3% 命中日在连续段内）。
+**敏感性**：加入第 4 个通道（缓存表头无 fqt）⇒ 12.2%、最长 9 日、85.4%、`N` 107→48→16 ⇒ **通道越多重复越高，11.4% 是下界**。
+
+### 声明文案（唯一来源 `shared/model.ts`）
+
+> `样本含同日多通道重复计入（相邻日的前向窗口也重叠）⇒ 区间偏窄`
+
+链路：`calibratePooled` → `BottomCalibration.intervalNote` → `buildBottomLane` → `RescueBottomLane.calibration` → 大盘页「历史频率」的 **`title` + `aria-label`**（读屏也读得到）。
+**不占常驻行、无任何数字、不给「偏窄多少」**（那会变成新的"准确率"）；**不进 `detailModel`**；**不改任何概率数值**。
+
+### 验证
+
+`npm run check` **1051 / 1051 × 2 时区** + selftest + build（73 项）。
+新增 `src/host/bottomInterval.test.ts` **5 条**，均验过必败：
+1. **三个入口**（`calibratePooled` / `calibrateAcross` / `calibrateBottom`）都原样带上唯一来源那句。
+2. **措辞纪律**：必须含「重复计入」「偏窄」；`/\d/` 必须为 0；不得含「准确率/命中率/精确/可靠」⇒ 注入「（约 80%）」数字判据红；换成「区间精确」⇒ 偏窄判据红。
+3. **链路**：`buildBottomLane` 输出带着它（界面读这一份，不自算）。
+4. **引用面恰好 3 个文件**（`shared/model.ts` · `host/bottom.ts` · `client/RescuePanel.tsx`）；`toolRegistry.ts` / `ToolsPage.tsx` 不许出现 ⇒ 谁把它接进 `detailModel` 必红。
+5. **源码锚**：大盘页「历史频率」的 title/aria-label 必须来自 `calibration.intervalNote` ⇒ 删掉必红。
+
+### 测量边界（如实记录）
+
+- 磁盘只有 **3 只 fqt=1 日线**（6 只里 3 只）⇒ 横截面重复率是**下界**。
+- 东财缓存 ≠ 生产用的腾讯日线（单通道命中数会差几个点，但「同日多通道同向触发」属市场结构）。
+- `N_greedy` 是**乐观上界**，真实有效样本量介于 `N_date` 与 `N_greedy` 之间。
+- **未做显著性检验**，也**没有据此改动任何概率数字**。
+
 ## v0.121.0 — 载荷闸门 + 出处 lint + 缓存上限 + 曲线上限；修「有规模无份额」无原因
 
 报告 `docs/AUDIT-IMPL89.md`、`docs/DESIGN-ADOPT-WORKBENCHES.md`。`npm run check` **1046 / 1046 × 2 时区**（基线 1007 + 39）+ selftest + build（73 片段全过）；未新增依赖。
