@@ -13,14 +13,30 @@ export interface LlmStreamChunk {
   [k: string]: unknown
 }
 
+export type LlmTextBlock = { type: 'text'; text: string }
+
 export interface LlmStreamFace {
   stream(options: {
     provider: string
     model: string
-    messages: Array<{ role: 'user' | 'assistant' | 'system'; content: string }>
+    /** 真实契约：`GenerateOptions.messages` 的 content 是 **ContentBlock[]**，不是字符串 */
+    messages: Array<{ role: 'user' | 'assistant' | 'system'; content: LlmTextBlock[] }>
     system?: string
+    reasoningEffort?: string
     maxTokens?: number
   }): AsyncIterable<LlmStreamChunk>
+}
+
+export interface StreamChunkSummary {
+  type: string
+  keys: string[]
+}
+
+export interface StreamResult {
+  text: string | null
+  error: string | null
+  /** 前 3 个原始 chunk 的 type + 键名（失败诊断用；不携带内容） */
+  chunks: StreamChunkSummary[]
 }
 
 export interface ResolvedModel {
@@ -61,22 +77,53 @@ export async function streamText(
   system: string | undefined,
   signal?: AbortSignal,
   maxTokens?: number,
-): Promise<{ text: string | null; error: string | null }> {
+): Promise<StreamResult> {
+  // 真实契约（dsh-llm/types）：`content` 必须是 ContentBlock[]；传字符串会让适配器
+  // `message.content.some(...)` 抛 TypeError，运行时把它变成 finish(error) 空流（0 chunk / 0ms）。
+  const wireMessages = messages.map((m) => ({
+    role: m.role,
+    content: [{ type: 'text' as const, text: m.content }],
+  }))
   let out = ''
+  let reasoningDeltas = 0
+  const chunks: StreamChunkSummary[] = []
+  let finishError: string | null = null
   try {
     const stream = llm.stream({
       provider: model.provider,
       model: model.model,
-      messages,
+      messages: wireMessages,
       ...(system === undefined ? {} : { system }),
       ...(maxTokens === undefined ? {} : { maxTokens }),
     })
     for await (const chunk of stream) {
       signal?.throwIfAborted()
+      if (chunks.length < 3) {
+        const c = chunk as Record<string, unknown>
+        const type = typeof c['type'] === 'string' ? c['type'] : '(no type)'
+        chunks.push({ type, keys: Object.keys(c) })
+      }
       if (chunk.type === 'text-delta' && typeof chunk.text === 'string') out += chunk.text
+      if (chunk.type === 'reasoning-delta') reasoningDeltas += 1
+      if (chunk.type === 'finish') {
+        const reason = (chunk as { reason?: { kind?: unknown; failure?: { code?: unknown; message?: unknown } } }).reason
+        if (reason !== undefined && (reason.kind === 'error' || reason.kind === 'aborted')) {
+          const failure = reason.failure
+          const code = typeof failure?.code === 'string' ? failure.code : ''
+          const message = typeof failure?.message === 'string' ? failure.message : '上游未给 message'
+          finishError = `模型流结束于 ${String(reason.kind)}${code === '' ? '' : ` [${code}]`}：${message}`
+        }
+      }
     }
-    return { text: out.trim() === '' ? null : out.trim(), error: out.trim() === '' ? '模型返回空文本' : null }
+    if (out.trim() === '') {
+      return {
+        text: null,
+        error: finishError ?? `模型返回空文本（0 个 text-delta，reasoning-delta ${reasoningDeltas} 个，chunk 数 ${chunks.length}）`,
+        chunks,
+      }
+    }
+    return { text: out.trim(), error: finishError, chunks }
   } catch (error) {
-    return { text: null, error: `模型调用失败（${String(error).slice(0, 120)}）` }
+    return { text: null, error: `模型调用失败（${String(error).slice(0, 120)}）`, chunks }
   }
 }

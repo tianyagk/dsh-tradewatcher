@@ -284,6 +284,8 @@ export function makePrismRoutes(deps: PrismRouteDeps): PluginWebRoute[] {
         let ok = false
         let error: string | null = null
         let model: string | null = null
+        let text: string | null = null
+        let chunks: Array<{ type: string; keys: string[] }> = []
         try {
           const resolved = await import('./prismLlm.ts').then((m) => m.resolvePrismModel(deps.get))
           if (resolved.llm === null || resolved.info.provider === null || resolved.info.model === null) {
@@ -292,15 +294,17 @@ export function makePrismRoutes(deps: PrismRouteDeps): PluginWebRoute[] {
             model = `${resolved.info.provider} / ${resolved.info.model}`
             const r = await import('./prismLlm.ts').then((m) =>
               m.streamText(resolved.llm as never, { provider: resolved.info.provider as string, model: resolved.info.model as string },
-                [{ role: 'user', content: '只回复 OK' }], undefined, AbortSignal.timeout(20_000), 50),
+                [{ role: 'user', content: '只回复 OK' }], undefined, AbortSignal.timeout(20_000)),
             )
             ok = r.text !== null && r.error === null
+            text = r.text
+            chunks = r.chunks
             error = r.error
           }
         } catch (e) {
           error = String(e).slice(0, 200)
         }
-        send(res, 200, { ok, error, model, elapsedMs: Date.now() - started })
+        send(res, 200, { ok, error, model, elapsedMs: Date.now() - started, text, chunks })
       },
     },
   ]

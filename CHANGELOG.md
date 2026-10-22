@@ -11,6 +11,45 @@
 
 ---
 
+## v0.131.1 — 修复棱镜自检「模型返回空文本」（content 必须传块数组）
+
+报告 `docs/AUDIT-PRISM-SELFTEST-FIX.md`。`npm run check` **1134 / 1134 × 2 时区**（1132 → 1134）+ selftest + build（73 片段全过）。
+
+### 根因
+
+`GenerateOptions.messages` 的真实契约是 `readonly ContentBlock[]`（`dsh-llm/lib/types/types.d.ts`：`MessageBase.content: readonly ContentBlock[]`），而 selftest 传了**字符串**。pi-ai 适配器对字符串调 `message.content.some(...)` 抛 `TypeError`，运行时把它转成 `finish(kind=error)` chunk；旧消费代码**只取 `text-delta`、丢掉 `finish`** ⇒ 0 chunk / **0 ms** / 空文本。
+
+⇒ 观察到 `elapsedMs: 0` 正是「流立即以 error 结束」的特征。
+
+### 修复
+
+1. `messages` 改发 `[{type:'text', text}]`。
+2. selftest 消费端**解析 `finish`**：`finish.reason.failure{code,message}` ⇒ `error = 模型流结束于 error [CODE]：<上游 message>`，并返回**前 3 个 chunk 的 `type` 与键名**便于定位。
+3. 去掉 `maxTokens: 50`（reasoning 模型可能把预算全给推理 ⇒ 空文本）；提示本身仍 ≤50 token。
+4. 失败仍 **200**；空流 `error` 含「空文本（0 个 text-delta，reasoning-delta N 个…）」。
+
+### 三种可能原因的排除结论
+
+| 可能原因 | 结论 | 依据 |
+| --- | --- | --- |
+| 消费方式错 | **部分成立，已修** | 旧代码忽略 `finish` 错误 chunk |
+| 缺必填 option | **不成立** | 必填只有 `provider` / `model` / `messages`；`system`、`maxTokens` 可选 |
+| provider 参数不同 | **不成立** | 与 `dsh headless` 同 provider/model（`workbuddy / cn:deepseek-v4.1-flash`），headless 能回 `OK`；差异只在 headless 走 agent loop、发的是块数组 |
+
+### selftest 返回形状
+
+成功：`{ok:true, error:null, model, elapsedMs, text:"OK", chunks:[{type:"text-delta", keys:[...]}, …]}`
+失败：HTTP **200**，`error` 为原文，`chunks` 给前 3 个 chunk 的 `type` 与键名。
+
+### 验证
+
+`npm run check` **1134 / 1134 × 2 时区** + selftest + build（73 项）；AO/AP 两轮干净复跑。
+新增 2 条用例（总 4 条）：两个 `text-delta` "O"+"K" ⇒ `text:"OK"` 且断言 `messages[0].content === [{type:'text',text:'…'}]`（传字符串 ⇒ 必败）｜空流 ⇒ `ok:false` + 「空文本」+ `chunks:[]`｜抛错 ⇒ 200 + 原文｜`finish(error)` ⇒ `ok:false` + 上游 message + `chunks[0]` 为 `finish`。
+
+### 待验证
+
+**活宿主内的 `curl /tradewatcher/prism/selftest` 未复验**（需重启装载后执行）。
+
 ## v0.131.0 — 棱镜批次 3+4：模拟盘引擎、完整页面、运行时自检、现金硬校验
 
 报告 `docs/AUDIT-PRISM-B34.md`。`npm run check` **1132 / 1132 × 2 时区**（1110 → 1132）+ selftest + build（73 片段全过）；未新增依赖；路由账 **32**（新增 selftest）。
