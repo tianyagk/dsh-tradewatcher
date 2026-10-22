@@ -51,7 +51,7 @@ function tabsFromSource(src: string): Array<{ key: string; label: string; row: s
 }
 
 const TABS = tabsFromSource(INDEX)
-const FULL_ROWS = new Set(['core', 'calendar', 'watchlist', 'portfolio', 'market', 'cloudmap', 'tools', 'fupan'])
+const FULL_ROWS = new Set(['core', 'calendar', 'watchlist', 'portfolio', 'market', 'cloudmap', 'tools', 'fupan', 'prism'])
 
 /** 页签判据：第 7 个是「复盘」、在「工具」之后、归属 `fupan`。返回问题列表（空 = 通过） */
 function tabProblems(tabs: ReadonlyArray<{ key: string; label: string; row: string }>): string[] {
@@ -62,8 +62,14 @@ function tabProblems(tabs: ReadonlyArray<{ key: string; label: string; row: stri
     bad.push('没有「复盘」页签（key=fupan）')
     return bad
   }
-  if (tabs.length !== 7) bad.push(`页签数必须是 7（实际 ${tabs.length}：${keys.join('、')}）`)
-  if (keys[keys.length - 1] !== 'fupan') bad.push('「复盘」必须是最后一个（第 7 个）页签')
+  if (tabs.length !== 8) bad.push(`页签数必须是 8（实际 ${tabs.length}：${keys.join('、')}）`)
+  const prism = tabs.find((t) => t.key === 'prism')
+  if (prism === undefined) bad.push('没有「棱镜」页签（key=prism）')
+  else {
+    if (prism.label !== '棱镜') bad.push(`棱镜标签必须是「棱镜」（实际「${prism.label}」）`)
+    if (prism.row !== 'prism') bad.push(`棱镜归属行必须是 prism（实际 ${prism.row}）`)
+    if (keys[keys.length - 1] !== 'prism') bad.push('「棱镜」必须是最后一个（第 8 个）页签')
+  }
   const ti = keys.indexOf('tools')
   if (ti < 0) bad.push('找不到「工具」页签（顺序判据失去基准）')
   else if (keys.indexOf('fupan') !== ti + 1) bad.push('「复盘」必须紧跟在「工具」之后')
@@ -73,28 +79,28 @@ function tabProblems(tabs: ReadonlyArray<{ key: string; label: string; row: stri
 }
 
 test('① 页签：第 7 个「复盘」在「工具」之后，归属行 fupan（删页签 ⇒ 必败）', () => {
-  assert.equal(TABS.length, 7, `必须能抽出 7 个页签（锚点变了？实得 ${TABS.length}）`)
+  assert.equal(TABS.length, 8, `必须能抽出 8 个页签（锚点变了？实得 ${TABS.length}）`)
   assert.deepEqual(tabProblems(TABS), [], '页签顺序/标签/归属行不对')
   // 门控：八行全开 ⇒ 七个页签都在（复盘不因门控消失）
   const all = gateTabs(TABS as Array<TabLike<string>>, FULL_ROWS, 'watch')
-  assert.equal(all.visible.length, 7, '全行启用时七个页签都在')
-  assert.equal(all.visible[all.visible.length - 1]?.key, 'fupan', '「复盘」排在最后')
+  assert.equal(all.visible.length, 8, '全行启用时八个页签都在')
+  assert.equal(all.visible[all.visible.length - 1]?.key, 'prism', '「棱镜」排在最后')
   // 行被停用 ⇒ 按既有门控隐藏（行级开关仍然有效）
   const off = gateTabs(TABS as Array<TabLike<string>>, new Set([...FULL_ROWS].filter((r) => r !== 'fupan')), 'watch')
   assert.equal(off.visible.some((t) => t.key === 'fupan'), false, 'fupan 行被停用 ⇒ 页签按既有机制隐藏')
   // 端点不可达 ⇒ 失败放行（抖动不该把页签弄没）
-  assert.equal(gateTabs(TABS as Array<TabLike<string>>, null, 'watch').visible.length, 7, 'rows 不可达 ⇒ 七个页签都在')
+  assert.equal(gateTabs(TABS as Array<TabLike<string>>, null, 'watch').visible.length, 8, 'rows 不可达 ⇒ 八个页签都在')
   // 反例注入 A：删掉页签 ⇒ 判据必须失败
-  const deleted = TABS.filter((t) => t.key !== 'fupan')
+  const deleted = TABS.filter((t) => t.key !== 'prism')
   assert.notDeepEqual(tabProblems(deleted), [], '⚠ 反例（删掉复盘页签）必须被抓住')
   assert.throws(
-    () => assert.deepEqual(tabProblems(deleted), [], '反例上"第 7 个页签存在"必须失败'),
+    () => assert.deepEqual(tabProblems(deleted), [], '反例上"第 8 个页签存在"必须失败'),
     /反例上/,
     '⚠ 反例注入（删页签）必须让断言失败',
   )
   // 反例注入 B：把复盘插到「工具」前面（顺序错）⇒ 判据必须失败
-  const reordered = [...TABS.filter((t) => t.key !== 'fupan').slice(0, 5), TABS.find((t) => t.key === 'fupan') as { key: string; label: string; row: string }, TABS.find((t) => t.key === 'tools') as { key: string; label: string; row: string }]
-  assert.notDeepEqual(tabProblems(reordered), [], '⚠ 反例（复盘排在工具之前）必须被抓住')
+  const reordered = [...TABS.filter((t) => t.key !== 'prism').slice(0, 7), TABS.find((t) => t.key === 'prism') as { key: string; label: string; row: string }].filter((t) => t.key !== 'fupan')
+  assert.notDeepEqual(tabProblems(reordered), [], '⚠ 反例（删掉复盘）必须被抓住')
   // 反例注入 C：行名写成 core ⇒ 门控会把它当 core 的页签（行开关失效）
   const wrongRow = TABS.map((t) => (t.key === 'fupan' ? { ...t, row: 'core' } : t))
   assert.notDeepEqual(tabProblems(wrongRow), [], '⚠ 反例（归属行写成 core）必须被抓住')
@@ -103,12 +109,12 @@ test('① 页签：第 7 个「复盘」在「工具」之后，归属行 fupan�
 test('①接线：index.tsx 真的引用 FupanPage 并把它放进保活容器（页面不是"只存在于文件里"）', () => {
   assert.ok(/import \{ FupanPage \} from '\.\/FupanPage\.tsx'/.test(INDEX), 'index.tsx 必须 import FupanPage')
   assert.ok(/if \(key === 'fupan'\) return React\.createElement\(FupanPage\)/.test(INDEX), '保活容器必须渲染 FupanPage')
-  assert.ok(/const KEEP_ALIVE: readonly PageKey\[\] = \['calendar', 'tools', 'fupan'\]/.test(INDEX), '复盘也必须保活（月份/选中日/草稿不随切页丢失）')
+  assert.ok(/const KEEP_ALIVE: readonly PageKey\[\] = \['calendar', 'tools', 'fupan', 'prism'\]/.test(INDEX), '复盘与棱镜都必须保活')
   assert.ok(/KEEP_ALIVE\.includes\(page\)\) return null/.test(INDEX), '保活页不重复渲染（沿用既有机制）')
   // 反例注入：把 fupan 从保活里去掉 ⇒ 判据必须失败
-  const injected = INDEX.replace("['calendar', 'tools', 'fupan']", "['calendar', 'tools']")
+  const injected = INDEX.replace("['calendar', 'tools', 'fupan', 'prism']", "['calendar', 'tools']")
   assert.notEqual(injected, INDEX)
-  assert.equal(/readonly PageKey\[\] = \['calendar', 'tools', 'fupan'\]/.test(injected), false, '⚠ 反例（不保活复盘）必须能被抓住')
+  assert.equal(/readonly PageKey\[\] = \['calendar', 'tools', 'fupan', 'prism'\]/.test(injected), false, '⚠ 反例（不保活复盘）必须能被抓住')
 })
 
 // ── ② 交易日 / 休市 ──────────────────────────────────────────────────────

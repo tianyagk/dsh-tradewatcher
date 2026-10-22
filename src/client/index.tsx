@@ -15,6 +15,7 @@ import { CloudMap } from './CloudMap.tsx'
 import { CalendarPage } from './CalendarPage.tsx'
 import { ToolsPage } from './ToolsPage.tsx'
 import { FupanPage } from './FupanPage.tsx'
+import { PrismPage } from './PrismPage.tsx'
 import { QuoteDrawer } from './QuoteDrawer.tsx'
 import { ensureCss } from './styles.ts'
 import { isMoneyMasked, setMoneyMask } from './format.ts'
@@ -229,7 +230,7 @@ function PanelIcon(props: { size?: number; active?: boolean }): React.ReactEleme
 
 /** 徽标底色在 `theme.ts` 的 `badgeToneColor`（按 `redUp` 取涨跌色；隐身视图下 tone 恒为 flat） */
 
-type PageKey = 'watch' | 'portfolio' | 'market' | 'cloud' | 'calendar' | 'tools' | 'fupan'
+type PageKey = 'watch' | 'portfolio' | 'market' | 'cloud' | 'calendar' | 'tools' | 'fupan' | 'prism'
 
 /**
  * 保活页（P2-7）：切走不卸载。只放"无轮询、纯本地状态"的页 ——
@@ -238,7 +239,7 @@ type PageKey = 'watch' | 'portfolio' | 'market' | 'cloud' | 'calendar' | 'tools'
  * `fupan`（复盘）加入的判据与日历同款：它**零轮询** —— 只在挂载 / 换月 / 写成功后取一次，
  * 所以保活的收益（月份、选中的日期、正在写的草稿都不丢）明显大于风险。
  */
-const KEEP_ALIVE: readonly PageKey[] = ['calendar', 'tools', 'fupan']
+const KEEP_ALIVE: readonly PageKey[] = ['calendar', 'tools', 'fupan', 'prism']
 
 function Dashboard(): React.ReactElement {
   /**
@@ -462,6 +463,8 @@ function Dashboard(): React.ReactElement {
     if (key === 'calendar') return React.createElement(CalendarPage, { prefs: prefs ?? DEFAULT_PREFS })
     // 复盘：月历 + 当日笔记（第 7 个页签；零轮询，与日历同款保活）
     if (key === 'fupan') return React.createElement(FupanPage)
+    // 棱镜（第 9 行 / 第 8 页签）：只在打开时取状态（active 门控，不轮询）
+    if (key === 'prism') return React.createElement(PrismPage, { active: page === 'prism' })
     // 工具箱：目录页 + 工具详情页都在 ToolsPage 里（v0.81.0 起它不接 props）
     return React.createElement(ToolsPage)
   }
@@ -479,6 +482,8 @@ function Dashboard(): React.ReactElement {
     // 复盘（第 8 行，第 7 个页签）：月历 + 当日笔记。行被停用 ⇒ 按既有门控隐藏；
     // 行在启用但路由取不到（宿主尚未落地/宿主报错）⇒ 页面本身给「原因 + 重试」，不空白。
     { key: 'fupan', label: '复盘', full: '复盘（月历 + 当日笔记）', row: 'fupan' },
+    // 棱镜（第 9 行，第 8 个页签）：最右；行被停用 ⇒ 页签不渲染（与其余页签同一套门控）
+    { key: 'prism', label: '棱镜', full: '棱镜（研判时点 + 金十快讯 + 4+1 研判）', row: 'prism' },
   ]
   useEffect(() => {
     let alive = true

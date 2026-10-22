@@ -31,6 +31,7 @@ import { CHIPS_DISPLAY, CHIPS_DISPLAY_MAX, CHIPS_MIN_SAMPLES, CHIPS_WINDOW, CHIP
 import { alignVolUnitWithQuote } from './klineUnits.ts'
 import { globalFlowPayload } from './globalFlow.ts'
 import { FUPAN_DROP_TEXT, FupanStore, fupanMonthView, notesInMonth, notesOnDay, parseFupanMonth, parseFupanOp } from './fupan.ts'
+import { makePrismRoutes } from './prismRoutes.ts'
 import { parseFupanDay, readFupanMonthTrades, readFupanTrades } from './fupanTrades.ts'
 import { unreadableMissing } from './readGuard.ts'
 
@@ -297,6 +298,8 @@ export function makeTradeRoutes(
    * 与面板现有的两融读取（`marketExtras.marginCross`）是两条独立路径，互不缓存。
    */
   leverage: LeverageService = new LeverageService(),
+  /** 棱镜（第 9 行）的依赖；不传 ⇒ 不注册棱镜路由（老调用点/单测照常） */
+  prism?: { store: import('./prismStore.ts').PrismStore; data: DataStore; get: (name: string) => unknown },
 ): TradeRoutes {
   const gate = (req: IncomingMessage): boolean => isTrustedApiRequest(req, trustedHosts)
   /** 上游主机组：503 时用它给出 retry-after，并聚合展示熔断明细（去重后 3 台） */
@@ -1607,6 +1610,7 @@ export function makeTradeRoutes(
       },
     },
   ]
+  if (prism !== undefined) routes.push(...makePrismRoutes(prism))
   return { routes, store }
 }
 

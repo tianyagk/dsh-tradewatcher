@@ -767,6 +767,32 @@ color-scheme:dark}
 @media (prefers-reduced-motion:reduce){
   .tw-glass,.tw-glass *{animation:none!important;transition:none!important}
 }
+
+/* ── 棱镜（Material elevation 六档 + state layer + 固定尺寸 ripple） ── */
+.tw-root{--tw-elev-0:none;--tw-elev-1:0 1px 2px rgba(16,24,40,.06);--tw-elev-3:0 1px 3px rgba(16,24,40,.10),0 4px 8px rgba(16,24,40,.06);--tw-elev-6:0 2px 6px rgba(16,24,40,.10),0 8px 16px rgba(16,24,40,.08);--tw-elev-8:0 4px 8px rgba(16,24,40,.10),0 12px 24px rgba(16,24,40,.10);--tw-elev-12:0 8px 16px rgba(16,24,40,.12),0 20px 40px rgba(16,24,40,.14);--tw-state-hover:.08;--tw-state-press:.12}
+.tw-root[data-theme=dark]{--tw-elev-0:none;--tw-elev-1:0 1px 2px rgba(0,0,0,.4);--tw-elev-3:0 1px 3px rgba(0,0,0,.45),0 4px 8px rgba(0,0,0,.35);--tw-elev-6:0 2px 6px rgba(0,0,0,.45),0 8px 16px rgba(0,0,0,.4);--tw-elev-8:0 4px 8px rgba(0,0,0,.45),0 12px 24px rgba(0,0,0,.45);--tw-elev-12:0 8px 16px rgba(0,0,0,.5),0 20px 40px rgba(0,0,0,.55)}
+.tw-prism{display:flex;flex-direction:column;gap:10px;padding:10px}
+.tw-prism-head{display:flex;align-items:center;gap:8px}
+.tw-prism-card{position:relative;overflow:hidden;display:flex;flex-direction:column;gap:6px;padding:10px;border:1px solid var(--tw-border);border-radius:10px;background:var(--tw-card);box-shadow:var(--tw-elev-1)}
+.tw-prism-card::after{content:'';position:absolute;inset:0;background:currentColor;opacity:0;pointer-events:none;transition:opacity .12s}
+.tw-prism-card:hover::after{opacity:var(--tw-state-hover)}
+.tw-prism-card:active::after{opacity:var(--tw-state-press)}
+.tw-prism-btn{position:relative;overflow:hidden;border:1px solid var(--tw-border);border-radius:8px;background:var(--tw-card);color:var(--tw-text);font-size:12px;padding:4px 8px;cursor:pointer}
+.tw-prism-btn:hover{background:var(--tw-hover)}
+.tw-prism-btn:disabled{opacity:.5;cursor:default}
+.tw-prism-ripple{position:absolute;width:100px;height:100px;border-radius:50%;background:currentColor;pointer-events:none;animation:tw-ripple .55s ease-out forwards}
+@keyframes tw-ripple{from{transform:scale(0);opacity:.22}to{transform:scale(1);opacity:0}}
+@media (prefers-reduced-motion:reduce){.tw-prism-ripple{animation:none;display:none}}
+.tw-prism-times{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.tw-prism-chip{display:inline-flex;gap:4px;align-items:center}
+.tw-prism-time{font-size:12px;border:1px solid var(--tw-border);border-radius:6px;background:var(--tw-bg);color:var(--tw-text);padding:2px 4px}
+.tw-prism-skeleton{width:100%;border:1px solid var(--tw-border);border-radius:8px;background:var(--tw-bg);color:var(--tw-text);padding:6px;resize:vertical}
+.tw-prism-row{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.tw-prism-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:8px}
+.tw-prism-analysis{border:1px solid var(--tw-border);border-radius:8px;padding:6px;background:var(--tw-bg)}
+.tw-prism-analysis-body,.tw-prism-summary{white-space:pre-wrap;line-height:1.5}
+.tw-prism-summary{border-top:1px solid var(--tw-border);padding-top:6px}
+.tw-prism-error{color:var(--tw-warn)}
 `
 
 let injected = false

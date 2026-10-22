@@ -1,6 +1,6 @@
-# dsh-tradewatcher bundle patch —— **八行形态**：聚合包 + 可单独开关的子组件。
+# dsh-tradewatcher bundle patch —— **九行形态**：聚合包 + 可单独开关的子组件。
 #
-# 八行 = 一个内核行 + 七个功能行，全部 `name: 'dsh-tradewatcher'`（**同一个包、同一个加载源**），
+# 九行 = 一个内核行 + 八个功能行，全部 `name: 'dsh-tradewatcher'`（**同一个包、同一个加载源**），
 # 靠 **`id` 前缀**区分、由 `config.row` 决定这一行注册哪一段（代码见 src/index.ts:32-64、:219-266）：
 #   tradewatcher-core      → row: core       内核：store/rescue 采样、共享路由（行情/详情图/云图/备份…）、
 #                                            `GET /tradewatcher/rows`、核心 agent 工具
@@ -20,6 +20,9 @@
 #                                            `/tradewatcher/fupan/month` `/tradewatcher/fupan/note` `/tradewatcher/fupan/trades`
 #                                            （只被复盘页消费 ⇒ 按 §2.2 判据归本行；数据是本地笔记文件、
 #                                            既有交易日历与既有流水，零新增上游请求；本行同样不带 agent 工具）。
+#   tradewatcher-prism     → row: prism      **棱镜**（第 9 行，v0.130.0）：研判时点 + 金十 24h 快讯 + 4+1 研判；
+#                                            `/tradewatcher/prism`（GET=状态；POST action=settings/skeleton/news/run）
+#                                            （只被棱镜页消费 ⇒ 按 §2.2 判据归本行；本行不带 agent 工具）。
 #
 # ⚠ **历史归因纠正（这一条要读，前一轮的结论是错的）** —— 这段说的是当时的**六行**形态，七行是同机制加一行。
 # v0.50.0 曾把"（六行）装载失败"归因成"同一 package 多个活跃 Loader 源 = composition error"，
@@ -85,3 +88,7 @@
     - id: tradewatcher-fupan
       name: 'dsh-tradewatcher/rows/fupan'
       config: { row: fupan }
+    # 棱镜（第 9 行）：研判时点（cron 语义的自研节拍）+ 金十 24h 快讯 + 4+1 研判；只读页面 + 两个编辑面
+    - id: tradewatcher-prism
+      name: 'dsh-tradewatcher/rows/prism'
+      config: { row: prism }

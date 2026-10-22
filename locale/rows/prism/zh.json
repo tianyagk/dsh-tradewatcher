@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "dsh-tradewatcher-prism",
+    "description": "棱镜：真实持仓 + 金十 24h 快讯 + 4 路并行分析 + 1 次汇总（时点可增删、非交易日不跑）"
+  }
+}

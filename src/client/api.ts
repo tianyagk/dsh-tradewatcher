@@ -219,6 +219,7 @@ export interface LeveragePayloadDto {
 }
 
 import type { ToneRow as ToneRowDto } from './stripTone.ts'
+import type { PrismNewsStatus, PrismRun, PrismSettings, PrismState } from '../shared/prism.ts'
 /** Same-origin JSON calls to the /tradewatcher/* host routes. */
 import type {
   BoardRow,
@@ -516,6 +517,34 @@ export const api = {
    */
   leverage(range: LeverageRange = '750'): Promise<LeveragePayloadDto> {
     return request(`/tradewatcher/leverage?range=${range}`)
+  },
+  /** 棱镜（第 9 行）：首屏状态（设置/骨架/新闻/最近运行/默认模型） */
+  prismState(): Promise<{ ok: boolean; asOf: number; state: PrismState }> {
+    return requestWithTimeout('/tradewatcher/prism', undefined, 20_000)
+  },
+  /** 棱镜：保存时点（可增删、无上限） */
+  prismSetTimes(times: string[]): Promise<{ ok: boolean; settings: PrismSettings }> {
+    return requestWithTimeout('/tradewatcher/prism', {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action: 'settings', times }),
+    }, 20_000)
+  },
+  /** 棱镜：保存骨架 */
+  prismSetSkeleton(text: string): Promise<{ ok: boolean; text: string }> {
+    return requestWithTimeout('/tradewatcher/prism', {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action: 'skeleton', text }),
+    }, 20_000)
+  },
+  /** 棱镜：同步金十新闻（首次回填 24h / 之后增量） */
+  prismNews(): Promise<{ ok: boolean; status: PrismNewsStatus }> {
+    return requestWithTimeout('/tradewatcher/prism', {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action: 'news' }),
+    }, 60_000)
+  },
+  /** 棱镜：手动补跑指定时点（只跑这一轮） */
+  prismRun(slot: string): Promise<{ ok: boolean; run: PrismRun }> {
+    return requestWithTimeout('/tradewatcher/prism', {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action: 'run', slot }),
+    }, 120_000)
   },
   /** 导出备份（P0-9）：GET /tradewatcher/backup */
   exportBackup(): Promise<{ ok: boolean; bundle: unknown; unreadable: string[] }> {

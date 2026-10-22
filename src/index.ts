@@ -17,6 +17,10 @@ import { DataStore, dataHome } from './host/store.ts'
 import { CalendarStore } from './host/calendar.ts'
 import { RescueMonitor } from './host/rescue.ts'
 import { AuctionSampler } from './host/auctionSeries.ts'
+import { PrismStore } from './host/prismStore.ts'
+import { PrismScheduler } from './host/prismScheduler.ts'
+import { runPrismForSlot } from './host/prismRoutes.ts'
+import { incrementalNews } from './host/prismNews.ts'
 import { FupanStore } from './host/fupan.ts'
 import { setQuoteFreshnessMs } from './host/em.ts'
 import { log, type PluginContext, type PluginWebRoute } from './host/context.ts'
@@ -25,10 +29,10 @@ import { log, type PluginContext, type PluginWebRoute } from './host/context.ts'
 export const name = 'dsh-tradewatcher'
 
 /** Services required before mounting: webserver routes + web runtime trust. */
-export const inject = ['webServer', 'webRuntime']
+export const inject = ['webServer', 'webRuntime', 'llm']
 
 /** 行标识（配置里写 `config: { row: watchlist }`） */
-export type RowId = 'core' | 'calendar' | 'watchlist' | 'portfolio' | 'market' | 'cloudmap' | 'tools' | 'fupan'
+export type RowId = 'core' | 'calendar' | 'watchlist' | 'portfolio' | 'market' | 'cloudmap' | 'tools' | 'fupan' | 'prism'
 
 /**
  * 行 → 该行独占的路由前缀（core 注册**其余全部**；P2–P4 再把别的行兑现）。
@@ -83,6 +87,16 @@ export const ROW_ROUTES: Record<Exclude<RowId, 'core'>, readonly string[]> = {
    * 存储是本地 `fupan.json` + 既有流水；零新增上游请求（细节见 `src/host/fupan.ts`、`src/host/fupanTrades.ts` 文件头）。
    */
   fupan: ['/tradewatcher/fupan/month', '/tradewatcher/fupan/note', '/tradewatcher/fupan/trades'],
+  /**
+   * 棱镜（第 9 行，v0.130.0 批次 1+2）：只被 `PrismPage.tsx` 消费 ⇒ 归本行。
+   *   · `/state`   页面首屏（设置 + 骨架 + 新闻状态 + 最近运行 + 默认模型）
+   *   · `/settings` 时点增删（GET/POST 同路径）
+   *   · `/skeleton` 骨架读写（GET/POST 同路径）
+   *   · `/news`     新闻同步（GET 查看 / POST 立即回填或增量）
+   *   · `/run`      手动补跑指定时点（POST；只跑这一轮）
+   */
+  // 五类操作复用**同一条**路由（GET=状态；POST action=settings/skeleton/news/run）⇒ 路由账只 +1
+  prism: ['/tradewatcher/prism'],
 }
 
 /** 行 → 该行独占的 agent 工具名（不含前缀）；同为**唯一事实源**（见上） */
@@ -96,6 +110,8 @@ export const ROW_TOOLS: Record<Exclude<RowId, 'core'>, readonly string[]> = {
   tools: [],
   // 复盘行：同样不带 agent 工具（月历 + 当日笔记是纯 UI；写作接口只给界面用）
   fupan: [],
+  // 棱镜：本批不带 agent 工具（研判管线在宿主内跑，页面只读）
+  prism: [],
 }
 
 /**
@@ -110,6 +126,10 @@ export interface CoreKernel {
   rescue: RescueMonitor
   /** 竞价时段采样器（09:15–09:25:30，每 10s；与 rescue 一样只允许一个实例） */
   auction: AuctionSampler
+  /** 棱镜状态（设置/骨架/新闻/运行；第 9 行独占） */
+  prism: PrismStore
+  /** 棱镜时点调度（30s 节拍；非交易日不跑） */
+  prismScheduler: PrismScheduler
   /**
    * 复盘笔记存储（第 8 行 `fupan` 的独占数据面）。
    *
@@ -163,7 +183,7 @@ export function rowOf(config: unknown, ctxConfig?: unknown): RowId | 'all' {
   const pick = (src: unknown): unknown => (typeof src === 'object' && src !== null ? (src as { row?: unknown }).row : undefined)
   const raw = pick(config) ?? pick(ctxConfig) ?? 'all'
   const row = typeof raw === 'string' ? raw.trim() : 'all'
-  return (['core', 'calendar', 'watchlist', 'portfolio', 'market', 'cloudmap', 'tools', 'fupan'] as const).includes(row as RowId)
+  return (['core', 'calendar', 'watchlist', 'portfolio', 'market', 'cloudmap', 'tools', 'fupan', 'prism'] as const).includes(row as RowId)
     ? (row as RowId)
     : 'all'
 }
@@ -182,13 +202,23 @@ export function setKernel(value: CoreKernel | null): void {
  * core 行：建内核（**模块级单例 + 幂等**）、启动一次性副作用、注册 core 路由/工具与活跃行端点。
  * 无论 `apply` 被调用几次，`store.init()` 与 `rescue.start()` 都只跑一次。
  */
+let prismRunRef: { fn: (slot: string) => Promise<unknown> } = { fn: async () => undefined }
+
 function applyCore(ctx: PluginContext, full = false): void {
   const first = kernel === null
   if (first) {
     const store = new DataStore()
+    const prism = new PrismStore()
+    prismRunRef = { fn: async () => undefined }
+    const prismScheduler = new PrismScheduler(prism, {
+      run: (slot) => prismRunRef.fn(slot),
+      news: () => incrementalNews(prism),
+    })
     kernel = {
       store,
       auction: new AuctionSampler(store),
+      prism,
+      prismScheduler,
       calendar: new CalendarStore(),
       rescue: new RescueMonitor(),
       fupan: new FupanStore(),
@@ -211,7 +241,7 @@ function applyCore(ctx: PluginContext, full = false): void {
   if (!k.started) {
     k.started = true
     __kernelStats.inits += 1
-    void k.store.init().then(() => {
+    void k.store.init().then(async () => {
       if (disposed) {
         log('plugin unloaded before store init finished — rescue monitor not started')
         return
@@ -224,8 +254,12 @@ function applyCore(ctx: PluginContext, full = false): void {
       k.starts += 1
       k.rescue.start()
       k.auction.start()
+      await k.prism.init().catch((error) => log('prism init failed:', String(error)))
       log('rescue monitor started', `interval ${k.store.getPrefs().rescue.intervalSec}s / tail ${k.store.getPrefs().rescue.tailIntervalSec}s`)
       log('auction sampler started', 'window 09:15:00–09:25:30 / interval 10s')
+      prismRunRef.fn = (slot) => runPrismForSlot({ store: k.prism, data: k.store, get: (name) => { try { return ctx.get(name) } catch { return undefined } } }, slot)
+      k.prismScheduler.start()
+      log('prism scheduler started', `times ${k.prism.settings().times.join(' / ')}`)
     }).catch((error) => {
       log('store init failed:', String(error))
     })
@@ -234,7 +268,7 @@ function applyCore(ctx: PluginContext, full = false): void {
   }
 
   ctx.effect(() => {
-    const { routes: all } = makeTradeRoutes(k.store, ctx.webRuntime.trustedHosts, k.calendar, k.rescue, undefined, undefined, () => [...k.activeRows], k.fupan)
+    const { routes: all } = makeTradeRoutes(k.store, ctx.webRuntime.trustedHosts, k.calendar, k.rescue, undefined, undefined, () => [...k.activeRows], k.fupan, undefined, { store: k.prism, data: k.store, get: (name) => { try { return ctx.get(name) } catch { return undefined } } })
     // core 注册**除功能行独占前缀之外**的全部路由（老 profile 只有 core ⇒ 与拆分前逐字一致）
     const owned = full ? [] : Object.values(ROW_ROUTES).flat()
     const mine = all.filter((r) => !owned.some((p) => r.path.startsWith(p)))
@@ -251,6 +285,7 @@ function applyCore(ctx: PluginContext, full = false): void {
       disposed = true
       k.rescue.stop()
       k.auction.stop()
+      k.prismScheduler.stop()
       for (const dispose of disposers) {
         try {
           dispose()
@@ -291,7 +326,7 @@ function applyFeatureRow(ctx: PluginContext, row: Exclude<RowId, 'core'>): void 
   const prefixes = ROW_ROUTES[row]
   const tools = ROW_TOOLS[row]
   ctx.effect(() => {
-    const { routes: all } = makeTradeRoutes(k.store, ctx.webRuntime.trustedHosts, k.calendar, k.rescue, undefined, undefined, () => [...k.activeRows], k.fupan)
+    const { routes: all } = makeTradeRoutes(k.store, ctx.webRuntime.trustedHosts, k.calendar, k.rescue, undefined, undefined, () => [...k.activeRows], k.fupan, undefined, { store: k.prism, data: k.store, get: (name) => { try { return ctx.get(name) } catch { return undefined } } })
     const mine = all.filter((r) => prefixes.some((p) => r.path.startsWith(p)))
     const disposers = mine.map((route: PluginWebRoute) => {
       try {

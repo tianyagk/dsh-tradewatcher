@@ -11,6 +11,46 @@
 
 ---
 
+## v0.130.0 — 新页签【棱镜】批次 1+2：注册面 / 调度 / 骨架 / 金十 / 研判管线 / MD 页面
+
+报告 `docs/AUDIT-PRISM-B12.md`、`docs/PROBE-PRISM2.md`。`npm run check` **1110 / 1110 × 2 时区**（1096 → 1110）+ selftest + build（73 片段全过）；未新增依赖。
+
+### 批次 1：注册面与调度
+
+- 新组件行 `tradewatcher-prism`（`cordis.patch.yml` 第 9 行）、新页签 **`棱镜` 最右**（第 8 个）；单条路由 `/tradewatcher/prism`，**路由账 31**；`README` **8 页签 / 9 行**；`locale/rows/prism`、两条 `exports`、五处镜像与测试期望同步。
+- `src/index.ts` 的 `inject` 加 **`llm`**；所有 `ctx.get` 包 try/catch（宿主 ctx 是 Proxy，未 inject 访问会抛）。
+- 调度：`prismScheduler.ts` 的 `dueSlots`（默认 `09:35 / 11:20 / 13:10 / 14:40`，可增删，上限 50）；**非交易日不跑**；自动只追 10 分钟内、更早**手动补跑**（POST `{action:'run', slot}` 只标该时点）；水位落 `prism-settings.json`（`updateJsonLocked` + `ReadGuard`）；30 秒节拍 + `unref` + 测试进程不启动。
+- 交易骨架：`prism-skeleton.md`，首次打开写默认；页面多行编辑 + 保存（≤20 000 字）。
+
+### 批次 2：金十与研判
+
+- 金十 `flash-api.jin10.com/get_flash_list`，带 `x-app-id` / `x-version`（否则 502），经 `withHostBreaker`；实测 **20 条/页**，最新 `15:41:51`；首次回填 **≤10 页、页间 ≥3 秒**、未完成标「回填中（已 N 页）」、之后 `lastSeenId` **增量**；保留 24 小时。
+- 研判 `prismPipeline.ts`：**4 路并行**（A股宏观 / 外盘 / 大宗 / 信息面）+ **1 次汇总**；输入 = 真实持仓（`assemblePortfolio`，只读）+ 骨架 + 金十 24h + 既有 `fetchQuotes` 行情摘要；结果 `prism-runs.json`（保留 20 次）；单路失败留痕、**不重试**；四路全空则汇总跳过。
+- 页面：时点增删、骨架编辑、新闻状态与同步、最近研判、补跑按钮；**无免责文案**；缺数据 `—` + 一句原因。
+
+### Material Design（只本页）
+
+- elevation 六档 token `--tw-elev-0/1/3/6/8/12`（浅/深各一套）+ state layer（`::after` + `opacity`）。
+- ripple 固定 **100×100**，关键帧只 `transform: scale` + `opacity`；`data-idle` 转真时 JS 移除节点；`prefers-reduced-motion` 关闭。
+- 字号只用 **12 / 14**；无闪烁动画。
+
+### 两处偏离（如实记录）
+
+1. **未用 `ctx.schedule`**：它必须绑定 `SessionId`，且投递会**开启 agent turn**（`dsh-schedule/lib/index.js:1596` 调 `agent.followup`）。改用已在用的 **30 秒节拍 + 水位**，行为等价且不产生额外会话。
+2. **插件 fiber 内的 `ctx.llm.stream` 未实跑**：`inject` 只在装载时生效，不重启 `dsh web` 就无法装载新行。已用 `dsh headless '只回复 OK'` 验证同 profile 模型链路**真实可用（输出 `OK`，无错误）**；插件内路径用假 stream 单测覆盖（4+1、失败留痕、不重试）。
+
+### 验证
+
+`npm run check` **1110 / 1110 × 2 时区** + selftest + build（73 项）；两轮（AB/AC）干净复跑。
+新增 14 条用例（六个测试文件），逐条注入必败：页签最右 + 路由账 31｜`inject` 含 `llm` 且有 try/catch｜时点落盘/可增删/周末不跑/补跑单点｜骨架默认与读写｜金十两头齐备｜回填 ≤10 页 + 3 秒 + 增量停在水位｜4 并行 + 1 汇总且失败不重试｜MD（ripple transform / 字号 / elevation token）｜无免责文案｜`—` + 原因。
+
+### 未做 / 待验证
+
+- **插件内模型调用未验证**：需重启 `dsh web` 后触发一次实跑。
+- 无真实浏览器截图（不能重启服务）。
+- 新闻同步在交易日每 15 分钟增量；首次回填由页面打开触发。
+- **批次 3（模拟盘引擎）与批次 4（页面完整化）尚未开始**。
+
 ## v0.129.1 — 修复「有日线却聚合不出周/月/年」（四个真实原因）
 
 报告 `docs/AUDIT-BK-AGG.md` §F。`npm run check` **1096 / 1096 × 2 时区**（1091 → 1096）+ selftest + build（73 片段全过）。
