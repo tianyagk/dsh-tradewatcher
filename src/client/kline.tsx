@@ -13,6 +13,7 @@ import { sessionAxis, type SessionDef } from './sessionAxis.ts'
 import { klineReadout, nearestIndex, tipPlacement, toneClass, trendReadout, upDownColors, type TipLine } from './chartCursor.ts'
 import { trendDayCount } from '../shared/model.ts'
 import { shToday } from './marketTime.ts'
+import { rangeStatsText, tradeStatsOf } from './klineStats.ts'
 
 const PAD_X = 8
 const PAD_TOP = 8
@@ -507,6 +508,8 @@ export function KlineChart(props: {
   mainH?: number
   volH?: number
   macdH?: number
+  /** 可见窗口变化（口径行据此把区间 B/S 统计并进同一行；不新增第二行） */
+  onRangeChange?: (range: [number, number]) => void
 }): React.ReactElement {
   const { bars, width, redUp, klt } = props
   const mainH = props.mainH ?? 230
@@ -521,6 +524,12 @@ export function KlineChart(props: {
     Math.max(0, bars.length - defaultWindow(klt)),
     bars.length,
   ])
+  // 可见窗口上报：回调走 ref ⇒ 父组件无需 memo，也不会因为回调身份变化触发循环
+  const rangeCb = useRef(props.onRangeChange)
+  rangeCb.current = props.onRangeChange
+  useEffect(() => {
+    rangeCb.current?.(range)
+  }, [range])
   /** 光标数据点（null = 不显示卡片）；鼠标移动只改它，不重建图 */
   const [cursor, setCursor] = useState<number | null>(null)
   /** 游标按帧合并（P2-10）：K 线窗口是 240 根柱 + 均线 + MACD，mousemove 不允许每像素重绘一次 */
@@ -744,41 +753,16 @@ export function KlineChart(props: {
    * 不说出来，用户会把"看不到"读成"没有交易"。因此这里同时报出：
    *   区间内 B/S 笔数、净买入数量、成本变化方向，以及区间外还剩多少笔。
    */
-  const inRange = [...grouped.entries()].filter(([i]) => i >= s && i < e)
-  const outCount = [...grouped.entries()].filter(([i]) => i < s || i >= e).reduce((a, [, g]) => a + g.buys.length + g.sells.length, 0)
-  const sum = (list: TradeDetail[]): { qty: number; amount: number } =>
-    list.reduce((a, t) => ({ qty: a.qty + (t.qty ?? 0), amount: a.amount + (t.qty ?? 0) * (t.price ?? 0) }), { qty: 0, amount: 0 })
-  let buyQty = 0
-  let sellQty = 0
-  let buyAmt = 0
-  let sellAmt = 0
-  let buyCount = 0
-  let sellCount = 0
-  for (const [, g] of inRange) {
-    const b = sum(g.buys)
-    const sl = sum(g.sells)
-    buyQty += b.qty; buyAmt += b.amount; buyCount += g.buys.length
-    sellQty += sl.qty; sellAmt += sl.amount; sellCount += g.sells.length
-  }
-  const netQty = Math.round((buyQty - sellQty) * 1e4) / 1e4
+  const stats = tradeStatsOf(bars, props.markers ?? [], s, e)
   /**
-   * 区间买卖统计（v0.55.0：**从常驻图例改成只存在于悬停提示**）。
-   *
-   * 用户的截图红框要求去掉这条常驻提示条（"减少不必要的提示"）。逐条核对后：
-   *   - `区间内 B/S 笔数` `净买入` `买入均价/卖出均价`：持仓页流水（`tradewatcher_ledger`）已有 ⇒ 不再常驻；
-   *   - `区间外另有 N 笔`：**别处没有**（它依赖当前缩放窗口）⇒ 必须仍可达（这里进提示），
-   *     读屏摘要（本组件的 `aria-label`）里也仍然有它；
-   *   - ⚠ `区间内无买卖点` 与 `区间外另有` 两句被 `build.mjs` 的片段表**锁定**（改字面量会构建失败）⇒
-   *     本轮**不改字面量**，只把它们搬到悬停提示里（常驻可见处不再出现，悬停可见）。
+   * 读屏摘要里仍保留「区间外另有 N 笔」（它依赖当前缩放窗口，别处没有）；
+   * **可见的状态行**只放区间内 B/S、净买入与买卖均价（用户裁决：并进口径行，不再浮动）。
+   * 键盘操作提示属一次性学习成本，**不再常驻、也不进悬停**（见 `docs/AUDIT-KLINE-HINT.md`）。
    */
-  const bsHint = buyCount + sellCount > 0 || outCount > 0
+  const bsHint = stats.buyCount + stats.sellCount > 0 || stats.outCount > 0
     ? [
-        buyCount + sellCount > 0 ? `区间内 B ${buyCount} 笔 / S ${sellCount} 笔` : '区间内无买卖点',
-        buyCount + sellCount > 0 ? `净${netQty >= 0 ? '买入' : '卖出'} ${Math.abs(netQty)} 份/股` : '',
-        buyCount + sellCount > 0 && buyQty > 0 && sellQty > 0
-          ? `买入均价 ${(buyAmt / buyQty).toFixed(3)} / 卖出均价 ${(sellAmt / sellQty).toFixed(3)}`
-          : '',
-        outCount > 0 ? `区间外另有 ${outCount} 笔（缩小日期范围即可看到）` : '',
+        rangeStatsText(stats),
+        stats.outCount > 0 ? `区间外另有 ${stats.outCount} 笔（缩小日期范围即可看到）` : '',
       ].filter((x) => x !== '').join('\n')
     : ''
 
@@ -787,7 +771,7 @@ export function KlineChart(props: {
    * 区间、首末收盘、区间涨跌幅、最高最低、买卖点笔数。**与图同源**（同一份 bars/markers/range），
    * 因此不会出现"摘要说涨、图上在跌"。
    *
-   * 键盘：图表可聚焦，←/→ 平移（Shift 加速 10 根）、+/- 缩放、Home/End 到两端。
+   * 读屏摘要只描述图上的数据（区间/首末收盘/涨跌/买卖点），不写键盘操作提示。
    */
   const visBars = bars.slice(s, e)
   const first = visBars[0]
@@ -804,8 +788,10 @@ export function KlineChart(props: {
         (chgPct === null ? '' : `，区间${chgPct >= 0 ? '涨' : '跌'} ${Math.abs(chgPct).toFixed(2)}%`) +
         `，区间最高 ${visHi === null ? '—' : fmtAxis(visHi)}，最低 ${visLo === null ? '—' : fmtAxis(visLo)}`
       : '（区间内没有数据）') +
-    (buyCount + sellCount > 0 ? `；区间内买入 ${buyCount} 笔、卖出 ${sellCount} 笔，净${netQty >= 0 ? '买入' : '卖出'} ${Math.abs(netQty)} 股` : '；区间内没有买卖点') +
-    (outCount > 0 ? `；区间外另有 ${outCount} 笔买卖记录` : '')
+    (stats.buyCount + stats.sellCount > 0
+      ? `；区间内买入 ${stats.buyCount} 笔、卖出 ${stats.sellCount} 笔，净${stats.netQty >= 0 ? '买入' : '卖出'} ${Math.abs(stats.netQty)} 股`
+      : '；区间内没有买卖点') +
+    (stats.outCount > 0 ? `；区间外另有 ${stats.outCount} 笔买卖记录` : '')
 
   const chartKey = (ev: React.KeyboardEvent): void => {
     const step = ev.shiftKey ? 10 : 1
@@ -861,10 +847,9 @@ export function KlineChart(props: {
     React.createElement('div', {
       tabIndex: 0,
       role: 'img',
-      'aria-label': summary,
-      // 常驻键盘说明 + （有区间买卖时）区间统计：两者都在**悬停/读屏**里，界面上不占位
-      title: '键盘：←/→ 平移（未显示卡片时）／移动光标并显示细节卡（Shift 加速），Enter 显示，Esc 隐藏，+/- 缩放，Home/End 到两端'
-        + (bsHint === '' ? '' : `\n${bsHint}`),
+      'aria-label': bsHint === '' ? summary : `${summary}\n${bsHint}`,
+      // v0.63.0：**不再挂原生 title**。原生 tooltip 会与 TipCard 细节卡重叠（用户截图）。
+      // 键盘说明与区间统计只进读屏摘要（aria-label），悬停时不再出第二个浮层。
       style: { outlineOffset: 2, position: 'relative' },
       onKeyDown: chartKey,
     },
@@ -973,7 +958,7 @@ function RangeSlider(props: {
   }
 
   /**
-   * 键盘操作（P2-3）：三处手柄都是 slider 语义，方向键微调、Shift+方向键粗调、Home/End 到底。
+   * 键盘操作（P2-3）：三处手柄都是 slider 语义，方向键可微调（粗调由滑块自身处理）。
    * 拖拽能用不代表键盘能用 —— 只用指针的图表对键盘用户等于不可操作。
    */
   const nudge = (which: 'start' | 'end' | 'mid', delta: number): void => {
@@ -1020,7 +1005,7 @@ function RangeSlider(props: {
       ref: trackRef,
       role: 'slider',
       tabIndex: 0,
-      'aria-label': '可视区间（方向键平移，Shift 加速）',
+      'aria-label': '可视区间（方向键调整）',
       'aria-valuemin': 0,
       'aria-valuemax': total,
       'aria-valuenow': s,

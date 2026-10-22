@@ -49,15 +49,16 @@ function visibleNoticeViolations(src: string): string[] {
 }
 
 test('① 上窗区间买卖图例不再渲染；两句被 build.mjs 锁定的字面量**原样保留**在悬停提示里', () => {
-  const kline = strip(read('./kline.tsx'))
+  // 区间统计文本已抽到纯函数模块（klineStats.ts），字面量两处合起来看
+  const kline = strip(read('./kline.tsx')) + strip(read('./klineStats.ts'))
 
   // 可见图例已删：不再是 DOM 元素
   assert.deepEqual(visibleNoticeViolations(kline), [], `可见提示条必须已删（实际违规：${JSON.stringify(visibleNoticeViolations(kline))}）`)
   // 但它必须变成**悬停提示**（不是丢掉）
   assert.ok(kline.includes('const bsHint ='), '区间买卖统计必须改名成提示文本（bsHint）')
-  assert.ok(/title: '键盘：←\/→ 平移[^\n]*'\s*\n?\s*\+ \(bsHint === '' \? '' : `\\n\$\{bsHint\}`\)/.test(kline)
-    || /\+ \(bsHint === '' \? '' : `\\n\$\{bsHint\}`\)/.test(kline), 'bsHint 必须挂到图表容器的 title（悬停可达）')
-  assert.ok(kline.includes("'aria-label': summary"), '读屏摘要仍在（区间内/区间外的笔数都在 summary 里）')
+  assert.ok(kline.includes("bsHint === '' ? summary"), 'bsHint 必须挂到图表容器的 aria-label（读屏可达）')
+  assert.equal(/title:\s*'键盘/.test(kline), false, '键盘提示不得再挂原生 title（会与细节卡浮层重叠）')
+  assert.ok(kline.includes("'aria-label': bsHint === '' ? summary"), '读屏摘要仍在（bsHint 挂在 aria-label 上，区间内/区间外的笔数都在）')
   // 被锁定的两句：字面量**一字不改**，且只出现在提示文本里
   assert.ok(kline.includes('区间内无买卖点'), '⚠ 被 build.mjs 锁定的字面量必须保留（改成提示文本，不是删除）')
   assert.ok(kline.includes('区间外另有'), '⚠ 同上（这句在 summary 里也仍然有）')
@@ -108,7 +109,8 @@ test('② 下窗脚注：K 线那一条整行走掉；分时那条保留；来�
 })
 
 test('③ `（详情头为真实成交价）` 从可见脚注搬到 B/S 标记的 title 与 aria-label（唯一来源）', () => {
-  const kline = strip(read('./kline.tsx'))
+  // 区间统计文本已抽到纯函数模块（klineStats.ts），字面量两处合起来看
+  const kline = strip(read('./kline.tsx')) + strip(read('./klineStats.ts'))
   const drawer = strip(read('./QuoteDrawer.tsx'))
 
   // 唯一来源：常量定义在 kline.tsx，正文含该口径

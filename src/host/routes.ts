@@ -11,6 +11,7 @@ import { CalendarStore, calToday, type CalSyncSourceResult } from './calendar.ts
 import { RESCUE_METHODOLOGY, RescueMonitor, wireRescueSnapshot } from './rescue.ts'
 import { wireKline, wireTrend } from './wireSlim.ts'
 import { QUOTE_HOSTS, HISTORY_HOSTS } from './em.ts'
+import { TENCENT_KLINE_HOSTS } from './tencent.ts'
 import { breakerSummary } from './breaker.ts'
 import { HttpError, httpStatusOf, retryAfterSecondsOf } from './http.ts'
 import { TotalUpstreamError, partialOutcomeOf, shortError, upstreamHealth, type PartialOutcome } from './degrade.ts'
@@ -301,6 +302,14 @@ export function makeTradeRoutes(
   /** 上游主机组：503 时用它给出 retry-after，并聚合展示熔断明细（去重后 3 台） */
   const upstreamHosts = [...new Set([...QUOTE_HOSTS, ...HISTORY_HOSTS])]
   /**
+   * 「上游健康」面板要看的**全部**主机：东财那组 + 腾讯 K 线的三台同源主机。
+   *
+   * 为什么单独一组：K 线可以在 `web.ifzq.gtimg.cn` 被 WAF 挡成 501 时由 `ifzq.gtimg.cn`
+   * 接住（`fetchTencentAppstock`）—— 那台是 **degraded（降级）**，链路本身有数据。
+   * 只有把它们放进面板，用户才看得到"哪台不行、谁接住了"，而不是一句"上游不可用"。
+   */
+  const healthHosts = [...new Set([...upstreamHosts, ...TENCENT_KLINE_HOSTS.map((h) => h.host)])]
+  /**
    * 兜底错误出口。
    *
    * P0（AUDIT-IMPL70 §1）：**逐标的路由不该走到这里**。走到这里说明这条路由没有部分结果
@@ -377,7 +386,7 @@ export function makeTradeRoutes(
            * **零新增上游请求**：全部来自 `withHostBreaker` 与 `em.fetchAny` 已有的记账，
            * 这里只是把内存状态读出来。它不复位、不探活 —— 探活会变成"看一眼就多一次请求"。
            */
-          upstream: upstreamHealth(upstreamHosts),
+          upstream: upstreamHealth(healthHosts),
         })
       },
     },
@@ -1007,7 +1016,8 @@ export function makeTradeRoutes(
           // 键必须与 fetchKline 内部一致：年K 用 103 的缓存，复权口径过 normalizeFq（指数/期货会被归为 0）
           const cache = em.klineCacheStatusOf(secid, klt === 104 ? 103 : klt, em.normalizeFq(secid, fqt))
           // 二级瘦身（AUDIT-IMPL77 第 2 项）：`pct:null` 不上线；读侧 `chartWire.klinePctOf` 还原成 null
-          send(res, 200, { kline: wireKline(kline), ...(kline === null ? { missing: [em.klineMissingReason(secid, klt, { cache })] } : {}) })
+          // `fqt` 一并传进理由函数：周/月/年拿不到时要能说清"本地日线够不够聚合"（AUDIT-BK-AGG）
+          send(res, 200, { kline: wireKline(kline), ...(kline === null ? { missing: [em.klineMissingReason(secid, klt, { cache, fqt })] } : {}) })
         } catch (error) {
           fail(res, error)
         }

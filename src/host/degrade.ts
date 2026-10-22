@@ -70,9 +70,30 @@ export function noteHostSkipped(host: string, reason: string): void {
   t.lastSkipReason = reason
 }
 
+/**
+ * 该主机这次**失败了，但同源的兄弟主机接住了**同一份请求（→ 降级，不判死）。
+ *
+ * 为什么要这个记号：腾讯 K 线有三台同源主机（`appstock` 那套：`web.ifzq.gtimg.cn` /
+ * `ifzq.gtimg.cn` / `proxy.finance.qq.com`），它们的数据**完全相同**（实测 2026-10-22：
+ * 同一 `param` 回包的 `qfqday` 逐字相同）。当 `web.ifzq.gtimg.cn` 被 WAF 挡成 501、而
+ * `ifzq.gtimg.cn` 照常 200 时，用户的图**是有数据的** —— 这时把失败那台记成"死了"
+ * 会让面板显示"K 线上游不可用"，与事实相反。`degraded` 表达的就是"这台这轮不行、链路没事"。
+ */
+const fallbacks = new Map<string, { at: number; servedBy: string }>()
+
+export function noteHostFallback(host: string, servedBy: string): void {
+  fallbacks.set(host, { at: Date.now(), servedBy })
+}
+
+/** 最近一次"被同源兄弟接住"的记录（供 `/health` 与断言读取；无则 null） */
+export function hostFallbackOf(host: string): { at: number; servedBy: string } | null {
+  return fallbacks.get(host) ?? null
+}
+
 /** 清空健康簿（**测试钩子**：`__` 前缀与全仓约定一致，见 repoHygiene ③） */
 export function __resetUpstreamHealth(): void {
   timelines.clear()
+  fallbacks.clear()
 }
 
 export interface HostHealth {
@@ -91,6 +112,13 @@ export interface HostHealth {
   /** 最近一次"没发请求"的时刻与原因（熔断冷却 / 半开探测被占） */
   lastSkipAt: number | null
   lastSkipReason: string | null
+  /**
+   * **降级（不是死）**：这台这次没成功，但同源的兄弟主机接住了同一份请求。
+   * `null` = 没有这回事（正常、或真的没有备用主机）。
+   */
+  servedBy: string | null
+  /** 上面那次"被接住"的时刻 */
+  servedByAt: number | null
 }
 
 export interface UpstreamHealth {
@@ -125,6 +153,7 @@ export function upstreamHealth(hosts?: readonly string[]): UpstreamHealth {
     const open = !b.allow()
     const lastOkAt = t?.lastOkAt ?? null
     const lastFailAt = t?.lastFailAt ?? null
+    const fb = fallbacks.get(host) ?? null
     rows.push({
       host,
       healthy: lastOkAt !== null && (lastFailAt === null || lastOkAt >= lastFailAt),
@@ -136,6 +165,8 @@ export function upstreamHealth(hosts?: readonly string[]): UpstreamHealth {
       lastError: t?.lastError ?? b.state.lastError,
       lastSkipAt: t?.lastSkipAt ?? null,
       lastSkipReason: t?.lastSkipReason ?? null,
+      servedBy: fb?.servedBy ?? null,
+      servedByAt: fb?.at ?? null,
     })
   }
   // 有活动的排前面（最近活动时间倒序），从未活动过的排最后 —— 摘要第一眼看到的就是"刚动过的那台"
@@ -154,6 +185,15 @@ function healthLine(rows: readonly HostHealth[]): string {
   if (rows.length === 0) return '上游健康：尚无上游请求记录'
   const now = rows.reduce<number>((acc, r) => Math.max(acc, r.lastOkAt ?? 0, r.lastFailAt ?? 0, r.lastSkipAt ?? 0), 0)
   const parts = rows.slice(0, 8).map((r) => {
+    /**
+     * **降级（不判死）**先说：这台这次没成功，但同源兄弟接住了 ⇒ 链路有数据。
+     * 若把它写成"熔断/不可用"，面板会与用户的图（有数据）矛盾。
+     */
+    if (r.servedBy !== null && r.lastFailAt !== null && (r.lastOkAt === null || r.lastFailAt >= r.lastOkAt)) {
+      const why = r.lastError === null ? '' : `，${shortError(r.lastError)}`
+      const openTail = r.open ? `，熔断剩 ${r.minutesLeft} 分钟` : ''
+      return `${r.host} 降级（同源 ${r.servedBy} 接住${openTail}，连续失败 ${r.consecutiveFails} 次${why}）`
+    }
     if (r.open) {
       const why = r.lastError === null ? '' : `，${shortError(r.lastError)}`
       return `${r.host} 熔断剩 ${r.minutesLeft} 分钟（连续失败 ${r.consecutiveFails} 次${why}）`

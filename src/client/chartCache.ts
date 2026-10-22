@@ -74,6 +74,38 @@ export function unavailableReasonOf(
   }
 }
 
+/** 图中"拿不到"那块**可见**的两行文字（纯函数：同一句原因只许出现一次，见 `unavailableBlockOf`） */
+export interface UnavailableBlock {
+  /** 第一行：固定短句（与 `TAB_LABEL` 无关，用户已熟悉的措辞） */
+  headline: string
+  /**
+   * 第二行：**唯一**那一句原因（`what + why 的短标签 + note`）。
+   * ⚠ 不许把 `note` 再单独渲染一遍 —— 用户截图里同一句原因出现了两遍（带底色的块里一遍、纯文本一遍）。
+   */
+  reason: string
+  /** 读屏用的短标签（`上游无此数据` / `未取到`） */
+  whyLabel: string
+}
+
+/**
+ * 抽屉里「该周期未取到」那块的内容（纯函数，便于直接断言）。
+ *
+ * 为什么要抽出来：这段文案曾经在**同一个容器里渲染两遍** —— 一遍进带底色的 `tw-hint` 块，
+ * 一遍又作为一行纯文本（`payload.missing[0].note`）。同一句原因说两次不会让人更明白，
+ * 只会让"到底哪儿出错"更难找。现在只有 `reason` 一处，`note` 只出现一次。
+ */
+export function unavailableBlockOf(missing: readonly MissingField[] | undefined): UnavailableBlock {
+  const m = missing?.[0]
+  if (m === undefined) return { headline: '该周期未取到', reason: '', whyLabel: '未取到' }
+  const noSource = m.why === 'no-source'
+  const whyLabel = noSource ? '上游无此数据' : '未取到'
+  return {
+    headline: '该周期未取到',
+    reason: `${m.what}不可用（${noSource ? '上游无此数据，重试无用' : '未取到，等它恢复'}）：${m.note}`,
+    whyLabel,
+  }
+}
+
 /** 盘中 TTL：分时 30s（宿主每 60s 才重算一次），五日 2min，K 线 10min */
 const TTL_MS: Record<ChartTab, number> = {
   trend: 30_000,

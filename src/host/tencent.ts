@@ -24,10 +24,123 @@
  * 所有请求都过 `breakerFetch.withHostBreaker`（按主机熔断记账）。
  */
 import { parseMarketStamp, usWallToEpoch } from './time.ts'
-import { withHostBreaker } from './breakerFetch.ts'
+import { UpstreamCoolingError, withHostBreaker } from './breakerFetch.ts'
+import { breakerFor } from './breaker.ts'
+import { noteHostFailure, noteHostFallback } from './degrade.ts'
 import { tencentVolToHands } from './klineUnits.ts'
 
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+
+// ───────────────── 同源主机回退（K 线：一台被 WAF 挡 ⇒ 换兄弟机） ─────────────
+
+/**
+ * 腾讯 `appstock`（K 线/分钟线那套接口）的**三台同源主机**。
+ *
+ * 为什么必须有这一层（实测 2026-10-22 本机）：
+ *   - `https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param=sh000001,day,,,5,`
+ *     ⇒ **HTTP 501**，回包是 WAF 挑战页（`waf.tencent.com/501page.html`）——**对任何标的都一样**，
+ *     包括上证指数与沪深个股。这不是"这只标的没有数据"，而是**这台主机不接受本机请求**。
+ *   - 同一路径换 `ifzq.gtimg.cn` / `proxy.finance.qq.com` ⇒ **200**，且 `data.<code>.qfqday` 与
+ *     `day` 数组**逐字相同**（只有 `qt`/`mx_price` 这类元数据里的时间戳不同，解析侧本来就不取它们）。
+ *   - 旧实现把 `web.ifzq.gtimg.cn` 写死在 K 线链路上 ⇒ 这台一被挡，整条 K 线链路（含所有周期）
+ *     就"没数据"，而界面只能把它说成"熔断冷却/上游没有"。
+ *
+ * ⚠ 三台的**前缀不同**（`proxy` 走 `/ifzqgtimg/appstock`），路径与其后的查询串必须完全一致 ——
+ * 换主机**不换参数**，否则就是另一个口径。
+ */
+export interface TencentKlineHost {
+  host: string
+  /** 主机根 + 该主机的 `appstock` 前缀（其后拼 `/app/...`） */
+  base: string
+}
+
+export const TENCENT_KLINE_HOSTS: readonly TencentKlineHost[] = [
+  { host: 'web.ifzq.gtimg.cn', base: 'https://web.ifzq.gtimg.cn/appstock' },
+  { host: 'ifzq.gtimg.cn', base: 'https://ifzq.gtimg.cn/appstock' },
+  { host: 'proxy.finance.qq.com', base: 'https://proxy.finance.qq.com/ifzqgtimg/appstock' },
+]
+
+/** 一次主机尝试的记账（供断言、`/health` 与原因文案读取） */
+export interface TencentKlineTry {
+  host: string
+  ok: boolean
+  /** HTTP 状态码（`null` = 连接层失败，或本轮**没发请求**） */
+  status: number | null
+  ms: number
+  /** 失败原因（`熔断冷却中（本轮未发请求）` / `HTTP 501 from …` / 连接错误原文） */
+  error: string | null
+}
+
+/**
+ * 三台**都**不可用。语义是「**主机不可用**」，**不是**「上游没有这只标的的数据」——
+ * 两者对用户的下一步动作完全不同（等主机恢复 vs 换标的/别等了），所以必须是两种错误。
+ */
+export class TencentKlineUnavailableError extends Error {
+  readonly tries: readonly TencentKlineTry[]
+
+  constructor(tries: readonly TencentKlineTry[]) {
+    const detail = tries.map((t) => `${t.host} ${t.error ?? '未知原因'}`).join('；')
+    super(`腾讯 K 线主机全部不可用（${detail}）`)
+    this.name = 'TencentKlineUnavailableError'
+    this.tries = [...tries]
+  }
+}
+
+/**
+ * 按固定顺序尝试三台同源主机（**同一路径、同一参数**），任一台 200 即返回。
+ *
+ * 记账分工（不重复计数）：
+ *   - 每台的成败由 `withHostBreaker` 记在**该台自己**的熔断器与健康簿上（501/超时/非 JSON 都是失败）；
+ *   - 冷却中的主机**记一次"跳过"并继续试下一台**（同源有人活着就不能整体失败）；
+ *   - 只有三台全部失败才抛 `TencentKlineUnavailableError`；
+ *   - 被兄弟主机接住的那台记 `noteHostFallback` ⇒ `/health` 里显示「降级」，**不判死**。
+ */
+export async function fetchTencentAppstock(
+  pathAndQuery: string,
+  timeoutMs: number,
+  opts: { headers?: Record<string, string> } = {},
+): Promise<{ json: unknown; host: string; tries: TencentKlineTry[] }> {
+  const tries: TencentKlineTry[] = []
+  for (const { host, base } of TENCENT_KLINE_HOSTS) {
+    const startedAt = Date.now()
+    try {
+      /**
+       * 非 2xx（含 WAF 的 501）**绝不当数据**：`withHostBreaker` 按 `res.ok === false` 记一次失败并把
+       * `HTTP 501 from …` 抛出（这正是"主机不可用"的原始事实），这里只接住它去试下一台。
+       */
+      const res = await withHostBreaker(host, () =>
+        fetch(`${base}${pathAndQuery}`, {
+          headers: { 'user-agent': UA, referer: 'https://gu.qq.com/', ...(opts.headers ?? {}) },
+          signal: AbortSignal.timeout(timeoutMs),
+        }),
+      )
+      let json: unknown
+      try {
+        json = JSON.parse(await res.text()) as unknown
+      } catch {
+        // 200 但正文不是 JSON（WAF 的"200 版"挑战页之类）：同样按**主机不可用**记账，再换下一台
+        const bad = new Error(`non-JSON reply from ${host}: 回包不是 JSON（可能被 WAF 拦截）`)
+        breakerFor(host).recordFailure(bad)
+        noteHostFailure(host, bad)
+        throw bad
+      }
+      tries.push({ host, ok: true, status: 200, ms: Date.now() - startedAt, error: null })
+      for (const t of tries) if (!t.ok) noteHostFallback(t.host, host)
+      return { json, host, tries }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      const status = /^HTTP (\d{3}) from /.exec(message)?.[1]
+      tries.push({
+        host,
+        ok: false,
+        status: status === undefined ? null : Number(status),
+        ms: Date.now() - startedAt,
+        error: error instanceof UpstreamCoolingError ? '熔断冷却中（本轮未发请求）' : message,
+      })
+    }
+  }
+  throw new TencentKlineUnavailableError(tries)
+}
 
 /**
  * 东财 secid → 腾讯代码。
@@ -298,14 +411,9 @@ export async function fetchTencentDaily(secid: string, count = 320): Promise<Arr
   // 国际指数也走这里（实测 `fqkline?param=us.INX,day,,,10,qfq` 返回 `day` 数组，下面已有 `day` 兜底）
   const code = tencentQuoteCode(secid)
   if (code === null) return []
-  const res = await withHostBreaker('web.ifzq.gtimg.cn', () =>
-    fetch(`https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param=${code},day,,,${count},qfq`, {
-      headers: { 'user-agent': UA, referer: 'https://gu.qq.com/' },
-      signal: AbortSignal.timeout(15000),
-    }),
-  )
-  if (!res.ok) throw new Error(`HTTP ${res.status} from web.ifzq.gtimg.cn`)
-  const j = (await res.json()) as { data?: Record<string, { qfqday?: string[][]; day?: string[][] }> }
+  // 同源三台主机回退（一台被 WAF 挡成 501 时换兄弟机；见 TENCENT_KLINE_HOSTS）
+  const { json } = await fetchTencentAppstock(`/app/fqkline/get?param=${code},day,,,${count},qfq`, 15000)
+  const j = json as { data?: Record<string, { qfqday?: string[][]; day?: string[][] }> }
   const arr = j?.data?.[code]?.qfqday ?? j?.data?.[code]?.day ?? []
   const out: Array<{ date: string; open: number; close: number; high: number; low: number; vol: number }> = []
   for (const r of arr) {

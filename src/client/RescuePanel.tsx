@@ -717,16 +717,15 @@ export function RescuePanel(props: {
       : null,
     loading && data === null ? React.createElement(Skeleton, { lines: 3, height: 20 }) : null,
     snapshot !== null
-      ? React.createElement('div', { className: 'tw-rescue-summary' },
-          React.createElement('span', { style: { color: LEVEL_COLOR[level], fontWeight: 600, flex: 'none' } }, levelText),
-          React.createElement('span', { className: 'tw-muted', style: { flex: 1, minWidth: 0 } }, snapshot.summary),
-          React.createElement('span', { className: 'tw-muted', style: { fontSize: 12, flex: 'none' } },
-            `${snapshot.indexName} ${fmtPct(snapshot.indexPct)} · ${snapshot.pulseBand.label}${
-              snapshot.pulseBand.phase === 'closed' ? '' : snapshot.pulseBand.isTail ? '（满分权重）' : '（脉冲打 0.6 折）'
-            } · 阈值来源 ${
-              snapshot.thresholdSource === 'self' ? `自建分位（${snapshot.selfSampleDays} 天）` : snapshot.thresholdSource === 'calibrated' ? '历史标定' : `经验锚点（自建样本 ${snapshot.selfSampleDays}/20 天）`
-            }`,
-          ),
+      ? React.createElement('div', {
+          className: 'tw-rescue-summary',
+          // 归因已改为**多行分块**（B0–B9）⇒ 容器必须 pre-wrap 才不会被折成一行；
+          // 且摘要独占整行：等级徽标在标题行已有，这里不再重复（同一信息出现两次只会误导）。
+          style: { display: 'block', whiteSpace: 'pre-wrap' },
+        },
+          React.createElement('span', { className: 'tw-muted', style: { display: 'block', whiteSpace: 'pre-wrap' } }, snapshot.summary),
+          // B9（指数 / 时段 / 权重说明 / 阈值来源）已并入 summary 末块 ⇒ 原先那个独立 span 必须删除，
+          // 否则同一段背景会在面板上出现两次（spec R「不得重复显示指数与阈值文字」）。
         )
       : null,
     // B3 缺失收缩（DESIGN-DASHBOARD §4）：取数失败（空壳）或没有快照时，塌成**一行**

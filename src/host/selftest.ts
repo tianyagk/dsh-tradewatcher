@@ -305,9 +305,9 @@ async function main(): Promise<void> {
       ok(capped.level === 1 && capped.summary.includes('追涨'), `指数+2% 的天量 → 封顶资金异动 (got ${capped.level})`)
       // L3 前置（B-2）= 核心参与共振 + 超大单**符号为正**（F2 的幅度阈值已删除）
       const thinNeg0 = scoreRescue({ ...strongInput, coreSuperVsAvg: -0.3, peripheralSuperVsAvg: -0.3, persistShare: 0.3, indexPct: -1.2 })
-      ok(thinNeg0.level === 2 && thinNeg0.summary.includes('符号为负'), `超大单符号为负：等级仍由 raw 与线决定，符号只进说明项 (got ${thinNeg0.level})`)
+      ok(thinNeg0.level === 2 && thinNeg0.summary.includes('超大单读数 -0.300x（为负）'), `超大单读数为负：等级仍由 raw 与线决定，读数只进说明项 (got ${thinNeg0.level})`)
       const thinPos0 = scoreRescue({ ...strongInput, coreSuperVsAvg: 0.3, peripheralSuperVsAvg: 0.3, persistShare: 0.3, indexPct: -1.2 })
-      ok(thinPos0.level === 2 && thinPos0.summary.includes('符号为正'), `符号为正：等级不变（符号不再是前置）(got ${thinPos0.level})`)
+      ok(thinPos0.level === 2 && thinPos0.summary.includes('超大单读数 0.300x（为正）'), `读数为正：等级不变（读数不再是前置）(got ${thinPos0.level})`)
 
       // P0-① 时点系数必须真正作用到评分（此前 tick 未传，运行时恒为 1）
       const sameButEarly = scoreRescue({ ...strongInput, timeCoef: 0.4 })
@@ -1020,9 +1020,9 @@ async function main(): Promise<void> {
       }
       const pos = scoreRescue({ ...common, coreSuperVsAvg: 0.25, peripheralSuperVsAvg: 0.25 } as never)
       ok(pos.level === 2, `强输入 ⇒ 声明集最高档（疑似护盘）(got ${pos.level})`)
-      ok(pos.summary.includes('符号为正'), '符号进说明项（正）')
+      ok(pos.summary.includes('超大单读数 0.250x（为正）'), '读数进说明项（为正）')
       const zero = scoreRescue({ ...common, coreSuperVsAvg: 0, peripheralSuperVsAvg: 0 } as never)
-      ok(zero.level === 2 && zero.summary.includes('符号为零'), `符号为 0 只改说明项、不改等级（got ${zero.level}）`)
+      ok(zero.level === 2 && zero.summary.includes('超大单读数 0.000x（为零）'), `读数为 0 只改说明项、不改等级（got ${zero.level}）`)
       const missing = scoreRescue({ ...common, coreSuperVsAvg: null, peripheralSuperVsAvg: null } as never)
       ok(missing.level === 2 && missing.summary.includes('超大单读数 未取到'), `读数缺失 ⇒ 如实进说明项（got ${missing.level}）`)
       ok(pos.factors.length === 4 && pos.factors.every((f) => f.id !== 'superflow'), '出分因子为四项（F2 已剔除）')

@@ -19,13 +19,14 @@ import { isMultiDayTrend, stitchTrendDays } from '../shared/trendStitch.ts'
 import { TREND_ARCHIVE_KEEP_DAYS, archiveTrendDays, loadTrendArchive, type TrendArchiveEntry } from './trendArchive.ts'
 import { payloadFingerprint } from '../shared/fingerprint.ts'
 import { TrendLkgStore } from './trendLkgStore.ts'
-import { aggregateUsDaily, detectUsSplits, splitMarksOf, usAggCaliber, usBucketOf, type UsAggPeriod, type UsSplit } from './usAggregate.ts'
+import { aggregateUsDaily, detectUsSplits, splitMarksOf, usAggCaliber, usBucketOf, type UsSplit } from './usAggregate.ts'
+import { aggBucketOf, aggCaliberOf, aggPeriodOfKlt, aggregateDaily, shouldAggregate, type AggBar, type AggPeriod } from './klineAggregate.ts'
 import { mkdir, readdir, readFile, rm, stat } from 'node:fs/promises'
 import { writeFileAtomic } from './atomic.ts'
 import { updateJsonLocked, withFileLock } from './lock.ts'
 import { breakerFor, hostsAllowed, minutesToRecover } from './breaker.ts'
 import { fetchSinaEtfRanking, fetchSinaQuotes, fetchSinaUsDaily, fetchSinaUsMin, sinaSymbol as sinaQuoteSymbol, type SinaBar } from './sina.ts'
-import { fetchTencentBoards, fetchTencentMinutes, fetchTencentQuoteRows, fetchTencentSuggest, minuteTrendPointsOf, tencentCode, tencentIndexCode, tencentQuoteCode, type TencentQuoteFull } from './tencent.ts'
+import { fetchTencentAppstock, fetchTencentBoards, fetchTencentMinutes, fetchTencentQuoteRows, fetchTencentSuggest, minuteTrendPointsOf, tencentCode, tencentIndexCode, tencentQuoteCode, TencentKlineUnavailableError, type TencentKlineTry, type TencentQuoteFull } from './tencent.ts'
 import { fetchAuction } from './auction.ts'
 import { join } from 'node:path'
 import { dataHome } from './store.ts'
@@ -2641,50 +2642,82 @@ function tencentSymbol(secid: string): string | null {
 }
 
 /**
- * 腾讯历史 K 线兜底源（东财 push2his 限流严重时救命）。
+ * 该标的的 K 线是不是**只有东财一条链路**（腾讯 `fqkline` 根本认不出它的代码）。
+ *
+ * 实测 2026-10-22（见 `docs/AUDIT-BK-AGG.md`）：
+ *   - 板块（`90.BK*`）：`tencentIndexCode` 只映射 `100.*` 国际指数，板块码返回 null ⇒ 腾讯那条链路
+ *     **一次都不请求**；换成腾讯自己的板块代码（`pt01801731`，与东财板块不是同一套编号）实测
+ *     `fqkline`/`kline` 的 `day` 只回**当天 1 根**，没有历史 ⇒ 腾讯拿不到板块日线；
+ *   - 中证/国证指数（`2.*`）、外盘商品、国内期货、美债（`171.*`）同理。
+ *
+ * 这决定了"周/月/年取不到"的**真实原因**：不是某个周期缺数据，而是**没有可用的日线源**可聚合。
+ * 把它写成"主机熔断冷却中"会让用户一直等一个不会来的周期。
+ */
+export function klineOnlyEmChain(secid: string): boolean {
+  return !isUsSecid(secid) && tencentSymbol(secid) === null
+}
+
+/**
+ * 腾讯 K 线回包的**纯解析**（同源三台主机共用同一份解析 ⇒ 换主机不改变任何读数）。
+ *
+ * 严格按请求的口径取键：要前复权却只拿到不复权序列时宁可失败，
+ * 也不能把不复权价格当前复权画出去（旧实现优先取 `${period}`，就是这种混口径）。
+ * 例外：**国际指数**（`100.*`）实测只回 `${period}`（如 `us.INX` 的 `day`），
+ * 且指数没有除权除息 ⇒ `day` 与 `qfqday` 是同一份序列，取它不构成混口径。
+ *
+ * 行格式 `[date, open, close, high, low, volume]`（腾讯是 O-C-H-L 顺序，别照东财的 O-H-L-C 读）。
+ */
+export function parseTencentKlineNode(
+  json: unknown,
+  opts: { sym: string; secid: string; period: string; fq: string },
+): DayBar[] | null {
+  const node = (json as { data?: Record<string, Record<string, unknown>> } | null)?.data?.[opts.sym]
+  if (node === undefined) return null
+  const key = opts.fq === '' ? opts.period : `${opts.fq}${opts.period}`
+  const rows = (node[key] ?? (/^100\./.test(opts.secid) ? node[opts.period] : undefined)) as unknown
+  if (!Array.isArray(rows)) return null
+  const bars: DayBar[] = []
+  for (const r of rows) {
+    if (!Array.isArray(r) || r.length < 5) continue
+    const close = num(r[2])
+    const open = num(r[1])
+    if (close === null || open === null) continue
+    bars.push({
+      date: String(r[0]),
+      open,
+      close,
+      high: num(r[3]) ?? close,
+      low: num(r[4]) ?? close,
+      // 量纲归一的**入口**：腾讯科创板日线给的是「股」，本插件全链路按「手」
+      // （实测 sh688035 同日腾讯 4 653 193 ↔ 快照 46 532 手，恰好 ×100；主板/创业板/ETF 不动）
+      vol: r.length > 5 ? tencentVolToHands(opts.secid, num(r[5])) : null,
+      pct: null,
+    })
+  }
+  return bars.length > 0 ? bars : null
+}
+
+/**
+ * 腾讯历史 K 线兜底源（东财 push2his 限流严重时救命；也是 A股/港股 K 线的**首选**）。
  * 统一走「不复权」，与东财 fqt=0 同口径，避免混源污染本地缓存。
- * 行格式 [date, open, close, high, low, volume]。
+ *
+ * ⚠ **三台同源主机按固定顺序回退**（`fetchTencentAppstock`）：`web.ifzq.gtimg.cn` 实测会被
+ * WAF 挡成 501（对任何标的），只写死这一台时整条 K 线链路会"没数据"，而界面只能猜原因。
+ * 三台都不可用时**不当作"上游没有这只标的"**：记一条 `klineHostDown`（主机不可用），
+ * 由 `klineMissingReason` 如实说"主机不可用"，而不是"上游无此数据"。
  */
 async function requestKlineFromTencent(secid: string, klt: number, lmt: number, fqt: FqMode): Promise<DayBar[] | null> {
   const sym = tencentSymbol(secid)
   if (sym === null) return null
   const period = klt === 101 ? 'day' : klt === 102 ? 'week' : 'month'
   const fq = fqt === 1 ? 'qfq' : fqt === 2 ? 'hfq' : ''
-  const path = `/appstock/app/fqkline/get?param=${sym},${period},,,${Math.min(1000, Math.max(5, lmt))},${fq}`
+  const path = `/app/fqkline/get?param=${sym},${period},,,${Math.min(1000, Math.max(5, lmt))},${fq}`
   try {
-    // H1：腾讯 fqkline 是 K 线的**首选**源 —— 此前不过熔断器 ⇒ 单台挂起时每次 /kline 付满 9 秒
-    const json = (await fetchHostThroughBreaker('web.ifzq.gtimg.cn', path, 9000)) as {
-      data?: Record<string, Record<string, unknown>>
-    }
-    const node = json?.data?.[sym]
-    if (node === undefined) return null
-    // 严格按请求的口径取键：要前复权却只拿到不复权序列时宁可失败，
-    // 也不能把不复权价格当前复权画出去（旧实现优先取 `${period}`，就是这种混口径）。
-    // 例外：**国际指数**（`100.*`）实测只回 `${period}`（如 `us.INX` 的 `day`），
-    // 且指数没有除权除息 ⇒ `day` 与 `qfqday` 是同一份序列，取它不构成混口径。
-    const key = fq === '' ? period : `${fq}${period}`
-    const rows = (node[key] ?? (/^100\./.test(secid) ? node[period] : undefined)) as unknown
-    if (!Array.isArray(rows)) return null
-    const bars: DayBar[] = []
-    for (const r of rows) {
-      if (!Array.isArray(r) || r.length < 5) continue
-      const close = num(r[2])
-      const open = num(r[1])
-      if (close === null || open === null) continue
-      bars.push({
-        date: String(r[0]),
-        open,
-        close,
-        high: num(r[3]) ?? close,
-        low: num(r[4]) ?? close,
-        // 量纲归一的**入口**：腾讯科创板日线给的是「股」，本插件全链路按「手」
-        // （实测 sh688035 同日腾讯 4 653 193 ↔ 快照 46 532 手，恰好 ×100；主板/创业板/ETF 不动）
-        vol: r.length > 5 ? tencentVolToHands(secid, num(r[5])) : null,
-        pct: null,
-      })
-    }
-    return bars.length > 0 ? bars : null
-  } catch {
+    const { json, host, tries } = await fetchTencentAppstock(path, 9000)
+    noteKlineHostTries(secid, klt, tries, host)
+    return parseTencentKlineNode(json, { sym, secid, period, fq })
+  } catch (error) {
+    if (error instanceof TencentKlineUnavailableError) noteKlineHostDown(secid, klt, error.tries)
     return null
   }
 }
@@ -2733,10 +2766,11 @@ async function usDailyBars(secid: string): Promise<DayBar[]> {
   })
 }
 
-/** K 线周期号 → 聚合周期（美股周/月/年由日线聚合；101 = 日线本身，不聚合） */
-function usAggPeriodOfKlt(klt: number): UsAggPeriod | null {
-  return klt === 102 ? 'week' : klt === 103 ? 'month' : klt === 104 ? 'year' : null
-}
+/**
+ * K 线周期号 → 聚合周期（周/月/年由日线聚合；101 = 日线本身，不聚合）。
+ * 实现在 `klineAggregate.ts`（美股与 A股/指数/板块共用一份），这里只保留历史名字。
+ */
+const usAggPeriodOfKlt = aggPeriodOfKlt
 
 /**
  * 美股一轮 K 线取数：
@@ -2760,6 +2794,41 @@ function usDailyFromCache(secid: string): SinaBar[] | null {
   if (slot === undefined || Date.now() >= slot.exp) return null
   const value = slot.value as SinaBar[] | undefined
   return Array.isArray(value) ? value : null
+}
+
+/**
+ * 周/月/年 K 的**日线聚合兜底**（不接新源、**不发任何新请求**）。
+ *
+ * 场景：板块指数（`90.BK*`）、中证指数（`2.*`）这类标的**只有东财一条 K 线链路**，
+ * 东财不可达时周/月/年就"未取到"；而**日线可能就在本地缓存里**（用户之前看过日K，
+ * 或日线走的是别的链路）。日线在手却算不出周线 = **丢数据**。
+ *
+ * 三条边界：
+ *   · 原生永远优先（`shouldAggregate` 要求 `nativeBars === 0`）；
+ *   · 只读**本地缓存**（`loadKlineCache` 不联网）—— 这条兜底绝不额外打上游；
+ *   · 美股不走这里（它的日线来自新浪，已有自己的聚合路径，口径是未复权原始价）。
+ */
+async function aggregateFromDailyCache(
+  secid: string,
+  klt: number,
+  mode: FqMode,
+): Promise<{ period: AggPeriod; bars: AggBar[]; note: string; asOf: number } | null> {
+  if (isUsSecid(secid)) return null
+  const period = aggPeriodOfKlt(klt)
+  if (period === null) return null
+  const daily = await loadKlineCache(secid, 101, mode)
+  if (!shouldAggregate({ klt, nativeBars: 0, dailyBars: daily.bars.length, minDailyBars: KLINE_MIN_USABLE_BARS })) return null
+  const bars = aggregateDaily(daily.bars, period)
+  if (bars.length === 0) return null
+  return {
+    period,
+    bars,
+    asOf: daily.updatedAt,
+    note: aggCaliberOf(period, {
+      dailyBars: daily.bars.length,
+      dailyAsOfText: daily.updatedAt > 0 ? shStampText(daily.updatedAt) : '—',
+    }),
+  }
 }
 
 /** 单主机取 K 线；空数组视为失败（push2delay/push2 会返回 200 + 空）。优先腾讯。 */
@@ -2860,8 +2929,16 @@ export async function fetchKline(
   const settledFn = us ? isUsSettledOffline : isSettledOffline
   const settled = !needFull && settledFn(entry.updatedAt)
   const stale = settled ? false : await refreshKline(secid, baseKlt, mode, entry, needFull)
-  if (!settled && stale && entry.bars.length === 0) return null
-  const series = baseKlt === 103 && klt === 104 ? resampleYearly(entry.bars) : entry.bars
+  /**
+   * **日线聚合兜底**（v0.129.0）：周/月/年 的原生数据一条都没拿到时，用**本地日线缓存**聚合。
+   * 不接新源、不发请求；原生数据永远优先。回包带 `aggregated` ⇒ 口径行写「由日线聚合」。
+   * 日线也没有（板块指数就是这种）⇒ 保持"未取到"，但原因由 `klineMissingReason` 说清是**没有日线源**。
+   */
+  const aggFallback = entry.bars.length === 0 ? await aggregateFromDailyCache(secid, klt, mode) : null
+  if (!settled && stale && entry.bars.length === 0 && aggFallback === null) return null
+  const series = aggFallback !== null
+    ? aggFallback.bars
+    : baseKlt === 103 && klt === 104 ? resampleYearly(entry.bars) : entry.bars
   const want = Math.max(1, Math.min(Math.round(lmt) || series.length, series.length))
   const days = series.slice(series.length - want)
   // 最后一根是否未收盘：只有"该 bar 就是今天"且此刻仍可能产生新数据时才算。
@@ -2881,11 +2958,14 @@ export async function fetchKline(
   const usPeriod = us ? usAggPeriodOfKlt(baseKlt) : null
   const aShareYear = !us && baseKlt === 103 && klt === 104
   const barOpen = !settled && lastDate !== '' && (
-    aShareYear
-      ? lastDate.slice(0, 4) === String(todayOf(Date.now())).slice(0, 4) && inSessionOf()
-      : usPeriod === null
-        ? lastDate === todayOf(Date.now()) && inSessionOf()
-        : usBucketOf(lastDate, usPeriod) === usBucketOf(usDayOf(Date.now()), usPeriod) && inUsSession()
+    aggFallback !== null
+      // 聚合档的 `date` 是"该桶的首个交易日"⇒ 比的是**所属周期**（否则周K 在周三永远显示"当根已收盘"）
+      ? aggBucketOf(lastDate, aggFallback.period) === aggBucketOf(dayOf(Date.now()), aggFallback.period) && inSession()
+      : aShareYear
+        ? lastDate.slice(0, 4) === String(todayOf(Date.now())).slice(0, 4) && inSessionOf()
+        : usPeriod === null
+          ? lastDate === todayOf(Date.now()) && inSessionOf()
+          : usBucketOf(lastDate, usPeriod) === usBucketOf(usDayOf(Date.now()), usPeriod) && inUsSession()
   )
   /**
    * 年K 的涨跌幅口径必须写出来（REVIEW-7 D7 的第三个口径）：**同比（相对上一年收盘）**，
@@ -2912,12 +2992,17 @@ export async function fetchKline(
     : (entry.unitNote === null ? usUnitNote : `${usUnitNote}；${entry.unitNote}`)
   const reason = unitNote === null ? staleReason : (staleReason === null ? unitNote : `${staleReason}；${unitNote}`)
   /**
-   * 美股聚合档与拆股标记（AUDIT-IMPL69）：
-   *   · `aggregated` 让界面口径行写出「由日线聚合（非上游原生）」（这是口径，不是脚注）；
-   *   · `splits` 是**未复权断层**的标注位置（图上标该根 + 口径行写"检测到 N 处"）。
-   *     ⚠ 我们**不改价**去抹平它 —— 那等于伪造复权。
+   * 聚合档的**口径句**（界面口径行原样显示，**只有这一处**）：
+   *   · 美股：`usAggCaliber`（含未复权 + 拆股计数）；
+   *   · 非美股（v0.129.0 兜底）：`aggCaliberOf`（含"日线取自本地缓存 N 根、截至何时"）。
+   * 两种情况都写「由日线聚合」—— 这是**口径**，不是脚注，也不新增第二条常驻文案。
    */
-  const aggregated = usPeriod === null ? undefined : { period: usPeriod, note: usAggCaliber(usPeriod, entry.splits) }
+  const aggNote = aggFallback !== null
+    ? aggFallback.note
+    : usPeriod === null ? null : usAggCaliber(usPeriod, entry.splits)
+  const aggregated = aggNote === null
+    ? undefined
+    : { period: (aggFallback !== null ? aggFallback.period : usPeriod) as AggPeriod, note: aggNote }
   const splits = us
     ? (usPeriod === null
         ? entry.splits.map((sp) => ({ date: sp.day, day: sp.day, label: sp.label }))
@@ -2926,15 +3011,18 @@ export async function fetchKline(
   return {
     secid,
     days,
-    stale,
+    // 聚合兜底 = 回源没拿到本期数据、用的是本地日线 ⇒ 如实标"上次成功数据"（`stale`）
+    stale: aggFallback !== null ? true : stale,
     ...(aggregated === undefined ? {} : { aggregated }),
     ...(splits === undefined || splits.length === 0 ? {} : { splits }),
     ...(reason === null ? {} : { staleReason: reason }),
     ...(unitNote === null ? {} : { unitNote }),
     fqt: mode,
     fqSupported: supported,
-    // 口径条的"数据截至"= 本地最近一次成功取数时刻（定稿时就是收盘那一次）
-    asOf: entry.updatedAt > 0 ? entry.updatedAt : Date.now(),
+    // 口径条的"数据截至"= 本地最近一次成功取数时刻（定稿时就是收盘那一次）；聚合档用**日线**的时刻
+    asOf: aggFallback !== null
+      ? (aggFallback.asOf > 0 ? aggFallback.asOf : Date.now())
+      : (entry.updatedAt > 0 ? entry.updatedAt : Date.now()),
     barOpen,
     ...(pctNote === null ? {} : { pctNote }),
     ...(settled ? { cached: true } : {}),
@@ -3035,7 +3123,7 @@ export function trendAmountMissingReason(
 export function klineMissingReason(
   secid: string,
   klt: number,
-  opts: { emDown?: boolean; cache?: KlineCacheStatus | null } = {},
+  opts: { emDown?: boolean; cache?: KlineCacheStatus | null; fqt?: FqMode } = {},
 ): UpstreamReason {
   const label = klt === 101 ? '日K' : klt === 102 ? '周K' : klt === 103 ? '月K' : '年K'
   /**
@@ -3062,6 +3150,63 @@ export function klineMissingReason(
   // 而那句话建立在"最近一小时我们根本没发过请求"之上 —— 会把 agent 引向"别重试了"。
   const attempt = klineAttempts.get(secid)
   const fresh = attempt !== undefined && Date.now() - attempt.at < 120_000
+  /**
+   * **腾讯三台同源主机这次都不可用**（实测 2026-10-22：`web.ifzq.gtimg.cn` 对任何标的回 HTTP 501，
+   * WAF 挑战页）—— 这是"**主机不可用**"，**不是**"上游没有这只标的的 K 线"。
+   *
+   * 旧实现把这一轮说成「主机熔断冷却中（未发出上游请求）」：事实恰恰相反，我们**发了**请求，
+   * 只是三个主机轮流回 501/连不上。两种说法的下一步动作完全不同，所以必须分开（AUDIT-BK-AGG §A）。
+   */
+  const hostDown = klineHostDownOf(secid)
+  const hostDownFresh = hostDown !== null && Date.now() - hostDown.at < 120_000
+  if (hostDownFresh) {
+    const emTail = down
+      ? '东财历史行情主机这次也不可达（熔断/限流）'
+      : '东财也没有给出该标的的 K 线'
+    return {
+      what: label,
+      why: 'transient',
+      note: `${cacheClause}；${hostDown.note}；${emTail} —— 这是「主机不可用」，与「这只标的没有 K 线」是两回事；${MISSING_TIER_ADVICE.transient}`,
+    }
+  }
+  /**
+   * **只有东财一条 K 线链路的标的**（板块 `90.*` / 中证指数 `2.*` / 商品·期货 / 美债）：
+   * 腾讯 `fqkline` 根本认不出这些代码（`klineOnlyEmChain`）⇒ 没有日线可聚合。
+   *
+   * 这条**排在熔断/冷却那些分支之前**：对这类标的，"周/月/年取不到"是结构性的
+   * （没有可用的日线源），把它写成"熔断冷却中、稍后就好"会让人一直等一个不会来的周期。
+   */
+  if (klineOnlyEmChain(secid)) {
+    const board = secid.startsWith('90.')
+    const market = secid.slice(0, Math.max(0, secid.indexOf('.')))
+    const only = board ? '板块指数' : '该标的'
+    const uncovered = board
+      ? '腾讯 K 线不覆盖板块码（90.BK*）'
+      : `腾讯 K 线只覆盖沪/深/港股（不认 ${market} 开头这类代码）`
+    const daily = opts.fqt === undefined
+      ? null
+      : (klineMem.get(`${secid}|101|${normalizeFq(secid, opts.fqt)}`)?.bars.length ?? 0)
+    const agg = klt === 101
+      ? ''
+      : daily === 0
+        ? '；本地也没有它的日线缓存，聚合不出周/月/年'
+        : daily === null
+          ? ''
+          : `；本地日线只有 ${daily} 根（不足 ${KLINE_MIN_USABLE_BARS} 根），聚合不出周/月/年`
+    /**
+     * `why` 沿用**既有事实判据**（东财这条唯一链路此刻可不可用），只把措辞换成"单链路"的说法：
+     *   · 东财不可达/熔断 ⇒ `transient`（等这条链路恢复，别的源不会再出现）；
+     *   · 东财可达却没给数据 ⇒ `no-source`（结构性：这条链路不给，重试无用）。
+     * ⚠ 措辞里**不出现**"熔断冷却中"：那只是此刻的状态，不是"周/月/年取不到"的原因
+     *   （真实原因是**没有可用的日线源**）；把状态写在首句会让人一直等一个不会来的周期。
+     */
+    const why: 'transient' | 'no-source' = down ? 'transient' : 'no-source'
+    return {
+      what: label,
+      why,
+      note: `${cacheClause}；${only}没有可用的日线源：${uncovered}，东财是唯一链路而它这次也没给出数据（本机长期连不通）${agg} —— ${MISSING_TIER_ADVICE[why]}`,
+    }
+  }
   if (fresh && attempt.requested) {
     return {
       what: label,
@@ -3146,6 +3291,56 @@ function noteKlineAttempt(secid: string, requested: boolean, note: string): void
 /** 最近一次 K 线取数的事实（`requested` = 真的发出过上游请求）；供理由函数与断言读取 */
 export function klineLastAttempt(secid: string): { at: number; requested: boolean; note: string } | null {
   return klineAttempts.get(secid) ?? null
+}
+
+/**
+ * 腾讯 K 线**同源三台主机**的逐台尝试记录（Lead v0.129.0 A 段的 `attempts`）。
+ *
+ * 为什么要单独记：`klineAttempts` 只记"这一轮到底发没发请求 + 一句话"，而这一轮现在是
+ * **三台主机轮流试** —— 哪台 501、哪台接住、各花多久，只有逐台记录才能事后核对
+ * （也正是用户那句"主机熔断冷却中"到底从哪来的答案）。
+ */
+const klineHostTries = new Map<string, { at: number; klt: number; servedBy: string | null; tries: TencentKlineTry[] }>()
+
+/** 三台都不可用时的记账（`failedAt` = 本轮真的试过；`note` 直接用于原因文案） */
+const klineHostDown = new Map<string, { at: number; klt: number; note: string }>()
+
+function noteKlineHostTries(secid: string, klt: number, tries: readonly TencentKlineTry[], servedBy: string): void {
+  klineHostTries.set(secid, { at: Date.now(), klt, servedBy, tries: [...tries] })
+  if (klineHostTries.size > 300) {
+    const oldest = klineHostTries.keys().next().value
+    if (oldest !== undefined) klineHostTries.delete(oldest)
+  }
+  klineHostDown.delete(secid)
+  // 有主机先失败、后来被兄弟机接住 ⇒ 记一条降级（聚合输出，不刷屏）
+  const failed = tries.filter((t) => !t.ok)
+  if (failed.length > 0) {
+    noteDegraded('kline-host-fallback', {
+      label: 'K 线主机回退（同源兄弟机接住）',
+      subject: secid,
+      reason: `由 ${servedBy} 接住`,
+      detail: `${secid} klt=${klt}：${failed.map((t) => `${t.host} ${t.error ?? ''}`).join('；')} ⇒ 改用 ${servedBy}`,
+    })
+  }
+}
+
+function noteKlineHostDown(secid: string, klt: number, tries: readonly TencentKlineTry[]): void {
+  const detail = tries.map((t) => `${t.host} ${t.error ?? '未知原因'}`).join('；')
+  klineHostDown.set(secid, { at: Date.now(), klt, note: `腾讯 K 线三台同源主机这次都不可用（${detail}）` })
+  if (klineHostDown.size > 300) {
+    const oldest = klineHostDown.keys().next().value
+    if (oldest !== undefined) klineHostDown.delete(oldest)
+  }
+}
+
+/** 最近一次逐台尝试（**含被兄弟机接住的那次**）；供断言与 `/health` 之外的排障读取 */
+export function klineHostTriesOf(secid: string): { at: number; klt: number; servedBy: string | null; tries: TencentKlineTry[] } | null {
+  return klineHostTries.get(secid) ?? null
+}
+
+/** 最近一次"三台都不可用"的记录（null = 没有这回事，或已被后来的成功覆盖） */
+export function klineHostDownOf(secid: string): { at: number; klt: number; note: string } | null {
+  return klineHostDown.get(secid) ?? null
 }
 
 /**

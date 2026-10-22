@@ -10,7 +10,7 @@ import type {
 } from '../shared/model.ts'
 import {
   RESCUE_BOND_30Y_NAME_HINTS, RESCUE_BOND_30Y_SECIDS, RESCUE_COVERAGE_FAMILY_LABEL, RESCUE_COVERAGE_FAMILY_OF_INDEX,
-  RESCUE_CORE_OUTFLOW_VETO, RESCUE_CORE_INDEXES, RESCUE_PERIPHERAL_FLOW_DISCOUNT, rescueUniverseMeta,
+  RESCUE_CORE_OUTFLOW_VETO, RESCUE_CORE_INDEXES, RESCUE_LEVEL_LABEL, RESCUE_PERIPHERAL_FLOW_DISCOUNT, rescueUniverseMeta,
 } from '../shared/model.ts'
 import { RESCUE_CALIBRATION } from './rescue-thresholds.ts'
 import { hostsAllowed } from './breaker.ts'
@@ -139,6 +139,14 @@ const SAMPLE_RING = 40
 export const ENGINE_VERSION = '0.16.0'
 const INDEX_SECID = '1.000300'
 const INDEX_NAME = '沪深300'
+/**
+ * F2（超大单强度）剔除依据的**标定常量**（305 个历史样本，因子分 p90 = 1，原始读数 p90 = 0.01×20 日均额）。
+ *
+ * 为什么提成常量：归因里必须能读到「凭什么剔除」，而样本量与分位是标定结果、不是随手写的字面量 ——
+ * 写在两处就一定会漂。这两个数**只进文案**，不参与任何判分。
+ */
+const F2_REMOVED_SAMPLES = 305
+const F2_REMOVED_P90 = 0.01
 
 interface Sample {
   ts: number
@@ -813,6 +821,13 @@ export interface RescueFactorInput {
   /**F2 锚点（可被自建分位数覆盖） */
   f2Anchors: [number, number, number]
   f2Source: RescueThresholdSource
+  /**
+   * 自建样本天数（**展示用**：只进归因 B9 的「阈值来源」一行）。
+   *
+   * 为什么要传进来：阈值来源的三种写法都要带天数（`自建分位（n 天）` / `经验锚点（自建样本 n/20 天）`），
+   * 而归因是宿主拼的字符串 —— 不传就只能写死 0。它**不参与任何判分**。
+   */
+  selfSampleDays?: number
   /**时点系数；缺省 1（纯函数不读时钟，便于自检） */
   timeCoef?: number
   /**当前是否为尾盘（14:30 后） */
@@ -898,6 +913,35 @@ export interface RescueScoreResult {
 }
 
 const fmt = (v: number | null, unit: string, digits = 2): string => (v === null ? '—' : `${v.toFixed(digits)}${unit}`)
+
+/**
+ * 归因折行（STE 规范 R4：每行不超过 40 字），**一个字都不删、一条都不丢**。
+ *
+ * 把 `items` 用 `separator` 串起来；一行放不下就换行，续行统一缩进 `indent` 后再缩两格。
+ * 只在分隔符处断行 —— 不把数字、单位或短语切成两半。
+ * 为什么需要它：封顶原因（触发数值 + 降级动作）与 4 因子全命中时的 B1 行都会超过 40 字，
+ * 而这两处的内容都不许删，折行是唯一既能守住行长、又不丢判据信息的做法。
+ */
+function wrapItems(items: readonly string[], prefix: string, indent: string, separator: string, limit = 40): string[] {
+  const head = `${indent}${prefix}`
+  const lines: string[] = []
+  let current = head
+  for (const item of items) {
+    const candidate = current === head ? `${head}${item}` : `${current}${separator}${item}`
+    if ([...candidate].length > limit && current !== head) {
+      lines.push(current)
+      current = `${indent}  ${item}`
+    } else {
+      current = candidate
+    }
+  }
+  lines.push(current)
+  return lines
+}
+
+/** 按「，」分句折行（封顶原因用） */
+const wrapClauses = (body: string, prefix: string, indent: string, limit = 40): string[] =>
+  wrapItems(body.split('，'), prefix, indent, '，', limit)
 
 /**
  * 六因子合成：S = Σ w·f × 时点系数，再施加防误报封顶。
@@ -1044,7 +1088,12 @@ export function scoreRescue(input: RescueFactorInput): RescueScoreResult {
       score: 0,
       level: 0,
       factors,
-      summary: `非交易时段（${fmt(input.indexPct, '%')} 为当时指数读数）：本次不出等级、不计入当日最高等级；量能与资金读数仅供参考（样本保留为留痕）`,
+      // 降级路径同样分块（不得拼回长句）：B0 标题 + 原因行 + 读数行，三行各说一件事
+      summary: [
+        '护盘信号｜非交易时段｜不出等级',
+        `原因 当时指数读数 ${fmt(input.indexPct, '%')}，本次不出等级、也不计入当日最高等级`,
+        '说明 量能与资金读数仅供参考，样本保留',
+      ].join('\n'),
       completeness: { available: av.length - miss.length, total: av.length, missing: miss },
       timeCoef: null,
       rawScore: null,
@@ -1113,27 +1162,15 @@ export function scoreRescue(input: RescueFactorInput): RescueScoreResult {
   const missing = availability.filter(([, ok]) => !ok).map(([label]) => label)
   const completeness: RescueCompleteness = { available: availability.length - missing.length, total: availability.length, missing }
 
-  const hits = factors.filter((f) => f.hit).map((f) => `${f.label} ${f.actual}`).join(' · ')
-  const base = level === 0 || hits === '' ? '宽基 ETF 量能与资金流均在常态区间（无异动）' : hits
-  const incomplete = missing.length > 0 ? `；因子 ${completeness.available}/${completeness.total}（缺 ${missing.join('、')}，评分偏保守）` : ''
   /**
-   * F2 剔除的**如实标注**（红线：缺数据说缺数据，不许用常数顶替）。
-   * 提示词里带上样本量与分位，读者能自己判断"剔除"是否合理。
+   * 分位算不出来的原因（算得出来时为 null）：归因 B4 与返回值**共用同一句话**，
+   * 免得"面板写一套、快照字段写另一套"。
    */
-  const removedNote = '；已剔除「超大单强度」因子：宽基 ETF 分单数据稀疏（305 样本 p90 = 0.01×20 日均额），该因子不可用'
-  /**
-   * 量能口径一句话（进归因、也进悬停）：**有同刻度基线就用它，没有就如实说"用时点系数替代"**。
-   * 这条不只是解释，也是"不得静默"的落点：面板/工具输出里能直接读到本次到底用了哪套。
-   */
-  const volumeNote = sameSlot
-    ? `量能口径：同刻度 z=${volumeZ.toFixed(2)}（近 ${volumeZDays} 日同 slot 分布）⇒ 时点系数不参与`
-    : `量能口径：同刻度基线不足（${volumeZDays}/${SAME_SLOT_MIN_DAYS} 日）⇒ 本次用时点系数 ${coefInput} 替代（不是静默：这一句就是替代声明）`
-  const contNote = `连续评分 ${continuous.toFixed(1)}/100（${pct === null ? '近 20 日分位 —（样本不足 5）' : `近 20 日分位 ${pct.pct.toFixed(0)}%，N=${pct.n}`}；生效时点系数 ${coef}；${volumeNote}）`
-  /**
-   * 两个**说明项**（Lead 决策：不再作为等级前置，只解释连续评分/分位）：
-   *   · 核心通道共振只数；· 超大单读数符号。等级只由 `raw` 与两条线（35/55）决定。
-   */
-  const advisory = `；说明项（不参与等级判定）：核心共振 ${input.coreResonance ?? 0} 只、超大单读数 ${flowSign === null ? '未取到' : `${flowSign.toFixed(3)}x（符号${flowSign > 0 ? '为正' : flowSign < 0 ? '为负' : '为零'}）`}`
+  const percentileWhy: string | null = pct === null
+    ? (pctHistory.length === 0
+      ? '还没有跨日样本（连续评分需要历史样本；冷启动当天为 0 条）'
+      : `跨日样本不足（${pctHistory.length} < 5）—— 不编分位，也不用 0 顶替`)
+    : null
   /**
    * P6 内部矛盾：量增（同时点量能倍数 ≥ 标定 P90）**但**超大单读数 ≤ 0。
    *
@@ -1144,25 +1181,110 @@ export function scoreRescue(input: RescueFactorInput): RescueScoreResult {
   const contradiction = input.timeAdjMult !== null && flowSign !== null && input.timeAdjMult >= RESCUE_CALIBRATION.f1.high && flowSign <= 0
     ? `量能放大（同时点倍数 ${input.timeAdjMult.toFixed(2)}x ≥ P90 ${RESCUE_CALIBRATION.f1.high}x）但超大单读数 ≤ 0（${flowSign.toFixed(3)}x）⇒ 可能是拆单/算法单或纯被动成交，不能读作"有资金托底"`
     : null
-  const contraNote = contradiction === null ? '' : `；⚠ 内部矛盾：${contradiction}`
   /**
-   * 覆盖广度一句话（进归因，也进悬停）：**读数照常写，加分与否由开关决定**。
-   * 阶段一（开关关）必须能读到"附加 0（开关关闭）" —— 否则读者会以为这块根本没算。
+   * ── 归因摘要：STE 分块（块序固定 B0–B9，空块整块删除，块内子行缩进两格）───────────
+   *
+   * 口径见 `magi/rescue-attribution-spec.md`。这里**只拼字符串**：分数、等级、因子分、
+   * 完整度全部由上面的算法给出，本段一个数都不改，也不进任何判据（红线：归因不得反向影响评分）。
+   *
+   * 三条纪律句必须常驻，不得因为"看起来啰嗦"而删：
+   *   ① 内部矛盾块里的「不得读作『有资金托底』」；
+   *   ② 缺失必须写「未取到」并附原因（不得只写因子名）；
+   *   ③ 缺失不得用 0 或任何常数顶替（读数缺失照实写「未取到」/「—」）。
    */
-  const coverageNote = coverage === null
-    ? ''
-    : `；覆盖广度 ${coverage.nEtf}/${coverage.nEtfWithData} 通道 · ${coverage.nFamily} 族${coverage.families.length > 0 ? `（${coverage.families.join('/')}）` : ''} · 方向 ${coverage.confirm1}（同向 ${coverage.confirm1N}）· 附加 ${coverageBonus}${input.coverageEnabled === true ? '' : '（开关关闭：只记录不评分）'}`
-  const summary = `${base}${caps.length > 0 ? ` —— ${caps.join('；')}` : ''}（评分 ${score}，${contNote}${incomplete}${advisory}${removedNote}）${coverageNote}${contraNote}`
+  const summaryLines: string[] = []
+
+  // B0 标题行：等级与评分先出现，不追加解释（解释一律归入后面的块）
+  summaryLines.push(`护盘信号｜${RESCUE_LEVEL_LABEL[level]}｜评分 ${score}/100`)
+
+  // B1 命中块：只列命中因子；顺序即 `factors` 顺序（量能放大 → 脉冲 → 持续性 → 量价背离）。
+  // 4 因子全命中时单行会超 40 字（实测最长 62 字）⇒ 同样折行：因子一个都不删，
+  // `命中 k/n：` 前缀与每个因子的 label / actual 原文保持不变。
+  const hitParts = factors.filter((f) => f.hit).map((f) => `${f.label} ${f.actual}`)
+  if (hitParts.length === 0) {
+    summaryLines.push('命中 0/4：量能与资金流均在常态区间')
+  } else {
+    summaryLines.push(...wrapItems(hitParts, `命中 ${hitParts.length}/${completeness.total}：`, '', '、'))
+  }
+
+  // B2 封顶块：一条一行，顺序 = 代码压入顺序。触发数值与降级动作**都不许丢**，
+  // 原文常常超过 40 字 ⇒ 在 `→` 处拆成「封顶 {原因}」+「  结果 {降级动作}」，仍超长再由 wrapClauses 折行。
+  for (const cap of caps) {
+    const [why, action] = cap.split(/\s*→\s*/)
+    summaryLines.push(...wrapClauses(why, '封顶 ', ''))
+    if (action !== undefined) summaryLines.push(...wrapClauses(action, '结果 ', '  '))
+  }
+
+  // B3 缺失块：可用因子数 + 缺失因子名 + 原因（缺数据就说缺数据，不许假装完整）
+  if (missing.length > 0) {
+    summaryLines.push(`可用 ${completeness.available}/${completeness.total} · 缺 ${missing.join('、')}，评分偏保守`)
+    summaryLines.push('  原因 读数未取到')
+  }
+  // 覆盖广度为 null 时它没有自己的块（B5 整块删除）⇒ 缺失原因必须在这里写清楚（不得只删块不写原因）。
+  // 写成「标题行 + 缩进原因」而不是一条嵌套括注：括注里再括注，读者要数括号才知道缺了什么。
+  if (coverage === null && (input.coverageWhy ?? []).length > 0) {
+    summaryLines.push('覆盖广度 未取到')
+    for (const why of input.coverageWhy ?? []) summaryLines.push(`  原因 ${why}`)
+  }
+
+  // B4 连续评分块：分位与 N 必须同一行；系数与量能口径各占一行（替代声明不得静默）
+  summaryLines.push(pct === null
+    ? `连续评分 ${continuous.toFixed(1)}/100（近 20 日分位 —）`
+    : `连续评分 ${continuous.toFixed(1)}/100（近 20 日分位 ${pct.pct.toFixed(0)}%，N=${pct.n}）`)
+  if (percentileWhy !== null) summaryLines.push(`  原因 ${percentileWhy}`)
+  if (sameSlot) {
+    summaryLines.push(`  时点系数不参与（同刻度量能，生效系数 ${coef}）`)
+    summaryLines.push(`  量能口径 同刻度 z=${volumeZ.toFixed(2)}（近 ${volumeZDays} 日同 slot 分布）`)
+  } else {
+    summaryLines.push(`  本次用时点系数 ${coefInput} 替代`)
+    summaryLines.push(`  量能口径 同刻度基线不足 ${volumeZDays}/${SAME_SLOT_MIN_DAYS} 日`)
+  }
+
+  // B5 覆盖块：读数照常写，加分与否由开关决定；开关状态**独立成行**（写成括注会与「附加 0」混读）
+  if (coverage !== null) {
+    const famText = coverage.families.length > 0 ? `（${coverage.families.join('/')}）` : ''
+    summaryLines.push(`覆盖广度 ${coverage.nEtf}/${coverage.nEtfWithData} 通道 · ${coverage.nFamily} 族${famText}`)
+    summaryLines.push(`  方向 ${coverage.confirm1}（同向 ${coverage.confirm1N} 只）· 附加 ${coverageBonus} 分`)
+    summaryLines.push(`  开关 ${input.coverageEnabled === true ? '开启，已计分' : '关闭，不评分'}`)
+  }
+
+  // B6 说明项块：「不评分」三个字必须保留，否则会被读成判据
+  const flowSignText = flowSign === null
+    ? '未取到'
+    : `${flowSign.toFixed(3)}x（${flowSign > 0 ? '为正' : flowSign < 0 ? '为负' : '为零'}）`
+  summaryLines.push(`说明项（不评分）核心共振 ${input.coreResonance ?? 0} 只 · 超大单读数 ${flowSignText}`)
+
+  // B7 已剔除块：样本量与 p90 取自标定常量（不另写字面量）；依据行让读者自行判断剔除是否合理
+  summaryLines.push('已剔除「超大单强度」因子')
+  summaryLines.push('  原因 宽基 ETF 分单数据稀疏')
+  summaryLines.push(`  依据 ${F2_REMOVED_SAMPLES} 样本 p90 = ${F2_REMOVED_P90.toFixed(2)}×20 日均额`)
+
+  // B8 内部矛盾块：只陈述事实 + 纪律句（末行是纪律句，不得删、不得换成「可能」）
+  if (contradiction !== null && input.timeAdjMult !== null && flowSign !== null) {
+    summaryLines.push('内部矛盾')
+    summaryLines.push(`  量能 ${input.timeAdjMult.toFixed(2)}x ≥ P90 ${RESCUE_CALIBRATION.f1.high}x，超大单 ${flowSign.toFixed(3)}x ≤ 0`)
+    summaryLines.push('  拆单、算法单或被动成交也会放量')
+    summaryLines.push('  不得读作「有资金托底」')
+  }
+
+  // B9 背景块（必须最后）：指数读数 / 时段 / 权重说明 + 阈值来源；面板不再重复渲染这两行
+  const selfDays = input.selfSampleDays ?? 0
+  const thresholdText = input.f2Source === 'self'
+    ? `自建分位（${selfDays} 天）`
+    : input.f2Source === 'calibrated' ? '历史标定' : `经验锚点（自建样本 ${selfDays}/20 天）`
+  const bandText = phase === 'closed' ? '已收盘' : bandLabel
+  const weightText = phase === 'closed' ? '' : isTail ? '（满分权重）' : '（脉冲打 0.6 折）'
+  summaryLines.push(`背景 ${INDEX_NAME} ${fmt(input.indexPct, '%')} · ${bandText}${weightText}`)
+  summaryLines.push(`  阈值来源 ${thresholdText}`)
+
+  const summary = summaryLines.join('\n')
   return {
     score, level, factors, summary, completeness,
     timeCoef: coef, rawScore: raw, levelLines: lines,
     inSession: true, continuous, percentile: pct === null ? null : pct.pct,
     percentileN: pctHistory.length,
-    percentileWhy: pct === null
-      ? (pctHistory.length === 0
-        ? '还没有跨日样本（连续评分需要历史样本；冷启动当天为 0 条）'
-        : `跨日样本不足（${pctHistory.length} < 5）—— 不编分位，也不用 0 顶替`)
-      : null,
+    // 与归因 B4 的「原因」行同源（单处计算，避免面板与快照字段写出两种口径）
+    percentileWhy,
     contradiction,
     coverage,
     coverageWhy: [...(input.coverageWhy ?? [])],
@@ -2240,6 +2362,8 @@ export class RescueMonitor {
       coreWorstShare,
       flowAvailable: source === 'em',
       f2Anchors: anchors, f2Source: this.f2Source(),
+      // 自建样本天数：只进归因 B9 的「阈值来源」一行（不进任何判分）
+      selfSampleDays: this.selfSampleDays(),
       // 时点系数此前没有传进来，运行时恒等于 1（早盘噪音最大的时段拿到满权重）
       timeCoef: timeCoefficient(elapsed),
       isTail: tail, pulseAnchors, bandLabel: pulseBandLabel(elapsed), phase,

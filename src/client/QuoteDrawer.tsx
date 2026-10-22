@@ -15,6 +15,7 @@ import { AuctionSpark } from './AuctionSpark.tsx'
 import { Btn, Skeleton, useEscapeLayer } from './ui.tsx'
 import type { CandleMarker, SparkMarker } from './charts.tsx'
 import { KlineChart, TrendChart } from './kline.tsx'
+import { caliberWithStats, tradeMarkersOf, tradeStatsOf } from './klineStats.ts'
 import { trendDayCount } from '../shared/model.ts'
 import {
   FQ_ORDER,
@@ -23,6 +24,7 @@ import {
   cacheNoteOf,
   chartCache,
   fqFor,
+  unavailableBlockOf,
   isKlineTab,
   rememberedTab,
   rememberFq,
@@ -43,7 +45,7 @@ import { SPLIT_DEFAULT, klineHeightsOf, normalizeSplitRatio, splitDragRatio, spl
 import { SPLIT_HIT_PX, CHIPS_MARGIN_TOP_PX } from './chipsView.ts'
 import { NoteIcon } from './NoteIcon.tsx'
 import { useChips } from './useChips.ts'
-import { shDayText, shStampText } from './marketTime.ts'
+import { shStampText } from './marketTime.ts'
 
 function useContainerWidth(): [React.RefObject<HTMLDivElement>, number] {
   const ref = useRef<HTMLDivElement | null>(null)
@@ -103,6 +105,8 @@ export function QuoteDrawer(props: {
   const [industry, setIndustry] = useState<{ name: string; pct: number | null } | null>(null)
   const [infoErr, setInfoErr] = useState(false)
   const [trades, setTrades] = useState<TradeMark[]>([])
+  /** K 线可见窗口（KlineChart 上报；口径行据此把区间 B/S 统计并进同一行） */
+  const [klineRange, setKlineRange] = useState<[number, number] | null>(null)
   const [retry, setRetry] = useState(0)
   // 筹码分布：**只随 secid 取一次**（页签/复权/图表重试都不参与）——切页签不发请求、不闪；
   // 五日档只是"不显示"（面板给原因），数据照留 ⇒ 切回来立即可见。
@@ -321,18 +325,22 @@ export function QuoteDrawer(props: {
      */
     if (payload.kind === 'unavailable') {
       const m = payload.missing[0]
+      /**
+       * 原因**只渲染一次**（`unavailableBlockOf` 是唯一来源）：此前同一句 `note` 既进带底色的
+       * `tw-hint` 块、又作为一行纯文本再写一遍（用户截图里看到两遍）——第二处已删除。
+       */
+      const block = unavailableBlockOf(payload.missing)
       return React.createElement('div', { style: { display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8, padding: 56 } },
-        React.createElement('span', { className: 'tw-muted' }, '该周期未取到'),
-        m !== undefined
-          ? React.createElement('span', {
+        React.createElement('span', { className: 'tw-muted' }, block.headline),
+        block.reason === ''
+          ? null
+          : React.createElement('span', {
               className: 'tw-hint',
               style: { maxWidth: 520, textAlign: 'center', color: m.why === 'no-source' ? 'var(--tw-muted)' : undefined },
               tabIndex: 0,
               role: 'note',
-              'aria-label': `${m.what}不可用（${m.why === 'no-source' ? '上游无此数据' : '未取到'}）：${m.note}`,
-            }, `${m.what}不可用（${m.why === 'no-source' ? '上游无此数据，重试无用' : '未取到，等它恢复'}）：${m.note}`)
-          : null,
-        React.createElement('span', { className: 'tw-muted' }, payload.missing[0]?.note ?? ''),
+              'aria-label': block.reason,
+            }, block.reason),
         React.createElement(NoteIcon, {
           reason: `数据拿不到：${m?.what ?? secid}`,
           detail: payload.missing.map((x) => `${x.what}：${x.note}（${x.why === 'no-source' ? '上游没有这份数据，重试无用' : '本次失败，稍后自动重试'}）`).join('\n'),
@@ -401,9 +409,7 @@ export function QuoteDrawer(props: {
     if (payload.kind !== 'kline') return null
     const plan = KLINE_PLAN[tab]
     const bars = payload.kline.days.map((d) => ({ date: d.date, open: d.open, close: d.close, high: d.high, low: d.low, vol: d.vol }))
-    const klineMarkers: CandleMarker[] = trades
-      .filter((tr) => bars.length > 0 && tr.ts >= Date.parse(`${bars[0].date}T00:00:00`) - 86_400_000 * 8)
-      .map((tr) => ({ date: shDayText(tr.ts), kind: tr.verb, qty: tr.qty, price: tr.price }))
+    const klineMarkers: CandleMarker[] = tradeMarkersOf(bars, trades)
     // 拆股/合股：宿主已把断层映射到**所属聚合根**（周/月/年）或断层当天（日K）⇒ 直接定位
     const splitBars = (payload.kline.splits ?? []).map((sp) => ({
       date: sp.date,
@@ -421,6 +427,7 @@ export function QuoteDrawer(props: {
       mainH: kh.mainH,
       volH: kh.volH,
       macdH: kh.macdH,
+      onRangeChange: setKlineRange,
     })
   }
 
@@ -571,7 +578,14 @@ export function QuoteDrawer(props: {
         : '当根已收盘'
     return `${mode} · klt ${plan.klt} · ${fq}${aggNote}${splitNote}${pctNote} · 截至 ${at}（${tail}）`
   }
-  const caliber = caliberLine()
+  /**
+   * 区间 B/S 统计（用户裁决：并进图上方那条口径行，**不新增第二行**、不新增浮层）。
+   * 只在 K 线档显示；窗口由 `KlineChart` 上报（缩放/拖拽/键盘平移后同一份）。
+   */
+  const klineStats = payload !== null && payload.kind === 'kline' && klineRange !== null
+    ? tradeStatsOf(payload.kline.days, tradeMarkersOf(payload.kline.days, trades), klineRange[0], klineRange[1])
+    : null
+  const caliber = caliberWithStats(caliberLine(), payload !== null && payload.kind === 'kline' ? klineStats : null)
   /**
    * 口径条的**完整解释**（title/aria）：五日的"只有当日/本地拼接覆盖"属于**结构性限制**，
    * 因此按用户要求不单独占一条横幅，而是并入口径条 —— 但完整解释必须鼠标与键盘都能读到。
