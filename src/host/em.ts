@@ -26,7 +26,7 @@ import { writeFileAtomic } from './atomic.ts'
 import { updateJsonLocked, withFileLock } from './lock.ts'
 import { breakerFor, hostsAllowed, minutesToRecover } from './breaker.ts'
 import { fetchSinaEtfRanking, fetchSinaQuotes, fetchSinaUsDaily, fetchSinaUsMin, sinaSymbol as sinaQuoteSymbol, type SinaBar } from './sina.ts'
-import { fetchTencentAppstock, fetchTencentBoards, fetchTencentMinutes, fetchTencentQuoteRows, fetchTencentSuggest, minuteTrendPointsOf, tencentCode, tencentIndexCode, tencentQuoteCode, TencentKlineUnavailableError, type TencentKlineTry, type TencentQuoteFull } from './tencent.ts'
+import { fetchTencentAppstock, fetchTencentBoards, fetchTencentMinutes, fetchTencentQuoteRows, fetchTencentSuggest, minuteTrendPointsOf, tencentCode, tencentIndexCode, tencentQuoteCode, TENCENT_KLINE_HOSTS, TencentKlineUnavailableError, type TencentKlineTry, type TencentQuoteFull } from './tencent.ts'
 import { fetchAuction } from './auction.ts'
 import { join } from 'node:path'
 import { dataHome } from './store.ts'
@@ -2797,6 +2797,36 @@ function usDailyFromCache(secid: string): SinaBar[] | null {
 }
 
 /**
+ * 聚合兜底找日线时**依次尝试的复权口径**（同口径永远优先，这里只排"同口径缺货"时的顺序）。
+ *
+ * 为什么允许换口径：`fqt` 不匹配**不是**"没有日线"。真实例子：本机 `klines/` 里 `1.601398` 的**旧命名**
+ * 日线（无口径后缀那份 = 不复权）有 812 根，而用户默认看的是前复权 —— 只按 fqt 严格过滤就会判
+ * "无日线"，把手里现成的 812 根白白丢掉。这不是"猜"，因为口径会**写进状态行**（见 `aggCaliberOf`）。
+ */
+const AGG_ALT_FQ: readonly FqMode[] = [0, 1, 2]
+
+/** 最近一次聚合尝试（日线根数 + 实际口径）；供 `klineMissingReason` 说清"为什么聚不出来" */
+const klineAggTries = new Map<string, { at: number; klt: number; dailyBars: number; fq: FqMode }>()
+
+/** 最近一次聚合尝试的结果（null = 这个进程里没试过） */
+export function klineAggTryOf(secid: string): { at: number; klt: number; dailyBars: number; fq: FqMode } | null {
+  return klineAggTries.get(secid) ?? null
+}
+
+/**
+ * 日线链路**已知不可用**吗（决定还要不要为聚合去实时取一次日线）。
+ *
+ * 两条链路各判各的：腾讯（沪/深/港股）有活主机就值得试；东财那条则看本链路最近是否失败/主机是否全冷却。
+ * 目的只有一个：**别在明知不可用的时候再多打一轮上游**（熔断记账与加速缓存已经足够便宜，
+ * 但这属于"低价值请求"，不打更好）。
+ */
+function dailyChainKnownDown(secid: string): boolean {
+  const tencentLive = tencentSymbol(secid) !== null && !isUsSecid(secid) && !hostsUnavailable(TENCENT_KLINE_HOSTS.map((h) => h.host))
+  if (tencentLive) return false
+  return upstreamFailedRecently('kline') || hostsUnavailable(HISTORY_HOSTS) || emUnavailableNow()
+}
+
+/**
  * 周/月/年 K 的**日线聚合兜底**（不接新源、**不发任何新请求**）。
  *
  * 场景：板块指数（`90.BK*`）、中证指数（`2.*`）这类标的**只有东财一条 K 线链路**，
@@ -2812,21 +2842,64 @@ async function aggregateFromDailyCache(
   secid: string,
   klt: number,
   mode: FqMode,
-): Promise<{ period: AggPeriod; bars: AggBar[]; note: string; asOf: number } | null> {
+): Promise<{ period: AggPeriod; bars: AggBar[]; note: string; asOf: number; fqUsed: FqMode } | null> {
   if (isUsSecid(secid)) return null
   const period = aggPeriodOfKlt(klt)
   if (period === null) return null
-  const daily = await loadKlineCache(secid, 101, mode)
-  if (!shouldAggregate({ klt, nativeBars: 0, dailyBars: daily.bars.length, minDailyBars: KLINE_MIN_USABLE_BARS })) return null
-  const bars = aggregateDaily(daily.bars, period)
+  const min = KLINE_MIN_USABLE_BARS
+  /** 一次聚合尝试的结果（**成功也算**：失败原因要能说清"日线只有 N 根"） */
+  const noteTry = (dailyBars: number, fq: FqMode): void => {
+    klineAggTries.set(secid, { at: Date.now(), klt, dailyBars, fq })
+    if (klineAggTries.size > 300) {
+      const oldest = klineAggTries.keys().next().value
+      if (oldest !== undefined) klineAggTries.delete(oldest)
+    }
+  }
+  /**
+   * 日线的**来源顺序**（Lead v0.129.1 的 ①②③）：
+   *   ① 同口径日线：**内存里已经有就直接用**（`loadKlineCache` 命中已加载的条目就不读盘）
+   *      —— 这正是"日K 当次实时取到、磁盘里还没有"的情形，聚合器必须看得见它；
+   *   ② 磁盘缓存（`loadKlineCache` 没命中内存时读盘，同样是这一步）；
+   *   ③ 口径不同也允许用：`fqt` 不匹配**不是**"没有日线"（例如日线只有不复权那份），
+   *      但**必须**在口径句里写明实际用的口径（`aggCaliberOf` 的 `fqUsed/fqRequested`）；
+   *   ④ 上面都没有 ⇒ **本次实时取一次日线**（与日K 页签同一条链路、同一份缓存/TTL ⇒ 第二次看零请求）。
+   */
+  const sourceOf = async (fq: FqMode): Promise<{ bars: DayBar[]; asOf: number; fq: FqMode } | null> => {
+    const entry = await loadKlineCache(secid, 101, fq)
+    return entry.bars.length >= min ? { bars: entry.bars, asOf: entry.updatedAt, fq } : null
+  }
+  let src = await sourceOf(mode)
+  if (src === null) {
+    for (const alt of AGG_ALT_FQ) {
+      if (alt === mode) continue
+      src = await sourceOf(alt)
+      if (src !== null) break
+    }
+  }
+  let live = false
+  if (src === null && !dailyChainKnownDown(secid)) {
+    // 本次实时取日线（klt=101 不会再进这一支 ⇒ 不会递归）
+    const day = await fetchKline(secid, 101, KLINE_FULL_LMT[101], mode)
+    if (day !== null && day.days.length >= min) {
+      src = { bars: day.days, asOf: day.asOf ?? Date.now(), fq: mode }
+      live = true
+    }
+  }
+  noteTry(src === null ? 0 : src.bars.length, src === null ? mode : src.fq)
+  if (src === null) return null
+  if (!shouldAggregate({ klt, nativeBars: 0, dailyBars: src.bars.length, minDailyBars: min })) return null
+  const bars = aggregateDaily(src.bars, period)
   if (bars.length === 0) return null
   return {
     period,
     bars,
-    asOf: daily.updatedAt,
+    asOf: live ? Date.now() : src.asOf,
+    fqUsed: src.fq,
     note: aggCaliberOf(period, {
-      dailyBars: daily.bars.length,
-      dailyAsOfText: daily.updatedAt > 0 ? shStampText(daily.updatedAt) : '—',
+      dailyBars: src.bars.length,
+      dailyAsOfText: live ? null : (src.asOf > 0 ? shStampText(src.asOf) : null),
+      fqUsed: src.fq,
+      fqRequested: mode,
     }),
   }
 }
@@ -3017,7 +3090,8 @@ export async function fetchKline(
     ...(splits === undefined || splits.length === 0 ? {} : { splits }),
     ...(reason === null ? {} : { staleReason: reason }),
     ...(unitNote === null ? {} : { unitNote }),
-    fqt: mode,
+    // 聚合档的复权口径以**日线实际那份**为准（口径不同时 `aggregated.note` 会写明两边）
+    fqt: aggFallback !== null ? aggFallback.fqUsed : mode,
     fqSupported: supported,
     // 口径条的"数据截至"= 本地最近一次成功取数时刻（定稿时就是收盘那一次）；聚合档用**日线**的时刻
     asOf: aggFallback !== null
@@ -3183,16 +3257,17 @@ export function klineMissingReason(
     const uncovered = board
       ? '腾讯 K 线不覆盖板块码（90.BK*）'
       : `腾讯 K 线只覆盖沪/深/港股（不认 ${market} 开头这类代码）`
-    const daily = opts.fqt === undefined
-      ? null
-      : (klineMem.get(`${secid}|101|${normalizeFq(secid, opts.fqt)}`)?.bars.length ?? 0)
+    /**
+     * "聚合不出来"的原因由**聚合器自己的记账**给（`klineAggTries`）：它知道日线到底有没有、
+     * 有几根、用的是哪个口径 —— 比在这里拿 `klineMem` 猜一遍准（那个键还依赖 fqt 对齐）。
+     */
+    const aggTry = klineAggTryOf(secid)
+    const aggFresh = aggTry !== null && Date.now() - aggTry.at < 120_000
     const agg = klt === 101
       ? ''
-      : daily === 0
-        ? '；本地也没有它的日线缓存，聚合不出周/月/年'
-        : daily === null
-          ? ''
-          : `；本地日线只有 ${daily} 根（不足 ${KLINE_MIN_USABLE_BARS} 根），聚合不出周/月/年`
+      : !aggFresh || aggTry.dailyBars === 0
+        ? '；本地与本次实时都没有取到日线，聚合不出周/月/年'
+        : `；日线只有 ${aggTry.dailyBars} 根（不足 ${KLINE_MIN_USABLE_BARS} 根），聚合不出周/月/年`
     /**
      * `why` 沿用**既有事实判据**（东财这条唯一链路此刻可不可用），只把措辞换成"单链路"的说法：
      *   · 东财不可达/熔断 ⇒ `transient`（等这条链路恢复，别的源不会再出现）；

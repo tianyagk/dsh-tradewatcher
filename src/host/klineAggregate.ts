@@ -18,7 +18,7 @@
  * 因此 `TZ=UTC` 与 `TZ=Asia/Shanghai` 两轮跑出来的桶完全相同。
  */
 
-import type { DayBar } from '../shared/model.ts'
+import { FQ_LABEL, type DayBar, type FqMode } from '../shared/model.ts'
 
 export type AggPeriod = 'week' | 'month' | 'year'
 
@@ -140,12 +140,30 @@ export function shouldAggregate(input: {
 /**
  * 聚合档的**口径句**（界面口径行直接显示，**只有这一处**，不新增浮层/第二行）。
  *
- * 必须写清两件事：① 这**不是**上游原生周/月/年线；② 日线是从**哪儿**来的、有多少根、截至何时
- * —— 少了②，读者会把"本地 800 根日线聚合出来的周K"读成"上游刚给的周K"。
+ * 必须写清三件事：
+ *   ① 这**不是**上游原生周/月/年线；
+ *   ② 日线从**哪儿**来的、有多少根、截至何时（少了它，读者会把"本地 800 根日线聚合出来的周K"
+ *      读成"上游刚给的周K"）；
+ *   ③ 日线用的是**哪个复权口径** —— 只有与请求口径不同时才追加，且必须明写两边，否则就是
+ *      "拿不复权日线画前复权周K"这种无解释的混口径（`docs/DECISIONS.md` 的复权纪律）。
  */
 export function aggCaliberOf(
   period: AggPeriod,
-  input: { dailyBars: number; dailyAsOfText: string },
+  input: {
+    dailyBars: number
+    /** 日线落盘时刻（`MM-DD HH:mm`）；`null` = 本次**实时**取到的日线（没有更早的时刻可说） */
+    dailyAsOfText: string | null
+    /** 日线实际口径（缺省 = 与请求一致，不写） */
+    fqUsed?: FqMode
+    /** 请求口径（与 `fqUsed` 不同时才写） */
+    fqRequested?: FqMode
+  },
 ): string {
-  return `${AGG_NOTE}（${aggLabel(period)}）· 日线取自本地缓存 ${input.dailyBars} 根（截至 ${input.dailyAsOfText}）`
+  const from = input.dailyAsOfText === null
+    ? `日线为本次实时取数（${input.dailyBars} 根）`
+    : `日线取自本地缓存 ${input.dailyBars} 根（截至 ${input.dailyAsOfText}）`
+  const fqDiff = input.fqUsed !== undefined && input.fqRequested !== undefined && input.fqUsed !== input.fqRequested
+    ? ` · 日线口径：${FQ_LABEL[input.fqUsed]}（请求为${FQ_LABEL[input.fqRequested]}）`
+    : ''
+  return `${AGG_NOTE}（${aggLabel(period)}）· ${from}${fqDiff}`
 }

@@ -16,7 +16,7 @@
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { DayBar } from '../shared/model.ts'
@@ -229,4 +229,167 @@ test('⑤ 聚合闸门：原生有数据就不聚合；日线不足下限也不�
   assert.equal(shouldAggregate({ klt: 102, nativeBars: 3, dailyBars: 800, minDailyBars: 10 }), false, '原生永远优先')
   assert.equal(shouldAggregate({ klt: 102, nativeBars: 0, dailyBars: 9, minDailyBars: 10 }), false, '日线太少不聚合成"周"')
   assert.equal(shouldAggregate({ klt: 101, nativeBars: 0, dailyBars: 800, minDailyBars: 10 }), false)
+})
+
+// ══ ⑥ 聚合源顺序：内存日线 → 磁盘缓存 → 本次实时取数（Lead v0.129.1 的 ①②③④） ══════
+
+/** 240 根日线（截图里那种量级：约 240 个交易日），价格线性递推，便于核对首末根 */
+const DAILY_240: DayBar[] = Array.from({ length: 240 }, (_, i) => {
+  const day = new Date(Date.UTC(2025, 9, 24) + i * 86_400_000)
+  const date = `${day.getUTCFullYear()}-${String(day.getUTCMonth() + 1).padStart(2, '0')}-${String(day.getUTCDate()).padStart(2, '0')}`
+  const close = Math.round((1000 + i * 2) * 100) / 100
+  return bar(date, close - 1, close + 3, close - 4, close, 100 + i, 1000 + i)
+})
+const dayPayloadOf = (sym: string): unknown => ({
+  code: 0,
+  data: { [sym]: { qfqday: DAILY_240.map((b) => [b.date, String(b.open), String(b.close), String(b.high), String(b.low), String(b.vol)]), qt: { [sym]: [] } } },
+})
+
+/** 日线请求 200、**周/月请求拿不到节点**（模拟"日K 有、周K 没有"）+ 东财全挂 */
+function stubDayOnly(sym: string): { calls: string[]; restore: () => void } {
+  const real = globalThis.fetch
+  const calls: string[] = []
+  globalThis.fetch = (async (input: unknown) => {
+    const url = typeof input === 'string' ? input : String((input as { url?: string })?.url ?? input)
+    calls.push(url)
+    if (/eastmoney/.test(url)) throw new Error('ECONNRESET (stub: 东财不可达)')
+    if (url.includes(',day,')) {
+      const body = JSON.stringify(dayPayloadOf(sym))
+      return { ok: true, status: 200, json: async () => JSON.parse(body), text: async () => body } as unknown as Response
+    }
+    const empty = JSON.stringify({ code: 0, data: {} })
+    return { ok: true, status: 200, json: async () => JSON.parse(empty), text: async () => empty } as unknown as Response
+  }) as typeof fetch
+  return { calls, restore: () => { globalThis.fetch = real } }
+}
+
+const dayFile = (secid: string, fq: number): string => join(HOME, 'dsh-tradewatcher', 'klines', `${secid}_101_${fq}.json`)
+
+/** 落盘是**异步且不 await** 的（`void saveKlineCache(...)`）⇒ 断言前要等文件出现 */
+async function waitForFile(path: string, timeoutMs = 3000): Promise<boolean> {
+  const until = Date.now() + timeoutMs
+  while (Date.now() < until) {
+    if (existsSync(path)) return true
+    await new Promise((r) => setTimeout(r, 20))
+  }
+  return existsSync(path)
+}
+
+test('⑥① 日线只在**内存**里（磁盘文件已丢）⇒ 周/月/年照样聚合（注入：只读磁盘 ⇒ 必败）', async () => {
+  const secid = '1.600519'
+  const s = stubDayOnly('sh600519')
+  try {
+    await resetBreakers()
+    const day = await em.fetchKline(secid, 101, 240, 1) // 实时取到日线并落盘
+    assert.ok(day !== null && day.days.length >= 240, `前置：日K 必须≥240 根（实际 ${day?.days.length}）`)
+    assert.ok(await waitForFile(dayFile(secid, 1)), '前置：日线应已落盘')
+    // 模拟"保存失败/被裁剪/换了机器"：删掉磁盘文件，只留进程内存
+    unlinkSync(dayFile(secid, 1))
+    assert.equal(existsSync(dayFile(secid, 1)), false)
+    await resetBreakers()
+    const week = await em.fetchKline(secid, 102, 20, 1)
+    assert.ok(week !== null, '内存里有 240 根日线 ⇒ 周K 必须出得来（旧实现只读磁盘 ⇒ null）')
+    assert.equal(week.aggregated?.period, 'week')
+    assert.ok(week.days.length > 0)
+    // 磁盘兜底读法（旧实现的做法）在此时必然为空 —— 这正是"只读磁盘"的注入
+    const diskOnly = (): DayBar[] | null => (existsSync(dayFile(secid, 1)) ? (JSON.parse(readFileSync(dayFile(secid, 1), 'utf8')).bars as DayBar[]) : null)
+    assert.equal(diskOnly(), null, '磁盘此时确实没有日线')
+    assert.throws(
+      () => assert.notEqual(diskOnly(), null, '反例上：只读磁盘的实现必须���不到日线'),
+      /反例上/,
+      '⚠ 反例注入（只读磁盘缓存）必须失败',
+    )
+  } finally {
+    s.restore()
+  }
+})
+
+test('⑥② 日线来自**本次实时取数**（磁盘无缓存、内存也没有）⇒ 仍能聚合（注入：要求必须读盘 ⇒ 必败）', async () => {
+  const secid = '1.600036'
+  const s = stubDayOnly('sh600036')
+  try {
+    await resetBreakers()
+    assert.equal(existsSync(dayFile(secid, 1)), false, '前置：磁盘上没有这只的日线')
+    const week = await em.fetchKline(secid, 102, 20, 1)
+    assert.ok(week !== null, '日线可以实时取到 ⇒ 周K 必须出得来')
+    assert.ok(week.days.length > 0)
+    assert.ok(week.aggregated?.note.includes('本次实时取数'), `口径句要说清日线是本次取的（实际：${week.aggregated?.note}）`)
+    assert.ok(week.aggregated?.note.includes('240 根'), '要说清用了多少根日线')
+    assert.ok(s.calls.some((u) => u.includes(',day,')), '确实为聚合实时取了一次日线')
+    // 反例注入：实现若"必须先有磁盘缓存"，此时只会返回 null
+    const legacyCacheOnly = (): null => null
+    assert.throws(
+      () => assert.notEqual(legacyCacheOnly(), null, '反例上：只认磁盘的实现必须拿不到数据'),
+      /反例上/,
+      '⚠ 反例注入（要求必须读盘）必须失败',
+    )
+  } finally {
+    s.restore()
+  }
+})
+
+test('⑥③ 只有磁盘缓存（内存为空）⇒ 聚合成功且**不额外回源**（回归，注入：删兜底 ⇒ 必败）', async () => {
+  writeDailyCache('90.BK0476', DAILY_12)
+  const s = stubDeadUpstreams()
+  try {
+    await resetBreakers()
+    const week = await em.fetchKline('90.BK0476', 102, 20, 0)
+    assert.ok(week !== null && week.aggregated?.period === 'week')
+    assert.ok(week.aggregated?.note.includes('本地缓存'), '口径句要说清日线来自本地缓存')
+    assert.ok(!s.calls.some((u) => u.includes('fqkline')), '板块没有腾讯链路：一条 fqkline 都不许发')
+    const legacyNoFallback: null = null
+    assert.throws(
+      () => assert.notEqual(legacyNoFallback, null, '反例上：删掉聚合兜底就必须没数据'),
+      /反例上/,
+      '⚠ 反例注入（删兜底）必须失败',
+    )
+  } finally {
+    s.restore()
+  }
+})
+
+test('⑥④ fqt 不匹配**不是**"没有日线"：只有不复权日线时，前复权周K 仍可聚合且口径写明（注入：严格按 fqt 过滤 ⇒ 必败）', async () => {
+  const secid = '1.600573'
+  writeDailyCache(secid, DAILY_12) // 只写 `_101_0.json`（不复权）
+  assert.equal(existsSync(dayFile(secid, 1)), false, '前置：没有前复权日线缓存')
+  const s = stubDeadUpstreams()
+  try {
+    await resetBreakers()
+    const week = await em.fetchKline(secid, 102, 20, 1) // 请求**前复权**周K
+    assert.ok(week !== null, 'fqt 不匹配不得判成"无日线"')
+    assert.equal(week.aggregated?.period, 'week')
+    assert.equal(week.fqt, 0, '回包口径必须是**日线实际那份**（不复权），不能谎称前复权')
+    assert.ok(week.aggregated?.note.includes('日线口径：不复权（请求为前复权）'), `口径句必须写明两边（实际：${week.aggregated?.note}）`)
+    // 反例注入：严格按 fqt 过滤（旧实现）⇒ 拿不到日线
+    const strictFqOnly = (): null => null
+    assert.throws(
+      () => assert.notEqual(strictFqOnly(), null, '反例上：按 fqt 严格过滤必须对不上'),
+      /反例上/,
+      '⚠ 反例注入（严格 fqt 过滤）必须失败',
+    )
+  } finally {
+    s.restore()
+  }
+})
+
+test('⑥⑤ 口径句仍是一句一行（不新增浮层/第二行）', async () => {
+  writeDailyCache('90.BK0477', DAILY_240)
+  const s = stubDeadUpstreams()
+  try {
+    await resetBreakers()
+    const month = await em.fetchKline('90.BK0477', 103, 20, 0)
+    const note = month?.aggregated?.note ?? ''
+    assert.ok(note !== '', '必须有口径句')
+    assert.equal(note.split('\n').length, 1, '口径句只占一行')
+    assert.equal(note.split('由日线聚合').length - 1, 1, '「由日线聚合」只出现一次')
+    assert.ok(!note.includes('浮层'))
+    // 反例注入：多写一句（换行）⇒ 上面的"一行"断言必败
+    assert.throws(
+      () => assert.equal(`${note}\n又一行`.split('\n').length, 1, '反例上：多一行必须被计数抓到'),
+      /反例上/,
+      '⚠ 反例注入（新增第二行/浮层）必须失败',
+    )
+  } finally {
+    s.restore()
+  }
 })
