@@ -11,6 +11,47 @@
 
 ---
 
+## v0.135.0 — 棱镜视觉补齐并与设计稿数值对拍（分段控件 / 卡片层级 / 右栏卡片化）
+
+报告 `docs/AUDIT-PRISM-REDESIGN.md`。`npm run check` **1163 / 1163 × 2 时区**（1156 → 1163）+ selftest + build（73 片段全过）；只改 `src/client/**`。
+
+### 修了七项视觉差异
+
+| # | 修前 | 修后 |
+| --- | --- | --- |
+| 1 | 分段控件是三段纯文本 | **MD SegmentedButton**：容器 `padding:2px` + `gap:4px` + `border-radius:8px` + 灰 tonal 底；按钮高 28px（总高 32px）；选中 `rgba(94,106,210,.14)` + 字重 600 + 文字 `#3a44a8` |
+| 2 | 卡片扁平、无层级 | `.tw-prism-card` 白底 + **圆角 10px** + 1px 边框 + `0 1px 2px rgba(0,0,0,.06), 0 1px 3px rgba(0,0,0,.04)`；页面底 `#f5f6f8`；四格改 **2×2**（避免 28px 数值被挤压） |
+| 3 | 卡内偏挤 | padding **12px**；标题 12px 次要色；数值 **28px** 半粗；标题与数值间距 4px |
+| 4 | 数字不齐 | 表头/单元格 **`font-variant-numeric: tabular-nums`**；表头 12px、行高 26px、1px 分隔 |
+| 5 | 右栏 439 条文本 + **原始 JSON** 直出 | 顶部一行 `研判 · 14:40 · 日期 · token 用量`；**汇总**最多 5 条（line-clamp 2，剥掉 ```json 块）；**决策小表**（单票上限 / 总仓位上限 / orders / cancel）+ rejects 单行；**四份分报告**可折叠（左侧 3px 系列色条）；**时点配置**与**模型配置**各自成卡 |
+| 6 | 分隔条看不见 | 6px 轨道 + 2px 竖线（上下各留 16px），hover/拖拽变强调色、`cursor:col-resize`、键盘 ±2 |
+| 7 | 净值卡样式不统一 | 空态文案保留；与其它卡同圆角、同 elevation-1、同 padding |
+
+### 验收方式改为「与设计稿数值对拍」
+
+新增 `prismDesignParity.ts`：从 `docs/mockups/md-hybrid.html` 抽基准值，与实现 CSS **逐项比对**；不一致即失败。
+
+| 项 | 设计稿 | 实现 |
+| --- | --- | --- |
+| 页面底色 | `#f5f6f8` | `#f5f6f8` |
+| 卡片圆角 | `10px` | `10px` |
+| 卡片阴影 | `0 1px 2px rgba(16,24,40,.05)` | 同 |
+| 卡片内边距 | `12px` | `12px` |
+| 分段圆角 / 内边距 | `8px` / `2px` | `8px` / `2px` |
+| 分段选中背景 | `rgba(94,106,210,.14)` | 同 |
+| 表格行高 / tabular | `26px` / `tabular-nums` | 同 |
+| 分隔条宽度 | `6px` | `6px` |
+
+### 验证
+
+`npm run check` **1163 / 1163 × 2 时区** + selftest + build（73 项）；BI/BJ 两轮干净复跑。
+新增 7 条用例（对拍 6 + 汇总 JSON 剥离 1）；注入必败：卡片圆角改 0｜删分段选中背景｜分隔条宽度 0｜去掉 `tabular-nums`｜页面恢复 `{"limits"` 原始 JSON。
+原有 10 条重设计断言保留（拖拽夹取、`<900` 折叠、左栏分段、8 系列色、红涨绿跌、ripple、elevation、深色、功能项）。
+
+### 未做
+
+重启后的真实截图复核（需刷新/重启）；当前为数值对拍 + 构建 + 静态断言。
+
 ## v0.134.0 — 棱镜页 UI/UX 重设计（hybrid + MD 结构，功能零回退）
 
 报告 `docs/AUDIT-PRISM-REDESIGN.md`；设计稿 `docs/mockups/{md-hybrid,md-tonal,variants-q9,q12,q13}.html`。`npm run check` **1156 / 1156 × 2 时区**（1146 → 1156）+ selftest + build（73 片段全过）；只改 `src/client/**`。

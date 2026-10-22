@@ -76,3 +76,10 @@ test('④ 页头自检文案：ok ⇒ 通过 + 文本；失败 ⇒ 失败 + erro
   assert.throws(() => assert.match(okText, /自检失败/, '注入：仍显示失败'), /注入/)
   assert.ok(page.includes('selftestText(selftest)'), '页头必须使用统一自检文案')
 })
+
+test('汇总要点：剥掉 ```json 决策块，页面不出现原始 JSON', async () => {
+  const { summaryBullets } = await import('./prismView.ts')
+  const bullets = summaryBullets('1. 宽基普跌，先降集中度。\n2. 外盘偏弱，控制敞口。\n```json\n{"limits":{"singlePct":20},"orders":[],"cancel":[]}\n```')
+  assert.equal(bullets.length, 2)
+  assert.equal(bullets.some((b) => b.includes('{') || b.includes('limits')), false)
+})

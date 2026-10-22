@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { TW_CSS } from './styles.ts'
-import { PRISM_SERIES } from './prismView.ts'
+import { PRISM_SERIES, PRISM_SERIES_CSS } from './prismView.ts'
 import {
   PRISM_SPLIT_DEFAULT,
   clampSplit,
@@ -67,10 +67,11 @@ test('④ 分段在左栏顶部且三项为持仓/挂单/成交（放右栏 ⇒ 
 test('⑤ MD dataviz：8 系列色、细网格、点、图例右上（旧单色 ⇒ 败）', () => {
   assert.deepEqual(seriesProblems(PRISM_SERIES), [])
   assert.equal(PRISM_SERIES.length, 8)
-  assert.ok(page.includes('stroke={PRISM_SERIES[0]}'), '折线必须用系列色')
+  assert.equal(PRISM_SERIES_CSS.length, 8)
+  assert.ok(page.includes('stroke={PRISM_SERIES_CSS[0]}'), '折线必须用系列色')
   assert.ok(page.includes('tw-prism-gridline') && page.includes('tw-prism-dot'), '必须细网格 + 点标记')
   assert.match(TW_CSS, /\.tw-prism-legend\{position:absolute;top:8px;right:8px/)
-  assert.ok(page.includes('PRISM_SERIES[i % PRISM_SERIES.length]'), '占比条必须用系列色')
+  assert.ok(page.includes('PRISM_SERIES_CSS[i % PRISM_SERIES_CSS.length]'), '占比条必须用系列色')
   assert.throws(() => assert.deepEqual(seriesProblems(PRISM_SERIES.slice(0, 1)), [], '注入：单色'), /注入/)
 })
 

@@ -15,20 +15,23 @@ import {
   PRISM_FONT,
   PRISM_MONEY,
   PRISM_PCT,
-  PRISM_SERIES,
+  PRISM_SERIES_CSS,
   analysisText,
+  decisionErrorText,
+  decisionRows,
   equityChartOf,
   newsStatusText,
   orderStatusText,
   positionWeightPct,
-  runSummaryText,
   selftestText,
+  summaryBullets,
   timesProblems,
   timesText,
   topCardsOf,
 } from './prismView.ts'
 
 type TabKey = 'positions' | 'orders' | 'fills'
+const REPORT_ROLES = ['A股宏观', '外盘', '大宗', '信息面'] as const
 const TABS: Array<{ key: TabKey; label: string }> = [
   { key: 'positions', label: '持仓' },
   { key: 'orders', label: '挂单' },
@@ -182,6 +185,9 @@ export function PrismPage(props: { active: boolean }): React.ReactElement {
       ? latest.reports
       : latest.analyses.map((a) => ({ role: a.label, text: a.text, error: a.error }))
   const modelCatalog = state?.modelCatalog
+  const bullets = summaryBullets(latest?.summary)
+  const reportRows = REPORT_ROLES.map((role) => reports.find((r) => r.role === role) ?? { role, text: null, error: latest === null ? '—（本轮未落盘）' : '—（该报告未落盘）' })
+  const dRows = decisionRows(latest?.decision)
 
   return (
     <div className="tw-prism">
@@ -312,9 +318,9 @@ export function PrismPage(props: { active: boolean }): React.ReactElement {
               <div className="tw-prism-chart">
                 <div className="tw-prism-legend">
                   {trading?.account.positions.slice(0, 3).map((p, i) => (
-                    <span key={p.secid}><i style={{ background: PRISM_SERIES[i] }} />{p.name}</span>
+                    <span key={p.secid}><i style={{ background: PRISM_SERIES_CSS[i] }} />{p.name}</span>
                   ))}
-                  <span><i style={{ background: PRISM_SERIES[3] }} />现金</span>
+                  <span><i style={{ background: PRISM_SERIES_CSS[3] }} />现金</span>
                 </div>
                 <svg viewBox="0 0 560 128" preserveAspectRatio="none" role="img" aria-label="净值曲线">
                   <g className="tw-prism-gridline">
@@ -322,7 +328,7 @@ export function PrismPage(props: { active: boolean }): React.ReactElement {
                     <line x1="0" y1="64" x2="560" y2="64" />
                     <line x1="0" y1="96" x2="560" y2="96" />
                   </g>
-                  <polyline points={chart.line} fill="none" stroke={PRISM_SERIES[0]} strokeWidth="1.5" />
+                  <polyline points={chart.line} fill="none" stroke={PRISM_SERIES_CSS[0]} strokeWidth="1.5" />
                   {chart.dots.map((d) => <circle key={`${d.x}-${d.value}`} className="tw-prism-dot" cx={d.x} cy={d.y} r="2.5" />)}
                   <text x="552" y="122" textAnchor="end" className="tw-prism-chart-label">{PRISM_MONEY(chart.last)}</text>
                 </svg>
@@ -330,10 +336,10 @@ export function PrismPage(props: { active: boolean }): React.ReactElement {
                   {(trading?.account.positions ?? []).map((p, i) => {
                     const price = trading?.prices?.[p.secid] ?? null
                     const weight = positionWeightPct(price, p.qty, totalAssets)
-                    return weight === null ? null : <span key={p.secid} style={{ width: `${weight}%`, background: PRISM_SERIES[i % PRISM_SERIES.length] }} />
+                    return weight === null ? null : <span key={p.secid} style={{ width: `${weight}%`, background: PRISM_SERIES_CSS[i % PRISM_SERIES_CSS.length] }} />
                   })}
                   {totalAssets !== null && totalAssets > 0 && trading !== null ? (
-                    <span style={{ width: `${Math.max(0, 100 - trading.account.positions.reduce((sum, p) => sum + (positionWeightPct(trading.prices?.[p.secid] ?? null, p.qty, totalAssets) ?? 0), 0))}%`, background: PRISM_SERIES[3] }} />
+                    <span style={{ width: `${Math.max(0, 100 - trading.account.positions.reduce((sum, p) => sum + (positionWeightPct(trading.prices?.[p.secid] ?? null, p.qty, totalAssets) ?? 0), 0))}%`, background: PRISM_SERIES_CSS[3] }} />
                   ) : null}
                 </div>
               </div>
@@ -356,27 +362,30 @@ export function PrismPage(props: { active: boolean }): React.ReactElement {
 
         <div className="tw-prism-col tw-prism-right">
           <section className="tw-prism-card">
-            <div className="tw-prism-card-title">研判 <span className="tw-prism-muted">{latest === null ? '—（还没有运行记录）' : `${latest.slot} · ${latest.day} ${latest.at} · token 用量 —（未取到）`}</span></div>
+            <div className="tw-prism-card-title">研判 <span className="tw-prism-muted">{latest === null ? '—（还没有运行记录）' : `${latest.slot} · ${latest.day} · token 用量 —（未取到）`}</span></div>
             <div className="tw-prism-row tw-prism-muted">
               {state?.news === undefined ? '—（尚未取到新闻状态）' : newsStatusText(state.news)}
               <RippleButton onClick={syncNews} disabled={busy}>同步新闻</RippleButton>
             </div>
-            <div className="tw-prism-summary">{latest === null ? '—（还没有运行记录）' : runSummaryText(latest)}</div>
-            {reports.map((a) => (
-              <details key={a.role} className="tw-prism-analysis">
+            <div className="tw-prism-card-title">汇总</div>
+            {bullets.length === 0 ? <div className="tw-prism-muted">—（本轮没有可展示的汇总）</div> : (
+              <ul className="tw-prism-points">{bullets.map((b, i) => <li key={`${i}-${b.slice(0, 8)}`}>{b}</li>)}</ul>
+            )}
+            {reportRows.map((a, i) => (
+              <details key={a.role} className="tw-prism-analysis" style={{ borderLeftColor: PRISM_SERIES_CSS[i] }}>
                 <summary>{a.role}</summary>
                 <div className="tw-prism-analysis-body">{analysisText({ key: 'info', label: a.role, text: a.text, error: a.error })}</div>
               </details>
             ))}
-            {latest?.decision === undefined || latest?.decision === null ? (
-              <div className="tw-prism-muted">limits / rejects：—（本轮没有决策记录）</div>
-            ) : (
-              <div className="tw-prism-stack">
-                <div className="tw-prism-muted">limits：单标的 {latest.decision.limits.singlePct ?? '—'}% / 总 {latest.decision.limits.totalPct ?? '—'}%（{latest.decision.limits.note ?? '未给依据'}）</div>
-                <div className="tw-prism-muted">rejects：{(latest.decision.rejects ?? []).length === 0 ? '无' : (latest.decision.rejects ?? []).map((r) => `${r.secid} ${r.reason}`).join('；')}</div>
-                {(latest.decision.parseError ?? null) === null ? null : <div className="tw-prism-error">决策 JSON 解析失败：{latest.decision.parseError}</div>}
-              </div>
-            )}
+          </section>
+
+          <section className="tw-prism-card">
+            <div className="tw-prism-card-title">决策 <span className="tw-prism-muted">limits / orders / cancel</span></div>
+            <table className="tw-prism-table tw-prism-decision"><tbody>
+              {dRows.map((r) => <tr key={r.key}><td>{r.key}</td><td className="tw-prism-num tw-prism-mono">{r.value}</td></tr>)}
+            </tbody></table>
+            <div className="tw-prism-muted">rejects：{(latest?.decision?.rejects ?? []).length === 0 ? '无' : (latest?.decision?.rejects ?? []).map((r) => `${r.secid} ${r.reason}`).join('；')}</div>
+            {(latest?.decision?.parseError ?? null) === null ? null : <div className="tw-prism-error">决策 JSON 解析失败：{decisionErrorText(latest?.decision?.parseError)}</div>}
           </section>
 
           <section className="tw-prism-card">

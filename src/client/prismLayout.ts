@@ -22,8 +22,10 @@ export function splitPctFromDrag(startPct: number, startX: number, clientX: numb
 /** 块间距只允许 0 / 8 / 16（只检查 .tw-prism* 规则里的 gap） */
 export function spacingProblems(css: string): string[] {
   const bad: string[] = []
-  for (const block of css.matchAll(/\.tw-prism[^{]*\{([^}]*)\}/g)) {
-    const body = block[1] ?? ''
+  for (const block of css.matchAll(/(\.tw-prism[^{]*)\{([^}]*)\}/g)) {
+    const selector = block[1] ?? ''
+    if (selector.includes('.tw-prism-seg')) continue // 分段项间 4px 是组件内部，不属于块间距
+    const body = block[2] ?? ''
     for (const m of body.matchAll(/(?:^|;)\s*(?:row-|column-)?gap\s*:\s*([^;]+)/g)) {
       const raw = (m[1] ?? '').trim()
       const values = raw.split(/\s+/).map((v) => Number.parseFloat(v))
@@ -39,7 +41,7 @@ export function spacingProblems(css: string): string[] {
 export function elevationProblems(css: string): string[] {
   const bad: string[] = []
   if (!/\.tw-prism\{[^}]*box-shadow:var\(--tw-elev-0\)/.test(css)) bad.push('页面底缺 elevation 0')
-  if (!/\.tw-prism-card\{[^}]*box-shadow:var\(--tw-elev-1\)/.test(css)) bad.push('卡片缺 elevation 1')
+  if (!/\.tw-prism-card\{[^}]*box-shadow:var\(--tw-prism-card-shadow\)/.test(css)) bad.push('卡片缺 elevation 1')
   if (!/\.tw-prism-seg\{[^}]*box-shadow:var\(--tw-elev-3\)/.test(css)) bad.push('分段缺 elevation 3')
   return bad
 }

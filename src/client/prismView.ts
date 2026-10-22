@@ -2,7 +2,7 @@
  * 棱镜页的展示口径与判据（纯函数；页面与测试共用）。
  * 字号只用 12 / 14（Material 低端子集）；不写免责文案；缺数据 `—` + 一句原因。
  */
-import type { PrismAnalysis, PrismNewsStatus, PrismRun, PrismSettings } from '../shared/prism.ts'
+import type { PrismAnalysis, PrismNewsStatus, PrismSettings } from '../shared/prism.ts'
 import { shStampText } from './marketTime.ts'
 
 export const PRISM_FONT = { body: 12, title: 14 } as const
@@ -20,11 +20,6 @@ export function analysisText(a: PrismAnalysis): string {
   return `—（${a.error ?? '未取到'}）`
 }
 
-export function runSummaryText(run: PrismRun | null | undefined): string {
-  if (run === null || run === undefined) return '—（还没有运行记录）'
-  if (run.summary !== null && run.summary !== '') return run.summary
-  return `—（${run.error ?? '汇总未产出'}）`
-}
 
 export function timesText(settings: PrismSettings | null | undefined): string {
   if (settings === null || settings === undefined || settings.times.length === 0) return '—（未设置时点）'
@@ -144,7 +139,12 @@ export function selftestText(r: { ok: boolean; error: string | null; text?: stri
 }
 
 /** MD dataviz 8 系列色（Q13 定案：图表序列色；表格涨跌仍用 up/down token） */
-export const PRISM_SERIES = ['#4285F4', '#EA4335', '#FBBC04', '#34A853', '#FF6D01', '#46BDC6', '#7B1FA2', '#5F6368'] as const
+export const PRISM_SERIES = ['#4C6EF5', '#E8590C', '#7048E8', '#0C8599', '#C2255C', '#2F9E44', '#F08C00', '#868E96'] as const
+/** 图表用 CSS 变量，深色自动换成更浅的 viz 色 */
+export const PRISM_SERIES_CSS = [
+  'var(--tw-prism-series-1)', 'var(--tw-prism-series-2)', 'var(--tw-prism-series-3)', 'var(--tw-prism-series-4)',
+  'var(--tw-prism-series-5)', 'var(--tw-prism-series-6)', 'var(--tw-prism-series-7)', 'var(--tw-prism-series-8)',
+] as const
 
 export interface EquityChart {
   line: string
@@ -167,4 +167,44 @@ export function equityChartOf(points: ReadonlyArray<{ equity: number }>, width =
     value: p.equity,
   }))
   return { line: dots.map((d) => `${d.x.toFixed(1)},${d.y.toFixed(1)}`).join(' '), dots, min, max, last: values[values.length - 1] as number }
+}
+
+/** 汇总文本 → 最多 5 条要点（去掉编号；每行/编号项一条；空 ⇒ []） */
+export function summaryBullets(summary: string | null | undefined): string[] {
+  if (summary === null || summary === undefined) return []
+  // 汇总里可能带 ```json 决策块：要点只取自然语言，原始 JSON 一律不进页面
+  const prose = summary.replace(/```[\s\S]*?```/g, '')
+  const lines = prose
+    .split(/\n+/)
+    .flatMap((line) => line.split(/(?=\d+[.、]\s)/))
+    .map((line) => line.replace(/^\s*\d+[.、]\s*/, '').trim())
+    .filter((line) => line !== '' && !/^[\{\[]/.test(line) && !/["']?(limits|orders|cancel)["']?\s*:/.test(line))
+  return lines.slice(0, 5)
+}
+
+export interface DecisionRow {
+  key: string
+  value: string
+}
+
+/** 决策卡：只给小表，不渲染原始 JSON */
+export function decisionRows(decision: {
+  limits?: { singlePct?: number | null; totalPct?: number | null }
+  orders?: readonly unknown[]
+  cancel?: readonly unknown[]
+} | null | undefined): DecisionRow[] {
+  const pct = (n: number | null | undefined): string => (typeof n === 'number' ? `${n}%` : '—')
+  return [
+    { key: '单票上限', value: pct(decision?.limits?.singlePct) },
+    { key: '总仓位上限', value: pct(decision?.limits?.totalPct) },
+    { key: 'orders', value: String(decision?.orders?.length ?? 0) },
+    { key: 'cancel', value: String(decision?.cancel?.length ?? 0) },
+  ]
+}
+
+/** 页面不得直接显示原始 JSON；解析失败只显示摘要（原文留在接口） */
+export function decisionErrorText(raw: string | null | undefined, max = 120): string {
+  if (raw === null || raw === undefined || raw === '') return ''
+  const cleaned = raw.replace(/\{[\s\S]*\}/g, '').replace(/\s+/g, ' ').trim()
+  return cleaned === '' ? '原文已留存在接口，不在页面展开' : cleaned.slice(0, max)
 }
