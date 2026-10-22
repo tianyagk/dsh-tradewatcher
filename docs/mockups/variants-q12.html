@@ -1,0 +1,222 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Q12 · 两栏内容划分 · 三选一</title>
+<style>
+:root{
+  --bg:#f5f6f8;--card:#fff;--card2:#f2f4f7;--border:#e2e5ea;--border2:#cfd3dc;
+  --text:#16181d;--dim:#4c535f;--muted:#6f7787;--accent:#5e6ad2;--accent-soft:rgba(94,106,210,.10);
+  --up:#e5484d;--down:#0e8f5c;--flat:#6f7787;
+  --e1:0 1px 2px rgba(16,24,40,.06);
+  --e2:0 1px 3px rgba(16,24,40,.10),0 4px 8px rgba(16,24,40,.06);
+  --e3:0 2px 6px rgba(16,24,40,.10),0 8px 16px rgba(16,24,40,.08);
+  --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--bg);color:var(--text);font:13px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif}
+.doc{max-width:1180px;margin:0 auto;padding:24px 16px 56px}
+.doc-head{display:flex;flex-direction:column;gap:8px;padding:16px 0 24px;border-bottom:1px solid var(--border2)}
+.doc-head h1{margin:0;font-size:20px;line-height:1.25;font-weight:650}
+.howto{margin:0;padding:8px 12px;background:var(--accent-soft);border:1px solid rgba(94,106,210,.28);border-radius:8px;color:#2f3570;font-size:13px}
+.meta{margin:0;color:var(--muted);font-size:12px}
+.variant{margin-top:24px}
+.variant-head{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;margin-bottom:8px}
+.badge{display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;border-radius:6px;background:var(--text);color:#fff;font:600 12px/1 var(--mono)}
+.variant-head h2{margin:0;font-size:15px;font-weight:650}
+.tradeoff{margin:0;color:var(--dim);font-size:12px}
+.tradeoff b{color:var(--text);font-weight:600}
+.canvas{background:var(--bg);border:1px solid var(--border2);border-radius:12px;padding:8px;box-shadow:var(--e1)}
+.app{background:var(--bg);border-radius:8px;overflow:hidden}
+.topbar{display:flex;align-items:center;gap:8px;padding:8px 12px;background:var(--card);border-bottom:1px solid var(--border)}
+.brand{font-weight:650;font-size:13px}
+.crumb{color:var(--muted);font-size:12px}
+.spacer{flex:1}
+.sync{color:var(--muted);font-size:12px}
+.split{display:grid;grid-template-columns:62fr 38fr;gap:8px;padding:8px}
+.split.rev{grid-template-columns:38fr 62fr}
+.col{display:flex;flex-direction:column;gap:8px;min-width:0}
+.cards{display:grid;grid-template-columns:repeat(2,1fr);gap:8px}
+.card{background:var(--card);border:1px solid var(--border);border-radius:8px;box-shadow:var(--e1);padding:8px;min-width:0}
+.k{color:var(--muted);font-size:12px;margin-bottom:2px}
+.v{font:600 14px/1.25 var(--mono);font-variant-numeric:tabular-nums}
+.v.up{color:var(--up)} .v.down{color:var(--down)}
+.sub{color:var(--muted);font-size:11px;margin-top:2px}
+.panel-title{display:flex;align-items:center;gap:8px;padding:8px 10px;border-bottom:1px solid var(--border);font-weight:600;font-size:12px}
+.panel-title .hint{margin-left:auto;color:var(--muted);font-weight:400;font-size:11px}
+table{width:100%;border-collapse:collapse}
+th,td{padding:4px 8px;border-bottom:1px solid var(--border);text-align:left;white-space:nowrap}
+th{color:var(--muted);font-weight:400;font-size:11px;background:var(--card2)}
+td{font-size:12px}
+td.num,th.num{text-align:right;font-family:var(--mono);font-variant-numeric:tabular-nums}
+tr:last-child td{border-bottom:0}
+.up{color:var(--up)} .down{color:var(--down)} .muted{color:var(--muted)}
+.seg{display:inline-flex;align-items:center;gap:2px;padding:2px;border:1px solid var(--border2);border-radius:999px;background:var(--card2);box-shadow:var(--e3)}
+.seg button{position:relative;overflow:hidden;border:0;background:transparent;color:var(--dim);font:12px/1 inherit;padding:6px 10px;border-radius:999px;cursor:pointer}
+.seg button.on{background:var(--card);color:var(--text);box-shadow:var(--e2)}
+.seg button::after{content:"";position:absolute;inset:0;background:currentColor;opacity:0;transition:opacity .12s;pointer-events:none}
+.seg button:hover::after{opacity:.06}
+.rip{position:absolute;left:50%;top:50%;width:64px;height:64px;margin:-32px 0 0 -32px;border-radius:50%;background:var(--accent);opacity:.14;transform:scale(.2);animation:rip 1.8s ease-out infinite;pointer-events:none}
+@keyframes rip{0%{transform:scale(.2);opacity:.18}70%{transform:scale(1);opacity:0}100%{transform:scale(1);opacity:0}}
+.research{display:flex;flex-direction:column;gap:8px}
+.report{border:1px solid var(--border);border-radius:8px;background:var(--card);padding:8px}
+.report summary{list-style:none;display:flex;align-items:center;gap:6px;cursor:pointer;font-weight:600;font-size:12px}
+.report summary::-webkit-details-marker{display:none}
+.report p{margin:6px 0 0;color:var(--dim);font-size:12px;line-height:1.55}
+.tag{display:inline-block;padding:2px 6px;border-radius:999px;background:var(--card2);color:var(--muted);font-size:11px}
+.summary-card{border:1px solid var(--border);border-radius:8px;background:var(--card);padding:8px}
+.summary-card h4{margin:0 0 4px;font-size:12px}
+.summary-card p{margin:0;color:var(--dim);font-size:12px;line-height:1.55}
+.config{border:1px solid var(--border);border-radius:8px;background:var(--card);padding:8px}
+.config h4{margin:0 0 6px;font-size:12px}
+.field{display:flex;align-items:center;gap:6px;margin-top:6px}
+.field label{width:64px;color:var(--muted);font-size:11px}
+.input{flex:1;min-width:0;border:1px solid var(--border2);border-radius:6px;background:var(--card2);padding:5px 6px;font:12px/1.2 var(--mono);color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.btn{position:relative;overflow:hidden;border:1px solid var(--border2);border-radius:7px;background:var(--card);padding:5px 9px;font-size:11px;color:var(--dim)}
+.btn::after{content:"";position:absolute;inset:0;background:currentColor;opacity:0;transition:opacity .12s;pointer-events:none}
+.btn:hover::after{opacity:.06}
+.btn:active::after{opacity:.12}
+.btn.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+.legend{display:flex;gap:12px;color:var(--muted);font-size:11px}
+.dot{display:inline-block;width:6px;height:6px;border-radius:50%;margin-right:4px;background:var(--accent)}
+.chart{display:flex;flex-direction:column;gap:6px;padding:8px}
+.spark{width:100%;height:48px;display:block}
+.bar{display:flex;height:14px;border-radius:999px;overflow:hidden;background:var(--card2)}
+.bar span{display:block;height:100%}
+.b1{background:var(--accent)}.b2{background:var(--up)}.b3{background:var(--down)}.b4{background:var(--flat)}
+.axis{display:flex;justify-content:space-between;color:var(--muted);font-size:11px;font-family:var(--mono)}
+.note{margin:8px;padding:8px 10px;border:1px dashed var(--border2);border-radius:8px;color:var(--muted);font-size:11px;background:var(--card)}
+.ratio{display:inline-block;padding:2px 6px;border:1px solid var(--border2);border-radius:999px;color:var(--muted);font:11px/1.2 var(--mono)}
+@media (max-width:900px){.split,.split.rev{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<main class="doc">
+  <header class="doc-head">
+    <h1>Q12 · 两栏内容划分 · 三选一</h1>
+    <p class="howto">怎么选：日常“看一眼账户再读研判”选 A；以研判为主导、账户只是结果展示选 B；最关心净值与持仓结构选 C。</p>
+    <p class="meta">统一口径：两栏 62:38（C 同为 62:38，未改比例）；块间距 8 的倍数；1px 边框卡片与行内 1px 分隔；MD elevation 三层；state layer / ripple 只落在按钮与分段；数据脱敏：标的 A/B/C、代码 1.00000A、金额真实量级。</p>
+  </header>
+
+  <!-- A -->
+  <section class="variant">
+    <div class="variant-head"><span class="badge">A</span><h2>左账户与交易 / 右研判与配置</h2><p class="tradeoff"><b>取舍（当前建议）：</b>账户与交易是“动作区”，研判与模型配置是“阅读区”，左右职责最清楚；缺点是右侧配置项会挤占研判阅读高度。</p></div>
+    <div class="canvas"><div class="app">
+      <div class="topbar"><span class="brand">棱镜 · 模拟盘</span><span class="crumb">账户 / 研判</span><span class="spacer"></span><div class="seg" role="tablist" aria-label="视图"><button class="on" role="tab" aria-selected="true"><span class="rip"></span>双栏</button><button role="tab">账户</button><button role="tab">研判</button></div><span class="sync">14:40 已更新 · <span class="ratio">左 62 / 右 38</span></span></div>
+      <div class="split">
+        <div class="col">
+          <div class="cards">
+            <div class="card"><div class="k">总资产</div><div class="v">1,284,360.00</div><div class="sub">资金上限 1,500,000</div></div>
+            <div class="card"><div class="k">现金</div><div class="v">224,560.00</div><div class="sub">可用 224,560.00</div></div>
+            <div class="card"><div class="k">当日盈亏</div><div class="v up">+12,480.00</div><div class="sub">+0.98%</div></div>
+            <div class="card"><div class="k">累计盈亏</div><div class="v up">+84,360.00</div><div class="sub">已实现 +21,200</div></div>
+          </div>
+          <div class="card" style="padding:0">
+            <div class="panel-title">持仓 <span class="hint">3 只 · 市值 1,059,800</span></div>
+            <table><thead><tr><th>代码</th><th>名称</th><th class="num">数量</th><th class="num">摊薄成本</th><th class="num">市值</th><th class="num">占比</th><th class="num">浮盈</th></tr></thead><tbody>
+              <tr><td class="muted">1.00000A</td><td>标的 A</td><td class="num">20,000</td><td class="num">18.40</td><td class="num">427,000.00</td><td class="num">33.25%</td><td class="num up">+59,000.00</td></tr>
+              <tr><td class="muted">1.00000B</td><td>标的 B</td><td class="num">40,000</td><td class="num">6.12</td><td class="num">234,400.00</td><td class="num">18.25%</td><td class="num down">−10,400.00</td></tr>
+              <tr><td class="muted">1.00000C</td><td>标的 C</td><td class="num">8,000</td><td class="num">52.00</td><td class="num">398,400.00</td><td class="num">31.02%</td><td class="num down">−17,600.00</td></tr>
+            </tbody></table>
+          </div>
+          <div class="card" style="padding:0">
+            <div class="panel-title">挂单 / 成交 <span class="hint">当日有效</span></div>
+            <table><tbody><tr><td>买 标的 A</td><td class="num">5,000 @ 21.20</td><td class="muted">待成交</td></tr><tr><td>卖 标的 B</td><td class="num">10,000 @ 5.90</td><td class="muted">待成交</td></tr></tbody></table>
+          </div>
+        </div>
+        <div class="col">
+          <div class="summary-card"><h4>汇总决策 <span class="tag">14:40</span></h4><p>宽基普跌、成长跌幅更深；标的 A 相对抗跌，标的 C 集中度偏高。优先降 C 的集中度，A 继续持有，B 设 5.60 止损观察。</p></div>
+          <details class="report" open><summary>A股宏观</summary><p>成交额与两融未给，流动性无法验证；银行、公用事业相对抗跌。</p></details>
+          <details class="report"><summary>外盘</summary><p>VIX 18.55，美股科技/AI 情绪偏弱。</p></details>
+          <details class="report"><summary>大宗</summary><p>油运高波动，金价与美元未给。</p></details>
+          <details class="report"><summary>信息面</summary><p>监管风险提示偏多，外资总量收缩。</p></details>
+          <div class="config"><h4>模型配置</h4><div class="field"><label>provider</label><span class="input">workbuddy</span></div><div class="field"><label>model</label><span class="input">cn:deepseek-v4.1-flash</span></div><div class="field"><span></span><span class="btn">自检</span><span class="btn primary">保存</span></div></div>
+        </div>
+      </div>
+    </div></div>
+  </section>
+
+  <!-- B -->
+  <section class="variant">
+    <div class="variant-head"><span class="badge">B</span><h2>左研判 / 右账户与持仓</h2><p class="tradeoff"><b>取舍：</b>把“先读结论”放在视觉第一入口，适合研判驱动；缺点是交易动作在右侧、宽度只有 38%，挂单/成交表会明显拥挤。</p></div>
+    <div class="canvas"><div class="app">
+      <div class="topbar"><span class="brand">棱镜 · 模拟盘</span><span class="crumb">研判 / 账户</span><span class="spacer"></span><div class="seg" role="tablist" aria-label="视图"><button class="on" role="tab" aria-selected="true"><span class="rip"></span>双栏</button><button role="tab">账户</button><button role="tab">研判</button></div><span class="sync">14:40 已更新 · <span class="ratio">左 62 / 右 38</span></span></div>
+      <div class="split">
+        <div class="col">
+          <div class="summary-card"><h4>汇总决策 <span class="tag">14:40</span></h4><p>宽基普跌、成长跌幅更深；标的 A 相对抗跌，标的 C 集中度偏高。优先降 C 的集中度，A 继续持有，B 设 5.60 止损观察。</p></div>
+          <details class="report" open><summary>A股宏观</summary><p>成交额与两融未给，流动性无法验证；银行、公用事业相对抗跌。</p></details>
+          <details class="report"><summary>外盘</summary><p>VIX 18.55，美股科技/AI 情绪偏弱。</p></details>
+          <details class="report"><summary>大宗</summary><p>油运高波动，金价与美元未给。</p></details>
+          <details class="report"><summary>信息面</summary><p>监管风险提示偏多，外资总量收缩。</p></details>
+          <div class="config"><h4>模型配置</h4><div class="field"><label>provider</label><span class="input">workbuddy</span></div><div class="field"><label>model</label><span class="input">cn:deepseek-v4.1-flash</span></div></div>
+        </div>
+        <div class="col">
+          <div class="cards">
+            <div class="card"><div class="k">总资产</div><div class="v">1,284,360.00</div><div class="sub">资金上限 1,500,000</div></div>
+            <div class="card"><div class="k">现金</div><div class="v">224,560.00</div><div class="sub">可用 224,560.00</div></div>
+            <div class="card"><div class="k">当日盈亏</div><div class="v up">+12,480.00</div><div class="sub">+0.98%</div></div>
+            <div class="card"><div class="k">累计盈亏</div><div class="v up">+84,360.00</div><div class="sub">已实现 +21,200</div></div>
+          </div>
+          <div class="card" style="padding:0">
+            <div class="panel-title">持仓 <span class="hint">3 只</span></div>
+            <table><thead><tr><th>名称</th><th class="num">数量</th><th class="num">市值</th><th class="num">浮盈</th></tr></thead><tbody>
+              <tr><td>标的 A</td><td class="num">20,000</td><td class="num">427,000.00</td><td class="num up">+59,000.00</td></tr>
+              <tr><td>标的 B</td><td class="num">40,000</td><td class="num">234,400.00</td><td class="num down">−10,400.00</td></tr>
+              <tr><td>标的 C</td><td class="num">8,000</td><td class="num">398,400.00</td><td class="num down">−17,600.00</td></tr>
+            </tbody></table>
+          </div>
+          <div class="card" style="padding:0">
+            <div class="panel-title">挂单</div>
+            <table><tbody><tr><td>买 A</td><td class="num">5,000 @ 21.20</td><td class="muted">待成交</td></tr><tr><td>卖 B</td><td class="num">10,000 @ 5.90</td><td class="muted">待成交</td></tr></tbody></table>
+          </div>
+        </div>
+      </div>
+    </div></div>
+  </section>
+
+  <!-- C -->
+  <section class="variant">
+    <div class="variant-head"><span class="badge">C</span><h2>左账户与净值 / 右持仓与研判</h2><p class="tradeoff"><b>取舍：</b>把“净值走势”提升为左栏第一信息，右侧集中持仓与研判；缺点是四格与净值会分走高度，持仓表行数多时需要滚动。</p></div>
+    <div class="canvas"><div class="app">
+      <div class="topbar"><span class="brand">棱镜 · 模拟盘</span><span class="crumb">账户与净值 / 持仓与研判</span><span class="spacer"></span><div class="seg" role="tablist" aria-label="视图"><button class="on" role="tab" aria-selected="true"><span class="rip"></span>双栏</button><button role="tab">账户</button><button role="tab">研判</button></div><span class="sync">14:40 已更新 · <span class="ratio">左 62 / 右 38（未改默认）</span></span></div>
+      <div class="split">
+        <div class="col">
+          <div class="cards">
+            <div class="card"><div class="k">总资产</div><div class="v">1,284,360.00</div><div class="sub">资金上限 1,500,000</div></div>
+            <div class="card"><div class="k">现金</div><div class="v">224,560.00</div><div class="sub">可用 224,560.00</div></div>
+            <div class="card"><div class="k">当日盈亏</div><div class="v up">+12,480.00</div><div class="sub">+0.98%</div></div>
+            <div class="card"><div class="k">累计盈亏</div><div class="v up">+84,360.00</div><div class="sub">已实现 +21,200</div></div>
+          </div>
+          <div class="card">
+            <div class="panel-title" style="padding:0 0 8px;border-bottom:0">净值曲线 <span class="hint">每日一点 · 近 12 日</span></div>
+            <div class="chart" style="padding:0">
+              <svg class="spark" viewBox="0 0 320 48" preserveAspectRatio="none" aria-label="净值曲线"><polyline points="0,42 29,34 58,36 87,28 116,31 145,22 174,25 203,14 232,17 261,9 290,12 319,4" fill="none" stroke="var(--accent)" stroke-width="1.5"/></svg>
+              <div class="axis"><span>10-09 · 1,284,000</span><span>10-22 · 1,310,000</span></div>
+            </div>
+          </div>
+          <div class="card" style="padding:0">
+            <div class="panel-title">挂单 / 成交</div>
+            <table><tbody><tr><td>买 标的 A</td><td class="num">5,000 @ 21.20</td><td class="muted">待成交</td></tr><tr><td>卖 标的 B</td><td class="num">10,000 @ 5.90</td><td class="muted">待成交</td></tr></tbody></table>
+          </div>
+        </div>
+        <div class="col">
+          <div class="card" style="padding:0">
+            <div class="panel-title">持仓 <span class="hint">3 只</span></div>
+            <table><thead><tr><th>名称</th><th class="num">市值</th><th class="num">占比</th><th class="num">浮盈</th></tr></thead><tbody>
+              <tr><td>标的 A</td><td class="num">427,000.00</td><td class="num">33.25%</td><td class="num up">+59,000.00</td></tr>
+              <tr><td>标的 B</td><td class="num">234,400.00</td><td class="num">18.25%</td><td class="num down">−10,400.00</td></tr>
+              <tr><td>标的 C</td><td class="num">398,400.00</td><td class="num">31.02%</td><td class="num down">−17,600.00</td></tr>
+            </tbody></table>
+          </div>
+          <div class="summary-card"><h4>汇总决策</h4><p>宽基普跌、成长跌幅更深；标的 C 集中度偏高。优先降 C 的集中度，A 继续持有。</p></div>
+          <details class="report"><summary>A股宏观</summary><p>成交额与两融未给，流动性无法验证。</p></details>
+          <details class="report"><summary>外盘</summary><p>VIX 18.55，美股科技/AI 情绪偏弱。</p></details>
+          <div class="config"><h4>模型配置</h4><div class="field"><label>provider</label><span class="input">workbuddy</span></div><div class="field"><label>model</label><span class="input">cn:deepseek-v4.1-flash</span></div></div>
+        </div>
+      </div>
+    </div></div>
+  </section>
+</main>
+</body>
+</html>

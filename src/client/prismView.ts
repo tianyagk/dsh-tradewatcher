@@ -142,3 +142,29 @@ export function selftestText(r: { ok: boolean; error: string | null; text?: stri
   if (r.ok) return `自检通过 · ${r.elapsedMs}ms · ${r.text ?? '—'}`
   return `自检失败 · ${r.error ?? '未给原因'}`
 }
+
+/** MD dataviz 8 系列色（Q13 定案：图表序列色；表格涨跌仍用 up/down token） */
+export const PRISM_SERIES = ['#4285F4', '#EA4335', '#FBBC04', '#34A853', '#FF6D01', '#46BDC6', '#7B1FA2', '#5F6368'] as const
+
+export interface EquityChart {
+  line: string
+  dots: Array<{ x: number; y: number; value: number }>
+  min: number
+  max: number
+  last: number
+}
+
+/** 净值折线几何：细网格/点标记/数据标签共用同一份坐标（无坐标文字） */
+export function equityChartOf(points: ReadonlyArray<{ equity: number }>, width = 560, height = 128): EquityChart | null {
+  if (points.length < 2) return null
+  const values = points.map((p) => p.equity)
+  const min = Math.min(...values)
+  const max = Math.max(...values)
+  const span = max - min || 1
+  const dots = points.map((p, i) => ({
+    x: (i / (points.length - 1)) * width,
+    y: height - ((p.equity - min) / span) * (height - 16) - 8,
+    value: p.equity,
+  }))
+  return { line: dots.map((d) => `${d.x.toFixed(1)},${d.y.toFixed(1)}`).join(' '), dots, min, max, last: values[values.length - 1] as number }
+}

@@ -1,0 +1,182 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Q13 · 图表配色边界 · 三选一</title>
+<style>
+:root{
+  --bg:#f5f6f8;--card:#fff;--card2:#f2f4f7;--border:#e2e5ea;--border2:#cfd3dc;
+  --text:#16181d;--dim:#4c535f;--muted:#6f7787;--accent:#5e6ad2;--accent-soft:rgba(94,106,210,.10);
+  --up:#e5484d;--down:#0e8f5c;--flat:#6f7787;
+  --md1:#4285F4;--md2:#EA4335;--md3:#FBBC04;--md4:#34A853;--md5:#FF6D01;--md6:#46BDC6;--md7:#7B1FA2;--md8:#5F6368;
+  --e1:0 1px 2px rgba(16,24,40,.06);
+  --e2:0 1px 3px rgba(16,24,40,.10),0 4px 8px rgba(16,24,40,.06);
+  --e3:0 2px 6px rgba(16,24,40,.10),0 8px 16px rgba(16,24,40,.08);
+  --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--bg);color:var(--text);font:13px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif}
+.doc{max-width:1180px;margin:0 auto;padding:24px 16px 56px}
+.doc-head{display:flex;flex-direction:column;gap:8px;padding:16px 0 24px;border-bottom:1px solid var(--border2)}
+.doc-head h1{margin:0;font-size:20px;line-height:1.25;font-weight:650}
+.howto{margin:0;padding:8px 12px;background:var(--accent-soft);border:1px solid rgba(94,106,210,.28);border-radius:8px;color:#2f3570;font-size:13px}
+.meta{margin:0;color:var(--muted);font-size:12px}
+.grid{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin-top:24px}
+.panel{background:var(--card);border:1px solid var(--border);border-radius:12px;box-shadow:var(--e2);overflow:hidden}
+.panel-head{padding:12px;border-bottom:1px solid var(--border);display:flex;flex-direction:column;gap:6px}
+.title-row{display:flex;align-items:center;gap:8px}
+.badge{display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;border-radius:6px;background:var(--text);color:#fff;font:600 12px/1 var(--mono)}
+.panel h2{margin:0;font-size:14px;font-weight:650}
+.tradeoff{margin:0;color:var(--dim);font-size:12px}
+.tradeoff b{color:var(--text);font-weight:600}
+.canvas{padding:12px;display:flex;flex-direction:column;gap:16px}
+.block{display:flex;flex-direction:column;gap:6px}
+.block-head{display:flex;align-items:baseline;gap:8px}
+.block-head h3{margin:0;font-size:12px;font-weight:600}
+.block-head .unit{margin-left:auto;color:var(--muted);font-size:11px;font-family:var(--mono)}
+.chart{position:relative;border:1px solid var(--border);border-radius:8px;background:var(--card);padding:8px;box-shadow:var(--e1)}
+.chart svg{display:block;width:100%;height:112px}
+.axis{display:flex;justify-content:space-between;color:var(--muted);font-size:10px;font-family:var(--mono);margin-top:2px}
+.datalabel{position:absolute;right:12px;top:10px;background:var(--card);border:1px solid var(--border);border-radius:6px;padding:3px 5px;font:10px/1.2 var(--mono);color:var(--text);box-shadow:var(--e3)}
+.bar{display:flex;height:18px;border-radius:999px;overflow:hidden;background:var(--card2);border:1px solid var(--border)}
+.bar span{display:flex;align-items:center;justify-content:center;height:100%;color:#fff;font:10px/1 var(--mono);white-space:nowrap;overflow:hidden}
+.bar .a{width:33.25%}.bar .b{width:18.25%}.bar .c{width:31.02%}.bar .d{width:17.48%}
+.legend{display:flex;flex-wrap:wrap;gap:8px 10px;color:var(--dim);font-size:11px}
+.legend i{display:inline-block;width:8px;height:8px;border-radius:2px;margin-right:4px;vertical-align:middle}
+.swatches{display:flex;height:10px;border-radius:999px;overflow:hidden;border:1px solid var(--border)}
+.swatches span{flex:1}
+.swatch-label{display:grid;grid-template-columns:repeat(4,1fr);gap:2px 4px;color:var(--muted);font-size:10px;font-family:var(--mono)}
+.note{border:1px solid var(--border);border-radius:8px;background:var(--card2);padding:8px;color:var(--muted);font-size:11px;line-height:1.5}
+.pill{display:inline-block;padding:2px 6px;border-radius:999px;border:1px solid var(--border2);background:var(--card);color:var(--muted);font:10px/1.2 var(--mono)}
+.seg{display:inline-flex;align-items:center;gap:2px;padding:2px;border:1px solid var(--border2);border-radius:999px;background:var(--card2);box-shadow:var(--e3);align-self:flex-start}
+.seg button{position:relative;overflow:hidden;border:0;background:transparent;color:var(--dim);font:11px/1 inherit;padding:5px 8px;border-radius:999px;cursor:pointer}
+.seg button.on{background:var(--card);color:var(--text);box-shadow:var(--e2)}
+.seg button::after{content:"";position:absolute;inset:0;background:currentColor;opacity:0;transition:opacity .12s;pointer-events:none}
+.seg button:hover::after{opacity:.06}
+.rip{position:absolute;left:50%;top:50%;width:56px;height:56px;margin:-28px 0 0 -28px;border-radius:50%;background:var(--accent);opacity:.14;transform:scale(.2);animation:rip 1.8s ease-out infinite;pointer-events:none}
+@keyframes rip{0%{transform:scale(.2);opacity:.18}70%{transform:scale(1);opacity:0}100%{transform:scale(1);opacity:0}}
+.kv{display:flex;justify-content:space-between;border-bottom:1px solid var(--border);padding:4px 0;font-size:11px}
+.kv:last-child{border-bottom:0}
+.kv b{font-family:var(--mono);font-weight:600}
+.token-row{display:flex;flex-wrap:wrap;gap:6px}
+.token{display:inline-flex;align-items:center;gap:4px;border:1px solid var(--border);border-radius:999px;padding:2px 6px;font:10px/1.2 var(--mono);color:var(--dim)}
+.token i{width:8px;height:8px;border-radius:50%;display:inline-block}
+@media (max-width:1000px){.grid{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<main class="doc">
+  <header class="doc-head">
+    <h1>Q13 · 图表配色边界 · 三选一</h1>
+    <p class="howto">怎么选：要与主插件涨跌语义完全一致选 A；要图表本身有更强分类能力选 B；只想让辅助序列更可辨、主序列保持品牌色选 C。</p>
+    <p class="meta">三案同一份数据：净值曲线（近 12 日，1,284,000 → 1,310,000）+ 一根持仓占比条（A 33.25% / B 18.25% / C 31.02% / 现金 17.48%）。MD 结构统一：细网格、点标记、数据标签；颜色边界是唯一变量。块间距 8 的倍数；1px 边框卡片；elevation 三层；数据脱敏。</p>
+  </header>
+
+  <div class="grid">
+    <!-- A -->
+    <section class="panel">
+      <div class="panel-head">
+        <div class="title-row"><span class="badge">A</span><h2>只借 MD 结构</h2></div>
+        <p class="tradeoff"><b>取舍：</b>颜色全部来自现有涨跌/强调 token，和主插件语义零漂移；缺点是序列一多就只能靠明度/线型区分。</p>
+        <div class="seg" role="tablist" aria-label="图表区间"><button class="on" role="tab" aria-selected="true"><span class="rip"></span>近 12 日</button><button role="tab">近 30 日</button><button role="tab">今年</button></div>
+      </div>
+      <div class="canvas">
+        <div class="block">
+          <div class="block-head"><h3>净值曲线</h3><span class="unit">总资产 · 每日一点</span></div>
+          <div class="chart">
+            <div class="datalabel">1,310,000.00</div>
+            <svg viewBox="0 0 320 112" preserveAspectRatio="none" aria-label="净值曲线 A">
+              <g stroke="#e2e5ea" stroke-width="1" opacity=".7">
+                <line x1="0" y1="20" x2="320" y2="20"/><line x1="0" y1="50" x2="320" y2="50"/><line x1="0" y1="80" x2="320" y2="80"/>
+              </g>
+              <polyline points="0,98 29,90 58,92 87,84 116,87 145,78 174,81 203,70 232,73 261,65 290,68 319,58" fill="none" stroke="var(--accent)" stroke-width="1.5"/>
+              <g fill="var(--accent)">
+                <circle cx="0" cy="98" r="2"/><circle cx="29" cy="90" r="2"/><circle cx="58" cy="92" r="2"/><circle cx="87" cy="84" r="2"/><circle cx="116" cy="87" r="2"/><circle cx="145" cy="78" r="2"/><circle cx="174" cy="81" r="2"/><circle cx="203" cy="70" r="2"/><circle cx="232" cy="73" r="2"/><circle cx="261" cy="65" r="2"/><circle cx="290" cy="68" r="2"/><circle cx="319" cy="58" r="2"/>
+              </g>
+            </svg>
+            <div class="axis"><span>10-09 · 1,284,000</span><span>10-22 · 1,310,000</span></div>
+          </div>
+        </div>
+        <div class="block">
+          <div class="block-head"><h3>持仓占比</h3><span class="unit">市值 ÷ 总资产</span></div>
+          <div class="bar" aria-label="持仓占比 A"><span class="a" style="background:var(--accent)">33.3%</span><span class="b" style="background:var(--up)">18.3%</span><span class="c" style="background:var(--down)">31.0%</span><span class="d" style="background:var(--flat)">17.5%</span></div>
+          <div class="legend"><span><i style="background:var(--accent)"></i>标的 A</span><span><i style="background:var(--up)"></i>标的 B</span><span><i style="background:var(--down)"></i>标的 C</span><span><i style="background:var(--flat)"></i>现金</span></div>
+        </div>
+        <div class="token-row"><span class="token"><i style="background:var(--accent)"></i>--tw-accent</span><span class="token"><i style="background:var(--up)"></i>--tw-up</span><span class="token"><i style="background:var(--down)"></i>--tw-down</span><span class="token"><i style="background:var(--flat)"></i>--tw-flat</span></div>
+        <div class="note">不使用任何新色值；序列区分靠既有语义色 + 图例，新增序列时优先复用 token。</div>
+      </div>
+    </section>
+
+    <!-- B -->
+    <section class="panel">
+      <div class="panel-head">
+        <div class="title-row"><span class="badge">B</span><h2>引入 MD dataviz 8 系列色</h2></div>
+        <p class="tradeoff"><b>取舍：</b>分类最清楚、图表最像“数据产品”；缺点是与主插件涨跌色脱钩，用户可能把系列色误读成涨跌。</p>
+        <div class="seg" role="tablist" aria-label="图表区间"><button class="on" role="tab" aria-selected="true"><span class="rip"></span>近 12 日</button><button role="tab">近 30 日</button><button role="tab">今年</button></div>
+      </div>
+      <div class="canvas">
+        <div class="block">
+          <div class="block-head"><h3>净值曲线</h3><span class="unit">总资产 · 每日一点</span></div>
+          <div class="chart">
+            <div class="datalabel">1,310,000.00</div>
+            <svg viewBox="0 0 320 112" preserveAspectRatio="none" aria-label="净值曲线 B">
+              <g stroke="#e2e5ea" stroke-width="1" opacity=".7">
+                <line x1="0" y1="20" x2="320" y2="20"/><line x1="0" y1="50" x2="320" y2="50"/><line x1="0" y1="80" x2="320" y2="80"/>
+              </g>
+              <polyline points="0,98 29,90 58,92 87,84 116,87 145,78 174,81 203,70 232,73 261,65 290,68 319,58" fill="none" stroke="var(--md1)" stroke-width="1.5"/>
+              <g fill="var(--md1)">
+                <circle cx="0" cy="98" r="2"/><circle cx="29" cy="90" r="2"/><circle cx="58" cy="92" r="2"/><circle cx="87" cy="84" r="2"/><circle cx="116" cy="87" r="2"/><circle cx="145" cy="78" r="2"/><circle cx="174" cy="81" r="2"/><circle cx="203" cy="70" r="2"/><circle cx="232" cy="73" r="2"/><circle cx="261" cy="65" r="2"/><circle cx="290" cy="68" r="2"/><circle cx="319" cy="58" r="2"/>
+              </g>
+            </svg>
+            <div class="axis"><span>10-09 · 1,284,000</span><span>10-22 · 1,310,000</span></div>
+          </div>
+        </div>
+        <div class="block">
+          <div class="block-head"><h3>持仓占比</h3><span class="unit">市值 ÷ 总资产</span></div>
+          <div class="bar" aria-label="持仓占比 B"><span class="a" style="background:var(--md1)">33.3%</span><span class="b" style="background:var(--md2)">18.3%</span><span class="c" style="background:var(--md3);color:#3a2c00">31.0%</span><span class="d" style="background:var(--md4)">17.5%</span></div>
+          <div class="legend"><span><i style="background:var(--md1)"></i>标的 A</span><span><i style="background:var(--md2)"></i>标的 B</span><span><i style="background:var(--md3)"></i>标的 C</span><span><i style="background:var(--md4)"></i>现金</span></div>
+        </div>
+        <div class="swatches"><span style="background:var(--md1)"></span><span style="background:var(--md2)"></span><span style="background:var(--md3)"></span><span style="background:var(--md4)"></span><span style="background:var(--md5)"></span><span style="background:var(--md6)"></span><span style="background:var(--md7)"></span><span style="background:var(--md8)"></span></div>
+        <div class="swatch-label"><span>1 · #4285F4</span><span>2 · #EA4335</span><span>3 · #FBBC04</span><span>4 · #34A853</span><span>5 · #FF6D01</span><span>6 · #46BDC6</span><span>7 · #7B1FA2</span><span>8 · #5F6368</span></div>
+        <div class="note">8 系列色只用于图表分类；涨跌文字/数字仍用 --tw-up / --tw-down，避免语义混用。</div>
+      </div>
+    </section>
+
+    <!-- C -->
+    <section class="panel">
+      <div class="panel-head">
+        <div class="title-row"><span class="badge">C</span><h2>混合</h2></div>
+        <p class="tradeoff"><b>取舍：</b>主序列（净值）继续用品牌强调色，辅助序列（占比分类）借 MD 系列色；兼顾识别与分类，代价是两套色需要在图例里明确说明。</p>
+        <div class="seg" role="tablist" aria-label="图表区间"><button class="on" role="tab" aria-selected="true"><span class="rip"></span>近 12 日</button><button role="tab">近 30 日</button><button role="tab">今年</button></div>
+      </div>
+      <div class="canvas">
+        <div class="block">
+          <div class="block-head"><h3>净值曲线</h3><span class="unit">主序列 · 现有强调 token</span></div>
+          <div class="chart">
+            <div class="datalabel">1,310,000.00</div>
+            <svg viewBox="0 0 320 112" preserveAspectRatio="none" aria-label="净值曲线 C">
+              <g stroke="#e2e5ea" stroke-width="1" opacity=".7">
+                <line x1="0" y1="20" x2="320" y2="20"/><line x1="0" y1="50" x2="320" y2="50"/><line x1="0" y1="80" x2="320" y2="80"/>
+              </g>
+              <polyline points="0,98 29,90 58,92 87,84 116,87 145,78 174,81 203,70 232,73 261,65 290,68 319,58" fill="none" stroke="var(--accent)" stroke-width="1.5"/>
+              <g fill="var(--accent)">
+                <circle cx="0" cy="98" r="2"/><circle cx="29" cy="90" r="2"/><circle cx="58" cy="92" r="2"/><circle cx="87" cy="84" r="2"/><circle cx="116" cy="87" r="2"/><circle cx="145" cy="78" r="2"/><circle cx="174" cy="81" r="2"/><circle cx="203" cy="70" r="2"/><circle cx="232" cy="73" r="2"/><circle cx="261" cy="65" r="2"/><circle cx="290" cy="68" r="2"/><circle cx="319" cy="58" r="2"/>
+              </g>
+            </svg>
+            <div class="axis"><span>10-09 · 1,284,000</span><span>10-22 · 1,310,000</span></div>
+          </div>
+        </div>
+        <div class="block">
+          <div class="block-head"><h3>持仓占比</h3><span class="unit">辅助序列 · MD 系列色</span></div>
+          <div class="bar" aria-label="持仓占比 C"><span class="a" style="background:var(--md1)">33.3%</span><span class="b" style="background:var(--md2)">18.3%</span><span class="c" style="background:var(--md3);color:#3a2c00">31.0%</span><span class="d" style="background:var(--md4)">17.5%</span></div>
+          <div class="legend"><span><i style="background:var(--md1)"></i>标的 A</span><span><i style="background:var(--md2)"></i>标的 B</span><span><i style="background:var(--md3)"></i>标的 C</span><span><i style="background:var(--md4)"></i>现金</span></div>
+        </div>
+        <div class="token-row"><span class="token"><i style="background:var(--accent)"></i>主序列 --tw-accent</span><span class="token"><i style="background:var(--md1)"></i>辅助 #4285F4</span><span class="token"><i style="background:var(--md2)"></i>辅助 #EA4335</span></div>
+        <div class="note">主序列不换色；辅助序列只在同一图表内使用 MD 系列色，并在图例中标注“分类色（非涨跌）”。</div>
+      </div>
+    </section>
+  </div>
+</main>
+</body>
+</html>

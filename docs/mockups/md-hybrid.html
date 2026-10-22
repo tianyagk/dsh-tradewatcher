@@ -1,0 +1,607 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>盯盘 · 账户总览设计稿（现有 token 底色 + MD 强调色）</title>
+<!--
+  盯盘 · 整页设计稿（现有 token 底色 + MD 强调色）— 静态稿，不改插件代码（src/** 零改动、无外部依赖）。
+  布局：两栏 62:38（6px 分隔条可拖 / ←→ 可调 / 40%–75% / 双击复位；<900px 折叠为上下堆叠）
+        块间 16、组内 8（8 的倍数）；卡片圆角 10、内边距 10–12；行高 24–26px、表格 12px、边框 1px
+  左栏：顶部分段控件 持仓 / 挂单 / 成交 → 四格资产 → 对应表格 → 净值走势（三条序列）
+  右栏：研判（汇总 + 四份报告 + 限额/拒单）→ 时点配置 → 模型配置
+  MD 元素：elevation 三层（页面 0 / 卡片 1 / **分段控件与浮层 3**）
+           state layer（悬停 8% / 按下 12%，::after + opacity）
+           ripple（仅按钮与分段控件，固定 100×100 + transform:scale + opacity）
+           SegmentedButton（选中项 = tonal 填充；分段控件本身 elevation 3）
+           强调色：主按钮 filled、次按钮 tonal、链接 primary
+           深色：顶栏 ◐ 切换；层级用更浅表面表达，elev1 与 elev3 同一条（不放大阴影）
+  图表：MD dataviz 8 系列色（--viz-1..8）用于序列（净值 / 基准 / 成本），结构 = 细网格 + 点标记 +
+        数据标签 + 图例右上；表格里的涨跌/盈亏仍用红涨绿跌 token（--up / --down）
+  数据：真实页面量级，已脱敏（标的 A/B/C、代码 1.00000A/B/C）
+-->
+<style>
+:root{color-scheme:light;
+  /* md-hybrid：完全沿用现有 token（与其它七页一致） */
+  /* 强调色只有 MD 强调色；涨跌仍走 --up/--down */
+  --s0:#f5f6f8; --s1:#ffffff; --s2:#f2f4f7; --s3:#ffffff; --s4:#eef0f5;
+  --outline:#e2e5ea; --outline-strong:#cfd3dc; --outline-2:#eceef2;
+  --on:#16181d; --on-var:#4c535f; --muted:#6f7787;
+  --primary:#5e6ad2; --on-primary:#ffffff; --primary-container:rgba(94,106,210,.14); --on-primary-container:#3a44a8;
+  --up:#e5484d; --down:#0e8f5c; --flat:#6f7787;
+  --up-wash:rgba(229,72,77,.10); --down-wash:rgba(14,143,92,.10);
+  --state:#0f1729; --state-hover:rgba(15,23,41,.08); --state-press:rgba(15,23,41,.12);
+  --elev1:0 1px 2px rgba(16,24,40,.05);
+  --elev3:0 1px 2px rgba(16,24,40,.05), 0 10px 28px rgba(16,24,40,.13);
+  --viz-1:#4C6EF5; --viz-2:#E8590C; --viz-3:#7048E8; --viz-4:#0C8599;
+  --viz-5:#C2255C; --viz-6:#2F9E44; --viz-7:#F08C00; --viz-8:#868E96;
+}
+:root[data-theme="dark"]{color-scheme:dark;
+  /* md-hybrid · 深色：完全沿用现有深色 token */
+  /* 层级用更浅的表面表达；阴影不放大（elev1 = elev3） */
+  --s0:#010102; --s1:#0f1011; --s2:#16181b; --s3:#1b1d21; --s4:#22252a;
+  --outline:#23252a; --outline-strong:#34343a; --outline-2:#1b1d21;
+  --on:#f7f8f8; --on-var:#c8ced8; --muted:#8a8f98;
+  --primary:#5e6ad2; --on-primary:#ffffff; --primary-container:rgba(94,106,210,.22); --on-primary-container:#dde0ff;
+  --up:#ff5f6d; --down:#27a644; --flat:#8a8f98;
+  --up-wash:rgba(255,95,109,.14); --down-wash:rgba(39,166,68,.14);
+  --state:#FFFFFF; --state-hover:rgba(255,255,255,.08); --state-press:rgba(255,255,255,.12);
+  --elev1:0 1px 2px rgba(0,0,0,.40);
+  --elev3:0 1px 2px rgba(0,0,0,.40);
+  --viz-1:#91A7FF; --viz-2:#FFA94D; --viz-3:#B197FC; --viz-4:#66D9E8;
+  --viz-5:#F783AC; --viz-6:#8CE99A; --viz-7:#FFD43B; --viz-8:#ADB5BD;
+}
+
+  /* ══════════════════════════════════════════════════════════════════
+     布局与组件（两文件逐字相同）
+     ══════════════════════════════════════════════════════════════════ */
+  *,*::before,*::after{box-sizing:border-box}
+  html,body{margin:0;padding:0}
+  body{background:var(--s0);color:var(--on);
+    font:12px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI","Inter","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
+    letter-spacing:-0.006em;-webkit-font-smoothing:antialiased}
+  .num{text-align:right;font-variant-numeric:tabular-nums}
+  .up{color:var(--up)} .down{color:var(--down)} .flat{color:var(--flat)}
+  .muted{color:var(--muted)}
+
+  /* ── 顶栏（elevation 1）── */
+  .topbar{display:flex;align-items:center;gap:8px;height:44px;padding:0 16px;background:var(--s1);
+    border-bottom:1px solid var(--outline);box-shadow:var(--elev1);position:sticky;top:0;z-index:6}
+  .brand{font-size:13px;font-weight:600}
+  .brand .tag{display:inline-block;margin-left:6px;padding:0 6px;height:18px;line-height:16px;
+    font-size:11px;font-weight:500;color:var(--muted);border:1px solid var(--outline);border-radius:6px}
+  .topmeta{font-size:12px;color:var(--muted)}
+  .spacer{margin-left:auto}
+
+  /* ── 状态层：悬停 8% / 按下 12%（::after + opacity）── */
+  .s{position:relative;isolation:isolate}
+  .s::after{content:"";position:absolute;inset:0;background:var(--state);opacity:0;
+    transition:opacity .12s ease;pointer-events:none;border-radius:inherit;z-index:1}
+  .s:hover::after{opacity:.08}
+  .s:active::after{opacity:.12}
+  .s>*{position:relative;z-index:2}
+
+  /* ── ripple：仅按钮与分段控件（固定 100×100 + transform:scale + opacity）── */
+  .ripple{overflow:hidden}
+  .rip{position:absolute;width:100px;height:100px;border-radius:50%;background:currentColor;
+    opacity:.20;transform:translate(-50%,-50%) scale(0);pointer-events:none;z-index:3;
+    transition:transform .42s cubic-bezier(.2,0,0,1),opacity .42s cubic-bezier(.2,0,0,1)}
+  .rip.on{transform:translate(-50%,-50%) scale(1);opacity:0}
+
+  /* ── 按钮 / 链接（强调色 + tonal 填充）── */
+  .btn{position:relative;display:inline-flex;align-items:center;justify-content:center;gap:6px;
+    height:28px;padding:0 12px;border-radius:8px;border:1px solid var(--outline);background:transparent;
+    color:var(--on);font:inherit;font-size:12.5px;cursor:pointer}
+  .btn.tonal{background:var(--primary-container);border-color:transparent;color:var(--on-primary-container);font-weight:600}
+  .btn.tonal:hover{filter:none}
+  .btn.text{border-color:transparent;color:var(--on-var)}
+  .btn.icon{width:28px;padding:0;font-size:13px}
+  .link{color:var(--primary);text-decoration:none;border-radius:4px;padding:0 2px;font-size:12px}
+  .link:hover{text-decoration:underline}
+  :where(.btn,.seg button,.menu button,.link,.splitter,.input):focus-visible{outline:2px solid var(--primary);outline-offset:2px}
+
+  /* ── 两栏 + 分隔条（6px；40%–75%；键盘 ←/→）── */
+  .split{display:grid;grid-template-columns:var(--left) 6px minmax(0,1fr);align-items:start}
+  .col{min-width:0;display:flex;flex-direction:column;gap:16px;padding:16px}
+  .col.left{padding-right:12px}
+  .col.right{padding-left:12px}
+  .splitter{position:relative;align-self:stretch;width:6px;padding:0;border:0;background:transparent;
+    cursor:col-resize;touch-action:none}
+  .splitter::before{content:"";position:absolute;top:16px;bottom:16px;left:2px;width:2px;border-radius:2px;
+    background:var(--outline-strong);transition:background .12s ease}
+  .splitter:hover::before,.splitter:active::before{background:var(--primary)}
+  .dragging{cursor:col-resize;user-select:none}
+
+  /* ── 卡片（elevation 1：1px 描边 + 紧凑内边距）── */
+  .card{background:var(--s1);border:1px solid var(--outline);border-radius:10px;box-shadow:var(--elev1)}
+  .card.pop{overflow:visible;position:relative}         /* 含浮层的卡片不裁剪 elevation 3 */
+  .card>.hd{display:flex;align-items:center;gap:8px;height:36px;padding:0 12px;border-bottom:1px solid var(--outline)}
+  .card>.hd .t{font-size:12.5px;font-weight:600}
+  .card>.hd .m{margin-left:auto;font-size:12px;color:var(--muted);display:flex;align-items:center;gap:8px}
+  .card>.hd .m .btn{height:26px;padding:0 10px;font-size:12px}
+  .card>.bd{padding:8px 0}
+  .card>.bd.pad{padding:12px}
+  .sub{display:flex;align-items:center;gap:8px;height:28px;padding:0 12px;font-size:12px;color:var(--muted);
+    border-bottom:1px solid var(--outline-2)}
+  .sub .t2{font-weight:600;color:var(--on)}
+  .sub .m2{margin-left:auto;display:flex;align-items:center;gap:8px}
+
+  /* ── 四格资产 ── */
+  .tiles{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px}
+  .tile{position:relative;background:var(--s1);border:1px solid var(--outline);border-radius:10px;
+    box-shadow:var(--elev1);padding:10px 12px;display:flex;flex-direction:column;gap:2px;min-width:0}
+  .tile .k{font-size:12px;color:var(--muted)}
+  .tile .v{font-size:20px;font-weight:700;letter-spacing:-0.02em;font-variant-numeric:tabular-nums;white-space:nowrap}
+  .tile .d{font-size:12px;font-variant-numeric:tabular-nums;color:var(--muted);white-space:nowrap}
+  .tile .d b{font-weight:600}
+
+  /* ── 表格：12px / 行高 24–26px / 1px 分隔 ── */
+  .tbl{width:100%;border-collapse:collapse;font-size:12px}
+  .tbl th{height:24px;padding:0 8px;font-weight:500;color:var(--muted);text-align:left;white-space:nowrap;
+    background:var(--s2);border-bottom:1px solid var(--outline)}
+  .tbl td{height:26px;padding:0 8px;white-space:nowrap;border-bottom:1px solid var(--outline-2)}
+  .tbl th:first-child,.tbl td:first-child{padding-left:12px}
+  .tbl th:last-child,.tbl td:last-child{padding-right:12px}
+  .tbl tbody tr:last-child td{border-bottom:0}
+  .tbl tbody tr td{transition:background .12s ease}
+  .tbl tbody tr:hover td{background:var(--state-hover)}    /* 行悬停 = 8% 状态层 */
+  .tbl tbody tr:active td{background:var(--state-press)}   /* 按下 12% */
+  .tbl .sym{font-weight:600}
+  .tbl .code{color:var(--muted);font-variant-numeric:tabular-nums}
+  .tbl .foot td{height:24px;color:var(--muted);border-bottom:0}
+  .chip{display:inline-block;height:18px;line-height:18px;padding:0 6px;border-radius:4px;font-size:11.5px;font-weight:600}
+  .chip.buy{color:var(--up);background:var(--up-wash)}
+  .chip.sell{color:var(--down);background:var(--down-wash)}
+  .chip.limit{color:var(--primary);background:var(--primary-container)}
+  .chip.reject{color:var(--down);background:var(--down-wash)}
+  .st{font-size:11.5px;color:var(--muted)}
+  .st.part{color:var(--primary)}
+  .st.warn{color:var(--up)}
+  .st.ok{color:var(--down)}
+
+  /* ── 分段控件（SegmentedButton：**elevation 3** + 选中项 tonal 填充）── */
+  .seg{position:relative;display:inline-flex;align-items:stretch;border:1px solid var(--outline-strong);
+    border-radius:8px;background:var(--s3);box-shadow:var(--elev3);overflow:hidden}
+  .seg.block{display:flex;width:100%}
+  .seg button{position:relative;height:28px;padding:0 12px;border:0;border-left:1px solid var(--outline);
+    background:transparent;color:var(--on-var);font:inherit;font-size:12.5px;cursor:pointer}
+  .seg button:first-child{border-left:0}
+  .seg button.on{background:var(--primary-container);color:var(--on-primary-container);font-weight:600}
+  .seg.block button{flex:1;text-align:center}
+  .seg.sm button{height:24px;padding:0 10px;font-size:12px}
+
+  /* ── 配置行 ── */
+  .cfg{position:relative;display:flex;align-items:center;gap:8px;min-height:34px;padding:0 12px;
+    border-bottom:1px solid var(--outline-2)}
+  .cfg:last-child{border-bottom:0}
+  .cfg>.k{width:60px;flex:none;color:var(--muted);font-size:12px}
+  .cfg>.v{margin-left:auto;display:flex;align-items:center;gap:6px}
+  .cfg .unit{color:var(--muted);font-size:12px}
+  .input{height:26px;width:64px;padding:0 8px;border:1px solid var(--outline);border-radius:6px;
+    background:var(--s0);color:var(--on);font:inherit;font-size:12px;text-align:right;font-variant-numeric:tabular-nums}
+  .select{position:relative;display:inline-flex;align-items:center;gap:8px;height:28px;padding:0 10px;
+    border:1px solid var(--outline);border-radius:8px;background:transparent;color:var(--on);
+    font:inherit;font-size:12.5px;cursor:pointer}
+  .caret{font-size:10px;color:var(--muted)}
+
+  /* ── 浮层 / 下拉（elevation 3）── */
+  .menu{position:absolute;z-index:4;min-width:172px;padding:4px;background:var(--s3);
+    border:1px solid var(--outline-strong);border-radius:8px;box-shadow:var(--elev3)}
+  .menu[hidden]{display:none}
+  .menu button{position:relative;display:flex;align-items:center;gap:8px;width:100%;height:32px;padding:0 8px;
+    border:0;border-radius:6px;background:transparent;color:var(--on);font:inherit;font-size:12.5px;
+    text-align:left;cursor:pointer}
+  .menu .tick{margin-left:auto;color:var(--primary);font-size:12px}
+  .menu .cap{padding:4px 8px 6px;font-size:11.5px;color:var(--muted)}
+  .menu.down{left:72px;top:calc(100% + 6px)}
+  .menu.down-r{right:12px;top:calc(100% + 6px)}
+
+  /* ── 研判区 ── */
+  .kv{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;padding:12px 12px 8px}
+  .kv .row{display:flex;align-items:baseline;gap:8px;min-height:26px;padding:0 8px;border:1px solid var(--outline-2);
+    border-radius:8px;background:var(--s2)}
+  .kv .row .k{color:var(--muted);font-size:12px}
+  .kv .row .v{margin-left:auto;font-weight:600;font-variant-numeric:tabular-nums;font-size:12.5px}
+  .research .grp+.grp{margin-top:8px}
+
+  /* ── 图表（MD dataviz 结构：细网格 + 点标记 + 数据标签 + 图例右上）── */
+  .chart{display:block;width:100%;height:auto}
+  .chart .grid{stroke:var(--outline);stroke-width:1;shape-rendering:crispEdges}
+  .chart .axis{font-size:11px;fill:var(--muted)}
+  .chart .dl{font-size:11px;fill:var(--on);font-variant-numeric:tabular-nums}
+  .chart .s1{fill:none;stroke:var(--viz-1);stroke-width:1.7;stroke-linejoin:round;stroke-linecap:round}
+  .chart .s2{stroke:var(--viz-2);stroke-width:1;stroke-dasharray:4 4}
+  .chart .s3{fill:none;stroke:var(--viz-3);stroke-width:1.1;stroke-linejoin:round;opacity:.85}
+  .chart .area{fill:var(--viz-1);fill-opacity:.10}
+  .chart .mk{fill:var(--viz-1);stroke:var(--s1);stroke-width:1.5}
+  .legend{display:inline-flex;align-items:center;gap:6px;font-size:11.5px;color:var(--muted)}
+  .sw{display:inline-block;width:14px;height:2px;border-radius:1px;background:var(--viz-1)}
+  .sw.v2{background:var(--viz-2)}
+  .sw.v3{background:var(--viz-3)}
+
+  /* ── 窄屏：<900px 折叠为上下堆叠 ── */
+  @media (max-width:899px){
+    .split{grid-template-columns:minmax(0,1fr)}
+    .splitter{display:none}
+    .col.left{padding-right:16px}
+    .col.right{padding-left:16px}
+    .tiles{grid-template-columns:repeat(2,minmax(0,1fr))}
+  }
+</style>
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">盯盘 · 账户总览<span class="tag">设计稿</span></div>
+  <div class="topmeta">数据时刻 2026-10-22 17:09:53 · 休市定稿</div>
+  <div class="spacer"></div>
+  <button class="btn icon s ripple" id="theme-btn" type="button" aria-label="切换深色模式" aria-pressed="false" title="切换深色模式">◐</button>
+</header>
+
+<main class="split" id="split" style="--left:62%">
+  <!-- ═══════════════ 左栏：分段控件（持仓/挂单/成交）→ 四格资产 → 表格 → 净值 ═══════════════ -->
+  <section class="col left" aria-label="账户与交易">
+    <!-- 左栏顶部的分段控件：elevation 3 -->
+    <div class="seg block" role="tablist" aria-label="持仓 / 挂单 / 成交" data-panels-for="left-panels">
+      <button class="s ripple on" type="button" role="tab" aria-selected="true" data-panel="pos"><span>持仓</span></button>
+      <button class="s ripple" type="button" role="tab" aria-selected="false" data-panel="ord"><span>挂单</span></button>
+      <button class="s ripple" type="button" role="tab" aria-selected="false" data-panel="trd"><span>成交</span></button>
+    </div>
+
+    <!-- 四格资产 -->
+    <div class="tiles">
+      <div class="tile s">
+        <div class="k">总资产</div>
+        <div class="v">1,427,283.49</div>
+        <div class="d">较昨日 <b class="down">−56,432.00</b></div>
+      </div>
+      <div class="tile s">
+        <div class="k">现金</div>
+        <div class="v">14,423.49</div>
+        <div class="d">占总资产 <b>1.0%</b></div>
+      </div>
+      <div class="tile s">
+        <div class="k">当日盈亏</div>
+        <div class="v down">−56,432.00</div>
+        <div class="d">当日 <b class="down">−3.80%</b></div>
+      </div>
+      <div class="tile s">
+        <div class="k">累计盈亏</div>
+        <div class="v down">−172,716.51</div>
+        <div class="d">摊薄口径 <b class="down">−12.11%</b></div>
+      </div>
+    </div>
+
+    <!-- 三个面板：同一位置切换（只有选中的那个 display 出来） -->
+    <div id="left-panels">
+      <div data-panel-body="pos">
+        <section class="card">
+          <div class="hd"><span class="t">持仓</span><span class="m">共 8 项 · 仅展示前 3 项</span></div>
+          <div class="bd">
+            <table class="tbl">
+              <thead>
+                <tr><th>标的</th><th>代码</th><th class="num">数量</th><th class="num">成本</th><th class="num">现价</th><th class="num">市值</th><th class="num">浮动盈亏</th><th class="num">盈亏%</th><th class="num">仓位</th></tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td class="sym">标的 A</td><td class="code">1.00000A</td><td class="num">800,000</td><td class="num">0.8903</td>
+                  <td class="num">0.7300</td><td class="num">584,000.00</td><td class="num down">−128,240.00</td>
+                  <td class="num down">−18.01%</td><td class="num">40.9%</td>
+                </tr>
+                <tr>
+                  <td class="sym">标的 B</td><td class="code">1.00000B</td><td class="num">150,000</td><td class="num">2.8833</td>
+                  <td class="num">2.7400</td><td class="num">411,000.00</td><td class="num down">−21,495.00</td>
+                  <td class="num down">−4.97%</td><td class="num">28.8%</td>
+                </tr>
+                <tr>
+                  <td class="sym">标的 C</td><td class="code">1.00000C</td><td class="num">60,000</td><td class="num">4.3466</td>
+                  <td class="num">4.1100</td><td class="num">246,600.00</td><td class="num down">−14,196.00</td>
+                  <td class="num down">−5.44%</td><td class="num">17.3%</td>
+                </tr>
+                <tr class="foot"><td colspan="5">其余 5 项（合计 171,260.00）</td><td class="num">171,260.00</td><td class="num down">−8,785.51</td><td class="num down">−4.88%</td><td class="num">12.0%</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+      </div>
+
+      <div data-panel-body="ord" hidden>
+        <section class="card">
+          <div class="hd"><span class="t">挂单</span><span class="m">3 笔 · 未成交 2 笔</span></div>
+          <div class="bd">
+            <table class="tbl">
+              <thead><tr><th>时间</th><th>标的</th><th>方向</th><th class="num">委托量</th><th class="num">委托价</th><th class="num">已成交</th><th>状态</th></tr></thead>
+              <tbody>
+                <tr><td class="code">14:52:03</td><td class="sym">标的 B</td><td><span class="chip buy">买入</span></td><td class="num">20,000</td><td class="num">2.7200</td><td class="num">0</td><td class="st">未成交</td></tr>
+                <tr><td class="code">14:31:47</td><td class="sym">标的 A</td><td><span class="chip sell">卖出</span></td><td class="num">100,000</td><td class="num">0.7400</td><td class="num">40,000</td><td class="st part">部分成交</td></tr>
+                <tr><td class="code">13:58:12</td><td class="sym">标的 C</td><td><span class="chip buy">买入</span></td><td class="num">10,000</td><td class="num">4.0800</td><td class="num">0</td><td class="st">未成交</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+      </div>
+
+      <div data-panel-body="trd" hidden>
+        <section class="card">
+          <div class="hd"><span class="t">成交</span><span class="m">今日 4 笔</span></div>
+          <div class="bd">
+            <table class="tbl">
+              <thead><tr><th>时间</th><th>标的</th><th>方向</th><th class="num">数量</th><th class="num">成交价</th><th class="num">金额</th><th class="num">费用</th></tr></thead>
+              <tbody>
+                <tr><td class="code">10:31:05</td><td class="sym">标的 B</td><td><span class="chip buy">买入</span></td><td class="num">20,000</td><td class="num">2.7350</td><td class="num">54,700.00</td><td class="num">16.41</td></tr>
+                <tr><td class="code">10:02:44</td><td class="sym">标的 A</td><td><span class="chip sell">卖出</span></td><td class="num">60,000</td><td class="num">0.7350</td><td class="num">44,100.00</td><td class="num">57.33</td></tr>
+                <tr><td class="code">09:41:18</td><td class="sym">标的 C</td><td><span class="chip buy">买入</span></td><td class="num">10,000</td><td class="num">4.0950</td><td class="num">40,950.00</td><td class="num">12.29</td></tr>
+                <tr><td class="code">09:33:02</td><td class="sym">标的 B</td><td><span class="chip sell">卖出</span></td><td class="num">12,000</td><td class="num">2.7420</td><td class="num">32,904.00</td><td class="num">42.78</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+      </div>
+    </div>
+
+    <!-- 净值走势（序列用 MD dataviz 系列色） -->
+    <section class="card">
+      <div class="hd">
+        <span class="t">净值走势</span>
+        <span class="m">
+          <span class="legend"><i class="sw"></i>净值</span>
+          <span class="legend"><i class="sw v2"></i>成本</span>
+          <span class="legend"><i class="sw v3"></i>基准</span>
+        </span>
+      </div>
+      <div class="bd pad"><svg class="chart" viewBox="0 0 680 208" role="img"
+             aria-label="近 30 个交易日净值走势：1,470,000 → 1,412,860；最高 1,492,400、最低 1,398,150；成本线 1,585,576.51">
+            <polygon class="area" points="52.0,188.0 52.0,123.1 73.2,121.7 94.3,119.7 115.5,119.9 136.7,115.8 157.9,112.0 179.0,109.1 200.2,111.7 221.4,102.6 242.6,120.6 263.7,126.3 284.9,133.2 306.1,138.7 327.2,140.1 348.4,144.7 369.6,147.8 390.8,146.0 411.9,148.4 433.1,146.3 454.3,147.6 475.4,153.0 496.6,157.1 517.8,158.8 539.0,163.4 560.1,168.4 581.3,164.2 602.5,158.9 623.7,155.0 644.8,149.7 666.0,158.1 666.0,188.0" />
+            <line class="grid" x1="52" x2="666" y1="27.5" y2="27.5" /><text class="axis" x="44" y="31.0" text-anchor="end">160.0万</text><line class="grid" x1="52" x2="666" y1="62.4" y2="62.4" /><text class="axis" x="44" y="65.9" text-anchor="end">155.0万</text><line class="grid" x1="52" x2="666" y1="97.3" y2="97.3" /><text class="axis" x="44" y="100.8" text-anchor="end">150.0万</text><line class="grid" x1="52" x2="666" y1="132.2" y2="132.2" /><text class="axis" x="44" y="135.7" text-anchor="end">145.0万</text><line class="grid" x1="52" x2="666" y1="167.1" y2="167.1" /><text class="axis" x="44" y="170.6" text-anchor="end">140.0万</text>
+            <line class="s2" x1="52" x2="666" y1="37.6" y2="37.6" />
+            <text class="axis" x="664" y="32.6" text-anchor="end">成本 158.6万</text>
+            <polyline class="s3" points="52.0,126.5 73.2,126.0 94.3,124.2 115.5,122.0 136.7,123.0 157.9,122.0 179.0,124.0 200.2,124.9 221.4,125.1 242.6,127.6 263.7,128.3 284.9,128.2 306.1,129.7 327.2,129.6 348.4,129.3 369.6,129.2 390.8,127.3 411.9,125.5 433.1,124.5 454.3,120.5 475.4,120.6 496.6,119.0 517.8,118.1 539.0,116.9 560.1,116.3 581.3,116.6 602.5,117.8 623.7,118.4 644.8,121.1 666.0,121.9" />
+            <polyline class="s1" points="52.0,123.1 73.2,121.7 94.3,119.7 115.5,119.9 136.7,115.8 157.9,112.0 179.0,109.1 200.2,111.7 221.4,102.6 242.6,120.6 263.7,126.3 284.9,133.2 306.1,138.7 327.2,140.1 348.4,144.7 369.6,147.8 390.8,146.0 411.9,148.4 433.1,146.3 454.3,147.6 475.4,153.0 496.6,157.1 517.8,158.8 539.0,163.4 560.1,168.4 581.3,164.2 602.5,158.9 623.7,155.0 644.8,149.7 666.0,158.1" />
+            <circle class="mk" cx="157.9" cy="112.0" r="1.4" /><circle class="mk" cx="221.4" cy="102.6" r="2.6" /><circle class="mk" cx="284.9" cy="133.2" r="1.4" /><circle class="mk" cx="411.9" cy="148.4" r="1.4" /><circle class="mk" cx="539.0" cy="163.4" r="1.4" /><circle class="mk" cx="560.1" cy="168.4" r="2.6" /><circle class="mk" cx="666.0" cy="158.1" r="2.6" />
+            <text class="dl" x="221.4" y="95.6" text-anchor="middle">149.2万</text>
+            <text class="dl" x="560.1" y="183.4" text-anchor="middle">139.8万</text>
+            <text class="dl" x="662.0" y="151.1" text-anchor="end">141.3万</text>
+            <text class="axis" x="52" y="203" text-anchor="start">09-05</text>
+            <text class="axis" x="666" y="203" text-anchor="end">10-22</text>
+          </svg></div>
+    </section>
+  </section>
+
+  <!-- 分隔条 -->
+  <div class="splitter" id="splitter" role="separator" aria-orientation="vertical" aria-label="左右栏宽度分隔条"
+       aria-valuemin="40" aria-valuemax="75" aria-valuenow="62" tabindex="0" title="拖拽调整左右栏宽度（双击复位）"></div>
+
+  <!-- ═══════════════ 右栏：研判（汇总 + 四份报告 + 限额/拒单）+ 时点/模型配置 ═══════════════ -->
+  <section class="col right" aria-label="研判与配置">
+    <section class="card research">
+      <div class="hd">
+        <span class="t">研判</span>
+        <span class="m">17:09 更新 · <a class="link" href="#">查看全部</a></span>
+      </div>
+      <div class="bd">
+        <!-- 汇总 -->
+        <div class="grp">
+          <div class="sub"><span class="t2">汇总</span><span class="m2 muted">综合研判 v3</span></div>
+          <div class="kv">
+            <div class="row"><span class="k">研判得分</span><span class="v">62</span></div>
+            <div class="row"><span class="k">杠杆温度</span><span class="v">90.4</span></div>
+            <div class="row"><span class="k">显性融资</span><span class="v">2.65%</span></div>
+            <div class="row"><span class="k">杠杆率</span><span class="v">2.69%</span></div>
+          </div>
+          <table class="tbl">
+            <thead><tr><th>信号</th><th>等级</th><th class="num">时点</th></tr></thead>
+            <tbody>
+              <tr><td>高位缩量</td><td><span class="st part">中</span></td><td class="num code">10-22</td></tr>
+              <tr><td>两融回落</td><td><span class="st">低</span></td><td class="num code">10-22</td></tr>
+              <tr><td>净值新低</td><td><span class="st part">中</span></td><td class="num code">10-21</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <!-- 四份报告 -->
+        <div class="grp">
+          <div class="sub"><span class="t2">四份报告</span><span class="m2"><a class="link" href="#">导出</a></span></div>
+          <table class="tbl">
+            <thead><tr><th>报告</th><th>结论</th><th>等级</th><th class="num">时点</th></tr></thead>
+            <tbody>
+              <tr><td class="sym">仓位体检</td><td>单一标的 40.9%</td><td><span class="st warn">偏高</span></td><td class="num code">17:09</td></tr>
+              <tr><td class="sym">杠杆观察</td><td>分位 90.4 / 阈值 95</td><td><span class="st part">中</span></td><td class="num code">17:09</td></tr>
+              <tr><td class="sym">交易复盘</td><td>换手 1.8% / 费用 129.81</td><td><span class="st ok">低</span></td><td class="num code">15:05</td></tr>
+              <tr><td class="sym">风控检查</td><td>2 项超限 · 3 笔拒单</td><td><span class="st warn">高</span></td><td class="num code">17:09</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <!-- 限额 / 拒单 -->
+        <div class="grp">
+          <div class="sub"><span class="t2">限额 / 拒单</span><span class="m2 muted">今日 2 项超限 · 3 笔拒单</span></div>
+          <table class="tbl">
+            <thead><tr><th>类型</th><th>规则</th><th>对象</th><th class="num">实际</th><th>状态</th></tr></thead>
+            <tbody>
+              <tr><td><span class="chip limit">限额</span></td><td>单标的上限 25%</td><td class="sym">标的 A</td><td class="num">40.9%</td><td class="st warn">超限</td></tr>
+              <tr><td><span class="chip limit">限额</span></td><td>单日换手上限 3%</td><td>账户</td><td class="num">1.8%</td><td class="st ok">正常</td></tr>
+              <tr><td><span class="chip reject">拒单</span></td><td>价格偏离 &gt; 2%</td><td class="sym">标的 C</td><td class="num">2 笔</td><td class="st">已拒</td></tr>
+              <tr><td><span class="chip reject">拒单</span></td><td>可用资金不足</td><td class="sym">标的 B</td><td class="num">1 笔</td><td class="st">已拒</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- 时点配置 -->
+    <section class="card pop">
+      <div class="hd"><span class="t">时点配置</span></div>
+      <div class="bd">
+        <div class="cfg">
+          <span class="k">时点</span>
+          <span class="v">
+            <button class="select s ripple" type="button" data-menu-toggle="tp-menu" aria-haspopup="menu" aria-expanded="false">
+              <span>收盘定稿</span><span class="caret">▾</span>
+            </button>
+          </span>
+          <div class="menu down" id="tp-menu" role="menu" hidden>
+            <div class="cap">数据时点</div>
+            <button class="s ripple" type="button" role="menuitem"><span>收盘定稿</span><span class="tick">✓</span></button>
+            <button class="s ripple" type="button" role="menuitem"><span>盘中最新</span></button>
+            <button class="s ripple" type="button" role="menuitem"><span>指定交易日</span></button>
+          </div>
+        </div>
+        <div class="cfg"><span class="k">基准</span><span class="v"><span class="muted">上一交易日收盘</span></span></div>
+        <div class="cfg">
+          <span class="k">复权</span>
+          <span class="v">
+            <span class="seg sm" role="group" aria-label="复权口径">
+              <button class="s ripple on" type="button" aria-pressed="true"><span>前复权</span></button>
+              <button class="s ripple" type="button" aria-pressed="false"><span>不复权</span></button>
+            </span>
+          </span>
+        </div>
+      </div>
+    </section>
+
+    <!-- 模型配置（打开的浮层 = elevation 3，落在卡片下方空白处，不遮挡字段） -->
+    <section class="card pop">
+      <div class="hd">
+        <span class="t">模型配置</span>
+        <span class="m">
+          <button class="btn text s ripple" type="button"><span>重置</span></button>
+          <button class="btn tonal s ripple" type="button"><span>应用</span></button>
+        </span>
+      </div>
+      <div class="bd">
+        <div class="cfg">
+          <span class="k">温度阈值</span>
+          <span class="v">
+            <input class="input" value="80" aria-label="温度阈值低档" /><span class="unit">/</span>
+            <input class="input" value="95" aria-label="温度阈值高档" />
+          </span>
+        </div>
+        <div class="cfg">
+          <span class="k">权重</span>
+          <span class="v">
+            <input class="input" value="0.40" aria-label="杠杆权重" /><span class="unit">杠杆</span>
+            <input class="input" value="0.30" aria-label="趋势权重" /><span class="unit">趋势</span>
+            <input class="input" value="0.30" aria-label="情绪权重" /><span class="unit">情绪</span>
+          </span>
+        </div>
+        <div class="cfg">
+          <span class="k">模型</span>
+          <span class="v">
+            <button class="select s ripple" type="button" data-menu-toggle="model-menu" aria-haspopup="menu" aria-expanded="true">
+              <span>综合研判 v3</span><span class="caret">▾</span>
+            </button>
+          </span>
+          <div class="menu down-r" id="model-menu" role="menu">
+            <div class="cap">研判模型</div>
+            <button class="s ripple" type="button" role="menuitem"><span>综合研判 v3</span><span class="tick">✓</span></button>
+            <button class="s ripple" type="button" role="menuitem"><span>杠杆温度计</span></button>
+            <button class="s ripple" type="button" role="menuitem"><span>两融结构</span></button>
+          </div>
+        </div>
+      </div>
+    </section>
+  </section>
+</main>
+
+<script>
+(function () {
+  'use strict';
+  /* ── 1) 分隔条拖拽 + 键盘（6px；40%–75%；←/→ 1%，Shift 5%，Home/End 到端点）── */
+  var split = document.getElementById('split');
+  var se = document.getElementById('splitter');
+  var MIN = 40, MAX = 75, DEFAULT = 62;
+  function apply(pct) {
+    var v = Math.max(MIN, Math.min(MAX, pct));
+    split.style.setProperty('--left', v + '%');
+    se.setAttribute('aria-valuenow', String(Math.round(v)));
+  }
+  var dragging = false;
+  se.addEventListener('pointerdown', function (e) {
+    dragging = true; document.body.classList.add('dragging');
+    if (se.setPointerCapture) se.setPointerCapture(e.pointerId);
+    e.preventDefault();
+  });
+  se.addEventListener('pointermove', function (e) {
+    if (!dragging) return;
+    var r = split.getBoundingClientRect();
+    apply(((e.clientX - r.left) / r.width) * 100);
+  });
+  function stop(e) {
+    if (!dragging) return;
+    dragging = false; document.body.classList.remove('dragging');
+    if (se.releasePointerCapture) { try { se.releasePointerCapture(e.pointerId); } catch (_) {} }
+  }
+  se.addEventListener('pointerup', stop);
+  se.addEventListener('pointercancel', stop);
+  se.addEventListener('dblclick', function () { apply(DEFAULT); });
+  se.addEventListener('keydown', function (e) {
+    var step = e.shiftKey ? 5 : 1;
+    var now = Number(se.getAttribute('aria-valuenow')) || DEFAULT;
+    if (e.key === 'ArrowLeft') { apply(now - step); e.preventDefault(); }
+    else if (e.key === 'ArrowRight') { apply(now + step); e.preventDefault(); }
+    else if (e.key === 'Home') { apply(MIN); e.preventDefault(); }
+    else if (e.key === 'End') { apply(MAX); e.preventDefault(); }
+  });
+
+  /* ── 2) 深色模式（MD：层级用更浅表面表达，阴影不放大）── */
+  var root = document.documentElement;
+  var themeBtn = document.getElementById('theme-btn');
+  themeBtn.addEventListener('click', function () {
+    var dark = root.getAttribute('data-theme') !== 'dark';
+    root.setAttribute('data-theme', dark ? 'dark' : 'light');
+    themeBtn.setAttribute('aria-pressed', String(dark));
+  });
+
+  /* ── 3) 分段控件（elevation 3；选中项 tonal 填充）── */
+  document.querySelectorAll('.seg[data-panels-for]').forEach(function (group) {
+    var box = document.getElementById(group.getAttribute('data-panels-for'));
+    if (!box) return;
+    group.addEventListener('click', function (e) {
+      var btn = e.target.closest('button[data-panel]');
+      if (!btn) return;
+      group.querySelectorAll('button').forEach(function (b) {
+        var on = b === btn;
+        b.classList.toggle('on', on);
+        b.setAttribute('aria-selected', String(on));
+      });
+      var name = btn.getAttribute('data-panel');
+      box.querySelectorAll('[data-panel-body]').forEach(function (p) {
+        p.hidden = p.getAttribute('data-panel-body') !== name;
+      });
+    });
+  });
+
+  /* ── 4) 下拉浮层开合 ── */
+  document.querySelectorAll('[data-menu-toggle]').forEach(function (trigger) {
+    var menu = document.getElementById(trigger.getAttribute('data-menu-toggle'));
+    trigger.addEventListener('click', function (e) {
+      e.stopPropagation();
+      var open = menu.hidden;
+      menu.hidden = !open;
+      trigger.setAttribute('aria-expanded', String(open));
+    });
+  });
+  document.addEventListener('click', function () {
+    document.querySelectorAll('[data-menu-toggle]').forEach(function (trigger) {
+      var menu = document.getElementById(trigger.getAttribute('data-menu-toggle'));
+      if (menu && !menu.hidden) { menu.hidden = true; trigger.setAttribute('aria-expanded', 'false'); }
+    });
+  });
+
+  /* ── 5) ripple：仅按钮与分段控件 ── */
+  document.addEventListener('pointerdown', function (e) {
+    var host = e.target.closest('.ripple');
+    if (!host) return;
+    var r = host.getBoundingClientRect();
+    var ink = document.createElement('span');
+    ink.className = 'rip';
+    ink.style.left = (e.clientX - r.left) + 'px';
+    ink.style.top = (e.clientY - r.top) + 'px';
+    host.appendChild(ink);
+    requestAnimationFrame(function () { ink.classList.add('on'); });
+    setTimeout(function () { ink.remove(); }, 460);
+  });
+})();
+</script>
+</body>
+</html>
