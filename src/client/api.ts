@@ -219,7 +219,7 @@ export interface LeveragePayloadDto {
 }
 
 import type { ToneRow as ToneRowDto } from './stripTone.ts'
-import type { PrismNewsStatus, PrismRun, PrismSettings, PrismState } from '../shared/prism.ts'
+import type { PrismAccount, PrismNewsStatus, PrismOrder, PrismRun, PrismSettings, PrismState, PrismTradingState } from '../shared/prism.ts'
 /** Same-origin JSON calls to the /tradewatcher/* host routes. */
 import type {
   BoardRow,
@@ -519,7 +519,7 @@ export const api = {
     return request(`/tradewatcher/leverage?range=${range}`)
   },
   /** 棱镜（第 9 行）：首屏状态（设置/骨架/新闻/最近运行/默认模型） */
-  prismState(): Promise<{ ok: boolean; asOf: number; state: PrismState }> {
+  prismState(): Promise<{ ok: boolean; asOf: number; state: PrismState; trading: PrismTradingState }> {
     return requestWithTimeout('/tradewatcher/prism', undefined, 20_000)
   },
   /** 棱镜：保存时点（可增删、无上限） */
@@ -541,6 +541,28 @@ export const api = {
     }, 60_000)
   },
   /** 棱镜：手动补跑指定时点（只跑这一轮） */
+  /** 模拟盘：改资金上限（入金） */
+  prismCapital(capitalLimit: number): Promise<{ ok: boolean; account: PrismAccount }> {
+    return requestWithTimeout('/tradewatcher/prism', {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action: 'capital', capitalLimit }),
+    }, 20_000)
+  },
+  /** 模拟盘：按真实成本价重新复制持仓（留痕） */
+  prismCopy(): Promise<{ ok: boolean; account: PrismAccount; error?: string }> {
+    return requestWithTimeout('/tradewatcher/prism', {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action: 'copy' }),
+    }, 30_000)
+  },
+  /** 模拟盘：撤销挂单（留痕） */
+  prismCancel(orderId: string): Promise<{ ok: boolean; orders: PrismOrder[] }> {
+    return requestWithTimeout('/tradewatcher/prism', {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action: 'cancel', orderId }),
+    }, 20_000)
+  },
+  /** 运行时自检：真实调用一次 ctx.llm.stream（永远 200） */
+  prismSelftest(): Promise<{ ok: boolean; error: string | null; model: string | null; elapsedMs: number }> {
+    return requestWithTimeout('/tradewatcher/prism/selftest', undefined, 30_000)
+  },
   prismRun(slot: string): Promise<{ ok: boolean; run: PrismRun }> {
     return requestWithTimeout('/tradewatcher/prism', {
       method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action: 'run', slot }),

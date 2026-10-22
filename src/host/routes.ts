@@ -299,7 +299,7 @@ export function makeTradeRoutes(
    */
   leverage: LeverageService = new LeverageService(),
   /** 棱镜（第 9 行）的依赖；不传 ⇒ 不注册棱镜路由（老调用点/单测照常） */
-  prism?: { store: import('./prismStore.ts').PrismStore; data: DataStore; get: (name: string) => unknown },
+  prism?: { store: import('./prismStore.ts').PrismStore; trading: import('./prismAccount.ts').PrismTradingStore; data: DataStore; get: (name: string) => unknown },
 ): TradeRoutes {
   const gate = (req: IncomingMessage): boolean => isTrustedApiRequest(req, trustedHosts)
   /** 上游主机组：503 时用它给出 retry-after，并聚合展示熔断明细（去重后 3 台） */

@@ -80,6 +80,7 @@ const FUNCTION_OWNED_PATHS = [
   '/tradewatcher/leverage',
   // v0.130 第 9 行：棱镜独占的五条（状态/时点/骨架/新闻/补跑）—— core 必须交出去，否则棱镜行关不掉
   '/tradewatcher/prism',
+  '/tradewatcher/prism/selftest',
 ] as const
 
 // 隔离数据目录：**绝不能在测试里碰用户的 ~/.dsh**（store.init 会读写真实文件）
@@ -358,7 +359,7 @@ const ROW_ROUTES_FOR_TEST: Record<string, readonly string[]> = {
   tools: ['/tradewatcher/tools/global-flow', '/tradewatcher/leverage'],
   // 第 8 行（复盘）：整月视图 + 写一条笔记 + 当日交易记录（都只被 FupanPage 消费 ⇒ 该行）
   fupan: ['/tradewatcher/fupan/month', '/tradewatcher/fupan/note', '/tradewatcher/fupan/trades'],
-  prism: ['/tradewatcher/prism'],
+  prism: ['/tradewatcher/prism', '/tradewatcher/prism/selftest'],
 }
 const ROW_TOOLS_FOR_TEST: Record<string, readonly string[]> = {
   calendar: ['calendar', 'calendar_add'],

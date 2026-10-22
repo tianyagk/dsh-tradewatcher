@@ -60,6 +60,7 @@ export async function streamText(
   messages: Array<{ role: 'user' | 'assistant' | 'system'; content: string }>,
   system: string | undefined,
   signal?: AbortSignal,
+  maxTokens?: number,
 ): Promise<{ text: string | null; error: string | null }> {
   let out = ''
   try {
@@ -68,6 +69,7 @@ export async function streamText(
       model: model.model,
       messages,
       ...(system === undefined ? {} : { system }),
+      ...(maxTokens === undefined ? {} : { maxTokens }),
     })
     for await (const chunk of stream) {
       signal?.throwIfAborted()

@@ -61,6 +61,8 @@ export interface PrismSchedulerOptions {
   /** 新闻增量（可选；测试不传 ⇒ 不联网） */
   news?: () => Promise<unknown>
   newsEveryMs?: number
+  /** 30 秒撮合（可选；测试不传 ⇒ 不联网不跑引擎） */
+  match?: () => Promise<unknown>
 }
 
 export class PrismScheduler {
@@ -108,6 +110,7 @@ export class PrismScheduler {
       this.lastNewsAt = now
       void this.opts.news().catch(() => undefined)
     }
+    if (this.opts.match !== undefined) void this.opts.match().catch(() => undefined)
     if (plan.due.length === 0 || this.firing) return plan
     this.firing = true
     try {

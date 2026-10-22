@@ -793,6 +793,16 @@ color-scheme:dark}
 .tw-prism-analysis-body,.tw-prism-summary{white-space:pre-wrap;line-height:1.5}
 .tw-prism-summary{border-top:1px solid var(--tw-border);padding-top:6px}
 .tw-prism-error{color:var(--tw-warn)}
+.tw-prism-cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:8px}
+.tw-prism-metric{gap:2px;box-shadow:var(--tw-elev-3)}
+.tw-prism-num{font-variant-numeric:tabular-nums}
+.tw-prism-mono{font-family:var(--tw-mono);font-variant-numeric:tabular-nums}
+.tw-prism-table{width:100%;border-collapse:collapse}
+.tw-prism-table th,.tw-prism-table td{border-bottom:1px solid var(--tw-border);padding:3px 6px;text-align:left;font-size:12px}
+.tw-prism-table th{color:var(--tw-muted);font-weight:400}
+.tw-prism-stack{display:flex;flex-direction:column;gap:6px}
+.tw-prism-spark{width:160px;height:36px;color:var(--tw-accent)}
+.tw-prism-analysis summary{cursor:pointer;padding:2px 0}
 `
 
 let injected = false

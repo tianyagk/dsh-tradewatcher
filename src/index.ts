@@ -18,9 +18,11 @@ import { CalendarStore } from './host/calendar.ts'
 import { RescueMonitor } from './host/rescue.ts'
 import { AuctionSampler } from './host/auctionSeries.ts'
 import { PrismStore } from './host/prismStore.ts'
+import { PrismTradingStore, fetchOneMinuteBars, matchTick } from './host/prismAccount.ts'
 import { PrismScheduler } from './host/prismScheduler.ts'
 import { runPrismForSlot } from './host/prismRoutes.ts'
 import { incrementalNews } from './host/prismNews.ts'
+import { inTradingWindow } from './host/rescue.ts'
 import { FupanStore } from './host/fupan.ts'
 import { setQuoteFreshnessMs } from './host/em.ts'
 import { log, type PluginContext, type PluginWebRoute } from './host/context.ts'
@@ -96,7 +98,7 @@ export const ROW_ROUTES: Record<Exclude<RowId, 'core'>, readonly string[]> = {
    *   · `/run`      手动补跑指定时点（POST；只跑这一轮）
    */
   // 五类操作复用**同一条**路由（GET=状态；POST action=settings/skeleton/news/run）⇒ 路由账只 +1
-  prism: ['/tradewatcher/prism'],
+  prism: ['/tradewatcher/prism', '/tradewatcher/prism/selftest'],
 }
 
 /** 行 → 该行独占的 agent 工具名（不含前缀）；同为**唯一事实源**（见上） */
@@ -128,6 +130,8 @@ export interface CoreKernel {
   auction: AuctionSampler
   /** 棱镜状态（设置/骨架/新闻/运行；第 9 行独占） */
   prism: PrismStore
+  /** 棱镜模拟盘账本（账户/挂单/成交/净值） */
+  prismTrading: PrismTradingStore
   /** 棱镜时点调度（30s 节拍；非交易日不跑） */
   prismScheduler: PrismScheduler
   /**
@@ -209,15 +213,29 @@ function applyCore(ctx: PluginContext, full = false): void {
   if (first) {
     const store = new DataStore()
     const prism = new PrismStore()
+    const prismTrading = new PrismTradingStore()
     prismRunRef = { fn: async () => undefined }
     const prismScheduler = new PrismScheduler(prism, {
       run: (slot) => prismRunRef.fn(slot),
       news: () => incrementalNews(prism),
+      match: () => (inTradingWindow(Date.now()) ? matchTick(prismTrading, {
+        quotes: async (secids) => {
+          const rows = await import('./host/em.ts').then((m) => m.fetchQuotes(secids))
+          const out: Record<string, { name: string; price: number | null; prev: number | null }> = {}
+          for (const secid of secids) {
+            const q = rows[secid]
+            if (q !== undefined) out[secid] = { name: q.name, price: q.price, prev: q.prev }
+          }
+          return out
+        },
+        bars: (secid, day) => fetchOneMinuteBars(secid, day),
+      }) : Promise.resolve({ filled: 0, rejected: 0 })),
     })
     kernel = {
       store,
       auction: new AuctionSampler(store),
       prism,
+      prismTrading,
       prismScheduler,
       calendar: new CalendarStore(),
       rescue: new RescueMonitor(),
@@ -255,9 +273,11 @@ function applyCore(ctx: PluginContext, full = false): void {
       k.rescue.start()
       k.auction.start()
       await k.prism.init().catch((error) => log('prism init failed:', String(error)))
+      await k.prismTrading.init().catch((error) => log('prism trading init failed:', String(error)))
+      await k.prismTrading.quarantine().catch(() => undefined)
       log('rescue monitor started', `interval ${k.store.getPrefs().rescue.intervalSec}s / tail ${k.store.getPrefs().rescue.tailIntervalSec}s`)
       log('auction sampler started', 'window 09:15:00–09:25:30 / interval 10s')
-      prismRunRef.fn = (slot) => runPrismForSlot({ store: k.prism, data: k.store, get: (name) => { try { return ctx.get(name) } catch { return undefined } } }, slot)
+      prismRunRef.fn = (slot) => runPrismForSlot({ store: k.prism, trading: k.prismTrading, data: k.store, get: (name) => { try { return ctx.get(name) } catch { return undefined } } }, slot)
       k.prismScheduler.start()
       log('prism scheduler started', `times ${k.prism.settings().times.join(' / ')}`)
     }).catch((error) => {
@@ -268,7 +288,7 @@ function applyCore(ctx: PluginContext, full = false): void {
   }
 
   ctx.effect(() => {
-    const { routes: all } = makeTradeRoutes(k.store, ctx.webRuntime.trustedHosts, k.calendar, k.rescue, undefined, undefined, () => [...k.activeRows], k.fupan, undefined, { store: k.prism, data: k.store, get: (name) => { try { return ctx.get(name) } catch { return undefined } } })
+    const { routes: all } = makeTradeRoutes(k.store, ctx.webRuntime.trustedHosts, k.calendar, k.rescue, undefined, undefined, () => [...k.activeRows], k.fupan, undefined, { store: k.prism, trading: k.prismTrading, data: k.store, get: (name) => { try { return ctx.get(name) } catch { return undefined } } })
     // core 注册**除功能行独占前缀之外**的全部路由（老 profile 只有 core ⇒ 与拆分前逐字一致）
     const owned = full ? [] : Object.values(ROW_ROUTES).flat()
     const mine = all.filter((r) => !owned.some((p) => r.path.startsWith(p)))
@@ -326,7 +346,7 @@ function applyFeatureRow(ctx: PluginContext, row: Exclude<RowId, 'core'>): void 
   const prefixes = ROW_ROUTES[row]
   const tools = ROW_TOOLS[row]
   ctx.effect(() => {
-    const { routes: all } = makeTradeRoutes(k.store, ctx.webRuntime.trustedHosts, k.calendar, k.rescue, undefined, undefined, () => [...k.activeRows], k.fupan, undefined, { store: k.prism, data: k.store, get: (name) => { try { return ctx.get(name) } catch { return undefined } } })
+    const { routes: all } = makeTradeRoutes(k.store, ctx.webRuntime.trustedHosts, k.calendar, k.rescue, undefined, undefined, () => [...k.activeRows], k.fupan, undefined, { store: k.prism, trading: k.prismTrading, data: k.store, get: (name) => { try { return ctx.get(name) } catch { return undefined } } })
     const mine = all.filter((r) => prefixes.some((p) => r.path.startsWith(p)))
     const disposers = mine.map((route: PluginWebRoute) => {
       try {

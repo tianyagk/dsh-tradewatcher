@@ -13,6 +13,7 @@ import {
 } from '../shared/prism.ts'
 import type { PrismStore } from './prismStore.ts'
 import { resolvePrismModel, streamText, type LlmStreamFace } from './prismLlm.ts'
+import { parseDecision } from './prismAccount.ts'
 
 export interface PrismInputs {
   positions: string
@@ -57,6 +58,7 @@ export async function runPrismAnalysis(
     finishedAt: null,
     analyses: PRISM_ANALYSIS_META.map((m) => ({ key: m.key, label: m.label, text: null, error: null })),
     summary: null,
+    decision: null,
     error: null,
   }
   if (resolved.llm === null || resolved.info.provider === null || resolved.info.model === null) {
@@ -64,6 +66,7 @@ export async function runPrismAnalysis(
       ...base,
       finishedAt: now(),
       error: resolved.info.error ?? '模型不可用',
+      decision: null,
       analyses: base.analyses.map((a) => ({ ...a, error: resolved.info.error ?? '模型不可用' })),
     }
     await store.saveRun(run)
@@ -94,7 +97,14 @@ export async function runPrismAnalysis(
     const res = await streamText(
       llm,
       model,
-      [{ role: 'user', content: `${context}\n\n【四路结论】\n${digest}\n\n【任务】把四路结论汇总成 5 条以内的要点，指出分歧与需要盯的变量。` }],
+      [{
+        role: 'user',
+        content: `${context}\n\n【四路结论】\n${digest}\n\n【任务】把四路结论汇总成 5 条以内的要点，指出分歧与需要盯的变量。` +
+          '\n最后另起一行输出一个 ```json 代码块，字段：' +
+          '{"limits":{"singlePct":数字或null,"totalPct":数字或null,"note":"仓位上限依据"},' +
+          '"orders":[{"secid":"1.600519","side":"buy|sell","price":数字,"shares":整百,"reason":"原因"}],' +
+          '"cancel":["订单id"]}。没有挂单就输出空数组；不要输出别的 JSON。',
+      }],
       '你是严谨的市场研判助手。只依据给定材料，缺失就写 — 并给一句原因；不写免责声明。',
       deps.signal,
     )
@@ -107,6 +117,7 @@ export async function runPrismAnalysis(
     finishedAt: now(),
     analyses,
     summary,
+    decision: parseDecision(summary),
     error: summaryError,
   }
   await store.saveRun(run)

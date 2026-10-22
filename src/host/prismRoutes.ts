@@ -13,6 +13,7 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { PluginWebRoute } from './context.ts'
 import type { PrismStore } from './prismStore.ts'
+import { PrismTradingStore, copyAtCost, matchTick, placeDecision, type QuoteLite } from './prismAccount.ts'
 import type { DataStore } from './store.ts'
 import type { PrismSettings, PrismState } from '../shared/prism.ts'
 import { PRISM_MAX_TIMES, PRISM_SKELETON_MAX } from '../shared/prism.ts'
@@ -24,6 +25,7 @@ import { dayOf } from './time.ts'
 
 export interface PrismRouteDeps {
   store: PrismStore
+  trading: PrismTradingStore
   data: DataStore
   get: (name: string) => unknown
 }
@@ -66,14 +68,36 @@ export const prismInputsOf = async (deps: PrismRouteDeps): Promise<PrismInputs> 
       return `${q.name ?? secid}：${q.price}（${q.pct === null ? '—' : `${q.pct.toFixed(2)}%`}）`
     })
     .join('\n')
+  const pending = deps.trading.orders().filter((o) => o.status === 'pending')
+  const pendingText = pending.length === 0
+    ? '—'
+    : pending.map((o) => `${o.id} ${o.side === 'buy' ? '买' : '卖'} ${o.name} ${o.shares}@${o.price}`).join('\n')
   const news = deps.store.news().items.slice().sort((a, b) => (a.time < b.time ? 1 : -1))
-  return { positions, quotes: quoteText, news, skeleton: deps.store.skeleton() }
+  return { positions, quotes: `${quoteText}\n【待成交挂单】\n${pendingText}`, news, skeleton: deps.store.skeleton() }
 }
 
 const kickNews = (store: PrismStore): void => {
   const status = store.news().status
   const task = status.state === 'ready' ? incrementalNews(store) : backfillNews(store)
   void task.catch(() => undefined)
+}
+
+const quoteLiteOf = async (secids: string[]): Promise<Record<string, QuoteLite>> => {
+  const rows = await fetchQuotes(secids).catch(() => ({}))
+  const out: Record<string, QuoteLite> = {}
+  for (const secid of secids) {
+    const q = rows[secid]
+    if (q !== undefined) out[secid] = { name: q.name, price: q.price, prev: q.prev }
+  }
+  return out
+}
+
+const copyRowsOf = async (deps: PrismRouteDeps): Promise<Array<{ secid: string; name: string; qty: number; cost: number }>> => {
+  const port = deps.data.portData()
+  const secids = port.items.map((p) => p.secid)
+  const quotes = await fetchQuotes(secids).catch(() => ({}))
+  const view = assemblePortfolio(port.groups, port.items, deps.data.ledgerEntries(), quotes).view
+  return view.positions.filter((p) => p.qty > 0).map((p) => ({ secid: p.secid, name: p.name, qty: p.qty, cost: p.avgCost }))
 }
 
 const stateOf = (store: PrismStore, get: (n: string) => unknown): PrismState => {
@@ -102,6 +126,22 @@ const stateOf = (store: PrismStore, get: (n: string) => unknown): PrismState => 
   }
 }
 
+const tradingOf = (trading: PrismTradingStore, prices: Record<string, number | null> = {}): {
+  account: ReturnType<PrismTradingStore['account']>
+  orders: ReturnType<PrismTradingStore['orders']>
+  fills: ReturnType<PrismTradingStore['fills']>
+  equity: ReturnType<PrismTradingStore['equity']>
+  decision: ReturnType<PrismStore['runs']>[number]['decision'] | null
+  prices: Record<string, number | null>
+} => ({
+  account: trading.account(),
+  orders: trading.orders(),
+  fills: trading.fills(),
+  equity: trading.equity(),
+  decision: null,
+  prices,
+})
+
 export async function runPrismForSlot(deps: PrismRouteDeps, slot: string): Promise<Awaited<ReturnType<typeof runPrismAnalysis>>> {
   const inputs = await prismInputsOf(deps)
   return runPrismAnalysis(deps.store, slot, inputs, { get: deps.get })
@@ -116,7 +156,11 @@ export function makePrismRoutes(deps: PrismRouteDeps): PluginWebRoute[] {
       handler: async (req, res) => {
         if (req.method === 'GET') {
           kickNews(store)
-          send(res, 200, { ok: true, asOf: Date.now(), state: stateOf(store, deps.get) })
+          const account = deps.trading.account()
+          const quotes = await quoteLiteOf(account.positions.map((p) => p.secid)).catch(() => ({}))
+          const prices: Record<string, number | null> = {}
+          for (const p of account.positions) prices[p.secid] = quotes[p.secid]?.price ?? null
+          send(res, 200, { ok: true, asOf: Date.now(), state: stateOf(store, deps.get), trading: tradingOf(deps.trading, prices) })
           return
         }
         if (req.method !== 'POST') {
@@ -124,7 +168,7 @@ export function makePrismRoutes(deps: PrismRouteDeps): PluginWebRoute[] {
           return
         }
         try {
-          const body = (await readBody(req)) as { action?: unknown; times?: unknown; text?: unknown; slot?: unknown } | null
+          const body = (await readBody(req)) as { action?: unknown; times?: unknown; text?: unknown; slot?: unknown; capitalLimit?: unknown; orderId?: unknown } | null
           const action = body !== null && typeof body.action === 'string' ? body.action : ''
           if (action === 'settings') {
             const raw = body !== null && Array.isArray(body.times) ? body.times : null
@@ -169,14 +213,94 @@ export function makePrismRoutes(deps: PrismRouteDeps): PluginWebRoute[] {
           if (action === 'run') {
             const slot = typeof body?.slot === 'string' && /^([01]\d|2[0-3]):[0-5]\d$/.test(body.slot) ? body.slot : 'manual'
             const run = await runPrismForSlot(deps, slot)
+            let placed: unknown[] = []
+            if (run.decision !== null && run.decision.orders.length > 0) {
+              const quotes = await quoteLiteOf(run.decision.orders.map((o) => o.secid))
+              placed = await placeDecision(deps.trading, run.decision, Date.now(), quotes)
+            } else if (run.decision !== null) {
+              await placeDecision(deps.trading, run.decision, Date.now(), {})
+            }
             if (slot !== 'manual') await store.markFired(dayOf(Date.now()), slot)
-            send(res, 200, { ok: true, asOf: Date.now(), run })
+            send(res, 200, { ok: true, asOf: Date.now(), run, orders: placed })
+            return
+          }
+          if (action === 'capital') {
+            const limit = Number(body?.capitalLimit)
+            if (!Number.isFinite(limit) || limit <= 0) {
+              send(res, 400, { ok: false, error: '资金上限必须是正数' })
+              return
+            }
+            const account = deps.trading.account()
+            const next = { ...account, capitalLimit: limit, cash: Math.round((account.cash + (limit - account.capitalLimit)) * 100) / 100 }
+            await deps.trading.saveAccount(next)
+            send(res, 200, { ok: true, account: next })
+            return
+          }
+          if (action === 'copy') {
+            const rows = await copyRowsOf(deps)
+            const result = copyAtCost(rows, deps.trading.account(), Date.now())
+            if (result.ok === false) {
+              send(res, 200, { ok: false, error: result.reason })
+              return
+            }
+            await deps.trading.saveAccount(result.account)
+            send(res, 200, { ok: true, account: result.account, log: result.log })
+            return
+          }
+          if (action === 'cancel') {
+            const orderId = typeof body?.orderId === 'string' ? body.orderId : ''
+            const orders = deps.trading.orders()
+            const order = orders.find((o) => o.id === orderId && o.status === 'pending')
+            if (order === undefined) {
+              send(res, 200, { ok: false, error: '没有可撤销的挂单' })
+              return
+            }
+            order.status = 'cancelled'
+            order.cancelledAt = Date.now()
+            order.cancelReason = '手动撤销'
+            await deps.trading.saveOrders(orders, deps.trading.fills())
+            send(res, 200, { ok: true, orders })
+            return
+          }
+          if (action === 'match') {
+            const result = await matchTick(deps.trading, {
+              quotes: quoteLiteOf,
+              bars: (secid, day) => import('./prismAccount.ts').then((m) => m.fetchOneMinuteBars(secid, day)),
+            })
+            send(res, 200, { ok: true, ...result, trading: tradingOf(deps.trading) })
             return
           }
           send(res, 400, { ok: false, error: '未知 action' })
         } catch (error) {
           send(res, 500, { ok: false, error: String(error).slice(0, 160) })
         }
+      },
+    },
+    {
+      kind: 'exact',
+      path: '/tradewatcher/prism/selftest',
+      handler: async (_req, res) => {
+        const started = Date.now()
+        let ok = false
+        let error: string | null = null
+        let model: string | null = null
+        try {
+          const resolved = await import('./prismLlm.ts').then((m) => m.resolvePrismModel(deps.get))
+          if (resolved.llm === null || resolved.info.provider === null || resolved.info.model === null) {
+            error = resolved.info.error ?? '模型不可用'
+          } else {
+            model = `${resolved.info.provider} / ${resolved.info.model}`
+            const r = await import('./prismLlm.ts').then((m) =>
+              m.streamText(resolved.llm as never, { provider: resolved.info.provider as string, model: resolved.info.model as string },
+                [{ role: 'user', content: '只回复 OK' }], undefined, AbortSignal.timeout(20_000), 50),
+            )
+            ok = r.text !== null && r.error === null
+            error = r.error
+          }
+        } catch (e) {
+          error = String(e).slice(0, 200)
+        }
+        send(res, 200, { ok, error, model, elapsedMs: Date.now() - started })
       },
     },
   ]

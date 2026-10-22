@@ -181,7 +181,7 @@ test('⑥ 详情回包带 series/seriesDay，且不新增竞价路由（路由�
   const routesSrc = await readFile(new URL('./routes.ts', import.meta.url), 'utf8')
   assert.equal(routesSrc.includes('/tradewatcher/auction'), false, '不许新增竞价路由')
   const design = await readFile(new URL('../../docs/DESIGN-SUBPLUGINS.md', import.meta.url), 'utf8')
-  assert.match(design, /路由账 31 =/)
+  assert.match(design, /路由账 32 =/)
 })
 
 test('行情解析/取数：空代码集不请求', async () => {

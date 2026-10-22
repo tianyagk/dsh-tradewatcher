@@ -40,6 +40,8 @@ export interface PrismAnalysis {
 export interface PrismRun {
   /** 触发时点（手动补跑也写时点；`manual` 用于非时点补跑） */
   slot: string
+  /** 本轮 agent 给出的仓位上限/挂单/撤单（解析失败 ⇒ null） */
+  decision?: PrismDecision | null
   startedAt: number
   finishedAt: number | null
   analyses: PrismAnalysis[]
@@ -82,3 +84,94 @@ export const PRISM_DEFAULT_SKELETON = `# 棱镜研判骨架（可编辑）
 - 顺序：A股宏观 → 外盘 → 大宗 → 信息面 → 汇总。
 - 输出：每段给「判断 / 依据 / 需要盯的变量」，不写免责声明。
 - 缺失数据写 — 并给一句原因。`
+
+
+/* ────────────────────────── 批次 3：模拟盘 ────────────────────────── */
+
+export interface PrismPosition {
+  secid: string
+  name: string
+  qty: number
+  /** T+1：今日可卖（当日买入不加进来） */
+  available: number
+  /** 成本价（真实成本复制/买入摊薄） */
+  cost: number
+}
+
+export interface PrismFill {
+  orderId: string
+  secid: string
+  name: string
+  side: 'buy' | 'sell'
+  price: number
+  shares: number
+  amount: number
+  fee: number
+  at: number
+  source: '1min' | 'trend'
+}
+
+export interface PrismOrder {
+  id: string
+  secid: string
+  name: string
+  side: 'buy' | 'sell'
+  price: number
+  shares: number
+  reason: string
+  decidedAt: number
+  /** 挂单所属交易日（`YYYY-MM-DD`）；跨日自动失效 */
+  day: string
+  status: 'pending' | 'filled' | 'cancelled' | 'rejected'
+  fillPrice?: number
+  filledAt?: number
+  fee?: number
+  source?: '1min' | 'trend'
+  rejectReason?: string
+  cancelledAt?: number
+  cancelReason?: string
+}
+
+export interface PrismEquityPoint {
+  day: string
+  equity: number
+  cash: number
+  positionsValue: number
+  realized: number
+  unrealized: number
+  at: number
+}
+
+export interface PrismCopyLog {
+  at: number
+  before: string[]
+  after: string[]
+}
+
+export interface PrismAccount {
+  /** 当前账本所属交易日（T+1/挂单当日有效的基准） */
+  day: string
+  capitalLimit: number
+  cash: number
+  realized: number
+  dayStartEquity: number | null
+  positions: PrismPosition[]
+  copiedAt: number | null
+  copyLogs: PrismCopyLog[]
+}
+
+export interface PrismDecision {
+  limits: { singlePct: number | null; totalPct: number | null; note: string | null }
+  orders: Array<{ secid: string; side: 'buy' | 'sell'; price: number; shares: number; reason: string }>
+  cancel: string[]
+}
+
+export interface PrismTradingState {
+  account: PrismAccount
+  orders: PrismOrder[]
+  fills: PrismFill[]
+  equity: PrismEquityPoint[]
+  decision: PrismDecision | null
+  /** 现价（按 secid；取不到 ⇒ null，界面 `—` + 原因） */
+  prices?: Record<string, number | null>
+}

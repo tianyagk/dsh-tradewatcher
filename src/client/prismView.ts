@@ -70,3 +70,60 @@ export function rippleCssProblems(css: string): string[] {
   if (!/transform:\s*scale\(/.test(block ?? '')) bad.push('ripple 必须用 transform: scale')
   return bad
 }
+
+/* ────────────────────────── 批次 4：模拟盘展示 ────────────────────────── */
+
+import type { PrismEquityPoint, PrismOrder, PrismTradingState } from '../shared/prism.ts'
+
+export const PRISM_MONEY = (n: number | null | undefined): string =>
+  n === null || n === undefined || !Number.isFinite(n) ? '—' : n.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+
+export const PRISM_SIGNED = (n: number | null | undefined): string =>
+  n === null || n === undefined || !Number.isFinite(n) ? '—' : `${n >= 0 ? '+' : ''}${PRISM_MONEY(n)}`
+
+/** 四格：总资产/现金/当日盈亏/累计盈亏；缺数据带原因 */
+export function topCardsOf(t: PrismTradingState | null, prices?: Readonly<Record<string, number | null>>): Array<{ key: string; label: string; value: string; hint: string | null }> {
+  if (t === null) {
+    return [
+      { key: 'equity', label: '总资产', value: '—', hint: '尚未取到模拟盘账户' },
+      { key: 'cash', label: '现金', value: '—', hint: null },
+      { key: 'day', label: '当日盈亏', value: '—', hint: null },
+      { key: 'total', label: '累计盈亏', value: '—', hint: null },
+    ]
+  }
+  const a = t.account
+  const px = prices ?? t.prices ?? {}
+  const value = a.positions.reduce((sum, p) => sum + p.qty * (px[p.secid] ?? p.cost), 0)
+  const equity = a.cash + value
+  const total = equity - a.capitalLimit
+  const day = a.dayStartEquity === null ? null : equity - a.dayStartEquity
+  return [
+    { key: 'equity', label: '总资产', value: PRISM_MONEY(equity), hint: `资金上限 ${PRISM_MONEY(a.capitalLimit)}` },
+    { key: 'cash', label: '现金', value: PRISM_MONEY(a.cash), hint: null },
+    { key: 'day', label: '当日盈亏', value: PRISM_SIGNED(day), hint: day === null ? '当日基准净值未取到' : null },
+    { key: 'total', label: '累计盈亏', value: PRISM_SIGNED(total), hint: `已实现 ${PRISM_SIGNED(a.realized)}` },
+  ]
+}
+
+export function orderStatusText(o: PrismOrder): string {
+  if (o.status === 'pending') return '待成交'
+  if (o.status === 'filled') return '已成交'
+  if (o.status === 'cancelled') return `已撤销${o.cancelReason === undefined ? '' : `（${o.cancelReason}）`}`
+  return `不可成交（${o.rejectReason ?? '未给原因'}）`
+}
+
+/** 迷你净值折线：只画线，不画坐标文字；不足两点 ⇒ null */
+export function sparklineOf(points: readonly PrismEquityPoint[], width = 160, height = 36): string | null {
+  if (points.length < 2) return null
+  const values = points.map((p) => p.equity)
+  const min = Math.min(...values)
+  const max = Math.max(...values)
+  const span = max - min || 1
+  return points
+    .map((p, i) => {
+      const x = (i / (points.length - 1)) * width
+      const y = height - ((p.equity - min) / span) * height
+      return `${x.toFixed(1)},${y.toFixed(1)}`
+    })
+    .join(' ')
+}

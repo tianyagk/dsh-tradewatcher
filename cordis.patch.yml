@@ -21,7 +21,8 @@
 #                                            （只被复盘页消费 ⇒ 按 §2.2 判据归本行；数据是本地笔记文件、
 #                                            既有交易日历与既有流水，零新增上游请求；本行同样不带 agent 工具）。
 #   tradewatcher-prism     → row: prism      **棱镜**（第 9 行，v0.130.0）：研判时点 + 金十 24h 快讯 + 4+1 研判；
-#                                            `/tradewatcher/prism`（GET=状态；POST action=settings/skeleton/news/run）
+#                                            `/tradewatcher/prism`（GET=状态；POST action=settings/skeleton/news/run/capital/copy/cancel/match）
+#                                            `/tradewatcher/prism/selftest`（真实调一次 ctx.llm.stream，永远 200）
 #                                            （只被棱镜页消费 ⇒ 按 §2.2 判据归本行；本行不带 agent 工具）。
 #
 # ⚠ **历史归因纠正（这一条要读，前一轮的结论是错的）** —— 这段说的是当时的**六行**形态，七行是同机制加一行。
