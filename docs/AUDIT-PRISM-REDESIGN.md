@@ -52,10 +52,17 @@
 
 对拍注入：卡片圆角 0 / 删选中背景 / 分隔条 0 / 去 tabular / 页面出现 `{"limits"` ⇒ 各自必败。
 
+## 3.1 滚动与自检修复（2026-10-22 21:1x）
+
+- **滚动根因**：`.tw-prism` 只是 flex 子项，没有 `flex:1/min-height:0/overflow-y:auto`；父级固定高度把净值卡之后内容裁掉，页面无滚动容器。改为整页统一滚动：`.tw-prism{flex:1;min-height:0;overflow-y:auto;overflow-x:auto}`；两栏 `.tw-prism-body{min-height:0}`；右栏**不做独立滚动**，整页滚动。`<900px` 折叠容器同样 `min-height:0`、无固定高度。
+- **自检根因**：页面侧走通用 `requestWithTimeout`，HTTP 200 但 body 非 JSON 时抛出 `响应解析失败 (HTTP 200)`；页面把 `HTTP 200` 当失败原因显示。改为专用 `runSelftest`：`fetch` + `res.text()` + `parseSelftestBody(status, raw)`；200 + JSON 按 `ok`；200 + 非 JSON ⇒ `响应非 JSON（前 60 字：…）`；网络/超时 ⇒ `超时/网络错误…`；不再把 200 当失败。
+- 断言：`scrollProblems`（根 auto/无 hidden、body min-height、移动端无固定高度）+ `parseSelftestBody`（JSON/非 JSON/前 60 字）+ 页面源码无 `HTTP ${status}`；注入 hidden/删 min-height/加 height/恢复 HTTP 文案均必败。
+
 ## 4. 门禁
 
 - 基线 1146 → 1156 → **1163**（新增 7：对拍 6 + 汇总 JSON 剥离 1）。
-- `DSH_HOME=/tmp/prismb39-check{BI,BJ} npm run check`：两轮 **1163 × 2 全绿**（BI 19,180/19,351ms；BJ 19,022/19,427ms）；构建 **73 项**（v0.134.0，`build.mjs` 未动）。
+- 基线 1163 → **1169**（新增 6：滚动 3 + 自检 3）。
+- `DSH_HOME=/tmp/prismb40-check{BK,BL} npm run check`：两轮 **1169 × 2 全绿**（BK 18,962/19,200ms；BL 18,875/18,729ms）；构建 **73 项**（v0.135.0，`build.mjs` 未动）。
 - 只改 `src/client/**`；不 commit、不重启；数据/引擎未动。
 
 ## 5. 未做

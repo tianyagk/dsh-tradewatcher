@@ -219,6 +219,7 @@ export interface LeveragePayloadDto {
 }
 
 import type { ToneRow as ToneRowDto } from './stripTone.ts'
+import { parseSelftestBody } from './prismView.ts'
 import type { PrismAccount, PrismNewsStatus, PrismOrder, PrismRun, PrismSettings, PrismState, PrismTradingState } from '../shared/prism.ts'
 /** Same-origin JSON calls to the /tradewatcher/* host routes. */
 import type {
@@ -500,6 +501,21 @@ export interface FupanTradesPayload {
   asOf?: number | null
 }
 
+/** 自检专用：不经过通用 request（HTTP 200 + 非 JSON 也要给可读原因） */
+async function runSelftest(path: string): Promise<{ ok: boolean; error: string | null; model: string | null; elapsedMs: number; text: string | null; chunks: Array<{ type: string; keys: string[] }> }> {
+  const sig = requestSignal(30_000)
+  try {
+    const res = await fetch(path, { method: 'GET', cache: 'no-store', signal: sig.signal })
+    const raw = await res.text()
+    return parseSelftestBody(res.status, raw)
+  } catch (error) {
+    const why = sig.timedOut() ? '超时/网络错误（30 秒未响应）' : `超时/网络错误（${error instanceof Error ? error.message : String(error)}）`
+    return { ok: false, error: why, model: null, elapsedMs: 0, text: null, chunks: [] }
+  } finally {
+    sig.clear()
+  }
+}
+
 export const api = {
   /**
    * 全球五市场（工具箱 → 全球资金流蛋糕模型）。
@@ -567,8 +583,9 @@ export const api = {
   },
   /** 运行时自检：真实调用一次 ctx.llm.stream（永远 200） */
   prismSelftest(): Promise<{ ok: boolean; error: string | null; model: string | null; elapsedMs: number; text: string | null; chunks: Array<{ type: string; keys: string[] }> }> {
-    return requestWithTimeout('/tradewatcher/prism/selftest', undefined, 30_000)
+    return runSelftest('/tradewatcher/prism/selftest')
   },
+
   prismRun(slot: string): Promise<{ ok: boolean; run: PrismRun }> {
     return requestWithTimeout('/tradewatcher/prism', {
       method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action: 'run', slot }),

@@ -11,6 +11,38 @@
 
 ---
 
+## v0.136.0 — 棱镜：修复整页不能滚动、页头自检误报失败
+
+报告 `docs/AUDIT-PRISM-REDESIGN.md`。`npm run check` **1169 / 1169 × 2 时区**（1163 → 1169）+ selftest + build（73 片段全过）；只改 `src/client/**`。
+
+### 1) 底部内容被裁、无法下滑
+
+**根因**：`.tw-prism` 是 flex 子项，但没有 `flex:1 / min-height:0 / overflow-y:auto`；父级是固定高度 ⇒ 整块内容被父容器裁掉，页面自身没有滚动容器。
+
+**修复**：
+- `.tw-prism{flex:1 1 auto; min-height:0; overflow-y:auto; overflow-x:auto}`；**无** `overflow:hidden`、**无**固定 `height`。
+- `.tw-prism-body{min-height:0}`；右栏**不独立滚动**（整页统一滚动）。
+- `<900px` 折叠容器同样 `min-height:0`，不写固定高度。
+
+### 2) 页头自检误报「自检失败 · HTTP 200」
+
+**根因**：页面走通用 `requestWithTimeout`；HTTP 200 但 body 非 JSON 时它抛 `响应解析失败 (HTTP 200)`，页面把这句话当成失败原因。
+
+**修复**：新增专用 `runSelftest` + `parseSelftestBody(status, raw)`：
+- 200 + 可解析 ⇒ 按 `body.ok` 给「自检通过 · {elapsedMs}ms · {text}」或「自检失败 · {error}」；
+- 200 + 非 JSON ⇒ 「自检失败 · 响应非 JSON（前 60 字：…）」；
+- 网络/超时 ⇒ 「自检失败 · 超时/网络错误…」；
+- 页面源码**不再出现** `HTTP ${status}` 作为失败文案。
+
+### 验证
+
+`npm run check` **1169 / 1169 × 2 时区** + selftest + build（73 项）；BK/BL 两轮干净复跑。
+新增 6 条用例：滚动 3 条（根 `overflow-y:auto` 且拒绝 `hidden`/固定高度；body `min-height:0`；移动端无固定高度）｜自检 3 条（`{ok:true,text:'OK',elapsedMs:12}` ⇒ 含「通过」「12ms」「OK」；非 JSON ⇒ 含「响应非 JSON」且带前 60 字；源码扫描 `HTTP ${status}` 且注入恢复必败）。
+
+### 待验证
+
+重启后确认「能滚到底」与「自检显示通过」。
+
 ## v0.135.0 — 棱镜视觉补齐并与设计稿数值对拍（分段控件 / 卡片层级 / 右栏卡片化）
 
 报告 `docs/AUDIT-PRISM-REDESIGN.md`。`npm run check` **1163 / 1163 × 2 时区**（1156 → 1163）+ selftest + build（73 片段全过）；只改 `src/client/**`。

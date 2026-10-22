@@ -208,3 +208,34 @@ export function decisionErrorText(raw: string | null | undefined, max = 120): st
   const cleaned = raw.replace(/\{[\s\S]*\}/g, '').replace(/\s+/g, ' ').trim()
   return cleaned === '' ? '原文已留存在接口，不在页面展开' : cleaned.slice(0, max)
 }
+
+export interface SelftestResult {
+  ok: boolean
+  error: string | null
+  model: string | null
+  elapsedMs: number
+  text: string | null
+  chunks: Array<{ type: string; keys: string[] }>
+}
+
+/** 解析自检回包：HTTP 200 + 非 JSON 也要给出可读原因，绝不把 200 当失败 */
+export function parseSelftestBody(status: number, raw: string): SelftestResult {
+  const fallback: SelftestResult = { ok: false, error: null, model: null, elapsedMs: 0, text: null, chunks: [] }
+  const text = raw.trim()
+  if (text === '') return { ...fallback, error: '响应为空（前 60 字：）' }
+  try {
+    const body = JSON.parse(text) as Partial<SelftestResult>
+    if (typeof body.ok !== 'boolean') return { ...fallback, error: `响应缺少 ok 字段（前 60 字：${text.slice(0, 60)}）` }
+    return {
+      ok: body.ok,
+      error: typeof body.error === 'string' ? body.error : null,
+      model: typeof body.model === 'string' ? body.model : null,
+      elapsedMs: typeof body.elapsedMs === 'number' ? body.elapsedMs : 0,
+      text: typeof body.text === 'string' ? body.text : null,
+      chunks: Array.isArray(body.chunks) ? body.chunks : [],
+    }
+  } catch {
+    const prefix = status === 200 ? '响应非 JSON' : `请求失败（HTTP ${status}）`
+    return { ...fallback, error: `${prefix}（前 60 字：${text.slice(0, 60)}）` }
+  }
+}

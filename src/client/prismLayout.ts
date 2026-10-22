@@ -79,3 +79,22 @@ export function tableRhythmProblems(css: string): string[] {
   if (h === undefined || Number(h) < 24 || Number(h) > 26) bad.push('表格行高必须是 24–26px')
   return bad
 }
+
+/** 页面根可滚动 + 两栏 min-height:0（含 <900px 折叠） */
+export function scrollProblems(css: string): string[] {
+  const bad: string[] = []
+  const rule = (selector: string): string => {
+    const esc = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    return new RegExp(`${esc}\\{([^}]*)\\}`).exec(css)?.[1] ?? ''
+  }
+  const root = rule('.tw-prism')
+  if (!/overflow-y\s*:\s*auto/.test(root)) bad.push('页面根缺 overflow-y:auto')
+  if (/(^|;)\s*overflow\s*:\s*hidden/.test(root)) bad.push('页面根不得 overflow:hidden')
+  if (/(^|;)\s*height\s*:\s*\d/.test(root)) bad.push('页面根不得写固定 height')
+  const body = rule('.tw-prism-body')
+  if (!/min-height\s*:\s*0/.test(body)) bad.push('两栏容器缺 min-height:0')
+  const mobile = /@media\s*\(max-width:899px\)\{([^\n]*)/.exec(css)?.[1] ?? ''
+  if (!/@media\s*\(max-width:899px\)/.test(css)) bad.push('缺 <900px 折叠媒体查询')
+  if (/(^|;)\s*height\s*:\s*\d/.test(mobile)) bad.push('移动端折叠容器不得写固定 height')
+  return bad
+}

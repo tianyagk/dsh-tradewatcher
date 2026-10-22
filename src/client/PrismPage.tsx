@@ -146,7 +146,7 @@ export function PrismPage(props: { active: boolean }): React.ReactElement {
   const saveModel = (): void => act(api.prismSetModel(provider, modelName), () => setNotice('模型已保存'))
   const selfTest = (): void => {
     setBusy(true)
-    api.prismSelftest().then(setSelftest).catch((e: Error) => setSelftest({ ok: false, error: e.message, model: null, elapsedMs: 0, text: null })).finally(() => setBusy(false))
+    api.prismSelftest().then(setSelftest).catch((e: Error) => setSelftest({ ok: false, error: `超时/网络错误（${e.message}）`, model: null, elapsedMs: 0, text: null })).finally(() => setBusy(false))
   }
 
   const onSeparatorDown = (ev: React.PointerEvent<HTMLDivElement>): void => {
