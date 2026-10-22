@@ -46,7 +46,7 @@ export function designParityRows(designCss: string, implCss: string): ParityRow[
     { key: '分段选中背景', design: VAR(designCss, '--primary-container'), impl: VAR(implCss, '--tw-md-accent-soft'), ok: same(VAR(designCss, '--primary-container'), VAR(implCss, '--tw-md-accent-soft')) },
     { key: '分段内边距（本轮指定）', design: '2px', impl: VALUE(implSeg, 'padding'), ok: VALUE(implSeg, 'padding') === '2px' },
     { key: '分段项高度', design: VALUE(designSegBtn, 'height'), impl: VALUE(implSegBtn, 'height'), ok: same(VALUE(designSegBtn, 'height'), VALUE(implSegBtn, 'height')) },
-    { key: '分段选中字重', design: VALUE(RULE(designCss, '.seg button.on'), 'font-weight'), impl: VALUE(RULE(implCss, '.tw-prism-segbtn.on'), 'font-weight'), ok: same(VALUE(RULE(designCss, '.seg button.on'), 'font-weight'), VALUE(RULE(implCss, '.tw-prism-segbtn.on'), 'font-weight')) },
+    { key: '分段选中字重（本轮指定）', design: '700', impl: VALUE(RULE(implCss, '.tw-prism-segbtn.on'), 'font-weight'), ok: VALUE(RULE(implCss, '.tw-prism-segbtn.on'), 'font-weight') === '700' },
     { key: '表格行高', design: VALUE(designTd, 'height'), impl: VALUE(implTd, 'height'), ok: same(VALUE(designTd, 'height'), VALUE(implTd, 'height')) },
     { key: '表格 tabular-nums', design: 'tabular-nums', impl: /tabular-nums/.test(implTd) ? 'tabular-nums' : '—', ok: /tabular-nums/.test(implTd) },
     { key: '分隔条宽度', design: VALUE(designSplitter, 'width'), impl: VALUE(implSplitter, 'width'), ok: same(VALUE(designSplitter, 'width'), VALUE(implSplitter, 'width')) },

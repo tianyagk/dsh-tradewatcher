@@ -1,4 +1,4 @@
-/**
+/*
  * 【棱镜】第 9 行 / 第 8 个页签（重设计：hybrid 配色 + 左栏分段 + 62:38 可拖拽）。
  *
  * 左：四格资产 → 分段（持仓/挂单/成交）→ 表格 → 净值曲线（MD dataviz 8 系列色）。
@@ -382,9 +382,8 @@ export function PrismPage(props: { active: boolean }): React.ReactElement {
           <section className="tw-prism-card">
             <div className="tw-prism-card-title">决策 <span className="tw-prism-muted">limits / orders / cancel</span></div>
             <table className="tw-prism-table tw-prism-decision"><tbody>
-              {dRows.map((r) => <tr key={r.key}><td>{r.key}</td><td className="tw-prism-num tw-prism-mono">{r.value}</td></tr>)}
+              {dRows.map((r) => <tr key={r.key}><td>{r.key}</td><td className={`tw-prism-num tw-prism-mono${r.muted === true ? ' zero' : ''}`}>{r.value}</td></tr>)}
             </tbody></table>
-            <div className="tw-prism-muted">rejects：{(latest?.decision?.rejects ?? []).length === 0 ? '无' : (latest?.decision?.rejects ?? []).map((r) => `${r.secid} ${r.reason}`).join('；')}</div>
             {(latest?.decision?.parseError ?? null) === null ? null : <div className="tw-prism-error">决策 JSON 解析失败：{decisionErrorText(latest?.decision?.parseError)}</div>}
           </section>
 

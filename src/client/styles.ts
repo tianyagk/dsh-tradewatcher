@@ -783,12 +783,12 @@ color-scheme:dark}
 .tw-prism-sep:hover::before,.tw-prism-sep:focus-visible::before,.tw-prism-sep:active::before{background:var(--tw-md-accent)}
 .tw-prism-sep:hover,.tw-prism-sep:focus-visible{outline:none}
 .tw-prism-sep:focus-visible{box-shadow:0 0 0 2px var(--tw-ring)}
-.tw-prism-card{position:relative;display:flex;flex-direction:column;gap:8px;padding:12px;border:1px solid var(--tw-border);border-radius:10px;background:var(--tw-prism-surface-1);box-shadow:var(--tw-prism-card-shadow);min-width:0}
+.tw-prism-card{position:relative;display:flex;flex-direction:column;gap:8px;padding:12px;border:1px solid var(--tw-border);border-radius:10px;background:var(--tw-prism-surface-1);box-shadow:0 1px 2px rgba(0,0,0,.06),0 1px 3px rgba(0,0,0,.04);min-width:0}
 .tw-prism-card-title{display:flex;align-items:center;flex-wrap:wrap;gap:8px;font-size:12px;font-weight:600;color:var(--tw-muted);line-height:1.3}
-.tw-prism-cards{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+.tw-prism-cards{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px}
 .tw-prism-metric{gap:8px;padding:12px}
 .tw-prism-k{color:var(--tw-muted);font-size:12px;line-height:1.3}
-.tw-prism-v{margin-top:4px;font:600 28px/1.15 var(--tw-mono);letter-spacing:-.02em;font-variant-numeric:tabular-nums;color:var(--tw-text)}
+.tw-prism-v{margin-top:4px;font:600 26px/1.15 var(--tw-mono);letter-spacing:-.02em;font-variant-numeric:tabular-nums;color:var(--tw-text)}
 .tw-prism-sub{color:var(--tw-muted);font-size:12px;line-height:1.3}
 .tw-prism-toolbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
 .tw-prism-row{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
@@ -810,7 +810,8 @@ color-scheme:dark}
 .tw-prism-segbtn::after{content:"";position:absolute;inset:0;background:currentColor;opacity:0;transition:opacity .12s;pointer-events:none}
 .tw-prism-segbtn:hover::after{opacity:var(--tw-state-hover)}
 .tw-prism-segbtn:active::after{opacity:var(--tw-state-press)}
-.tw-prism-segbtn.on{background:var(--tw-md-accent-soft);color:var(--tw-md-on-accent);font-weight:600;box-shadow:none}
+.tw-prism-segbtn.on{background:rgba(94,106,210,.18);color:#2f3aa0;font-weight:700;box-shadow:none}
+.tw-root[data-theme=dark] .tw-prism-segbtn.on{background:rgba(138,180,248,.22);color:#dde0ff}
 .tw-prism-table{width:100%;border-collapse:collapse;table-layout:auto}
 .tw-prism-table th,.tw-prism-table td{border-bottom:1px solid var(--tw-border);padding:0 8px;text-align:left;font-size:12px;line-height:1.2;height:26px;white-space:nowrap;font-variant-numeric:tabular-nums}
 .tw-prism-table th{height:24px;color:var(--tw-muted);font-weight:500;background:var(--tw-prism-surface-2)}
@@ -843,13 +844,16 @@ color-scheme:dark}
 .tw-prism-points li{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;font-size:12px;line-height:1.45;color:var(--tw-dim);padding-left:12px;position:relative}
 .tw-prism-points li::before{content:"·";position:absolute;left:2px;color:var(--tw-md-accent);font-weight:700}
 .tw-prism-decision td:last-child{font-weight:600;font-variant-numeric:tabular-nums}
+.tw-prism-decision td.zero{color:var(--tw-muted);font-weight:400}
 .tw-prism-error{color:var(--tw-up);font-size:12px;line-height:1.4}
 .tw-prism-muted{color:var(--tw-muted);font-size:12px;line-height:1.4}
 .tw-prism-field{display:flex;align-items:center;gap:8px;min-width:0}
 .tw-prism-field label{width:64px;flex:none;color:var(--tw-muted);font-size:12px}
 .tw-prism-input{flex:1;min-width:0;border:1px solid var(--tw-border);border-radius:6px;background:var(--tw-bg);color:var(--tw-text);font:12px/1.2 var(--tw-mono);padding:5px 6px}
+@media (max-width:1099px){.tw-prism-cards{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media (max-width:899px){.tw-prism-body{display:flex;flex-direction:column;gap:16px;min-height:0}.tw-prism-sep{display:none}.tw-prism-cards{grid-template-columns:repeat(2,minmax(0,1fr))}.tw-prism-left{display:flex;flex-direction:column;gap:16px}.tw-prism-left>.tw-prism-cards{order:1}.tw-prism-left>.tw-prism-toolbar{order:2}.tw-prism-left>.tw-prism-seg{order:3}.tw-prism-left>.tw-prism-tablecard{order:4}.tw-prism-left>.tw-prism-equitycard{order:5}}
 
+@media (max-width:639px){.tw-prism-cards{grid-template-columns:minmax(0,1fr)}}
 `
 
 let injected = false

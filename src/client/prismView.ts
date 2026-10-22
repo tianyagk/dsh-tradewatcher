@@ -15,8 +15,13 @@ export function newsStatusText(s: PrismNewsStatus | null | undefined): string {
   return `${s.items} 条 · 最近更新 ${s.fetchedAt === null ? '—' : shStampText(s.fetchedAt)}`
 }
 
+/** 剥离 Markdown 标记（** / * / 反引号），保留文字；用于汇总、报告、错误摘要 */
+export function stripMarkdown(text: string): string {
+  return text.replace(/`+/g, '').replace(/\*\*|__/g, '').replace(/\*/g, '').replace(/_{2,}/g, '')
+}
+
 export function analysisText(a: PrismAnalysis): string {
-  if (a.text !== null && a.text !== '') return a.text
+  if (a.text !== null && a.text !== '') return stripMarkdown(a.text)
   return `—（${a.error ?? '未取到'}）`
 }
 
@@ -173,7 +178,7 @@ export function equityChartOf(points: ReadonlyArray<{ equity: number }>, width =
 export function summaryBullets(summary: string | null | undefined): string[] {
   if (summary === null || summary === undefined) return []
   // 汇总里可能带 ```json 决策块：要点只取自然语言，原始 JSON 一律不进页面
-  const prose = summary.replace(/```[\s\S]*?```/g, '')
+  const prose = stripMarkdown(summary.replace(/```[\s\S]*?```/g, ''))
   const lines = prose
     .split(/\n+/)
     .flatMap((line) => line.split(/(?=\d+[.、]\s)/))
@@ -185,6 +190,7 @@ export function summaryBullets(summary: string | null | undefined): string[] {
 export interface DecisionRow {
   key: string
   value: string
+  muted?: boolean
 }
 
 /** 决策卡：只给小表，不渲染原始 JSON */
@@ -192,20 +198,28 @@ export function decisionRows(decision: {
   limits?: { singlePct?: number | null; totalPct?: number | null }
   orders?: readonly unknown[]
   cancel?: readonly unknown[]
+  rejects?: ReadonlyArray<{ secid?: string; reason?: string }>
 } | null | undefined): DecisionRow[] {
   const pct = (n: number | null | undefined): string => (typeof n === 'number' ? `${n}%` : '—')
   return [
     { key: '单票上限', value: pct(decision?.limits?.singlePct) },
     { key: '总仓位上限', value: pct(decision?.limits?.totalPct) },
-    { key: 'orders', value: String(decision?.orders?.length ?? 0) },
-    { key: 'cancel', value: String(decision?.cancel?.length ?? 0) },
+    { key: 'orders', value: String(decision?.orders?.length ?? 0), muted: (decision?.orders?.length ?? 0) === 0 },
+    { key: 'cancel', value: String(decision?.cancel?.length ?? 0), muted: (decision?.cancel?.length ?? 0) === 0 },
+    {
+      key: 'rejects',
+      value: (decision?.rejects?.length ?? 0) === 0
+        ? '无'
+        : (decision?.rejects ?? []).map((r) => `${r.secid ?? '—'} ${r.reason ?? '未给原因'}`).join('；'),
+      muted: (decision?.rejects?.length ?? 0) === 0,
+    },
   ]
 }
 
 /** 页面不得直接显示原始 JSON；解析失败只显示摘要（原文留在接口） */
 export function decisionErrorText(raw: string | null | undefined, max = 120): string {
   if (raw === null || raw === undefined || raw === '') return ''
-  const cleaned = raw.replace(/\{[\s\S]*\}/g, '').replace(/\s+/g, ' ').trim()
+  const cleaned = stripMarkdown(raw.replace(/\{[\s\S]*\}/g, '')).replace(/\s+/g, ' ').trim()
   return cleaned === '' ? '原文已留存在接口，不在页面展开' : cleaned.slice(0, max)
 }
 

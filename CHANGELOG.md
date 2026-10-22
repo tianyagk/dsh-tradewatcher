@@ -11,6 +11,31 @@
 
 ---
 
+## v0.137.0 — 棱镜视觉收口：剥 Markdown、四格一行四列、阴影按最终生效值、分段加深、决策表并入 rejects
+
+报告 `docs/AUDIT-PRISM-REDESIGN.md`。`npm run check` **1175 / 1175 × 2 时区**（1169 → 1175）+ selftest + build（73 片段全过）；只改 `src/client/**`。
+
+| # | 修前 | 修后 |
+| --- | --- | --- |
+| 1 | 汇总直接显示 `**总体偏弱、防御占优**` | `stripMarkdown` 剥离 `**` / `*` / 反引号；`summaryBullets`、`analysisText`、`decisionErrorText` 全走它；页面无连续两个星号 |
+| 2 | 四格 2×2 且极宽留白 | 宽屏 **`repeat(4, minmax(0,1fr))`**；`<1100px` 两列；`<640px` 单列；数值 26px |
+| 3 | 卡片阴影看不见（被后续同选择器覆盖） | 最终规则直接写设计稿值；新增 `finalCardShadow` 取**同选择器最后一条**并解析 `var`，后写覆盖会被抓到 |
+| 4 | 分段选中态太淡 | `rgba(94,106,210,.18)` + `#2f3aa0` + **700**；容器 1px 边框 + 2px 内边距；深色 `.22` + `#dde0ff` |
+| 5 | `rejects: 无` 纯文本 | 并入**决策表格行**；`orders`/`cancel` 为 0 时 `.zero` 次要色；整表 `tabular-nums` |
+
+### 时点核实
+
+`PRISM_DEFAULT_TIMES = ['09:35','11:20','13:10','14:40']`（测试断言含 `14:40`）；活文件 `prism-settings.json` 为 `14:35` 且 `lastFired` 记录过 `14:40` ⇒ **属用户手动编辑，未改**。
+
+### 验证
+
+`npm run check` **1175 / 1175 × 2 时区** + selftest + build（73 项）；BM/BN 两轮干净复跑。
+新增 6 条用例：① 页面无 `**`（恢复星号 ⇒ 败）｜② 宽屏 4 列 + 两档媒体查询（写回 2 列 ⇒ 败）｜③ `finalCardShadow` 等于设计稿值（追加 `.tw-prism-card{box-shadow:none}` ⇒ 败）｜④ 选中背景/文字/700（删背景 ⇒ 败）｜⑤ `decisionRows` 含 `rejects` 行且 zero 次要色（改回纯文本 ⇒ 败）｜⑥ 默认常量含 `14:40`。
+
+### 验收通过的功能读数（活宿主，curl）
+
+自检 `ok:true / OK / 1376ms`；账户 `现金 1.12 / 6 个持仓 / copiedAt 有值`；金十 `ready / 10 页 / 471 条`；研判 2 次（`day`、`at`、4 份报告、`parseError=false`）；挂单与成交 0；净值 1 点。
+
 ## v0.136.0 — 棱镜：修复整页不能滚动、页头自检误报失败
 
 报告 `docs/AUDIT-PRISM-REDESIGN.md`。`npm run check` **1169 / 1169 × 2 时区**（1163 → 1169）+ selftest + build（73 片段全过）；只改 `src/client/**`。

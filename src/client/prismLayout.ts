@@ -41,7 +41,7 @@ export function spacingProblems(css: string): string[] {
 export function elevationProblems(css: string): string[] {
   const bad: string[] = []
   if (!/\.tw-prism\{[^}]*box-shadow:var\(--tw-elev-0\)/.test(css)) bad.push('页面底缺 elevation 0')
-  if (!/\.tw-prism-card\{[^}]*box-shadow:var\(--tw-prism-card-shadow\)/.test(css)) bad.push('卡片缺 elevation 1')
+  if (!/\.tw-prism-card\{[^}]*box-shadow:(var\(--tw-prism-card-shadow\)|0 1px 2px rgba\(0,0,0,\.06\),0 1px 3px rgba\(0,0,0,\.04\))/.test(css)) bad.push('卡片缺 elevation 1')
   if (!/\.tw-prism-seg\{[^}]*box-shadow:var\(--tw-elev-3\)/.test(css)) bad.push('分段缺 elevation 3')
   return bad
 }
@@ -97,4 +97,16 @@ export function scrollProblems(css: string): string[] {
   if (!/@media\s*\(max-width:899px\)/.test(css)) bad.push('缺 <900px 折叠媒体查询')
   if (/(^|;)\s*height\s*:\s*\d/.test(mobile)) bad.push('移动端折叠容器不得写固定 height')
   return bad
+}
+
+
+/** 最终生效的卡片阴影（同选择器后写覆盖前写；解析 var） */
+export function finalCardShadow(css: string): string {
+  const blocks = [...css.matchAll(/\.tw-prism-card\{([^}]*)\}/g)]
+  const last = blocks[blocks.length - 1]?.[1] ?? ''
+  const raw = /(?:^|;)\s*box-shadow\s*:\s*([^;]+)/.exec(last)?.[1]?.trim() ?? ''
+  if (!raw.startsWith('var(')) return raw.replace(/\s+/g, ' ').trim()
+  const name = /var\((--[\w-]+)\)/.exec(raw)?.[1] ?? ''
+  const value = new RegExp(`${name}\s*:\s*([^;]+)`).exec(css)?.[1]?.trim() ?? ''
+  return value.replace(/\s+/g, ' ').trim()
 }

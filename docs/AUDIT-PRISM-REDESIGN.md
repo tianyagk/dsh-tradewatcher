@@ -58,6 +58,15 @@
 - **自检根因**：页面侧走通用 `requestWithTimeout`，HTTP 200 但 body 非 JSON 时抛出 `响应解析失败 (HTTP 200)`；页面把 `HTTP 200` 当失败原因显示。改为专用 `runSelftest`：`fetch` + `res.text()` + `parseSelftestBody(status, raw)`；200 + JSON 按 `ok`；200 + 非 JSON ⇒ `响应非 JSON（前 60 字：…）`；网络/超时 ⇒ `超时/网络错误…`；不再把 200 当失败。
 - 断言：`scrollProblems`（根 auto/无 hidden、body min-height、移动端无固定高度）+ `parseSelftestBody`（JSON/非 JSON/前 60 字）+ 页面源码无 `HTTP ${status}`；注入 hidden/删 min-height/加 height/恢复 HTTP 文案均必败。
 
+## 3.2 设计稿剩余 5 处（2026-10-22 21:2x）
+
+- 汇总/报告剥离 Markdown：`stripMarkdown` 去掉 `**`/`*`/反引号；页面源码无连续两个星号。
+- 四格：宽屏 `repeat(4,minmax(0,1fr))`；`<1100px` 2×2、`<640px` 单列；数值 26px。
+- 卡片阴影：最终生效值断言（同选择器后写覆盖会被 `finalCardShadow` 抓到）= `0 1px 2px rgba(0,0,0,.06),0 1px 3px rgba(0,0,0,.04)`。
+- 分段选中：`rgba(94,106,210,.18)` / `#2f3aa0` / 700；容器 1px 边框 + 2px 内边距。
+- 决策表：`rejects` 并入表格行；`orders`/`cancel` 为 0 时 `.zero` 次要色；整表 tabular-nums。
+- **时点核实**：代码默认 `PRISM_DEFAULT_TIMES` 仍为 `14:40`；活文件 `prism-settings.json` 是 `['09:35','11:20','13:10','14:35']`，且 `lastFired` 记录过 `14:40`，说明是用户后续手动编辑，**不改**；测试只断言默认常量含 14:40。
+
 ## 4. 门禁
 
 - 基线 1146 → 1156 → **1163**（新增 7：对拍 6 + 汇总 JSON 剥离 1）。
