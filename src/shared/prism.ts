@@ -6,6 +6,8 @@
 export interface PrismSettings {
   /** `HH:MM`（Asia/Shanghai），默认 09:35 / 11:20 / 13:10 / 14:40；可增删、无上限 */
   times: string[]
+  /** 研判/自检使用的模型；缺省用 agentDefaultModel.currentSelection() */
+  model?: { provider: string; model: string } | null
   /** 每个交易日已触发的时点（`YYYY-MM-DD` → `HH:MM[]`），进程重启不丢 */
   lastFired: Record<string, string[]>
 }
@@ -81,6 +83,8 @@ export interface PrismState {
   equity?: PrismEquityPoint[]
   decision?: PrismDecision | null
   prices?: Record<string, number | null>
+  /** 宿主可用模型（provider → model ids）；取不到则为空并给原因 */
+  modelCatalog?: { providers: Array<{ id: string; name: string }>; models: Record<string, string[]>; error: string | null }
 }
 
 export const PRISM_DEFAULT_TIMES = ['09:35', '11:20', '13:10', '14:40'] as const
@@ -114,8 +118,10 @@ export interface PrismPosition {
   qty: number
   /** T+1：今日可卖（当日买入不加进来） */
   available: number
-  /** 成本价（真实成本复制/买入摊薄） */
+  /** 摊薄成本价：(累计买入含费 − 累计卖出净额) ÷ 剩余数量 */
   cost: number
+  /** 摊薄净成本（口径唯一事实源；旧账本无此字段时按 qty×cost 回退） */
+  netCost?: number
 }
 
 export interface PrismFill {

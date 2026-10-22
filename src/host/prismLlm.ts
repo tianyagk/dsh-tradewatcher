@@ -45,7 +45,7 @@ export interface ResolvedModel {
 }
 
 /** 解析 llm + 默认模型（任一缺失都给原因，不抛） */
-export function resolvePrismModel(get: (name: string) => unknown): ResolvedModel {
+export function resolvePrismModel(get: (name: string) => unknown, selected?: { provider: string; model: string } | null): ResolvedModel {
   let llm: LlmStreamFace | null = null
   let info: PrismModelInfo = { provider: null, model: null, error: null }
   try {
@@ -54,6 +54,15 @@ export function resolvePrismModel(get: (name: string) => unknown): ResolvedModel
     else info = { provider: null, model: null, error: '宿主没有 llm 服务（未注入/未安装适配器）' }
   } catch (error) {
     info = { provider: null, model: null, error: `llm 服务不可用（${String(error).slice(0, 80)}）` }
+  }
+  if (selected !== undefined && selected !== null) {
+    // 页面配置优先；未知 provider/model 由路由保存时校验，这里明确使用配置，不静默回退默认
+    if (selected.provider.trim() === '' || selected.model.trim() === '') {
+      info = { ...info, provider: null, model: null, error: '模型配置为空（provider/model 必填）' }
+    } else {
+      info = { ...info, provider: selected.provider, model: selected.model, error: null }
+    }
+    return { info, llm }
   }
   try {
     const sel = get('agentDefaultModel') as { currentSelection?: () => { provider?: unknown; model?: unknown } } | undefined

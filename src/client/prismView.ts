@@ -127,3 +127,18 @@ export function sparklineOf(points: readonly PrismEquityPoint[], width = 160, he
     })
     .join(' ')
 }
+
+/** 仓位占比：市值 ÷ 总资产（现金 + 持仓市值），2 位小数 %；总资产 ≤0 ⇒ null */
+export function positionWeightPct(price: number | null, qty: number, totalAssets: number | null): number | null {
+  if (price === null || totalAssets === null || !(totalAssets > 0)) return null
+  return Math.round(((price * qty) / totalAssets) * 10_000) / 100
+}
+
+export const PRISM_PCT = (n: number | null): string => (n === null ? '—' : `${n.toFixed(2)}%`)
+
+/** 页头自检文案：ok ⇒ 通过 + 耗时 + 文本；失败 ⇒ 失败 + error 原文 */
+export function selftestText(r: { ok: boolean; error: string | null; text?: string | null; elapsedMs: number } | null): string {
+  if (r === null) return '—（未自检）'
+  if (r.ok) return `自检通过 · ${r.elapsedMs}ms · ${r.text ?? '—'}`
+  return `自检失败 · ${r.error ?? '未给原因'}`
+}

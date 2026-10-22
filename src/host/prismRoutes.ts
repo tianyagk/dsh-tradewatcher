@@ -103,7 +103,8 @@ const copyRowsOf = async (deps: PrismRouteDeps): Promise<Array<{ secid: string; 
   const secids = port.items.map((p) => p.secid)
   const quotes = await fetchQuotes(secids).catch(() => ({}))
   const view = assemblePortfolio(port.groups, port.items, deps.data.ledgerEntries(), quotes).view
-  return view.positions.filter((p) => p.qty > 0).map((p) => ({ secid: p.secid, name: p.name, qty: p.qty, cost: p.avgCost }))
+  // 用户口径：复制主插件**摊薄成本**（不是移动加权 avgCost）
+  return view.positions.filter((p) => p.qty > 0).map((p) => ({ secid: p.secid, name: p.name, qty: p.qty, cost: p.dilutedCost ?? p.avgCost }))
 }
 
 /** 首次读取/研判前初始化：按真实成本复制，现金不足则部分复制并留痕 */
@@ -122,6 +123,45 @@ const recordEquity = async (deps: PrismRouteDeps, now = Date.now()): Promise<voi
   const quotes = await quoteLiteOf(deps, account.positions.map((p) => p.secid)).catch(() => ({}))
   const point = equityPointOf(account, (secid) => quotes[secid]?.price ?? null, now)
   await deps.trading.saveEquity(upsertEquity(deps.trading.equity(), point))
+}
+
+interface ModelCatalog {
+  providers: Array<{ id: string; name: string }>
+  models: Record<string, string[]>
+  error: string | null
+}
+
+let catalogCache: { at: number; value: ModelCatalog } | null = null
+
+/** 宿主可用模型（60s 缓存）；拿不到 ⇒ providers 空 + error（页面退化为自由输入） */
+const modelCatalogOf = async (get: (n: string) => unknown): Promise<ModelCatalog> => {
+  if (catalogCache !== null && Date.now() - catalogCache.at < 60_000) return catalogCache.value
+  try {
+    const llm = get('llm') as {
+      listProviders?: () => Array<{ id?: unknown; name?: unknown }>
+      listModels?: (provider: string) => Promise<Array<{ id?: unknown }>>
+    } | undefined
+    const providers = (llm?.listProviders?.() ?? [])
+      .filter((p): p is { id: string; name?: unknown } => typeof p.id === 'string')
+      .map((p) => ({ id: p.id, name: typeof p.name === 'string' ? p.name : p.id }))
+    const models: Record<string, string[]> = {}
+    if (typeof llm?.listModels === 'function') {
+      for (const p of providers) {
+        try {
+          models[p.id] = (await llm.listModels(p.id)).map((m) => m.id).filter((id): id is string => typeof id === 'string')
+        } catch {
+          models[p.id] = []
+        }
+      }
+    }
+    const value: ModelCatalog = { providers, models, error: providers.length === 0 ? '宿主没有可用 provider 列表（可自由输入）' : null }
+    catalogCache = { at: Date.now(), value }
+    return value
+  } catch (error) {
+    const value: ModelCatalog = { providers: [], models: {}, error: `模型列表不可读（${String(error).slice(0, 80)}）` }
+    catalogCache = { at: Date.now(), value }
+    return value
+  }
 }
 
 const stateOf = (store: PrismStore, get: (n: string) => unknown): PrismState => {
@@ -168,7 +208,7 @@ const tradingOf = (trading: PrismTradingStore, prices: Record<string, number | n
 
 export async function runPrismForSlot(deps: PrismRouteDeps, slot: string): Promise<Awaited<ReturnType<typeof runPrismAnalysis>>> {
   const inputs = await prismInputsOf(deps)
-  return runPrismAnalysis(deps.store, slot, inputs, { get: deps.get })
+  return runPrismAnalysis(deps.store, slot, inputs, { get: deps.get, model: deps.store.settings().model ?? null })
 }
 
 export function makePrismRoutes(deps: PrismRouteDeps): PluginWebRoute[] {
@@ -189,8 +229,15 @@ export function makePrismRoutes(deps: PrismRouteDeps): PluginWebRoute[] {
           const trading = tradingOf(deps.trading, prices)
           const latestDecision = store.runs().at(-1)?.decision ?? null
           const tradingWithDecision = { ...trading, decision: latestDecision }
+          const modelCatalog = await modelCatalogOf(deps.get)
           // 顶层 `state` 也带模拟盘字段（旧消费者读 state.account；页面读 trading）
-          send(res, 200, { ok: true, asOf: Date.now(), state: { ...stateOf(store, deps.get), ...tradingWithDecision }, trading: tradingWithDecision })
+          send(res, 200, {
+            ok: true,
+            asOf: Date.now(),
+            state: { ...stateOf(store, deps.get), ...tradingWithDecision, modelCatalog },
+            trading: tradingWithDecision,
+            modelCatalog,
+          })
           return
         }
         if (req.method !== 'POST') {
@@ -198,7 +245,7 @@ export function makePrismRoutes(deps: PrismRouteDeps): PluginWebRoute[] {
           return
         }
         try {
-          const body = (await readBody(req)) as { action?: unknown; times?: unknown; text?: unknown; slot?: unknown; capitalLimit?: unknown; orderId?: unknown } | null
+          const body = (await readBody(req)) as { action?: unknown; times?: unknown; text?: unknown; slot?: unknown; capitalLimit?: unknown; orderId?: unknown; provider?: unknown; model?: unknown } | null
           const action = body !== null && typeof body.action === 'string' ? body.action : ''
           if (action === 'settings') {
             const raw = body !== null && Array.isArray(body.times) ? body.times : null
@@ -216,6 +263,22 @@ export function makePrismRoutes(deps: PrismRouteDeps): PluginWebRoute[] {
               return
             }
             const settings: PrismSettings = await store.saveTimes(times)
+            send(res, 200, { ok: true, settings })
+            return
+          }
+          if (action === 'model') {
+            const provider = typeof body?.provider === 'string' ? body.provider.trim() : ''
+            const model = typeof body?.model === 'string' ? body.model.trim() : ''
+            if (provider === '' || model === '') {
+              send(res, 400, { ok: false, error: 'provider 和 model 都必须填写' })
+              return
+            }
+            const catalog = await modelCatalogOf(deps.get)
+            if (catalog.providers.length > 0 && !catalog.providers.some((p) => p.id === provider)) {
+              send(res, 400, { ok: false, error: `未知 provider「${provider}」（可用：${catalog.providers.map((p) => p.id).join(' / ')}）` })
+              return
+            }
+            const settings = await store.saveModel(provider, model)
             send(res, 200, { ok: true, settings })
             return
           }
@@ -318,7 +381,7 @@ export function makePrismRoutes(deps: PrismRouteDeps): PluginWebRoute[] {
         let text: string | null = null
         let chunks: Array<{ type: string; keys: string[] }> = []
         try {
-          const resolved = await import('./prismLlm.ts').then((m) => m.resolvePrismModel(deps.get))
+          const resolved = await import('./prismLlm.ts').then((m) => m.resolvePrismModel(deps.get, deps.store.settings().model ?? null))
           if (resolved.llm === null || resolved.info.provider === null || resolved.info.model === null) {
             error = resolved.info.error ?? '模型不可用'
           } else {

@@ -29,7 +29,7 @@ import { beijingIsoOf, dayOf } from './time.ts'
 
 const DEFAULT_STATUS: PrismNewsStatus = { state: 'idle', pages: 0, lastSeenId: null, fetchedAt: null, reason: null, items: 0 }
 
-const defaultSettings = (): PrismSettings => ({ times: [...PRISM_DEFAULT_TIMES], lastFired: {} })
+const defaultSettings = (): PrismSettings => ({ times: [...PRISM_DEFAULT_TIMES], lastFired: {}, model: null })
 
 export class PrismStore {
   private readonly dir: string
@@ -86,7 +86,7 @@ export class PrismStore {
   }
 
   private async loadSettings(): Promise<void> {
-    const disk = await this.loadJson<{ times?: unknown; lastFired?: unknown }>('prism-settings.json')
+    const disk = await this.loadJson<{ times?: unknown; lastFired?: unknown; model?: unknown }>('prism-settings.json')
     if (disk === null) return
     const times = Array.isArray(disk.times) ? disk.times.filter((t): t is string => typeof t === 'string' && /^\d{2}:\d{2}$/.test(t)) : []
     const lastFired: Record<string, string[]> = {}
@@ -95,7 +95,14 @@ export class PrismStore {
         if (/^\d{4}-\d{2}-\d{2}$/.test(day) && Array.isArray(slots)) lastFired[day] = slots.filter((s): s is string => typeof s === 'string')
       }
     }
-    this.settingsValue = { times: times.length > 0 ? times : [...PRISM_DEFAULT_TIMES], lastFired }
+    const rawModel = disk.model
+    const model =
+      rawModel !== null && rawModel !== undefined && typeof rawModel === 'object' &&
+      typeof (rawModel as { provider?: unknown }).provider === 'string' &&
+      typeof (rawModel as { model?: unknown }).model === 'string'
+        ? { provider: (rawModel as { provider: string }).provider, model: (rawModel as { model: string }).model }
+        : null
+    this.settingsValue = { times: times.length > 0 ? times : [...PRISM_DEFAULT_TIMES], lastFired, model }
   }
 
   private async loadNews(): Promise<void> {
@@ -140,11 +147,18 @@ export class PrismStore {
 
   async saveTimes(times: string[]): Promise<PrismSettings> {
     const clean = [...new Set(times.map((t) => t.trim()))].filter((t) => /^([01]\d|2[0-3]):[0-5]\d$/.test(t)).sort()
-    const next: PrismSettings = { times: clean, lastFired: this.settingsValue.lastFired }
+    const next: PrismSettings = { times: clean, lastFired: this.settingsValue.lastFired, model: this.settingsValue.model ?? null }
     this.settingsValue = next
     await updateJsonLocked(this.pathOf('prism-settings.json'), () => ({ v: 1, ...next })).catch((error) => {
       this.guard.markUnreadable(this.pathOf('prism-settings.json'), error)
     })
+    return this.settings()
+  }
+
+  /** 保存研判/自检模型（provider/model 由路由先做未知 provider 校验） */
+  async saveModel(provider: string, model: string): Promise<PrismSettings> {
+    this.settingsValue = { ...this.settingsValue, model: { provider, model } }
+    await updateJsonLocked(this.pathOf('prism-settings.json'), () => ({ v: 1, ...this.settingsValue })).catch(() => undefined)
     return this.settings()
   }
 

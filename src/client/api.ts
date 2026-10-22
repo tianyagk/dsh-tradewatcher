@@ -541,6 +541,12 @@ export const api = {
     }, 60_000)
   },
   /** 棱镜：手动补跑指定时点（只跑这一轮） */
+  /** 棱镜：保存研判/自检模型（未知 provider 由宿主明确报错） */
+  prismSetModel(provider: string, model: string): Promise<{ ok: boolean; settings: PrismSettings }> {
+    return requestWithTimeout('/tradewatcher/prism', {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action: 'model', provider, model }),
+    }, 20_000)
+  },
   /** 模拟盘：改资金上限（入金） */
   prismCapital(capitalLimit: number): Promise<{ ok: boolean; account: PrismAccount }> {
     return requestWithTimeout('/tradewatcher/prism', {
@@ -560,7 +566,7 @@ export const api = {
     }, 20_000)
   },
   /** 运行时自检：真实调用一次 ctx.llm.stream（永远 200） */
-  prismSelftest(): Promise<{ ok: boolean; error: string | null; model: string | null; elapsedMs: number }> {
+  prismSelftest(): Promise<{ ok: boolean; error: string | null; model: string | null; elapsedMs: number; text: string | null; chunks: Array<{ type: string; keys: string[] }> }> {
     return requestWithTimeout('/tradewatcher/prism/selftest', undefined, 30_000)
   },
   prismRun(slot: string): Promise<{ ok: boolean; run: PrismRun }> {

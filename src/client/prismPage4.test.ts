@@ -51,3 +51,28 @@ test('⑨ 自检路由永远 200 且失败带 error 原文', async () => {
   assert.match(block, /catch \(e\) \{\s*error = String\(e\)\.slice\(0, 200\)/)
   assert.match(block, /AbortSignal\.timeout\(20_000\)/)
 })
+
+test('② 仓位占比：市值 60/40、现金 0 ⇒ 60.00% / 40.00%（用总资产，不是持仓内部占比）', async () => {
+  const { positionWeightPct } = await import('./prismView.ts')
+  assert.equal(positionWeightPct(30, 2, 100), 60)
+  assert.equal(positionWeightPct(20, 2, 100), 40)
+  // 注入：现金 100、市值 60/40、总资产 200 ⇒ 30%/20%；若用持仓内部占比会得到 60%/40%
+  assert.equal(positionWeightPct(30, 2, 200), 30)
+  assert.equal(positionWeightPct(20, 2, 200), 20)
+  assert.equal(positionWeightPct(10, 1, 0), null)
+  assert.ok(page.includes('仓位占比'), '表头必须有「仓位占比」')
+  assert.ok(page.indexOf('仓位占比') > page.indexOf('市值') && page.indexOf('仓位占比') < page.indexOf('浮盈'), '位置在市值之后、浮盈之前')
+})
+
+test('④ 页头自检文案：ok ⇒ 通过 + 文本；失败 ⇒ 失败 + error 原文', async () => {
+  const { selftestText } = await import('./prismView.ts')
+  const okText = selftestText({ ok: true, error: null, text: 'OK', elapsedMs: 12 })
+  assert.match(okText, /自检通过/)
+  assert.match(okText, /OK/)
+  assert.match(okText, /12ms/)
+  const failText = selftestText({ ok: false, error: 'boom-原文', text: null, elapsedMs: 0 })
+  assert.match(failText, /自检失败/)
+  assert.match(failText, /boom-原文/)
+  assert.throws(() => assert.match(okText, /自检失败/, '注入：仍显示失败'), /注入/)
+  assert.ok(page.includes('selftestText(selftest)'), '页头必须使用统一自检文案')
+})

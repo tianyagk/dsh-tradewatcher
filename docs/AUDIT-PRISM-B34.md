@@ -48,6 +48,15 @@
 
 **活宿主 pre-fix 真实读数**（`~/.dsh/dsh-tradewatcher/prism-runs.json` 最后一轮 `14:40`）：`limits.singlePct=20`、`totalPct=null`、`orders=[]`、`cancel=[]`、`reports` 缺、`day/at` 缺；账户 `cash=1,500,000`、`positions=[]`、`copiedAt=null`；`orders=[]`、`equity=[]`。修复后首次 GET 即应得到 `copiedAt` 非空、成本持仓、`equity` 1 点；盘后手动补跑会得到 4 份 `reports` + `rejects`。
 
+## 2.3 用户三条改动 + 页头自检（2026-10-22 20:1x）
+
+| 改动 | 实现 |
+| --- | --- |
+| 摊薄成本 | `copyRowsOf` 取主插件 `PositionRow.dilutedCost`（回退 `avgCost` 仅当摊薄为 null）；`PrismPosition` 增 `netCost`；买入 `netCost += amount + fee`、卖出 `netCost -= amount − fee`，`cost = netCost/qty`；浮盈/页面仍用 `cost`（现价−摊薄）×数量。样例：买 100@10 → 卖 50@12 ⇒ `netCost=400`、`cost=8.00`（移动加权会留 10.00） |
+| 仓位占比 | 持仓表在「市值」后、「浮盈」前新增列：`市值 ÷ 总资产 ×100`（总资产=现金+持仓市值），2 位小数 `%`；`positionWeightPct` 可测；总资产 0/缺价 ⇒ `—` |
+| 模型配置 | `PrismSettings.model{provider,model}` 落 `prism-settings.json`；页面顶部 provider/model 两个自由输入 + 宿主 `listProviders/listModels` 的 datalist 候选；`resolvePrismModel(get, selected)` 配置优先，研判与自检都传 `settings.model`；保存时未知 provider ⇒ 400 明确报错、不写入（不静默回退） |
+| 页头自检 | `selftestText`：`ok:true ⇒ 自检通过 · {elapsedMs}ms · {text}`；`ok:false ⇒ 自检失败 · {error}`；不再把 HTTP 200 当失败、不再显示 0ms |
+
 ## 3. 撮合与费用实测样例（一买一卖完整链路）
 
 样例（脚本直跑引擎，1 分钟 bar 为构造值）：

@@ -26,6 +26,8 @@ export interface PrismInputs {
 
 export interface PrismPipelineDeps {
   get: (name: string) => unknown
+  /** 页面配置的模型；缺省用 agentDefaultModel */
+  model?: { provider: string; model: string } | null
   now?: () => number
   signal?: AbortSignal
 }
@@ -53,7 +55,7 @@ export async function runPrismAnalysis(
 ): Promise<PrismRun> {
   const now = deps.now ?? Date.now
   const startedAt = now()
-  const resolved = resolvePrismModel(deps.get)
+  const resolved = resolvePrismModel(deps.get, deps.model)
   const base: PrismRun = {
     slot,
     day: dayOf(startedAt),

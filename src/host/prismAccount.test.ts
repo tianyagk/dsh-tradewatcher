@@ -172,6 +172,8 @@ test('决策 JSON 解析：limits/orders/cancel；坏 JSON ⇒ null', () => {
   assert.deepEqual(d?.cancel, ['o1'])
   assert.equal(parseDecision('```json\n{坏}\n```'), null)
   assert.equal(parseDecision(null), null)
+  // 无代码围栏的纯 JSON 也接受（严格 JSON 的另一种形态）
+  assert.equal(parseDecision('{"limits":{},"orders":[],"cancel":[]}')?.orders.length, 0)
 })
 
 test('T+1 日切：新交易日 available=qty', () => {
@@ -255,4 +257,17 @@ test('注入：绕开成交前校验直接 applyFill ⇒ 必须抛错（现金�
     /现金不足/,
     '⚠ 反例（照常成交）必须被兜底拦住',
   )
+})
+
+test('摊薄成本：买 100@10 → 卖 50@12 ⇒ 剩余 50 股成本 8.00（不是移动加权 10.00）', () => {
+  const buy = applyFill(emptyAccount(), orderOf({ price: 10, shares: 100, side: 'buy' }), {
+    orderId: 'b', secid: '1.600519', name: '贵州茅台', side: 'buy', price: 10, shares: 100, amount: 1000, fee: 0, at: 1, source: '1min',
+  })
+  assert.equal(buy.positions[0]?.cost, 10)
+  const sell = applyFill(buy, orderOf({ side: 'sell', price: 12, shares: 50 }), {
+    orderId: 's', secid: '1.600519', name: '贵州茅台', side: 'sell', price: 12, shares: 50, amount: 600, fee: 0, at: 2, source: '1min',
+  })
+  assert.equal(sell.positions[0]?.qty, 50)
+  assert.equal(sell.positions[0]?.netCost, 400)
+  assert.equal(sell.positions[0]?.cost, 8, '摊薄口径 (1000−600)/50 = 8.00')
 })

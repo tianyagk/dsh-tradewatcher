@@ -151,17 +151,21 @@ export function applyFill(account: PrismAccount, order: PrismOrder, fill: PrismF
       positions.push({ secid: order.secid, name: order.name, qty: fill.shares, available: 0, cost: money((fill.amount + fill.fee) / fill.shares) })
     } else {
       const p = positions[idx] as PrismPosition
-      const qty = p.qty + fill.shares
-      p.cost = money((p.qty * p.cost + fill.amount + fill.fee) / qty)
-      p.qty = qty
+      const net = p.netCost ?? p.qty * p.cost
+      p.netCost = money(net + fill.amount + fill.fee)
+      p.qty += fill.shares
+      p.cost = money(p.netCost / p.qty)
     }
   } else {
     const p = positions[idx]
     if (p === undefined) throw new Error('卖出无持仓（内部错误）')
     cash = money(cash + fill.amount - fill.fee)
     realized = money(realized + (fill.price - p.cost) * fill.shares - fill.fee)
+    const net = p.netCost ?? p.qty * p.cost
+    p.netCost = money(net - (fill.amount - fill.fee))
     p.qty -= fill.shares
     p.available = Math.max(0, p.available - fill.shares)
+    if (p.qty > 0) p.cost = money((p.netCost as number) / p.qty)
     if (p.qty === 0) positions.splice(idx, 1)
   }
   return { ...account, cash, realized, positions }
@@ -191,7 +195,7 @@ export function copyAtCost(
       skipped.push(`${r.secid}×${r.qty}@${cost.toFixed(2)}（剩余现金 ${remaining.toFixed(2)} 不足）`)
       continue
     }
-    positions.push({ secid: r.secid, name: r.name, qty: take, available: take, cost })
+    positions.push({ secid: r.secid, name: r.name, qty: take, available: take, cost, netCost: money(take * cost) })
     remaining = money(remaining - take * cost)
     if (take < r.qty) skipped.push(`${r.secid} 仅复制 ${take}/${r.qty} 股（剩余现金不足）`)
   }
@@ -253,9 +257,12 @@ export function upsertEquity(list: readonly PrismEquityPoint[], point: PrismEqui
 export function parseDecisionDetailed(text: string | null): { decision: PrismDecision | null; parseError: string | null } {
   if (text === null) return { decision: null, parseError: null }
   const m = /```json\s*([\s\S]*?)```/.exec(text)
-  if (m === null) return { decision: null, parseError: text.slice(0, 4000) }
+  const start = text.indexOf('{')
+  const end = text.lastIndexOf('}')
+  const source = m !== null ? (m[1] as string) : start >= 0 && end > start ? text.slice(start, end + 1) : null
+  if (source === null) return { decision: null, parseError: text.slice(0, 4000) }
   try {
-    const raw = JSON.parse(m[1] as string) as Record<string, unknown>
+    const raw = JSON.parse(source) as Record<string, unknown>
     const limitsRaw = (raw['limits'] ?? {}) as Record<string, unknown>
     const ordersRaw = Array.isArray(raw['orders']) ? raw['orders'] : []
     const orders = ordersRaw
@@ -284,7 +291,7 @@ export function parseDecisionDetailed(text: string | null): { decision: PrismDec
     }
     return { decision, parseError: null }
   } catch {
-    return { decision: null, parseError: (m[1] as string).slice(0, 4000) }
+    return { decision: null, parseError: source.slice(0, 4000) }
   }
 }
 

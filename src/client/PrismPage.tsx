@@ -16,7 +16,10 @@ import {
   analysisText,
   newsStatusText,
   orderStatusText,
+  positionWeightPct,
+  PRISM_PCT,
   runSummaryText,
+  selftestText,
   sparklineOf,
   timesProblems,
   timesText,
@@ -67,9 +70,11 @@ export function PrismPage(props: { active: boolean }): React.ReactElement {
   const [times, setTimes] = useState<string[]>([...PRISM_DEFAULT_TIMES])
   const [skeleton, setSkeleton] = useState('')
   const [capital, setCapital] = useState('1500000')
+  const [provider, setProvider] = useState('')
+  const [modelName, setModelName] = useState('')
   const [busy, setBusy] = useState(false)
   const [notice, setNotice] = useState<string | null>(null)
-  const [selftest, setSelftest] = useState<{ ok: boolean; error: string | null; model: string | null; elapsedMs: number } | null>(null)
+  const [selftest, setSelftest] = useState<{ ok: boolean; error: string | null; model: string | null; elapsedMs: number; text: string | null } | null>(null)
 
   const load = useCallback((): void => {
     setError(null)
@@ -80,6 +85,8 @@ export function PrismPage(props: { active: boolean }): React.ReactElement {
         setTimes(r.state.settings.times)
         setSkeleton(r.state.skeleton)
         setCapital(String(r.trading.account.capitalLimit))
+        setProvider(r.state.settings.model?.provider ?? r.state.model.provider ?? '')
+        setModelName(r.state.settings.model?.model ?? r.state.model.model ?? '')
       })
       .catch((e: Error) => setError(e.message))
   }, [])
@@ -104,28 +111,37 @@ export function PrismPage(props: { active: boolean }): React.ReactElement {
   const doCopy = (): void => act(api.prismCopy(), (r) => setNotice(r.ok ? '已按成本价复制持仓' : `复制失败：${r.error ?? '未知'}`))
   const doCancel = (id: string): void => act(api.prismCancel(id), () => setNotice('已撤销'))
   const saveCapital = (): void => act(api.prismCapital(Number(capital)), () => setNotice('资金上限已更新'))
+  const saveModel = (): void => act(api.prismSetModel(provider, modelName), () => setNotice('模型已保存'))
   const selfTest = (): void => {
     setBusy(true)
-    api.prismSelftest().then(setSelftest).catch((e: Error) => setSelftest({ ok: false, error: e.message, model: null, elapsedMs: 0 })).finally(() => setBusy(false))
+    api.prismSelftest().then(setSelftest).catch((e: Error) => setSelftest({ ok: false, error: e.message, model: null, elapsedMs: 0, text: null })).finally(() => setBusy(false))
   }
 
   const latest: PrismRun | null = state === null || state.runs.length === 0 ? null : (state.runs[state.runs.length - 1] as PrismRun)
   const cards = topCardsOf(trading, trading?.prices ?? {})
+  const totalAssets = trading === null
+    ? null
+    : trading.account.cash + trading.account.positions.reduce((sum, p) => sum + p.qty * (trading.prices?.[p.secid] ?? p.cost), 0)
   const spark = trading === null ? null : sparklineOf(trading.equity)
-  const modelText = state === null ? '—' : state.model.error !== null ? `—（${state.model.error}）` : `${state.model.provider ?? '—'} / ${state.model.model ?? '—'}`
+
 
   return (
     <div className="tw-prism">
       <div className="tw-prism-head">
         <span style={{ fontSize: PRISM_FONT.title }}>棱镜 · 模拟盘</span>
-        <span className="tw-muted" style={{ fontSize: PRISM_FONT.body }}>模型 {modelText}</span>
+        <span className="tw-muted" style={{ fontSize: PRISM_FONT.body }}>模型</span>
+        <input className="tw-prism-time" list="prism-providers" value={provider} onChange={(e) => setProvider(e.target.value)} aria-label="模型 provider" placeholder="provider" />
+        <input className="tw-prism-time" list="prism-models" value={modelName} onChange={(e) => setModelName(e.target.value)} aria-label="模型 model" placeholder="model" />
+        <RippleButton onClick={saveModel} disabled={busy}>保存模型</RippleButton>
+        <datalist id="prism-providers">
+          {(state?.modelCatalog?.providers ?? []).map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+        </datalist>
+        <datalist id="prism-models">
+          {(state?.modelCatalog?.models?.[provider] ?? []).slice(0, 80).map((m) => <option key={m} value={m} />)}
+        </datalist>
         <RippleButton onClick={load} disabled={busy}>刷新</RippleButton>
         <RippleButton onClick={selfTest} disabled={busy}>自检</RippleButton>
-        {selftest !== null ? (
-          <span className="tw-muted" style={{ fontSize: PRISM_FONT.body }}>
-            {selftest.ok ? `自检 OK（${selftest.elapsedMs}ms）` : `自检失败：${selftest.error ?? '未给原因'}（${selftest.elapsedMs}ms）`}
-          </span>
-        ) : null}
+        <span className="tw-muted" style={{ fontSize: PRISM_FONT.body }}>{selftestText(selftest)}</span>
       </div>
       {error !== null ? <div className="tw-prism-error" style={{ fontSize: PRISM_FONT.body }}>—（{error}）</div> : null}
       {notice !== null ? <div className="tw-muted" style={{ fontSize: PRISM_FONT.body }}>{notice}</div> : null}
@@ -155,7 +171,7 @@ export function PrismPage(props: { active: boolean }): React.ReactElement {
             <div className="tw-muted" style={{ fontSize: PRISM_FONT.body }}>—（没有模拟持仓）</div>
           ) : (
             <table className="tw-prism-table" style={{ fontSize: PRISM_FONT.body }}>
-              <thead><tr><th>代码</th><th>名称</th><th className="tw-prism-num">数量</th><th className="tw-prism-num">成本</th><th className="tw-prism-num">现价</th><th className="tw-prism-num">市值</th><th className="tw-prism-num">浮盈</th></tr></thead>
+              <thead><tr><th>代码</th><th>名称</th><th className="tw-prism-num">数量</th><th className="tw-prism-num">成本</th><th className="tw-prism-num">现价</th><th className="tw-prism-num">市值</th><th className="tw-prism-num">仓位占比</th><th className="tw-prism-num">浮盈</th></tr></thead>
               <tbody>
                 {trading.account.positions.map((p) => {
                   const price = trading.prices?.[p.secid] ?? null
@@ -168,6 +184,7 @@ export function PrismPage(props: { active: boolean }): React.ReactElement {
                       <td className="tw-prism-num tw-prism-mono">{PRISM_MONEY(p.cost)}</td>
                       <td className="tw-prism-num tw-prism-mono">{price === null ? '—（未取到行情）' : PRISM_MONEY(price)}</td>
                       <td className="tw-prism-num tw-prism-mono">{PRISM_MONEY(mv)}</td>
+                      <td className="tw-prism-num tw-prism-mono">{PRISM_PCT(positionWeightPct(price, p.qty, totalAssets))}</td>
                       <td className="tw-prism-num tw-prism-mono">{pnl === null ? '—' : PRISM_MONEY(pnl)}</td>
                     </tr>
                   )
