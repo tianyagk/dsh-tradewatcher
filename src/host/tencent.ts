@@ -183,7 +183,7 @@ export interface TencentQuoteFull extends TencentQuote {
 
 /** 完整批量行情（含名称/开高低/量），供自选与持仓的行情链路兜底使用 */
 /** 拉 `qt.gtimg.cn` 原始文本（GBK） */
-async function tencentQuoteText(codes: string[]): Promise<string> {
+export async function tencentQuoteText(codes: string[]): Promise<string> {
   const res = await withHostBreaker('qt.gtimg.cn', () =>
     fetch(`https://qt.gtimg.cn/q=${codes.join(',')}`, {
       headers: { 'user-agent': UA, referer: 'https://gu.qq.com/' },

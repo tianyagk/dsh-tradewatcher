@@ -12,7 +12,10 @@ import type { AuctionInfo } from '../shared/model.ts'
 const here = dirname(fileURLToPath(import.meta.url))
 const drawerSrc = readFileSync(join(here, 'QuoteDrawer.tsx'), 'utf8')
 
-const ok: AuctionInfo = { state: 'ok', price: 1331.88, volLots: 516, volSharePct: 1.54, premiumPct: 0.83, reason: null }
+const ok: AuctionInfo = {
+  state: 'ok', price: 1331.88, volLots: 516, volSharePct: 1.54, premiumPct: 0.83, reason: null,
+  series: [], seriesDay: null,
+}
 
 test('① 四项齐全且格式逐字：`1331.88 · 516.00 手 · 1.54% · +0.83%`', () => {
   assert.equal(auctionText(ok), '1331.88 · 516.00 手 · 1.54% · +0.83%')
@@ -27,9 +30,15 @@ test('① 四项齐全且格式逐字：`1331.88 · 516.00 手 · 1.54% · +0.83
 })
 
 test('② 未开盘 ⇒ `—`；不可用 ⇒ `—（原因）`（拿昨日顶替 / 写作 0 ⇒ 必败）', () => {
-  const notOpen: AuctionInfo = { state: 'not-open', price: null, volLots: null, volSharePct: null, premiumPct: null, reason: null }
+  const notOpen: AuctionInfo = {
+    state: 'not-open', price: null, volLots: null, volSharePct: null, premiumPct: null, reason: null,
+    series: [], seriesDay: null,
+  }
   assert.equal(auctionText(notOpen), '—')
-  const unavailable: AuctionInfo = { state: 'unavailable', price: null, volLots: null, volSharePct: null, premiumPct: null, reason: '腾讯 m1 取数失败' }
+  const unavailable: AuctionInfo = {
+    state: 'unavailable', price: null, volLots: null, volSharePct: null, premiumPct: null,
+    reason: '腾讯 m1 取数失败', series: [], seriesDay: null,
+  }
   assert.equal(auctionText(unavailable), '—（腾讯 m1 取数失败）')
   // 反例注入：未开盘却拿昨日数据（写成 0 或数字）⇒ 判据必须失败
   assert.throws(() => assert.equal(auctionText(notOpen), '1320.50 · 800.00 手 · 2.00% · +0.10%', '反例'), /反例/, '⚠ 反例（昨日顶替）必须失败')

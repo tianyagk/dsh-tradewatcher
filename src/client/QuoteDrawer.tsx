@@ -10,6 +10,8 @@ import { FQ_LABEL } from '../shared/model.ts'
 import { api } from './api.ts'
 import { dirClass, fmtAmt, fmtBig, fmtPct, fmtPrice, fmtSigned } from './format.ts'
 import { auctionText } from './auctionView.ts'
+import { auctionSeriesText } from './auctionSeries.ts'
+import { AuctionSpark } from './AuctionSpark.tsx'
 import { Btn, Skeleton, useEscapeLayer } from './ui.tsx'
 import type { CandleMarker, SparkMarker } from './charts.tsx'
 import { KlineChart, TrendChart } from './kline.tsx'
@@ -276,6 +278,19 @@ export function QuoteDrawer(props: {
         kv('成交额', amtFmt ?? '—'),
         kv('市盈率(动)', d.pe !== null ? String(d.pe) : '—'),
         kv('总市值', d.totalMv !== null ? fmtAmt(d.totalMv) : '—'),
+      ),
+      // 竞价参考价曲线：无点 ⇒ 曲线区显示「—」；有值在行尾给当日最高/最低参考价
+      React.createElement('div', {
+        'data-auction-series': '1',
+        style: { display: 'flex', alignItems: 'center', gap: 8, marginTop: 4, height: 44 },
+      },
+        React.createElement(AuctionSpark, { series: d.auction?.series ?? [] }),
+        (d.auction?.series?.length ?? 0) === 0
+          ? null
+          : React.createElement('span', {
+              className: 'tw-muted',
+              style: { fontSize: 12, fontFamily: 'var(--tw-mono)' },
+            }, auctionSeriesText(d.auction?.series ?? [])),
       ),
     )
   }

@@ -619,6 +619,14 @@ export interface BoardRow {
  */
 export type AuctionState = 'ok' | 'not-open' | 'unavailable'
 
+/** 竞价时段（09:15–09:25:30）的一个采样点：`ref` = 虚拟参考价，`matched` = 匹配量（手） */
+export interface AuctionPoint {
+  /** 行情源时间（epoch ms；`f30`） */
+  t: number
+  ref: number
+  matched: number
+}
+
 export interface AuctionInfo {
   state: AuctionState
   price: number | null
@@ -630,6 +638,10 @@ export interface AuctionInfo {
   premiumPct: number | null
   /** `unavailable` 时的一句原因；其余为 null */
   reason: string | null
+  /** 当日竞价时段采样点（无点 ⇒ `[]`；**不拿 0/占位点冒充**） */
+  series: AuctionPoint[]
+  /** series 属于哪一天（`YYYY-MM-DD`）；无点 ⇒ null */
+  seriesDay: string | null
 }
 
 export interface StockDetail {

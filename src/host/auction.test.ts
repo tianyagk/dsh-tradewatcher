@@ -73,12 +73,17 @@ test('取数壳：非沪深给原因；m1 抛错 → unavailable（永不抛）'
   assert.equal(hk.state, 'unavailable')
   assert.match(String(hk.reason), /仅沪深提供竞价/)
 
-  const ok = await fetchAuction('1.600519', 1320.5, { loadMinutes: async () => [firstToday, lastToday], now: () => at('2026-10-21 10:00') })
+  const ok = await fetchAuction('1.600519', 1320.5, {
+    loadMinutes: async () => [firstToday, lastToday],
+    loadSeries: async () => null,
+    now: () => at('2026-10-21 10:00'),
+  })
   assert.equal(ok.state, 'ok')
   assert.equal(ok.price, 1331.88)
 
   const failed = await fetchAuction('1.600519', 1320.5, {
     loadMinutes: async () => { throw new Error('boom') },
+    loadSeries: async () => null,
     now: () => at('2026-10-21 10:00'),
   })
   assert.equal(failed.state, 'unavailable')

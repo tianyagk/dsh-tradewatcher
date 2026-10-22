@@ -16,6 +16,7 @@ import { makeAgentTools, servicesOf } from './host/tools.ts'
 import { DataStore, dataHome } from './host/store.ts'
 import { CalendarStore } from './host/calendar.ts'
 import { RescueMonitor } from './host/rescue.ts'
+import { AuctionSampler } from './host/auctionSeries.ts'
 import { FupanStore } from './host/fupan.ts'
 import { setQuoteFreshnessMs } from './host/em.ts'
 import { log, type PluginContext, type PluginWebRoute } from './host/context.ts'
@@ -107,6 +108,8 @@ export interface CoreKernel {
   store: DataStore
   calendar: CalendarStore
   rescue: RescueMonitor
+  /** 竞价时段采样器（09:15–09:25:30，每 10s；与 rescue 一样只允许一个实例） */
+  auction: AuctionSampler
   /**
    * 复盘笔记存储（第 8 行 `fupan` 的独占数据面）。
    *
@@ -182,7 +185,17 @@ export function setKernel(value: CoreKernel | null): void {
 function applyCore(ctx: PluginContext, full = false): void {
   const first = kernel === null
   if (first) {
-    kernel = { store: new DataStore(), calendar: new CalendarStore(), rescue: new RescueMonitor(), fupan: new FupanStore(), activeRows: new Set<RowId>(['core']), started: false, starts: 0 }
+    const store = new DataStore()
+    kernel = {
+      store,
+      auction: new AuctionSampler(store),
+      calendar: new CalendarStore(),
+      rescue: new RescueMonitor(),
+      fupan: new FupanStore(),
+      activeRows: new Set<RowId>(['core']),
+      started: false,
+      starts: 0,
+    }
   }
   const k = kernel as CoreKernel
   const provide = ctxSafe<(name: string, value: unknown) => void>(ctx, 'provide')
@@ -210,7 +223,9 @@ function applyCore(ctx: PluginContext, full = false): void {
       __kernelStats.starts += 1
       k.starts += 1
       k.rescue.start()
+      k.auction.start()
       log('rescue monitor started', `interval ${k.store.getPrefs().rescue.intervalSec}s / tail ${k.store.getPrefs().rescue.tailIntervalSec}s`)
+      log('auction sampler started', 'window 09:15:00–09:25:30 / interval 10s')
     }).catch((error) => {
       log('store init failed:', String(error))
     })
@@ -235,6 +250,7 @@ function applyCore(ctx: PluginContext, full = false): void {
     return () => {
       disposed = true
       k.rescue.stop()
+      k.auction.stop()
       for (const dispose of disposers) {
         try {
           dispose()
