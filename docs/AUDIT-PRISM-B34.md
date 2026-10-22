@@ -35,6 +35,19 @@
 - `applyFill` 再加兜底：买入不足直接抛错（任何绕过路径都不能把现金打成负数）。
 - 实测：现金 1,000 买 100@20（需 2,005.02）⇒ `rejected`，现金仍 1,000；现金 1,000 买 100@9.9（需 995.01）⇒ 成交，现金 4.99；持仓 100 卖 200 ⇒ `rejected`，持仓仍 100。
 
+## 2.2 活宿主五处落账修复（2026-10-22 17:1x）
+
+| 问题 | 修复 |
+| --- | --- |
+| `state.account` 为空 | GET `/tradewatcher/prism` 与 `run` 前调用 `ensureAccount`：`copiedAt=null` 时按真实 `avgCost` 复制；现金不足**部分复制**（逐行 `take=min(qty,floor(剩余/cost))`）并在 `copyLogs.note/skipped` 留痕；`cash=150万−已复制成本`。`state` 顶层同时返回 `account/orders/fills/equity/decision/prices`（旧消费者读 `state.account`） |
+| `run.day/at` null | `PrismRun` 增 `day`（北京日期）与 `at`（`beijingIsoOf`，ISO+08:00）；旧 runs 读盘时归一化补齐 |
+| `run.reports` [] | `reports:[{role,text,error}]` 四份逐份写入 `prism-runs.json` 并随 run 回包；旧 runs 从 `analyses` 归一化 |
+| `decision.orders/cancels` 0 | 活宿主实际汇总的 JSON **解析成功**（`limits.singlePct=20`，`orders=[]`、`cancel=[]` 是模型真实选择，不是解析失败）。新增 `decision.parseError`：无 JSON 块/JSON 非法/orders 字段非法被丢弃 ⇒ 带原文或丢弃计数，**不再静默成 0 笔**；提示词要求严格 JSON（无注释/尾逗号） |
+| `equity` 0 点 | GET、每次研判、复制持仓后都 `recordEquity`：总资产=现金+持仓市值（缺价按成本），`upsertEquity` 同日覆盖、每日一点 |
+| 盘后下单 | `placeDecision` 在 `<09:30` 或 `≥15:00` 时把每笔决策单置 `rejected`，原因 `盘后不下单（HH:MM，A股 15:00 收盘）`，并写入 `decision.rejects`（`run` 后 `replaceRun` 落盘） |
+
+**活宿主 pre-fix 真实读数**（`~/.dsh/dsh-tradewatcher/prism-runs.json` 最后一轮 `14:40`）：`limits.singlePct=20`、`totalPct=null`、`orders=[]`、`cancel=[]`、`reports` 缺、`day/at` 缺；账户 `cash=1,500,000`、`positions=[]`、`copiedAt=null`；`orders=[]`、`equity=[]`。修复后首次 GET 即应得到 `copiedAt` 非空、成本持仓、`equity` 1 点；盘后手动补跑会得到 4 份 `reports` + `rejects`。
+
 ## 3. 撮合与费用实测样例（一买一卖完整链路）
 
 样例（脚本直跑引擎，1 分钟 bar 为构造值）：
@@ -69,7 +82,7 @@
 
 ## 6. 门禁
 
-- 基线 1096 → 批次 1+2 的 1110 → 本批 **1132**（新增 22：账户/撮合/费用/约束/账本 12 + 页面/四格 4 + 自检 handler 2 + 现金/可卖硬校验 4）。
+- 基线 1096 → 1110 → 1132 → 本批 **1139**（1134 + 5：首次初始化/部分复制/盘后 rejects 3 + day/at/reports 1 + parseError 1）。
 - `DSH_HOME=/tmp/prismb34-check{AM,AN} npm run check`：两轮 **1132 × 2 全绿**（AM 18,976/18,745ms；AN 20,030/18,778ms）；selftest 全过；构建 **73 项**（v0.130.0，`build.mjs` 未改）。
 
 ## 7. 未做 / 已知边界

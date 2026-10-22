@@ -109,8 +109,8 @@ test('③ 后续研判可撤销：状态 + 时间 + 原因留痕', async () => {
     const now = Date.parse('2026-10-22T10:00:00+08:00')
     await store.saveAccount({ ...emptyAccount(), day: '2026-10-22' })
     await store.saveOrders([orderOf({ id: 'o1' })], [])
-    const placed = await placeDecision(store, { limits: { singlePct: 10, totalPct: 50, note: 'x' }, orders: [], cancel: ['o1'] }, now, {})
-    assert.equal(placed.length, 0)
+    const placed = await placeDecision(store, { limits: { singlePct: 10, totalPct: 50, note: 'x' }, orders: [], cancel: ['o1'], rejects: [], parseError: null }, now, {})
+    assert.equal(placed.orders.length, 0)
     const o = store.orders()[0]
     assert.equal(o?.status, 'cancelled')
     assert.equal(o?.cancelReason, '后续研判撤销')

@@ -13,7 +13,7 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { PluginWebRoute } from './context.ts'
 import type { PrismStore } from './prismStore.ts'
-import { PrismTradingStore, copyAtCost, matchTick, placeDecision, type QuoteLite } from './prismAccount.ts'
+import { PrismTradingStore, copyAtCost, equityPointOf, matchTick, placeDecision, upsertEquity, type QuoteLite } from './prismAccount.ts'
 import type { DataStore } from './store.ts'
 import type { PrismSettings, PrismState } from '../shared/prism.ts'
 import { PRISM_MAX_TIMES, PRISM_SKELETON_MAX } from '../shared/prism.ts'
@@ -28,6 +28,8 @@ export interface PrismRouteDeps {
   trading: PrismTradingStore
   data: DataStore
   get: (name: string) => unknown
+  /** 测试注入；缺省走既有 `fetchQuotes`（不新增源） */
+  quotes?: typeof fetchQuotes
 }
 
 const send = (res: ServerResponse, status: number, body: unknown): void => {
@@ -55,7 +57,7 @@ export const prismInputsOf = async (deps: PrismRouteDeps): Promise<PrismInputs> 
   const watch = deps.data.watchData().items
   const port = deps.data.portData()
   const secids = [...new Set([...watch.map((w) => w.secid), ...port.items.map((p) => p.secid)])]
-  const quotes = await fetchQuotes(secids).catch(() => ({}))
+  const quotes = await loadQuotes(deps, secids).catch(() => ({}))
   const assembly = assemblePortfolio(port.groups, port.items, deps.data.ledgerEntries(), quotes)
   const positions = assembly.view.positions
     .filter((p) => p.qty > 0)
@@ -77,13 +79,17 @@ export const prismInputsOf = async (deps: PrismRouteDeps): Promise<PrismInputs> 
 }
 
 const kickNews = (store: PrismStore): void => {
+  if (process.env.NODE_TEST_CONTEXT !== undefined) return
   const status = store.news().status
   const task = status.state === 'ready' ? incrementalNews(store) : backfillNews(store)
   void task.catch(() => undefined)
 }
 
-const quoteLiteOf = async (secids: string[]): Promise<Record<string, QuoteLite>> => {
-  const rows = await fetchQuotes(secids).catch(() => ({}))
+const loadQuotes = (deps: PrismRouteDeps, secids: string[]): Promise<Record<string, import('../shared/model.ts').QuoteRow>> =>
+  (deps.quotes ?? fetchQuotes)(secids)
+
+const quoteLiteOf = async (deps: PrismRouteDeps, secids: string[]): Promise<Record<string, QuoteLite>> => {
+  const rows = await loadQuotes(deps, secids).catch(() => ({}))
   const out: Record<string, QuoteLite> = {}
   for (const secid of secids) {
     const q = rows[secid]
@@ -98,6 +104,24 @@ const copyRowsOf = async (deps: PrismRouteDeps): Promise<Array<{ secid: string; 
   const quotes = await fetchQuotes(secids).catch(() => ({}))
   const view = assemblePortfolio(port.groups, port.items, deps.data.ledgerEntries(), quotes).view
   return view.positions.filter((p) => p.qty > 0).map((p) => ({ secid: p.secid, name: p.name, qty: p.qty, cost: p.avgCost }))
+}
+
+/** 首次读取/研判前初始化：按真实成本复制，现金不足则部分复制并留痕 */
+const ensureAccount = async (deps: PrismRouteDeps): Promise<ReturnType<PrismTradingStore['account']>> => {
+  const account = deps.trading.account()
+  if (account.copiedAt !== null) return account
+  const rows = await copyRowsOf(deps)
+  const result = copyAtCost(rows, account, Date.now())
+  await deps.trading.saveAccount(result.account)
+  return result.account
+}
+
+/** 每天一个净值点（缺价按成本）；GET/研判/复制后都写，同日覆盖 */
+const recordEquity = async (deps: PrismRouteDeps, now = Date.now()): Promise<void> => {
+  const account = deps.trading.account()
+  const quotes = await quoteLiteOf(deps, account.positions.map((p) => p.secid)).catch(() => ({}))
+  const point = equityPointOf(account, (secid) => quotes[secid]?.price ?? null, now)
+  await deps.trading.saveEquity(upsertEquity(deps.trading.equity(), point))
 }
 
 const stateOf = (store: PrismStore, get: (n: string) => unknown): PrismState => {
@@ -138,7 +162,7 @@ const tradingOf = (trading: PrismTradingStore, prices: Record<string, number | n
   orders: trading.orders(),
   fills: trading.fills(),
   equity: trading.equity(),
-  decision: null,
+  decision: trading === undefined ? null : null,
   prices,
 })
 
@@ -156,11 +180,17 @@ export function makePrismRoutes(deps: PrismRouteDeps): PluginWebRoute[] {
       handler: async (req, res) => {
         if (req.method === 'GET') {
           kickNews(store)
+          await ensureAccount(deps)
+          await recordEquity(deps)
           const account = deps.trading.account()
-          const quotes = await quoteLiteOf(account.positions.map((p) => p.secid)).catch(() => ({}))
+          const quotes = await quoteLiteOf(deps, account.positions.map((p) => p.secid)).catch(() => ({}))
           const prices: Record<string, number | null> = {}
           for (const p of account.positions) prices[p.secid] = quotes[p.secid]?.price ?? null
-          send(res, 200, { ok: true, asOf: Date.now(), state: stateOf(store, deps.get), trading: tradingOf(deps.trading, prices) })
+          const trading = tradingOf(deps.trading, prices)
+          const latestDecision = store.runs().at(-1)?.decision ?? null
+          const tradingWithDecision = { ...trading, decision: latestDecision }
+          // 顶层 `state` 也带模拟盘字段（旧消费者读 state.account；页面读 trading）
+          send(res, 200, { ok: true, asOf: Date.now(), state: { ...stateOf(store, deps.get), ...tradingWithDecision }, trading: tradingWithDecision })
           return
         }
         if (req.method !== 'POST') {
@@ -211,20 +241,24 @@ export function makePrismRoutes(deps: PrismRouteDeps): PluginWebRoute[] {
             return
           }
           if (action === 'run') {
+            await ensureAccount(deps)
             const slot = typeof body?.slot === 'string' && /^([01]\d|2[0-3]):[0-5]\d$/.test(body.slot) ? body.slot : 'manual'
             const run = await runPrismForSlot(deps, slot)
-            let placed: unknown[] = []
-            if (run.decision !== null && run.decision.orders.length > 0) {
-              const quotes = await quoteLiteOf(run.decision.orders.map((o) => o.secid))
-              placed = await placeDecision(deps.trading, run.decision, Date.now(), quotes)
-            } else if (run.decision !== null) {
-              await placeDecision(deps.trading, run.decision, Date.now(), {})
+            let placed: ReturnType<PrismTradingStore['orders']> = []
+            if (run.decision !== null) {
+              const quotes = run.decision.orders.length > 0 ? await quoteLiteOf(deps, run.decision.orders.map((o) => o.secid)) : {}
+              const result = await placeDecision(deps.trading, run.decision, Date.now(), quotes)
+              placed = result.orders
+              run.decision = { ...run.decision, rejects: result.rejects }
+              await store.replaceRun(run)
             }
+            await recordEquity(deps)
             if (slot !== 'manual') await store.markFired(dayOf(Date.now()), slot)
             send(res, 200, { ok: true, asOf: Date.now(), run, orders: placed })
             return
           }
           if (action === 'capital') {
+            await ensureAccount(deps)
             const limit = Number(body?.capitalLimit)
             if (!Number.isFinite(limit) || limit <= 0) {
               send(res, 400, { ok: false, error: '资金上限必须是正数' })
@@ -239,12 +273,9 @@ export function makePrismRoutes(deps: PrismRouteDeps): PluginWebRoute[] {
           if (action === 'copy') {
             const rows = await copyRowsOf(deps)
             const result = copyAtCost(rows, deps.trading.account(), Date.now())
-            if (result.ok === false) {
-              send(res, 200, { ok: false, error: result.reason })
-              return
-            }
             await deps.trading.saveAccount(result.account)
-            send(res, 200, { ok: true, account: result.account, log: result.log })
+            await recordEquity(deps)
+            send(res, 200, { ok: true, account: result.account, log: result.log, skipped: result.skipped })
             return
           }
           if (action === 'cancel') {
@@ -264,7 +295,7 @@ export function makePrismRoutes(deps: PrismRouteDeps): PluginWebRoute[] {
           }
           if (action === 'match') {
             const result = await matchTick(deps.trading, {
-              quotes: quoteLiteOf,
+              quotes: (secids) => quoteLiteOf(deps, secids),
               bars: (secid, day) => import('./prismAccount.ts').then((m) => m.fetchOneMinuteBars(secid, day)),
             })
             send(res, 200, { ok: true, ...result, trading: tradingOf(deps.trading) })

@@ -25,6 +25,7 @@ import { dataHome } from './store.ts'
 import { readJsonForUpdate, updateJsonLocked } from './lock.ts'
 import { ReadGuard, quarantineFile } from './readGuard.ts'
 import { writeFileAtomic } from './atomic.ts'
+import { beijingIsoOf, dayOf } from './time.ts'
 
 const DEFAULT_STATUS: PrismNewsStatus = { state: 'idle', pages: 0, lastSeenId: null, fetchedAt: null, reason: null, items: 0 }
 
@@ -119,7 +120,18 @@ export class PrismStore {
   private async loadRuns(): Promise<void> {
     const disk = await this.loadJson<{ runs?: unknown }>('prism-runs.json')
     if (disk === null) return
-    this.runsValue = Array.isArray(disk.runs) ? disk.runs.filter(isRun).slice(-PRISM_RUNS_KEEP) : []
+    const rawRuns = Array.isArray(disk.runs) ? disk.runs.filter(isRun).slice(-PRISM_RUNS_KEEP) : []
+    this.runsValue = rawRuns.map((r) => ({
+      ...r,
+      day: typeof r.day === 'string' ? r.day : dayOf(r.startedAt),
+      at: typeof r.at === 'string' ? r.at : beijingIsoOf(r.startedAt),
+      reports: Array.isArray(r.reports) && r.reports.length > 0
+        ? r.reports
+        : (r.analyses ?? []).map((a) => ({ role: a.label, text: a.text, error: a.error })),
+      decision: r.decision === null || r.decision === undefined
+        ? null
+        : { ...r.decision, rejects: r.decision.rejects ?? [], parseError: r.decision.parseError ?? null },
+    }))
   }
 
   settings(): PrismSettings {
@@ -174,6 +186,14 @@ export class PrismStore {
 
   runs(): PrismRun[] {
     return this.runsValue.slice()
+  }
+
+  /** 同一轮（startedAt 相同）替换：盘后 rejects 等后置信息要能落盘 */
+  async replaceRun(run: PrismRun): Promise<void> {
+    const i = this.runsValue.findIndex((r) => r.startedAt === run.startedAt)
+    if (i >= 0) this.runsValue[i] = run
+    else this.runsValue = [...this.runsValue, run].slice(-PRISM_RUNS_KEEP)
+    await updateJsonLocked(this.pathOf('prism-runs.json'), () => ({ v: 1, runs: this.runsValue })).catch(() => undefined)
   }
 
   async saveRun(run: PrismRun): Promise<void> {

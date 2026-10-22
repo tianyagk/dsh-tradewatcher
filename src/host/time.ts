@@ -337,3 +337,9 @@ export function isSettledOffline(cacheUpdatedAt: number, ts: number = Date.now()
   if (!Number.isFinite(cacheUpdatedAt) || cacheUpdatedAt <= 0) return false
   return cacheUpdatedAt >= lastCloseBoundary(ts)
 }
+
+/** 北京时间 ISO（含 +08:00）：`2026-10-22T17:12:53+08:00` */
+export function beijingIsoOf(ts: number): string {
+  const d = new Date(ts + 8 * 3_600_000)
+  return `${d.toISOString().slice(0, 19)}+08:00`
+}

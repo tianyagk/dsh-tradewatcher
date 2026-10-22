@@ -237,12 +237,12 @@ export function PrismPage(props: { active: boolean }): React.ReactElement {
           : (
             <div className="tw-prism-stack">
               <div className="tw-muted" style={{ fontSize: PRISM_FONT.body }}>
-                {latest.slot} · {shClockText(latest.startedAt)} · token 用量 —（未取到）
+                {latest.slot} · {latest.day || '—'} {latest.at || ''} · token 用量 —（未取到）
               </div>
-              {latest.analyses.map((a) => (
-                <details key={a.key} className="tw-prism-analysis">
-                  <summary style={{ fontSize: PRISM_FONT.body }}>{a.label}</summary>
-                  <div className="tw-prism-analysis-body" style={{ fontSize: PRISM_FONT.body }}>{analysisText(a)}</div>
+              {((latest.reports ?? []).length > 0 ? latest.reports ?? [] : latest.analyses.map((a) => ({ role: a.label, text: a.text, error: a.error }))).map((a) => (
+                <details key={a.role} className="tw-prism-analysis">
+                  <summary style={{ fontSize: PRISM_FONT.body }}>{a.role}</summary>
+                  <div className="tw-prism-analysis-body" style={{ fontSize: PRISM_FONT.body }}>{analysisText({ key: 'info', label: a.role, text: a.text, error: a.error })}</div>
                 </details>
               ))}
               <div className="tw-prism-summary" style={{ fontSize: PRISM_FONT.body }}>汇总：{runSummaryText(latest)}</div>
@@ -253,6 +253,10 @@ export function PrismPage(props: { active: boolean }): React.ReactElement {
                   <div>仓位上限：单标的 {latest.decision.limits.singlePct ?? '—'}% / 总 {latest.decision.limits.totalPct ?? '—'}%（{latest.decision.limits.note ?? '未给依据'}）</div>
                   <div>挂单清单：{latest.decision.orders.length === 0 ? '无' : latest.decision.orders.map((o) => `${o.side === 'buy' ? '买' : '卖'} ${o.secid} ${o.shares}@${o.price}`).join('；')}</div>
                   <div>撤单清单：{latest.decision.cancel.length === 0 ? '无' : latest.decision.cancel.join('、')}</div>
+                  {(latest.decision.parseError ?? null) === null ? null : (
+                    <div className="tw-prism-error" style={{ fontSize: PRISM_FONT.body }}>决策 JSON 解析失败：{latest.decision.parseError}</div>
+                  )}
+                  <div>引擎拒绝：{(latest.decision.rejects ?? []).length === 0 ? '无' : (latest.decision.rejects ?? []).map((r) => `${r.secid} ${r.reason}`).join('；')}</div>
                 </div>
               )}
             </div>

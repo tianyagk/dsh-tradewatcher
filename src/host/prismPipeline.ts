@@ -8,12 +8,14 @@
 import {
   PRISM_ANALYSIS_META,
   type PrismAnalysis,
+  type PrismDecision,
   type PrismNewsItem,
   type PrismRun,
 } from '../shared/prism.ts'
 import type { PrismStore } from './prismStore.ts'
+import { beijingIsoOf, dayOf } from './time.ts'
 import { resolvePrismModel, streamText, type LlmStreamFace } from './prismLlm.ts'
-import { parseDecision } from './prismAccount.ts'
+import { parseDecisionDetailed } from './prismAccount.ts'
 
 export interface PrismInputs {
   positions: string
@@ -54,6 +56,9 @@ export async function runPrismAnalysis(
   const resolved = resolvePrismModel(deps.get)
   const base: PrismRun = {
     slot,
+    day: dayOf(startedAt),
+    at: beijingIsoOf(startedAt),
+    reports: [],
     startedAt,
     finishedAt: null,
     analyses: PRISM_ANALYSIS_META.map((m) => ({ key: m.key, label: m.label, text: null, error: null })),
@@ -103,7 +108,7 @@ export async function runPrismAnalysis(
           '\n最后另起一行输出一个 ```json 代码块，字段：' +
           '{"limits":{"singlePct":数字或null,"totalPct":数字或null,"note":"仓位上限依据"},' +
           '"orders":[{"secid":"1.600519","side":"buy|sell","price":数字,"shares":整百,"reason":"原因"}],' +
-          '"cancel":["订单id"]}。没有挂单就输出空数组；不要输出别的 JSON。',
+          '"cancel":["订单id"]}。严格 JSON（不得注释、尾逗号、额外文字）；没有挂单就输出空数组；不要输出别的 JSON。',
       }],
       '你是严谨的市场研判助手。只依据给定材料，缺失就写 — 并给一句原因；不写免责声明。',
       deps.signal,
@@ -111,13 +116,21 @@ export async function runPrismAnalysis(
     summary = res.text
     summaryError = res.error
   }
+  const parsed = parseDecisionDetailed(summary)
+  const decision: PrismDecision | null = parsed.decision
+    ?? (summary === null
+      ? null
+      : { limits: { singlePct: null, totalPct: null, note: null }, orders: [], cancel: [], rejects: [], parseError: parsed.parseError })
   const run: PrismRun = {
     slot,
+    day: dayOf(startedAt),
+    at: beijingIsoOf(startedAt),
+    reports: analyses.map((a) => ({ role: a.label, text: a.text, error: a.error })),
     startedAt,
     finishedAt: now(),
     analyses,
     summary,
-    decision: parseDecision(summary),
+    decision,
     error: summaryError,
   }
   await store.saveRun(run)

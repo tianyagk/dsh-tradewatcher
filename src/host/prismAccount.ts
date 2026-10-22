@@ -25,7 +25,7 @@ import type {
 import { dataHome } from './store.ts'
 import { readJsonForUpdate, updateJsonLocked } from './lock.ts'
 import { ReadGuard, quarantineFile } from './readGuard.ts'
-import { dayOf } from './time.ts'
+import { dayOf, hhmmOf } from './time.ts'
 import { withHostBreaker } from './breakerFetch.ts'
 
 export const PRISM_INITIAL_CAPITAL = 1_500_000
@@ -167,32 +167,50 @@ export function applyFill(account: PrismAccount, order: PrismOrder, fill: PrismF
   return { ...account, cash, realized, positions }
 }
 
-/** 复制真实持仓（按成本价；超过资金上限 ⇒ 拒绝并给原因） */
+/**
+ * 复制真实持仓（按成本价；资金上限不足时**只复制能覆盖的部分**并留痕）。
+ * 复制的现金口径：`cash = capitalLimit − Σ(实际复制 qty × cost)`。
+ */
 export function copyAtCost(
   rows: ReadonlyArray<{ secid: string; name: string; qty: number; cost: number }>,
   account: PrismAccount,
   now: number,
-): { ok: true; account: PrismAccount; log: PrismCopyLog } | { ok: false; reason: string } {
-  const invested = money(rows.reduce((a, r) => a + r.qty * r.cost, 0))
-  if (invested > account.capitalLimit) {
-    return { ok: false, reason: `复制成本 ${invested.toFixed(2)} 超过资金上限 ${account.capitalLimit.toFixed(2)}` }
-  }
+): { ok: true; account: PrismAccount; log: PrismCopyLog; skipped: string[] } {
   const before = account.positions.map((p) => `${p.secid}×${p.qty}@${p.cost.toFixed(2)}`)
-  const positions: PrismPosition[] = rows.map((r) => ({
-    secid: r.secid,
-    name: r.name,
-    qty: r.qty,
-    available: r.qty,
-    cost: money(r.cost),
-  }))
+  let remaining = money(account.capitalLimit)
+  const positions: PrismPosition[] = []
+  const skipped: string[] = []
+  for (const r of rows) {
+    const cost = money(r.cost)
+    if (!(cost > 0) || !(r.qty > 0)) {
+      skipped.push(`${r.secid}×${r.qty}@${r.cost}（数量或成本无效）`)
+      continue
+    }
+    const take = Math.max(0, Math.min(r.qty, Math.floor(remaining / cost)))
+    if (take <= 0) {
+      skipped.push(`${r.secid}×${r.qty}@${cost.toFixed(2)}（剩余现金 ${remaining.toFixed(2)} 不足）`)
+      continue
+    }
+    positions.push({ secid: r.secid, name: r.name, qty: take, available: take, cost })
+    remaining = money(remaining - take * cost)
+    if (take < r.qty) skipped.push(`${r.secid} 仅复制 ${take}/${r.qty} 股（剩余现金不足）`)
+  }
+  const note = skipped.length === 0 ? undefined : `部分复制：${skipped.join('；')}`
+  const log: PrismCopyLog = {
+    at: now,
+    before,
+    after: positions.map((p) => `${p.secid}×${p.qty}@${p.cost.toFixed(2)}`),
+    ...(note === undefined ? {} : { note }),
+    ...(skipped.length === 0 ? {} : { skipped }),
+  }
   const next: PrismAccount = {
     ...account,
-    cash: money(account.capitalLimit - invested),
+    cash: remaining,
     positions,
     copiedAt: now,
-    copyLogs: [...account.copyLogs, { at: now, before, after: positions.map((p) => `${p.secid}×${p.qty}@${p.cost.toFixed(2)}`) }].slice(-20),
+    copyLogs: [...account.copyLogs, log].slice(-20),
   }
-  return { ok: true, account: next, log: next.copyLogs[next.copyLogs.length - 1] as PrismCopyLog }
+  return { ok: true, account: next, log, skipped }
 }
 
 /** 新交易日：T+1 解锁（available = qty）；dayStartEquity 用上一日收盘净值 */
@@ -228,11 +246,14 @@ export function upsertEquity(list: readonly PrismEquityPoint[], point: PrismEqui
   return out.sort((a, b) => (a.day < b.day ? -1 : 1)).slice(-365)
 }
 
-/** 解析汇总里的 JSON 决策块（```json … ```）；失败 ⇒ null */
-export function parseDecision(text: string | null): PrismDecision | null {
-  if (text === null) return null
+/**
+ * 解析汇总里的严格 JSON 决策块（```json … ```）。
+ * 失败 ⇒ `decision=null` + `parseError` 带**原文**（不得静默成 0 笔）。
+ */
+export function parseDecisionDetailed(text: string | null): { decision: PrismDecision | null; parseError: string | null } {
+  if (text === null) return { decision: null, parseError: null }
   const m = /```json\s*([\s\S]*?)```/.exec(text)
-  if (m === null) return null
+  if (m === null) return { decision: null, parseError: text.slice(0, 4000) }
   try {
     const raw = JSON.parse(m[1] as string) as Record<string, unknown>
     const limitsRaw = (raw['limits'] ?? {}) as Record<string, unknown>
@@ -248,7 +269,9 @@ export function parseDecision(text: string | null): PrismDecision | null {
       }))
       .filter((o) => /^[0-9]{1,3}\.[A-Za-z0-9]+$/.test(o.secid) && o.price > 0 && o.shares > 0)
     const cancel = Array.isArray(raw['cancel']) ? raw['cancel'].filter((x): x is string => typeof x === 'string') : []
-    return {
+    const dropped = ordersRaw.length - orders.length
+    const parseError = dropped > 0 ? `orders 中有 ${dropped} 笔字段非法被丢弃（原始 ${ordersRaw.length} 笔）` : null
+    const decision: PrismDecision = {
       limits: {
         singlePct: typeof limitsRaw['singlePct'] === 'number' ? limitsRaw['singlePct'] : null,
         totalPct: typeof limitsRaw['totalPct'] === 'number' ? limitsRaw['totalPct'] : null,
@@ -256,10 +279,18 @@ export function parseDecision(text: string | null): PrismDecision | null {
       },
       orders,
       cancel,
+      rejects: [],
+      parseError,
     }
+    return { decision, parseError: null }
   } catch {
-    return null
+    return { decision: null, parseError: (m[1] as string).slice(0, 4000) }
   }
+}
+
+/** 兼容旧调用：只取决策（失败 ⇒ null；需要原文用 `parseDecisionDetailed`） */
+export function parseDecision(text: string | null): PrismDecision | null {
+  return parseDecisionDetailed(text).decision
 }
 
 /* ────────────────────────── 账本存储 ────────────────────────── */
@@ -464,12 +495,17 @@ const idOf = (order: { secid: string; side: string; price: number; shares: numbe
   `o-${order.decidedAt}-${order.secid}-${order.side}-${order.price}-${order.shares}`
 
 /** 按当日决策落挂单：先撤销指定单，再逐笔做静态约束（拒绝也留痕） */
+export interface PlaceDecisionResult {
+  orders: PrismOrder[]
+  rejects: PrismDecision['rejects']
+}
+
 export async function placeDecision(
   store: PrismTradingStore,
   decision: PrismDecision,
   now: number,
   quotes: Record<string, QuoteLite>,
-): Promise<PrismOrder[]> {
+): Promise<PlaceDecisionResult> {
   const day = dayOf(now)
   const account = rollDay(store.account(), day, store.equity().at(-1)?.equity ?? null)
   const orders = store.orders().map((o) => ({ ...o }))
@@ -482,6 +518,9 @@ export async function placeDecision(
     }
   }
   const out: PrismOrder[] = []
+  const rejects: PrismDecision['rejects'] = []
+  const hhmm = hhmmOf(now)
+  const afterHours = hhmm >= '15:00' || hhmm < '09:30'
   for (const d of decision.orders) {
     const q = quotes[d.secid]
     const position = account.positions.find((p) => p.secid === d.secid)
@@ -499,6 +538,15 @@ export async function placeDecision(
       status: 'pending',
     }
     if (orders.some((o) => o.id === order.id)) continue
+    if (afterHours) {
+      const reason = `盘后不下单（${hhmm}，A股 15:00 收盘）`
+      order.status = 'rejected'
+      order.rejectReason = reason
+      orders.push(order)
+      out.push(order)
+      rejects.push({ secid: d.secid, side: d.side, price: d.price, shares: d.shares, reason })
+      continue
+    }
     const reason = q === undefined
       ? '未取到行情（停牌/代码无效）'
       : rejectReasonOf(order, {
@@ -516,7 +564,7 @@ export async function placeDecision(
   }
   await store.saveAccount(account)
   await store.saveOrders(orders, store.fills())
-  return out
+  return { orders: out, rejects }
 }
 
 /** 30 秒撮合：跨日挂单失效；1 分钟 high/low 触及按挂单价成交；净值每日一点 */

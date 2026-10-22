@@ -37,9 +37,22 @@ export interface PrismAnalysis {
   error: string | null
 }
 
+export interface PrismReport {
+  /** 分报告角色（A股宏观/外盘/大宗/信息面） */
+  role: string
+  text: string | null
+  error: string | null
+}
+
 export interface PrismRun {
   /** 触发时点（手动补跑也写时点；`manual` 用于非时点补跑） */
   slot: string
+  /** 北京日期 `YYYY-MM-DD` */
+  day: string
+  /** 北京时刻 ISO（含 +08:00） */
+  at: string
+  /** 四份分报告（逐份落盘 + 回包） */
+  reports: PrismReport[]
   /** 本轮 agent 给出的仓位上限/挂单/撤单（解析失败 ⇒ null） */
   decision?: PrismDecision | null
   startedAt: number
@@ -61,6 +74,13 @@ export interface PrismState {
   news: PrismNewsStatus
   runs: PrismRun[]
   model: PrismModelInfo
+  /** 模拟盘状态（GET `/tradewatcher/prism` 顶层同时返回 `trading`） */
+  account?: PrismAccount
+  orders?: PrismOrder[]
+  fills?: PrismFill[]
+  equity?: PrismEquityPoint[]
+  decision?: PrismDecision | null
+  prices?: Record<string, number | null>
 }
 
 export const PRISM_DEFAULT_TIMES = ['09:35', '11:20', '13:10', '14:40'] as const
@@ -146,6 +166,10 @@ export interface PrismCopyLog {
   at: number
   before: string[]
   after: string[]
+  /** 复制说明（部分复制/超限原因） */
+  note?: string
+  /** 未能覆盖的行（逐条原因） */
+  skipped?: string[]
 }
 
 export interface PrismAccount {
@@ -164,6 +188,10 @@ export interface PrismDecision {
   limits: { singlePct: number | null; totalPct: number | null; note: string | null }
   orders: Array<{ secid: string; side: 'buy' | 'sell'; price: number; shares: number; reason: string }>
   cancel: string[]
+  /** 引擎拒绝的委托（盘后/资金/约束），带原因；不是「模型没动作」 */
+  rejects: Array<{ secid: string; side: 'buy' | 'sell'; price: number; shares: number; reason: string }>
+  /** 汇总 JSON 解析失败时的原文（不得静默成 0 笔） */
+  parseError: string | null
 }
 
 export interface PrismTradingState {

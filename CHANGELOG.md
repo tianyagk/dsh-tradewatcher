@@ -11,6 +11,37 @@
 
 ---
 
+## v0.132.0 — 棱镜落账补齐：账户自动初始化、时间戳、四份报告、JSON 解析留痕、盘后拒绝、净值
+
+报告 `docs/AUDIT-PRISM-B34.md`。`npm run check` **1139 / 1139 × 2 时区**（1134 → 1139）+ selftest + build（73 片段全过）。
+
+### 活宿主实测发现的五处缺失（已修）
+
+| # | 问题 | 修复 |
+| --- | --- | --- |
+| 1 | 账户是 `{}`（无现金/持仓） | `ensureAccount` 在**首次 GET / 首次研判 / 改资金前**执行：按真实 `avgCost` 复制，`cash = 150 万 − Σ(实际 qty×cost)`；不足则**按行部分复制**（`take = min(qty, floor(剩余/cost))`）并写 `copyLogs.note/skipped` |
+| 2 | `run.day` / `run.at` 为 `null` | 写北京日期与 ISO 时刻（`2026-10-22T17:12:53+08:00`）；旧 runs 读盘自动补齐 |
+| 3 | `run.reports` 为 `[]` | `reports:[{role,text,error}]` **四份逐份落盘**并随回包返回；页面优先读 `reports` |
+| 4 | 挂单 0 笔且无原因 | 新增 `decision.parseError`：无 JSON / JSON 非法 / `orders` 被丢弃都会**带原文或丢弃计数**，**不再静默成 0 笔**；提示词要求严格 JSON |
+| 5 | `equity` 0 点 | GET、每次研判、复制持仓后各 `recordEquity`（总资产 = 现金 + 持仓市值，缺价按成本），**同日覆盖、每日一点** |
+
+### 盘后下单：明确拒绝并留痕
+
+引擎拒绝 `<09:30` 或 `≥15:00` 的决策单 ⇒ `rejected`，原因 `盘后不下单（HH:MM，A股 15:00 收盘）`，同时写 `decision.rejects` 并落盘。**不会伪装成「模型没动作」。**
+
+### 查实一条：那次 0 笔不是解析失败
+
+活宿主 `14:40` 那轮实际解析成功：`limits.singlePct=20`、`orders=[]`、`cancel=[]` 是**模型的真实选择**。
+
+### 验证
+
+`npm run check` **1139 / 1139 × 2 时区** + selftest + build（73 项）；AQ/AR 两轮干净复跑。
+新增 5 条用例：① 首次 GET 后 `copiedAt` 非空、`cost` 正确、`cash` 正确、`equity=1`（另测资金不足 ⇒ 只复制部分 + 留痕）｜② `day`/`at` 非空且 `+08:00`｜③ `reports.length=4` 且文本非空、落盘可读｜④ 汇总无 JSON ⇒ `parseError` 含原文、`decision` 非 null｜⑤ 17:05 决策 ⇒ `rejected` + `rejects[0].reason` 含「盘后不下单」｜⑥ 同日再 GET 仍 1 点。
+
+### 待验证
+
+活宿主内复验（需重启）：首次 GET 后账户/净值应有值；17:0x 补跑应出现 4 份 `reports` + `rejects`。
+
 ## v0.131.1 — 修复棱镜自检「模型返回空文本」（content 必须传块数组）
 
 报告 `docs/AUDIT-PRISM-SELFTEST-FIX.md`。`npm run check` **1134 / 1134 × 2 时区**（1132 → 1134）+ selftest + build（73 片段全过）。

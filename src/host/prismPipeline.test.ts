@@ -67,3 +67,49 @@ test('⑦ 模型不可用：一次调用都不发，整轮留痕', async () => {
     await rm(dir, { recursive: true, force: true })
   }
 })
+
+test('②/③ run.day/at 非空、四份 reports 落盘', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'prism-pipe3-'))
+  try {
+    const store = new PrismStore(dir)
+    await store.init()
+    let n = 0
+    const llm = { stream: () => { n += 1; const text = n <= 4 ? `分报告${n}` : '汇总' ; return (async function* () { yield { type: 'text-delta', text } })() } }
+    const run = await runPrismAnalysis(store, '14:40', inputs, {
+      get: (name) => (name === 'llm' ? llm : name === 'agentDefaultModel' ? { currentSelection: () => ({ provider: 'p', model: 'm' }) } : undefined),
+      now: () => Date.parse('2026-10-22T14:40:05+08:00'),
+    })
+    assert.equal(run.day, '2026-10-22')
+    assert.match(run.at, /^2026-10-22T14:40:0[0-9]\+08:00$/)
+    assert.equal(run.reports.length, 4)
+    assert.equal(run.reports.every((r) => r.text !== null && r.error === null), true)
+    assert.equal(store.runs()[0]?.reports.length, 4, '必须逐份落盘')
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test('④ 汇总不是严格 JSON ⇒ decision.parseError 带原文（不是 0 笔）', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'prism-pipe4-'))
+  try {
+    const store = new PrismStore(dir)
+    await store.init()
+    let n = 0
+    const llm = {
+      stream: () => {
+        n += 1
+        const text = n <= 4 ? `分报告${n}` : '这是一段没有 JSON 的汇总，不能静默成 0 笔'
+        return (async function* () { yield { type: 'text-delta', text } })()
+      },
+    }
+    const run = await runPrismAnalysis(store, 'manual', inputs, {
+      get: (name) => (name === 'llm' ? llm : name === 'agentDefaultModel' ? { currentSelection: () => ({ provider: 'p', model: 'm' }) } : undefined),
+      now: () => 1,
+    })
+    assert.equal(run.decision?.orders.length, 0)
+    assert.match(String(run.decision?.parseError), /没有 JSON/)
+    assert.notEqual(run.decision, null, '解析失败也必须留 decision 记录')
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
