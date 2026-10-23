@@ -13,7 +13,7 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { PluginWebRoute } from './context.ts'
 import type { PrismStore } from './prismStore.ts'
-import { PrismTradingStore, copyAtCost, equityPointOf, matchTick, placeDecision, upsertEquity, type QuoteLite } from './prismAccount.ts'
+import { PrismTradingStore, copyAtCost, equityPointOf, matchTick, placeDecision, rebuildFromOrders, upsertEquity, type QuoteLite } from './prismAccount.ts'
 import type { DataStore } from './store.ts'
 import type { PrismAccount, PrismFill, PrismSettings, PrismState } from '../shared/prism.ts'
 import { PRISM_MAX_TIMES, PRISM_SKELETON_MAX } from '../shared/prism.ts'
@@ -226,7 +226,18 @@ const tradingOf = (trading: PrismTradingStore, prices: Record<string, number | n
 
 export async function runPrismForSlot(deps: PrismRouteDeps, slot: string): Promise<Awaited<ReturnType<typeof runPrismAnalysis>>> {
   const inputs = await prismInputsOf(deps)
-  return runPrismAnalysis(deps.store, slot, inputs, { get: deps.get, model: deps.store.settings().model ?? null })
+  const run = await runPrismAnalysis(deps.store, slot, inputs, { get: deps.get, model: deps.store.settings().model ?? null })
+  if (run.decision === null) {
+    run.placement = { placed: 0, skipped: 0, rejects: [] }
+    await deps.store.replaceRun(run)
+    return run
+  }
+  const quotes = run.decision.orders.length > 0 ? await quoteLiteOf(deps, run.decision.orders.map((o) => o.secid)) : {}
+  const result = await placeDecision(deps.trading, run.decision, Date.now(), quotes)
+  run.decision = { ...run.decision, rejects: result.rejects }
+  run.placement = result.placement
+  await deps.store.replaceRun(run)
+  return run
 }
 
 export function makePrismRoutes(deps: PrismRouteDeps): PluginWebRoute[] {
@@ -323,17 +334,9 @@ export function makePrismRoutes(deps: PrismRouteDeps): PluginWebRoute[] {
           if (action === 'run') {
             const slot = typeof body?.slot === 'string' && /^([01]\d|2[0-3]):[0-5]\d$/.test(body.slot) ? body.slot : 'manual'
             const run = await runPrismForSlot(deps, slot)
-            let placed: ReturnType<PrismTradingStore['orders']> = []
-            if (run.decision !== null) {
-              const quotes = run.decision.orders.length > 0 ? await quoteLiteOf(deps, run.decision.orders.map((o) => o.secid)) : {}
-              const result = await placeDecision(deps.trading, run.decision, Date.now(), quotes)
-              placed = result.orders
-              run.decision = { ...run.decision, rejects: result.rejects }
-              await store.replaceRun(run)
-            }
             await recordEquity(deps)
             if (slot !== 'manual') await store.markFired(dayOf(Date.now()), slot)
-            send(res, 200, { ok: true, asOf: Date.now(), run, orders: placed })
+            send(res, 200, { ok: true, asOf: Date.now(), run, orders: deps.trading.orders() })
             return
           }
           if (action === 'capital') {
@@ -357,10 +360,16 @@ export function makePrismRoutes(deps: PrismRouteDeps): PluginWebRoute[] {
           if (action === 'copy') {
             const rows = await copyRowsOf(deps)
             const result = copyAtCost(rows, deps.trading.account(), Date.now())
-            await deps.trading.saveAccount(result.account)
+            await deps.trading.saveAccount(result.account, { explicitReset: true })
             const settings = await store.saveCapital(result.account.capitalLimit)
             await recordEquity(deps)
             send(res, 200, { ok: true, account: result.account, settings, log: result.log, skipped: result.skipped })
+            return
+          }
+          if (action === 'recover') {
+            const account = deps.trading.account()
+            const rebuilt = rebuildFromOrders(account, deps.trading.orders())
+            send(res, 200, { ok: true, rebuilt: true, fills: rebuilt.fills, cash: rebuilt.cash, note: rebuilt.note })
             return
           }
           if (action === 'cancel') {

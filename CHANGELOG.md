@@ -11,6 +11,45 @@
 
 ---
 
+## v0.146.0 — 棱镜：自动时点不落单、账本被清空（含恢复路径）
+
+报告 `docs/AUDIT-PRISM-LEDGER.md`。`npm run check` **1227 / 1227 × 2 时区**（1223 → 1227）+ selftest + build（73 片段全过）。
+
+### Bug 1：自动时点研判的挂单从不落库
+
+**根因**：`runPrismForSlot` 只写 `prism-runs.json`；`placeDecision` 只在**手动** `POST action:'run'` 的**路由层**调用。调度器直接调 `runPrismForSlot` ⇒ 自动时点的 4 / 1 / 2 / 1 笔挂单**从未进入账本**。
+
+**修复**：把 `quoteLiteOf + placeDecision + store.replaceRun` 移入 `runPrismForSlot`（手动路由不再重复 place）。
+每个 run 现在记录 `placement: { placed, skipped, rejects:[{secid,reason}], skippedReasons }`；重复委托不再静默 `continue`，计入 `skipped` 并写原因。
+
+### Bug 2：账本被清空 / 读取回落
+
+**根因**：① `init()` 把 `{v:1, account}` 整包传给 `normalizeAccount`，未解包 ⇒ 重启后回落默认；② `ensureAccount` 在 GET/run/capital 前自动 `copyAtCost`，覆盖现金。
+
+**修复**：
+- 读取兼容**三种**历史格式（裸 account / `{v,account}` / 含 `fills` 的包裹）；fills 优先 `prism-orders.json`。
+- GET / run / capital **不再自动复制**；只有显式 `action:'copy'`。
+- **`accountWriteGuard`**：旧账户有 positions/fills、新账户 `positions=0` 且 `fills=0`、且非 `explicitReset` ⇒ **拒绝写盘并告警**。
+- 新增只读 `POST {action:'recover'}`：返回重建的 fills/cash，**不写盘**。
+
+### 今天的数据：能恢复多少
+
+当前磁盘 `prism-orders.json` 保留 **4 笔 filled 单 + 4 笔 fills**，`rebuildFromOrders` 可重建：
+`1.588170 sell 50000@0.698`、`1.560010 sell 20000@2.657`、`1.688035 sell 500@52.33`、`1.518880 sell 1000@8.187`。
+
+- **10:12 的 4 笔成交可以恢复 fills**（订单文件保留成交价/费/时间）。
+- 现金只能给参考值 **1 722 234.82**，**不能精确复原**（缺历史入金与未知买入）⇒ 以当前账户为准。
+- **11:15 / 13:10 / 14:35 的 1 / 2 / 1 笔从未落单，没有成交价与时刻 ⇒ 不能伪造历史成交**，只能在新代码下重跑并重新挂单。
+
+### 验证
+
+`npm run check` **1227 / 1227 × 2 时区** + selftest + build（73 项）；两轮干净复跑。
+新增 4 条用例：① 自动 `runPrismForSlot` ⇒ `run.placement` 存在且 `trading.orders` 增加（只写 runs ⇒ 败）｜② 重复委托 ⇒ `skipped=1` 且带「重复」原因｜③ 三种格式读取后 positions/fills 非空（读空 ⇒ 败）｜④ 旧有数据写空账户 ⇒ `accountWriteGuard` 拒绝且磁盘保留旧持仓，`explicitReset` 才允许｜⑤ `rebuildFromOrders` 2 笔买入 ⇒ fills=2、cash=699.9、note 含「重建」（重建为空 ⇒ 败）。
+
+### 生效条件
+
+需**重启 `dsh web`** 装载新 host 代码；重启后 `POST {action:'recover'}` 可查看可重建的成交。
+
 ## v0.145.0 — 棱镜：修复资金上限无法保存、现金余额反复横跳
 
 报告 `docs/AUDIT-PRISM-CASH.md`。`npm run check` **1223 / 1223 × 2 时区**（1219 → 1223）+ selftest + build（73 片段全过）。

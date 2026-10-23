@@ -337,15 +337,20 @@ export class PrismTradingStore {
     await mkdir(this.dir, { recursive: true })
     const acc = await this.readJson('prism-account.json')
     if (acc !== null && typeof acc === 'object') {
-      // 落盘格式是 { v: 1, account }；也兼容旧的裸 account（否则重启后一律回落 150 万/空仓）
+      // 三种历史格式都兼容：裸 account / { v, account } / { v, account, fills } 或 { v, ...account, fills }
       const root = acc as { account?: unknown }
       const saved = root.account !== null && typeof root.account === 'object' ? root.account : acc
       this.accountValue = normalizeAccount(saved as Record<string, unknown>)
     }
     const ord = await this.readJson('prism-orders.json')
     const ordRoot = ord as { orders?: unknown; fills?: unknown } | null
+    const accRoot = acc as { fills?: unknown; account?: { fills?: unknown } } | null
     this.ordersValue = Array.isArray(ordRoot?.orders) ? (ordRoot?.orders as PrismOrder[]) : []
-    this.fillsValue = Array.isArray(ordRoot?.fills) ? (ordRoot?.fills as PrismFill[]) : []
+    const fileFills = Array.isArray(ordRoot?.fills) ? (ordRoot?.fills as PrismFill[]) : []
+    const embeddedFills = Array.isArray(accRoot?.fills)
+      ? (accRoot?.fills as PrismFill[])
+      : Array.isArray(accRoot?.account?.fills) ? (accRoot.account.fills as PrismFill[]) : []
+    this.fillsValue = fileFills.length > 0 ? fileFills : embeddedFills
     const eq = await this.readJson('prism-equity.json')
     const eqRoot = eq as { points?: unknown } | null
     this.equityValue = Array.isArray(eqRoot?.points) ? (eqRoot?.points as PrismEquityPoint[]) : []
@@ -383,7 +388,12 @@ export class PrismTradingStore {
   fills(): PrismFill[] { return this.fillsValue.slice() }
   equity(): PrismEquityPoint[] { return this.equityValue.slice() }
 
-  async saveAccount(account: PrismAccount): Promise<void> {
+  async saveAccount(account: PrismAccount, opts: { explicitReset?: boolean } = {}): Promise<void> {
+    const oldHasData = this.accountValue.positions.length > 0 || this.fillsValue.length > 0
+    if (opts.explicitReset !== true && oldHasData && account.positions.length === 0 && this.fillsValue.length === 0) {
+      console.warn('[tradewatcher] accountWriteGuard：拒绝把已有持仓/成交流水的账户写成空账户（如确需重置请显式 reset）')
+      throw new Error('accountWriteGuard：拒绝把已有数据的账户写成空账户')
+    }
     this.accountValue = account
     await updateJsonLocked(this.pathOf('prism-account.json'), () => ({ v: 1, account })).catch(() => undefined)
   }
@@ -516,6 +526,12 @@ const idOf = (order: { secid: string; side: string; price: number; shares: numbe
 export interface PlaceDecisionResult {
   orders: PrismOrder[]
   rejects: PrismDecision['rejects']
+  placement: {
+    placed: number
+    skipped: number
+    rejects: Array<{ secid: string; reason: string }>
+    skippedReasons: Array<{ secid: string; reason: string }>
+  }
 }
 
 export async function placeDecision(
@@ -537,6 +553,7 @@ export async function placeDecision(
   }
   const out: PrismOrder[] = []
   const rejects: PrismDecision['rejects'] = []
+  const skippedReasons: Array<{ secid: string; reason: string }> = []
   const hhmm = hhmmOf(now)
   const afterHours = hhmm >= '15:00' || hhmm < '09:30'
   for (const d of decision.orders) {
@@ -555,7 +572,10 @@ export async function placeDecision(
       day,
       status: 'pending',
     }
-    if (orders.some((o) => o.id === order.id)) continue
+    if (orders.some((o) => o.id === order.id)) {
+      skippedReasons.push({ secid: d.secid, reason: '重复决策（同一秒/同一委托已存在）' })
+      continue
+    }
     if (afterHours) {
       const reason = `盘后不下单（${hhmm}，A股 15:00 收盘）`
       order.status = 'rejected'
@@ -582,7 +602,49 @@ export async function placeDecision(
   }
   await store.saveAccount(account)
   await store.saveOrders(orders, store.fills())
-  return { orders: out, rejects }
+  return {
+    orders: out,
+    rejects,
+    placement: {
+      placed: out.filter((o) => o.status === 'pending').length,
+      skipped: skippedReasons.length,
+      rejects: rejects.map((r) => ({ secid: r.secid, reason: r.reason })),
+      skippedReasons,
+    },
+  }
+}
+
+/** 从 orders.json 的已成交单重建 fills 与现金（只读推断；不写盘，标注「重建」） */
+export interface RebuiltLedger {
+  fills: PrismFill[]
+  /** 以当前 capitalLimit 为起点的推算现金（未含历史入金/未知成交） */
+  cash: number
+  note: string
+}
+
+export function rebuildFromOrders(account: PrismAccount, orders: readonly PrismOrder[]): RebuiltLedger {
+  let cash = account.capitalLimit
+  const fills: PrismFill[] = []
+  for (const o of orders) {
+    if (o.status !== 'filled') continue
+    const price = o.fillPrice ?? o.price
+    const amount = money(price * o.shares)
+    const fee = o.fee ?? 0
+    cash = money(cash + (o.side === 'sell' ? amount - fee : -amount - fee))
+    fills.push({
+      orderId: o.id,
+      secid: o.secid,
+      name: o.name,
+      side: o.side,
+      price,
+      shares: o.shares,
+      amount,
+      fee,
+      at: o.filledAt ?? o.decidedAt,
+      source: o.source ?? 'trend',
+    })
+  }
+  return { fills, cash, note: `重建：据 ${fills.length} 笔已成交单推断；未包含历史入金/未知成交，cash 仅作参考` }
 }
 
 /** 30 秒撮合：跨日挂单失效；1 分钟 high/low 触及按挂单价成交；净值每日一点 */

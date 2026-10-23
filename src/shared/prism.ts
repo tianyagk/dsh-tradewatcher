@@ -48,6 +48,17 @@ export interface PrismReport {
   error: string | null
 }
 
+export interface PrismPlacement {
+  /** 本轮新进入 pending 的挂单数 */
+  placed: number
+  /** 去重/无法处理而跳过的笔数 */
+  skipped: number
+  /** 被引擎拒绝的委托（含原因；不是静默） */
+  rejects: Array<{ secid: string; reason: string }>
+  /** 跳过原因（skipped>0 时必填） */
+  skippedReasons?: Array<{ secid: string; reason: string }>
+}
+
 export interface PrismRun {
   /** 触发时点（手动补跑也写时点；`manual` 用于非时点补跑） */
   slot: string
@@ -59,6 +70,8 @@ export interface PrismRun {
   reports: PrismReport[]
   /** 本轮 agent 给出的仓位上限/挂单/撤单（解析失败 ⇒ null） */
   decision?: PrismDecision | null
+  /** 本轮落库结果（自动时点与手动补跑都必须有） */
+  placement?: PrismPlacement
   startedAt: number
   finishedAt: number | null
   analyses: PrismAnalysis[]
