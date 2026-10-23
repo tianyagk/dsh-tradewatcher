@@ -773,6 +773,7 @@ color-scheme:dark}
 .tw-prism{display:flex;flex:1 1 auto;flex-direction:column;gap:16px;padding:16px;box-shadow:var(--tw-elev-0);min-height:0;width:100%;overflow-y:auto;overflow-x:auto}
 .tw-prism-head{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
 .tw-prism-title{font-weight:650;color:var(--tw-text)}
+.tw-prism-notice{margin-left:auto;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:40%}
 .tw-prism-body{display:grid;grid-template-columns:minmax(0,62fr) 6px minmax(0,38fr);gap:0;align-items:stretch;min-width:0;min-height:0}
 .tw-prism-col{display:flex;flex-direction:column;gap:16px;min-width:0}
 .tw-prism-left{min-width:0}

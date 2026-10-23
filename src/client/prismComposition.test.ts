@@ -81,3 +81,22 @@ test('决策卡显示 note / limits.note（空则 —）', () => {
   assert.equal(empty.find((r) => r.key === '决策理由')?.value, '—')
   assert.equal(empty.find((r) => r.key === '仓位上限依据')?.value, '—')
 })
+
+test('单票上限：可买额度不足一手 ⇒ —（可买额度不足一手）；充足 ⇒ 百分比', async () => {
+  const { singleLimitText } = await import('./prismView.ts')
+  assert.equal(singleLimitText(0.00009, 1.12, 4.06), '—（可买额度不足一手）')
+  assert.equal(singleLimitText(0.00009, 100000, 4.06), '0.00009%')
+  assert.equal(singleLimitText(20, 1.12, 4.06), '—（可买额度不足一手）')
+  const rows = decisionRows({ note: '不买：无钱；不卖：未破位', limits: { singlePct: 0.00009, totalPct: null, note: '1.12 ÷ 总资产' }, orders: [], cancel: [], rejects: [] }, { cash: 1.12, minPrice: 4.06 })
+  assert.equal(rows.find((r) => r.key === '单票上限')?.value, '—（可买额度不足一手）')
+  assert.equal(rows.find((r) => r.key === '仓位上限依据')?.value, '1.12 ÷ 总资产')
+})
+
+test('已跑标签移到标题行右侧，不挤占分段行', () => {
+  const head = page.slice(page.indexOf('tw-prism-head'), page.indexOf('tw-prism-body'))
+  assert.match(head, /tw-prism-notice/)
+  assert.match(TW_CSS, /\.tw-prism-notice\{[^}]*margin-left:auto/)
+  const injected = page.replace('{notice !== null ? <span className="tw-prism-notice tw-prism-muted">{notice}</span> : null}', '{notice !== null ? <span className="tw-prism-muted">{notice}</span> : null}')
+  assert.notEqual(injected, page)
+  assert.doesNotMatch(injected.slice(injected.indexOf('tw-prism-head'), injected.indexOf('tw-prism-body')), /tw-prism-notice/)
+})

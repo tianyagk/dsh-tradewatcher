@@ -191,7 +191,13 @@ export function PrismPage(props: { active: boolean }): React.ReactElement {
   const modelCatalog = state?.modelCatalog
   const bullets = summaryBullets(latest?.summary)
   const reportRows = REPORT_ROLES.map((role) => reports.find((r) => r.role === role) ?? { role, text: null, error: latest === null ? '—（本轮未落盘）' : '—（该报告未落盘）' })
-  const dRows = decisionRows(latest?.decision)
+  const lowPrice = trading === null
+    ? null
+    : trading.account.positions.reduce<number | null>((min, p) => {
+        const price = trading.prices?.[p.secid] ?? null
+        return price === null ? min : min === null ? price : Math.min(min, price)
+      }, null)
+  const dRows = decisionRows(latest?.decision, { cash: trading?.account.cash, minPrice: lowPrice })
   const composition = trading === null
     ? []
     : compositionItems(trading.account.positions, trading.prices ?? {}, totalAssets, PRISM_SERIES_CSS)
@@ -204,9 +210,9 @@ export function PrismPage(props: { active: boolean }): React.ReactElement {
         <RippleButton onClick={load} disabled={busy}>刷新</RippleButton>
         <RippleButton onClick={selfTest} disabled={busy}>自检</RippleButton>
         <span className="tw-prism-muted">{selftestText(selftest)}</span>
+        {notice !== null ? <span className="tw-prism-notice tw-prism-muted">{notice}</span> : null}
       </div>
       {error !== null ? <div className="tw-prism-error">—（{error}）</div> : null}
-      {notice !== null ? <div className="tw-prism-muted">{notice}</div> : null}
 
       <div
         ref={bodyRef}

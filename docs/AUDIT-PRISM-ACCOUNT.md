@@ -20,6 +20,21 @@
 - 页面决策表新增「决策理由」行；空 ⇒ `—`。
 - 断言：`decisionProblems`：`orders=[]` 且 `note` 空 ⇒ 非空错误；`note` 非空 ⇒ 通过。
 
+## 缺陷 3：只评估买入侧
+
+- 汇总 prompt 增加硬要求：先判断降低风险暴露（减仓/止损/清仓）；orders 允许 `side:'sell'`；orders 为空时 note 必须分「不买」「不卖」两段。
+- `decisionProblems`：`orders=[]` 且 note 不含卖/减仓/止损字样 ⇒ 报错；只讲买入侧必败。
+- 测试：模型返回一笔 `sell` ⇒ 解析成功并随 run 落库。
+
+## 单票上限的荒谬值
+
+- `singleLimitText`：`cash < minPrice × 100` ⇒ `—（可买额度不足一手）`；否则保留百分比；`limits.note` 原样保留在「仓位上限依据」。
+- 测试：1.12 元 / 最低价 4.06 ⇒ 指定文案；可买额度充足 ⇒ `0.00009%` 正常显示。
+
+## 「已跑」标签位置
+
+- `notice` 从独立行移入 `.tw-prism-head` 右侧（`.tw-prism-notice{margin-left:auto}`），不再位于分段控件行左侧。
+
 ## 数据结构核实
 
 - 活宿主 `GET /tradewatcher/prism`：`state.account.cash` 与 `trading.account.cash` 都是 `1.12`，`positions` 都是 6 个。
@@ -28,5 +43,6 @@
 
 ## 门禁
 
-- 新增 7 条（prompt 4 + client 2 + 既有行断言 1 调整）；当前全量 1200（仓库同时有其它未提交变更）。
+- 新增 8 条（prompt 5 + client 3）；当前全量 **1203**（仓库同时有其它未提交测试变更）。
+- `DSH_HOME=/tmp/prismaccount-check3/4 npm run check`：两轮 **1203 / 1203 全绿**；构建 **73 项**（v0.140.0）。
 - 构建 73 项（v0.139.0）；`build.mjs` 未动；不 commit、不重启。

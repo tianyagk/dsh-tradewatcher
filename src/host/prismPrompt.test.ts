@@ -48,7 +48,7 @@ test('捕获的 5 个请求体都含账户快照；汇总要求 note，limits �
         seen.push(Array.isArray(raw) ? raw.map((b) => (b as { text?: string }).text ?? '').join('') : String(raw))
         const text = calls <= 4
           ? `分报告${calls}`
-          : '汇总\n```json\n{"note":"风险优先，暂不新增订单","limits":{"singlePct":20,"totalPct":50,"note":"按总资产 20%"},"orders":[],"cancel":[]}\n```'
+          : '汇总\n```json\n{"note":"不买：无新增资金；不卖：未破止损","limits":{"singlePct":20,"totalPct":50,"note":"按总资产 20%"},"orders":[],"cancel":[]}\n```'
         return (async function* () { yield { type: 'text-delta', text } })()
       },
     }
@@ -57,19 +57,26 @@ test('捕获的 5 个请求体都含账户快照；汇总要求 note，limits �
     assert.equal(seen.length, 5)
     for (const text of seen) for (const field of ACCOUNT_PROMPT_FIELDS) assert.ok(text.includes(field), `请求体缺 ${field}`)
     assert.match(seen[4] ?? '', /"note"/)
+    assert.match(seen[4] ?? '', /减仓/)
+    assert.match(seen[4] ?? '', /止损/)
+    assert.match(seen[4] ?? '', /清仓/)
+    assert.match(seen[4] ?? '', /不买/)
+    assert.match(seen[4] ?? '', /不卖/)
     assert.equal(run.decision?.limits.singlePct, 20)
     assert.equal(run.decision?.limits.totalPct, 50)
-    assert.equal(run.decision?.note, '风险优先，暂不新增订单')
+    assert.equal(run.decision?.note, '不买：无新增资金；不卖：未破止损')
     assert.deepEqual(decisionProblems(run.decision), [])
   } finally {
     await rm(dir, { recursive: true, force: true })
   }
 })
 
-test('orders=[] 且 note 空 ⇒ 决策自检必败', () => {
-  assert.deepEqual(decisionProblems({ limits: { singlePct: 20, totalPct: 50, note: 'x' }, note: '理由', orders: [], cancel: [], rejects: [], parseError: null }), [])
-  const bad = decisionProblems({ limits: { singlePct: 20, totalPct: 50, note: 'x' }, note: '', orders: [], cancel: [], rejects: [], parseError: null })
-  assert.ok(bad.some((x) => x.includes('note')))
+test('orders=[] 且 note 只讲买入侧 ⇒ 决策自检必败；两侧齐全才过', () => {
+  const ok = decisionProblems({ limits: { singlePct: 20, totalPct: 50, note: 'x' }, note: '不买：估值不够；不卖：止损位未破', orders: [], cancel: [], rejects: [], parseError: null })
+  assert.deepEqual(ok, [])
+  const buyOnly = decisionProblems({ limits: { singlePct: 20, totalPct: 50, note: 'x' }, note: '不买：估值不够', orders: [], cancel: [], rejects: [], parseError: null })
+  assert.ok(buyOnly.some((x) => x.includes('不卖') || x.includes('减仓')))
+  assert.equal(buyOnly.some((x) => x.includes('未说明不买')), false)
 })
 
 
@@ -78,4 +85,29 @@ test('API 同一份账户：state.account 与 trading.account 由同一个 tradi
   assert.match(routes, /const tradingWithDecision = \{ \.\.\.trading, decision: latestDecision \}/)
   assert.match(routes, /state: \{ \.\.\.stateOf\(store, deps\.get\), \.\.\.tradingWithDecision, modelCatalog \}/)
   assert.match(routes, /trading: tradingWithDecision/)
+})
+
+
+test('模型返回一笔 sell：解析成功且随 run 落库', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'prism-sell-'))
+  try {
+    const store = new PrismStore(dir)
+    await store.init()
+    let calls = 0
+    const llm = {
+      stream: () => {
+        calls += 1
+        const text = calls <= 4
+          ? `分报告${calls}`
+          : '汇总\n```json\n{"note":"不买：无新增资金；不卖：未破止损，但先减仓一档","limits":{"singlePct":20,"totalPct":50,"note":"按总资产"},"orders":[{"secid":"1.588170","side":"sell","price":0.89,"shares":100,"reason":"降低暴露"}],"cancel":[]}\n```'
+        return (async function* () { yield { type: 'text-delta', text } })()
+      },
+    }
+    const get = (name: string): unknown => name === 'llm' ? llm : name === 'agentDefaultModel' ? { currentSelection: () => ({ provider: 'p', model: 'm' }) } : undefined
+    const run = await runPrismAnalysis(store, '09:35', inputs, { get, now: () => Date.parse('2026-10-23T09:35:18+08:00') })
+    assert.equal(run.decision?.orders[0]?.side, 'sell')
+    assert.equal(store.runs()[0]?.decision?.orders[0]?.side, 'sell')
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
 })

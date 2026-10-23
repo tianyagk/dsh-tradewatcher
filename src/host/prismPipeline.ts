@@ -40,7 +40,12 @@ export const ACCOUNT_PROMPT_FIELDS = ['总资产：', '现金：', '持仓市值
 export function decisionProblems(decision: PrismDecision | null): string[] {
   if (decision === null) return ['decision 为 null']
   const bad: string[] = []
-  if (decision.orders.length === 0 && (decision.note ?? '') === '') bad.push('orders=[] 但 note 为空')
+  const note = decision.note ?? ''
+  if (note.trim() === '') bad.push('note 为空')
+  if (decision.orders.length === 0) {
+    if (!/买|加仓|建仓/.test(note)) bad.push('orders=[] 但 note 未说明不买/不加仓')
+    if (!/卖|减仓|清仓|止损/.test(note)) bad.push('orders=[] 但 note 未说明不卖/减仓/止损')
+  }
   if (decision.limits.singlePct === null || decision.limits.totalPct === null) bad.push('limits 有空值')
   return bad
 }
@@ -123,8 +128,11 @@ export async function runPrismAnalysis(
         role: 'user',
         content: `${context}\n\n【四路结论】\n${digest}\n\n【任务】把四路结论汇总成 5 条以内的要点，指出分歧与需要盯的变量。` +
           '\n必须依据【账户快照】计算仓位上限；正常应当给出 singlePct/totalPct，确实无法计算时才用 null 并在 limits.note 说明原因。' +
+          '\n【强制·风险暴露】必须先判断是否需要降低风险暴露（减仓/止损/清仓），给出结论与理由；若判断不减，必须写明为什么满仓是合理的。' +
+          '\n【强制·双侧】orders 允许卖单，卖单字段同样是 {secid, side:\'sell\', price, shares, reason}；不能只考虑买入侧。' +
+          '\n【强制·空单说明】orders 为空时，note 必须分两段：「不买的理由」与「不卖的理由」；缺一段即视为不合格。' +
           '\n最后另起一行输出一个 ```json 代码块，字段：' +
-          '{"note":"本轮决策理由（一句话；orders 为空也必须写）",' +
+          '{"note":"本轮决策理由（一句话；orders 为空时必须同时说明不买与不卖）",' +
           '"limits":{"singlePct":数字或null,"totalPct":数字或null,"note":"仓位上限依据"},' +
           '"orders":[{"secid":"1.600519","side":"buy|sell","price":数字,"shares":整百,"reason":"原因"}],' +
           '"cancel":["订单id"]}。严格 JSON（不得注释、尾逗号、额外文字）；没有挂单就输出空数组；不要输出别的 JSON。',

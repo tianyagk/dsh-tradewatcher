@@ -193,6 +193,19 @@ export interface DecisionRow {
   muted?: boolean
 }
 
+export interface DecisionRowOptions {
+  cash?: number | null
+  minPrice?: number | null
+}
+
+/** 单票上限：可买额度不足一手时，百分比没有行动意义 ⇒ 显示原因；原计算留在 limits.note */
+export function singleLimitText(singlePct: number | null | undefined, cash: number | null | undefined, minPrice: number | null | undefined): string {
+  if (typeof singlePct !== 'number') return '—'
+  if (cash === undefined || minPrice === undefined || cash === null || minPrice === null) return `${singlePct}%`
+  if (cash < minPrice * 100) return '—（可买额度不足一手）'
+  return `${singlePct}%`
+}
+
 /** 决策卡：只给小表，不渲染原始 JSON */
 export function decisionRows(decision: {
   note?: string | null
@@ -200,11 +213,13 @@ export function decisionRows(decision: {
   orders?: readonly unknown[]
   cancel?: readonly unknown[]
   rejects?: ReadonlyArray<{ secid?: string; reason?: string }>
-} | null | undefined): DecisionRow[] {
+} | null | undefined, opts: DecisionRowOptions = {}): DecisionRow[] {
   const pct = (n: number | null | undefined): string => (typeof n === 'number' ? `${n}%` : '—')
   const prose = (t: string | null | undefined): string => (typeof t === 'string' && t.trim() !== '' ? t.trim() : '—')
   return [
-    { key: '单票上限', value: pct(decision?.limits?.singlePct) },
+    { key: '单票上限', value: typeof opts.cash === 'undefined' && typeof opts.minPrice === 'undefined'
+      ? pct(decision?.limits?.singlePct)
+      : singleLimitText(decision?.limits?.singlePct, opts.cash, opts.minPrice) },
     { key: '总仓位上限', value: pct(decision?.limits?.totalPct) },
     { key: '仓位上限依据', value: prose(decision?.limits?.note), muted: (decision?.limits?.note ?? '') === '' },
     { key: '决策理由', value: prose(decision?.note), muted: (decision?.note ?? '') === '' },
