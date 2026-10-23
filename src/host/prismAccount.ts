@@ -28,7 +28,8 @@ import { ReadGuard, quarantineFile } from './readGuard.ts'
 import { dayOf, hhmmOf } from './time.ts'
 import { withHostBreaker } from './breakerFetch.ts'
 
-export const PRISM_INITIAL_CAPITAL = 1_500_000
+import { PRISM_DEFAULT_CAPITAL } from '../shared/prism.ts'
+export const PRISM_INITIAL_CAPITAL = PRISM_DEFAULT_CAPITAL
 export const COMMISSION_RATE = 0.00025
 export const COMMISSION_MIN = 5
 export const STAMP_RATE = 0.001
@@ -335,7 +336,12 @@ export class PrismTradingStore {
   async init(): Promise<void> {
     await mkdir(this.dir, { recursive: true })
     const acc = await this.readJson('prism-account.json')
-    if (acc !== null && typeof acc === 'object') this.accountValue = normalizeAccount(acc as Record<string, unknown>)
+    if (acc !== null && typeof acc === 'object') {
+      // 落盘格式是 { v: 1, account }；也兼容旧的裸 account（否则重启后一律回落 150 万/空仓）
+      const root = acc as { account?: unknown }
+      const saved = root.account !== null && typeof root.account === 'object' ? root.account : acc
+      this.accountValue = normalizeAccount(saved as Record<string, unknown>)
+    }
     const ord = await this.readJson('prism-orders.json')
     const ordRoot = ord as { orders?: unknown; fills?: unknown } | null
     this.ordersValue = Array.isArray(ordRoot?.orders) ? (ordRoot?.orders as PrismOrder[]) : []

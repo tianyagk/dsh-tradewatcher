@@ -6,6 +6,8 @@
 export interface PrismSettings {
   /** `HH:MM`（Asia/Shanghai），默认 09:35 / 11:20 / 13:10 / 14:40；可增删、无上限 */
   times: string[]
+  /** 模拟盘资金上限（持久化；入金 = 上限与现金同步 +delta） */
+  capital?: number
   /** 研判/自检使用的模型；缺省用 agentDefaultModel.currentSelection() */
   model?: { provider: string; model: string } | null
   /** 每个交易日已触发的时点（`YYYY-MM-DD` → `HH:MM[]`），进程重启不丢 */
@@ -87,6 +89,7 @@ export interface PrismState {
   modelCatalog?: { providers: Array<{ id: string; name: string }>; models: Record<string, string[]>; error: string | null }
 }
 
+export const PRISM_DEFAULT_CAPITAL = 1_500_000
 export const PRISM_DEFAULT_TIMES = ['09:35', '11:20', '13:10', '14:40'] as const
 export const PRISM_MAX_TIMES = 50
 export const PRISM_SKELETON_MAX = 20_000

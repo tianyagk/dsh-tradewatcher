@@ -12,6 +12,7 @@
 import { mkdir, readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import {
+  PRISM_DEFAULT_CAPITAL,
   PRISM_DEFAULT_SKELETON,
   PRISM_DEFAULT_TIMES,
   PRISM_NEWS_KEEP_MS,
@@ -29,7 +30,7 @@ import { beijingIsoOf, dayOf } from './time.ts'
 
 const DEFAULT_STATUS: PrismNewsStatus = { state: 'idle', pages: 0, lastSeenId: null, fetchedAt: null, reason: null, items: 0 }
 
-const defaultSettings = (): PrismSettings => ({ times: [...PRISM_DEFAULT_TIMES], lastFired: {}, model: null })
+const defaultSettings = (): PrismSettings => ({ times: [...PRISM_DEFAULT_TIMES], lastFired: {}, model: null, capital: PRISM_DEFAULT_CAPITAL })
 
 export class PrismStore {
   private readonly dir: string
@@ -86,9 +87,10 @@ export class PrismStore {
   }
 
   private async loadSettings(): Promise<void> {
-    const disk = await this.loadJson<{ times?: unknown; lastFired?: unknown; model?: unknown }>('prism-settings.json')
+    const disk = await this.loadJson<{ times?: unknown; lastFired?: unknown; model?: unknown; capital?: unknown }>('prism-settings.json')
     if (disk === null) return
     const times = Array.isArray(disk.times) ? disk.times.filter((t): t is string => typeof t === 'string' && /^\d{2}:\d{2}$/.test(t)) : []
+    const capital = typeof disk.capital === 'number' && Number.isFinite(disk.capital) && disk.capital > 0 ? disk.capital : PRISM_DEFAULT_CAPITAL
     const lastFired: Record<string, string[]> = {}
     if (disk.lastFired !== null && typeof disk.lastFired === 'object') {
       for (const [day, slots] of Object.entries(disk.lastFired as Record<string, unknown>)) {
@@ -102,7 +104,7 @@ export class PrismStore {
       typeof (rawModel as { model?: unknown }).model === 'string'
         ? { provider: (rawModel as { provider: string }).provider, model: (rawModel as { model: string }).model }
         : null
-    this.settingsValue = { times: times.length > 0 ? times : [...PRISM_DEFAULT_TIMES], lastFired, model }
+    this.settingsValue = { times: times.length > 0 ? times : [...PRISM_DEFAULT_TIMES], lastFired, model, capital }
   }
 
   private async loadNews(): Promise<void> {
@@ -147,9 +149,18 @@ export class PrismStore {
 
   async saveTimes(times: string[]): Promise<PrismSettings> {
     const clean = [...new Set(times.map((t) => t.trim()))].filter((t) => /^([01]\d|2[0-3]):[0-5]\d$/.test(t)).sort()
-    const next: PrismSettings = { times: clean, lastFired: this.settingsValue.lastFired, model: this.settingsValue.model ?? null }
+    const next: PrismSettings = { ...this.settingsValue, times: clean }
     this.settingsValue = next
     await updateJsonLocked(this.pathOf('prism-settings.json'), () => ({ v: 1, ...next })).catch((error) => {
+      this.guard.markUnreadable(this.pathOf('prism-settings.json'), error)
+    })
+    return this.settings()
+  }
+
+  /** 保存资金上限（与账户同值；入金/改上限走这里） */
+  async saveCapital(capital: number): Promise<PrismSettings> {
+    this.settingsValue = { ...this.settingsValue, capital }
+    await updateJsonLocked(this.pathOf('prism-settings.json'), () => ({ v: 1, ...this.settingsValue })).catch((error) => {
       this.guard.markUnreadable(this.pathOf('prism-settings.json'), error)
     })
     return this.settings()

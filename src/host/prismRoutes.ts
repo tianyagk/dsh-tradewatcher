@@ -129,20 +129,10 @@ const quoteLiteOf = async (deps: PrismRouteDeps, secids: string[]): Promise<Reco
 const copyRowsOf = async (deps: PrismRouteDeps): Promise<Array<{ secid: string; name: string; qty: number; cost: number }>> => {
   const port = deps.data.portData()
   const secids = port.items.map((p) => p.secid)
-  const quotes = await fetchQuotes(secids).catch(() => ({}))
+  const quotes = await loadQuotes(deps, secids).catch(() => ({}))
   const view = assemblePortfolio(port.groups, port.items, deps.data.ledgerEntries(), quotes).view
   // 用户口径：复制主插件**摊薄成本**（不是移动加权 avgCost）
   return view.positions.filter((p) => p.qty > 0).map((p) => ({ secid: p.secid, name: p.name, qty: p.qty, cost: p.dilutedCost ?? p.avgCost }))
-}
-
-/** 首次读取/研判前初始化：按真实成本复制，现金不足则部分复制并留痕 */
-const ensureAccount = async (deps: PrismRouteDeps): Promise<ReturnType<PrismTradingStore['account']>> => {
-  const account = deps.trading.account()
-  if (account.copiedAt !== null) return account
-  const rows = await copyRowsOf(deps)
-  const result = copyAtCost(rows, account, Date.now())
-  await deps.trading.saveAccount(result.account)
-  return result.account
 }
 
 /** 每天一个净值点（缺价按成本）；GET/研判/复制后都写，同日覆盖 */
@@ -248,7 +238,6 @@ export function makePrismRoutes(deps: PrismRouteDeps): PluginWebRoute[] {
       handler: async (req, res) => {
         if (req.method === 'GET') {
           kickNews(store)
-          await ensureAccount(deps)
           await recordEquity(deps)
           const account = deps.trading.account()
           const quotes = await quoteLiteOf(deps, account.positions.map((p) => p.secid)).catch(() => ({}))
@@ -332,7 +321,6 @@ export function makePrismRoutes(deps: PrismRouteDeps): PluginWebRoute[] {
             return
           }
           if (action === 'run') {
-            await ensureAccount(deps)
             const slot = typeof body?.slot === 'string' && /^([01]\d|2[0-3]):[0-5]\d$/.test(body.slot) ? body.slot : 'manual'
             const run = await runPrismForSlot(deps, slot)
             let placed: ReturnType<PrismTradingStore['orders']> = []
@@ -349,24 +337,30 @@ export function makePrismRoutes(deps: PrismRouteDeps): PluginWebRoute[] {
             return
           }
           if (action === 'capital') {
-            await ensureAccount(deps)
             const limit = Number(body?.capitalLimit)
             if (!Number.isFinite(limit) || limit <= 0) {
               send(res, 400, { ok: false, error: '资金上限必须是正数' })
               return
             }
             const account = deps.trading.account()
-            const next = { ...account, capitalLimit: limit, cash: Math.round((account.cash + (limit - account.capitalLimit)) * 100) / 100 }
+            const cash = Math.round((account.cash + (limit - account.capitalLimit)) * 100) / 100
+            if (cash < 0) {
+              send(res, 400, { ok: false, error: '资金上限低于当前持仓成本 + 已用现金，不能把现金改为负数' })
+              return
+            }
+            const next = { ...account, capitalLimit: limit, cash }
             await deps.trading.saveAccount(next)
-            send(res, 200, { ok: true, account: next })
+            const settings = await store.saveCapital(limit)
+            send(res, 200, { ok: true, account: next, settings })
             return
           }
           if (action === 'copy') {
             const rows = await copyRowsOf(deps)
             const result = copyAtCost(rows, deps.trading.account(), Date.now())
             await deps.trading.saveAccount(result.account)
+            const settings = await store.saveCapital(result.account.capitalLimit)
             await recordEquity(deps)
-            send(res, 200, { ok: true, account: result.account, log: result.log, skipped: result.skipped })
+            send(res, 200, { ok: true, account: result.account, settings, log: result.log, skipped: result.skipped })
             return
           }
           if (action === 'cancel') {

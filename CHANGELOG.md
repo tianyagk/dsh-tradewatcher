@@ -11,6 +11,43 @@
 
 ---
 
+## v0.145.0 — 棱镜：修复资金上限无法保存、现金余额反复横跳
+
+报告 `docs/AUDIT-PRISM-CASH.md`。`npm run check` **1223 / 1223 × 2 时区**（1219 → 1223）+ selftest + build（73 片段全过）。
+
+### Bug 1：资金上限无法保存（三个根因）
+
+1. **只写账户未写 settings**：`prism-settings.json` 没有 `capital` 字段，`PrismSettings` 也没定义。
+2. **重启回落**：`PrismTradingStore.init()` 把 `{ v: 1, account }` 整包传给 `normalizeAccount`，**没解包 `account`** ⇒ 重启后 capital/cash 回落到 1500000、持仓回空。
+3. 修复：新增 `PrismSettings.capital` 与 `PrismStore.saveCapital`；保存时**同时写 account + settings**并回包；初始化**兼容包裹格式与旧裸对象**。
+
+### Bug 2：现金余额反复横跳（两个根因）
+
+1. **GET 自动复制**：`ensureAccount` 在每次 GET / run / capital 前调用，首次会 `copyAtCost` 覆盖现金。
+2. **账户解包错误**（同上）⇒ 重启后读成空账户，随后又被自动复制 ⇒ 现金在两个值间来回。
+
+修复：GET / run / capital **全部移除 `ensureAccount`**；只有 `action:'copy'` 才复制；`recordEquity` 只写 equity、不写 account；`state.account` 与 `trading.account` 共用同一个 `tradingWithDecision`。
+
+### curl 序列实测（隔离 route server，夹具 1 只 100 股 @1000）
+
+| 步骤 | capital | cash | copiedAt |
+| --- | --- | --- | --- |
+| POST copy | 1 500 000 | 1 400 000 | …070615 |
+| GET 基线 | 1 500 000 | 1 400 000 | …070615 |
+| POST capital 2 000 000 | **2 000 000** | **1 900 000** | …070615 |
+| GET ×3（间隔 2 s） | **2 000 000** | **1 900 000**（三次相同） | …070615 |
+| POST copy | 2 000 000 | 1 900 000 | **…076866**（只变一次） |
+| GET ×3 | 2 000 000 | 1 900 000（三次相同） | …076866 |
+
+### 验证
+
+`npm run check` **1223 / 1223 × 2 时区** + selftest + build（73 项）；两轮干净复跑。
+新增 `prismCash.test.ts` **4 条**：① capital 落 settings、3 次 GET 恒新值、**重启后 settings/account 均保留**（GET 里写回常量 ⇒ 败）｜② GET 不写 account（cash、copiedAt、`JSON.stringify(account)` 三次一致；`state.account` 与 `trading.account` 逐字节相同）（GET 里重算 ⇒ 败）｜③ `copiedAt` 非空不重复制、入金只改 capital/cash 一次且 positions/cost/copiedAt 不变、同值再存不重复加钱（入金触发重复制 ⇒ 败）｜④ **源码 GET 分支不得含 `saveAccount`/`ensureAccount`/`copyAtCost`**（注入 `saveAccount` ⇒ 败）。
+
+### 升级注意
+
+**GET 不再自动复制持仓**。升级后若账户仍为空，请点一次页面「按成本价复制持仓」重建账户。活宿主当前基线为 `capital 1 500 000 / cash 1.12`，语义与测试序列一致。
+
 ## v0.144.0 — 日志降噪：跨批抑制、熔断期只记状态转换、原因折叠、限长
 
 报告 `docs/AUDIT-LOG-NOISE.md`。`npm run check` **1219 / 1219 × 2 时区**（1212 → 1219）+ selftest + build（73 片段全过）。

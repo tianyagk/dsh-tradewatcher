@@ -35,30 +35,46 @@ const callGet = async (deps: { store: PrismStore; trading: PrismTradingStore; da
   return JSON.parse(text) as Record<string, unknown>
 }
 
-test('① 首次读取即初始化账户：按成本复制、现金 = 150万 − Σ(qty×cost)、净值写一点', async () => {
+const callPost = async (deps: { store: PrismStore; trading: PrismTradingStore; data: DataStore }, body: unknown): Promise<Record<string, unknown>> => {
+  const route = makePrismRoutes({ ...deps, get: () => undefined, quotes: async () => ({}) }).find((r) => r.path === '/tradewatcher/prism')
+  let text = ''
+  const res = {
+    setHeader: () => undefined,
+    end: (v: string) => { text = v },
+    statusCode: 200,
+  } as unknown as ServerResponse
+  await route?.handler({ method: 'POST', [Symbol.asyncIterator]: async function* () { yield Buffer.from(JSON.stringify(body)) } } as unknown as IncomingMessage, res)
+  return JSON.parse(text) as Record<string, unknown>
+}
+
+test('① 首次读取不复制、不改现金；显式复制才按成本复制', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'prism-init-'))
   try {
     const store = new PrismStore(dir)
     const trading = new PrismTradingStore(dir)
     await store.init()
     await trading.init()
-    const body = await callGet({ store, trading, data: fakeData() })
-    const state = body['state'] as Record<string, any>
-    assert.notEqual(state['account']?.copiedAt, null, '首次读取必须初始化 copiedAt')
-    assert.equal(state['account']?.positions?.[0]?.cost, 1000, '必须按成本价（不是现价）')
-    assert.equal(state['account']?.cash, 1_400_000)
-    assert.equal((state['equity'] as unknown[]).length, 1, '首次读取写一个净值点')
-    // 第二次读取不重复复制、同日净值覆盖
+    const first = await callGet({ store, trading, data: fakeData() })
+    const s0 = first['state'] as Record<string, any>
+    assert.equal(s0['account']?.copiedAt, null, 'GET 不得自动复制')
+    assert.equal(s0['account']?.cash, 1_500_000, 'GET 不得改现金')
+    assert.equal(s0['account']?.positions?.length, 0)
+    const copied = await callPost({ store, trading, data: fakeData() }, { action: 'copy' })
+    const account = copied['account'] as Record<string, any>
+    assert.notEqual(account?.copiedAt, null, '显式复制初始化 copiedAt')
+    assert.equal(account?.positions?.[0]?.cost, 1000, '必须按成本价（不是现价）')
+    assert.equal(account?.cash, 1_400_000)
     const again = await callGet({ store, trading, data: fakeData() })
     const s2 = again['state'] as Record<string, any>
-    assert.equal(s2['account']?.copiedAt, state['account']?.copiedAt, '已初始化 ⇒ 不重复复制')
+    assert.equal(s2['account']?.copiedAt, account?.copiedAt, '已初始化 ⇒ 不重复复制')
+    assert.equal((s2['account'] as any)?.cash, 1_400_000, 'GET 不得重算现金')
     assert.equal((s2['equity'] as unknown[]).length, 1, '同一交易日一个点')
   } finally {
     await rm(dir, { recursive: true, force: true })
   }
 })
 
-test('① 现金不足：只复制能覆盖的部分并留痕', async () => {
+test('① 现金不足：显式复制只覆盖可买部分并留痕', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'prism-init2-'))
   try {
     const store = new PrismStore(dir)
@@ -66,8 +82,8 @@ test('① 现金不足：只复制能覆盖的部分并留痕', async () => {
     await store.init()
     await trading.init()
     await trading.saveAccount({ ...trading.account(), capitalLimit: 50_000, cash: 50_000 })
-    const body = await callGet({ store, trading, data: fakeData() })
-    const account = (body['state'] as Record<string, any>)['account']
+    const body = await callPost({ store, trading, data: fakeData() }, { action: 'copy' })
+    const account = body['account'] as Record<string, any>
     assert.equal(account.positions[0].qty, 50, '5 万 / 1000 = 50 股')
     assert.equal(account.cash, 0)
     assert.match(String(account.copyLogs[0].note), /部分复制/)
