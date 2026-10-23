@@ -13,7 +13,7 @@ import type {
   TrendData,
   TrendPoint,
 } from '../shared/model.ts'
-import { MISSING_TIER_ADVICE, SECID_RE, normalizeTrendSeries, type TrendSource } from '../shared/model.ts'
+import { MISSING_TIER_ADVICE, SECID_RE, normalizeTrendSeries, type AuctionInfo, type TrendSource } from '../shared/model.ts'
 import { BREADTH_HS_A_FS, BREADTH_PAGE_SIZE, type CountPage } from './breadthCount.ts'
 import { isMultiDayTrend, stitchTrendDays } from '../shared/trendStitch.ts'
 import { TREND_ARCHIVE_KEEP_DAYS, archiveTrendDays, loadTrendArchive, type TrendArchiveEntry } from './trendArchive.ts'
@@ -27,7 +27,7 @@ import { updateJsonLocked, withFileLock } from './lock.ts'
 import { breakerFor, hostsAllowed, minutesToRecover } from './breaker.ts'
 import { fetchSinaEtfRanking, fetchSinaQuotes, fetchSinaUsDaily, fetchSinaUsMin, sinaSymbol as sinaQuoteSymbol, type SinaBar } from './sina.ts'
 import { fetchTencentAppstock, fetchTencentBoards, fetchTencentMinutes, fetchTencentQuoteRows, fetchTencentSuggest, minuteTrendPointsOf, tencentCode, tencentIndexCode, tencentQuoteCode, TENCENT_KLINE_HOSTS, TencentKlineUnavailableError, type TencentKlineTry, type TencentQuoteFull } from './tencent.ts'
-import { fetchAuction } from './auction.ts'
+import { auctionUnavailable, fetchAuction } from './auction.ts'
 import { join } from 'node:path'
 import { dataHome } from './store.ts'
 import { hhmmOf, dayOf, inSession, isSettledOffline, parseMarketStamp, shStampText, shanghaiParts, usDayOf, inUsSession, isUsSettledOffline } from './time.ts'
@@ -1261,8 +1261,12 @@ export async function fetchStockDetail(secid: string): Promise<StockDetail | nul
   const code = String(it.f12 ?? '')
   const market = String(it.f13 ?? '')
   const prev = num(it.f18)
-  // 竞价：复用既有腾讯 m1 链（当日第一根）；失败/未开盘都由 `fetchAuction` 归一成三态，不抛
-  const auction = await fetchAuction(`${market}.${code}`, prev)
+  /**
+   * ⚠ **竞价不在这里算**（AUDIT-AUCTION-DECOUPLE）：本函数整段依赖东财 `ulist.np`，
+   * 东财一熔断就抛错 ⇒ 旧实现把竞价一起带走了（用户实测：`detail: {}`，本地 37 个竞价文件读不到）。
+   * 现在竞价由 `fetchAuctionFor` 独立取（本地 `auction/*.json` + 腾讯 m1），路由负责拼装：
+   * `{ detail: { …, auction }, auction }` —— `detail.auction` 保留只为兼容旧客户端。
+   */
   return {
     secid: `${market}.${code}`,
     code,
@@ -1284,8 +1288,22 @@ export async function fetchStockDetail(secid: string): Promise<StockDetail | nul
     floatMv: num(it.f21),
     up: num(it.f104),
     down: num(it.f105),
-    auction,
   }
+}
+
+/**
+ * 竞价（四项 + 竞价时段采样序列）——**完全不依赖东财**。
+ *
+ * 两条来源：① 本地 `auction/<secid>.json`（09:15–09:25 采样，`auctionSeries.ts` 只用腾讯 `qt.gtimg.cn` 写盘）；
+ * ② 腾讯 m1（`minute/query` 的 09:30 首根 = 竞价成交价/量，同包 `qt[4]` = 昨收）。东财熔断不影响它。
+ *
+ * 昨收仍优先用**零请求**的共用行情槽（`peekQuotes`，不新打上游、也不因"槽里没有"就报错）；
+ * 槽里没有时由腾讯 m1 同包给出 —— 两条都不碰 `push2*`。
+ */
+export async function fetchAuctionFor(secid: string): Promise<AuctionInfo> {
+  if (!SECID_RE.test(secid)) return auctionUnavailable('secid 非法')
+  const prev = peekQuotes([secid])[secid]?.prev ?? null
+  return fetchAuction(secid, prev)
 }
 
 // ───────────────────────────── intraday trend ─────────────────────────────

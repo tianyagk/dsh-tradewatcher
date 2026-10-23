@@ -25,7 +25,7 @@ test('② inject 含 llm 且 ctx.get 有 try/catch（删掉 ⇒ 必败）', () =
   assert.throws(() => assert.deepEqual(injectProblems(injected), [], '反例'), /反例/, '⚠ 反例注入必须失败')
 })
 
-test('① 第 9 行 / 8 页签 / 主路由 + 自检 / 路由账 32', () => {
+test('① 第 9 行 / 8 页签 / 主路由 + 自检 / 路由账 33（v0.139.0：+ 竞价出口）', () => {
   const patch = read('cordis.patch.yml')
   assert.match(patch, /- id: tradewatcher-prism\n\s+name: 'dsh-tradewatcher\/rows\/prism'\n\s+config: \{ row: prism \}/)
   const ids = [...patch.matchAll(/^\s+- id: tradewatcher-(\w+)$/gm)].map((m) => m[1])
@@ -41,7 +41,7 @@ test('① 第 9 行 / 8 页签 / 主路由 + 自检 / 路由账 32', () => {
   assert.match(routes, /action === 'run'/)
   assert.match(routes, /path: '\/tradewatcher\/prism\/selftest'/)
   const design = read('docs/DESIGN-SUBPLUGINS.md')
-  assert.match(design, /路由账 32 =/)
-  // 反例注入：多开一条路由 ⇒ 路由账不再是 31（判据必须能区分）
+  assert.match(design, /路由账 33 = core 16/)
+  // 反例注入：多开一条路由 ⇒ 路由账不再是 33（判据必须能区分）
   assert.throws(() => assert.equal(paths.length, 3, '反例'), /反例/, '⚠ 反例（多路由）必须失败')
 })

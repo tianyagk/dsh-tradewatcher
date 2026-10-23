@@ -12,6 +12,7 @@ import { RESCUE_METHODOLOGY, RescueMonitor, wireRescueSnapshot } from './rescue.
 import { wireKline, wireTrend } from './wireSlim.ts'
 import { QUOTE_HOSTS, HISTORY_HOSTS } from './em.ts'
 import { TENCENT_KLINE_HOSTS } from './tencent.ts'
+import { auctionMissingOf } from './auction.ts'
 import { breakerSummary } from './breaker.ts'
 import { HttpError, httpStatusOf, retryAfterSecondsOf } from './http.ts'
 import { TotalUpstreamError, partialOutcomeOf, shortError, upstreamHealth, type PartialOutcome } from './degrade.ts'
@@ -1123,6 +1124,15 @@ export function makeTradeRoutes(
            * 现在：`detail: null` + `missing[]` 写明"只有东财一个上游 + 本次不可达"，
            * 界面照常显示价格与其余字段，只在详情区标"未取到 + 原因"。
            */
+          /**
+           * **竞价与详情解耦**（AUDIT-AUCTION-DECOUPLE）：并发取，互不拖累。
+           *
+           * 旧实现把竞价算在 `fetchStockDetail` 里面 ⇒ 东财 `ulist.np` 一熔断，整条路由只剩
+           * `detail: {}`，本地已经采样好的竞价序列（`auction/<secid>.json`）一条都读不到。
+           * 现在竞价走 `fetchAuctionFor`（本地文件 + 腾讯 m1，**零东财**），并**同时**放在
+           * 顶层 `auction`（新出口，客户端读它）与 `detail.auction`（兼容旧客户端）。
+           */
+          const auctionPromise = em.fetchAuctionFor(secid)
           let detail: Awaited<ReturnType<typeof em.fetchStockDetail>> = null
           let failure: unknown = null
           try {
@@ -1130,15 +1140,43 @@ export function makeTradeRoutes(
           } catch (error) {
             failure = error
           }
+          const auction = await auctionPromise
           const reason = em.detailMissingReason(failure === null ? {} : { emDown: true })
           send(res, 200, {
-            detail,
+            detail: detail === null ? null : { ...detail, auction },
+            auction,
             ...(detail === null
               ? { missing: [{ ...reason, what: secid, ...(failure === null ? {} : { note: `${reason.note}（${shortError(failure)}）` }) }] }
               : {}),
           })
         } catch (error) {
           fail(res, error, '行情详情')
+        }
+      },
+    },
+    {
+      /**
+       * 竞价（四项 + 竞价时段采样序列）——**唯一一条不依赖东财**的详情类出口。
+       *
+       * 为什么单独一条：东财 `ulist.np` 熔断时 `/detail` 只能给 `detail: null`，
+       * 而竞价的数据其实已经在本机（采样器 09:15–09:25 落盘）+ 腾讯 m1 里。把它挂在 `/detail` 上
+       * 等于让"东财挂了"连累"本地已有的数据"。这条路由**只**读本地文件与腾讯（零 `push2*` 请求）。
+       *
+       * 契约：**永远 200**，`auction` 必有（不可用时 `state:'unavailable'` + 一句原因），
+       * 不可用时另给 `missing[]`（`no-source` = 该市场本来没有竞价；`transient` = 这次没取到）。
+       */
+      kind: 'exact',
+      path: '/tradewatcher/auction',
+      handler: async (req, res) => {
+        if (!needGate(req, res)) return
+        try {
+          const secid = String(queryOf(req).get('secid') ?? '').trim()
+          if (!SECID_RE.test(secid)) throw new HttpError('secid 非法', 400)
+          const auction = await em.fetchAuctionFor(secid)
+          const missing = auctionMissingOf(secid, auction)
+          send(res, 200, { auction, ...(missing === null ? {} : { missing: [missing] }) })
+        } catch (error) {
+          fail(res, error, '竞价')
         }
       },
     },

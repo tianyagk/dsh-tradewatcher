@@ -615,11 +615,11 @@ export function RescuePanel(props: {
       snapshot !== null && (snapshot.completeness?.missing.length ?? 0) > 0
         ? React.createElement('span', {
             className: 'tw-badge',
-            // 缺因子的**原因**必须说清：备用源（腾讯）没有分单资金流，等多久都不会补齐；
+            // 缺因子的**原因**必须说清：备用数据源（腾讯）没有分单资金流，等多久都不会补齐；
             // 东财源下的缺因子才是"冷启动/采样满 5 分钟自动补齐"。此前一律写"5 分钟后自动补齐"，
-            // 在备用源场景下是空头承诺。
+            // 在备用数据源场景下是空头承诺。
             title: snapshot.flowSource === 'tencent'
-              ? `本次快照缺少因子：${snapshot.completeness?.missing.join('、')} —— 数据来自「腾讯备用源」，该源不含分单资金流（超大单/主力净额），因此「持续性」无法计算，不是等几分钟就能补齐的；量能、脉冲、背离仍为真实数据，评分偏保守。（「超大单强度」已整体剔除：宽基 ETF 分单数据稀疏，不可用。）`
+              ? `本次快照缺少因子：${snapshot.completeness?.missing.join('、')} —— 数据来自「腾讯备用数据源」，该源不含分单资金流（超大单/主力净额），因此「持续性」无法计算，不是等几分钟就能补齐的；量能、脉冲、背离仍为真实数据，评分偏保守。（「超大单强度」已整体剔除：宽基 ETF 分单数据稀疏，不可用。）`
               : `本次快照缺少因子：${snapshot.completeness?.missing.join('、')}（评分偏保守；冷启动回填完成或盘中采样 5 分钟后自动补齐）`,
             style: { color: LEVEL_COLOR[2], borderColor: LEVEL_COLOR[2] },
           }, `因子 ${snapshot.completeness?.available}/${snapshot.completeness?.total}`)
@@ -631,7 +631,7 @@ export function RescuePanel(props: {
             title: [
               snapshot.lastSampleTs !== null ? `数据时刻 ${fmtStamp(snapshot.lastSampleTs)}（最近一次成功采样）` : '尚未成功采样',
               snapshot.lastFailTs !== null && snapshot.lastFailTs !== undefined ? `最近一次采样失败：${fmtStamp(snapshot.lastFailTs)}` : null,
-              snapshot.flowSource === 'tencent' ? '数据来源：腾讯备用源（无分单资金流）' : snapshot.flowSource === 'em' ? '数据来源：东方财富（含分单资金流）' : null,
+              snapshot.flowSource === 'tencent' ? '数据来源：腾讯备用数据源（无分单资金流）' : snapshot.flowSource === 'em' ? '数据来源：东方财富（含分单资金流）' : null,
               snapshot.note ?? null,
             ].filter(Boolean).join('\n'),
           },
@@ -667,11 +667,11 @@ export function RescuePanel(props: {
       const b = data?.breaker
       if (b?.open !== true || snapshot === null) return null
       // 一行短句 + tooltip 明细，且**说清影响范围**：
-      //  - 东财主机熔断只影响"东财那条链路"；面板数据若已由腾讯备用源兜底，
+      //  - 东财主机熔断只影响"东财那条链路"；面板数据若已由腾讯备用数据源兜底，
       //    结论是"缺分单资金流因子"，而不是"没有数据"（此前一律写"面板显示当日复盘数据"，
-      //    在备用源兜底成功的场景下与事实不符）；
+      //    在备用数据源兜底成功的场景下与事实不符）；
       //  - 收盘后不再承诺"最早 N 分钟可重试"（那时没有采样需求），改为"下次开盘自动重试"；
-      //  - "期间不发起请求"只对熔断中的东财主机成立，备用源照常请求（「立即采样」仍可用）。
+      //  - "期间不发起请求"只对熔断中的东财主机成立，备用数据源照常请求（「立即采样」仍可用）。
       // 紧凑形式（task-14 ③）：常驻只留标记（≤6 字），完整原因在 title/aria —— 用户要"少提示"，
       // 但降级事实不许丢（那条长句仍在，只是不再常驻占位）。
       const badge = breakerBadgeOf({
@@ -697,7 +697,7 @@ export function RescuePanel(props: {
             badge.reason,
             `熔断明细（按主机独立计数）：${b.detail.filter((h) => h.open).map((h) => `${h.host} 剩余 ${h.minutesLeft} 分钟（连续熔断 ${h.trips} 次）`).join('；')}`,
             `最后错误：${b.lastError ?? '—'}`,
-            '熔断期间不再请求「熔断中的东财主机」（避免把限流推成封锁）；腾讯/新浪备用源不受影响，「立即采样」照常可用。',
+            '熔断期间不再请求「熔断中的东财主机」（避免把限流推成封锁）；腾讯/新浪备用数据源不受影响，「立即采样」照常可用。',
             '熔断是进程级状态，不随面板开关变化。',
           ].join('\n'),
         },
@@ -716,18 +716,6 @@ export function RescuePanel(props: {
         }, `⚠ ${snapshot.calendarStatus.warning}`)
       : null,
     loading && data === null ? React.createElement(Skeleton, { lines: 3, height: 20 }) : null,
-    snapshot !== null
-      ? React.createElement('div', {
-          className: 'tw-rescue-summary',
-          // 归因已改为**多行分块**（B0–B9）⇒ 容器必须 pre-wrap 才不会被折成一行；
-          // 且摘要独占整行：等级徽标在标题行已有，这里不再重复（同一信息出现两次只会误导）。
-          style: { display: 'block', whiteSpace: 'pre-wrap' },
-        },
-          React.createElement('span', { className: 'tw-muted', style: { display: 'block', whiteSpace: 'pre-wrap' } }, snapshot.summary),
-          // B9（指数 / 时段 / 权重说明 / 阈值来源）已并入 summary 末块 ⇒ 原先那个独立 span 必须删除，
-          // 否则同一段背景会在面板上出现两次（spec R「不得重复显示指数与阈值文字」）。
-        )
-      : null,
     // B3 缺失收缩（DESIGN-DASHBOARD §4）：取数失败（空壳）或没有快照时，塌成**一行**
     // `— + 原因 + 重试`（≤60px）——此前 `etfs.length===0` 会默认展开一个空壳，白占 150px。
     rescueEmpty || (snapshot === null && error !== null && !loading)

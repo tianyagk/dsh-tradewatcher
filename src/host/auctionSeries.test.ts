@@ -158,7 +158,7 @@ test('落盘：写入/读回/坏文件隔离/5 日轮转', async () => {
   }
 })
 
-test('⑥ 详情回包带 series/seriesDay，且不新增竞价路由（路由账仍 30）', async () => {
+test('⑥ 竞价随**独立出口**下发（series/seriesDay），路由账同步（v0.139.0：新增 /tradewatcher/auction）', async () => {
   const today = '2026-10-22'
   const series = [pointAt(at('2026-10-22 09:15:00')), pointAt(at('2026-10-22 09:20:00'), 10.5, 120)]
   const info = await fetchAuction('1.600519', 10, {
@@ -177,11 +177,26 @@ test('⑥ 详情回包带 series/seriesDay，且不新增竞价路由（路由�
   })
   assert.equal(ignored.series.length, 0)
   assert.throws(() => assert.equal(ignored.series.length, 2, '反例'), /反例/, '⚠ 反例（不读序列）必须失败')
-  // 路由账：没有 /tradewatcher/auction，设计文档仍写 30
+  /**
+   * 路由账（v0.139.0 起口径相反）：竞价现在有**独立出口** `/tradewatcher/auction`
+   * （AUDIT-AUCTION-DECOUPLE：详情只有东财一个上游，东财熔断时本地采样读不到）。
+   * 写了路由就**必须**登记：注册表里在、设计文档的路由账对得上（core 16 / 总 33）。
+   */
   const routesSrc = await readFile(new URL('./routes.ts', import.meta.url), 'utf8')
-  assert.equal(routesSrc.includes('/tradewatcher/auction'), false, '不许新增竞价路由')
+  const registered = [...routesSrc.matchAll(/path: '(\/tradewatcher\/[a-z0-9/-]+)'/g)].map((m) => m[1])
+  assert.equal(registered.includes('/tradewatcher/auction'), true, '竞价路由必须存在（东财熔断时的唯一出口）')
   const design = await readFile(new URL('../../docs/DESIGN-SUBPLUGINS.md', import.meta.url), 'utf8')
-  assert.match(design, /路由账 32 =/)
+  const ledger = /路由账\s*(\d+)\s*=\s*core\s*(\d+)/.exec(design)
+  assert.notEqual(ledger, null, '设计文档必须有路由账行')
+  assert.equal(Number(ledger![1]), 33, '路由账总数必须同步（30 + 棱镜 2 + 竞价 1 = 33）')
+  assert.equal(Number(ledger![2]), 16, 'core 计数必须同步（15 + 竞价 1 = 16）')
+  // 反例注入：写了路由不登记 ⇒ 文档数字对不上
+  const staleLedger = '路由账 32 = core 15'
+  assert.throws(
+    () => assert.equal(Number(/路由账\s*(\d+)/.exec(staleLedger)![1]), 33, '反例上：旧路由账必须对不上'),
+    /反例上/,
+    '⚠ 反例注入（写了路由不登记）必须失败',
+  )
 })
 
 test('行情解析/取数：空代码集不请求', async () => {

@@ -5,7 +5,7 @@
  * reopening the same stock costs zero requests while the entry is fresh.
  */
 import React, { useEffect, useRef, useState } from 'react'
-import type { FqMode, MissingField, StockDetail, TradeMark } from '../shared/model.ts'
+import type { AuctionInfo, FqMode, MissingField, StockDetail, TradeMark } from '../shared/model.ts'
 import { FQ_LABEL } from '../shared/model.ts'
 import { api } from './api.ts'
 import { dirClass, fmtAmt, fmtBig, fmtPct, fmtPrice, fmtSigned } from './format.ts'
@@ -102,6 +102,14 @@ export function QuoteDrawer(props: {
   /** 头部详情为 null 时的原因（宿主回的 missing[0]）；不为 null 就是"拿得到"或用不着解释 */
   const [infoNote, setInfoNote] = useState<MissingField | null>(null)
   const [detail, setDetail] = useState<StockDetail | null>(null)
+  /**
+   * 竞价（四项 + 采样曲线）——**独立于 `detail` 的一份状态**。
+   *
+   * 为什么不从 `detail.auction` 读：详情只有东财一个上游，东财熔断时整条 `/detail` 只剩
+   * `detail: null`，本地已经采样好的竞价序列会跟着一起消失（用户实测：37 个竞价文件读不到）。
+   * 现在走 `/tradewatcher/auction`（本地文件 + 腾讯 m1），东财挂不挂都与它无关。
+   */
+  const [auction, setAuction] = useState<AuctionInfo | null>(null)
   const [industry, setIndustry] = useState<{ name: string; pct: number | null } | null>(null)
   const [infoErr, setInfoErr] = useState(false)
   const [trades, setTrades] = useState<TradeMark[]>([])
@@ -166,7 +174,12 @@ export function QuoteDrawer(props: {
       if (!alive) return
       setDetail(r.detail)
       setInfoNote(r.detail === null ? (r.missing?.[0] ?? null) : null)
+      // 兼容旧宿主：顶层没有 `auction` 时才回落到 detail 里那份
+      if (r.auction !== undefined) setAuction(r.auction)
+      else if (r.detail?.auction !== undefined) setAuction(r.detail.auction)
     }).catch(() => { if (alive) setInfoErr(true) })
+    // 竞价单开一条请求：它不依赖东财，**不能**被 detail 的成败连坐
+    api.auction(secid).then((r) => { if (alive) setAuction(r.auction) }).catch(() => { if (alive) setAuction((a) => a) })
     api.industry(secid).then((r) => { if (alive) setIndustry(r.industry) }).catch(() => undefined)
     api.trades(secid).then((r) => { if (alive) setTrades(r.trades) }).catch(() => { if (alive) setTrades([]) })
     return () => { alive = false }
@@ -222,6 +235,57 @@ export function QuoteDrawer(props: {
       React.createElement('span', { className: `v ${cls ?? ''}` }, v),
     )
 
+  /**
+   * 「竞价」一行 + 采样曲线（**不依赖东财**的那部分）。
+   *
+   * 为什么单独一块：`detail` 拿不到时（东财熔断）其余字段只能给 `—`，但竞价有独立出口
+   * （`GET /tradewatcher/auction`：本地 `auction/<secid>.json` + 腾讯 m1）⇒ 这一行与曲线
+   * **必须照常渲染**，否则本地 09:15–09:25 采到的序列白采。
+   */
+  const auctionRow = (a: AuctionInfo | null): React.ReactNode =>
+    kv('竞价', auctionText(a))
+
+  /** 采样曲线：无点 ⇒ 曲线区显示「—」；有值在行尾给当日最高/最低参考价 */
+  const auctionSpark = (a: AuctionInfo | null): React.ReactNode => React.createElement('div', {
+    'data-auction-series': '1',
+    style: { display: 'flex', alignItems: 'center', gap: 8, marginTop: 4, height: 44 },
+  },
+    React.createElement(AuctionSpark, { series: a?.series ?? [] }),
+    (a?.series?.length ?? 0) === 0
+      ? null
+      : React.createElement('span', {
+          className: 'tw-muted',
+          style: { fontSize: 12, fontFamily: 'var(--tw-mono)' },
+        }, auctionSeriesText(a?.series ?? [])),
+  )
+
+  /**
+   * 头部字段网格。`d === null`（东财不可达）时除竞价外一律 `—` —— 竞价来自独立出口
+   * （`auction` 状态），所以**不会**跟着变成 `—`。这一份是唯一渲染点（不再两处各写一遍）。
+   */
+  const infoGrid = (d: StockDetail | null): React.ReactNode => {
+    const volFmt = d !== null && d.vol !== null && d.vol !== undefined ? fmtBig(d.vol) : null
+    const amtFmt = d !== null && d.amount !== null && d.amount !== undefined ? fmtAmt(d.amount) : null
+    const board = industry
+    // 竞价优先用独立出口那份；旧宿主只有 `detail.auction` 时才回落到它
+    const a = auction ?? d?.auction ?? null
+    return React.createElement('div', { className: 'tw-dkv-grid', style: { marginTop: 6 } },
+      kv('所属板块', board !== null ? (board.pct !== null ? `${board.name}  ${fmtPct(board.pct)}` : board.name) : '—',
+        board !== null && board.pct !== null ? dirClass(board.pct, redUp) : undefined,
+        board !== null ? '行业板块及当日涨跌幅' : '仅 A股 提供行业板块'),
+      kv('今开', d === null ? '—' : fmtPrice(d.open)),
+      auctionRow(a),
+      kv('昨收', d === null ? '—' : fmtPrice(d.prev)),
+      kv('换手率', d === null || d.turnover === null ? '—' : `${d.turnover}%`),
+      kv('最高', d === null ? '—' : fmtPrice(d.high), d === null ? undefined : dirClass(d.high !== null && d.prev !== null ? d.high - d.prev : 0, redUp)),
+      kv('最低', d === null ? '—' : fmtPrice(d.low), d === null ? undefined : dirClass(d.low !== null && d.prev !== null ? d.low - d.prev : 0, redUp)),
+      kv('成交量', volFmt ?? '—'),
+      kv('成交额', amtFmt ?? '—'),
+      kv('市盈率(动)', d === null || d.pe === null ? '—' : String(d.pe)),
+      kv('总市值', d === null || d.totalMv === null ? '—' : fmtAmt(d.totalMv)),
+    )
+  }
+
   const headerRows = (): React.ReactNode => {
     if (detail === null) {
       if (infoErr) {
@@ -231,30 +295,41 @@ export function QuoteDrawer(props: {
         const long = '行情详情只有东财一个上游：东财熔断/限流时未取到。宿主已按熔断冷却快速失败并给了 retry-after，' +
           '稍等会自动重试；频繁点「重试」只会让本机 IP 的限流更严重。'
         // 用户第 1 条：长条 + 按钮压成右上角一个小圆形 icon（悬停给详情、点击=重试、键盘可达）
-        return React.createElement('div', { className: 'tw-hint tw-hint-icon' },
-          React.createElement(NoteIcon, {
-            reason: '详情不可用 · 上游限流，稍后自动重试',
-            detail: long,
-            onRetry: () => setRetry((x) => x + 1),
-          }),
-          React.createElement('span', { className: 'tw-muted' }, '详情暂不可用'),
+        return React.createElement('div', null,
+          React.createElement('div', { className: 'tw-hint tw-hint-icon' },
+            React.createElement(NoteIcon, {
+              reason: '详情不可用 · 上游限流，稍后自动重试',
+              detail: long,
+              onRetry: () => setRetry((x) => x + 1),
+            }),
+            React.createElement('span', { className: 'tw-muted' }, '详情暂不可用'),
+          ),
+          // 竞价不依赖东财：详情挂了它照常显示（其余字段给 —）
+          infoGrid(null),
+          auctionSpark(auction),
         )
       }
       // 拿不到详情时把**原因**显示出来（此前只会停在骨架屏，用户以为一直在加载）
       if (infoNote !== null) {
-        return React.createElement('div', { className: 'tw-hint tw-hint-icon' },
-          infoNote.why === 'no-source'
-            ? React.createElement(NoteIcon, { reason: '该标的无详情字段（重试无用）', detail: infoNote.note })
-            : React.createElement(NoteIcon, { reason: '上游限流，稍后自动重试', detail: infoNote.note, onRetry: () => setRetry((x) => x + 1) }),
-          React.createElement('span', { className: 'tw-muted' }, infoNote.why === 'no-source' ? '详情不可用' : '详情暂不可用'),
+        return React.createElement('div', null,
+          React.createElement('div', { className: 'tw-hint tw-hint-icon' },
+            infoNote.why === 'no-source'
+              ? React.createElement(NoteIcon, { reason: '该标的无详情字段（重试无用）', detail: infoNote.note })
+              : React.createElement(NoteIcon, { reason: '上游限流，稍后自动重试', detail: infoNote.note, onRetry: () => setRetry((x) => x + 1) }),
+            React.createElement('span', { className: 'tw-muted' }, infoNote.why === 'no-source' ? '详情不可用' : '详情暂不可用'),
+          ),
+          infoGrid(null),
+          auctionSpark(auction),
         )
       }
-      return React.createElement(Skeleton, { lines: 3, height: 14, style: { maxWidth: 420 } })
+      // 首帧（还没有任何结论）：骨架；竞价若已先到，仍然把它显示出来（不占位等待详情）
+      return React.createElement('div', null,
+        React.createElement(Skeleton, { lines: 3, height: 14, style: { maxWidth: 420 } }),
+        auction === null ? null : infoGrid(null),
+        auction === null ? null : auctionSpark(auction),
+      )
     }
     const d = detail
-    const volFmt = d.vol !== null && d.vol !== undefined ? fmtBig(d.vol) : null
-    const amtFmt = d.amount !== null && d.amount !== undefined ? fmtAmt(d.amount) : null
-    const board = industry
     return React.createElement('div', { style: { display: 'flex', flexDirection: 'column', gap: 2 } },
       React.createElement('div', { style: { display: 'flex', gap: 8 } },
         React.createElement('div', { style: { display: 'flex', flexDirection: 'column' } },
@@ -268,34 +343,8 @@ export function QuoteDrawer(props: {
         ),
         React.createElement(Btn, { onClick: onClose, title: '关闭 (Esc)', 'aria-label': '关闭明细' }, '✕'),
       ),
-      React.createElement('div', { className: 'tw-dkv-grid', style: { marginTop: 6 } },
-        kv('所属板块', board !== null ? (board.pct !== null ? `${board.name}  ${fmtPct(board.pct)}` : board.name) : '—',
-          board !== null && board.pct !== null ? dirClass(board.pct, redUp) : undefined,
-          board !== null ? '行业板块及当日涨跌幅' : '仅 A股 提供行业板块'),
-        kv('今开', fmtPrice(d.open)),
-        kv('竞价', auctionText(d.auction)),
-        kv('昨收', fmtPrice(d.prev)),
-        kv('换手率', d.turnover !== null ? `${d.turnover}%` : '—'),
-        kv('最高', fmtPrice(d.high), dirClass(d.high !== null && d.prev !== null ? d.high - d.prev : 0, redUp)),
-        kv('最低', fmtPrice(d.low), dirClass(d.low !== null && d.prev !== null ? d.low - d.prev : 0, redUp)),
-        kv('成交量', volFmt ?? '—'),
-        kv('成交额', amtFmt ?? '—'),
-        kv('市盈率(动)', d.pe !== null ? String(d.pe) : '—'),
-        kv('总市值', d.totalMv !== null ? fmtAmt(d.totalMv) : '—'),
-      ),
-      // 竞价参考价曲线：无点 ⇒ 曲线区显示「—」；有值在行尾给当日最高/最低参考价
-      React.createElement('div', {
-        'data-auction-series': '1',
-        style: { display: 'flex', alignItems: 'center', gap: 8, marginTop: 4, height: 44 },
-      },
-        React.createElement(AuctionSpark, { series: d.auction?.series ?? [] }),
-        (d.auction?.series?.length ?? 0) === 0
-          ? null
-          : React.createElement('span', {
-              className: 'tw-muted',
-              style: { fontSize: 12, fontFamily: 'var(--tw-mono)' },
-            }, auctionSeriesText(d.auction?.series ?? [])),
-      ),
+      infoGrid(d),
+      auctionSpark(auction ?? d.auction ?? null),
     )
   }
 

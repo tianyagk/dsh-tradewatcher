@@ -634,7 +634,10 @@ export interface AuctionInfo {
   volLots: number | null
   /** 竞价量 ÷ 当日总量（%） */
   volSharePct: number | null
-  /** 竞价价 ÷ 昨收 − 1（%）；带符号由展示层加 */
+  /**
+   * 竞价价 ÷ 昨收 − 1（%）；带符号由展示层加。
+   * `null` = 缺昨收（**只缺这一项**，价格/量/占比照给；界面显示 `· —`）。
+   */
   premiumPct: number | null
   /** `unavailable` 时的一句原因；其余为 null */
   reason: string | null
@@ -665,8 +668,14 @@ export interface StockDetail {
   floatMv: number | null
   up: number | null
   down: number | null
-  /** 竞价四项（详情抽屉头部显示；不参与其它页面） */
-  auction: AuctionInfo
+  /**
+   * 竞价四项 + 竞价时段采样序列（详情抽屉头部显示；不参与其它页面）。
+   *
+   * ⚠ v0.139.0（AUDIT-AUCTION-DECOUPLE）：**可选**。详情只由东财 `ulist.np` 提供，东财不可达时
+   * `detail` 为 null，但竞价另有独立出口（`GET /tradewatcher/auction`）⇒ 路由把同一份竞价同时放进
+   * 顶层 `auction` 与 `detail.auction`（后者仅为兼容旧客户端）。客户端必须优先读顶层。
+   */
+  auction?: AuctionInfo
 }
 
 /** Watchlist group. */

@@ -246,6 +246,7 @@ import type {
   TradeMark,
   CalEvent,
   YtdPayload,
+  AuctionInfo,
 } from '../shared/model.ts'
 import { SUGGEST_FULL_COUNT } from '../shared/model.ts'
 
@@ -815,8 +816,18 @@ export const api = {
     if (ids === '') return Promise.resolve({ map: {} })
     return request(`/tradewatcher/industries?secids=${encodeURIComponent(ids)}`)
   },
-  detail(secid: string): Promise<{ detail: StockDetail | null; missing?: MissingField[] }> {
+  detail(secid: string): Promise<{ detail: StockDetail | null; auction?: AuctionInfo; missing?: MissingField[] }> {
     return request(`/tradewatcher/detail?secid=${encodeURIComponent(secid)}`)
+  },
+  /**
+   * 竞价（四项 + 竞价时段采样序列）——**唯一的非东财详情类出口**。
+   *
+   * 为什么不从 `detail` 里拿：详情只有东财一个上游，东财熔断时 `detail: null`，而竞价的数据
+   * 就在本机（`auction/<secid>.json`）+ 腾讯 m1 里。拆出来以后 "东财挂了" 不再连累 "竞价看不到"。
+   * 契约：永远 200，`auction` 必有（不可用时 `state:'unavailable'` + 原因）。
+   */
+  auction(secid: string): Promise<{ auction: AuctionInfo; missing?: MissingField[] }> {
+    return request(`/tradewatcher/auction?secid=${encodeURIComponent(secid)}`)
   },
   /**
    * 搜索候选（v0.95.1：**列出全部匹配**）。

@@ -66,9 +66,15 @@ test('H1 熔断收口：腾讯/日历/新浪那些主机必须**记账**（失�
   }
   assert.ok(b.state.fails > failsBefore, `失败必须记账（fails ${failsBefore} → ${b.state.fails}）`)
 
-  // ② 连续失败到熔断 ⇒ 冷却期内**零请求**（旧实现每次都真打上游）
-  for (let i = 0; i < 3; i += 1) breakerFor(TEN).recordFailure(new Error('inject'))
-  assert.equal(breakerFor(TEN).allow(), false, '三次失败后必须进入冷却')
+  /**
+   * ② 连续失败到熔断 ⇒ 冷却期内**零请求**（旧实现每次都真打上游）。
+   * ⚠ v0.129.0 起腾讯 K 线/分钟有**同源三台主机回退**（web.ifzq → ifzq → proxy）：
+   * 只让一台冷却时，兄弟机会接住 —— 所以这条判据必须把**三台都**打到冷却，才谈得上"冷却期零请求"。
+   */
+  for (const host of ['web.ifzq.gtimg.cn', 'ifzq.gtimg.cn', 'proxy.finance.qq.com']) {
+    for (let i = 0; i < 3; i += 1) breakerFor(host).recordFailure(new Error('inject'))
+    assert.equal(breakerFor(host).allow(), false, `${host} 三次失败后必须进入冷却`)
+  }
   const s2 = stubFetch(() => okJson({ data: {} }))
   try {
     await assert.rejects(async () => {
@@ -77,7 +83,7 @@ test('H1 熔断收口：腾讯/日历/新浪那些主机必须**记账**（失�
     assert.equal(s2.count(), 0, `冷却期内必须零上游请求（实际 ${s2.count()} 条）`)
   } finally {
     s2.restore()
-    breakerFor(TEN).recordSuccess()
+    for (const host of ['web.ifzq.gtimg.cn', 'ifzq.gtimg.cn', 'proxy.finance.qq.com']) breakerFor(host).recordSuccess()
   }
 
   // ③ 另一台主机（smartbox）同样必须记账

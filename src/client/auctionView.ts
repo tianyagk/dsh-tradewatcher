@@ -10,9 +10,14 @@ import { fmtSigned } from './format.ts'
 
 export function auctionText(a: AuctionInfo | null | undefined): string {
   if (a === null || a === undefined) return '—'
-  if (a.state !== 'ok' || a.price === null || a.volLots === null || a.volSharePct === null || a.premiumPct === null) {
+  if (a.state !== 'ok' || a.price === null || a.volLots === null || a.volSharePct === null) {
     const reason = a.state === 'unavailable' && a.reason !== null && a.reason !== '' ? `（${a.reason}）` : ''
     return `—${reason}`
   }
-  return `${a.price.toFixed(2)} · ${a.volLots.toFixed(2)} 手 · ${a.volSharePct.toFixed(2)}% · ${fmtSigned(a.premiumPct)}%`
+  /**
+   * 缺昨收只影响**溢价这一项**：前三个数已经算出来了就照给，溢价位置给 `—`
+   * （旧实现在这里整行退化成 `—`，一个字段的缺口把三个数一起扔掉）。
+   */
+  const premium = a.premiumPct === null ? '—' : `${fmtSigned(a.premiumPct)}%`
+  return `${a.price.toFixed(2)} · ${a.volLots.toFixed(2)} 手 · ${a.volSharePct.toFixed(2)}% · ${premium}`
 }

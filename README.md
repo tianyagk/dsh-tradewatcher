@@ -240,9 +240,11 @@ bash scripts/install.sh
 
 ### HTTP 路由（同源，浏览器信任围栏保护，POST 校验 Origin）
 
-`GET /tradewatcher/health|badge|quotes?ids=|trend?secid=|kline?secid=|detail?secid=|suggest?q=|board?scope=&sort=&pn=&pz=|anomaly?ids=|ytd?ids=|breadth`、`GET|POST /tradewatcher/watch|portfolio|prefs|calendar`、`GET /tradewatcher/ledger`、`GET /tradewatcher/trades?secid=`、`GET /tradewatcher/industry|industries`、`GET|POST /tradewatcher/backup`（导出/导入备份；POST body `{mode:'preview'|'apply', bundle}`）
+`GET /tradewatcher/health|badge|quotes?ids=|trend?secid=|kline?secid=|detail?secid=|auction?secid=|suggest?q=|board?scope=&sort=&pn=&pz=|anomaly?ids=|ytd?ids=|breadth`、`GET|POST /tradewatcher/watch|portfolio|prefs|calendar`、`GET /tradewatcher/ledger`、`GET /tradewatcher/trades?secid=`、`GET /tradewatcher/industry|industries`、`GET|POST /tradewatcher/backup`（导出/导入备份；POST body `{mode:'preview'|'apply', bundle}`）
 
 - `/tradewatcher/kline` 的 `fqt`：`0`=不复权 `1`=前复权（默认）`2`=后复权；回包 `kline.fqt` 是**实际生效**口径（指数/期货恒为 0 并置 `fqSupported:false`），`kline.asOf`/`barOpen` 供口径条显示"数据截至几点、当根是否已收盘"
+- `/tradewatcher/auction?secid=`：竞价四项（价/量/占比/溢价）+ 09:15–09:25 采样序列。**唯一一条不依赖东财的详情类出口**：只读本地 `auction/<secid>.json` 与腾讯 m1（同包 `qt` 里的昨收），东财熔断也照给；永远 200，不可用时 `auction.state='unavailable'` + `missing[]`（沪深 `transient` / 非沪深 `no-source`）
+- `/tradewatcher/detail` 除 `detail` 外**同时**返回顶层 `auction`（与 `/auction` 同一份）；`detail.auction` 保留只为兼容旧客户端
 - `/tradewatcher/badge` 只读**同一份** rescue 快照与持仓汇总，**不触发新采样**
 - `/tradewatcher/anomaly` 用 K 线本地缓存 + 行情涨跌幅判定自选异动，不额外打上游
 

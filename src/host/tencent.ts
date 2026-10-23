@@ -87,6 +87,23 @@ export class TencentKlineUnavailableError extends Error {
 }
 
 /**
+ * 读一个 2xx 回包的 JSON 正文。
+ *
+ * 优先 `res.json()`（真实 `Response` 两个方法都有；测试里的假 Response 有时只给 `json()`），
+ * 没有 `json()` 再退回 `text()` + `JSON.parse`。两条路都失败 ⇒ 抛（调用方按"主机不可用"记账）。
+ */
+async function readJsonBody(res: unknown, host: string): Promise<unknown> {
+  const r = res as { json?: () => Promise<unknown>; text?: () => Promise<string> }
+  if (typeof r.json === 'function') return await r.json()
+  const text = typeof r.text === 'function' ? await r.text() : ''
+  try {
+    return JSON.parse(text) as unknown
+  } catch {
+    throw new Error(`non-JSON reply from ${host}`)
+  }
+}
+
+/**
  * 按固定顺序尝试三台同源主机（**同一路径、同一参数**），任一台 200 即返回。
  *
  * 记账分工（不重复计数）：
@@ -116,7 +133,7 @@ export async function fetchTencentAppstock(
       )
       let json: unknown
       try {
-        json = JSON.parse(await res.text()) as unknown
+        json = await readJsonBody(res, host)
       } catch {
         // 200 但正文不是 JSON（WAF 的"200 版"挑战页之类）：同样按**主机不可用**记账，再换下一台
         const bad = new Error(`non-JSON reply from ${host}: 回包不是 JSON（可能被 WAF 拦截）`)
@@ -590,22 +607,49 @@ export interface TencentMinutePoint {
   cumVol?: number
 }
 
-/** 当日分钟线 → 累计成交额序列（HHmm 从 09:30 至 15:00） */
-export async function fetchTencentMinutes(secid: string): Promise<TencentMinutePoint[]> {
+/**
+ * 腾讯 `qt` 数组里的**昨收**（索引 4）。
+ *
+ * 实测（2026-10-23 09:31，`sh600519` 的 `data.sh600519.qt.sh600519`）：
+ * `["1","贵州茅台","600519","1317.87","1318.49","1311.84", …]`
+ * ⇒ 3=现价 1317.87、**4=昨收 1318.49**、5=今开 1311.84（= 当日首根分钟线的开盘价，也就是竞价成交价）。
+ *
+ * 为什么要它：竞价"溢价"需要昨收。旧实现只从**东财详情**取昨收（`f18`）⇒ 东财一熔断，竞价四项全没了
+ * （`auctionOfMinutePoints` 拿不到昨收就把整块判成不可用）。同一份腾讯分钟回包里就带着昨收，
+ * 没必要为它依赖东财（AUDIT-AUCTION-DECOUPLE）。
+ */
+export function prevCloseOfQt(qt: unknown): number | null {
+  if (!Array.isArray(qt) || qt.length < 5) return null
+  const raw = qt[4]
+  const n = typeof raw === 'number' ? raw : Number(raw)
+  return Number.isFinite(n) && n > 0 ? n : null
+}
+
+/** 当日分钟线 + 同一回包里的昨收（竞价四项用；**不碰东财**） */
+export interface TencentMinuteBundle {
+  points: TencentMinutePoint[]
+  /** 昨收（`qt[4]`）；缺字段 ⇒ null（不拿今开顶替） */
+  prev: number | null
+}
+
+/**
+ * 当日分钟线 → 累计成交额序列（HHmm 从 09:30 至 15:00），外加同一回包里的昨收。
+ *
+ * 与 K 线共用**同源三台主机回退**（`fetchTencentAppstock`）：实测 `web.ifzq.gtimg.cn` 会阶段性
+ * 被 WAF 挡成 501，而 `ifzq.gtimg.cn` / `proxy.finance.qq.com` 照常 200（2026-10-23 09:31 复测同款）
+ * —— 只写死一台时竞价四项会跟着整条分钟链一起"没数据"。
+ */
+export async function fetchTencentMinuteBundle(secid: string): Promise<TencentMinuteBundle> {
   const code = tencentCode(secid)
-  if (code === null) return []
-  const res = await withHostBreaker('web.ifzq.gtimg.cn', () =>
-    fetch(`https://web.ifzq.gtimg.cn/appstock/app/minute/query?code=${code}`, {
-      headers: { 'user-agent': UA, referer: 'https://gu.qq.com/' },
-      signal: AbortSignal.timeout(8000),
-    }),
-  )
-  if (!res.ok) throw new Error(`HTTP ${res.status} from web.ifzq.gtimg.cn`)
-  const j = (await res.json()) as { data?: Record<string, { data?: { date?: string; data?: string[] } }> }
-  const body = j?.data?.[code]?.data
+  if (code === null) return { points: [], prev: null }
+  const { json } = await fetchTencentAppstock(`/app/minute/query?code=${code}`, 8000)
+  const j = json as { data?: Record<string, { data?: { date?: string; data?: string[] }; qt?: Record<string, unknown> }> }
+  const node = j?.data?.[code]
+  const prev = prevCloseOfQt(node?.qt?.[code])
+  const body = node?.data
   const date = body?.date ?? ''
   const rows = Array.isArray(body?.data) ? body.data : []
-  if (date.length < 8 || rows.length === 0) return []
+  if (date.length < 8 || rows.length === 0) return { points: [], prev }
   const day = `${date.slice(0, 4)}-${date.slice(4, 6)}-${date.slice(6, 8)}`
   const points: TencentMinutePoint[] = []
   for (const row of rows) {
@@ -619,5 +663,10 @@ export async function fetchTencentMinutes(secid: string): Promise<TencentMinuteP
     const t = parseMarketStamp(`${day} ${hhmm.slice(0, 2)}:${hhmm.slice(2, 4)}`)
     if (Number.isFinite(t)) points.push({ ts: t, amount, price: num(parts[1]), cumVol: num(parts[2]) })
   }
-  return points
+  return { points, prev }
+}
+
+/** 当日分钟线 → 累计成交额序列（HHmm 从 09:30 至 15:00） */
+export async function fetchTencentMinutes(secid: string): Promise<TencentMinutePoint[]> {
+  return (await fetchTencentMinuteBundle(secid)).points
 }

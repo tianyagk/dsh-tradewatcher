@@ -11,7 +11,9 @@
  * `updateJsonLocked`（锁内读-改-写），读失败走 `ReadGuard`（读不到 ≠ 空数据，不覆写）；
  * 坏文件先 `quarantineFile` 隔离，再重建。
  *
- * 不新增路由：曲线随既有 `/tradewatcher/detail` 的 `StockDetail.auction.series` 下发。
+ * 出口（v0.139.0 起）：`GET /tradewatcher/auction` 的 `auction.series` / `auction.seriesDay`
+ * —— **单独一条路由、不依赖东财**（AUDIT-AUCTION-DECOUPLE：详情只有东财一个上游，东财熔断时
+ * 这条曲线以前会跟着一起消失）；`/tradewatcher/detail` 仍带 `auction`，只为兼容旧客户端。
  */
 import { mkdir, readFile } from 'node:fs/promises'
 import { join } from 'node:path'
