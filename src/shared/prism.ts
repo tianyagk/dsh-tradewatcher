@@ -80,6 +80,8 @@ export interface PrismRun {
   codeVersion?: string
   /** 骨架 + settings 参数（剔除 lastFired）的全 sha256 */
   mandateHash?: string
+  /** P-20 回撤闸门（本轮计算 + 上一轮触发状态用于连续两次冻结） */
+  drawdown?: PrismDrawdownGate
   startedAt: number
   finishedAt: number | null
   analyses: PrismAnalysis[]
@@ -107,6 +109,7 @@ export interface PrismState {
   decision?: PrismDecision | null
   prices?: Record<string, number | null>
   exposure?: PrismExposure | null
+  evaluation?: PrismEvaluation | null
   /** 宿主可用模型（provider → model ids）；取不到则为空并给原因 */
   modelCatalog?: { providers: Array<{ id: string; name: string }>; models: Record<string, string[]>; error: string | null }
 }
@@ -229,6 +232,8 @@ export interface PrismAccount {
   copyLogs: PrismCopyLog[]
 }
 
+export type PrismIndustryLimits = Record<string, number> | Array<{ name: string; limitPct: number }>
+
 export interface PrismClampEvent {
   at: number
   secid: string
@@ -239,7 +244,7 @@ export interface PrismClampEvent {
 }
 
 export interface PrismDecision {
-  limits: { singlePct: number | null; totalPct: number | null; note: string | null; byIndustry?: Record<string, number> }
+  limits: { singlePct: number | null; totalPct: number | null; note: string | null; byIndustry?: PrismIndustryLimits }
   /** 本轮决策理由（一句话；orders 为空也必须给） */
   note?: string | null
   orders: Array<{ secid: string; side: 'buy' | 'sell'; price: number; shares: number; reason: string }>
@@ -275,6 +280,49 @@ export interface PrismExposure {
   total: number
 }
 
+export interface PrismEvalMetric {
+  value: number | null
+  reason: string | null
+  n: number
+}
+
+export interface PrismEvalExcess {
+  withFee: number | null
+  withoutFee: number | null
+  reason: string | null
+  n: number
+}
+
+export interface PrismEvaluation {
+  excess: PrismEvalExcess
+  drawdown: PrismEvalMetric
+  hitRate: PrismEvalMetric
+  /** 独立窗口数（不是事件数） */
+  n: number
+  embargoDays: number
+  footnote: string
+  /** 累计超额曲线（每个独立窗口一个点，%） */
+  curve: number[]
+  reason: string | null
+}
+
+export interface PrismDrawdownGate {
+  dailyPct: number | null
+  cumulativePct: number | null
+  peak: number | null
+  triggered: boolean
+  dailyTriggered: boolean
+  cumulativeTriggered: boolean
+  targetTotalPct: number
+  cashMinPct: number
+  /** 连续两次触发后的单轮冻结 */
+  freezeRound: boolean
+  status: '正常' | '已拒新买单'
+  n: number
+  reason: string | null
+  at: number
+}
+
 export interface PrismTradingState {
   account: PrismAccount
   orders: PrismOrder[]
@@ -285,4 +333,6 @@ export interface PrismTradingState {
   prices?: Record<string, number | null>
   /** 行业暴露（宿主按既有 f127 聚合；缺数据保留未穿透） */
   exposure?: PrismExposure | null
+  /** P-03/P-02 评估（始终给出对象；样本不足用 —+原因） */
+  evaluation?: PrismEvaluation | null
 }

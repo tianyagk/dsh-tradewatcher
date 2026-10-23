@@ -41,7 +41,7 @@ export function spacingProblems(css: string): string[] {
 export function elevationProblems(css: string): string[] {
   const bad: string[] = []
   if (!/\.tw-prism\{[^}]*box-shadow:var\(--tw-elev-0\)/.test(css)) bad.push('页面底缺 elevation 0')
-  if (!/\.tw-prism-card\{[^}]*box-shadow:(var\(--tw-prism-card-shadow\)|0 1px 2px rgba\(0,0,0,\.06\),0 1px 3px rgba\(0,0,0,\.04\))/.test(css)) bad.push('卡片缺 elevation 1')
+  if (!/\.tw-prism-card\{[^}]*box-shadow:(var\(--tw-prism-card-shadow\)|0 1px 2px rgba\(0,0,0,\.06\),0 1px 3px rgba\(0,0,0,\.04\)|0 1px 2px rgba\(16,24,40,\.05\))/.test(css)) bad.push('卡片缺 elevation 1')
   if (!/\.tw-prism-seg\{[^}]*box-shadow:var\(--tw-elev-3\)/.test(css)) bad.push('分段缺 elevation 3')
   return bad
 }

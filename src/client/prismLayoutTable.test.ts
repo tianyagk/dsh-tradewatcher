@@ -29,12 +29,12 @@ test('分段在左栏第一块、四格之前（放回四格之后 ⇒ 败）', 
 
 test('四格数值 28px 且不低于展示级 15px（34px ⇒ 败）', () => {
   const block = /\.tw-prism-v\{([^}]*)\}/.exec(TW_CSS)?.[1] ?? ''
-  const px = Number(/font:600 (\d+)px/.exec(block)?.[1] ?? NaN)
+  const px = Number(/font-size:(\d+)px/.exec(block)?.[1] ?? NaN)
   assert.equal(px, 28)
   assert.ok(px >= 15, `展示级字号应 ≥15（实得 ${px}）`)
-  const injected = TW_CSS.replace('font:600 28px', 'font:600 34px')
+  const injected = TW_CSS.replace('font-size:28px;font-weight:700', 'font-size:34px;font-weight:700')
   assert.notEqual(injected, TW_CSS)
-  assert.throws(() => assert.equal(/font:600 (\d+)px/.exec(injected)?.[1], '28', '注入：34px'), /注入/)
+  assert.throws(() => assert.equal(/font-size:(\d+)px/.exec(injected)?.[1], '28', '注入：34px'), /注入/)
 })
 
 const tableStart = page.indexOf('<table className="tw-prism-table">')

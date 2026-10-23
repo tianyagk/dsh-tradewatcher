@@ -351,6 +351,25 @@ export function compositionItems(
   return [...head, { key: 'other', name: '其他', weight: otherWeight, color: series[5] as string }]
 }
 
+/** 评估缺数据/样本不足的统一占位；不返回 null */
+export function unavailableEvaluation(reason: string): import('../shared/prism.ts').PrismEvaluation {
+  return {
+    excess: { withFee: null, withoutFee: null, reason, n: 0 },
+    drawdown: { value: null, reason, n: 0 },
+    hitRate: { value: null, reason, n: 0 },
+    n: 0, embargoDays: 1, footnote: '非重叠样本 · 不含 embargo 区间', curve: [], reason,
+  }
+}
+
+/** 迷你超额曲线（累计 %）；少于 2 点 ⇒ null */
+export function evalCurveOf(values: readonly number[], width = 320, height = 64): string | null {
+  if (values.length < 2) return null
+  const min = Math.min(...values, 0)
+  const max = Math.max(...values, 0)
+  const span = max - min || 1
+  return values.map((v, i) => `${((i / (values.length - 1)) * width).toFixed(1)},${(height - ((v - min) / span) * (height - 8) - 4).toFixed(1)}`).join(' ')
+}
+
 /** 行业暴露缺数据时的唯一占位：卡片仍渲染，表体 — + 原因 */
 export function unavailableExposure(reason: string): import('../shared/prism.ts').PrismExposure {
   return { state: 'unavailable', reason, rows: [], classifiedPct: 0, unclassifiedPct: 0, unpenetratedPct: 0, cashPct: 0, total: 0 }
@@ -378,5 +397,6 @@ export function normalizeTradingState(payload: {
     decision: raw?.decision ?? payload.state?.decision ?? null,
     prices: raw?.prices,
     exposure: raw?.exposure ?? payload.state?.exposure ?? unavailableExposure('接口未返回行业暴露（旧宿主或半包）'),
+    evaluation: raw?.evaluation ?? payload.state?.evaluation ?? unavailableEvaluation('接口未返回评估数据（旧宿主或半包）'),
   }
 }

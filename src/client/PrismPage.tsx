@@ -23,6 +23,8 @@ import {
   decisionRows,
   equityChartOf,
   equityLegendItems,
+  evalCurveOf,
+  unavailableEvaluation,
   unavailableExposure,
   newsStatusText,
   normalizeTradingState,
@@ -152,6 +154,12 @@ export function PrismPage(props: { active: boolean }): React.ReactElement {
   const doCancel = (id: string): void => act(api.prismCancel(id), () => setNotice('已撤销'))
   const saveCapital = (): void => act(api.prismCapital(Number(capital)), () => setNotice('资金上限已更新'))
   const saveModel = (): void => act(api.prismSetModel(provider, modelName), () => setNotice('模型已保存'))
+  const saveIndustryLimit = (name: string, raw: string): void => {
+    const value = Number(raw.replace('%', '').trim())
+    if (!Number.isFinite(value) || value < 0 || value > 100) { setNotice(`行业上限非法：${raw}`); return }
+    const next = { ...(state?.settings.industryLimits ?? {}), [name]: value }
+    act(api.prismSetIndustryLimits(next), () => setNotice(`行业上限已保存：${name} ${value}%`))
+  }
   const selfTest = (): void => {
     setBusy(true)
     api.prismSelftest().then(setSelftest).catch((e: Error) => setSelftest({ ok: false, error: `超时/网络错误（${e.message}）`, model: null, elapsedMs: 0, text: null })).finally(() => setBusy(false))
@@ -211,6 +219,10 @@ export function PrismPage(props: { active: boolean }): React.ReactElement {
     ? []
     : compositionItems(trading.account.positions, trading.prices ?? {}, totalAssets, PRISM_SERIES_CSS)
   const equityLegend = equityLegendItems()
+  const evaluation = trading?.evaluation ?? unavailableEvaluation('尚未取到评估数据')
+  const evalCurve = evalCurveOf(evaluation.curve)
+  const evalPct = (v: number | null): string => v === null ? '—' : `${v >= 0 ? '+' : ''}${v.toFixed(2)}%`
+  const metricText = (m: { value: number | null; reason: string | null }): string => m.value === null ? `—（${m.reason ?? '样本不足'}）` : evalPct(m.value)
   const exposure = trading?.exposure ?? unavailableExposure('尚未取到模拟盘行业暴露')
   const exposureOk = exposure.state === 'ok'
   const expClassified = exposureOk ? exposure.rows.filter((r) => r.kind === 'industry' || r.kind === 'wide') : []
@@ -228,7 +240,11 @@ export function PrismPage(props: { active: boolean }): React.ReactElement {
     `达成度 ${achieved.length === 0 ? `—（${achievementReason ?? '未配置行业上限'}）` : achieved.join(' / ')}`,
     clampText,
   ].join('\n')
-  const dRows = decisionRows(latest?.decision, { cash: trading?.account.cash, minPrice: lowPrice }).map((r) => r.key === '仓位上限依据' ? { ...r, value: basisText } : r)
+  const dd = latest?.drawdown ?? null
+  const ddText = dd === null
+    ? '—（缺资本调整后净值，未计算回撤闸门）'
+    : `单日 −3% / 累计 −10% / 状态 ${dd.status}\n当前 单日 ${evalPct(dd.dailyPct)} · 自高点 ${evalPct(dd.cumulativePct)} · 目标总仓 ≤${dd.targetTotalPct}% · 现金 ≥${dd.cashMinPct}% · 样本 n=${dd.n}${dd.freezeRound ? ' · 连续两次触发，本轮冻结新开仓' : ''}`
+  const dRows = [...decisionRows(latest?.decision, { cash: trading?.account.cash, minPrice: lowPrice }).map((r) => r.key === '仓位上限依据' ? { ...r, value: basisText } : r), { key: '回撤闸门', value: ddText }]
   const versionInfo = versionSummaryOf(latest?.codeVersion, latest?.mandateHash)
 
   return (
@@ -379,7 +395,7 @@ export function PrismPage(props: { active: boolean }): React.ReactElement {
               <table className="tw-prism-table tw-prism-exposure-table">
                 <thead><tr><th>行业</th><th className="tw-prism-num">市值</th><th className="tw-prism-num">占比</th><th className="tw-prism-num">上限</th><th>状态</th></tr></thead>
                 <tbody>
-                  {expTop.map((r) => <tr key={r.name}><td>{r.name}{r.family === null || r.family === undefined ? null : <span className="tw-prism-muted"> · {r.family}</span>}</td><td className="tw-prism-num tw-prism-mono">{PRISM_MONEY(r.value)}</td><td className="tw-prism-num tw-prism-mono">{r.weight.toFixed(2)}%</td><td className="tw-prism-num tw-prism-mono">{r.limitPct === null ? '—' : `${r.limitPct}%`}</td><td className={r.status === '超限' ? 'up' : ''}>{r.status}</td></tr>)}
+                  {expTop.map((r) => <tr key={r.name}><td>{r.name}{r.family === null || r.family === undefined ? null : <span className="tw-prism-muted"> · {r.family}</span>}</td><td className="tw-prism-num tw-prism-mono">{PRISM_MONEY(r.value)}</td><td className="tw-prism-num tw-prism-mono">{r.weight.toFixed(2)}%</td><td className="tw-prism-num"><input key={`${r.name}:${r.limitPct ?? 'none'}`} className="tw-prism-limitinput" aria-label={`${r.name}行业上限`} defaultValue={r.limitPct === null ? '' : String(r.limitPct)} placeholder="—" onBlur={(e) => { if (e.target.value.trim() !== '') saveIndustryLimit(r.name, e.target.value) }} onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur() }} /></td><td className={r.status === '超限' ? 'up' : ''}>{r.status}</td></tr>)}
                   {expRest.length > 0 ? <tr><td>其余 {expRest.length} 行</td><td className="tw-prism-num tw-prism-mono">{PRISM_MONEY(expRest.reduce((s, r) => s + r.value, 0))}</td><td className="tw-prism-num tw-prism-mono">{expRestWeight.toFixed(2)}%</td><td className="tw-prism-num">—</td><td>正常</td></tr> : null}
                   {expFixed.map((r) => <tr key={r.name}><td>{r.name}</td><td className="tw-prism-num tw-prism-mono">{PRISM_MONEY(r.value)}</td><td className="tw-prism-num tw-prism-mono">{r.weight.toFixed(2)}%</td><td className="tw-prism-num">—</td><td>{r.status}</td></tr>)}
                   {exposureOk ? null : <tr><td colSpan={5} className="tw-prism-muted">—（{exposure.reason ?? '行业数据不可用'}）</td></tr>}
@@ -453,6 +469,24 @@ export function PrismPage(props: { active: boolean }): React.ReactElement {
               </div>
             )}
           </section>
+          <section className="tw-prism-card tw-prism-evalcard" aria-label="评估">
+            <div className="tw-prism-card-title">评估 <span className="tw-prism-muted">P-03 · P-02 · {evaluation.n} 个独立窗口</span></div>
+            {evalCurve === null ? <div className="tw-prism-muted">—（累计超额曲线不足两点）</div> : (
+              <div className="tw-prism-evalchart">
+                <svg viewBox="0 0 320 64" preserveAspectRatio="none" role="img" aria-label={`累计超额（${evaluation.n} 个独立窗口）`}>
+                  <line className="tw-prism-gridline" x1="0" y1="16" x2="320" y2="16" />
+                  <line className="tw-prism-gridline" x1="0" y1="32" x2="320" y2="32" />
+                  <line className="tw-prism-gridline" x1="0" y1="48" x2="320" y2="48" />
+                  <polyline points={evalCurve} fill="none" stroke={PRISM_SERIES_CSS[0]} strokeWidth="1.4" />
+                </svg>
+              </div>
+            )}
+            <div className="tw-prism-evalrow"><span>超额（对 1.000300）</span><span>{evaluation.excess.withFee === null || evaluation.excess.withoutFee === null ? `—（${evaluation.excess.reason ?? '样本不足'}）` : `含费 ${evalPct(evaluation.excess.withFee)} ｜ 不含费 ${evalPct(evaluation.excess.withoutFee)}`}</span><span className="tw-prism-muted">n={evaluation.excess.n}</span></div>
+            <div className="tw-prism-evalrow"><span>回撤（自高点）</span><span>{metricText(evaluation.drawdown)}</span><span className="tw-prism-muted">n={evaluation.drawdown.n}</span></div>
+            <div className="tw-prism-evalrow"><span>命中率</span><span>{metricText(evaluation.hitRate)}</span><span className="tw-prism-muted">n={evaluation.hitRate.n}</span></div>
+            <div className="tw-prism-muted">非重叠样本 · 不含 embargo 区间 · embargo {evaluation.embargoDays} 日</div>
+          </section>
+
             <details className="tw-prism-verinfo">
               <summary>{versionInfo.summary}</summary>
               <div className="tw-prism-muted">{versionInfo.body}</div>

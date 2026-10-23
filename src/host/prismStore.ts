@@ -173,6 +173,15 @@ export class PrismStore {
     return this.settings()
   }
 
+  /** 保存行业上限（名称 → 百分比；空对象即清空） */
+  async saveIndustryLimits(limits: Record<string, number>): Promise<PrismSettings> {
+    this.settingsValue = { ...this.settingsValue, industryLimits: limits }
+    await updateJsonLocked(this.pathOf('prism-settings.json'), () => ({ v: 1, ...this.settingsValue })).catch((error) => {
+      this.guard.markUnreadable(this.pathOf('prism-settings.json'), error)
+    })
+    return this.settings()
+  }
+
   /** 保存研判/自检模型（provider/model 由路由先做未知 provider 校验） */
   async saveModel(provider: string, model: string): Promise<PrismSettings> {
     this.settingsValue = { ...this.settingsValue, model: { provider, model } }

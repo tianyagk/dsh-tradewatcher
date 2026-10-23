@@ -22,6 +22,7 @@ import { runPrismAnalysis, type PrismInputs } from './prismPipeline.ts'
 import { fetchIndustryOverview, fetchKline, fetchQuotes } from './em.ts'
 import { assemblePortfolio } from './portfolio.ts'
 import { industryExposureOf, needsIndustryOf, unavailableExposure } from './prismExposure.ts'
+import { applyDrawdownGate, drawdownGateOf, evaluationOf, EVAL_MIN_SAMPLE } from './prismEval.ts'
 import { dayOf } from './time.ts'
 
 export interface PrismRouteDeps {
@@ -272,14 +273,20 @@ export async function runPrismForSlot(deps: PrismRouteDeps, slot: string): Promi
   const account = deps.trading.account()
   const quotes = run.decision.orders.length > 0 ? await quoteLiteOf(deps, run.decision.orders.map((o) => o.secid)) : {}
   const industries = await fetchIndustryOverview(account.positions.map((p) => p.secid)).catch(() => ({}))
+  const settings = deps.store.settings()
+  const decisionIndustry = Array.isArray(run.decision.limits.byIndustry) ? Object.fromEntries(run.decision.limits.byIndustry.map((x) => [x.name, x.limitPct])) : (run.decision.limits.byIndustry ?? {})
+  const limits = { ...run.decision.limits, byIndustry: { ...(settings.industryLimits ?? {}), ...decisionIndustry } }
   const clamped = clampDecision(run.decision, {
     cash: account.cash,
     positions: account.positions.map((p) => ({ secid: p.secid, qty: p.qty, price: quotes[p.secid]?.price ?? p.cost })),
-    limits: run.decision.limits,
+    limits,
     industries: Object.fromEntries(Object.entries(industries).map(([k, v]) => [k, v?.name ?? null])),
     at: run.startedAt,
   })
-  run.decision = clamped.decision
+  const previous = deps.store.runs().filter((r) => r.startedAt < run.startedAt).at(-1)?.drawdown ?? null
+  const drawdown = drawdownGateOf(deps.trading.equity(), previous, run.startedAt)
+  run.decision = applyDrawdownGate(clamped.decision, drawdown)
+  run.drawdown = drawdown
   // 边界口径：用 run 触发时刻（startedAt），不是分析结束后的墙钟；14:59:09 ⇒ 14:59 可下单
   const result = await placeDecision(deps.trading, run.decision, run.startedAt, quotes)
   run.decision = { ...run.decision, rejects: result.rejects }
@@ -308,11 +315,16 @@ export function makePrismRoutes(deps: PrismRouteDeps): PluginWebRoute[] {
           const industryData = await industryDataOf(accountView.positions.map((p) => p.secid))
           let exposure
           try {
-            exposure = industryExposureOf(accountView, prices, industryData.map, { ...(settings.industryLimits ?? {}), ...(store.runs().at(-1)?.decision?.limits.byIndustry ?? {}) }, industryData.reason)
+            const latestIndustry = store.runs().at(-1)?.decision?.limits.byIndustry
+            const latestIndustryMap = Array.isArray(latestIndustry) ? Object.fromEntries(latestIndustry.map((x) => [x.name, x.limitPct])) : (latestIndustry ?? {})
+            exposure = industryExposureOf(accountView, prices, industryData.map, { ...(settings.industryLimits ?? {}), ...latestIndustryMap }, industryData.reason)
           } catch (error) {
             exposure = unavailableExposure(`行业暴露计算失败：${String(error).slice(0, 80)}`)
           }
-          const trading = { ...tradingOf(deps.trading, prices), account: accountView, exposure }
+          const feesByDay: Record<string, number> = {}
+          for (const f of deps.trading.fills()) feesByDay[dayOf(f.at)] = (feesByDay[dayOf(f.at)] ?? 0) + f.fee
+          const evaluation = evaluationOf(deps.trading.equity(), feesByDay, 1, EVAL_MIN_SAMPLE)
+          const trading = { ...tradingOf(deps.trading, prices), account: accountView, exposure, evaluation }
           const latestDecision = store.runs().at(-1)?.decision ?? null
           const tradingWithDecision = { ...trading, decision: latestDecision }
           const modelCatalog = await modelCatalogOf(deps.get)
@@ -331,7 +343,7 @@ export function makePrismRoutes(deps: PrismRouteDeps): PluginWebRoute[] {
           return
         }
         try {
-          const body = (await readBody(req)) as { action?: unknown; times?: unknown; text?: unknown; slot?: unknown; capitalLimit?: unknown; orderId?: unknown; provider?: unknown; model?: unknown } | null
+          const body = (await readBody(req)) as { action?: unknown; times?: unknown; text?: unknown; slot?: unknown; capitalLimit?: unknown; orderId?: unknown; provider?: unknown; model?: unknown; industryLimits?: unknown } | null
           const action = body !== null && typeof body.action === 'string' ? body.action : ''
           if (action === 'settings') {
             const raw = body !== null && Array.isArray(body.times) ? body.times : null
@@ -349,6 +361,22 @@ export function makePrismRoutes(deps: PrismRouteDeps): PluginWebRoute[] {
               return
             }
             const settings: PrismSettings = await store.saveTimes(times)
+            send(res, 200, { ok: true, settings })
+            return
+          }
+          if (action === 'industryLimits') {
+            const raw = body !== null && body.industryLimits !== null && typeof body.industryLimits === 'object' && !Array.isArray(body.industryLimits)
+              ? body.industryLimits as Record<string, unknown>
+              : null
+            if (raw === null) { send(res, 400, { ok: false, error: 'industryLimits 必须是对象' }); return }
+            const clean: Record<string, number> = {}
+            for (const [name, v] of Object.entries(raw)) {
+              if (name.trim() === '' || name.length > 80 || typeof v !== 'number' || !Number.isFinite(v) || v < 0 || v > 100) {
+                send(res, 400, { ok: false, error: `行业上限非法：${name}` }); return
+              }
+              clean[name.trim()] = Math.round(v * 100) / 100
+            }
+            const settings = await store.saveIndustryLimits(clean)
             send(res, 200, { ok: true, settings })
             return
           }

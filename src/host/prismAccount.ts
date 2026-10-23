@@ -16,6 +16,7 @@ import { join } from 'node:path'
 import type {
   PrismAccount,
   PrismClampEvent,
+  PrismIndustryLimits,
   PrismCopyLog,
   PrismDecision,
   PrismEquityPoint,
@@ -570,7 +571,7 @@ const idOf = (order: { secid: string; side: string; price: number; shares: numbe
 export interface ClampContext {
   cash: number
   positions: ReadonlyArray<{ secid: string; qty: number; price: number | null; industry?: string | null }>
-  limits: { singlePct?: number | null; totalPct?: number | null; byIndustry?: Record<string, number> }
+  limits: { singlePct?: number | null; totalPct?: number | null; byIndustry?: PrismIndustryLimits }
   industries?: Record<string, string | null>
   at: number
 }
@@ -589,6 +590,9 @@ export function clampDecision(decision: PrismDecision, ctx: ClampContext): Clamp
   const missingPrice = positions.some((p) => p.price === null)
   const totalAssets = ctx.cash + positions.reduce((sum, p) => sum + p.value, 0)
   const industryValue = (name: string): number => positions.filter((p) => (p.industry ?? ctx.industries?.[p.secid] ?? null) === name).reduce((sum, p) => sum + p.value, 0)
+  const industryLimitOf = (name: string): number | undefined => Array.isArray(ctx.limits.byIndustry)
+    ? ctx.limits.byIndustry.find((x) => x.name === name)?.limitPct
+    : ctx.limits.byIndustry?.[name]
   const events: PrismClampEvent[] = []
   const rejected: PrismDecision['rejects'] = []
   let cashLeft = ctx.cash
@@ -606,7 +610,7 @@ export function clampDecision(decision: PrismDecision, ctx: ClampContext): Clamp
       dims.push({ dimension: 'single', max: totalAssets * ctx.limits.singlePct / 100, current: existing, basis: `单票 ${ctx.limits.singlePct}% × 总资产 ${totalAssets.toFixed(2)}` })
     }
     const industry = ctx.industries?.[order.secid] ?? positions.find((p) => p.secid === order.secid)?.industry ?? null
-    const indLimit = industry === null ? undefined : ctx.limits.byIndustry?.[industry]
+    const indLimit = industry === null ? undefined : industryLimitOf(industry)
     if (!missingPrice && industry !== null && typeof indLimit === 'number' && totalAssets > 0) {
       const currentIndustry = industryValue(industry) + accepted.filter((x) => x.industry === industry).reduce((sum, x) => sum + x.value, 0)
       dims.push({ dimension: 'industry', max: totalAssets * indLimit / 100, current: currentIndustry, basis: `行业 ${industry} ${indLimit}% × 总资产` })

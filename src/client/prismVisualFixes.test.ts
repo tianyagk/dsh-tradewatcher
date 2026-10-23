@@ -23,24 +23,24 @@ test('② 四格宽屏 4 列、<1100 2 列、<640 单列（写回 2 列 ⇒ 败�
   assert.match(TW_CSS, /\.tw-prism-cards\{display:grid;grid-template-columns:repeat\(4,minmax\(0,1fr\)\);gap:8px\}/)
   assert.match(TW_CSS, /@media \(max-width:1099px\)\{\.tw-prism-cards\{grid-template-columns:repeat\(2,minmax\(0,1fr\)\)\}\}/)
   assert.match(TW_CSS, /@media \(max-width:639px\)\{\.tw-prism-cards\{grid-template-columns:minmax\(0,1fr\)\}\}/)
-  assert.match(TW_CSS, /\.tw-prism-v\{[^}]*font:600 28px/)
+  assert.match(TW_CSS, /\.tw-prism-v\{[^}]*font-size:28px;font-weight:700;line-height:1\.2/)
   const injected = TW_CSS.replace('.tw-prism-cards{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px}', '.tw-prism-cards{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}')
   assert.notEqual(injected, TW_CSS)
   assert.doesNotMatch(injected, /\.tw-prism-cards\{[^}]*repeat\(4,minmax/)
 })
 
 test('③ 卡片阴影最终生效值 = 设计稿值（后写覆盖 ⇒ 败）', () => {
-  assert.equal(finalCardShadow(TW_CSS), '0 1px 2px rgba(0,0,0,.06),0 1px 3px rgba(0,0,0,.04)')
+  assert.equal(finalCardShadow(TW_CSS), '0 1px 2px rgba(16,24,40,.05)')
   const injected = `${TW_CSS}\n.tw-prism-card{box-shadow:none}`
   assert.notEqual(finalCardShadow(injected), finalCardShadow(TW_CSS), '后写覆盖必须被最终值判据抓到')
 })
 
 test('④ 分段选中背景/文字/字重达标（删背景 ⇒ 败）', () => {
-  assert.match(TW_CSS, /\.tw-prism-segbtn\.on\{background:rgba\(94,106,210,\.18\);color:#2f3aa0;font-weight:700/)
-  assert.match(TW_CSS, /\.tw-prism-seg\{[^}]*padding:2px;[^}]*border:1px solid/)
-  const injected = TW_CSS.replace('background:rgba(94,106,210,.18);color:#2f3aa0;font-weight:700', 'color:#2f3aa0;font-weight:700')
+  assert.match(TW_CSS, /\.tw-prism-segbtn\.on\{background:var\(--tw-md-accent-soft\);color:var\(--tw-md-on-accent\);font-weight:600/)
+  assert.match(TW_CSS, /\.tw-prism-seg\{[^}]*padding:0;[^}]*border:1px solid/)
+  const injected = TW_CSS.replace('background:var(--tw-md-accent-soft);color:var(--tw-md-on-accent);font-weight:600', 'color:var(--tw-md-on-accent);font-weight:600')
   assert.notEqual(injected, TW_CSS)
-  assert.doesNotMatch(injected, /\.tw-prism-segbtn\.on\{background:rgba\(94,106,210,\.18\)/)
+  assert.doesNotMatch(injected, /\.tw-prism-segbtn\.on\{background:var\(--tw-md-accent-soft\)/)
 })
 
 test('⑤ rejects 走决策表格行，orders/cancel 0 用次要色（纯文本 ⇒ 败）', () => {

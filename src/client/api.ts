@@ -545,6 +545,12 @@ export const api = {
       method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action: 'settings', times }),
     }, 20_000)
   },
+  /** 棱镜：保存行业上限（P-11） */
+  prismSetIndustryLimits(industryLimits: Record<string, number>): Promise<{ ok: boolean; settings: PrismSettings }> {
+    return requestWithTimeout('/tradewatcher/prism', {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action: 'industryLimits', industryLimits }),
+    }, 20_000)
+  },
   /** 棱镜：保存骨架 */
   prismSetSkeleton(text: string): Promise<{ ok: boolean; text: string }> {
     return requestWithTimeout('/tradewatcher/prism', {
