@@ -21,7 +21,7 @@ import { backfillNews, incrementalNews } from './prismNews.ts'
 import { runPrismAnalysis, type PrismInputs } from './prismPipeline.ts'
 import { fetchIndustryOverview, fetchKline, fetchQuotes } from './em.ts'
 import { assemblePortfolio } from './portfolio.ts'
-import { industryExposureOf } from './prismExposure.ts'
+import { industryExposureOf, needsIndustryOf, unavailableExposure } from './prismExposure.ts'
 import { dayOf } from './time.ts'
 
 export interface PrismRouteDeps {
@@ -80,6 +80,18 @@ export function accountSnapshotOf(
   ].join('\n')
 }
 
+const industryDataOf = async (secids: string[]): Promise<{ map: Record<string, { name: string; pct: number | null }>; reason?: string }> => {
+  try {
+    const map = await fetchIndustryOverview(secids)
+    if (needsIndustryOf(secids.map((secid) => ({ secid }))) && Object.keys(map).length === 0) {
+      return { map, reason: '行业归属接口未返回 f127（东财可能限流/熔断；本次记未穿透）' }
+    }
+    return { map }
+  } catch (error) {
+    return { map: {}, reason: `行业归属 f127 取数失败（东财限流/熔断或网络不可达）：${String(error).slice(0, 80)}` }
+  }
+}
+
 export const prismInputsOf = async (deps: PrismRouteDeps): Promise<PrismInputs> => {
   const watch = deps.data.watchData().items
   const port = deps.data.portData()
@@ -106,12 +118,14 @@ export const prismInputsOf = async (deps: PrismRouteDeps): Promise<PrismInputs> 
     ? '—'
     : pending.map((o) => `${o.id} ${o.side === 'buy' ? '买' : '卖'} ${o.name} ${o.shares}@${o.price}`).join('\n')
   const news = deps.store.news().items.slice().sort((a, b) => (a.time < b.time ? 1 : -1))
-  const industries = await fetchIndustryOverview(account.positions.map((p) => p.secid)).catch(() => ({}))
-  const exposure = industryExposureOf(account, accountPrices, industries, deps.store.settings().industryLimits ?? {})
-  const exposureText = exposure.rows.length === 0
-    ? '—（无持仓与现金）'
-    : exposure.rows.map((r) => `${r.name}：${r.weight.toFixed(2)}%（市值 ${r.value.toFixed(2)}${r.limitPct === null ? '' : `，上限 ${r.limitPct}%`}）`).join('\n') +
-      `\n已归类 ${exposure.classifiedPct.toFixed(2)}% + 未归类 ${exposure.unclassifiedPct.toFixed(2)}% = 100.00%`
+  const industryData = await industryDataOf(account.positions.map((p) => p.secid))
+  const exposure = industryExposureOf(account, accountPrices, industryData.map, deps.store.settings().industryLimits ?? {}, industryData.reason)
+  const exposureText = exposure.state === 'unavailable'
+    ? `—（${exposure.reason ?? '行业归属不可用'}）`
+    : exposure.rows.length === 0
+      ? '—（无持仓与现金）'
+      : exposure.rows.map((r) => `${r.name}：${r.weight.toFixed(2)}%（市值 ${r.value.toFixed(2)}${r.limitPct === null ? '' : `，上限 ${r.limitPct}%`}）`).join('\n') +
+        `\n已归类 ${exposure.classifiedPct.toFixed(2)}% + 未归类 ${exposure.unclassifiedPct.toFixed(2)}% = 100.00%`
   return { positions, account: accountSnapshot, quotes: `${quoteText}\n【待成交挂单】\n${pendingText}`, news, skeleton: deps.store.skeleton(), exposure: exposureText }
 }
 
@@ -234,6 +248,7 @@ const tradingOf = (trading: PrismTradingStore, prices: Record<string, number | n
   equity: ReturnType<PrismTradingStore['equity']>
   decision: ReturnType<PrismStore['runs']>[number]['decision'] | null
   prices: Record<string, number | null>
+  exposure: ReturnType<typeof unavailableExposure>
 } => ({
   account: trading.account(),
   orders: trading.orders(),
@@ -241,6 +256,8 @@ const tradingOf = (trading: PrismTradingStore, prices: Record<string, number | n
   equity: trading.equity(),
   decision: trading === undefined ? null : null,
   prices,
+  // 非 GET 操作不重算行业；仍返回非 null 的 unavailable，前端永远有卡可渲染
+  exposure: unavailableExposure('本次操作未重算行业暴露（GET 时计算）'),
 })
 
 export async function runPrismForSlot(deps: PrismRouteDeps, slot: string): Promise<Awaited<ReturnType<typeof runPrismAnalysis>>> {
@@ -288,8 +305,13 @@ export function makePrismRoutes(deps: PrismRouteDeps): PluginWebRoute[] {
           const quotes = await quoteLiteOf(deps, accountView.positions.map((p) => p.secid)).catch(() => ({}))
           const prices: Record<string, number | null> = {}
           for (const p of accountView.positions) prices[p.secid] = quotes[p.secid]?.price ?? null
-          const industries = await fetchIndustryOverview(accountView.positions.map((p) => p.secid)).catch(() => ({}))
-          const exposure = industryExposureOf(accountView, prices, industries, { ...(settings.industryLimits ?? {}), ...(store.runs().at(-1)?.decision?.limits.byIndustry ?? {}) })
+          const industryData = await industryDataOf(accountView.positions.map((p) => p.secid))
+          let exposure
+          try {
+            exposure = industryExposureOf(accountView, prices, industryData.map, { ...(settings.industryLimits ?? {}), ...(store.runs().at(-1)?.decision?.limits.byIndustry ?? {}) }, industryData.reason)
+          } catch (error) {
+            exposure = unavailableExposure(`行业暴露计算失败：${String(error).slice(0, 80)}`)
+          }
           const trading = { ...tradingOf(deps.trading, prices), account: accountView, exposure }
           const latestDecision = store.runs().at(-1)?.decision ?? null
           const tradingWithDecision = { ...trading, decision: latestDecision }

@@ -5,6 +5,15 @@ import { RESCUE_COVERAGE_FAMILY_LABEL, RESCUE_COVERAGE_FAMILY_OF_INDEX, RESCUE_E
 export type ExposureRow = PrismExposureRow
 export type ExposureView = PrismExposure
 
+/** 是否有需要 f127 的非宽基持仓（宽基已由目录兜底） */
+export function needsIndustryOf(positions: ReadonlyArray<{ secid: string }>): boolean {
+  return positions.some((p) => !wide.has(p.secid))
+}
+
+export function unavailableExposure(reason: string): ExposureView {
+  return { state: 'unavailable', reason, rows: [], classifiedPct: 0, unclassifiedPct: 0, unpenetratedPct: 0, cashPct: 0, total: 0 }
+}
+
 const round2 = (n: number): number => Math.round(n * 100) / 100
 const wideFamily = new Map<string, '大盘' | '中小盘' | '成长'>()
 for (const x of RESCUE_ETF_CATALOG) {
@@ -18,10 +27,12 @@ export function industryExposureOf(
   prices: Readonly<Record<string, number | null>>,
   industries: Readonly<Record<string, { name: string } | null>>,
   limits: Readonly<Record<string, number>> = {},
+  industryReason?: string,
 ): ExposureView {
+  if (industryReason !== undefined && industryReason !== '' && needsIndustryOf(account.positions)) return unavailableExposure(industryReason)
   const totalPos = account.positions.reduce((sum, p) => sum + p.qty * (prices[p.secid] ?? p.cost), 0)
   const total = account.cash + totalPos
-  if (!(total > 0)) return { rows: [], classifiedPct: 0, unclassifiedPct: 0, unpenetratedPct: 0, cashPct: 0, total: 0 }
+  if (!(total > 0)) return { state: 'ok', rows: [], classifiedPct: 0, unclassifiedPct: 0, unpenetratedPct: 0, cashPct: 0, total: 0 }
   const byName = new Map<string, { value: number; kind: Exclude<ExposureRow['kind'], 'cash'>; families: Set<'大盘' | '中小盘' | '成长'> }>()
   for (const p of account.positions) {
     const value = p.qty * (prices[p.secid] ?? p.cost)
@@ -45,6 +56,7 @@ export function industryExposureOf(
   const unpenetratedPct = round2(rows.filter((r) => r.kind === 'unpenetrated').reduce((s, r) => s + r.weight, 0))
   const classifiedPct = round2(rows.filter((r) => r.kind === 'industry' || r.kind === 'wide').reduce((s, r) => s + r.weight, 0))
   return {
+    state: 'ok',
     rows,
     classifiedPct,
     unclassifiedPct: round2(100 - classifiedPct),

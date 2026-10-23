@@ -84,9 +84,9 @@
 
 ## 7. 门禁
 
-- 新增测试 **12**（P-01 2、P-04 1、P-05 2、P-08 4、P-10 1、UI 2）。
-- 全量：**1246 / 1246**；`DSH_HOME=/tmp/pb1-check1` 与 `/tmp/pb1-check2` 两轮 `npm run check` 均绿（每轮正常 + UTC 各 1246）。
-- 构建：**73 项**（v0.148.0）。
+- 新增测试 **15**（P-01 2、P-04 1、P-05 2、P-08 4、P-10 2、UI 4）。
+- 全量：**1249 / 1249**；`DSH_HOME=/tmp/pb1fix-check1` 与 `/tmp/pb1fix-check2` 两轮 `npm run check` 均绿（每轮正常 + UTC 各 1249）。
+- 构建：**73 项**（v0.149.0；基线 v0.148.0）。
 - `build.mjs` 未改；无新依赖；未 commit、未重启。
 
 ## 8. 未做 / 边界
@@ -97,3 +97,21 @@
 - P-08 只裁模型给出的买单，不自动卖、不把已有超限仓位直接卖到上限（R12）；行业裁剪需要 `limits.byIndustry` 或 settings 行业上限，未配置时不夹。
 - P-10 不做 ETF 成分穿透；未穿透独立披露，不猜行业；行业上限在未配置时显示 `—`。
 - 未在活宿主重启后做浏览器截图验收；以 `npm run check`、构建和 UI 源码断言为准。
+
+## 9. 重启后核对修复（2026-10-23）
+
+- **exposure 不再可消失**：`GET /tradewatcher/prism` 的 `trading.exposure` / `state.exposure` 始终为对象；行业 f127 取不到时返回 `{state:'unavailable',reason}`，前端在 `state==='unavailable'` 时仍渲染行业卡，表体一行 `—（reason）`。
+- **根因**：当前宿主 breakers 对 `push2.eastmoney.com` / `push2delay.eastmoney.com` / `push2his.eastmoney.com` 报 `fetch failed`，`fetchIndustryOverview` 没有拿到 f127；此前代码把空 map 当全部未穿透且前端遇到 null 就不渲染。现在 reason 会明确写「行业归属接口未返回 f127（东财可能限流/熔断）」或「f127 取数失败（…）」。
+- **equity 同源**：GET 的 `trading.equity` 与页面 `equityPoints` 都取 `PrismTradingStore.equity()`；`normalizeTradingState` 保留 `exposure`，并在旧包缺 exposure 时补 `unavailable`，不返回 null。
+- **版本信息**：`codeVersion`/`mandateHash` 为空、全横线时固定显示 `—（旧记录无版本绑定）`。
+- **达成度**：`—` 必带原因：`缺行业数据`（exposure unavailable）或 `未配置行业上限`（可用但无行业上限）。
+
+新增断言（`src/host/prismBatch1.test.ts`、`src/client/prismBatch1Ui.test.ts`）：
+
+- exposure unavailable 对象仍存在、reason 含 f127；
+- 前端 unavailable 仍渲染卡片；注入不渲染 ⇒ 必败；
+- `trading`/`state` 的 equity 同源；注入点数为 0 ⇒ 必败；
+- 版本缺值固定文案；注入空串/横线 ⇒ 必败；
+- 达成度 `—` 带原因；注入只写 `—` ⇒ 必败。
+
+门禁更新：**1249 / 1249 × 2 轮**，构建 **73 项**；`build.mjs` 未动、无新依赖、未 commit、未重启。

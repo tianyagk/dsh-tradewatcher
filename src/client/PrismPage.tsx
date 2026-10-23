@@ -23,6 +23,7 @@ import {
   decisionRows,
   equityChartOf,
   equityLegendItems,
+  unavailableExposure,
   newsStatusText,
   normalizeTradingState,
   orderStatusText,
@@ -209,22 +210,26 @@ export function PrismPage(props: { active: boolean }): React.ReactElement {
     ? []
     : compositionItems(trading.account.positions, trading.prices ?? {}, totalAssets, PRISM_SERIES_CSS)
   const equityLegend = equityLegendItems()
-  const exposure = trading?.exposure ?? null
-  const expClassified = exposure === null ? [] : exposure.rows.filter((r) => r.kind === 'industry' || r.kind === 'wide')
+  const exposure = trading?.exposure ?? unavailableExposure('尚未取到模拟盘行业暴露')
+  const exposureOk = exposure.state === 'ok'
+  const expClassified = exposureOk ? exposure.rows.filter((r) => r.kind === 'industry' || r.kind === 'wide') : []
   const expTop = expClassified.slice(0, 6)
   const expRest = expClassified.slice(6)
-  const expFixed = exposure === null ? [] : exposure.rows.filter((r) => r.kind === 'unpenetrated' || r.kind === 'cash')
+  const expFixed = exposureOk ? exposure.rows.filter((r) => r.kind === 'unpenetrated' || r.kind === 'cash') : []
   const expRestWeight = Math.round(expRest.reduce((sum, r) => sum + r.weight, 0) * 100) / 100
   const clampText = (latest?.decision?.clampEvents ?? []).length === 0
     ? '本次夹紧 —'
     : `本次夹紧 ${(latest?.decision?.clampEvents ?? []).map((e) => `${e.secid} ${e.before} → ${e.after}（${e.dimension}）`).join('；')}`
-  const achieved = exposure === null ? [] : exposure.rows.filter((r) => r.limitPct !== null && r.limitPct > 0).map((r) => `${r.name} ${Math.round((r.weight / r.limitPct!) * 100)}%`)
+  const achieved = exposureOk ? exposure.rows.filter((r) => r.limitPct !== null && r.limitPct > 0).map((r) => `${r.name} ${Math.round((r.weight / r.limitPct!) * 100)}%`) : []
+  const achievementReason = exposure.state === 'unavailable' ? '缺行业数据' : achieved.length === 0 ? '未配置行业上限' : null
   const basisText = [
     `资金上限 ${PRISM_MONEY(trading?.account.capital ?? trading?.account.capitalLimit ?? null)} · 单票 ${latest?.decision?.limits.singlePct == null ? '—' : `${latest.decision.limits.singlePct}%`} · 总仓 ${latest?.decision?.limits.totalPct == null ? '—' : `${latest.decision.limits.totalPct}%`}` + (latest?.decision?.limits.note === null || latest?.decision?.limits.note === undefined || latest.decision.limits.note.trim() === '' ? '' : `（依据：${latest.decision.limits.note}）`),
-    `达成度 ${achieved.length === 0 ? '—' : achieved.join(' / ')}`,
+    `达成度 ${achieved.length === 0 ? `—（${achievementReason ?? '未配置行业上限'}）` : achieved.join(' / ')}`,
     clampText,
   ].join('\n')
   const dRows = decisionRows(latest?.decision, { cash: trading?.account.cash, minPrice: lowPrice }).map((r) => r.key === '仓位上限依据' ? { ...r, value: basisText } : r)
+  const versionText = typeof latest?.codeVersion === 'string' && latest.codeVersion.trim() !== '' && !/^[—–-]+$/.test(latest.codeVersion.trim()) ? latest.codeVersion.trim() : '—（旧记录无版本绑定）'
+  const mandateText = typeof latest?.mandateHash === 'string' && latest.mandateHash.trim() !== '' && !/^[—–-]+$/.test(latest.mandateHash.trim()) ? latest.mandateHash : '—（旧记录无版本绑定）'
 
   return (
     <div className="tw-prism">
@@ -358,30 +363,29 @@ export function PrismPage(props: { active: boolean }): React.ReactElement {
             ) : null}
           </section>
 
-          {exposure === null ? null : (
-            <section className="tw-prism-card tw-prism-exposurecard" aria-label="行业暴露">
-              <div className="tw-prism-card-title">行业暴露 <span className="tw-prism-muted">已归类 {exposure.classifiedPct.toFixed(2)}% · 未归类 {exposure.unclassifiedPct.toFixed(2)}%</span></div>
-              <div className="tw-prism-bar tw-prism-exposurebar" aria-label="行业暴露堆叠条">
+          <section className="tw-prism-card tw-prism-exposurecard" aria-label="行业暴露">
+              <div className="tw-prism-card-title">行业暴露 <span className="tw-prism-muted">{exposureOk ? `已归类 ${exposure.classifiedPct.toFixed(2)}% · 未归类 ${exposure.unclassifiedPct.toFixed(2)}%` : '—'}</span></div>
+              {exposureOk ? <div className="tw-prism-bar tw-prism-exposurebar" aria-label="行业暴露堆叠条">
                 {expTop.map((r, i) => <span key={r.name} style={{ width: `${r.weight}%`, background: PRISM_SERIES_CSS[i % PRISM_SERIES_CSS.length] }} title={`${r.name} ${r.weight.toFixed(2)}%`} />)}
                 {expRest.length > 0 ? <span style={{ width: `${expRestWeight}%`, background: PRISM_SERIES_CSS[3] }} title={`其余 ${expRest.length} 行 ${expRestWeight.toFixed(2)}%`} /> : null}
                 {expFixed.map((r) => <span key={r.name} style={{ width: `${r.weight}%`, background: r.kind === 'unpenetrated' ? PRISM_SERIES_CSS[4] : '#868E96' }} title={`${r.name} ${r.weight.toFixed(2)}%`} />)}
-              </div>
-              <div className="tw-prism-composition-legend">
+              </div> : null}
+              {exposureOk ? <div className="tw-prism-composition-legend">
                 {expTop.map((r, i) => <span key={r.name}><i style={{ background: PRISM_SERIES_CSS[i % PRISM_SERIES_CSS.length] }} />{r.name} {r.weight.toFixed(2)}%</span>)}
                 {expRest.length > 0 ? <span><i style={{ background: PRISM_SERIES_CSS[3] }} />其余 {expRest.length} 行 {expRestWeight.toFixed(2)}%</span> : null}
                 {expFixed.map((r) => <span key={r.name}><i style={{ background: r.kind === 'unpenetrated' ? PRISM_SERIES_CSS[4] : '#868E96' }} />{r.name} {r.weight.toFixed(2)}%</span>)}
-              </div>
-              <div className="tw-prism-muted">已归类 {exposure.classifiedPct.toFixed(2)}% + 未归类 {exposure.unclassifiedPct.toFixed(2)}% = 100.00%<span>（未归类 = 未穿透 {exposure.unpenetratedPct.toFixed(2)}% + 现金 {exposure.cashPct.toFixed(2)}%；前 6 行 + 其余 {expRest.length} 行）</span></div>
+              </div> : null}
+              {exposureOk ? <div className="tw-prism-muted">已归类 {exposure.classifiedPct.toFixed(2)}% + 未归类 {exposure.unclassifiedPct.toFixed(2)}% = 100.00%<span>（未归类 = 未穿透 {exposure.unpenetratedPct.toFixed(2)}% + 现金 {exposure.cashPct.toFixed(2)}%；前 6 行 + 其余 {expRest.length} 行）</span></div> : null}
               <table className="tw-prism-table tw-prism-exposure-table">
                 <thead><tr><th>行业</th><th className="tw-prism-num">市值</th><th className="tw-prism-num">占比</th><th className="tw-prism-num">上限</th><th>状态</th></tr></thead>
                 <tbody>
                   {expTop.map((r) => <tr key={r.name}><td>{r.name}{r.family === null || r.family === undefined ? null : <span className="tw-prism-muted"> · {r.family}</span>}</td><td className="tw-prism-num tw-prism-mono">{PRISM_MONEY(r.value)}</td><td className="tw-prism-num tw-prism-mono">{r.weight.toFixed(2)}%</td><td className="tw-prism-num tw-prism-mono">{r.limitPct === null ? '—' : `${r.limitPct}%`}</td><td className={r.status === '超限' ? 'up' : ''}>{r.status}</td></tr>)}
                   {expRest.length > 0 ? <tr><td>其余 {expRest.length} 行</td><td className="tw-prism-num tw-prism-mono">{PRISM_MONEY(expRest.reduce((s, r) => s + r.value, 0))}</td><td className="tw-prism-num tw-prism-mono">{expRestWeight.toFixed(2)}%</td><td className="tw-prism-num">—</td><td>正常</td></tr> : null}
                   {expFixed.map((r) => <tr key={r.name}><td>{r.name}</td><td className="tw-prism-num tw-prism-mono">{PRISM_MONEY(r.value)}</td><td className="tw-prism-num tw-prism-mono">{r.weight.toFixed(2)}%</td><td className="tw-prism-num">—</td><td>{r.status}</td></tr>)}
+                  {exposureOk ? null : <tr><td colSpan={5} className="tw-prism-muted">—（{exposure.reason ?? '行业数据不可用'}）</td></tr>}
                 </tbody>
               </table>
             </section>
-          )}
 
           <section className="tw-prism-card tw-prism-decisioncard">
             <div className="tw-prism-card-title">决策 <span className="tw-prism-muted">limits / orders / cancel</span></div>
@@ -450,8 +454,8 @@ export function PrismPage(props: { active: boolean }): React.ReactElement {
             )}
           </section>
             <details className="tw-prism-verinfo">
-              <summary>版本信息 · {latest?.codeVersion ?? '—'} · {latest?.mandateHash === undefined ? '—' : `${latest.mandateHash.slice(0, 12)}…`}</summary>
-              <div className="tw-prism-muted">codeVersion {latest?.codeVersion ?? '—'} ｜ mandateHash {latest?.mandateHash ?? '—'}</div>
+              <summary>版本信息 · {versionText} · {mandateText === '—（旧记录无版本绑定）' ? mandateText : `${mandateText.slice(0, 12)}…`}</summary>
+              <div className="tw-prism-muted">codeVersion {versionText} ｜ mandateHash {mandateText}</div>
             </details>
 
           <section className="tw-prism-card tw-prism-timecard">

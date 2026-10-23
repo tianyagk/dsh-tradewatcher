@@ -106,6 +106,7 @@ export interface PrismState {
   equity?: PrismEquityPoint[]
   decision?: PrismDecision | null
   prices?: Record<string, number | null>
+  exposure?: PrismExposure | null
   /** 宿主可用模型（provider → model ids）；取不到则为空并给原因 */
   modelCatalog?: { providers: Array<{ id: string; name: string }>; models: Record<string, string[]>; error: string | null }
 }
@@ -263,6 +264,9 @@ export interface PrismExposureRow {
 }
 
 export interface PrismExposure {
+  /** ok = 可展示；unavailable = 缺行业归属，表体必须显示 — + reason */
+  state: 'ok' | 'unavailable'
+  reason?: string
   rows: PrismExposureRow[]
   classifiedPct: number
   unclassifiedPct: number

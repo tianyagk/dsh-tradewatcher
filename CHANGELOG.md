@@ -11,6 +11,37 @@
 
 ---
 
+## v0.150.0 — 棱镜首批补修：行业卡常驻、净值点同源、版本与达成度文案
+
+报告 `docs/AUDIT-PRISM-BATCH1.md`。`npm run check` **1249 / 1249 × 2 时区**（1246 → 1249）+ selftest + build（73 片段全过）。
+
+### 1) 行业暴露卡整卡消失
+
+- 根因：`trading.exposure` 为 `null` 时前端**不渲染整卡**，违反「缺数据必须显示 `—` + 原因」。
+- 修复：后端 `exposure` **始终存在**；不可用时 `{state:'unavailable', reason, rows:[]}`。前端**永远渲染**行业卡，不可用时表体显示 `—（原因）`；`normalizeTradingState` 对旧包也补 `unavailable`。
+- **当前 live 根因**：宿主 breaker 对 `push2*.eastmoney.com` 报 `fetch failed` ⇒ `fetchIndustryOverview` 取不到 `f127` ⇒ 非宽基持仓全部落到「未穿透」。此前空 map 被当成正常数据。
+
+### 2) 净值点数两处不一致
+
+- `GET` 的 `trading.equity`、`state.equity`、页面 `equityPoints` 统一来自 `PrismTradingStore.equity()`；旧包 `trading.equity` 为空而 `state.equity` 有数据时回退到非空数组。
+
+### 3) 版本信息空值
+
+- `codeVersion` / `mandateHash` 缺值固定显示 `—（旧记录无版本绑定）`，不再出现 `«——»` 或空串。
+
+### 4) 达成度 `—` 补原因
+
+- `exposure` 不可用 ⇒ `达成度 —（缺行业数据）`；可用但无行业上限 ⇒ `达成度 —（未配置行业上限）`。
+
+### 验证
+
+`npm run check` **1249 / 1249 × 2 时区** + selftest + build（73 项）；正常 + UTC 两轮干净复跑。
+新增/覆盖 5 条断言：`exposure` 非 null 且不可用给 `unavailable`｜前端在 `unavailable` 时仍渲染卡（不渲染 ⇒ 败）｜`trading`/`state` 点数一致（页面 `equityPoints=[]` ⇒ 败）｜版本缺值固定文案（空串/横线 ⇒ 败）｜达成度 `—` 必带原因（只写 `—` ⇒ 败）。
+
+### 注意
+
+升级后行业卡会**始终出现**；在东财 `f127` 恢复前，卡内大部分市值会显示在「未穿透」，这是如实反映，不是新 bug。
+
 ## v0.149.0 — 棱镜首批五项：净值口径、版本绑定、量能撮合、仓位裁剪、行业暴露
 
 报告 `docs/AUDIT-PRISM-BATCH1.md`；设计定稿 `docs/mockups/prism-v2-final.html`。`npm run check` **1246 / 1246 × 2 时区**（1234 → 1246）+ selftest + build（73 片段全过）。

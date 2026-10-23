@@ -148,6 +148,17 @@ test('P-08 缺行业数据时不按行业上限夹紧', () => {
   assert.equal(r.events.some((e) => e.dimension === 'industry'), false)
 })
 
+
+test('P-10 缺行业归属 ⇒ unavailable 对象仍在，不返回 null；reason 可展示', () => {
+  const view = industryExposureOf(
+    { cash: 0, positions: [{ secid: '1.600000', name: '股票', qty: 100, cost: 10 }] },
+    { '1.600000': 10 }, {}, { 半导体: 20 }, '行业归属接口未返回 f127（东财可能限流/熔断）',
+  )
+  assert.equal(view.state, 'unavailable')
+  assert.match(view.reason ?? '', /f127/)
+  assert.deepEqual(view.rows, [])
+})
+
 test('P-10 暴露：宽基去重、未穿透独立、现金残差、权重合计 100.00', () => {
   const view = industryExposureOf(
     { cash: 1000, positions: [

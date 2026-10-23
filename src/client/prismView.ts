@@ -332,6 +332,11 @@ export function compositionItems(
   return [...head, { key: 'other', name: '其他', weight: otherWeight, color: series[5] as string }]
 }
 
+/** 行业暴露缺数据时的唯一占位：卡片仍渲染，表体 — + 原因 */
+export function unavailableExposure(reason: string): import('../shared/prism.ts').PrismExposure {
+  return { state: 'unavailable', reason, rows: [], classifiedPct: 0, unclassifiedPct: 0, unpenetratedPct: 0, cashPct: 0, total: 0 }
+}
+
 /** 统一交易账户：老宿主/半包若 trading.account 为空，落回 state.account（同一份 cash/positions） */
 export function normalizeTradingState(payload: {
   trading?: PrismTradingState | null
@@ -348,8 +353,11 @@ export function normalizeTradingState(payload: {
     account,
     orders: raw?.orders ?? payload.state?.orders ?? [],
     fills: raw?.fills ?? payload.state?.fills ?? [],
-    equity: raw?.equity ?? payload.state?.equity ?? [],
+    equity: (raw?.equity?.length ?? 0) >= (payload.state?.equity?.length ?? 0)
+      ? raw?.equity ?? []
+      : payload.state?.equity ?? [],
     decision: raw?.decision ?? payload.state?.decision ?? null,
     prices: raw?.prices,
+    exposure: raw?.exposure ?? payload.state?.exposure ?? unavailableExposure('接口未返回行业暴露（旧宿主或半包）'),
   }
 }
