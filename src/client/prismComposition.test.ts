@@ -60,3 +60,24 @@ test('limits 为 null 时页面保持 —（模型没给，非解析失败）', 
   assert.equal(rows[0]?.value, '—')
   assert.equal(rows[1]?.value, '—')
 })
+
+test('交易账户统一：trading.account 空时落回 state.account（cash/positions 一致）', async () => {
+  const { normalizeTradingState } = await import('./prismView.ts')
+  const account = { day: '2026-10-23', capitalLimit: 1500000, cash: 1.12, realized: 0, dayStartEquity: 1, positions: [{ secid: '1.588170', name: '半导体', qty: 500000, available: 500000, cost: 0.89 }], copiedAt: 1, copyLogs: [] }
+  const state = { account, orders: [], fills: [], equity: [], decision: null } as unknown as import('../shared/prism.ts').PrismState
+  const t = normalizeTradingState({
+    state,
+    trading: { account: { ...account, cash: 0, positions: [] }, orders: [], fills: [], equity: [], decision: null },
+  })
+  assert.equal(t?.account.cash, 1.12)
+  assert.equal(t?.account.positions.length, 1)
+})
+
+test('决策卡显示 note / limits.note（空则 —）', () => {
+  const rows = decisionRows({ note: '风险优先，暂不新增订单', limits: { singlePct: 20, totalPct: 50, note: '按总资产 20%' }, orders: [], cancel: [], rejects: [] })
+  assert.equal(rows.find((r) => r.key === '决策理由')?.value, '风险优先，暂不新增订单')
+  assert.equal(rows.find((r) => r.key === '仓位上限依据')?.value, '按总资产 20%')
+  const empty = decisionRows({ note: '', limits: { singlePct: null, totalPct: null, note: null }, orders: [], cancel: [], rejects: [] })
+  assert.equal(empty.find((r) => r.key === '决策理由')?.value, '—')
+  assert.equal(empty.find((r) => r.key === '仓位上限依据')?.value, '—')
+})

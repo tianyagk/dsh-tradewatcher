@@ -45,7 +45,7 @@ test('④ 分段选中背景/文字/字重达标（删背景 ⇒ 败）', () => 
 
 test('⑤ rejects 走决策表格行，orders/cancel 0 用次要色（纯文本 ⇒ 败）', () => {
   const rows = decisionRows({ limits: { singlePct: 20, totalPct: null }, orders: [], cancel: [], rejects: [] })
-  assert.deepEqual(rows.map((r) => r.key), ['单票上限', '总仓位上限', 'orders', 'cancel', 'rejects'])
+  assert.deepEqual(rows.map((r) => r.key), ['单票上限', '总仓位上限', '仓位上限依据', '决策理由', 'orders', 'cancel', 'rejects'])
   assert.equal(rows.find((r) => r.key === 'rejects')?.value, '无')
   assert.equal(rows.find((r) => r.key === 'orders')?.muted, true)
   assert.ok(page.includes('tw-prism-decision') && page.includes('zero'))

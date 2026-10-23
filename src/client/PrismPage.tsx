@@ -23,6 +23,7 @@ import {
   equityChartOf,
   equityLegendItems,
   newsStatusText,
+  normalizeTradingState,
   orderStatusText,
   positionWeightPct,
   selftestText,
@@ -115,10 +116,11 @@ export function PrismPage(props: { active: boolean }): React.ReactElement {
     api.prismState()
       .then((r) => {
         setState(r.state)
-        setTrading(r.trading)
+        const tradingState = normalizeTradingState(r)
+        setTrading(tradingState)
         setTimes(r.state.settings.times)
         setSkeleton(r.state.skeleton)
-        setCapital(String(r.trading.account.capitalLimit))
+        setCapital(String(tradingState?.account.capitalLimit ?? ''))
         setProvider(r.state.settings.model?.provider ?? r.state.model.provider ?? '')
         setModelName(r.state.settings.model?.model ?? r.state.model.model ?? '')
       })

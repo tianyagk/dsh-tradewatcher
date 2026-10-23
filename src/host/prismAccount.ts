@@ -284,6 +284,11 @@ export function parseDecisionDetailed(text: string | null): { decision: PrismDec
         totalPct: typeof limitsRaw['totalPct'] === 'number' ? limitsRaw['totalPct'] : null,
         note: typeof limitsRaw['note'] === 'string' ? limitsRaw['note'] : null,
       },
+      note: typeof raw['note'] === 'string' && raw['note'].trim() !== ''
+        ? raw['note'].trim()
+        : typeof limitsRaw['note'] === 'string' && limitsRaw['note'].trim() !== ''
+          ? limitsRaw['note'].trim()
+          : null,
       orders,
       cancel,
       rejects: [],

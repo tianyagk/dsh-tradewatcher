@@ -192,6 +192,8 @@ export interface PrismAccount {
 
 export interface PrismDecision {
   limits: { singlePct: number | null; totalPct: number | null; note: string | null }
+  /** 本轮决策理由（一句话；orders 为空也必须给） */
+  note?: string | null
   orders: Array<{ secid: string; side: 'buy' | 'sell'; price: number; shares: number; reason: string }>
   cancel: string[]
   /** 引擎拒绝的委托（盘后/资金/约束），带原因；不是「模型没动作」 */

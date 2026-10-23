@@ -848,6 +848,8 @@ color-scheme:dark}
 .tw-prism-points li::before{content:"·";position:absolute;left:2px;color:var(--tw-md-accent);font-weight:700}
 .tw-prism-decision td:last-child{font-weight:600;font-variant-numeric:tabular-nums}
 .tw-prism-decision td.zero{color:var(--tw-muted);font-weight:400}
+.tw-prism-decision td:first-child{width:86px;color:var(--tw-muted)}
+.tw-prism-decision td:last-child{white-space:normal;line-height:1.4;height:auto;min-height:26px;padding-top:4px;padding-bottom:4px}
 .tw-prism-error{color:var(--tw-up);font-size:12px;line-height:1.4}
 .tw-prism-muted{color:var(--tw-muted);font-size:12px;line-height:1.4}
 .tw-prism-field{display:flex;align-items:center;gap:8px;min-width:0}

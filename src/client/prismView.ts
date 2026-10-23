@@ -2,7 +2,7 @@
  * 棱镜页的展示口径与判据（纯函数；页面与测试共用）。
  * 字号只用 12 / 14（Material 低端子集）；不写免责文案；缺数据 `—` + 一句原因。
  */
-import type { PrismAnalysis, PrismNewsStatus, PrismSettings } from '../shared/prism.ts'
+import type { PrismAnalysis, PrismNewsStatus, PrismSettings, PrismState, PrismTradingState } from '../shared/prism.ts'
 import { shStampText } from './marketTime.ts'
 
 export const PRISM_FONT = { body: 12, title: 14 } as const
@@ -73,7 +73,7 @@ export function rippleCssProblems(css: string): string[] {
 
 /* ────────────────────────── 批次 4：模拟盘展示 ────────────────────────── */
 
-import type { PrismEquityPoint, PrismOrder, PrismTradingState } from '../shared/prism.ts'
+import type { PrismEquityPoint, PrismOrder } from '../shared/prism.ts'
 
 export const PRISM_MONEY = (n: number | null | undefined): string =>
   n === null || n === undefined || !Number.isFinite(n) ? '—' : n.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
@@ -195,15 +195,19 @@ export interface DecisionRow {
 
 /** 决策卡：只给小表，不渲染原始 JSON */
 export function decisionRows(decision: {
-  limits?: { singlePct?: number | null; totalPct?: number | null }
+  note?: string | null
+  limits?: { singlePct?: number | null; totalPct?: number | null; note?: string | null }
   orders?: readonly unknown[]
   cancel?: readonly unknown[]
   rejects?: ReadonlyArray<{ secid?: string; reason?: string }>
 } | null | undefined): DecisionRow[] {
   const pct = (n: number | null | undefined): string => (typeof n === 'number' ? `${n}%` : '—')
+  const prose = (t: string | null | undefined): string => (typeof t === 'string' && t.trim() !== '' ? t.trim() : '—')
   return [
     { key: '单票上限', value: pct(decision?.limits?.singlePct) },
     { key: '总仓位上限', value: pct(decision?.limits?.totalPct) },
+    { key: '仓位上限依据', value: prose(decision?.limits?.note), muted: (decision?.limits?.note ?? '') === '' },
+    { key: '决策理由', value: prose(decision?.note), muted: (decision?.note ?? '') === '' },
     { key: 'orders', value: String(decision?.orders?.length ?? 0), muted: (decision?.orders?.length ?? 0) === 0 },
     { key: 'cancel', value: String(decision?.cancel?.length ?? 0), muted: (decision?.cancel?.length ?? 0) === 0 },
     {
@@ -288,4 +292,26 @@ export function compositionItems(
   const head = weighed.slice(0, 5).map((w, i) => ({ ...w, color: series[i] as string }))
   const otherWeight = Math.round(weighed.slice(5).reduce((a, w) => a + w.weight, 0) * 100) / 100
   return [...head, { key: 'other', name: '其他', weight: otherWeight, color: series[5] as string }]
+}
+
+/** 统一交易账户：老宿主/半包若 trading.account 为空，落回 state.account（同一份 cash/positions） */
+export function normalizeTradingState(payload: {
+  trading?: PrismTradingState | null
+  state?: PrismState | null
+}): PrismTradingState | null {
+  const raw = payload.trading ?? null
+  const fallback = payload.state?.account ?? null
+  if (raw === null && fallback === null) return null
+  const rawPositions = raw?.account?.positions?.length ?? 0
+  const fallbackPositions = fallback?.positions?.length ?? 0
+  const account = rawPositions === 0 && fallbackPositions > 0 ? fallback : raw?.account ?? fallback
+  if (account === null) return raw
+  return {
+    account,
+    orders: raw?.orders ?? payload.state?.orders ?? [],
+    fills: raw?.fills ?? payload.state?.fills ?? [],
+    equity: raw?.equity ?? payload.state?.equity ?? [],
+    decision: raw?.decision ?? payload.state?.decision ?? null,
+    prices: raw?.prices,
+  }
 }

@@ -11,6 +11,32 @@
 
 ---
 
+## v0.140.0 — 棱镜：研判注入账户快照、决策带理由、账户字段统一
+
+报告 `docs/AUDIT-PRISM-ACCOUNT.md`。`npm run check` **1200 / 1200 × 2 时区**（1194 → 1200）+ selftest + build（73 片段全过）。
+
+### 缺陷 1：账户数据没喂给模型
+
+`decision.limits` 长期为 `null`，模型原话「材料未提供账户总资产、风险预算与仓位约束」。
+
+修复：`PrismInputs.account` + `accountSnapshotOf`，4 路分析与汇总的请求体**全部**带上 7 项：
+`总资产` / `现金` / `持仓市值` / `当前仓位占比` / `可买额度` / `当日已成交笔数` / `未成交挂单`。
+汇总 prompt 要求**依据快照计算** `singlePct/totalPct`；确实无法算才 null 并在 `limits.note` 说明。页面决策表新增「**仓位上限依据**」行。
+
+### 缺陷 2：决策没有「为什么不下单」
+
+`PrismDecision.note` 新增（兼容旧落盘）：`parseDecisionDetailed` 优先读顶层 `note`、兼容 `limits.note`、空串归一 null；汇总 JSON schema 增加 `"note":"本轮决策理由（一句话；orders 为空也必须写）"`；页面决策表新增「**决策理由**」行。
+`decisionProblems` 对 `orders=[] && note===''` 返回错误。
+
+### 账户字段统一
+
+`state.account` 与 `trading.account` 同一对象（同一 `tradingWithDecision` 展开），实测 `cash=1.12`、`positions=6`、`copiedAt` 均有值；客户端新增 `normalizeTradingState`（`trading.account.positions` 为空时落回 `state.account`）。
+
+### 验证
+
+`npm run check` **1200 / 1200 × 2 时区** + selftest + build（73 项）；两轮干净复跑。
+本轮新增 7 条用例：7 项齐全且 5 个请求体全含（少一项 ⇒ 败）｜正常 `20/50` 回包解析非 null｜`orders=[]` + 空 note ⇒ 败｜`state.account` 与 `trading.account` 同源｜`trading.account` 空时客户端兜底（cash 1.12 / 1 持仓）｜决策表新增两行且空值显示 `—`。
+
 ## v0.139.0 — 竞价格式解耦东财；删除护盘「备用源」归因面板
 
 报告 `docs/AUDIT-AUCTION-DECOUPLE.md`、`docs/AUDIT-RESCUE-PANEL.md`。`npm run check` **1194 / 1194 × 2 时区**（1181 → 1194）+ selftest + build（73 片段全过）。

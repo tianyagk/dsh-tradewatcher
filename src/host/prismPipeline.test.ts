@@ -6,7 +6,7 @@ import { join } from 'node:path'
 import { runPrismAnalysis } from './prismPipeline.ts'
 import { PrismStore } from './prismStore.ts'
 
-const inputs = { positions: '茅台 100 股', quotes: '600519 1330', news: [], skeleton: '骨架' }
+const inputs = { positions: '茅台 100 股', quotes: '600519 1330', account: '总资产：1000.00 元', news: [], skeleton: '骨架' }
 
 test('⑦ 4 路并行 + 1 次汇总；失败只留痕、不自动重试（调用数固定 5）', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'prism-pipe-'))

@@ -15,7 +15,7 @@ import type { PluginWebRoute } from './context.ts'
 import type { PrismStore } from './prismStore.ts'
 import { PrismTradingStore, copyAtCost, equityPointOf, matchTick, placeDecision, upsertEquity, type QuoteLite } from './prismAccount.ts'
 import type { DataStore } from './store.ts'
-import type { PrismSettings, PrismState } from '../shared/prism.ts'
+import type { PrismAccount, PrismFill, PrismSettings, PrismState } from '../shared/prism.ts'
 import { PRISM_MAX_TIMES, PRISM_SKELETON_MAX } from '../shared/prism.ts'
 import { backfillNews, incrementalNews } from './prismNews.ts'
 import { runPrismAnalysis, type PrismInputs } from './prismPipeline.ts'
@@ -53,6 +53,30 @@ const readBody = async (req: IncomingMessage): Promise<unknown> => {
   return JSON.parse(text) as unknown
 }
 
+/** 账户快照：七项数字/单位必须同时出现（提示词用，缺项写 — 与原因） */
+export function accountSnapshotOf(
+  account: PrismAccount,
+  prices: Readonly<Record<string, number | null>>,
+  fills: readonly PrismFill[],
+  pendingCount: number,
+  now: number = Date.now(),
+): string {
+  const value = account.positions.reduce((sum, p) => sum + p.qty * (prices[p.secid] ?? p.cost), 0)
+  const total = account.cash + value
+  const weight = total > 0 ? (value / total) * 100 : null
+  const today = dayOf(now)
+  const filledToday = fills.filter((f) => dayOf(f.at) === today).length
+  return [
+    `总资产：${total.toFixed(2)} 元`,
+    `现金：${account.cash.toFixed(2)} 元`,
+    `持仓市值：${value.toFixed(2)} 元`,
+    `当前仓位占比：${weight === null ? '—（总资产为 0）' : `${weight.toFixed(2)}%`}`,
+    `可买额度：${account.cash.toFixed(2)} 元`,
+    `当日已成交笔数：${filledToday} 笔`,
+    `未成交挂单：${pendingCount} 笔`,
+  ].join('\n')
+}
+
 export const prismInputsOf = async (deps: PrismRouteDeps): Promise<PrismInputs> => {
   const watch = deps.data.watchData().items
   const port = deps.data.portData()
@@ -71,11 +95,15 @@ export const prismInputsOf = async (deps: PrismRouteDeps): Promise<PrismInputs> 
     })
     .join('\n')
   const pending = deps.trading.orders().filter((o) => o.status === 'pending')
+  const account = deps.trading.account()
+  const accountPrices: Record<string, number | null> = {}
+  for (const p of account.positions) accountPrices[p.secid] = quotes[p.secid]?.price ?? null
+  const accountSnapshot = accountSnapshotOf(account, accountPrices, deps.trading.fills(), pending.length)
   const pendingText = pending.length === 0
     ? '—'
     : pending.map((o) => `${o.id} ${o.side === 'buy' ? '买' : '卖'} ${o.name} ${o.shares}@${o.price}`).join('\n')
   const news = deps.store.news().items.slice().sort((a, b) => (a.time < b.time ? 1 : -1))
-  return { positions, quotes: `${quoteText}\n【待成交挂单】\n${pendingText}`, news, skeleton: deps.store.skeleton() }
+  return { positions, account: accountSnapshot, quotes: `${quoteText}\n【待成交挂单】\n${pendingText}`, news, skeleton: deps.store.skeleton() }
 }
 
 const kickNews = (store: PrismStore): void => {

@@ -56,7 +56,7 @@ test('③ 研判请求的 provider/model 等于页面所选（忽略配置 ⇒ �
         return (async function* () { yield { type: 'text-delta', text: 'x' } })()
       },
     }
-    await runPrismAnalysis(store, 'manual', { positions: '', quotes: '', news: [], skeleton: '' }, {
+    await runPrismAnalysis(store, 'manual', { positions: '', quotes: '', account: '', news: [], skeleton: '' }, {
       get: fakeGet(llm), model: { provider: 'cfg-p', model: 'cfg-m' }, now: () => 1,
     })
     assert.equal(seen.length, 5)
