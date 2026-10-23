@@ -23,7 +23,7 @@ test('② 四格宽屏 4 列、<1100 2 列、<640 单列（写回 2 列 ⇒ 败�
   assert.match(TW_CSS, /\.tw-prism-cards\{display:grid;grid-template-columns:repeat\(4,minmax\(0,1fr\)\);gap:8px\}/)
   assert.match(TW_CSS, /@media \(max-width:1099px\)\{\.tw-prism-cards\{grid-template-columns:repeat\(2,minmax\(0,1fr\)\)\}\}/)
   assert.match(TW_CSS, /@media \(max-width:639px\)\{\.tw-prism-cards\{grid-template-columns:minmax\(0,1fr\)\}\}/)
-  assert.match(TW_CSS, /\.tw-prism-v\{[^}]*font:600 26px/)
+  assert.match(TW_CSS, /\.tw-prism-v\{[^}]*font:600 28px/)
   const injected = TW_CSS.replace('.tw-prism-cards{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px}', '.tw-prism-cards{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}')
   assert.notEqual(injected, TW_CSS)
   assert.doesNotMatch(injected, /\.tw-prism-cards\{[^}]*repeat\(4,minmax/)

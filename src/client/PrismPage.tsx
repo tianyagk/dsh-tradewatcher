@@ -221,16 +221,6 @@ export function PrismPage(props: { active: boolean }): React.ReactElement {
       >
         <div className="tw-prism-col tw-prism-left">
 
-          <div className="tw-prism-cards" aria-label="总资产 现金 当日盈亏 累计盈亏">
-            {cards.map((c) => (
-              <div key={c.key} className="tw-prism-card tw-prism-metric">
-                <div className="tw-prism-k">{c.label}</div>
-                <div className="tw-prism-v">{c.value}</div>
-                {c.hint !== null ? <div className="tw-prism-sub">{c.hint}</div> : null}
-              </div>
-            ))}
-          </div>
-
           <div className="tw-prism-seg" role="tablist" aria-label="交易视图">
             {TABS.map((t) => (
               <RippleButton
@@ -242,6 +232,16 @@ export function PrismPage(props: { active: boolean }): React.ReactElement {
               >{t.label}</RippleButton>
             ))}
           </div>
+          <div className="tw-prism-cards" aria-label="总资产 现金 当日盈亏 累计盈亏">
+            {cards.map((c) => (
+              <div key={c.key} className="tw-prism-card tw-prism-metric">
+                <div className="tw-prism-k">{c.label}</div>
+                <div className="tw-prism-v">{c.value}</div>
+                {c.hint !== null ? <div className="tw-prism-sub">{c.hint}</div> : null}
+              </div>
+            ))}
+          </div>
+
           <div className="tw-prism-toolbar">
             <label className="tw-prism-muted" htmlFor="prism-capital">资金上限</label>
             <input id="prism-capital" className="tw-prism-time" value={capital} onChange={(e) => setCapital(e.target.value)} aria-label="资金上限" />
@@ -257,7 +257,7 @@ export function PrismPage(props: { active: boolean }): React.ReactElement {
                 : (
                   <div className="tw-prism-stack">
                     <table className="tw-prism-table">
-                      <thead><tr><th>标的</th><th className="tw-prism-num">数量</th><th className="tw-prism-num">摊薄成本</th><th className="tw-prism-num">现价</th><th className="tw-prism-num">市值</th><th className="tw-prism-num">仓位占比</th><th className="tw-prism-num">浮盈</th></tr></thead>
+                      <thead><tr><th>代码</th><th>名称</th><th className="tw-prism-num">数量</th><th className="tw-prism-num">摊薄成本</th><th className="tw-prism-num">现价</th><th className="tw-prism-num">市值</th><th className="tw-prism-num">仓位占比</th><th className="tw-prism-num">浮盈</th></tr></thead>
                       <tbody>
                         {trading.account.positions.map((p) => {
                           const price = trading.prices?.[p.secid] ?? null
@@ -265,7 +265,7 @@ export function PrismPage(props: { active: boolean }): React.ReactElement {
                           const pnl = price === null ? null : (price - p.cost) * p.qty
                           return (
                             <tr key={p.secid}>
-                              <td><span className="tw-prism-mono">{p.secid}</span> <span className="tw-prism-muted">{p.name}</span></td>
+                              <td className="tw-prism-code tw-prism-mono">{p.secid}</td><td className="tw-prism-name">{p.name}</td>
                               <td className="tw-prism-num tw-prism-mono">{p.qty}</td>
                               <td className="tw-prism-num tw-prism-mono">{PRISM_MONEY(p.cost)}</td>
                               <td className="tw-prism-num tw-prism-mono">{price === null ? '—（未取到行情）' : PRISM_MONEY(price)}</td>
