@@ -11,6 +11,56 @@
 
 ---
 
+## v0.149.0 — 棱镜首批五项：净值口径、版本绑定、量能撮合、仓位裁剪、行业暴露
+
+报告 `docs/AUDIT-PRISM-BATCH1.md`；设计定稿 `docs/mockups/prism-v2-final.html`。`npm run check` **1246 / 1246 × 2 时区**（1234 → 1246）+ selftest + build（73 片段全过）。
+
+### P-01 权益口径与现金流
+
+- 净值点新增 `capital` / `benchmarkClose` / `warnings`；`benchmarkClose` 走既有 `em.fetchKline('1.000300',101,1)`，取不到写 `null`。
+- **资本调整后收益** = `(equity_t − capital_t) / (equity_0 − capital_0) − 1`；缺 `capital` 的点给 `null` + 原因，**不用当前 capital 回填**（否则 10-22 收益 −14.55% 会变 −35.91%）。
+- `dayStartEquity` 与前一交易日收盘差 **> 1 元 ⇒ 告警**（`warnings` + `console.warn`）；当日盈亏改为相邻净值点 `(equity − capital)` 差分。
+- `unrealized` 数值不变，UI 标注「相对本金总盈亏」。
+- **UI**：净值卡移到右栏；卡头「名义 / 调整后」开关，**默认调整后**。
+
+### P-04 版本绑定
+
+- `PrismRun.codeVersion` 来自构建注入 `__TW_VERSION__`（测试回落 `dev`，不手写）。
+- `mandateHash` = 骨架 + settings 参数（**剔除 `lastFired`**）的**全 sha256**，复用 `backup.ts` 的 `canonical()`。
+- **UI**：版本信息在净值卡之后，默认折叠 `<details>`。
+
+### P-05 量能约束
+
+- `MinuteBar.volume`：新浪补 `r['volume']`、腾讯 m1 补 `r[5]`（注释标「股」口径）；**缺失为 `null`，不是 0**。
+- 参与率进 settings，默认 **10%**；成交 ≤ `volume × rate`；不足则**部分成交**，剩余仍 `pending`。
+- 独立原因码：`vol-missing` / `vol-zero` / `trend-no-1min` / `transient-source`，全部进 `rejects` 与挂单「原因」列。
+- **修既有 bug**：`source === null` 不再置 `rejected`，保留 `pending` 下个 tick 重试。
+
+### P-08 仓位上限真正执行
+
+- 纯函数 `clampDecision`：固定链 **单票 → 行业 → 总仓 → 现金**；分母统一「现金 + 持仓市值」；整手向下；`<100` 不成交并留痕；**卖单不裁**；缺价格/行业/上限不夹；**夹掉不重分配**。
+- `ClampEvent{at,secid,dimension,before,after,basis}` 写入 decision，**裁剪早于 `placeDecision`**；只裁已有订单、不新建委托（R12）；允许撤销未成交的买卖单。
+- **UI**：不单独占卡，写进决策卡「仓位上限依据」三行（`资金上限 · 单票 · 总仓` / `达成度` / `本次夹紧 前 → 后`，无则 `—`）。
+
+### P-10 行业暴露
+
+- `industryExposureOf`：`市值 ÷ (现金 + 持仓市值)`；行业取 `fetchIndustryOverview(f127)`；目录内宽基去重为「宽基 ETF」；族级用 `RESCUE_COVERAGE_FAMILY_OF_INDEX`；**未穿透与现金独立成行**。
+- 暴露写进决策输入，GET 注入 `trading.exposure`。
+- **UI**：构成条之后新增行业卡 —— 堆叠条 + 图例 + 紧凑表（前 6 行 + `其余 N 行`）；含 `未穿透`、`现金`、上限/状态；卡内写 `已归类 X% + 未归类 Y% = 100.00%`。
+
+### 验证
+
+`npm run check` **1246 / 1246 × 2 时区** + selftest + build（73 项）；两轮（正常 + UTC）干净复跑。
+新增 **12 条**用例（`prismBatch1.test.ts`、`prismBatch1Ui.test.ts`）：缺 capital ⇒ `—`｜`benchmarkClose` 可空落盘｜`dayStartEquity` 差 >1 告警｜仅 `lastFired` 不同 ⇒ hash 相同、改 capital ⇒ 变化、64 位全摘要｜`volume=null/0/trend/transient` 四码不同且都保持 `pending`｜100/200 部分成交且余量 `pending`｜40.92% 夹到 25%（先整手）｜两个买单总仓不重分配｜缺行业不夹｜卖单不动｜权重合计 100.00、宽基只一行、未穿透不并入其它｜UI 默认调整后、行业卡 100.00%、移动端顺序。
+
+### 未做
+
+- 后续批次（P-02/P-03/P-06/P-07/P-09/P-11 及以后）未动。
+- P-05 未做真实逐笔回放（量能口径沿用既有「股」标定 + mock）。
+- P-08 不自动卖出已有超限仓位（R12）；行业裁剪仅在 `limits.byIndustry` 或 settings 行业上限存在时生效。
+- P-10 不做 ETF 成分穿透。
+- **未在活宿主重启后做浏览器截图验收**。
+
 ## v0.148.0 — 棱镜：复制持仓自动提额（资金不足时补到刚好够）
 
 报告 `docs/AUDIT-PRISM-COPY.md`。`npm run check` **1234 / 1234 × 2 时区**（1230 → 1234）+ selftest + build（73 片段全过）。

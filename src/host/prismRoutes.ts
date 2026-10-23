@@ -13,14 +13,15 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { PluginWebRoute } from './context.ts'
 import type { PrismStore } from './prismStore.ts'
-import { PrismTradingStore, copyAtCost, equityPointOf, matchTick, placeDecision, rebuildFromOrders, upsertEquity, type QuoteLite } from './prismAccount.ts'
+import { PrismTradingStore, clampDecision, copyAtCost, dayStartMismatchOf, equityPointOf, matchTick, placeDecision, rebuildFromOrders, upsertEquity, type QuoteLite } from './prismAccount.ts'
 import type { DataStore } from './store.ts'
 import type { PrismAccount, PrismFill, PrismSettings, PrismState } from '../shared/prism.ts'
 import { PRISM_MAX_TIMES, PRISM_SKELETON_MAX } from '../shared/prism.ts'
 import { backfillNews, incrementalNews } from './prismNews.ts'
 import { runPrismAnalysis, type PrismInputs } from './prismPipeline.ts'
-import { fetchQuotes } from './em.ts'
+import { fetchIndustryOverview, fetchKline, fetchQuotes } from './em.ts'
 import { assemblePortfolio } from './portfolio.ts'
+import { industryExposureOf } from './prismExposure.ts'
 import { dayOf } from './time.ts'
 
 export interface PrismRouteDeps {
@@ -105,7 +106,13 @@ export const prismInputsOf = async (deps: PrismRouteDeps): Promise<PrismInputs> 
     ? '—'
     : pending.map((o) => `${o.id} ${o.side === 'buy' ? '买' : '卖'} ${o.name} ${o.shares}@${o.price}`).join('\n')
   const news = deps.store.news().items.slice().sort((a, b) => (a.time < b.time ? 1 : -1))
-  return { positions, account: accountSnapshot, quotes: `${quoteText}\n【待成交挂单】\n${pendingText}`, news, skeleton: deps.store.skeleton() }
+  const industries = await fetchIndustryOverview(account.positions.map((p) => p.secid)).catch(() => ({}))
+  const exposure = industryExposureOf(account, accountPrices, industries, deps.store.settings().industryLimits ?? {})
+  const exposureText = exposure.rows.length === 0
+    ? '—（无持仓与现金）'
+    : exposure.rows.map((r) => `${r.name}：${r.weight.toFixed(2)}%（市值 ${r.value.toFixed(2)}${r.limitPct === null ? '' : `，上限 ${r.limitPct}%`}）`).join('\n') +
+      `\n已归类 ${exposure.classifiedPct.toFixed(2)}% + 未归类 ${exposure.unclassifiedPct.toFixed(2)}% = 100.00%`
+  return { positions, account: accountSnapshot, quotes: `${quoteText}\n【待成交挂单】\n${pendingText}`, news, skeleton: deps.store.skeleton(), exposure: exposureText }
 }
 
 const kickNews = (store: PrismStore): void => {
@@ -141,8 +148,18 @@ const copyRowsOf = async (deps: PrismRouteDeps): Promise<Array<{ secid: string; 
 const recordEquity = async (deps: PrismRouteDeps, now = Date.now()): Promise<void> => {
   const account = deps.trading.account()
   const quotes = await quoteLiteOf(deps, account.positions.map((p) => p.secid)).catch(() => ({}))
-  const point = equityPointOf(account, (secid) => quotes[secid]?.price ?? null, now)
-  await deps.trading.saveEquity(upsertEquity(deps.trading.equity(), point))
+  let benchmarkClose: number | null = null
+  try {
+    const k = await fetchKline('1.000300', 101, 1)
+    const last = k?.days.at(-1)?.close
+    benchmarkClose = typeof last === 'number' && Number.isFinite(last) ? last : null
+  } catch { benchmarkClose = null }
+  const before = deps.trading.equity()
+  const warning = dayStartMismatchOf(account, before)
+  if (warning !== null) console.warn(`[tradewatcher] 棱镜净值口径告警：${warning}`)
+  const point = equityPointOf(account, (secid) => quotes[secid]?.price ?? null, now, benchmarkClose)
+  if (warning !== null) point.warnings = [warning]
+  await deps.trading.saveEquity(upsertEquity(before, point))
 }
 
 interface ModelCatalog {
@@ -235,7 +252,17 @@ export async function runPrismForSlot(deps: PrismRouteDeps, slot: string): Promi
     await deps.store.replaceRun(run)
     return run
   }
+  const account = deps.trading.account()
   const quotes = run.decision.orders.length > 0 ? await quoteLiteOf(deps, run.decision.orders.map((o) => o.secid)) : {}
+  const industries = await fetchIndustryOverview(account.positions.map((p) => p.secid)).catch(() => ({}))
+  const clamped = clampDecision(run.decision, {
+    cash: account.cash,
+    positions: account.positions.map((p) => ({ secid: p.secid, qty: p.qty, price: quotes[p.secid]?.price ?? p.cost })),
+    limits: run.decision.limits,
+    industries: Object.fromEntries(Object.entries(industries).map(([k, v]) => [k, v?.name ?? null])),
+    at: run.startedAt,
+  })
+  run.decision = clamped.decision
   // 边界口径：用 run 触发时刻（startedAt），不是分析结束后的墙钟；14:59:09 ⇒ 14:59 可下单
   const result = await placeDecision(deps.trading, run.decision, run.startedAt, quotes)
   run.decision = { ...run.decision, rejects: result.rejects }
@@ -261,7 +288,9 @@ export function makePrismRoutes(deps: PrismRouteDeps): PluginWebRoute[] {
           const quotes = await quoteLiteOf(deps, accountView.positions.map((p) => p.secid)).catch(() => ({}))
           const prices: Record<string, number | null> = {}
           for (const p of accountView.positions) prices[p.secid] = quotes[p.secid]?.price ?? null
-          const trading = { ...tradingOf(deps.trading, prices), account: accountView }
+          const industries = await fetchIndustryOverview(accountView.positions.map((p) => p.secid)).catch(() => ({}))
+          const exposure = industryExposureOf(accountView, prices, industries, { ...(settings.industryLimits ?? {}), ...(store.runs().at(-1)?.decision?.limits.byIndustry ?? {}) })
+          const trading = { ...tradingOf(deps.trading, prices), account: accountView, exposure }
           const latestDecision = store.runs().at(-1)?.decision ?? null
           const tradingWithDecision = { ...trading, decision: latestDecision }
           const modelCatalog = await modelCatalogOf(deps.get)
@@ -418,6 +447,7 @@ export function makePrismRoutes(deps: PrismRouteDeps): PluginWebRoute[] {
             const result = await matchTick(deps.trading, {
               quotes: (secids) => quoteLiteOf(deps, secids),
               bars: (secid, day) => import('./prismAccount.ts').then((m) => m.fetchOneMinuteBars(secid, day)),
+              participationRate: store.settings().participationRate ?? 0.1,
             })
             send(res, 200, { ok: true, ...result, trading: tradingOf(deps.trading) })
             return

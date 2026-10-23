@@ -198,7 +198,7 @@ async function tickWith(opts: {
   const result = await matchTick(store, {
     now: () => Date.parse('2026-10-22T10:00:00+08:00'),
     quotes: async () => ({ [opts.order.secid]: opts.quote }),
-    bars: async () => ({ bars: opts.bars, source: '1min', reason: null }),
+    bars: async () => ({ bars: opts.bars.map((b) => ({ ...b, volume: b.volume === undefined ? 1_000_000_000 : b.volume })), source: '1min', reason: null }),
   })
   return { store, result }
 }

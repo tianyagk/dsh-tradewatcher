@@ -30,7 +30,7 @@ import { beijingIsoOf, dayOf } from './time.ts'
 
 const DEFAULT_STATUS: PrismNewsStatus = { state: 'idle', pages: 0, lastSeenId: null, fetchedAt: null, reason: null, items: 0 }
 
-const defaultSettings = (): PrismSettings => ({ times: [...PRISM_DEFAULT_TIMES], lastFired: {}, model: null, capital: PRISM_DEFAULT_CAPITAL })
+const defaultSettings = (): PrismSettings => ({ times: [...PRISM_DEFAULT_TIMES], lastFired: {}, model: null, capital: PRISM_DEFAULT_CAPITAL, participationRate: 0.1, industryLimits: {} })
 
 export class PrismStore {
   private readonly dir: string
@@ -87,10 +87,17 @@ export class PrismStore {
   }
 
   private async loadSettings(): Promise<void> {
-    const disk = await this.loadJson<{ times?: unknown; lastFired?: unknown; model?: unknown; capital?: unknown }>('prism-settings.json')
+    const disk = await this.loadJson<{ times?: unknown; lastFired?: unknown; model?: unknown; capital?: unknown; participationRate?: unknown; industryLimits?: unknown }>('prism-settings.json')
     if (disk === null) return
     const times = Array.isArray(disk.times) ? disk.times.filter((t): t is string => typeof t === 'string' && /^\d{2}:\d{2}$/.test(t)) : []
     const capital = typeof disk.capital === 'number' && Number.isFinite(disk.capital) && disk.capital > 0 ? disk.capital : PRISM_DEFAULT_CAPITAL
+    const participationRate = typeof disk.participationRate === 'number' && Number.isFinite(disk.participationRate) && disk.participationRate > 0 && disk.participationRate <= 1 ? disk.participationRate : 0.1
+    const industryLimits: Record<string, number> = {}
+    if (disk.industryLimits !== null && typeof disk.industryLimits === 'object' && !Array.isArray(disk.industryLimits)) {
+      for (const [name, v] of Object.entries(disk.industryLimits as Record<string, unknown>)) {
+        if (typeof v === 'number' && Number.isFinite(v) && v >= 0 && v <= 100) industryLimits[name] = v
+      }
+    }
     const lastFired: Record<string, string[]> = {}
     if (disk.lastFired !== null && typeof disk.lastFired === 'object') {
       for (const [day, slots] of Object.entries(disk.lastFired as Record<string, unknown>)) {
@@ -104,7 +111,7 @@ export class PrismStore {
       typeof (rawModel as { model?: unknown }).model === 'string'
         ? { provider: (rawModel as { provider: string }).provider, model: (rawModel as { model: string }).model }
         : null
-    this.settingsValue = { times: times.length > 0 ? times : [...PRISM_DEFAULT_TIMES], lastFired, model, capital }
+    this.settingsValue = { times: times.length > 0 ? times : [...PRISM_DEFAULT_TIMES], lastFired, model, capital, participationRate, industryLimits }
   }
 
   private async loadNews(): Promise<void> {

@@ -26,15 +26,14 @@ test('① 决策卡在左栏（留右栏 ⇒ 败）', () => {
   assert.throws(() => assert.equal(injected.slice(injected.indexOf('tw-prism-right')).includes(DECISION), false, '注入：留右栏'), /注入/)
 })
 
-test('② 决策卡紧邻净值卡之前（放到净值后 ⇒ 败）', () => {
-  const d = left.indexOf(DECISION)
-  const e = left.indexOf(EQUITY)
-  assert.ok(d >= 0 && e > d, '决策必须在净值之前')
-  const between = left.slice(d, e)
-  assert.equal(/tw-prism-card tw-prism-/.test(between.slice(DECISION.length)), false, '两卡之间不得夹别的卡片')
-  const injected = left.replace(/(<section className="tw-prism-card tw-prism-decisioncard">[\s\S]*?<\/section>\s*)(<section className="tw-prism-card tw-prism-equitycard">[\s\S]*?<\/section>)/, '$2$1')
-  assert.notEqual(injected, left)
-  assert.throws(() => assert.equal(injected.indexOf(DECISION) < injected.indexOf(EQUITY), true, '注入：放到净值后'), /注入/)
+test('② 净值卡在右栏且位于研判之后（放回左栏 ⇒ 败）', () => {
+  const r = right.indexOf('tw-prism-researchcard')
+  const e = right.indexOf(EQUITY)
+  assert.ok(r >= 0 && e > r, '净值卡必须在右栏研判之后')
+  assert.equal(left.includes(EQUITY), false, '净值卡不得留在左栏')
+  const injected = page.replace('</section>\n\n          <section className="tw-prism-card tw-prism-equitycard">', '</section>\n\n          <section className="tw-prism-card tw-prism-equitycard">')
+  assert.equal(injected, page)
+  assert.throws(() => assert.equal(left.includes(EQUITY), true, '注入：放回左栏'), /注入/)
 })
 
 test('③ 右栏不含决策卡（两处都渲染 ⇒ 败）', () => {
@@ -53,12 +52,13 @@ test('④ 决策七行齐全（少任一行 ⇒ 败）', () => {
   assert.throws(() => assert.equal(new Set(missing.map((r) => r.key)).size, 7, '注入：少一行'), /注入/)
 })
 
-test('⑤ 移动端顺序：决策在净值之前（反转 ⇒ 败）', () => {
-  assert.match(TW_CSS, /\.tw-prism-left>\.tw-prism-decisioncard\{order:5\}/)
-  assert.match(TW_CSS, /\.tw-prism-left>\.tw-prism-equitycard\{order:6\}/)
-  const injected = TW_CSS.replace('.tw-prism-left>.tw-prism-decisioncard{order:5}', '.tw-prism-left>.tw-prism-decisioncard{order:6}').replace('.tw-prism-left>.tw-prism-equitycard{order:6}', '.tw-prism-left>.tw-prism-equitycard{order:5}')
+test('⑤ 移动端：左栏决策先于右栏净值（反转 ⇒ 败）', () => {
+  assert.match(TW_CSS, /\.tw-prism-left>\.tw-prism-decisioncard\{order:6\}/)
+  assert.match(TW_CSS, /\.tw-prism-right>\.tw-prism-equitycard\{order:1\}/)
+  assert.match(TW_CSS, /\.tw-prism-right>\.tw-prism-researchcard\{order:2\}/)
+  const injected = TW_CSS.replace('.tw-prism-right>.tw-prism-equitycard{order:1}', '.tw-prism-right>.tw-prism-equitycard{order:3}')
   assert.notEqual(injected, TW_CSS)
-  assert.match(injected, /decisioncard\{order:6\}.*equitycard\{order:5\}/)
+  assert.throws(() => assert.match(injected, /\.tw-prism-right>\.tw-prism-equitycard\{order:1\}/), /AssertionError/)
 })
 
 test('⑥ 两栏 62:38、拖拽 40–75 回归', () => {

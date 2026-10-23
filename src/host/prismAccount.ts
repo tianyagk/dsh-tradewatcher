@@ -15,6 +15,7 @@ import { mkdir, readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import type {
   PrismAccount,
+  PrismClampEvent,
   PrismCopyLog,
   PrismDecision,
   PrismEquityPoint,
@@ -124,6 +125,8 @@ export interface MinuteBar {
   t: number
   high: number
   low: number
+  /** 成交量（股；与 em.ts 新浪/腾讯分钟口径一致）；null/undefined = 上游未给，不是 0 */
+  volume?: number | null
 }
 
 /** 撮合：买看 low ≤ 挂单价，卖看 high ≥ 挂单价；按**挂单价**成交（不用收盘价） */
@@ -230,6 +233,7 @@ export function equityPointOf(
   account: PrismAccount,
   priceOf: (secid: string) => number | null,
   now: number,
+  benchmarkClose: number | null = null,
 ): PrismEquityPoint {
   const positionsValue = money(account.positions.reduce((a, p) => a + p.qty * (priceOf(p.secid) ?? p.cost), 0))
   const equity = money(account.cash + positionsValue)
@@ -237,12 +241,23 @@ export function equityPointOf(
   return {
     day,
     equity,
+    capital: account.capital ?? account.capitalLimit,
+    benchmarkClose,
     cash: account.cash,
     positionsValue,
     realized: account.realized,
     unrealized: money(equity - account.capitalLimit),
     at: now,
   }
+}
+
+/** dayStartEquity 与前一交易日收盘净值差 >1 元 ⇒ 告警（不改口径来源） */
+export function dayStartMismatchOf(account: PrismAccount, points: readonly PrismEquityPoint[]): string | null {
+  if (account.dayStartEquity === null) return null
+  const prev = [...points].filter((p) => p.day < account.day).sort((a, b) => (a.day < b.day ? 1 : -1))[0]
+  if (prev === undefined) return null
+  const diff = Math.abs(account.dayStartEquity - prev.equity)
+  return diff > 1 ? `当日基准净值 ${account.dayStartEquity.toFixed(2)} 与前一收盘净值 ${prev.equity.toFixed(2)} 差 ${diff.toFixed(2)} 元` : null
 }
 
 export function upsertEquity(list: readonly PrismEquityPoint[], point: PrismEquityPoint): PrismEquityPoint[] {
@@ -279,11 +294,19 @@ export function parseDecisionDetailed(text: string | null): { decision: PrismDec
     const cancel = Array.isArray(raw['cancel']) ? raw['cancel'].filter((x): x is string => typeof x === 'string') : []
     const dropped = ordersRaw.length - orders.length
     const parseError = dropped > 0 ? `orders 中有 ${dropped} 笔字段非法被丢弃（原始 ${ordersRaw.length} 笔）` : null
+    const byIndustryRaw = limitsRaw['byIndustry']
+    const byIndustry: Record<string, number> = {}
+    if (byIndustryRaw !== null && typeof byIndustryRaw === 'object' && !Array.isArray(byIndustryRaw)) {
+      for (const [name, v] of Object.entries(byIndustryRaw as Record<string, unknown>)) {
+        if (typeof v === 'number' && Number.isFinite(v) && v >= 0 && v <= 100) byIndustry[name] = v
+      }
+    }
     const decision: PrismDecision = {
       limits: {
         singlePct: typeof limitsRaw['singlePct'] === 'number' ? limitsRaw['singlePct'] : null,
         totalPct: typeof limitsRaw['totalPct'] === 'number' ? limitsRaw['totalPct'] : null,
         note: typeof limitsRaw['note'] === 'string' ? limitsRaw['note'] : null,
+        ...(Object.keys(byIndustry).length === 0 ? {} : { byIndustry }),
       },
       note: typeof raw['note'] === 'string' && raw['note'].trim() !== ''
         ? raw['note'].trim()
@@ -474,7 +497,9 @@ export async function fetchOneMinuteBars(
         .filter((r) => typeof r['day'] === 'string' && (r['day'] as string).startsWith(day))
         .map((r) => {
           const t = Date.parse(`${(r['day'] as string).replace(' ', 'T')}+08:00`)
-          return { t, high: Number(r['high']), low: Number(r['low']) }
+          // 新浪 minute volume 单位为「股」（与 em.ts:1685 的真机标定一致）；缺失必须是 null，不是 0
+          const volume = Number(r['volume'])
+          return { t, high: Number(r['high']), low: Number(r['low']), volume: Number.isFinite(volume) ? volume : null }
         })
         .filter((b) => Number.isFinite(b.t) && Number.isFinite(b.high) && Number.isFinite(b.low))
       if (bars.length > 0) {
@@ -492,7 +517,11 @@ export async function fetchOneMinuteBars(
       if (Array.isArray(rows)) {
         const bars = rows
           .filter((r): r is unknown[] => Array.isArray(r) && r.length >= 5 && String(r[0]).startsWith(day.replace(/-/g, '')))
-          .map((r) => ({ t: Date.parse(`${String(r[0]).slice(0, 4)}-${String(r[0]).slice(4, 6)}-${String(r[0]).slice(6, 8)}T${String(r[0]).slice(8, 10)}:${String(r[0]).slice(10, 12)}:00+08:00`), high: Number(r[3]), low: Number(r[4]) }))
+          .map((r) => {
+            // 腾讯 m1 第 5 列 volume 单位「股」；缺失必须是 null，不是 0
+            const volume = Number(r[5])
+            return { t: Date.parse(`${String(r[0]).slice(0, 4)}-${String(r[0]).slice(4, 6)}-${String(r[0]).slice(6, 8)}T${String(r[0]).slice(8, 10)}:${String(r[0]).slice(10, 12)}:00+08:00`), high: Number(r[3]), low: Number(r[4]), volume: Number.isFinite(volume) ? volume : null }
+          })
           .filter((b) => Number.isFinite(b.t) && Number.isFinite(b.high) && Number.isFinite(b.low))
         if (bars.length > 0) {
           const value: BarsResult = { bars, source: '1min', reason: null }
@@ -531,10 +560,87 @@ export interface TradingDeps {
   now?: () => number
   quotes: (secids: string[]) => Promise<Record<string, QuoteLite>>
   bars: (secid: string, day: string) => Promise<BarsResult>
+  /** 参与率上限（默认 10%）；成交股数 ≤ volume × participationRate */
+  participationRate?: number
 }
 
 const idOf = (order: { secid: string; side: string; price: number; shares: number; decidedAt: number }): string =>
   `o-${order.decidedAt}-${order.secid}-${order.side}-${order.price}-${order.shares}`
+
+export interface ClampContext {
+  cash: number
+  positions: ReadonlyArray<{ secid: string; qty: number; price: number | null; industry?: string | null }>
+  limits: { singlePct?: number | null; totalPct?: number | null; byIndustry?: Record<string, number> }
+  industries?: Record<string, string | null>
+  at: number
+}
+
+export interface ClampResult {
+  decision: PrismDecision
+  events: PrismClampEvent[]
+  rejected: PrismDecision['rejects']
+}
+
+const lot = (shares: number): number => Math.max(0, Math.floor(shares / 100) * 100)
+
+/** 确定性裁剪链：单票 → 行业 → 总仓 → 现金；只裁模型已给的买单，不新建、不重分配；卖出不动。 */
+export function clampDecision(decision: PrismDecision, ctx: ClampContext): ClampResult {
+  const positions = ctx.positions.map((p) => ({ ...p, value: p.qty * (p.price ?? 0) }))
+  const missingPrice = positions.some((p) => p.price === null)
+  const totalAssets = ctx.cash + positions.reduce((sum, p) => sum + p.value, 0)
+  const industryValue = (name: string): number => positions.filter((p) => (p.industry ?? ctx.industries?.[p.secid] ?? null) === name).reduce((sum, p) => sum + p.value, 0)
+  const events: PrismClampEvent[] = []
+  const rejected: PrismDecision['rejects'] = []
+  let cashLeft = ctx.cash
+  const accepted: Array<{ secid: string; industry: string | null; value: number }> = []
+  const buyValue = (secid: string): number => positions.filter((p) => p.secid === secid).reduce((sum, p) => sum + p.value, 0) + accepted.filter((x) => x.secid === secid).reduce((sum, x) => sum + x.value, 0)
+  const orders: PrismDecision['orders'] = []
+  for (const order of decision.orders) {
+    if (order.side === 'sell') { orders.push(order); continue }
+    const before = order.shares
+    let shares = lot(order.shares)
+    const px = order.price
+    const existing = buyValue(order.secid)
+    const dims: Array<{ dimension: PrismClampEvent['dimension']; max: number | null; current: number; basis: string }> = []
+    if (!missingPrice && typeof ctx.limits.singlePct === 'number' && totalAssets > 0) {
+      dims.push({ dimension: 'single', max: totalAssets * ctx.limits.singlePct / 100, current: existing, basis: `单票 ${ctx.limits.singlePct}% × 总资产 ${totalAssets.toFixed(2)}` })
+    }
+    const industry = ctx.industries?.[order.secid] ?? positions.find((p) => p.secid === order.secid)?.industry ?? null
+    const indLimit = industry === null ? undefined : ctx.limits.byIndustry?.[industry]
+    if (!missingPrice && industry !== null && typeof indLimit === 'number' && totalAssets > 0) {
+      const currentIndustry = industryValue(industry) + accepted.filter((x) => x.industry === industry).reduce((sum, x) => sum + x.value, 0)
+      dims.push({ dimension: 'industry', max: totalAssets * indLimit / 100, current: currentIndustry, basis: `行业 ${industry} ${indLimit}% × 总资产` })
+    }
+    if (!missingPrice && typeof ctx.limits.totalPct === 'number' && totalAssets > 0) {
+      const currentTotal = positions.reduce((sum, p) => sum + p.value, 0) + accepted.reduce((sum, x) => sum + x.value, 0)
+      dims.push({ dimension: 'total', max: totalAssets * ctx.limits.totalPct / 100, current: currentTotal, basis: `总仓 ${ctx.limits.totalPct}% × 总资产` })
+    }
+    for (const d of dims) {
+      if (d.max === null) continue
+      const room = Math.max(0, d.max - d.current)
+      const maxShares = lot(Math.floor(room / px))
+      if (shares > maxShares) {
+        const after = maxShares
+        events.push({ at: ctx.at, secid: order.secid, dimension: d.dimension, before: shares, after, basis: d.basis })
+        shares = after
+      }
+    }
+    const cashMax = lot(Math.floor(cashLeft / px))
+    if (shares > cashMax) {
+      const after = cashMax
+      events.push({ at: ctx.at, secid: order.secid, dimension: 'cash', before: shares, after, basis: `现金 ${cashLeft.toFixed(2)}` })
+      shares = after
+    }
+    if (shares < 100) {
+      rejected.push({ secid: order.secid, side: 'buy', price: order.price, shares: before, reason: '裁剪后不足一手（<100 股）' })
+      continue
+    }
+    orders.push({ ...order, shares })
+    accepted.push({ secid: order.secid, industry, value: shares * px })
+    cashLeft = Math.max(0, cashLeft - shares * px)
+  }
+  return { decision: { ...decision, orders, rejects: [...decision.rejects, ...rejected], clampEvents: events }, events, rejected }
+}
 
 /** 按当日决策落挂单：先撤销指定单，再逐笔做静态约束（拒绝也留痕） */
 export interface PlaceDecisionResult {
@@ -665,14 +771,16 @@ export function rebuildFromOrders(account: PrismAccount, orders: readonly PrismO
 export async function matchTick(
   store: PrismTradingStore,
   deps: TradingDeps,
-): Promise<{ filled: number; rejected: number }> {
+): Promise<{ filled: number; rejected: number; skipped: Array<{ id: string; code: string; reason: string }>; rejects: Array<{ id: string; code: string; reason: string }> }> {
   const now = (deps.now ?? Date.now)()
   const day = dayOf(now)
+  const rate = deps.participationRate ?? 0.1
   const account = rollDay(store.account(), day, store.equity().at(-1)?.equity ?? null)
   const orders = store.orders().map((o) => ({ ...o }))
   const fills = store.fills().slice()
   let filled = 0
   let rejected = 0
+  const skipped: Array<{ id: string; code: string; reason: string }> = []
   for (const order of orders) {
     if (order.status !== 'pending') continue
     if (order.day !== day) {
@@ -701,43 +809,82 @@ export async function matchTick(
     }
     const barsResult = await deps.bars(order.secid, day)
     if (barsResult.source === null) {
-      order.status = 'rejected'
-      order.rejectReason = barsResult.reason ?? '撮合数据不可用'
-      rejected += 1
+      // 瞬时失败不是终态：保留 pending，下一 tick 重试
+      order.skipCode = 'transient-source'
+      order.skipReason = barsResult.reason ?? '撮合数据暂不可用（下一 tick 重试）'
+      skipped.push({ id: order.id, code: order.skipCode, reason: order.skipReason })
+      continue
+    }
+    if (barsResult.source === 'trend') {
+      order.skipCode = 'trend-no-1min'
+      order.skipReason = '仅分时源（无 1 分钟成交量），本轮不成交并保持 pending'
+      skipped.push({ id: order.id, code: order.skipCode, reason: order.skipReason })
       continue
     }
     const hit = matchOrder(order, barsResult.bars)
     if (hit === null) continue
-    const blocked = fillRejectReasonOf(account, order, hit.price)
+    const bar = barsResult.bars.find((b) => b.t === hit.at)
+    const volume = bar?.volume
+    if (volume === null || volume === undefined) {
+      order.skipCode = 'vol-missing'
+      order.skipReason = '上游未给成交量（volume=null），本轮不成交并保持 pending'
+      skipped.push({ id: order.id, code: order.skipCode, reason: order.skipReason })
+      continue
+    }
+    if (!(volume > 0)) {
+      order.skipCode = 'vol-zero'
+      order.skipReason = '该分钟成交量为 0，本轮不成交并保持 pending'
+      skipped.push({ id: order.id, code: order.skipCode, reason: order.skipReason })
+      continue
+    }
+    const remaining = order.shares - (order.filledShares ?? 0)
+    const take = Math.min(remaining, Math.floor(volume * rate))
+    if (take <= 0) {
+      order.skipCode = 'participation'
+      order.skipReason = '按参与率裁剪后不足 1 股，本轮不成交并保持 pending'
+      skipped.push({ id: order.id, code: order.skipCode, reason: order.skipReason })
+      continue
+    }
+    const checkOrder = { ...order, shares: take }
+    const blocked = fillRejectReasonOf(account, checkOrder, hit.price)
     if (blocked !== null) {
       order.status = 'rejected'
       order.rejectReason = blocked
       rejected += 1
       continue
     }
-    const amount = money(hit.price * order.shares)
-    const fee = feesOf(order.side, hit.price, order.shares).total
+    const amount = money(hit.price * take)
+    const fee = feesOf(order.side, hit.price, take).total
     const fill: PrismFill = {
       orderId: order.id,
       secid: order.secid,
       name: order.name,
       side: order.side,
       price: hit.price,
-      shares: order.shares,
+      shares: take,
       amount,
       fee,
       at: hit.at,
-      source: barsResult.source,
+      source: '1min',
     }
     const nextAccount = applyFill(account, order, fill)
     account.cash = nextAccount.cash
     account.realized = nextAccount.realized
     account.positions = nextAccount.positions
-    order.status = 'filled'
-    order.filledAt = hit.at
-    order.fillPrice = hit.price
-    order.fee = fee
-    order.source = barsResult.source
+    order.filledShares = (order.filledShares ?? 0) + take
+    if (order.filledShares >= order.shares) {
+      order.status = 'filled'
+      order.filledAt = hit.at
+      order.fillPrice = hit.price
+      order.fee = (order.fee ?? 0) + fee
+      order.source = '1min'
+      order.skipCode = undefined
+      order.skipReason = undefined
+    } else {
+      order.status = 'pending'
+      order.skipCode = 'partial'
+      order.skipReason = `部分成交 ${order.filledShares}/${order.shares}，余量排队`
+    }
     fills.push(fill)
     filled += 1
   }
@@ -746,5 +893,5 @@ export async function matchTick(
   const quoteMap = await deps.quotes(account.positions.map((p) => p.secid)).catch(() => ({}))
   const point = equityPointOf(account, (secid) => quoteMap[secid]?.price ?? null, now)
   await store.saveEquity(upsertEquity(store.equity(), point))
-  return { filled, rejected }
+  return { filled, rejected, skipped, rejects: skipped }
 }

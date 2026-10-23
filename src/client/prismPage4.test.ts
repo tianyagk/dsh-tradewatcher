@@ -21,19 +21,23 @@ test('⑩ 页面四格 + 三张表 + 净值曲线齐全（少一格 ⇒ 必败�
   }
 })
 
-test('四格口径：总资产 = 现金 + 市值；累计 = 总资产 − 资金上限；缺基准给原因', () => {
+test('四格口径：总资产 = 现金 + 市值；累计 = 总资产 − 资金上限；当日用净值+capital差分', () => {
   const t: PrismTradingState = {
     account: {
       day: '2026-10-22', capitalLimit: 1_500_000, cash: 1_000_000, realized: 100,
       dayStartEquity: 1_490_000, copiedAt: null, copyLogs: [],
       positions: [{ secid: '1.600519', name: '茅台', qty: 100, available: 100, cost: 1000 }],
     },
-    orders: [], fills: [], equity: [], decision: null, prices: { '1.600519': 1200 },
+    orders: [], fills: [], decision: null, prices: { '1.600519': 1200 },
+    equity: [
+      { day: '2026-10-21', equity: 1500000, capital: 1500000, cash: 0, positionsValue: 0, realized: 0, unrealized: 0, at: 1 },
+      { day: '2026-10-22', equity: 1120000, capital: 1500000, cash: 0, positionsValue: 0, realized: 0, unrealized: 0, at: 2 },
+    ],
   }
   const cards = topCardsOf(t)
   assert.equal(cards.length, 4)
   assert.match(cards[0]?.value ?? '', /1,120,000/)
-  assert.match(cards[2]?.value ?? '', /-370,000/)
+  assert.match(cards[2]?.value ?? '', /-380,000/)
   assert.match(cards[3]?.value ?? '', /-380,000/)
   assert.equal(topCardsOf(null)[0]?.value, '—')
 })

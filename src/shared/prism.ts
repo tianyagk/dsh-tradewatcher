@@ -8,6 +8,10 @@ export interface PrismSettings {
   times: string[]
   /** 模拟盘资金上限（持久化；入金 = 上限与现金同步 +delta） */
   capital?: number
+  /** 成交参与率上限（默认 0.10；成交股数 ≤ volume × 该值） */
+  participationRate?: number
+  /** 行业展示上限（百分比；缺失 ⇒ 表格上限 `—`，不猜） */
+  industryLimits?: Record<string, number>
   /** 研判/自检使用的模型；缺省用 agentDefaultModel.currentSelection() */
   model?: { provider: string; model: string } | null
   /** 每个交易日已触发的时点（`YYYY-MM-DD` → `HH:MM[]`），进程重启不丢 */
@@ -72,6 +76,10 @@ export interface PrismRun {
   decision?: PrismDecision | null
   /** 本轮落库结果（自动时点与手动补跑都必须有） */
   placement?: PrismPlacement
+  /** 构建注入的代码版本（禁止手写） */
+  codeVersion?: string
+  /** 骨架 + settings 参数（剔除 lastFired）的全 sha256 */
+  mandateHash?: string
   startedAt: number
   finishedAt: number | null
   analyses: PrismAnalysis[]
@@ -165,6 +173,12 @@ export interface PrismOrder {
   /** 挂单所属交易日（`YYYY-MM-DD`）；跨日自动失效 */
   day: string
   status: 'pending' | 'filled' | 'cancelled' | 'rejected'
+  /** 已成交股数（部分成交时 < shares；status 仍 pending，余量排队） */
+  filledShares?: number
+  /** 本轮不成交的稳定原因码（vol-missing / vol-zero / trend-no-1min / transient-source） */
+  skipCode?: string
+  /** 本轮不成交原因（UI「原因」列；不写 = rejected） */
+  skipReason?: string
   fillPrice?: number
   filledAt?: number
   fee?: number
@@ -177,11 +191,17 @@ export interface PrismOrder {
 export interface PrismEquityPoint {
   day: string
   equity: number
+  /** 当日资金上限（用于资本调整后收益；旧点缺省 ⇒ 调整后收益不可算） */
+  capital?: number
+  /** 沪深300收盘（1.000300）；未取到 ⇒ null / 缺省 */
+  benchmarkClose?: number | null
   cash: number
   positionsValue: number
   realized: number
   unrealized: number
   at: number
+  /** 读取/口径告警（如 dayStartEquity 与前一收盘差 >1；不改变数值） */
+  warnings?: string[]
 }
 
 export interface PrismCopyLog {
@@ -208,8 +228,17 @@ export interface PrismAccount {
   copyLogs: PrismCopyLog[]
 }
 
+export interface PrismClampEvent {
+  at: number
+  secid: string
+  dimension: 'single' | 'industry' | 'total' | 'cash'
+  before: number
+  after: number
+  basis: string
+}
+
 export interface PrismDecision {
-  limits: { singlePct: number | null; totalPct: number | null; note: string | null }
+  limits: { singlePct: number | null; totalPct: number | null; note: string | null; byIndustry?: Record<string, number> }
   /** 本轮决策理由（一句话；orders 为空也必须给） */
   note?: string | null
   orders: Array<{ secid: string; side: 'buy' | 'sell'; price: number; shares: number; reason: string }>
@@ -218,6 +247,28 @@ export interface PrismDecision {
   rejects: Array<{ secid: string; side: 'buy' | 'sell'; price: number; shares: number; reason: string }>
   /** 汇总 JSON 解析失败时的原文（不得静默成 0 笔） */
   parseError: string | null
+  /** 确定性裁剪留痕（只裁模型已给的单，不新建） */
+  clampEvents?: PrismClampEvent[]
+}
+
+export interface PrismExposureRow {
+  name: string
+  value: number
+  weight: number
+  kind: 'industry' | 'wide' | 'unpenetrated' | 'cash'
+  /** 宽基族级（大盘/中小盘/成长；同族多 ETF 合并后仍标；无则 null） */
+  family?: '大盘' | '中小盘' | '成长' | '混合' | null
+  limitPct: number | null
+  status: '超限' | '正常' | '待穿透' | '可用'
+}
+
+export interface PrismExposure {
+  rows: PrismExposureRow[]
+  classifiedPct: number
+  unclassifiedPct: number
+  unpenetratedPct: number
+  cashPct: number
+  total: number
 }
 
 export interface PrismTradingState {
@@ -228,4 +279,6 @@ export interface PrismTradingState {
   decision: PrismDecision | null
   /** 现价（按 secid；取不到 ⇒ null，界面 `—` + 原因） */
   prices?: Record<string, number | null>
+  /** 行业暴露（宿主按既有 f127 聚合；缺数据保留未穿透） */
+  exposure?: PrismExposure | null
 }

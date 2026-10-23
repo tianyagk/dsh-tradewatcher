@@ -96,17 +96,18 @@ export function topCardsOf(t: PrismTradingState | null, prices?: Readonly<Record
   const value = a.positions.reduce((sum, p) => sum + p.qty * (px[p.secid] ?? p.cost), 0)
   const equity = a.cash + value
   const total = equity - a.capitalLimit
-  const day = a.dayStartEquity === null ? null : equity - a.dayStartEquity
+  const dayInfo = dayPnlOf(t.equity)
+  const day = dayInfo.value
   return [
     { key: 'equity', label: '总资产', value: PRISM_MONEY(equity), hint: `资金上限 ${PRISM_MONEY(a.capitalLimit)}` },
     { key: 'cash', label: '现金', value: PRISM_MONEY(a.cash), hint: null },
-    { key: 'day', label: '当日盈亏', value: PRISM_SIGNED(day), hint: day === null ? '当日基准净值未取到' : null },
-    { key: 'total', label: '累计盈亏', value: PRISM_SIGNED(total), hint: `已实现 ${PRISM_SIGNED(a.realized)}` },
+    { key: 'day', label: '当日盈亏', value: PRISM_SIGNED(day), hint: day === null ? dayInfo.reason : null },
+    { key: 'total', label: '累计盈亏', value: PRISM_SIGNED(total), hint: `相对本金总盈亏 · 已实现 ${PRISM_SIGNED(a.realized)}` },
   ]
 }
 
 export function orderStatusText(o: PrismOrder): string {
-  if (o.status === 'pending') return '待成交'
+  if (o.status === 'pending') return o.filledShares !== undefined && o.filledShares > 0 ? `部分成交（${o.filledShares}/${o.shares}）` : '待成交'
   if (o.status === 'filled') return '已成交'
   if (o.status === 'cancelled') return `已撤销${o.cancelReason === undefined ? '' : `（${o.cancelReason}）`}`
   return `不可成交（${o.rejectReason ?? '未给原因'}）`
@@ -159,17 +160,39 @@ export interface EquityChart {
   last: number
 }
 
-/** 净值折线几何：细网格/点标记/数据标签共用同一份坐标（无坐标文字） */
-export function equityChartOf(points: ReadonlyArray<{ equity: number }>, width = 560, height = 128): EquityChart | null {
-  if (points.length < 2) return null
-  const values = points.map((p) => p.equity)
+/** 资本调整后收益序列：分母 = 首个有 capital 的点 (equity − capital)；缺 capital 的点为 null + 原因 */
+export function adjustedReturnSeries(points: ReadonlyArray<{ day: string; equity: number; capital?: number }>): Array<{ day: string; value: number | null; reason: string | null }> {
+  const base = points.find((p) => typeof p.capital === 'number')
+  const baseValue = base === undefined ? null : base.equity - (base.capital as number)
+  return points.map((p) => {
+    if (typeof p.capital !== 'number') return { day: p.day, value: null, reason: '该净值点缺 capital，不能用当前值回填' }
+    if (baseValue === null || baseValue === 0) return { day: p.day, value: null, reason: '调整后收益的基准点为 0 或缺失' }
+    return { day: p.day, value: ((p.equity - p.capital) / baseValue - 1) * 100, reason: null }
+  })
+}
+
+/** 当日盈亏：净值序列 + capital 差分；不用 dayStartEquity，也不拿当前 capital 回填 */
+export function dayPnlOf(points: ReadonlyArray<{ day?: string; equity: number; capital?: number }> | null | undefined): { value: number | null; reason: string | null } {
+  if (points === null || points === undefined || points.length < 2) return { value: null, reason: '净值序列不足两个点' }
+  const cur = points[points.length - 1]
+  const prev = points[points.length - 2]
+  if (cur === undefined || prev === undefined) return { value: null, reason: '净值序列不足两个点' }
+  if (typeof cur.capital !== 'number' || typeof prev.capital !== 'number') return { value: null, reason: '净值点缺 capital，不能用当前值回填' }
+  return { value: (cur.equity - cur.capital) - (prev.equity - prev.capital), reason: null }
+}
+
+/** 净值折线几何：细网格/点标记/数据标签共用同一份坐标（无坐标文字）；adjusted 用 equity−capital */
+export function equityChartOf(points: ReadonlyArray<{ equity: number; capital?: number }>, width = 560, height = 128, mode: 'nominal' | 'adjusted' = 'nominal'): EquityChart | null {
+  const use = mode === 'adjusted' ? points.filter((p) => typeof p.capital === 'number') : points
+  if (use.length < 2) return null
+  const values = use.map((p) => mode === 'adjusted' ? p.equity - (p.capital as number) : p.equity)
   const min = Math.min(...values)
   const max = Math.max(...values)
   const span = max - min || 1
-  const dots = points.map((p, i) => ({
-    x: (i / (points.length - 1)) * width,
-    y: height - ((p.equity - min) / span) * (height - 16) - 8,
-    value: p.equity,
+  const dots = use.map((p, i) => ({
+    x: (i / (use.length - 1)) * width,
+    y: height - ((mode === 'adjusted' ? p.equity - (p.capital as number) : p.equity) - min) / span * (height - 16) - 8,
+    value: mode === 'adjusted' ? p.equity - (p.capital as number) : p.equity,
   }))
   return { line: dots.map((d) => `${d.x.toFixed(1)},${d.y.toFixed(1)}`).join(' '), dots, min, max, last: values[values.length - 1] as number }
 }

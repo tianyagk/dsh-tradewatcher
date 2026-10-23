@@ -38,8 +38,8 @@ export function filesChecksum(files: unknown): string {
   return createHash('sha1').update(canonical(files)).digest('hex').slice(0, 16)
 }
 
-/** 键排序的稳定序列化：对象键顺序不同不应该算出不同的校验和 */
-function canonical(value: unknown): string {
+/** 键排序的稳定序列化：对象键顺序不同不应该算出不同的校验和；P-04 mandateHash 复用 */
+export function canonical(value: unknown): string {
   if (value === null || typeof value !== 'object') return JSON.stringify(value) ?? 'null'
   if (Array.isArray(value)) return `[${value.map(canonical).join(',')}]`
   const entries = Object.entries(value as Record<string, unknown>)

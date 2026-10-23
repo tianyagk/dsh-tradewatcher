@@ -16,6 +16,7 @@ import {
   PRISM_MONEY,
   PRISM_PCT,
   PRISM_SERIES_CSS,
+  adjustedReturnSeries,
   analysisText,
   compositionItems,
   decisionErrorText,
@@ -106,6 +107,7 @@ export function PrismPage(props: { active: boolean }): React.ReactElement {
   const [busy, setBusy] = useState(false)
   const [notice, setNotice] = useState<string | null>(null)
   const [tab, setTab] = useState<TabKey>('positions')
+  const [netMode, setNetMode] = useState<'nominal' | 'adjusted'>('adjusted')
   const [split, setSplit] = useState(62)
   const [selftest, setSelftest] = useState<{ ok: boolean; error: string | null; model: string | null; elapsedMs: number; text: string | null } | null>(null)
   const bodyRef = useRef<HTMLDivElement | null>(null)
@@ -182,7 +184,13 @@ export function PrismPage(props: { active: boolean }): React.ReactElement {
   const totalAssets = trading === null
     ? null
     : trading.account.cash + trading.account.positions.reduce((sum, p) => sum + p.qty * (trading.prices?.[p.secid] ?? p.cost), 0)
-  const chart = equityChartOf(trading?.equity ?? [])
+  const equityPoints = trading?.equity ?? []
+  const chart = equityChartOf(equityPoints, 560, 128, netMode)
+  const adjustedLast = adjustedReturnSeries(equityPoints).at(-1)
+  const equityWarnings = equityPoints.flatMap((p) => p.warnings ?? [])
+  const netHead = netMode === 'adjusted'
+    ? adjustedLast?.value === null || adjustedLast?.value === undefined ? '调整后 —' : `调整后 ${adjustedLast.value >= 0 ? '+' : ''}${adjustedLast.value.toFixed(2)}%`
+    : `名义 ${PRISM_MONEY(chart?.last ?? null)}`
   const reports = latest === null
     ? []
     : (latest.reports ?? []).length > 0
@@ -197,11 +205,26 @@ export function PrismPage(props: { active: boolean }): React.ReactElement {
         const price = trading.prices?.[p.secid] ?? null
         return price === null ? min : min === null ? price : Math.min(min, price)
       }, null)
-  const dRows = decisionRows(latest?.decision, { cash: trading?.account.cash, minPrice: lowPrice })
   const composition = trading === null
     ? []
     : compositionItems(trading.account.positions, trading.prices ?? {}, totalAssets, PRISM_SERIES_CSS)
   const equityLegend = equityLegendItems()
+  const exposure = trading?.exposure ?? null
+  const expClassified = exposure === null ? [] : exposure.rows.filter((r) => r.kind === 'industry' || r.kind === 'wide')
+  const expTop = expClassified.slice(0, 6)
+  const expRest = expClassified.slice(6)
+  const expFixed = exposure === null ? [] : exposure.rows.filter((r) => r.kind === 'unpenetrated' || r.kind === 'cash')
+  const expRestWeight = Math.round(expRest.reduce((sum, r) => sum + r.weight, 0) * 100) / 100
+  const clampText = (latest?.decision?.clampEvents ?? []).length === 0
+    ? '本次夹紧 —'
+    : `本次夹紧 ${(latest?.decision?.clampEvents ?? []).map((e) => `${e.secid} ${e.before} → ${e.after}（${e.dimension}）`).join('；')}`
+  const achieved = exposure === null ? [] : exposure.rows.filter((r) => r.limitPct !== null && r.limitPct > 0).map((r) => `${r.name} ${Math.round((r.weight / r.limitPct!) * 100)}%`)
+  const basisText = [
+    `资金上限 ${PRISM_MONEY(trading?.account.capital ?? trading?.account.capitalLimit ?? null)} · 单票 ${latest?.decision?.limits.singlePct == null ? '—' : `${latest.decision.limits.singlePct}%`} · 总仓 ${latest?.decision?.limits.totalPct == null ? '—' : `${latest.decision.limits.totalPct}%`}` + (latest?.decision?.limits.note === null || latest?.decision?.limits.note === undefined || latest.decision.limits.note.trim() === '' ? '' : `（依据：${latest.decision.limits.note}）`),
+    `达成度 ${achieved.length === 0 ? '—' : achieved.join(' / ')}`,
+    clampText,
+  ].join('\n')
+  const dRows = decisionRows(latest?.decision, { cash: trading?.account.cash, minPrice: lowPrice }).map((r) => r.key === '仓位上限依据' ? { ...r, value: basisText } : r)
 
   return (
     <div className="tw-prism">
@@ -301,9 +324,9 @@ export function PrismPage(props: { active: boolean }): React.ReactElement {
                         <tr key={o.id}>
                           <td>{o.side === 'buy' ? '买' : '卖'} {o.name}</td>
                           <td className="tw-prism-num tw-prism-mono">{PRISM_MONEY(o.price)}</td>
-                          <td className="tw-prism-num tw-prism-mono">{o.shares}</td>
+                          <td className="tw-prism-num tw-prism-mono">{o.filledShares !== undefined && o.filledShares > 0 ? `${o.filledShares}/${o.shares}` : o.shares}</td>
                           <td>{orderStatusText(o)}</td>
-                          <td className="tw-prism-muted">{o.reason}</td>
+                          <td className="tw-prism-muted">{o.skipReason ?? o.rejectReason ?? o.reason}</td>
                           <td>{o.status === 'pending' ? <RippleButton onClick={() => doCancel(o.id)} disabled={busy}>撤</RippleButton> : null}</td>
                         </tr>
                       ))}
@@ -335,6 +358,31 @@ export function PrismPage(props: { active: boolean }): React.ReactElement {
             ) : null}
           </section>
 
+          {exposure === null ? null : (
+            <section className="tw-prism-card tw-prism-exposurecard" aria-label="行业暴露">
+              <div className="tw-prism-card-title">行业暴露 <span className="tw-prism-muted">已归类 {exposure.classifiedPct.toFixed(2)}% · 未归类 {exposure.unclassifiedPct.toFixed(2)}%</span></div>
+              <div className="tw-prism-bar tw-prism-exposurebar" aria-label="行业暴露堆叠条">
+                {expTop.map((r, i) => <span key={r.name} style={{ width: `${r.weight}%`, background: PRISM_SERIES_CSS[i % PRISM_SERIES_CSS.length] }} title={`${r.name} ${r.weight.toFixed(2)}%`} />)}
+                {expRest.length > 0 ? <span style={{ width: `${expRestWeight}%`, background: PRISM_SERIES_CSS[3] }} title={`其余 ${expRest.length} 行 ${expRestWeight.toFixed(2)}%`} /> : null}
+                {expFixed.map((r) => <span key={r.name} style={{ width: `${r.weight}%`, background: r.kind === 'unpenetrated' ? PRISM_SERIES_CSS[4] : '#868E96' }} title={`${r.name} ${r.weight.toFixed(2)}%`} />)}
+              </div>
+              <div className="tw-prism-composition-legend">
+                {expTop.map((r, i) => <span key={r.name}><i style={{ background: PRISM_SERIES_CSS[i % PRISM_SERIES_CSS.length] }} />{r.name} {r.weight.toFixed(2)}%</span>)}
+                {expRest.length > 0 ? <span><i style={{ background: PRISM_SERIES_CSS[3] }} />其余 {expRest.length} 行 {expRestWeight.toFixed(2)}%</span> : null}
+                {expFixed.map((r) => <span key={r.name}><i style={{ background: r.kind === 'unpenetrated' ? PRISM_SERIES_CSS[4] : '#868E96' }} />{r.name} {r.weight.toFixed(2)}%</span>)}
+              </div>
+              <div className="tw-prism-muted">已归类 {exposure.classifiedPct.toFixed(2)}% + 未归类 {exposure.unclassifiedPct.toFixed(2)}% = 100.00%<span>（未归类 = 未穿透 {exposure.unpenetratedPct.toFixed(2)}% + 现金 {exposure.cashPct.toFixed(2)}%；前 6 行 + 其余 {expRest.length} 行）</span></div>
+              <table className="tw-prism-table tw-prism-exposure-table">
+                <thead><tr><th>行业</th><th className="tw-prism-num">市值</th><th className="tw-prism-num">占比</th><th className="tw-prism-num">上限</th><th>状态</th></tr></thead>
+                <tbody>
+                  {expTop.map((r) => <tr key={r.name}><td>{r.name}{r.family === null || r.family === undefined ? null : <span className="tw-prism-muted"> · {r.family}</span>}</td><td className="tw-prism-num tw-prism-mono">{PRISM_MONEY(r.value)}</td><td className="tw-prism-num tw-prism-mono">{r.weight.toFixed(2)}%</td><td className="tw-prism-num tw-prism-mono">{r.limitPct === null ? '—' : `${r.limitPct}%`}</td><td className={r.status === '超限' ? 'up' : ''}>{r.status}</td></tr>)}
+                  {expRest.length > 0 ? <tr><td>其余 {expRest.length} 行</td><td className="tw-prism-num tw-prism-mono">{PRISM_MONEY(expRest.reduce((s, r) => s + r.value, 0))}</td><td className="tw-prism-num tw-prism-mono">{expRestWeight.toFixed(2)}%</td><td className="tw-prism-num">—</td><td>正常</td></tr> : null}
+                  {expFixed.map((r) => <tr key={r.name}><td>{r.name}</td><td className="tw-prism-num tw-prism-mono">{PRISM_MONEY(r.value)}</td><td className="tw-prism-num tw-prism-mono">{r.weight.toFixed(2)}%</td><td className="tw-prism-num">—</td><td>{r.status}</td></tr>)}
+                </tbody>
+              </table>
+            </section>
+          )}
+
           <section className="tw-prism-card tw-prism-decisioncard">
             <div className="tw-prism-card-title">决策 <span className="tw-prism-muted">limits / orders / cancel</span></div>
             <table className="tw-prism-table tw-prism-decision"><tbody>
@@ -343,28 +391,6 @@ export function PrismPage(props: { active: boolean }): React.ReactElement {
             {(latest?.decision?.parseError ?? null) === null ? null : <div className="tw-prism-error">决策 JSON 解析失败：{decisionErrorText(latest?.decision?.parseError)}</div>}
           </section>
 
-          <section className="tw-prism-card tw-prism-equitycard">
-            <div className="tw-prism-card-title">净值曲线 <span className="tw-prism-muted">每日一点 · 总资产 = 现金 + 持仓市值（缺价按成本）</span></div>
-            {chart === null ? (
-              <div className="tw-prism-muted">—（不足两个交易日的净值）</div>
-            ) : (
-              <div className="tw-prism-chart">
-                <div className="tw-prism-legend">
-                  {equityLegend.map((name) => <span key={name}><i style={{ background: PRISM_SERIES_CSS[0] }} />{name}</span>)}
-                </div>
-                <svg viewBox="0 0 560 128" preserveAspectRatio="none" role="img" aria-label="净值曲线">
-                  <g className="tw-prism-gridline">
-                    <line x1="0" y1="32" x2="560" y2="32" />
-                    <line x1="0" y1="64" x2="560" y2="64" />
-                    <line x1="0" y1="96" x2="560" y2="96" />
-                  </g>
-                  <polyline points={chart.line} fill="none" stroke={PRISM_SERIES_CSS[0]} strokeWidth="1.5" />
-                  {chart.dots.map((d) => <circle key={`${d.x}-${d.value}`} className="tw-prism-dot" cx={d.x} cy={d.y} r="2.5" />)}
-                  <text x="552" y="122" textAnchor="end" className="tw-prism-chart-label">{PRISM_MONEY(chart.last)}</text>
-                </svg>
-              </div>
-            )}
-          </section>
         </div>
 
         <div
@@ -381,7 +407,7 @@ export function PrismPage(props: { active: boolean }): React.ReactElement {
         />
 
         <div className="tw-prism-col tw-prism-right">
-          <section className="tw-prism-card">
+          <section className="tw-prism-card tw-prism-researchcard">
             <div className="tw-prism-card-title">研判 <span className="tw-prism-muted">{latest === null ? '—（还没有运行记录）' : `${latest.slot} · ${latest.day} · token 用量 —（未取到）`}</span></div>
             <div className="tw-prism-row tw-prism-muted">
               {state?.news === undefined ? '—（尚未取到新闻状态）' : newsStatusText(state.news)}
@@ -399,7 +425,36 @@ export function PrismPage(props: { active: boolean }): React.ReactElement {
             ))}
           </section>
 
-          <section className="tw-prism-card">
+          <section className="tw-prism-card tw-prism-equitycard">
+            <div className="tw-prism-card-title">净值曲线 <span className="tw-prism-muted">{netHead}</span><span className="tw-prism-netseg" style={{ marginLeft: 'auto' }}><RippleButton className={`tw-prism-segbtn${netMode === 'nominal' ? ' on' : ''}`} onClick={() => setNetMode('nominal')}>名义</RippleButton><RippleButton className={`tw-prism-segbtn${netMode === 'adjusted' ? ' on' : ''}`} onClick={() => setNetMode('adjusted')}>调整后</RippleButton></span></div>
+            {equityWarnings.length > 0 ? <div className="tw-prism-error">净值口径告警：{equityWarnings.at(-1)}</div> : null}
+            {chart === null ? (
+              <div className="tw-prism-muted">{netMode === 'adjusted' ? '—（调整后净值缺 capital 或点数不足）' : '—（不足两个交易日的净值）'}</div>
+            ) : (
+              <div className="tw-prism-chart">
+                <div className="tw-prism-legend">
+                  <span><i style={{ background: PRISM_SERIES_CSS[0] }} />{netMode === 'adjusted' ? '调整后净值' : equityLegend[0]}</span>
+
+                </div>
+                <svg viewBox="0 0 560 128" preserveAspectRatio="none" role="img" aria-label="净值曲线">
+                  <g className="tw-prism-gridline">
+                    <line x1="0" y1="32" x2="560" y2="32" />
+                    <line x1="0" y1="64" x2="560" y2="64" />
+                    <line x1="0" y1="96" x2="560" y2="96" />
+                  </g>
+                  <polyline points={chart.line} fill="none" stroke={PRISM_SERIES_CSS[0]} strokeWidth="1.5" />
+                  {chart.dots.map((d) => <circle key={`${d.x}-${d.value}`} className="tw-prism-dot" cx={d.x} cy={d.y} r="2.5" />)}
+                  <text x="552" y="122" textAnchor="end" className="tw-prism-chart-label">{netMode === 'adjusted' ? (adjustedLast?.value === null || adjustedLast?.value === undefined ? '—' : `${adjustedLast.value >= 0 ? '+' : ''}${adjustedLast.value.toFixed(2)}%`) : PRISM_MONEY(chart.last)}</text>
+                </svg>
+              </div>
+            )}
+          </section>
+            <details className="tw-prism-verinfo">
+              <summary>版本信息 · {latest?.codeVersion ?? '—'} · {latest?.mandateHash === undefined ? '—' : `${latest.mandateHash.slice(0, 12)}…`}</summary>
+              <div className="tw-prism-muted">codeVersion {latest?.codeVersion ?? '—'} ｜ mandateHash {latest?.mandateHash ?? '—'}</div>
+            </details>
+
+          <section className="tw-prism-card tw-prism-timecard">
             <div className="tw-prism-card-title">时点配置 <span className="tw-prism-muted">Asia/Shanghai</span></div>
             <div className="tw-prism-times">
               {times.map((t, i) => (
@@ -423,7 +478,7 @@ export function PrismPage(props: { active: boolean }): React.ReactElement {
             </div>
           </section>
 
-          <section className="tw-prism-card">
+          <section className="tw-prism-card tw-prism-modelcard">
             <div className="tw-prism-card-title">模型配置 <span className="tw-prism-muted">{modelCatalog?.error ?? '宿主候选'}</span></div>
             <div className="tw-prism-field">
               <label htmlFor="prism-provider">provider</label>

@@ -12,12 +12,13 @@ const series = ['#1', '#2', '#3', '#4', '#5', '#6'] as const
 const pos = (n: number) => Array.from({ length: n }, (_, i) => ({ secid: `s${i}`, name: `标的${i}`, qty: 1, cost: 10 }))
 const prices = Object.fromEntries(Array.from({ length: 7 }, (_, i) => [`s${i}`, 10]))
 
-test('① 净值卡图例只有 1 项（再列持仓 ⇒ 败）', () => {
+test('① 净值卡只有一个数据图例（再列持仓 ⇒ 败）', () => {
   assert.deepEqual(equityLegendItems(), ['总资产'])
-  assert.ok(page.includes('equityLegend.map'))
-  const injected = page.replace("equityLegend.map((name) => <span key={name}>", "['总资产','标的 A'].map((name) => <span key={name}>")
+  assert.ok(page.includes("equityLegend[0]"))
+  assert.ok(page.includes('netMode'))
+  const injected = page.replace("equityLegend[0]", "'标的 A'")
   assert.notEqual(injected, page)
-  assert.throws(() => assert.equal(injected.includes("'标的 A'"), false, '注入：再列持仓'), /注入/)
+  assert.throws(() => assert.equal(injected.includes('标的 A'), false, '注入：再列持仓'), /注入/)
 })
 
 test('② 持仓构成图例 = min(持仓数,6)：3→3、6→6、7→6（写死 4 ⇒ 败）', () => {
