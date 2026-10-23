@@ -17,9 +17,11 @@ import {
   PRISM_PCT,
   PRISM_SERIES_CSS,
   analysisText,
+  compositionItems,
   decisionErrorText,
   decisionRows,
   equityChartOf,
+  equityLegendItems,
   newsStatusText,
   orderStatusText,
   positionWeightPct,
@@ -188,6 +190,10 @@ export function PrismPage(props: { active: boolean }): React.ReactElement {
   const bullets = summaryBullets(latest?.summary)
   const reportRows = REPORT_ROLES.map((role) => reports.find((r) => r.role === role) ?? { role, text: null, error: latest === null ? '—（本轮未落盘）' : '—（该报告未落盘）' })
   const dRows = decisionRows(latest?.decision)
+  const composition = trading === null
+    ? []
+    : compositionItems(trading.account.positions, trading.prices ?? {}, totalAssets, PRISM_SERIES_CSS)
+  const equityLegend = equityLegendItems()
 
   return (
     <div className="tw-prism">
@@ -241,27 +247,38 @@ export function PrismPage(props: { active: boolean }): React.ReactElement {
               trading === null || trading.account.positions.length === 0
                 ? <div className="tw-prism-muted">—（没有模拟持仓）</div>
                 : (
-                  <table className="tw-prism-table">
-                    <thead><tr><th>标的</th><th className="tw-prism-num">数量</th><th className="tw-prism-num">摊薄成本</th><th className="tw-prism-num">现价</th><th className="tw-prism-num">市值</th><th className="tw-prism-num">仓位占比</th><th className="tw-prism-num">浮盈</th></tr></thead>
-                    <tbody>
-                      {trading.account.positions.map((p) => {
-                        const price = trading.prices?.[p.secid] ?? null
-                        const mv = price === null ? null : price * p.qty
-                        const pnl = price === null ? null : (price - p.cost) * p.qty
-                        return (
-                          <tr key={p.secid}>
-                            <td><span className="tw-prism-mono">{p.secid}</span> <span className="tw-prism-muted">{p.name}</span></td>
-                            <td className="tw-prism-num tw-prism-mono">{p.qty}</td>
-                            <td className="tw-prism-num tw-prism-mono">{PRISM_MONEY(p.cost)}</td>
-                            <td className="tw-prism-num tw-prism-mono">{price === null ? '—（未取到行情）' : PRISM_MONEY(price)}</td>
-                            <td className="tw-prism-num tw-prism-mono">{PRISM_MONEY(mv)}</td>
-                            <td className="tw-prism-num tw-prism-mono">{PRISM_PCT(positionWeightPct(price, p.qty, totalAssets))}</td>
-                            <td className={`tw-prism-num tw-prism-mono ${pnl === null ? '' : pnl >= 0 ? 'up' : 'down'}`}>{pnl === null ? '—（未取到行情）' : PRISM_MONEY(pnl)}</td>
-                          </tr>
-                        )
-                      })}
-                    </tbody>
-                  </table>
+                  <div className="tw-prism-stack">
+                    <table className="tw-prism-table">
+                      <thead><tr><th>标的</th><th className="tw-prism-num">数量</th><th className="tw-prism-num">摊薄成本</th><th className="tw-prism-num">现价</th><th className="tw-prism-num">市值</th><th className="tw-prism-num">仓位占比</th><th className="tw-prism-num">浮盈</th></tr></thead>
+                      <tbody>
+                        {trading.account.positions.map((p) => {
+                          const price = trading.prices?.[p.secid] ?? null
+                          const mv = price === null ? null : price * p.qty
+                          const pnl = price === null ? null : (price - p.cost) * p.qty
+                          return (
+                            <tr key={p.secid}>
+                              <td><span className="tw-prism-mono">{p.secid}</span> <span className="tw-prism-muted">{p.name}</span></td>
+                              <td className="tw-prism-num tw-prism-mono">{p.qty}</td>
+                              <td className="tw-prism-num tw-prism-mono">{PRISM_MONEY(p.cost)}</td>
+                              <td className="tw-prism-num tw-prism-mono">{price === null ? '—（未取到行情）' : PRISM_MONEY(price)}</td>
+                              <td className="tw-prism-num tw-prism-mono">{PRISM_MONEY(mv)}</td>
+                              <td className="tw-prism-num tw-prism-mono">{PRISM_PCT(positionWeightPct(price, p.qty, totalAssets))}</td>
+                              <td className={`tw-prism-num tw-prism-mono ${pnl === null ? '' : pnl >= 0 ? 'up' : 'down'}`}>{pnl === null ? '—（未取到行情）' : PRISM_MONEY(pnl)}</td>
+                            </tr>
+                          )
+                        })}
+                      </tbody>
+                    </table>
+                    <div className="tw-prism-composition">
+                      <div className="tw-prism-muted">持仓构成（市值 ÷ 总资产；现金留白）</div>
+                      <div className="tw-prism-bar" aria-label="持仓构成">
+                        {composition.map((c) => <span key={c.key} style={{ width: `${c.weight}%`, background: c.color }} />)}
+                      </div>
+                      <div className="tw-prism-composition-legend">
+                        {composition.map((c) => <span key={c.key}><i style={{ background: c.color }} />{c.name}</span>)}
+                      </div>
+                    </div>
+                  </div>
                 )
             ) : null}
 
@@ -317,10 +334,7 @@ export function PrismPage(props: { active: boolean }): React.ReactElement {
             ) : (
               <div className="tw-prism-chart">
                 <div className="tw-prism-legend">
-                  {trading?.account.positions.slice(0, 3).map((p, i) => (
-                    <span key={p.secid}><i style={{ background: PRISM_SERIES_CSS[i] }} />{p.name}</span>
-                  ))}
-                  <span><i style={{ background: PRISM_SERIES_CSS[3] }} />现金</span>
+                  {equityLegend.map((name) => <span key={name}><i style={{ background: PRISM_SERIES_CSS[0] }} />{name}</span>)}
                 </div>
                 <svg viewBox="0 0 560 128" preserveAspectRatio="none" role="img" aria-label="净值曲线">
                   <g className="tw-prism-gridline">
@@ -332,16 +346,6 @@ export function PrismPage(props: { active: boolean }): React.ReactElement {
                   {chart.dots.map((d) => <circle key={`${d.x}-${d.value}`} className="tw-prism-dot" cx={d.x} cy={d.y} r="2.5" />)}
                   <text x="552" y="122" textAnchor="end" className="tw-prism-chart-label">{PRISM_MONEY(chart.last)}</text>
                 </svg>
-                <div className="tw-prism-bar" aria-label="持仓占比">
-                  {(trading?.account.positions ?? []).map((p, i) => {
-                    const price = trading?.prices?.[p.secid] ?? null
-                    const weight = positionWeightPct(price, p.qty, totalAssets)
-                    return weight === null ? null : <span key={p.secid} style={{ width: `${weight}%`, background: PRISM_SERIES_CSS[i % PRISM_SERIES_CSS.length] }} />
-                  })}
-                  {totalAssets !== null && totalAssets > 0 && trading !== null ? (
-                    <span style={{ width: `${Math.max(0, 100 - trading.account.positions.reduce((sum, p) => sum + (positionWeightPct(trading.prices?.[p.secid] ?? null, p.qty, totalAssets) ?? 0), 0))}%`, background: PRISM_SERIES_CSS[3] }} />
-                  ) : null}
-                </div>
               </div>
             )}
           </section>
@@ -393,7 +397,7 @@ export function PrismPage(props: { active: boolean }): React.ReactElement {
               {times.map((t, i) => (
                 <span key={`${t}-${i}`} className="tw-prism-chip">
                   <input className="tw-prism-time" type="time" value={t} aria-label={`时点 ${i + 1}`} onChange={(e) => setTimes((prev) => prev.map((x, j) => (j === i ? e.target.value : x)))} />
-                  <RippleButton onClick={() => setTimes((prev) => prev.filter((_, j) => j !== i))}>✕</RippleButton>
+                  <RippleButton onClick={() => setTimes((prev) => prev.filter((_, j) => j !== i))}>删除</RippleButton>
                 </span>
               ))}
               <RippleButton onClick={() => setTimes((prev) => [...prev, '10:00'])}>＋ 时点</RippleButton>
@@ -401,8 +405,8 @@ export function PrismPage(props: { active: boolean }): React.ReactElement {
               <span className="tw-prism-muted">{timesText(state?.settings ?? null)}</span>
             </div>
             <div className="tw-prism-row">
-              {(state?.settings.times ?? [...PRISM_DEFAULT_TIMES]).map((t) => <RippleButton key={t} onClick={() => run(t)} disabled={busy}>{t}</RippleButton>)}
-              <RippleButton onClick={() => run('manual')} disabled={busy}>manual</RippleButton>
+              {(state?.settings.times ?? [...PRISM_DEFAULT_TIMES]).map((t) => <RippleButton key={t} onClick={() => run(t)} disabled={busy}>重跑 {t}</RippleButton>)}
+              <RippleButton onClick={() => run('manual')} disabled={busy}>补跑</RippleButton>
             </div>
             <textarea className="tw-prism-skeleton" value={skeleton} onChange={(e) => setSkeleton(e.target.value)} rows={4} aria-label="研判骨架" />
             <div className="tw-prism-row">

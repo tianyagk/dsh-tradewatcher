@@ -253,3 +253,39 @@ export function parseSelftestBody(status: number, raw: string): SelftestResult {
     return { ...fallback, error: `${prefix}（前 60 字：${text.slice(0, 60)}）` }
   }
 }
+
+export interface CompositionItem {
+  key: string
+  name: string
+  weight: number
+  color: string
+}
+
+/** 净值卡图例：只允许一个口径（总资产） */
+export function equityLegendItems(): string[] {
+  return ['总资产']
+}
+
+/**
+ * 持仓构成条：最多 6 项；≤6 全列，>6 前 5 + 其他。
+ * 权重 = 市值 ÷ 总资产；缺价按成本。现金不混进持仓图例（用底色留白表示）。
+ */
+export function compositionItems(
+  positions: ReadonlyArray<{ secid: string; name: string; qty: number; cost: number }>,
+  prices: Readonly<Record<string, number | null>>,
+  totalAssets: number | null,
+  series: readonly string[],
+): CompositionItem[] {
+  if (totalAssets === null || !(totalAssets > 0)) return []
+  const weighed = positions.map((p) => ({
+    key: p.secid,
+    name: p.name,
+    weight: Math.round((((prices[p.secid] ?? p.cost) * p.qty) / totalAssets) * 10_000) / 100,
+  }))
+  if (weighed.length <= 6) {
+    return weighed.map((w, i) => ({ ...w, color: series[i % series.length] as string }))
+  }
+  const head = weighed.slice(0, 5).map((w, i) => ({ ...w, color: series[i] as string }))
+  const otherWeight = Math.round(weighed.slice(5).reduce((a, w) => a + w.weight, 0) * 100) / 100
+  return [...head, { key: 'other', name: '其他', weight: otherWeight, color: series[5] as string }]
+}

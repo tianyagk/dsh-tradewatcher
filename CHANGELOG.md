@@ -11,6 +11,25 @@
 
 ---
 
+## v0.138.0 — 棱镜收尾：净值卡语义拆分、时点去 emoji、四格留白
+
+报告 `docs/AUDIT-PRISM-REDESIGN.md`。`npm run check` **1181 / 1181 × 2 时区**（1175 → 1181）+ selftest + build（73 片段全过）；只改 `src/client/**`。
+
+| # | 修前 | 修后 |
+| --- | --- | --- |
+| 1 | 净值卡混两种语义（净值折线 + 持仓构成堆叠条，图例只列 3 个持仓） | 净值卡**只留折线 + `总资产` 单项图例**；持仓构成条移到**持仓表下方**（权重 = 市值 ÷ 总资产，现金为条底留白），图例 **`min(持仓数, 6)`**（>6 列前 5 + `其他`） |
+| 2 | 时点配置用 emoji（`⏱` `✕`） | 改**文字按钮**（`重跑` / `删除`）；源码不含 `⏱ / ⏰ / ⏳ / ✕` |
+| 3 | 四格右侧大片留白 | 宽屏 `repeat(4, minmax(0,1fr))`、`<1100px` 2×2、`<640px` 单列；数值 26px 左对齐，次要说明 `margin-left:auto` 贴右 |
+
+### limits 核实
+
+11:20 轮 `decision.limits = {singlePct:null, totalPct:null, note:"材料未提供组合总资产、现金与风险预算，无法计算仓位上限"}`、`parseError: null` ⇒ **模型本轮没给 limits，页面 `—` 正确**；14:40 轮 `singlePct=20` 说明解析链路正常。**不是解析丢失。**
+
+### 验证
+
+`npm run check` **1181 / 1181 × 2 时区** + selftest + build（73 项）；BO/BP 两轮干净复跑。
+新增 6 条用例：① `equityLegendItems()` 只返回 `['总资产']`（注入第二个持仓名 ⇒ 败）｜② `compositionItems` 3→3 / 6→6 / 7→6（写死 4 ⇒ 败）｜③ 构成条在持仓卡内、净值卡内不含 `tw-prism-composition`（合并回一卡 ⇒ 败）｜④ 时点源码无 emoji 码位（恢复 ⇒ 败）｜⑤ `.tw-prism-sub` 含 `margin-left:auto`（删掉 ⇒ 败）｜⑥ limits 为 null 时返回 `—` 且不产生 `parseError`。
+
 ## v0.137.0 — 棱镜视觉收口：剥 Markdown、四格一行四列、阴影按最终生效值、分段加深、决策表并入 rejects
 
 报告 `docs/AUDIT-PRISM-REDESIGN.md`。`npm run check` **1175 / 1175 × 2 时区**（1169 → 1175）+ selftest + build（73 片段全过）；只改 `src/client/**`。

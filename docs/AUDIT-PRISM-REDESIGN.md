@@ -67,6 +67,13 @@
 - 决策表：`rejects` 并入表格行；`orders`/`cancel` 为 0 时 `.zero` 次要色；整表 tabular-nums。
 - **时点核实**：代码默认 `PRISM_DEFAULT_TIMES` 仍为 `14:40`；活文件 `prism-settings.json` 是 `['09:35','11:20','13:10','14:35']`，且 `lastFired` 记录过 `14:40`，说明是用户后续手动编辑，**不改**；测试只断言默认常量含 14:40。
 
+## 3.3 图例语义 / 时点文字 / 四格留白（2026-10-23 09:2x）
+
+- **净值卡只保留净值 + 单一口径图例「总资产」**；持仓构成堆叠条移到持仓表下方，图例 `min(持仓数,6)`：≤6 全列，>6 前 5 + `其他`。现金不混入持仓图例，条底留白表示。
+- **时点配置**：删除 emoji `✕`，改文字「删除」；补跑按钮改「重跑 HH:MM / 补跑」；源码不含 `⏱⏰⏳✕`。
+- **四格**：`grid-template-columns:repeat(4,minmax(0,1fr))`；`<1100` 2×2、`<640` 单列；次要说明 `margin-left:auto; align-self:flex-end; text-align:right`，数值左对齐。
+- **limits 核实**：11:20 轮 live decision = `{singlePct:null,totalPct:null,note:"材料未提供组合总资产、现金与风险预算，无法计算仓位上限"}`，`parseError:null` ⇒ 模型本轮未给 limits，页面 `—` 正确；14:40 轮 `singlePct:20`。不是解析丢失，不补 parseError。
+
 ## 4. 门禁
 
 - 基线 1146 → 1156 → **1163**（新增 7：对拍 6 + 汇总 JSON 剥离 1）。
