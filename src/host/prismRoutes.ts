@@ -30,6 +30,8 @@ export interface PrismRouteDeps {
   get: (name: string) => unknown
   /** 测试注入；缺省走既有 `fetchQuotes`（不新增源） */
   quotes?: typeof fetchQuotes
+  /** 测试注入时钟（run 触发/下单边界用） */
+  now?: () => number
 }
 
 const send = (res: ServerResponse, status: number, body: unknown): void => {
@@ -226,14 +228,16 @@ const tradingOf = (trading: PrismTradingStore, prices: Record<string, number | n
 
 export async function runPrismForSlot(deps: PrismRouteDeps, slot: string): Promise<Awaited<ReturnType<typeof runPrismAnalysis>>> {
   const inputs = await prismInputsOf(deps)
-  const run = await runPrismAnalysis(deps.store, slot, inputs, { get: deps.get, model: deps.store.settings().model ?? null })
+  const now = deps.now ?? Date.now
+  const run = await runPrismAnalysis(deps.store, slot, inputs, { get: deps.get, model: deps.store.settings().model ?? null, now })
   if (run.decision === null) {
     run.placement = { placed: 0, skipped: 0, rejects: [] }
     await deps.store.replaceRun(run)
     return run
   }
   const quotes = run.decision.orders.length > 0 ? await quoteLiteOf(deps, run.decision.orders.map((o) => o.secid)) : {}
-  const result = await placeDecision(deps.trading, run.decision, Date.now(), quotes)
+  // 边界口径：用 run 触发时刻（startedAt），不是分析结束后的墙钟；14:59:09 ⇒ 14:59 可下单
+  const result = await placeDecision(deps.trading, run.decision, run.startedAt, quotes)
   run.decision = { ...run.decision, rejects: result.rejects }
   run.placement = result.placement
   await deps.store.replaceRun(run)
@@ -249,12 +253,15 @@ export function makePrismRoutes(deps: PrismRouteDeps): PluginWebRoute[] {
       handler: async (req, res) => {
         if (req.method === 'GET') {
           kickNews(store)
+          await deps.trading.reloadOrders()
           await recordEquity(deps)
           const account = deps.trading.account()
-          const quotes = await quoteLiteOf(deps, account.positions.map((p) => p.secid)).catch(() => ({}))
+          const settings = store.settings()
+          const accountView = { ...account, capital: settings.capital ?? account.capital ?? account.capitalLimit }
+          const quotes = await quoteLiteOf(deps, accountView.positions.map((p) => p.secid)).catch(() => ({}))
           const prices: Record<string, number | null> = {}
-          for (const p of account.positions) prices[p.secid] = quotes[p.secid]?.price ?? null
-          const trading = tradingOf(deps.trading, prices)
+          for (const p of accountView.positions) prices[p.secid] = quotes[p.secid]?.price ?? null
+          const trading = { ...tradingOf(deps.trading, prices), account: accountView }
           const latestDecision = store.runs().at(-1)?.decision ?? null
           const tradingWithDecision = { ...trading, decision: latestDecision }
           const modelCatalog = await modelCatalogOf(deps.get)
@@ -351,7 +358,7 @@ export function makePrismRoutes(deps: PrismRouteDeps): PluginWebRoute[] {
               send(res, 400, { ok: false, error: '资金上限低于当前持仓成本 + 已用现金，不能把现金改为负数' })
               return
             }
-            const next = { ...account, capitalLimit: limit, cash }
+            const next = { ...account, capital: limit, capitalLimit: limit, cash }
             await deps.trading.saveAccount(next)
             const settings = await store.saveCapital(limit)
             send(res, 200, { ok: true, account: next, settings })
@@ -363,13 +370,13 @@ export function makePrismRoutes(deps: PrismRouteDeps): PluginWebRoute[] {
             await deps.trading.saveAccount(result.account, { explicitReset: true })
             const settings = await store.saveCapital(result.account.capitalLimit)
             await recordEquity(deps)
-            send(res, 200, { ok: true, account: result.account, settings, log: result.log, skipped: result.skipped })
+            send(res, 200, { ok: true, account: { ...result.account, capital: result.account.capitalLimit }, settings, log: result.log, skipped: result.skipped })
             return
           }
           if (action === 'recover') {
             const account = deps.trading.account()
             const rebuilt = rebuildFromOrders(account, deps.trading.orders())
-            send(res, 200, { ok: true, rebuilt: true, fills: rebuilt.fills, cash: rebuilt.cash, note: rebuilt.note })
+            send(res, 200, { ok: true, fills: rebuilt.fills, cash: rebuilt.cash, note: rebuilt.note })
             return
           }
           if (action === 'cancel') {

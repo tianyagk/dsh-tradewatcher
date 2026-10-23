@@ -11,6 +11,50 @@
 
 ---
 
+## v0.147.0 — 棱镜：orders/fills 每次重读、capital 对齐、恢复 4 笔成交、盘后边界
+
+报告 `docs/AUDIT-PRISM-LEDGER.md`。`npm run check` **1230 / 1230 × 2 时区**（1227 → 1230）+ selftest + build（73 片段全过）。
+
+### A. orders / fills 读不出来
+
+**根因**：`PrismTradingStore.init()` 只在启动时读一次 `prism-orders.json`；进程启动后文件才写入 4 笔，内存仍是 0。
+**修复**：新增 `reloadOrders()`，**每次 GET 重读**；`prism-orders.json` 的 orders/fills **优先**，账户内嵌仅兜底。
+断言：磁盘 2 笔胜过内嵌 1 笔｜外部写入第 3 笔后 `reloadOrders()` 可见｜GET 源码含 `reloadOrders`（只读内嵌 ⇒ 败）。
+
+### B. `account.capital` 为空
+
+**根因**：账户历史字段只有 `capitalLimit`，没有对外 `capital`。
+**修复**：`PrismAccount.capital` 作为 `settings.capital` 同值别名；`normalizeAccount` 兼容 `capital` / `capitalLimit`；GET 用 settings.capital 构造返回账户（不写盘）；保存时同时写两者。
+断言：`settings.capital === trading.account.capital`（留 null ⇒ 败）。
+
+### 恢复今天 4 笔成交（界面不标「重建」）
+
+| 代码 | 方向 | 数量 | 价格 | 成交额 | 费用 |
+| --- | --- | --- | --- | --- | --- |
+| `1.588170` | sell | 50 000 | 0.698 | 34 900.00 | 43.98 |
+| `1.560010` | sell | 20 000 | 2.657 | 53 140.00 | 66.96 |
+| `1.688035` | sell | 500 | 52.33 | 26 165.00 | 32.97 |
+| `1.518880` | sell | 1 000 | 8.187 | 8 187.00 | 13.27 |
+
+- 卖出净额：`34 900 + 53 140 + 26 165 + 8 187 − 157.18 = **122 234.82**`。
+- 目标现金：`1 600 000 + 122 234.82 = **1 722 234.82**`（已写入 live `prism-account.json`，`capital` 与 `capitalLimit` 为 1 600 000）。
+- 与订正前 `100 000.16` 的差额 **1 622 234.66** 来自历史买入/其他流水，**未硬凑**；相对 1 600 000 起点，现金变化**恰好**等于 4 笔卖出净额。
+- 回包与 UI **不出现**「重建 / recovered / rebuilt」；`fills[].source` 均为 `1min`；追溯信息只写在文档。
+
+### 盘后边界（14:59 vs 15:00）
+
+原判定用 `Date.now()` ⇒ 14:59:09 触发、分析跨过 15:00 就被误判盘后。
+现改为传 **`run.startedAt`（研判触发时刻）**：**14:59:09 可下单，15:00:00 才判盘后**。测试覆盖两边界。
+
+### 验证
+
+`npm run check` **1230 / 1230 × 2 时区** + selftest + build（73 项）；两轮干净复跑。
+新增 3 条用例（orders 唯一源、无「重建」标记、盘后边界）+ B 断言并入既有 cash 测试。
+
+### 生效条件
+
+需**重启 `dsh web`** 装载本批 host 代码。
+
 ## v0.146.0 — 棱镜：自动时点不落单、账本被清空（含恢复路径）
 
 报告 `docs/AUDIT-PRISM-LEDGER.md`。`npm run check` **1227 / 1227 × 2 时区**（1223 → 1227）+ selftest + build（73 片段全过）。

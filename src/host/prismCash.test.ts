@@ -62,6 +62,8 @@ test('① capital 落 settings，3 次 GET 恒为新值；重启仍保留', asyn
     assert.equal(again['state']['settings']['capital'], 2_000_000)
     assert.equal(again['trading']['account']['capitalLimit'], 2_000_000)
     assert.equal(again['trading']['account']['cash'], baseCash + 500_000)
+    assert.equal(again['state']['settings']['capital'], again['trading']['account']['capital'], 'settings.capital 与 account.capital 必须相等')
+    assert.equal(again['trading']['account']['capital'], 2_000_000)
   } finally {
     await rm(dir, { recursive: true, force: true })
   }

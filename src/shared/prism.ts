@@ -197,6 +197,8 @@ export interface PrismCopyLog {
 export interface PrismAccount {
   /** 当前账本所属交易日（T+1/挂单当日有效的基准） */
   day: string
+  /** 与 settings.capital 同值的对外别名（capitalLimit 为历史字段） */
+  capital?: number
   capitalLimit: number
   cash: number
   realized: number

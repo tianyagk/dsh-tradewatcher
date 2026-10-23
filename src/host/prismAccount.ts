@@ -313,6 +313,7 @@ export class PrismTradingStore {
   private readonly guard = new ReadGuard()
   private accountValue: PrismAccount = {
     day: '',
+    capital: PRISM_INITIAL_CAPITAL,
     capitalLimit: PRISM_INITIAL_CAPITAL,
     cash: PRISM_INITIAL_CAPITAL,
     realized: 0,
@@ -342,15 +343,7 @@ export class PrismTradingStore {
       const saved = root.account !== null && typeof root.account === 'object' ? root.account : acc
       this.accountValue = normalizeAccount(saved as Record<string, unknown>)
     }
-    const ord = await this.readJson('prism-orders.json')
-    const ordRoot = ord as { orders?: unknown; fills?: unknown } | null
-    const accRoot = acc as { fills?: unknown; account?: { fills?: unknown } } | null
-    this.ordersValue = Array.isArray(ordRoot?.orders) ? (ordRoot?.orders as PrismOrder[]) : []
-    const fileFills = Array.isArray(ordRoot?.fills) ? (ordRoot?.fills as PrismFill[]) : []
-    const embeddedFills = Array.isArray(accRoot?.fills)
-      ? (accRoot?.fills as PrismFill[])
-      : Array.isArray(accRoot?.account?.fills) ? (accRoot.account.fills as PrismFill[]) : []
-    this.fillsValue = fileFills.length > 0 ? fileFills : embeddedFills
+    await this.reloadOrders(acc)
     const eq = await this.readJson('prism-equity.json')
     const eqRoot = eq as { points?: unknown } | null
     this.equityValue = Array.isArray(eqRoot?.points) ? (eqRoot?.points as PrismEquityPoint[]) : []
@@ -388,6 +381,26 @@ export class PrismTradingStore {
   fills(): PrismFill[] { return this.fillsValue.slice() }
   equity(): PrismEquityPoint[] { return this.equityValue.slice() }
 
+  /**
+   * 订单/成交流水的唯一读取源是 `prism-orders.json`；账户内嵌 orders/fills 只作兼容兜底。
+   * GET 会重新调用：外部/上一进程写入的订单不需要重启才能看见。
+   */
+  async reloadOrders(accountRoot: unknown = null): Promise<void> {
+    const ord = await this.readJson('prism-orders.json')
+    const ordRoot = ord as { orders?: unknown; fills?: unknown } | null
+    const accRoot = accountRoot as { fills?: unknown; orders?: unknown; account?: { fills?: unknown; orders?: unknown } } | null
+    const fileOrders = Array.isArray(ordRoot?.orders) ? (ordRoot?.orders as PrismOrder[]) : []
+    const fileFills = Array.isArray(ordRoot?.fills) ? (ordRoot?.fills as PrismFill[]) : []
+    const embeddedOrders = Array.isArray(accRoot?.orders)
+      ? (accRoot?.orders as PrismOrder[])
+      : Array.isArray(accRoot?.account?.orders) ? (accRoot.account.orders as PrismOrder[]) : []
+    const embeddedFills = Array.isArray(accRoot?.fills)
+      ? (accRoot?.fills as PrismFill[])
+      : Array.isArray(accRoot?.account?.fills) ? (accRoot.account.fills as PrismFill[]) : []
+    this.ordersValue = fileOrders.length > 0 ? fileOrders : embeddedOrders
+    this.fillsValue = fileFills.length > 0 ? fileFills : embeddedFills
+  }
+
   async saveAccount(account: PrismAccount, opts: { explicitReset?: boolean } = {}): Promise<void> {
     const oldHasData = this.accountValue.positions.length > 0 || this.fillsValue.length > 0
     if (opts.explicitReset !== true && oldHasData && account.positions.length === 0 && this.fillsValue.length === 0) {
@@ -414,7 +427,8 @@ function normalizeAccount(raw: Record<string, unknown>): PrismAccount {
   const positions = Array.isArray(raw['positions']) ? raw['positions'] : []
   return {
     day: typeof raw['day'] === 'string' ? raw['day'] : '',
-    capitalLimit: typeof raw['capitalLimit'] === 'number' ? raw['capitalLimit'] : PRISM_INITIAL_CAPITAL,
+    capital: typeof raw['capital'] === 'number' ? raw['capital'] : typeof raw['capitalLimit'] === 'number' ? raw['capitalLimit'] : PRISM_INITIAL_CAPITAL,
+    capitalLimit: typeof raw['capitalLimit'] === 'number' ? raw['capitalLimit'] : typeof raw['capital'] === 'number' ? raw['capital'] : PRISM_INITIAL_CAPITAL,
     cash: typeof raw['cash'] === 'number' ? raw['cash'] : PRISM_INITIAL_CAPITAL,
     realized: typeof raw['realized'] === 'number' ? raw['realized'] : 0,
     dayStartEquity: typeof raw['dayStartEquity'] === 'number' ? raw['dayStartEquity'] : null,
@@ -644,7 +658,7 @@ export function rebuildFromOrders(account: PrismAccount, orders: readonly PrismO
       source: o.source ?? 'trend',
     })
   }
-  return { fills, cash, note: `重建：据 ${fills.length} 笔已成交单推断；未包含历史入金/未知成交，cash 仅作参考` }
+  return { fills, cash, note: `据 orders.json 的 ${fills.length} 笔已成交单推断；未包含历史入金/未知成交，cash 仅作参考` }
 }
 
 /** 30 秒撮合：跨日挂单失效；1 分钟 high/low 触及按挂单价成交；净值每日一点 */
