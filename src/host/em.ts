@@ -178,6 +178,7 @@ export async function fetchAny(hosts: readonly string[], pathAndQuery: string, t
       noteDegraded('em-fast-fail', {
         label: '东财连接被立刻关闭（跳过第二轮重试）',
         subject: hosts.join('/'),
+        hosts,
         reason: `pass 1 整轮 ${String(lastError).slice(0, 40)}`,
         detail: `${hosts.join('/')} 第 1 轮三次尝试均 <300ms 失败：${String(lastError).slice(0, 120)}`,
       })
@@ -192,6 +193,7 @@ export async function fetchAny(hosts: readonly string[], pathAndQuery: string, t
   noteDegraded('em-upstream-failed', {
     label: '东财上游不可达',
     subject: hosts.join('/'),
+    hosts: [...neverSucceeded],
     reason: shortError(lastError, 40),
     detail: `${hosts.join('/')}（${neverSucceeded.size} 台从未成功）：${String(lastError).slice(0, 160)}`,
   })
@@ -691,6 +693,7 @@ async function rawQuotes(list: string[]): Promise<Map<string, QuoteRow>> {
       noteDegraded('quotes-batch', {
         label: '东财行情批量失败',
         subject: missing.join(','),
+        hosts: QUOTE_HOSTS,
         reason: `pass ${pass + 1}（${shortError(error, 30)}）`,
         detail: `pass ${pass + 1} ${missing.length} 只（${missing.slice(0, 8).join(',')}${missing.length > 8 ? '…' : ''}）：${String(error).slice(0, 160)}`,
       })

@@ -16,7 +16,7 @@
  *   - `finally` 必 `releaseProbe()`（半开探针不会泄漏）。
  */
 import { breakerFor } from './breaker.ts'
-import { noteHostFailure, noteHostSkipped, noteHostSuccess } from './degrade.ts'
+import { noteHostFailure, noteHostProbe, noteHostSkipped, noteHostSuccess } from './degrade.ts'
 
 /** 主机正在熔断冷却/半开探测中（这一轮**没有**发出上游请求） */
 export class UpstreamCoolingError extends Error {
@@ -43,6 +43,8 @@ export async function withHostBreaker<T>(host: string, run: () => Promise<T>): P
     noteHostSkipped(host, '半开探测中（已有探针在跑）')
     throw new UpstreamCoolingError(host, '半开探测中（已有探针在跑）')
   }
+  // ② 熔断周期里必须留痕的三条状态转换之一（探测）；重复探测由签名抑制折叠
+  if (breaker.inHalfOpen) noteHostProbe(host)
   try {
     const out = await run()
     /**
