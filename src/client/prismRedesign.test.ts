@@ -36,7 +36,8 @@ test('② <900px 折叠为上下（仍两栏 ⇒ 败）', () => {
   assert.match(page, /className="tw-prism-body"/)
   assert.match(TW_CSS, /\.tw-prism-left>\.tw-prism-cards\{order:1\}/)
   assert.match(TW_CSS, /\.tw-prism-left>\.tw-prism-tablecard\{order:4\}/)
-  assert.match(TW_CSS, /\.tw-prism-left>\.tw-prism-equitycard\{order:5\}/)
+  assert.match(TW_CSS, /\.tw-prism-left>\.tw-prism-decisioncard\{order:5\}/)
+  assert.match(TW_CSS, /\.tw-prism-left>\.tw-prism-equitycard\{order:6\}/)
   const injected = TW_CSS.replace('.tw-prism-body{display:flex;flex-direction:column', '.tw-prism-body{display:grid;grid-template-columns:62% 6px 1fr')
   assert.notEqual(injected, TW_CSS)
   assert.throws(() => assert.match(injected, /\.tw-prism-body\{display:flex;flex-direction:column/), /AssertionError/)
@@ -52,12 +53,14 @@ test('③ 块间 8 的倍数、行内 1px/12px/24–26px（块间 12px ⇒ 败�
   assert.notDeepEqual(spacingProblems(injected), [], '注入 12px 必须被抓到')
 })
 
-test('④ 分段在左栏顶部且三项为持仓/挂单/成交（放右栏 ⇒ 败）', () => {
+test('④ 分段在左栏四格之后、交易内容之前，三项为持仓/挂单/成交（放右栏 ⇒ 败）', () => {
   assert.ok(page.includes("label: '持仓'") && page.includes("label: '挂单'") && page.includes("label: '成交'"))
   const left = page.indexOf('tw-prism-left')
   const seg = page.indexOf('tw-prism-seg')
   const cards = page.indexOf('tw-prism-cards')
-  assert.ok(left >= 0 && seg > left && seg < cards, '分段必须在左栏顶部、四格之前')
+  assert.ok(left >= 0 && cards > left && seg > cards, '分段必须在左栏四格之后')
+  const table = page.indexOf('tw-prism-tablecard')
+  assert.ok(table < 0 || seg < table, '分段必须在交易内容之前')
   assert.equal((page.match(/className="tw-prism-seg"/g) ?? []).length, 1, '右栏不得再做分段')
   const injected = page.replace('<div className="tw-prism-col tw-prism-right">', '<div className="tw-prism-col tw-prism-right"><div className="tw-prism-seg"></div>')
   assert.notEqual(injected, page)

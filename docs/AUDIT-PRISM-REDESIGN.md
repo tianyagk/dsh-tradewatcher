@@ -74,6 +74,12 @@
 - **四格**：`grid-template-columns:repeat(4,minmax(0,1fr))`；`<1100` 2×2、`<640` 单列；次要说明 `margin-left:auto; align-self:flex-end; text-align:right`，数值左对齐。
 - **limits 核实**：11:20 轮 live decision = `{singlePct:null,totalPct:null,note:"材料未提供组合总资产、现金与风险预算，无法计算仓位上限"}`，`parseError:null` ⇒ 模型本轮未给 limits，页面 `—` 正确；14:40 轮 `singlePct:20`。不是解析丢失，不补 parseError。
 
+## 3.4 决策卡移到左栏（2026-10-23 11:2x）
+
+- 左栏 DOM：四格 → 分段 → 工具 → 交易表/构成 → 决策卡 → 净值卡；右栏只剩研判/时点/模型。
+- `<900px` order：资产 1 → 工具 2 → 分段 3 → 交易表 4 → 决策 5 → 净值 6 → 研判。
+- 6 条断言：左栏归属、紧邻净值之前、右栏不含、七行齐全、移动端 order、62:38 与 40–75 回归；注入留右/放后/双渲染/少行/反转均必败。
+
 ## 4. 门禁
 
 - 基线 1146 → 1156 → **1163**（新增 7：对拍 6 + 汇总 JSON 剥离 1）。

@@ -2,7 +2,7 @@
  * 【棱镜】第 9 行 / 第 8 个页签（重设计：hybrid 配色 + 左栏分段 + 62:38 可拖拽）。
  *
  * 左：四格资产 → 分段（持仓/挂单/成交）→ 表格 → 净值曲线（MD dataviz 8 系列色）。
- * 右：研判（汇总常驻 + 四份报告 + limits/rejects）→ 时点配置 → 模型配置。
+ * 右：研判（汇总常驻 + 四份报告）→ 时点配置 → 模型配置；决策卡在左栏净值卡之前。
  * 功能行为不变：摊薄成本、占比列、模型、自检文案、时点增删/补跑、缺数据 `—` + 原因、无声明性文案。
  */
 import React, { useCallback, useEffect, useRef, useState } from 'react'
@@ -220,17 +220,6 @@ export function PrismPage(props: { active: boolean }): React.ReactElement {
         style={{ gridTemplateColumns: `${split}fr ${PRISM_SEP_PX}px ${100 - split}fr` }}
       >
         <div className="tw-prism-col tw-prism-left">
-          <div className="tw-prism-seg" role="tablist" aria-label="交易视图">
-            {TABS.map((t) => (
-              <RippleButton
-                key={t.key}
-                className={`tw-prism-segbtn${tab === t.key ? ' on' : ''}`}
-                role="tab"
-                ariaSelected={tab === t.key}
-                onClick={() => setTab(t.key)}
-              >{t.label}</RippleButton>
-            ))}
-          </div>
 
           <div className="tw-prism-cards" aria-label="总资产 现金 当日盈亏 累计盈亏">
             {cards.map((c) => (
@@ -242,6 +231,17 @@ export function PrismPage(props: { active: boolean }): React.ReactElement {
             ))}
           </div>
 
+          <div className="tw-prism-seg" role="tablist" aria-label="交易视图">
+            {TABS.map((t) => (
+              <RippleButton
+                key={t.key}
+                className={`tw-prism-segbtn${tab === t.key ? ' on' : ''}`}
+                role="tab"
+                ariaSelected={tab === t.key}
+                onClick={() => setTab(t.key)}
+              >{t.label}</RippleButton>
+            ))}
+          </div>
           <div className="tw-prism-toolbar">
             <label className="tw-prism-muted" htmlFor="prism-capital">资金上限</label>
             <input id="prism-capital" className="tw-prism-time" value={capital} onChange={(e) => setCapital(e.target.value)} aria-label="资金上限" />
@@ -335,6 +335,14 @@ export function PrismPage(props: { active: boolean }): React.ReactElement {
             ) : null}
           </section>
 
+          <section className="tw-prism-card tw-prism-decisioncard">
+            <div className="tw-prism-card-title">决策 <span className="tw-prism-muted">limits / orders / cancel</span></div>
+            <table className="tw-prism-table tw-prism-decision"><tbody>
+              {dRows.map((r) => <tr key={r.key}><td>{r.key}</td><td className={`tw-prism-num tw-prism-mono${r.muted === true ? ' zero' : ''}`}>{r.value}</td></tr>)}
+            </tbody></table>
+            {(latest?.decision?.parseError ?? null) === null ? null : <div className="tw-prism-error">决策 JSON 解析失败：{decisionErrorText(latest?.decision?.parseError)}</div>}
+          </section>
+
           <section className="tw-prism-card tw-prism-equitycard">
             <div className="tw-prism-card-title">净值曲线 <span className="tw-prism-muted">每日一点 · 总资产 = 现金 + 持仓市值（缺价按成本）</span></div>
             {chart === null ? (
@@ -389,14 +397,6 @@ export function PrismPage(props: { active: boolean }): React.ReactElement {
                 <div className="tw-prism-analysis-body">{analysisText({ key: 'info', label: a.role, text: a.text, error: a.error })}</div>
               </details>
             ))}
-          </section>
-
-          <section className="tw-prism-card">
-            <div className="tw-prism-card-title">决策 <span className="tw-prism-muted">limits / orders / cancel</span></div>
-            <table className="tw-prism-table tw-prism-decision"><tbody>
-              {dRows.map((r) => <tr key={r.key}><td>{r.key}</td><td className={`tw-prism-num tw-prism-mono${r.muted === true ? ' zero' : ''}`}>{r.value}</td></tr>)}
-            </tbody></table>
-            {(latest?.decision?.parseError ?? null) === null ? null : <div className="tw-prism-error">决策 JSON 解析失败：{decisionErrorText(latest?.decision?.parseError)}</div>}
           </section>
 
           <section className="tw-prism-card">
