@@ -33,6 +33,7 @@ import {
   timesProblems,
   timesText,
   topCardsOf,
+  versionSummaryOf,
 } from './prismView.ts'
 
 type TabKey = 'positions' | 'orders' | 'fills'
@@ -228,8 +229,7 @@ export function PrismPage(props: { active: boolean }): React.ReactElement {
     clampText,
   ].join('\n')
   const dRows = decisionRows(latest?.decision, { cash: trading?.account.cash, minPrice: lowPrice }).map((r) => r.key === '仓位上限依据' ? { ...r, value: basisText } : r)
-  const versionText = typeof latest?.codeVersion === 'string' && latest.codeVersion.trim() !== '' && !/^[—–-]+$/.test(latest.codeVersion.trim()) ? latest.codeVersion.trim() : '—（旧记录无版本绑定）'
-  const mandateText = typeof latest?.mandateHash === 'string' && latest.mandateHash.trim() !== '' && !/^[—–-]+$/.test(latest.mandateHash.trim()) ? latest.mandateHash : '—（旧记录无版本绑定）'
+  const versionInfo = versionSummaryOf(latest?.codeVersion, latest?.mandateHash)
 
   return (
     <div className="tw-prism">
@@ -454,8 +454,8 @@ export function PrismPage(props: { active: boolean }): React.ReactElement {
             )}
           </section>
             <details className="tw-prism-verinfo">
-              <summary>版本信息 · {versionText} · {mandateText === '—（旧记录无版本绑定）' ? mandateText : `${mandateText.slice(0, 12)}…`}</summary>
-              <div className="tw-prism-muted">codeVersion {versionText} ｜ mandateHash {mandateText}</div>
+              <summary>{versionInfo.summary}</summary>
+              <div className="tw-prism-muted">{versionInfo.body}</div>
             </details>
 
           <section className="tw-prism-card tw-prism-timecard">
