@@ -11,6 +11,49 @@
 
 ---
 
+## v0.148.0 — 棱镜：复制持仓自动提额（资金不足时补到刚好够）
+
+报告 `docs/AUDIT-PRISM-COPY.md`。`npm run check` **1234 / 1234 × 2 时区**（1230 → 1234）+ selftest + build（73 片段全过）。
+
+### 根因（用户报「总市值与持仓股数对不上」）
+
+8 只持仓按成本合计需 **1 907 130 元**，当时上限 **1 750 000 元** ⇒ 复制逻辑按行**部分复制**，长鑫科技从 5 000 股变成 **1 314 股**，界面无提示。
+总资产本身自洽（现金 41.04 + 市值 1 555 039.90 = 1 555 080.94）。
+
+### 修复（方案：自动提额）
+
+`action:'copy'` 先按摊薄成本算 `required = Σ(round2(成本) × 数量)`（不含费用），向上取整到分：
+
+- `capitalAfter = max(capitalBefore, required)`；`raised = capitalAfter > capitalBefore`。
+- 用提升后的上限执行 `copyAtCost`，**写** `account.capital` / `capitalLimit` 与 `settings.capital`。
+- 复制后 `cash = capitalAfter − required`。
+- 回包新增 `copy:{ requestedPositions, copiedPositions, required, capitalBefore, capitalAfter, raised }`，**UI 不显示该摘要**。
+- 真实持仓为空 ⇒ `required=0`、`raised=false`、上限不变。连续复制不累加。
+
+### 真实数据读数（隔离目录，use live positions/ledger）
+
+```json
+{ "copy": { "requestedPositions": 8, "copiedPositions": 8, "required": 1907130,
+            "capitalBefore": 1750000, "capitalAfter": 1907130, "raised": true },
+  "capital": 1907130, "cash": 0, "positions": 8 }
+```
+
+8 只数量逐只相等：`600000 / 5000 / 15000 / 4000 / 65000 / 85000 / 2000 / 5000`；**长鑫科技 5 000 股**。
+与我先前估的 `1 908 105` 差 **975 元**：当前 `dilutedCost` 取整口径不同（长鑫 42.6437→42.64 等），实现**不硬编码**该值。
+
+### 验证
+
+`npm run check` **1234 / 1234 × 2 时区** + selftest + build（73 项）；两轮干净复跑。
+新增 `prismCopy.test.ts` **4 条**：① 上限不足 ⇒ `capital === required`、8 只全等、长鑫 5000（保留部分复制 ⇒ 败）｜② `cash === capital − required`（负现金 ⇒ 败）｜③ `raised` 与 `capitalBefore/After` 正确（不记录 ⇒ 败）｜④ 上限 2 000 000 ⇒ `raised=false`、cash 92 020（无条件上调 ⇒ 败）｜⑤ 连续两次 copy 不累加｜⑥ 持仓空 ⇒ required 0 且不改上限。
+
+### 保留
+
+GET 每次 `reloadOrders()`；`prism-orders.json` 为 orders/fills 唯一来源；`account.capital === settings.capital`；14:59:09 可下单、15:00:00 判盘后（用 `run.startedAt`）。
+
+### 生效条件
+
+需**重启 `dsh web`**；重启后点一次「按成本价复制持仓」，上限会自动补到所需并完整复制。
+
 ## v0.147.0 — 棱镜：orders/fills 每次重读、capital 对齐、恢复 4 笔成交、盘后边界
 
 报告 `docs/AUDIT-PRISM-LEDGER.md`。`npm run check` **1230 / 1230 × 2 时区**（1227 → 1230）+ selftest + build（73 片段全过）。

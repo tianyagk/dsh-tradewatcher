@@ -74,7 +74,7 @@ test('① 首次读取不复制、不改现金；显式复制才按成本复制'
   }
 })
 
-test('① 现金不足：显式复制只覆盖可买部分并留痕', async () => {
+test('① 现金不足：显式复制自动提上限并完整复制', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'prism-init2-'))
   try {
     const store = new PrismStore(dir)
@@ -84,9 +84,10 @@ test('① 现金不足：显式复制只覆盖可买部分并留痕', async () =
     await trading.saveAccount({ ...trading.account(), capitalLimit: 50_000, cash: 50_000 })
     const body = await callPost({ store, trading, data: fakeData() }, { action: 'copy' })
     const account = body['account'] as Record<string, any>
-    assert.equal(account.positions[0].qty, 50, '5 万 / 1000 = 50 股')
+    assert.equal(account.positions[0].qty, 100, '不足上限 ⇒ 自动提到 required 后完整复制')
+    assert.equal(account.capitalLimit, 100_000)
     assert.equal(account.cash, 0)
-    assert.match(String(account.copyLogs[0].note), /部分复制/)
+    assert.equal((body['copy'] as { raised?: boolean } | undefined)?.raised, true)
   } finally {
     await rm(dir, { recursive: true, force: true })
   }

@@ -366,11 +366,31 @@ export function makePrismRoutes(deps: PrismRouteDeps): PluginWebRoute[] {
           }
           if (action === 'copy') {
             const rows = await copyRowsOf(deps)
-            const result = copyAtCost(rows, deps.trading.account(), Date.now())
+            const required = Math.round(rows.reduce((sum, r) => sum + Math.round(Math.max(0, r.cost) * 100) / 100 * Math.max(0, r.qty), 0) * 100) / 100
+            const account = deps.trading.account()
+            const capitalBefore = account.capitalLimit
+            const capitalAfter = Math.max(capitalBefore, required)
+            const raised = capitalAfter > capitalBefore
+            const result = copyAtCost(rows, { ...account, capitalLimit: capitalAfter, capital: capitalAfter }, Date.now())
+            result.account.capital = capitalAfter
             await deps.trading.saveAccount(result.account, { explicitReset: true })
-            const settings = await store.saveCapital(result.account.capitalLimit)
+            const settings = await store.saveCapital(capitalAfter)
             await recordEquity(deps)
-            send(res, 200, { ok: true, account: { ...result.account, capital: result.account.capitalLimit }, settings, log: result.log, skipped: result.skipped })
+            send(res, 200, {
+              ok: true,
+              account: { ...result.account, capital: capitalAfter },
+              settings,
+              copy: {
+                requestedPositions: rows.length,
+                copiedPositions: result.account.positions.length,
+                required,
+                capitalBefore,
+                capitalAfter,
+                raised,
+              },
+              log: result.log,
+              skipped: result.skipped,
+            })
             return
           }
           if (action === 'recover') {
