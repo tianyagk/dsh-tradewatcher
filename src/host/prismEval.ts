@@ -63,6 +63,10 @@ export function evaluationOf(
     const a = valid[w.start]
     const b = valid[w.end]
     if (a === undefined || b === undefined) continue
+    if (typeof a.benchmarkClose !== 'number' || typeof b.benchmarkClose !== 'number' || !(a.benchmarkClose > 0)) {
+      benchmarkMissing = true
+      continue
+    }
     const base = a.equity - (a.capital as number)
     const end = b.equity - (b.capital as number)
     if (!(base > 0)) continue
@@ -71,10 +75,6 @@ export function evaluationOf(
       .filter(([day]) => day > a.day && day <= b.day)
       .reduce((sum, [, v]) => sum + v, 0)
     const noFee = port + (fee / base) * 100
-    if (typeof a.benchmarkClose !== 'number' || typeof b.benchmarkClose !== 'number' || !(a.benchmarkClose > 0)) {
-      benchmarkMissing = true
-      continue
-    }
     const bench = (b.benchmarkClose / a.benchmarkClose - 1) * 100
     const ex = port - bench
     withFee.push(ex)
@@ -86,27 +86,30 @@ export function evaluationOf(
   const sampleShort = reasonOf(nUsed, minSample) ?? short
   let excess: PrismEvalExcess
   if (benchmarkMissing && nUsed === 0) {
-    excess = { withFee: null, withoutFee: null, reason: '基准 1.000300 收盘缺失', n: nUsed }
+    // 缺基准的优先级高于“样本不足”：回填 10-22 后正是这种形态，必须保留缺基准原因
+    excess = { withFee: null, withoutFee: null, reason: '基准 1.000300 收盘缺失', n }
   } else if (sampleShort !== null) {
-    excess = { withFee: null, withoutFee: null, reason: sampleShort, n: nUsed }
+    excess = { withFee: null, withoutFee: null, reason: sampleShort, n }
   } else {
-    excess = { withFee: round(avg(withFee) as number), withoutFee: round(avg(withoutFee) as number), reason: null, n: nUsed }
+    excess = { withFee: round(avg(withFee) as number), withoutFee: round(avg(withoutFee) as number), reason: null, n }
   }
   const adjusted = valid.map((p) => p.equity - (p.capital as number))
-  let peak = adjusted[0] as number
+  const baseAdj = adjusted[0] as number
+  const series = baseAdj !== 0 ? adjusted.map((v) => (v / baseAdj - 1) * 100) : adjusted.map(() => 0)
+  let peakSeries = 0
   let dd = 0
-  for (const v of adjusted) {
-    peak = Math.max(peak, v)
-    if (peak > 0) dd = Math.min(dd, (v / peak - 1) * 100)
+  for (const v of series) {
+    peakSeries = Math.max(peakSeries, v)
+    dd = Math.min(dd, v - peakSeries)
   }
   const ddReason = sampleShort
-  const hitReason = sampleShort ?? (benchmarkMissing ? '基准 1.000300 收盘缺失' : null)
+  const hitReason = benchmarkMissing ? '基准 1.000300 收盘缺失' : sampleShort
   const hits = withFee.filter((x) => x > 0).length
   return {
     excess,
-    drawdown: { value: ddReason === null ? round(dd) : null, reason: ddReason, n: nUsed },
-    hitRate: { value: hitReason === null && nUsed > 0 ? round((hits / nUsed) * 100) : null, reason: hitReason, n: nUsed },
-    n: nUsed, embargoDays: EMBARGO_DAYS, footnote: EVAL_FOOTNOTE, curve,
+    drawdown: { value: ddReason === null ? round(dd) : null, reason: ddReason, n },
+    hitRate: { value: hitReason === null && nUsed > 0 ? round((hits / nUsed) * 100) : null, reason: hitReason, n },
+    n, embargoDays: EMBARGO_DAYS, footnote: EVAL_FOOTNOTE, curve,
     reason: excess.reason,
   }
 }
@@ -129,9 +132,11 @@ export function drawdownGateOf(
   const values = valid.map((p) => p.equity - (p.capital as number))
   const last = values[values.length - 1] as number
   const prev = values[values.length - 2] as number
-  const dailyPct = prev > 0 ? (last / prev - 1) * 100 : null
-  const peak = Math.max(...values)
-  const cumulativePct = peak > 0 ? (last / peak - 1) * 100 : null
+  const dailyPct = prev !== 0 ? (last / prev - 1) * 100 : null
+  const base = values[0] as number
+  const series = base !== 0 ? values.map((v) => (v / base - 1) * 100) : values.map(() => 0)
+  const peak = Math.max(0, ...series)
+  const cumulativePct = (series[series.length - 1] as number) - peak
   // 先按展示精度取整再比较阈值，避免 -9.999999999999998 逃过 -10
   const dailyTriggered = dailyPct !== null && round(dailyPct) <= -3
   const cumulativeTriggered = cumulativePct !== null && round(cumulativePct) <= -10

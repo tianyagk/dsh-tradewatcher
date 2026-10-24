@@ -93,3 +93,23 @@ test('P-11 行业上限 18% 在同一裁剪链生效；缺行业不夹紧', () =
   const missing = clampDecision(d, { cash: 100000, positions: [], limits: d.limits, industries: {}, at: 1 })
   assert.equal(missing.decision.orders[0]?.shares, 2000)
 })
+
+test('回填 10-22 capital：n=1；超额仍缺基准；回撤闸门可用', () => {
+  const points = [
+    point('2026-10-22', 1281801.66, 1500000, null),
+    point('2026-10-23', 1805855, 2000000, 4105.33),
+  ]
+  const e = evaluationOf(points, {}, 1, EVAL_MIN_SAMPLE)
+  assert.equal(e.n, 1, '两点 ⇒ 1 个独立窗口')
+  assert.equal(e.excess.withFee, null)
+  assert.match(e.excess.reason ?? '', /缺基准|基准 1\.000300/)
+  assert.deepEqual(points[1], point('2026-10-23', 1805855, 2000000, 4105.33), '10-23 不得改动')
+  assert.notEqual(1500001, points[0]?.capital)
+  assert.throws(() => assert.equal(2000000, points[0]?.capital, '注入：写成 2000000'), /注入/)
+  assert.throws(() => assert.equal(4105.33, points[0]?.benchmarkClose, '注入：编造基准'), /注入/)
+  const g = drawdownGateOf(points, null)
+  assert.equal(g.reason, null)
+  assert.equal(g.n, 2)
+  assert.equal(typeof g.dailyPct, 'number')
+  assert.equal(typeof g.cumulativePct, 'number')
+})
