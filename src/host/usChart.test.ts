@@ -144,7 +144,12 @@ test('②b 五日：新浪 5 分钟是真多日源（不是本地拼接）；不
   assert.ok(t !== null)
   const days = [...new Set(t.points.map((p) => p.label.slice(0, 10)))]
   assert.deepEqual(days, ['2026-10-14', '2026-10-15', '2026-10-16'], '五日必须是**真实多日**（三天都在）')
-  assert.equal(t.source, undefined, '真实多日源不标 local-stitch（那是本地归档拼接的标记）')
+  /**
+   * v0.157.0（AUDIT-INTL-MINUTE §2）：**任何国际回包都必须带 `source`**（用户实测 `106.FRO` 缺出处）。
+   * 旧断言写的是"真实多日源不标 source"，与"缺失必须能追到源"直接冲突 —— 本轮反转。
+   */
+  assert.equal(t.source, 'sina-us-min', '真实多日源必须自报来源（美股分钟 = 新浪 US_MinKService）')
+  assert.notEqual(t.source, 'local-stitch', '它不是本地归档拼接')
 })
 
 test('③ 三档解禁：周/月/年由日线聚合出数（注入：仍返回 null 或仍 disabled ⇒ 必败）', async () => {

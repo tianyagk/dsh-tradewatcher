@@ -258,6 +258,8 @@ export type TrendSource =
   | 'sina-5min'
   | 'tencent-5min'
   | 'sina-global-min'
+  | 'sina-us-min'
+  | 'lkg-snapshot'
   | 'local-stitch'
 
 /**
@@ -277,6 +279,8 @@ export const TREND_SOURCE_LABEL: Record<TrendSource, string> = {
   'sina-5min': '新浪 5 分钟',
   'tencent-5min': '腾讯 5 分钟',
   'sina-global-min': '新浪全球期货分钟',
+  'sina-us-min': '新浪美股分钟',
+  'lkg-snapshot': '本地兜底快照',
   'local-stitch': '本地归档拼接',
 }
 

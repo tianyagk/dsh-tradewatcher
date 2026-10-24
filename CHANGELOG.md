@@ -11,6 +11,43 @@
 
 ---
 
+## v0.158.0 — 外盘分时覆盖扩到 8 个品种；出处与陈旧标注补齐
+
+报告 `docs/AUDIT-INTL-MINUTE.md` §5。`npm run check` **1279 / 1279 × 2 时区**（1273 → 1279）+ selftest + build（73 片段全过）。
+
+### 侦察实测（新浪全球期货分钟，20:05–20:10）
+
+| symbol | secid | 条数 | 末点 | 有量 |
+| --- | --- | --- | --- | --- |
+| `CL` | `101.CL` 原油 | 1378 | 10-24 04:59 | 否 |
+| `GC` | `101.GC` 黄金 | 1379 | 10-24 04:59 | 否 |
+| `SI` | `101.SI` 白银 | 1365 | 10-24 04:59 | 否 |
+| `HG` | `101.HG00Y` 铜 | 1321 | 10-24 04:59 | 否 |
+| `NG` | `101.NG` 天然气 | 1121 | 10-24 04:59 | 否 |
+| `OIL` | `112.B00Y` 布伦特 | 1270 | 10-24 05:59 | **是** |
+| `NK` | `100.N225` 日经 | 673 | 10-24 05:03 | **是** |
+| `XAG` | `122.XAG` 伦敦银 | 1373 | 10-24 04:53 | 否 |
+| `KS200` 等 13 个候选 | `100.KOSPI200` | **0** | — | — |
+
+### 采用方案
+
+- `101.CL/GC/SI/HG/NG`：`sina-global-min`（代码表 `SINA_GLOBAL_MIN`，去掉 `00Y` 后缀再查）。
+- `112.B00Y` → `OIL`、`100.N225` → `NK`：**代理**，口径行自曝（ICE 布伦特连续 / SGX 日经期货，**不是该合约与现货本身**）。
+- `106.FRO` / `107.VIXY`：改走同一条 `trendWithFallback` loader，带 `source: sina-us-min` + `at`。
+- 兜底快照：`source` 缺省 `lkg-snapshot`；`nonSession.reason` 写「当日分时源不可用，最后交易日 YYYY-MM-DD（显示本地兜底快照）」。
+- `annotate()` 抽为模块级 `annotateTrendPayload()`，**休市定稿短路复用也走同一套标注**（原来直接返回 ⇒ 旧图无 `stale`、无日期、`source` 为空）。
+
+### 仍未取到
+
+- **`100.KOSPI200`：无任何源**（实测 KS200 / KOSPI / KOSPI200 / K200 / KS / KRX / NKD / NIY / SPI 全空）⇒ `trend:null` + `missing{why:'no-source'}`，note 点名「已试：东财 trends2、新浪全球期货分钟（无对应代码）、腾讯分钟（仅沪/深/港）、本地兜底快照」。
+- **未接**：`100.HSI`、`100.SPX/NDX/DJI`、`100.FCHI/FTSE/SX5E/GDAXI`（本轮未扩；欧洲指数无源）。
+
+### 验证
+
+`npm run check` **1279 / 1279 × 2 时区** + selftest + build（73 项）。
+新增 **6 条**断言：`CL/GC/SI` 各有可用源且末点距取数 ≤18h（不接新源 ⇒ 败）｜`100.KOSPI200` 回 `trend:null`+`missing` 含「已试：」（只回 `{trend:null}` ⇒ 败）｜`122.XAU` / `101.CL` / `106.FRO` 三条路径必带 `source`+`at`（删掉 ⇒ 败）｜`100.N225` 兜底必带 `stale:true`+「最后交易日 2026-10-13」（旧文案无日期 ⇒ 败）｜落后 14h 必给 `lagMinutes/lagReason`、只差 2 分钟必不给｜美股不得 early-return。
+**有意更新既有断言 1 处**：`usChart.test.ts` ②b 由「真实多日源不标 source」反转为 `source === 'sina-us-min'`（与「国际回包必须带出处」一致）。
+
 ## v0.157.0 — 国际商品分时换源：伦敦金现接新浪全球期货分钟，滞后自曝
 
 报告 `docs/AUDIT-INTL-MINUTE.md`。`npm run check` **1273 / 1273 × 2 时区**（1263 → 1273）+ selftest + build（73 片段全过）。

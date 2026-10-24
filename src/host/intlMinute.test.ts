@@ -134,7 +134,7 @@ test('① 最后一点早于「现在 −15 分钟」⇒ 回包带 lagMinutes/la
 
 test('①b 边界：15 分钟整不告警、16 分钟告警（阈值只有 TREND_LAG_WARN_MINUTES 一处）', async () => {
   const { TREND_LAG_WARN_MINUTES } = await import('../shared/model.ts')
-  for (const [secid, add, expectLag] of [['122.XPT', 15, false], ['122.XPD', 16, true]] as const) {
+  for (const [secid, add, expectLag] of [['101.CL', 15, false], ['101.GC', 16, true]] as const) {
     resetBreakers()
     const s = stub()
     try {
@@ -154,9 +154,9 @@ test('④ 无任何源可用 ⇒ 返回 null + 明确原因（不拿旧曲线顶
   resetBreakers()
   const s = stub({ sina: 'null' }) // 上游回 null（等于"该标的不给序列"）
   try {
-    const t = await em.fetchTrend('122.XSI', 1, { now: LAST_T + 60 * 60_000 })
+    const t = await em.fetchTrend('101.SI', 1, { now: LAST_T + 60 * 60_000 })
     assert.equal(t, null, '没有任何源给数据时必须回 null，而不是编一条序列')
-    const reason = em.trendMissingReason('122.XSI')
+    const reason = em.trendMissingReason('101.SI')
     assert.equal(reason.what, '分时')
     assert.ok(reason.note.includes('新浪全球期货分钟') || reason.note.includes('没有可用快照'), `原因必须指明试过哪些源（实际：${reason.note}）`)
     // 反例注入：从别处捞一条旧曲线冒充当日 ⇒ 判据必败（"null 就是 null"）
@@ -179,7 +179,7 @@ test('④b 只有旧数据（10-21）⇒ 必须标 nonSession 且给出日期（
   ]
   const s = stub({ sina: globalPayload(oldRows) })
   try {
-    const t = await em.fetchTrend('122.XSN', 1, { now: parseMarketStamp('2026-10-24 19:14:00') })
+    const t = await em.fetchTrend('101.HG', 1, { now: parseMarketStamp('2026-10-24 19:14:00') })
     assert.ok(t !== null)
     assert.equal(t.sessionDay, '2026-10-21', 'sessionDay 必须是数据自己的日子')
     assert.ok(t.nonSession !== undefined, '非当日数据必须带 nonSession（否则界面会读成当日）')
