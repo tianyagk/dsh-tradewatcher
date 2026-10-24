@@ -36,11 +36,11 @@ test('③ 卡片阴影最终生效值 = 设计稿值（后写覆盖 ⇒ 败）',
 })
 
 test('④ 分段选中背景/文字/字重达标（删背景 ⇒ 败）', () => {
-  assert.match(TW_CSS, /\.tw-prism-segbtn\.on\{background:var\(--tw-md-accent-soft\);color:var\(--tw-md-on-accent\);font-weight:600/)
-  assert.match(TW_CSS, /\.tw-prism-seg\{[^}]*padding:0;[^}]*border:1px solid/)
-  const injected = TW_CSS.replace('background:var(--tw-md-accent-soft);color:var(--tw-md-on-accent);font-weight:600', 'color:var(--tw-md-on-accent);font-weight:600')
+  assert.match(TW_CSS, /\.tw-prism-segbtn\.on\{background:rgba\(94,106,210,\.18\);color:#2f3aa0;font-weight:700/)
+  assert.match(TW_CSS, /\.tw-prism-seg\{[^}]*padding:2px;[^}]*border:1px solid/)
+  const injected = TW_CSS.replace('background:rgba(94,106,210,.18);color:#2f3aa0;font-weight:700', 'color:#2f3aa0;font-weight:700')
   assert.notEqual(injected, TW_CSS)
-  assert.doesNotMatch(injected, /\.tw-prism-segbtn\.on\{background:var\(--tw-md-accent-soft\)/)
+  assert.doesNotMatch(injected, /\.tw-prism-segbtn\.on\{background:rgba\(94,106,210,\.18\)/)
 })
 
 test('⑤ rejects 走决策表格行，orders/cancel 0 用次要色（纯文本 ⇒ 败）', () => {

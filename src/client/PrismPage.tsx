@@ -17,6 +17,9 @@ import {
   PRISM_PCT,
   PRISM_SERIES_CSS,
   adjustedReturnSeries,
+  SEGMENT_GAP, SEGMENT_PADDING,
+  basisBlocksOf,
+  segmentItemWidthOf,
   analysisText,
   compositionItems,
   decisionErrorText,
@@ -80,6 +83,7 @@ function RippleButton(props: {
   className?: string
   role?: string
   ariaSelected?: boolean
+  style?: React.CSSProperties
 }): React.ReactElement {
   const { ref, onPointerDown } = useRipple()
   return (
@@ -93,6 +97,7 @@ function RippleButton(props: {
       title={props.title}
       role={props.role}
       aria-selected={props.ariaSelected}
+      style={props.style}
     >
       {props.children}
     </button>
@@ -235,16 +240,18 @@ export function PrismPage(props: { active: boolean }): React.ReactElement {
     : `本次夹紧 ${(latest?.decision?.clampEvents ?? []).map((e) => `${e.secid} ${e.before} → ${e.after}（${e.dimension}）`).join('；')}`
   const achieved = exposureOk ? exposure.rows.filter((r) => r.limitPct !== null && r.limitPct > 0).map((r) => `${r.name} ${Math.round((r.weight / r.limitPct!) * 100)}%`) : []
   const achievementReason = exposure.state === 'unavailable' ? '缺行业数据' : achieved.length === 0 ? '未配置行业上限' : null
-  const basisText = [
+  const basisParts = [
     `资金上限 ${PRISM_MONEY(trading?.account.capital ?? trading?.account.capitalLimit ?? null)} · 单票 ${latest?.decision?.limits.singlePct == null ? '—' : `${latest.decision.limits.singlePct}%`} · 总仓 ${latest?.decision?.limits.totalPct == null ? '—' : `${latest.decision.limits.totalPct}%`}` + (latest?.decision?.limits.note === null || latest?.decision?.limits.note === undefined || latest.decision.limits.note.trim() === '' ? '' : `（依据：${latest.decision.limits.note}）`),
     `达成度 ${achieved.length === 0 ? `—（${achievementReason ?? '未配置行业上限'}）` : achieved.join(' / ')}`,
     clampText,
-  ].join('\n')
+  ]
+  const basisBlocks = basisBlocksOf(basisParts)
+  const segWidth = segmentItemWidthOf(TABS.map((t) => t.label))
   const dd = latest?.drawdown ?? null
   const ddText = dd === null
     ? '—（缺资本调整后净值，未计算回撤闸门）'
     : `单日 −3% / 累计 −10% / 状态 ${dd.status}\n当前 单日 ${evalPct(dd.dailyPct)} · 自高点 ${evalPct(dd.cumulativePct)} · 目标总仓 ≤${dd.targetTotalPct}% · 现金 ≥${dd.cashMinPct}% · 样本 n=${dd.n}${dd.freezeRound ? ' · 连续两次触发，本轮冻结新开仓' : ''}`
-  const dRows = [...decisionRows(latest?.decision, { cash: trading?.account.cash, minPrice: lowPrice }).map((r) => r.key === '仓位上限依据' ? { ...r, value: basisText } : r), { key: '回撤闸门', value: ddText }]
+  const dRows = [...decisionRows(latest?.decision, { cash: trading?.account.cash, minPrice: lowPrice }).map((r) => r.key === '仓位上限依据' ? { ...r, value: basisBlocks[0] as string } : r), { key: '回撤闸门', value: ddText }]
   const versionInfo = versionSummaryOf(latest?.codeVersion, latest?.mandateHash)
 
   return (
@@ -265,7 +272,7 @@ export function PrismPage(props: { active: boolean }): React.ReactElement {
       >
         <div className="tw-prism-col tw-prism-left">
 
-          <div className="tw-prism-seg" role="tablist" aria-label="交易视图">
+          <div className="tw-prism-seg" role="tablist" aria-label="交易视图" style={{ gap: `${SEGMENT_GAP}px`, padding: `${SEGMENT_PADDING}px` }}>
             {TABS.map((t) => (
               <RippleButton
                 key={t.key}
@@ -273,6 +280,7 @@ export function PrismPage(props: { active: boolean }): React.ReactElement {
                 role="tab"
                 ariaSelected={tab === t.key}
                 onClick={() => setTab(t.key)}
+                style={{ minWidth: `${segWidth}px` }}
               >{t.label}</RippleButton>
             ))}
           </div>
@@ -406,7 +414,7 @@ export function PrismPage(props: { active: boolean }): React.ReactElement {
           <section className="tw-prism-card tw-prism-decisioncard">
             <div className="tw-prism-card-title">决策 <span className="tw-prism-muted">limits / orders / cancel</span></div>
             <table className="tw-prism-table tw-prism-decision"><tbody>
-              {dRows.map((r) => <tr key={r.key}><td>{r.key}</td><td className={`tw-prism-num tw-prism-mono${r.muted === true ? ' zero' : ''}`}>{r.value}</td></tr>)}
+              {dRows.map((r) => <tr key={r.key}><td>{r.key}</td><td className={`tw-prism-num tw-prism-mono${r.muted === true ? ' zero' : ''}`}>{r.key === '仓位上限依据' ? <div className="tw-prism-basis">{basisBlocks.map((b, i) => <div key={i} className={`tw-prism-basis-block${i === 2 ? ' tw-prism-basis-clamp tw-prism-mono' : ''}`} title={b}>{b}</div>)}</div> : r.value}</td></tr>)}
             </tbody></table>
             {(latest?.decision?.parseError ?? null) === null ? null : <div className="tw-prism-error">决策 JSON 解析失败：{decisionErrorText(latest?.decision?.parseError)}</div>}
           </section>

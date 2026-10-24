@@ -11,6 +11,23 @@
 
 ---
 
+## v0.153.0 — 棱镜：分段控件间隙、决策卡依据三块、渲染级断言
+
+`npm run check` **1259 / 1259 × 2 时区**（1257 → 1259）+ selftest + build（73 片段全过）；只改 `src/client/**`。
+
+| # | 修前 | 修后 |
+| --- | --- | --- |
+| 1 | 分段控件三个标签挤成一串 | 容器 `padding:2px` + `gap:4px`，每项 `min-width:49px`；选中 `rgba(94,106,210,.18)` + `#2f3aa0` + `700`，未选中 `transparent` + `--tw-dim` + `400` |
+| 2 | 决策卡「仓位上限依据」是一整段自动换行 | 拆成 **3 个独立块**（各 `white-space:nowrap`、块间 2px、次要色，夹紧块等宽数字） |
+
+### 断言改为渲染级（旧的 CSS 数值断言抓不到）
+
+- ① `segmentLayoutOf` 计算实际间隙：`gaps = 4 / 4px`、`min-width = 49px`（注入 `gap:0` ⇒ 必败）。
+- ② `basisBlocksOf` **只接受 3 块**，2 块或 4 块直接抛错；每块 `\n` 压成空格（合成一段 ⇒ 必败）。
+- ③ `segmentPaintOf(true)` 与 `(false)` 背景必须不同（同色 ⇒ 必败）。
+
+CSS 对拍仍 **68 项 / 0 不一致**。
+
 ## v0.152.0 — 棱镜第二批：评估口径、回撤闸门、行业上限；CSS 对拍 68 项全等
 
 报告 `docs/AUDIT-PRISM-BATCH2.md`；对拍表 `docs/CSS-PARITY-PRISM.md`；设计稿 `docs/mockups/prism-v3.html`。`npm run check` **1257 / 1257 × 2 时区**（1250 → 1257）+ selftest + build（73 片段全过）。

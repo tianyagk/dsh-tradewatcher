@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { TW_CSS } from './styles.ts'
-import { evalCurveOf } from './prismView.ts'
+import { basisBlocksOf, evalCurveOf, segmentItemWidthOf, segmentLayoutOf, segmentPaintOf } from './prismView.ts'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const page = readFileSync(join(here, './PrismPage.tsx'), 'utf8')
@@ -51,4 +51,32 @@ test('评估/回撤/行业上限样式在 CSS 中存在且不出现“预测能�
   for (const s of ['.tw-prism-evalrow', '.tw-prism-evalchart', '.tw-prism-limitinput']) assert.ok(TW_CSS.includes(s), s)
   const all = `${page}\n${TW_CSS}\n${readFileSync(join(here, '../host/prismEval.ts'), 'utf8')}`
   assert.equal(all.includes('预测能力'), false)
+})
+
+test('分段控件渲染级：每项最小宽 + 实际间隙 ≥4px + 容器 2px；选中/未选中背景不同', () => {
+  const labels = ['持仓', '挂单', '成交']
+  const layout = segmentLayoutOf(labels)
+  assert.equal(layout.padding, 2)
+  assert.equal(layout.gap, 4)
+  assert.ok(segmentItemWidthOf(labels) >= 49)
+  assert.ok(page.includes('segmentItemWidthOf') && page.includes('SEGMENT_GAP'))
+  assert.ok(layout.gaps.every((g) => g >= 4), `实际间隙 ${layout.gaps.join(',')}`)
+  const selected = segmentPaintOf(true)
+  const idle = segmentPaintOf(false)
+  assert.notEqual(selected.background, idle.background)
+  assert.equal(selected.fontWeight, 700)
+  const injected = segmentLayoutOf(labels, { gap: 0 })
+  assert.throws(() => assert.ok(injected.gaps.every((g) => g >= 4), '注入：间隙 0'), /注入/)
+  assert.throws(() => assert.notEqual('red', 'red', '注入：同色'), /注入/)
+})
+
+test('仓位上限依据渲染级：恰为 3 块、每块单行；合成一段 ⇒ 必败', () => {
+  const blocks = basisBlocksOf(['资金上限 1 · 单票 25% · 总仓 60%', '达成度 —（缺行业数据）', '本次夹紧 —'])
+  assert.equal(blocks.length, 3)
+  assert.ok(blocks.every((b) => !b.includes('\n')))
+  assert.ok(page.includes('basisBlocks.map'))
+  assert.ok(page.includes('basisBlocksOf'))
+  assert.ok(page.includes('tw-prism-basis-block'))
+  assert.throws(() => basisBlocksOf(['a\nb', 'c']), /3 块/)
+  assert.throws(() => basisBlocksOf(['a', 'b', 'c', 'd']), /3 块/)
 })

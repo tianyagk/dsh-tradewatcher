@@ -24,7 +24,7 @@ export function spacingProblems(css: string): string[] {
   const bad: string[] = []
   for (const block of css.matchAll(/(\.tw-prism[^{]*)\{([^}]*)\}/g)) {
     const selector = block[1] ?? ''
-    if (selector.includes('.tw-prism-seg')) continue // 分段项间 4px 是组件内部，不属于块间距
+    if (selector.includes('.tw-prism-seg') || selector.includes('.tw-prism-netseg') || selector.includes('.tw-prism-basis')) continue // 组件内部间距（用户指定 4px/2px），不属于块间距
     const body = block[2] ?? ''
     for (const m of body.matchAll(/(?:^|;)\s*(?:row-|column-)?gap\s*:\s*([^;]+)/g)) {
       const raw = (m[1] ?? '').trim()

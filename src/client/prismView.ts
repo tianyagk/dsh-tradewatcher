@@ -400,3 +400,43 @@ export function normalizeTradingState(payload: {
     evaluation: raw?.evaluation ?? payload.state?.evaluation ?? unavailableEvaluation('接口未返回评估数据（旧宿主或半包）'),
   }
 }
+
+/* ── P-UI：分段布局 / 决策依据块的渲染级判据（纯函数，页面与测试共用） ── */
+export const SEGMENT_GAP = 4
+export const SEGMENT_PADDING = 2
+export const SEGMENT_PAD_X = 12
+export const SEGMENT_FONT = 12.5
+export const SEGMENT_SELECTED_BG = 'rgba(94,106,210,.18)'
+export const SEGMENT_SELECTED_COLOR = '#2f3aa0'
+
+/** 每项最小宽度 = 最长标签按字号折算 + 两侧内边距（至少 1 个汉字宽） */
+export function segmentItemWidthOf(labels: readonly string[], fontPx = SEGMENT_FONT, padX = SEGMENT_PAD_X): number {
+  const longest = labels.reduce((n, s) => Math.max(n, [...s].length), 0)
+  return Math.ceil(longest * fontPx + padX * 2)
+}
+
+/** 计算每个 tab 的实际 x/宽度与相邻间隙；间隙必须 ≥ SEGMENT_GAP */
+export function segmentLayoutOf(
+  labels: readonly string[],
+  opts: { gap?: number; padding?: number } = {},
+): { items: Array<{ label: string; x: number; width: number }>; gaps: number[]; gap: number; padding: number } {
+  const gap = opts.gap ?? SEGMENT_GAP
+  const padding = opts.padding ?? SEGMENT_PADDING
+  const width = segmentItemWidthOf(labels)
+  const items = labels.map((label, i) => ({ label, x: padding + i * (width + gap), width }))
+  const gaps = items.slice(1).map((it, i) => it.x - ((items[i] as { x: number; width: number }).x + (items[i] as { width: number }).width))
+  return { items, gaps, gap, padding }
+}
+
+/** 选中/未选中背景与字重（渲染值的唯一出口） */
+export function segmentPaintOf(selected: boolean): { background: string; color: string; fontWeight: number } {
+  return selected
+    ? { background: SEGMENT_SELECTED_BG, color: SEGMENT_SELECTED_COLOR, fontWeight: 700 }
+    : { background: 'transparent', color: 'var(--tw-dim)', fontWeight: 400 }
+}
+
+/** 「仓位上限依据」恰为 3 块，每块 flatten 成单行（页面不得用 \n 拼成一段） */
+export function basisBlocksOf(parts: readonly string[]): string[] {
+  if (parts.length !== 3) throw new Error(`仓位上限依据必须恰为 3 块（实得 ${parts.length}）`)
+  return parts.map((p) => p.replace(/\s*\n\s*/g, ' ').trim())
+}
