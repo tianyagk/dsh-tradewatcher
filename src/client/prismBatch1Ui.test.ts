@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { TW_CSS } from './styles.ts'
-import { normalizeTradingState, versionSummaryOf } from './prismView.ts'
+import { normalizeTradingState } from './prismView.ts'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const page = readFileSync(join(here, './PrismPage.tsx'), 'utf8')
@@ -34,7 +34,6 @@ test('P-11 layout：左栏行业卡在决策卡前；移动端右栏净值在研
 test('P-01 equity 与页面点数同源；版本缺值固定文案；达成度 — 带原因', () => {
   assert.match(page, /const equityPoints = trading\?\.equity \?\? \[\]/)
   assert.match(page, /equityChartOf\(equityPoints/)
-  assert.ok(page.includes('versionSummaryOf'))
   assert.ok(page.includes('缺行业数据'))
   assert.ok(page.includes('未配置行业上限'))
   const injected = page.replace('const equityPoints = trading?.equity ?? []', 'const equityPoints = []')
@@ -54,17 +53,4 @@ test('③ equity 同源：trading 与 state 点数一致；exposure 缺失时也
   assert.equal(normalized?.equity.length, equity.length)
   assert.equal(normalized?.exposure?.state, 'unavailable')
   assert.match(normalized?.exposure?.reason ?? '', /未返回行业暴露/)
-})
-
-test('版本信息：字段名各一次；缺值最多两次且都有字段名；有值时显示 版本 v… · 指纹 …', () => {
-  const missing = versionSummaryOf(null, null)
-  assert.equal(missing.summary, '版本 —（旧记录无版本绑定） · 指纹 —（旧记录无版本绑定）')
-  assert.equal((missing.summary.match(/—（旧记录无版本绑定）/g) ?? []).length, 2)
-  assert.match(missing.summary, /版本 —（旧记录无版本绑定）/)
-  assert.match(missing.summary, /· 指纹 —（旧记录无版本绑定）/)
-  const full = versionSummaryOf('0.150.0', 'ab12cd34ef56aa')
-  assert.equal(full.summary, '版本 v0.150.0 · 指纹 ab12cd34ef56…')
-  assert.doesNotMatch(full.summary, /版本信息/)
-  assert.throws(() => assert.match('—（旧记录无版本绑定） · —（旧记录无版本绑定）', /版本 —（旧记录无版本绑定）/, '注入：无字段名重复'), /AssertionError/)
-  assert.throws(() => assert.match('v0.150.0 · ab12cd34ef56…', /版本 v0\.150\.0/, '注入：丢字段名'), /AssertionError/)
 })

@@ -38,7 +38,6 @@ import {
   timesProblems,
   timesText,
   topCardsOf,
-  versionSummaryOf,
 } from './prismView.ts'
 
 type TabKey = 'positions' | 'orders' | 'fills'
@@ -252,7 +251,6 @@ export function PrismPage(props: { active: boolean }): React.ReactElement {
     ? '—（缺资本调整后净值，未计算回撤闸门）'
     : `单日 −3% / 累计 −10% / 状态 ${dd.status}\n当前 单日 ${evalPct(dd.dailyPct)} · 自高点 ${evalPct(dd.cumulativePct)} · 目标总仓 ≤${dd.targetTotalPct}% · 现金 ≥${dd.cashMinPct}% · 样本 n=${dd.n}${dd.freezeRound ? ' · 连续两次触发，本轮冻结新开仓' : ''}`
   const dRows = [...decisionRows(latest?.decision, { cash: trading?.account.cash, minPrice: lowPrice }).map((r) => r.key === '仓位上限依据' ? { ...r, value: basisBlocks[0] as string } : r), { key: '回撤闸门', value: ddText }]
-  const versionInfo = versionSummaryOf(latest?.codeVersion, latest?.mandateHash)
 
   return (
     <div className="tw-prism">
@@ -414,7 +412,7 @@ export function PrismPage(props: { active: boolean }): React.ReactElement {
           <section className="tw-prism-card tw-prism-decisioncard">
             <div className="tw-prism-card-title">决策 <span className="tw-prism-muted">limits / orders / cancel</span></div>
             <table className="tw-prism-table tw-prism-decision"><tbody>
-              {dRows.map((r) => <tr key={r.key}><td>{r.key}</td><td className={`tw-prism-num tw-prism-mono${r.muted === true ? ' zero' : ''}`}>{r.key === '仓位上限依据' ? <div className="tw-prism-basis">{basisBlocks.map((b, i) => <div key={i} className={`tw-prism-basis-block${i === 2 ? ' tw-prism-basis-clamp tw-prism-mono' : ''}`} title={b}>{b}</div>)}</div> : r.value}</td></tr>)}
+              {dRows.map((r) => <tr key={r.key}><td>{r.key}</td><td className={`tw-prism-num tw-prism-mono${r.muted === true ? ' zero' : ''}`}>{r.key === '仓位上限依据' ? <div className="tw-prism-basis">{basisBlocks.map((b, i) => <div key={i} className={`tw-prism-basis-block${i === 2 ? ' tw-prism-basis-clamp tw-prism-mono' : ''}`} title={b}>{b}</div>)}</div> : r.key === '决策理由' ? <div className="tw-prism-decision-reason" title={r.value}>{r.value}</div> : r.value}</td></tr>)}
             </tbody></table>
             {(latest?.decision?.parseError ?? null) === null ? null : <div className="tw-prism-error">决策 JSON 解析失败：{decisionErrorText(latest?.decision?.parseError)}</div>}
           </section>
@@ -495,10 +493,6 @@ export function PrismPage(props: { active: boolean }): React.ReactElement {
             <div className="tw-prism-muted">非重叠样本 · 不含 embargo 区间 · embargo {evaluation.embargoDays} 日</div>
           </section>
 
-            <details className="tw-prism-verinfo">
-              <summary>{versionInfo.summary}</summary>
-              <div className="tw-prism-muted">{versionInfo.body}</div>
-            </details>
 
           <section className="tw-prism-card tw-prism-timecard">
             <div className="tw-prism-card-title">时点配置 <span className="tw-prism-muted">Asia/Shanghai</span></div>

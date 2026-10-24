@@ -11,6 +11,26 @@
 
 ---
 
+## v0.155.0 — 棱镜：决策理由不越界、删除版本指纹行
+
+`npm run check` **1262 / 1262 × 2 时区**（1260 → 1262）+ selftest + build（73 片段全过）；只改 `src/client/**`。
+
+### 1) 决策理由穿透右栏
+
+- `.tw-prism-left` / `.tw-prism-decisioncard`：`min-width:0; overflow:hidden`；决策表 `table-layout:fixed`；单元格 `white-space:normal; overflow-wrap:anywhere; word-break:break-word`。
+- 「决策理由」`-webkit-line-clamp:3` + ellipsis，全文放 `title`；「仓位上限依据」仍为 3 个单行块，仅「本次夹紧」用等宽 + `nowrap`。
+- 新增纯函数 `decisionReasonLayoutOf` / `decisionReasonFits`，页面与测试共用。
+
+### 2) 删除版本指纹行
+
+- 删除研判卡下方整个 `<details class="tw-prism-verinfo">` 与 `versionSummaryOf` UI helper；界面不再渲染 `版本 —` / `指纹 —` / `旧记录无版本绑定`。
+- **数据保留**：`PrismRun.codeVersion` / `mandateHash` 与 run 回包不变，`prismPipeline.ts` 仍写入。
+
+### 验证
+
+`npm run check` **1262 / 1262 × 2 时区** + selftest + build（73 项）；正常 + UTC 两轮干净复跑。
+新增 2 条断言：① 长文本在左栏宽 300 时 `width ≤ 300`、`lines ≤ 3`、`truncated=true`（渲染 301 / `maxLines=5` ⇒ 败）；CSS 含 `overflow-wrap:anywhere` 且长文本不含 `nowrap`（注入 nowrap ⇒ 败）。② 页面不含 `版本 —` / `指纹 —` / `旧记录无版本绑定` / `tw-prism-verinfo`（注入一行 ⇒ 败）；`src/shared/prism.ts` 仍含两字段（删数据 ⇒ 败）。
+
 ## v0.154.0 — 回填 10-22 净值点 capital；回撤闸门首次可用
 
 留痕 `docs/AUDIT-PRISM-EQUITY-BACKFILL.md`。`npm run check` **1260 / 1260 × 2 时区**（1259 → 1260）+ selftest + build（73 片段全过）。

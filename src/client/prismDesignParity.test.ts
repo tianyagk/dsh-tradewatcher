@@ -29,7 +29,7 @@ test('注入：卡片圆角 0 / 选中背景删除 / 表格字号 13 / 分隔条
   const cases: Array<[string, string, RegExp]> = [
     ['卡片圆角 0', inject('border-radius:10px;background:var(--tw-prism-surface-1)', 'border-radius:0;background:var(--tw-prism-surface-1)'), /卡片圆角/],
     ['选中背景删除', inject('.tw-prism-segbtn.on{background:rgba(94,106,210,.18);color:#2f3aa0;font-weight:700', '.tw-prism-segbtn.on{color:#2f3aa0;font-weight:700'), /分段选中背景/],
-    ['表格字号 13', inject('font-size:12px;line-height:1.2;height:26px;white-space:nowrap', 'font-size:13px;line-height:1.2;height:26px;white-space:nowrap'), /表格字号/],
+    ['表格字号 13', inject('font-size:12px;line-height:1.2;height:26px;white-space:normal', 'font-size:13px;line-height:1.2;height:26px;white-space:nowrap'), /表格字号/],
     ['分隔条 0', inject('.tw-prism-sep{position:relative;width:6px', '.tw-prism-sep{position:relative;width:0px'), /分隔条宽度/],
     ['阴影 none', `${TW_CSS}\n.tw-prism-card{box-shadow:none}`, /卡片阴影/],
     ['深色阴影放大', `${TW_CSS}\n.tw-root[data-theme=dark]{--tw-elev-1:0 8px 24px rgba(0,0,0,.8)}`, /深色阴影/],

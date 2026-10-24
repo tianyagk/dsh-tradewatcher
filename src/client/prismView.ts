@@ -197,25 +197,6 @@ export function equityChartOf(points: ReadonlyArray<{ equity: number; capital?: 
   return { line: dots.map((d) => `${d.x.toFixed(1)},${d.y.toFixed(1)}`).join(' '), dots, min, max, last: values[values.length - 1] as number }
 }
 
-export const MISSING_VERSION_TEXT = '—（旧记录无版本绑定）'
-
-const versionValueOf = (raw: string | null | undefined): string => {
-  const v = typeof raw === 'string' ? raw.trim() : ''
-  if (v === '' || /^[—–-]+$/.test(v)) return MISSING_VERSION_TEXT
-  return /^\d+\.\d+\.\d+$/.test(v) ? `v${v}` : v
-}
-
-/** 版本信息行：字段名各写一次，缺值各写一次；有值时指纹只显示前 12 位 */
-export function versionSummaryOf(codeVersion: string | null | undefined, mandateHash: string | null | undefined): { summary: string; body: string } {
-  const version = versionValueOf(codeVersion)
-  const mandate = versionValueOf(mandateHash)
-  const shortMandate = mandate === MISSING_VERSION_TEXT ? mandate : `${mandate.slice(0, 12)}…`
-  return {
-    summary: `版本 ${version} · 指纹 ${shortMandate}`,
-    body: `版本 ${version} ｜ 指纹 ${mandate}`,
-  }
-}
-
 /** 汇总文本 → 最多 5 条要点（去掉编号；每行/编号项一条；空 ⇒ []） */
 export function summaryBullets(summary: string | null | undefined): string[] {
   if (summary === null || summary === undefined) return []
@@ -439,4 +420,38 @@ export function segmentPaintOf(selected: boolean): { background: string; color: 
 export function basisBlocksOf(parts: readonly string[]): string[] {
   if (parts.length !== 3) throw new Error(`仓位上限依据必须恰为 3 块（实得 ${parts.length}）`)
   return parts.map((p) => p.replace(/\s*\n\s*/g, ' ').trim())
+}
+
+/* ── 决策长文本：宽度/行数 clamp 的纯函数（页面 CSS 与测试共用） ── */
+export const DECISION_MAX_LINES = 3
+
+export interface DecisionReasonLayout {
+  width: number
+  lines: number
+  truncated: boolean
+  /** 完整文本用于 title；渲染只显示前 maxLines 行 */
+  title: string
+}
+
+/** 纯函数 clamp：宽度不超过左栏；行数不超过 3；不把长文本写成 nowrap */
+export function decisionReasonLayoutOf(
+  text: string,
+  leftWidth: number,
+  charWidth = 7,
+  maxLines = DECISION_MAX_LINES,
+): DecisionReasonLayout {
+  const safeWidth = Math.max(0, leftWidth)
+  const perLine = Math.max(1, Math.floor(Math.max(0, safeWidth - 24) / Math.max(1, charWidth)))
+  const rawLines = Math.max(1, Math.ceil([...text].length / perLine))
+  return {
+    width: Math.min(safeWidth, Math.max(1, [...text].length * charWidth)),
+    lines: Math.min(rawLines, maxLines),
+    truncated: rawLines > maxLines,
+    title: text,
+  }
+}
+
+/** 反例/几何判据：渲染宽度不得超过左栏 */
+export function decisionReasonFits(leftWidth: number, renderedWidth: number): boolean {
+  return renderedWidth <= leftWidth
 }
