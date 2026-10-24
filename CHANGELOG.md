@@ -11,6 +11,21 @@
 
 ---
 
+## v0.156.0 — 棱镜：决策理由与上限依据改为卡片内完整换行（去掉省略号）
+
+`npm run check` **1263 / 1263 × 2 时区**（1262 → 1263）+ selftest + build（73 片段全过）；只改 `src/client/**`。
+
+| # | 修前 | 修后 |
+| --- | --- | --- |
+| 1 | 「决策理由」用 `-webkit-line-clamp:3` + 省略号 + `title` 截断 | **移除截断**，完整多行显示，卡片高度随内容增长 |
+| 2 | 文本未换行、向右溢出到右栏 | `.tw-prism-left` / `.tw-prism-decisioncard` `min-width:0; overflow:hidden`；`.tw-prism-decision` `table-layout:fixed; width:100%`；单元格 `white-space:normal; overflow-wrap:anywhere; word-break:break-word`；两个字段**无 `nowrap`**（「本次夹紧」只保留等宽字体） |
+| 3 | 「仓位上限依据」三块中「本次夹紧」禁止换行 | 三块均可多行，块间 2px；缺数据仍写 `—（原因）` |
+
+### 验证
+
+`npm run check` **1263 / 1263 × 2 时区** + selftest + build（73 项）；正常 + UTC 两轮干净复跑。
+新增 5 条断言（`prismBatch3Ui.test.ts`）：① 长文本 ≥200 字 ⇒ `lines ≥ 2` 且 `truncated === false`（省略号或单行 ⇒ 败）｜② 渲染宽度 ≤ 内容宽度（越界 1px ⇒ 败）｜③ 左栏仍 62%（63% ⇒ 败）｜④ 卡片高度随内容增长（不变 ⇒ 败）｜⑤ 两字段 CSS 不含 `nowrap` / `line-clamp` / `ellipsis`，页面不含 `title={r.value}`（出现任一 ⇒ 败）。
+
 ## v0.155.0 — 棱镜：决策理由不越界、删除版本指纹行
 
 `npm run check` **1262 / 1262 × 2 时区**（1260 → 1262）+ selftest + build（73 片段全过）；只改 `src/client/**`。

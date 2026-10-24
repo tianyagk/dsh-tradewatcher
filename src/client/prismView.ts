@@ -423,35 +423,35 @@ export function basisBlocksOf(parts: readonly string[]): string[] {
 }
 
 /* ── 决策长文本：宽度/行数 clamp 的纯函数（页面 CSS 与测试共用） ── */
-export const DECISION_MAX_LINES = 3
-
+/** 决策理由/仓位依据：完整多行显示，不截断、不省略 */
 export interface DecisionReasonLayout {
   width: number
+  contentWidth: number
   lines: number
-  truncated: boolean
-  /** 完整文本用于 title；渲染只显示前 maxLines 行 */
-  title: string
+  height: number
+  truncated: false
 }
 
-/** 纯函数 clamp：宽度不超过左栏；行数不超过 3；不把长文本写成 nowrap */
+/** 纯函数：按卡片内容宽度换行；行数随长度增长，永不截断 */
 export function decisionReasonLayoutOf(
   text: string,
-  leftWidth: number,
+  cardContentWidth: number,
   charWidth = 7,
-  maxLines = DECISION_MAX_LINES,
+  lineHeight = 20,
 ): DecisionReasonLayout {
-  const safeWidth = Math.max(0, leftWidth)
-  const perLine = Math.max(1, Math.floor(Math.max(0, safeWidth - 24) / Math.max(1, charWidth)))
-  const rawLines = Math.max(1, Math.ceil([...text].length / perLine))
-  return {
-    width: Math.min(safeWidth, Math.max(1, [...text].length * charWidth)),
-    lines: Math.min(rawLines, maxLines),
-    truncated: rawLines > maxLines,
-    title: text,
-  }
+  const width = Math.max(1, cardContentWidth)
+  const perLine = Math.max(1, Math.floor(width / Math.max(1, charWidth)))
+  const lines = Math.max(1, Math.ceil([...text].length / perLine))
+  return { width, contentWidth: width, lines, height: lines * lineHeight, truncated: false }
 }
 
-/** 反例/几何判据：渲染宽度不得超过左栏 */
-export function decisionReasonFits(leftWidth: number, renderedWidth: number): boolean {
-  return renderedWidth <= leftWidth
+/** 渲染宽度不得超过卡片内容宽度 */
+export function decisionReasonFits(contentWidth: number, renderedWidth: number): boolean {
+  return renderedWidth <= contentWidth
+}
+
+/** 左栏仍为容器 62%，不因文本被撑开 */
+export function leftColumnPctOf(bodyWidth: number, leftWidth: number): number {
+  if (!(bodyWidth > 0)) return 0
+  return Math.round((leftWidth / bodyWidth) * 10000) / 100
 }

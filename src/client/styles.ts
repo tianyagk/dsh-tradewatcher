@@ -871,9 +871,9 @@ color-scheme:dark}
 .tw-prism-netseg .tw-prism-segbtn{min-width:0;height:22px;min-height:22px;padding:0 8px;font-size:12px;white-space:nowrap}
 .tw-prism-decisioncard{min-width:0;overflow:hidden}
 .tw-prism-basis{display:flex;flex-direction:column;gap:2px;color:var(--tw-muted);font-size:12px;line-height:1.5;font-weight:400;min-width:0;overflow:hidden}
-.tw-prism-decision-reason{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:3;overflow:hidden;white-space:normal;overflow-wrap:anywhere;word-break:break-word;text-overflow:ellipsis;max-width:100%;line-height:1.6}
-.tw-prism-basis-block{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:1;overflow:hidden;white-space:normal;overflow-wrap:anywhere;text-overflow:ellipsis;max-width:100%}
-.tw-prism-basis-clamp{font-variant-numeric:tabular-nums;white-space:nowrap;overflow-wrap:normal}
+.tw-prism-decision-reason{display:block;white-space:normal;overflow-wrap:anywhere;word-break:break-word;max-width:100%;line-height:1.6}
+.tw-prism-basis-block{display:block;white-space:normal;overflow-wrap:anywhere;word-break:break-word;max-width:100%}
+.tw-prism-basis-clamp{font-variant-numeric:tabular-nums}
 .tw-prism-error{color:var(--tw-up);font-size:12px;line-height:1.4}
 .tw-prism-muted{color:var(--tw-muted);font-size:12px;line-height:1.4}
 .tw-prism-field{display:flex;align-items:center;gap:8px;min-width:0}

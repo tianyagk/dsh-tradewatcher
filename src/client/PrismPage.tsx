@@ -412,7 +412,7 @@ export function PrismPage(props: { active: boolean }): React.ReactElement {
           <section className="tw-prism-card tw-prism-decisioncard">
             <div className="tw-prism-card-title">决策 <span className="tw-prism-muted">limits / orders / cancel</span></div>
             <table className="tw-prism-table tw-prism-decision"><tbody>
-              {dRows.map((r) => <tr key={r.key}><td>{r.key}</td><td className={`tw-prism-num tw-prism-mono${r.muted === true ? ' zero' : ''}`}>{r.key === '仓位上限依据' ? <div className="tw-prism-basis">{basisBlocks.map((b, i) => <div key={i} className={`tw-prism-basis-block${i === 2 ? ' tw-prism-basis-clamp tw-prism-mono' : ''}`} title={b}>{b}</div>)}</div> : r.key === '决策理由' ? <div className="tw-prism-decision-reason" title={r.value}>{r.value}</div> : r.value}</td></tr>)}
+              {dRows.map((r) => <tr key={r.key}><td>{r.key}</td><td className={`tw-prism-num tw-prism-mono${r.muted === true ? ' zero' : ''}`}>{r.key === '仓位上限依据' ? <div className="tw-prism-basis">{basisBlocks.map((b, i) => <div key={i} className={`tw-prism-basis-block${i === 2 ? ' tw-prism-basis-clamp tw-prism-mono' : ''}`}>{b}</div>)}</div> : r.key === '决策理由' ? <div className="tw-prism-decision-reason">{r.value}</div> : r.value}</td></tr>)}
             </tbody></table>
             {(latest?.decision?.parseError ?? null) === null ? null : <div className="tw-prism-error">决策 JSON 解析失败：{decisionErrorText(latest?.decision?.parseError)}</div>}
           </section>
