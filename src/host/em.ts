@@ -13,7 +13,7 @@ import type {
   TrendData,
   TrendPoint,
 } from '../shared/model.ts'
-import { MISSING_TIER_ADVICE, SECID_RE, normalizeTrendSeries, type AuctionInfo, type TrendSource } from '../shared/model.ts'
+import { MISSING_TIER_ADVICE, SECID_RE, TREND_LAG_WARN_MINUTES, normalizeTrendSeries, type AuctionInfo, type TrendSource } from '../shared/model.ts'
 import { BREADTH_HS_A_FS, BREADTH_PAGE_SIZE, type CountPage } from './breadthCount.ts'
 import { isMultiDayTrend, stitchTrendDays } from '../shared/trendStitch.ts'
 import { TREND_ARCHIVE_KEEP_DAYS, archiveTrendDays, loadTrendArchive, type TrendArchiveEntry } from './trendArchive.ts'
@@ -25,7 +25,7 @@ import { mkdir, readdir, readFile, rm, stat } from 'node:fs/promises'
 import { writeFileAtomic } from './atomic.ts'
 import { updateJsonLocked, withFileLock } from './lock.ts'
 import { breakerFor, hostsAllowed, minutesToRecover } from './breaker.ts'
-import { fetchSinaEtfRanking, fetchSinaQuotes, fetchSinaUsDaily, fetchSinaUsMin, sinaSymbol as sinaQuoteSymbol, type SinaBar } from './sina.ts'
+import { fetchSinaEtfRanking, fetchSinaGlobalMin, fetchSinaQuotes, fetchSinaUsDaily, fetchSinaUsMin, sinaSymbol as sinaQuoteSymbol, type SinaBar } from './sina.ts'
 import { fetchTencentAppstock, fetchTencentBoards, fetchTencentMinutes, fetchTencentQuoteRows, fetchTencentSuggest, minuteTrendPointsOf, tencentCode, tencentIndexCode, tencentQuoteCode, TENCENT_KLINE_HOSTS, TencentKlineUnavailableError, type TencentKlineTry, type TencentQuoteFull } from './tencent.ts'
 import { auctionUnavailable, fetchAuction } from './auction.ts'
 import { join } from 'node:path'
@@ -1511,8 +1511,17 @@ async function trendWithFallbackRaw(
     const annotate = (data: TrendData): TrendData => {
       const sessionDay = picked.sessionDay
       const asOf = picked.from === 'lkg' ? (typeof data.staleAt === 'number' ? data.staleAt : now) : now
-      const base: TrendData = { ...data, asOf }
+      const base: TrendData = { ...data, asOf, at: now }
       if (picked.from === 'lkg') base.stale = true
+      /**
+       * 滞后必须由**宿主**判定并随包下发：客户端时钟/时区与宿主不一致时不至于凭空造出一条
+       * 「数据滞后 N 小时」，也避免两处各写一个阈值（阈值只有 `TREND_LAG_WARN_MINUTES` 一处）。
+       */
+      const lag = trendLagOf(secid, base, picked.from, now)
+      if (lag !== null) {
+        base.lagMinutes = lag.lagMinutes
+        base.lagReason = lag.lagReason
+      }
       if (sessionDay === null || sessionDay === dayOf(now)) return base
       const sourceLabel = data.source ?? (picked.from === 'lkg' ? '本地兜底快照' : '上游')
       const short = picked.from === 'lkg'
@@ -1590,6 +1599,47 @@ export function trendSessionDay(trend: TrendData | null): string | null {
 }
 
 export type TrendOrigin = 'upstream' | 'backup' | 'lkg' | 'none'
+
+/**
+ * 该市场此刻是否**本应有报价**（决定要不要在口径行谈"滞后"）。
+ *
+ * 为什么必须分市场：收盘后「最后一点 = 收盘价」是对的，不是滞后 —— A股 15:00 之后、
+ * 美股 16:00 之后若也挂一条"数据滞后 4 小时"，就把正常收盘说成了故障（用户会天天看到）。
+ * 而无交易时段表的市场（国际指数/外盘商品/期货，如 `122.XAU`）接近 24 小时连续交易，
+ * 只要取数成功、最后一点却停在很久以前，那就**必须**说出来。
+ */
+function lagWarnApplies(secid: string, now: number): boolean {
+  const dot = secid.indexOf('.')
+  const mkt = dot > 0 ? secid.slice(0, dot) : ''
+  if (mkt === '0' || mkt === '1' || mkt === '116') return inSession(now)
+  if (mkt === '105' || mkt === '106' || mkt === '107') return inUsSession(now)
+  return true
+}
+
+/**
+ * 分时滞后读数（AUDIT-INTL-MINUTE）：最后一点距**本次取数**多少分钟。
+ *
+ * 只在"超过阈值 + 该市场此刻本应有报价"时返回；否则 `null`（= 不谈滞后，**不等于**"数据一定新"）。
+ * `reason` 要能分开两件事：上游不可用走 LKG（会自愈），还是取数成功但源端没有更新的点。
+ */
+function trendLagOf(
+  secid: string,
+  data: TrendData,
+  from: TrendOrigin,
+  now: number,
+): { lagMinutes: number; lagReason: string } | null {
+  const last = data.points[data.points.length - 1]
+  if (last === undefined || !Number.isFinite(last.t)) return null
+  const lagMinutes = Math.round((now - last.t) / 60_000)
+  if (!(lagMinutes > TREND_LAG_WARN_MINUTES)) return null
+  if (!lagWarnApplies(secid, now)) return null
+  return {
+    lagMinutes,
+    lagReason: from === 'lkg'
+      ? '上游本次不可用，显示本地兜底快照'
+      : '上游此刻没有更新的分钟线（本次取数成功）',
+  }
+}
 
 export function pickTrendFallback(args: {
   upstream: TrendData | null
@@ -1781,7 +1831,7 @@ async function sinaMinuteTrend(secid: string): Promise<TrendData | null> {
 
 /** 备用分钟源（`source` 取值见 `TrendSource`） */
 export interface MinuteSource {
-  key: 'sina-minute' | 'tencent-minute' | 'injected'
+  key: 'sina-global-min' | 'sina-minute' | 'tencent-minute' | 'injected'
   /** 原因文案里的名字（"为什么没取到"要能指名道姓） */
   label: string
   fetch: (secid: string) => Promise<TrendData | null>
@@ -1799,6 +1849,69 @@ export function minuteFallbackSources(): readonly MinuteSource[] {
     { key: 'sina-minute', label: '新浪分钟', fetch: sinaMinuteTrend },
     { key: 'tencent-minute', label: '腾讯分钟', fetch: tencentTrend },
   ]
+}
+
+/**
+ * `122.*`（伦敦金现等外盘现货）的**专用**备用源表。
+ *
+ * 为什么不并进 `minuteFallbackSources()`：那张表的不变式是"当日链与五日链同源同序"（新浪 → 腾讯），
+ * 一旦塞进第三源，CN 市场的顺序契约就被稀释了。国际现货本来就不在那两条链的覆盖范围里
+ * （腾讯对 `hf_*` 回 `code param error`，新浪 CN 分钟只认 `sh/sz`），单列一张表更诚实。
+ */
+function globalMinuteSources(): readonly MinuteSource[] {
+  return [{ key: 'sina-global-min', label: '新浪全球期货分钟', fetch: sinaGlobalMinuteTrend }]
+}
+
+/** `122.XAU`（伦敦金现）⇒ 新浪全球期货代码 `XAU`；非 122 或代码形状不认识 ⇒ null（不发请求） */
+function sinaGlobalSymbol(secid: string): string | null {
+  const dot = secid.indexOf('.')
+  if (dot <= 0) return null
+  if (secid.slice(0, dot) !== '122') return null
+  const code = secid.slice(dot + 1).trim().toUpperCase()
+  return /^[A-Z]{2,8}$/.test(code) ? code : null
+}
+
+/**
+ * 新浪「全球期货分时」→ 当日分时（`122.*` 的唯一实测可用分钟源，AUDIT-INTL-MINUTE）。
+ *
+ * 口径（写进 `caliber`，界面照显示）：
+ *   · 一个交易时段跨北京日期（06:00 → 次日 04:5x）⇒ 序列**不按日期裁剪**（裁了会把夜盘抹掉）；
+ *   · 成交量/成交额上游不给 ⇒ `vol/amount = null`（**不是 0**）；
+ *   · `avg` 用上游直给的均价，缺失即 null（不拿价格凑）；
+ *   · `prePrice` 用上游表头给的昨收（实测 4024.26，与 `hf_XAU` 报价的昨收一致）。
+ */
+async function sinaGlobalMinuteTrend(secid: string): Promise<TrendData | null> {
+  const symbol = sinaGlobalSymbol(secid)
+  if (symbol === null) return null
+  const series = await ttlCache(`sina-global-min:${symbol}`, 60_000, () => fetchSinaGlobalMin(symbol))
+  if (series.bars.length < 2) return null
+  const points: TrendPoint[] = series.bars.map((b) => ({
+    t: b.t,
+    label: b.label,
+    price: b.price,
+    avg: b.avg,
+    vol: null,
+    amount: null,
+  }))
+  const clean = normalizeTrendSeries(points)
+  if (clean.length < 2) return null
+  const tail = clean[clean.length - 1]
+  return {
+    secid,
+    prePrice: series.prePrice,
+    points: clean,
+    last: tail?.price ?? null,
+    sessionDay: tail === undefined ? undefined : dayOf(tail.t),
+    timeZone: 'Asia/Shanghai',
+    source: 'sina-global-min',
+    caliber: [
+      '来源：新浪全球期货分时（GlobalFuturesService）',
+      '时区：北京',
+      '复权：不适用（分时序列）',
+      '成交量/成交额：上游不提供（null，不是 0）',
+      ...(series.prePrice === null ? ['昨收：上游未给（—）'] : ['昨收＝上游表头给的昨收']),
+    ].join(' · '),
+  }
 }
 
 /** 五日链的分钟源（与当日链同源、同序，粒度改 5 分钟）——判据在 `fetchMultiDayTrend` 里按它逐个试 */
@@ -2037,7 +2150,13 @@ export async function fetchTrend(secid: string, ndays = 1, opts: TrendOptions = 
     const stitched = await stitchFromArchive(secid, days, opts)
     if (stitched !== null) return stitched
   }
-  return fetchTrendSingleDay(secid, opts)
+  /**
+   * 单日链：`122.*`（外盘现货）走专用分钟源表 —— 它的唯一实测可用分钟源是新浪全球期货分时；
+   * 其余市场沿用 CN 那张（新浪 → 腾讯）。注入的 `minuteSources` 永远优先（测试/诊断）。
+   */
+  const minuteSources = opts.minuteSources
+    ?? (sinaGlobalSymbol(secid) !== null ? globalMinuteSources() : undefined)
+  return fetchTrendSingleDay(secid, minuteSources === undefined ? opts : { ...opts, minuteSources })
 }
 
 /**
@@ -3146,6 +3265,8 @@ export interface UpstreamReason {
 export function trendMissingReason(secid: string, opts: { emDown?: boolean } = {}): UpstreamReason {
   const us = isUsSecid(secid)
   const tencentMinute = tencentCode(secid) !== null
+  /** `122.*`（伦敦金现等）：唯一实测可用的分钟源是新浪全球期货分时（AUDIT-INTL-MINUTE） */
+  const globalMin = sinaGlobalSymbol(secid) !== null
   // 判定顺序：注入值（测试）→ 本链路刚失败过 → 本链路主机熔断中 → 东财整体不可用
   const down = opts.emDown ?? (upstreamFailedRecently('trend') || hostsUnavailable(HISTORY_HOSTS) || emUnavailableNow())
   if (down) {
@@ -3154,6 +3275,8 @@ export function trendMissingReason(secid: string, opts: { emDown?: boolean } = {
       why: 'transient',
       note: us
         ? `东财行情主机当前不可达（熔断/限流），新浪美股分钟（美股唯一的分钟源）这次也没取到，本地又没有可用快照 —— ${MISSING_TIER_ADVICE.transient}（不是"该标的没有分时"）`
+        : globalMin
+        ? `东财行情主机当前不可达（熔断/限流），新浪全球期货分钟（该品种唯一的分钟源）这次也没取到，本地又没有可用快照 —— ${MISSING_TIER_ADVICE.transient}（不是"该标的没有分时"）`
         : tencentMinute
           ? `东财行情主机当前不可达（熔断/限流），腾讯分钟线这次也未取到，本地又没有可用快照 —— ${MISSING_TIER_ADVICE.transient}`
           : `东财行情主机当前不可达（熔断/限流），而该标的没有腾讯分钟线兜底（腾讯只覆盖沪/深/港股），本地也没有可用快照 —— ${MISSING_TIER_ADVICE.transient}（不是"该标的没有分时"）`,
@@ -3164,7 +3287,9 @@ export function trendMissingReason(secid: string, opts: { emDown?: boolean } = {
     why: 'no-source',
     note: us
       ? `新浪美股分钟可达但没有返回该标的的序列（上游单次最多 1023 根，未知代码直接不给行）—— ${MISSING_TIER_ADVICE['no-source']}`
-      : `东财当前可达但没有返回该标的的分时数据，且本插件没有别的分钟源可兜底（腾讯只覆盖沪/深/港股）—— ${MISSING_TIER_ADVICE['no-source']}`,
+      : globalMin
+        ? `东财没有返回该标的的分时数据，新浪全球期货分钟这次也没有给它序列（该站在休市时段可能整天没有新点）—— ${MISSING_TIER_ADVICE['no-source']}`
+        : `东财当前可达但没有返回该标的的分时数据，且本插件没有别的分钟源可兜底（腾讯只覆盖沪/深/港股）—— ${MISSING_TIER_ADVICE['no-source']}`,
   }
 }
 

@@ -33,7 +33,7 @@ import {
   type ChartTab,
 } from './chartCache.ts'
 
-import { nonSessionOf, visibleProvenanceOf } from './chartNote.ts'
+import { nonSessionOf, trendLagNote, visibleProvenanceOf } from './chartNote.ts'
 import { sessionOf } from './sessionAxis.ts'
 import { isUsableBaseline } from './trendView.ts'
 import { trendCaliberOf } from '../shared/trendCaliber.ts'
@@ -88,6 +88,13 @@ export function QuoteDrawer(props: {
   splitRatio?: number
   /** 比例变更回调（宿主写 prefs；不给则只在本次会话内生效） */
   onSplitRatio?: (ratio: number) => void
+  /**
+   * **实时价**这一行的来源（`em`/`sina`/`tencent`/`lkg`）。
+   *
+   * 为什么要它：分时序列与实时价可能来自不同源（`122.XAU`：报价新浪 `hf_XAU`、分钟新浪全球期货分时），
+   * 只标一处会让"报价是新的"被读成"分时也是新的"。缺省不影响既有行为。
+   */
+  quoteSource?: string | null
 }): React.ReactElement {
   const { secid, name, redUp, onClose } = props
   // 记住上次看的周期：关掉再打开、换一只标的时不必重新点一次
@@ -592,7 +599,8 @@ export function QuoteDrawer(props: {
         // 归档失败属运维细节：正文不再占位，原因并入口径条的完整解释（见 caliberExplain）
         // 该标的不适用分时段网格（美股/国际指数/外盘商品/期货）⇒ 一句话如实说明
         const gridNote = sessionOf(secid) === null ? ' · 无固定交易时段' : ''
-        return base + fiveMarker + gridNote
+        // 滞后（宿主判定）：最后一点早于「现在 − N 分钟」必须自曝，不得静默当当日分时
+        return base + trendLagNote(t, props.quoteSource) + fiveMarker + gridNote
       }
       return ''
     }

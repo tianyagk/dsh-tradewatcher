@@ -22,7 +22,7 @@
  */
 
 import { withHostBreaker } from './breakerFetch.ts'
-import { usWallToEpoch } from './time.ts'
+import { parseMarketStamp, usWallToEpoch } from './time.ts'
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
 
 export interface SinaEtfRow {
@@ -719,4 +719,94 @@ export async function fetchSinaEtfRanking(sort: 'pct' | 'amount' = 'amount', lim
     text = new TextDecoder('latin1').decode(buf)
   }
   return parseSinaEtfRanking(text, limit)
+}
+
+// ───────────────────── 全球期货/现货分钟线（伦敦金现等 `122.*`） ─────────────────────
+
+export interface SinaGlobalMinBar {
+  /** epoch ms（上游给的**北京墙上时刻**，显式 +08:00 解析） */
+  t: number
+  /** `YYYY-MM-DD HH:mm`（上游原文，不换算） */
+  label: string
+  price: number
+  /** 均价（上游直给；缺失 ⇒ null，不拿价格凑） */
+  avg: number | null
+}
+
+export interface SinaGlobalMinSeries {
+  bars: SinaGlobalMinBar[]
+  /** 昨收（上游表头给的；缺失 ⇒ null） */
+  prePrice: number | null
+  /** 交易所代码（实测 `LIFFE`；缺失 ⇒ null） */
+  exchange: string | null
+  /** 序列所属交易日 `YYYY-MM-DD`（上游表头第一格） */
+  sessionDate: string | null
+}
+
+/**
+ * 新浪「全球期货分时」回包解析（`GlobalFuturesService.getGlobalFuturesMinLine`）。
+ *
+ * 实测形状（2026-10-24 本机抓，`symbol=XAU`）：
+ * ```
+ * /*<script>location.href='//sina.com';</script>*\/var t=({"minLine_1d":[
+ *   ["2026-10-23","4024.260","LIFFE","","06:00","4024.210","0","0","4024.620","2026-10-23 06:00:00"],
+ *   ["06:01","4025.590","0","0","4025.087","2026-10-23 06:01:00"],
+ *   ……
+ *   ["04:53","3996.800","0","0","3996.800","2026-10-24 04:53:00"]]})
+ * ```
+ *  - 第 0 行是**表头**：交易日 / 昨收 / 交易所 / 空 / 首点 HH:mm / 首点价 / 0 / 0 / 首点均价 / 首点完整时刻；
+ *  - 其后每行：`HH:mm, 价, 0, 0, 均价, 完整时刻`；
+ *  - **下单量/成交额恒为 0**（上游不提供）⇒ 解析成 `null`，绝不写 0；
+ *  - 完整时刻是**北京时间**（10-23 06:00 → 10-24 04:53 正是现货金一个交易时段）。
+ */
+export function parseSinaGlobalMin(text: string): SinaGlobalMinSeries {
+  const empty: SinaGlobalMinSeries = { bars: [], prePrice: null, exchange: null, sessionDate: null }
+  const m = /var\s+t=\(([\s\S]*)\);?\s*$/.exec(text.trim())
+  if (m === null) return empty
+  let js: unknown
+  try {
+    js = JSON.parse(m[1] as string) as unknown
+  } catch {
+    return empty
+  }
+  const rows = (js as { minLine_1d?: unknown }).minLine_1d
+  if (!Array.isArray(rows) || rows.length === 0) return empty
+  const head = Array.isArray(rows[0]) ? (rows[0] as unknown[]) : []
+  const sessionDate = typeof head[0] === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(head[0]) ? head[0] : null
+  const rawPrev = num(head[1])
+  const exchange = typeof head[2] === 'string' && head[2] !== '' ? head[2] : null
+  const bars: SinaGlobalMinBar[] = []
+  for (const row of rows.slice(1)) {
+    if (!Array.isArray(row)) continue
+    const price = num(row[1])
+    if (price === null || !(price > 0)) continue
+    const full = typeof row[5] === 'string' ? row[5] : null
+    const t = full === null ? Number.NaN : parseMarketStamp(full)
+    if (!Number.isFinite(t)) continue
+    const avg = num(row[4])
+    bars.push({ t, label: full.slice(0, 16), price, avg: avg !== null && avg > 0 ? avg : null })
+  }
+  return {
+    bars,
+    prePrice: rawPrev !== null && rawPrev > 0 ? rawPrev : null,
+    exchange,
+    sessionDate,
+  }
+}
+
+/** 新浪「全球期货分时」的原文地址（`symbol` 用商品代码，如 `XAU`） */
+export function sinaGlobalMinUrl(symbol: string): string {
+  return `https://stock2.finance.sina.com.cn/futures/api/jsonp.php/var%20t=/GlobalFuturesService.getGlobalFuturesMinLine?symbol=${encodeURIComponent(symbol.trim().toUpperCase())}`
+}
+
+/**
+ * 拉「全球期货/现货当日分钟线」。
+ *
+ * 为什么要有它（AUDIT-INTL-MINUTE）：伦敦金现（`122.XAU`）的当日分时原来只有东财 `trends2` 一条链，
+ * 东财对该标的**不回数据/不可达**时整条链落到 `trends-lkg` 的旧快照（实测停在 10-21 14:08），
+ * 而实时价却来自新浪 `hf_XAU`（当刻）—— 同一张图上两个时间，用户读成"今天的分时"。
+ * 本接口实测能给到当天最近一分钟（2026-10-24 04:53），且带均价与完整时刻。
+ */
+export async function fetchSinaGlobalMin(symbol: string): Promise<SinaGlobalMinSeries> {
+  return parseSinaGlobalMin(await sinaText(sinaGlobalMinUrl(symbol), { gbk: false, timeoutMs: 15000 }))
 }

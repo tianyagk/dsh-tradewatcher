@@ -257,7 +257,28 @@ export type TrendSource =
   | 'tencent-minute'
   | 'sina-5min'
   | 'tencent-5min'
+  | 'sina-global-min'
   | 'local-stitch'
+
+/**
+ * 分时**滞后**的判定阈值（分钟）：最后一点早于「现在 − N 分钟」⇒ 图表口径行必须写
+ * `数据滞后 X 小时（源/原因）`，不得把旧序列静默当当日分时。
+ *
+ * 为什么是常量而不是 settings：这是一条**呈现口径**（什么时候必须自曝），不是策略参数；
+ * 需要改时改这一处，宿主与客户端同读，避免两处各写一个数字后漂移。
+ */
+export const TREND_LAG_WARN_MINUTES = 15
+
+/** 分时源的中文名（口径行/滞后说明共用；缺省走 `—` 而不是英文 key） */
+export const TREND_SOURCE_LABEL: Record<TrendSource, string> = {
+  'eastmoney-trends2': '东财分时',
+  'sina-minute': '新浪分钟',
+  'tencent-minute': '腾讯分钟',
+  'sina-5min': '新浪 5 分钟',
+  'tencent-5min': '腾讯 5 分钟',
+  'sina-global-min': '新浪全球期货分钟',
+  'local-stitch': '本地归档拼接',
+}
 
 /**
  * **非当日数据**的交代（AUDIT-IMPL84）：最后一个点属于 `day`，不是今天。
@@ -305,6 +326,20 @@ export interface TrendData {
    * ⚠ 它不是"响应生成时刻"，也不是"最后一个点的时刻" —— 三者必须能分开读。
    */
   asOf?: number
+  /**
+   * **本次取数时刻**（服务端时钟，epoch ms）——与 `asOf`（数据自身的观测时刻）、
+   * 最后一点的 `t`（行情时刻）三者必须能分开读。滞后的分母用的就是它。
+   */
+  at?: number
+  /**
+   * 最后一点距**本次取数**的分钟数（只在超过 `TREND_LAG_WARN_MINUTES` 且该市场此刻应有报价时给）。
+   *
+   * 给了它 ⇒ 界面必须写「数据滞后 X 小时（源/原因）」。**没给**不等于"一定是新的"，
+   * 也可能是不该在这里谈滞后（收盘后、周末休市）—— 判据在宿主，客户端不自己算。
+   */
+  lagMinutes?: number
+  /** 滞后的一行短因（与 `lagMinutes` 同时出现）：区分"上游没有新点"与"本次取数失败" */
+  lagReason?: string
   /**
    * 这份数据不是"刚刚从上游拿到的"（LKG 兜底）。
    * 与 `staleAt` 同时出现；界面沿用"上次成功数据（MM-DD HH:mm）"那一句。

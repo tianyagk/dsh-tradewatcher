@@ -17,7 +17,12 @@ test('分时缺失原因：东财不可达 + 无腾讯兜底 ⇒ transient（等
   assert.equal(xau.what, '分时')
   assert.equal(xau.why, 'transient', '东财被限流时不能说"该标的没有分时"——那会让用户白白放弃等待')
   assert.ok(xau.note.includes('东财'), `说明里必须写清等待对象（实际：${xau.note}）`)
-  assert.ok(xau.note.includes('腾讯'), '要说明为什么没有兜底源')
+  /**
+   * v0.150.0（AUDIT-INTL-MINUTE）起 `122.*` **有**专用分钟源（新浪全球期货分时），
+   * 所以这句从"腾讯没有该品种"改成"点名那条源这次也没取到" —— 旧措辞已经与事实不符。
+   */
+  assert.ok(xau.note.includes('新浪全球期货分钟'), `122.* 必须点名它真正的那条分钟源（实际：${xau.note}）`)
+  assert.ok(!xau.note.includes('腾讯只覆盖沪/深/港股'), '122.* 已有专用源，不得再写"没有兜底源"')
   assert.ok(!xau.note.includes('重试无用'), 'transient 不得说"重试无用"（那是反向指引）')
 })
 

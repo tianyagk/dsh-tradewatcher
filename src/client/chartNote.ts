@@ -1,5 +1,6 @@
 import { shStampText } from './marketTime.ts'
 import { TREND_LKG_RETENTION_NOTE } from '../shared/trendRetention.ts'
+import { TREND_SOURCE_LABEL, type TrendSource } from '../shared/model.ts'
 /**
  * 为什么日期不能省：K 线兜底那条以前只有 `· 显示上次成功数据（本次刷新失败）`，没有日期 ——
  */
@@ -174,4 +175,38 @@ export function cacheNoteOf(payload: NotePayloadLike | null): string {
   if (settled(payload)) return ' · 休市定稿缓存（未回源）'
   if (payload.fromCache === true) return ' · 本地缓存'
   return ''
+}
+
+/**
+ * 分时**滞后**的口径段（AUDIT-INTL-MINUTE）：`· 数据滞后 14.5 小时（分钟源：新浪全球期货分钟 · 报价源：新浪 · 原因：…）`。
+ *
+ * 为什么由宿主给 `lagMinutes` 而不是客户端自己算：浏览器时钟/时区与宿主不一致时，客户端自算会
+ * 凭空造出（或掩盖）一条"数据滞后"；而"该不该在这里谈滞后"（收盘后/休市）只有宿主知道。
+ * 因此这里**只渲染**，判据一律在宿主（`TREND_LAG_WARN_MINUTES` 同一处常量）。
+ *
+ * 报价源与分钟源**同时标出**：`122.XAU` 的实时价来自新浪 `hf_XAU`、分钟来自新浪全球期货分时，
+ * 两者虽同为新浪，但一个是快照一个是序列 —— 分开写清才不会把"报价新"读成"分时新"。
+ */
+const QUOTE_SOURCE_LABEL: Record<string, string> = {
+  em: '东财',
+  sina: '新浪',
+  tencent: '腾讯',
+  lkg: '本地兜底快照',
+}
+
+export function trendLagNote(
+  trend: { lagMinutes?: number; lagReason?: string; source?: TrendSource } | undefined | null,
+  quoteSource?: string | null,
+): string {
+  const minutes = trend?.lagMinutes
+  if (typeof minutes !== 'number' || !(minutes > 0)) return ''
+  const span = minutes < 60
+    ? `${Math.round(minutes)} 分钟`
+    : `${(minutes / 60).toFixed(1).replace(/\.0$/, '')} 小时`
+  const src = trend?.source === undefined ? '—' : TREND_SOURCE_LABEL[trend.source]
+  const quote = typeof quoteSource === 'string' && quoteSource !== ''
+    ? ` · 报价源：${QUOTE_SOURCE_LABEL[quoteSource] ?? quoteSource}`
+    : ''
+  const why = typeof trend?.lagReason === 'string' && trend.lagReason !== '' ? ` · 原因：${trend.lagReason}` : ''
+  return ` · 数据滞后 ${span}（分钟源：${src}${quote}${why}）`
 }

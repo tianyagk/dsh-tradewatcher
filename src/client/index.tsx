@@ -577,6 +577,8 @@ function Dashboard(): React.ReactElement {
           secid: detail.secid,
           name: detail.name,
           redUp: (prefs ?? DEFAULT_PREFS).redUp,
+          // 实时价那一行的来源（口径行要把"报价源"与"分钟源"分开写，见 chartNote.trendLagNote）
+          quoteSource: engine.quotes[detail.secid]?.source ?? null,
           // 上下分区比例：读写都走 prefs（老 profile 缺键 ⇒ 抽屉内用默认值）
           splitRatio: (prefs ?? DEFAULT_PREFS).splitRatio,
           onSplitRatio: (ratio: number) => setPrefs({ splitRatio: ratio }),
