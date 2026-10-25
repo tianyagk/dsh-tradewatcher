@@ -190,6 +190,8 @@ export function cacheNoteOf(payload: NotePayloadLike | null): string {
 const QUOTE_SOURCE_LABEL: Record<string, string> = {
   em: '东财',
   sina: '新浪',
+  'sina-futures': '新浪期货',
+  'sina-index': '新浪指数',
   tencent: '腾讯',
   lkg: '本地兜底快照',
 }

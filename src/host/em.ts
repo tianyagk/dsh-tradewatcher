@@ -25,7 +25,7 @@ import { mkdir, readdir, readFile, rm, stat } from 'node:fs/promises'
 import { writeFileAtomic } from './atomic.ts'
 import { updateJsonLocked, withFileLock } from './lock.ts'
 import { breakerFor, hostsAllowed, minutesToRecover } from './breaker.ts'
-import { fetchSinaEtfRanking, fetchSinaGlobalMin, fetchSinaQuotes, fetchSinaUsDaily, fetchSinaUsMin, sinaSymbol as sinaQuoteSymbol, type SinaBar } from './sina.ts'
+import { fetchSinaEtfRanking, fetchSinaGlobalMin, fetchSinaQuotes, fetchSinaUsDaily, fetchSinaUsMin, sinaFamilyOf, sinaSymbol as sinaQuoteSymbol, type SinaBar } from './sina.ts'
 import { fetchTencentAppstock, fetchTencentBoards, fetchTencentMinutes, fetchTencentQuoteRows, fetchTencentSuggest, minuteTrendPointsOf, tencentCode, tencentIndexCode, tencentQuoteCode, TENCENT_KLINE_HOSTS, TencentKlineUnavailableError, type TencentKlineTry, type TencentQuoteFull } from './tencent.ts'
 import { auctionUnavailable, fetchAuction } from './auction.ts'
 import { join } from 'node:path'
@@ -455,12 +455,17 @@ export function quoteProvenance(detail: QuoteProvenance, opts: { emDown?: boolea
           note: `该品种只有东财一个行情源（腾讯/新浪无映射），而东财本次可达却没有返回它 —— ${MISSING_TIER_ADVICE['no-source']}`,
         }
       }
+      /**
+       * 「已试：东财、新浪」是**可核对**的：名单直接来自能力表（`quoteSourcesOf`），
+       * 不是手写的。新增一个源却忘了改这句话，就会在这里对不上 —— 这比文案写死"腾讯/新浪"更可靠。
+       */
+      const tried = ['em', 'tencent', 'sina'].filter((id) => quoteSourcesOf(secid).includes(id as QuoteSourceId))
+      const labelOf = (id: string): string => (id === 'em' ? '东财' : id === 'tencent' ? '腾讯' : id === 'sina' ? '新浪' : id)
       return {
         what: secid,
         why: 'transient' as const,
-        // 前缀「东财与备用源」是既有文案契约（usQuote.test.ts ⑧ 断言它）；后半句补上来源顺序，
-        // 让读者知道"两边"具体是谁（腾讯/新浪优先、东财兜底）。
-        note: `东财与备用源本次都未给出可用价格（腾讯/新浪优先、东财兜底都已试过；限流、超时或该品种本轮上游无数据）—— ${MISSING_TIER_ADVICE.transient}`,
+        // 前缀「东财与备用源」是既有文案契约（usQuote.test.ts ⑧ 断言它）；后半句补上"已试"名单。
+        note: `东财与备用源本次都未给出可用价格（已试：${tried.map(labelOf).join('、')}；限流、超时或该品种本轮上游无数据）—— ${MISSING_TIER_ADVICE.transient}`,
       }
     }),
     // 这一批是否"休市定稿零回源"：定稿时 asOf 会停在收盘时刻，且没有任何兜底行
@@ -797,6 +802,16 @@ async function fillFromFallbacks(list: readonly string[], rows: Map<string, Quot
     for (const [secid, q] of Object.entries(sx)) {
       const cur = rows.get(secid)
       if (cur !== undefined && cur.price !== null) continue
+      /**
+       * 出处按**新浪的族**标：`nf_`/`hf_` = 期货（国内主连与外盘商品）⇒ `sina-futures`；
+       * `sh/sz` 指数 ⇒ `sina-index`；美股 `gb_*` 仍是泛指 `sina`。
+       * 为什么必须分：用户要能一眼分清"这个数是国内期货的连续合约"还是"指数现货"，
+       * 三类的新浪代码族、字段布局、交易时段都不同（见 `sina.ts:parseSinaHq`）。
+       */
+      const family = sinaFamilyOf(secid)
+      const source: QuoteSource = family === 'nf' || family === 'hf'
+        ? 'sina-futures'
+        : family === 'index' ? 'sina-index' : 'sina'
       rows.set(secid, {
         secid,
         code: secid.split('.')[1] ?? secid,
@@ -818,7 +833,7 @@ async function fillFromFallbacks(list: readonly string[], rows: Map<string, Quot
         time: q.time ?? null,
         totalMv: q.totalMv ?? null,
         floatMv: null,
-        source: 'sina',
+        source,
         at: Date.now(),
       })
     }

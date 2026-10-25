@@ -100,7 +100,18 @@ function sinaUsSymbolOf(secid: string): string | null {
 }
 
 function sinaSymbolOf(secid: string): string | null {
-  return SINA_BY_UPPER[secid.trim().toUpperCase()] ?? sinaUsSymbolOf(secid)
+  return SINA_BY_UPPER[secid.trim().toUpperCase()] ?? SINA_INDEX_BY_UPPER[secid.trim().toUpperCase()] ?? sinaUsSymbolOf(secid)
+}
+
+/** 该标的走的是新浪哪一族（决定 `source` 标 `sina-futures` 还是 `sina-index`） */
+export function sinaFamilyOf(secid: string): 'nf' | 'hf' | 'index' | 'gb' | null {
+  const symbol = sinaSymbolOf(secid)
+  if (symbol === null) return null
+  if (symbol.startsWith('nf_')) return 'nf'
+  if (symbol.startsWith('hf_')) return 'hf'
+  if (symbol.startsWith('gb_')) return 'gb'
+  if (symbol.startsWith('sh') || symbol.startsWith('sz')) return 'index'
+  return null
 }
 
 const SINA_SYMBOL: Record<string, string> = {
@@ -109,14 +120,40 @@ const SINA_SYMBOL: Record<string, string> = {
   '114.jmm': 'nf_JM0',
   '114.mm': 'nf_M0',
   '114.lhm': 'nf_LH0',
+  // AUDIT-SINA-FUTURES（2026-10-25 实测，见 docs/PROBE-SINA-FUTURES.md）：国内期货主连
+  '112.AU0': 'nf_AU0',
+  '112.AG0': 'nf_AG0',
+  '112.CU0': 'nf_CU0',
+  '112.LC0': 'nf_LC0',
   '122.XAU': 'hf_XAU',
+  '122.XAG': 'hf_XAG',
   '101.HG00Y': 'hf_HG',
   '101.SI00Y': 'hf_SI',
+  '101.GC00Y': 'hf_GC',
+  '101.CL00Y': 'hf_CL',
+  '101.NG00Y': 'hf_NG',
   '112.B00Y': 'hf_OIL',
+}
+
+/**
+ * 上证/深证系列指数 → 新浪指数代码（**逐条登记**，不做 `1.*`/`0.*` 的通配规则）。
+ *
+ * 为什么不通配：`sh600519` 这类A股新浪也能给，但一旦通配，**每只A股**都会多一条兜底请求，
+ * 改变既有链路的成本与顺序（那不是本任务的范围）。这里只登记用户点名的 6 条指数。
+ */
+const SINA_INDEX_SYMBOL: Record<string, string> = {
+  '1.000001': 'sh000001',
+  '0.399001': 'sz399001',
+  '0.399006': 'sz399006',
+  '1.000300': 'sh000300',
+  '1.000905': 'sh000905',
+  '1.000852': 'sh000852',
 }
 
 // 建索引：查表一律走大写键（见 SINA_BY_UPPER 的说明）
 for (const [secid, symbol] of Object.entries(SINA_SYMBOL)) SINA_BY_UPPER[secid.toUpperCase()] = symbol
+const SINA_INDEX_BY_UPPER: Record<string, string> = {}
+for (const [secid, symbol] of Object.entries(SINA_INDEX_SYMBOL)) SINA_INDEX_BY_UPPER[secid.toUpperCase()] = symbol
 
 export function sinaSymbol(secid: string): string | null {
   return sinaSymbolOf(secid)
@@ -144,7 +181,12 @@ export interface SinaHqQuote {
   totalMv?: number | null
   /** 股本/份额（股）—— 只有 `gb_*` 有该字段（下标 19） */
   shares?: number | null
-  /** 上游自报的**成交**时刻（epoch ms）—— 只有 `gb_*` 有（美东，见 `parseSinaUsTradeStamp`） */
+  /**
+   * 上游自报的**成交**时刻（epoch ms）。
+   *   · `gb_*`：美东墙上时间（见 `parseSinaUsTradeStamp`）；
+   *   · `nf_*`/`hf_*`/`sh|sz`：**北京**墙上时间（由上游的"日期 + 时刻"两格拼出，见 `parseSinaHq`）。
+   * 解析不出 ⇒ null（**不用"现在"顶替**：那会把"上游没给时刻"伪装成"刚刚成交"）。
+   */
   time?: number | null
 }
 
@@ -168,17 +210,86 @@ export function parseSinaHq(payload: string): Record<string, SinaHqQuote> {
     if (parts.length < 2) continue
     let q: SinaHqQuote | null = null
     if (symbol.startsWith('nf_')) {
+      /**
+       * `nf_*` 字段（2026-10-25 实测 `nf_AU0`）：
+       * `名称, 时间, 开, 高, 低, 昨收, 买, 卖, **最新**, 结算, **昨结算**, 买量, 卖量, 持仓, 成交量, 交易所, 品种, 日期, …`
+       * ⚠ 昨收（下标 5）在夜盘/新合约上常给 `0.000`（实测 AU0/AG0/CU0/JM0 全是 0）——
+       * 此时用**昨结算**（下标 10）当基准：这是国内期货的行情惯例，不是拿别的数凑；
+       * 两个都为 0/缺失 ⇒ `prev=null`、`pct=null`（绝不写 0%）。
+       */
       const price = num(parts[8])
-      const prev = num(parts[5])
+      const rawPrev = num(parts[5])
+      const settle = num(parts[10])
+      const prev = rawPrev !== null && rawPrev > 0 ? rawPrev : (settle !== null && settle > 0 ? settle : null)
       if (price === null) continue
-      const pct = prev !== null && prev > 0 ? ((price - prev) / prev) * 100 : null
-      q = { name: parts[0] ?? symbol, price, prev, open: num(parts[2]), high: num(parts[3]), low: num(parts[4]), pct: sanePct(pct) }
+      const pct = prev !== null ? ((price - prev) / prev) * 100 : null
+      const nfDay = typeof parts[17] === 'string' ? parts[17].trim() : ''
+      const nfTime = typeof parts[1] === 'string' ? parts[1].trim() : ''
+      const nfStamp = /^\d{6}$/.test(nfTime) && nfDay !== ''
+        ? parseMarketStamp(`${nfDay} ${nfTime.slice(0, 2)}:${nfTime.slice(2, 4)}:${nfTime.slice(4, 6)}`)
+        : Number.NaN
+      q = {
+        name: parts[0] ?? symbol,
+        price,
+        prev,
+        open: num(parts[2]),
+        high: num(parts[3]),
+        low: num(parts[4]),
+        pct: sanePct(pct),
+        // 上游自报的**成交时刻**（北京墙上时间）；解析不出 ⇒ null（不编一个"现在"）
+        time: Number.isFinite(nfStamp) ? nfStamp : null,
+        // 成交量（手，下标 14）；上游给 0 是"今日还没成交"⇒ 如实 null
+        vol: ((): number | null => { const v = num(parts[14]); return v !== null && v > 0 ? v : null })(),
+      }
     } else if (symbol.startsWith('hf_')) {
+      /**
+       * `hf_*` 字段（2026-10-25 实测 `hf_GC`）：
+       * `最新, 昨收, 买, 卖, 最高, 最低, 时间, 昨收(重复), **今开**, 持仓, 买量, 卖量, 日期, 名称, …`
+       * ⚠ 旧实现把下标 3（**卖价**）当"今开"—— 开盘价一直是错的（实测 4010.00 vs 真实 4042.20）。
+       */
       const price = num(parts[0])
-      const prev = num(parts[7])
+      const prev = num(parts[7]) ?? num(parts[1])
       if (price === null) continue
       const pct = prev !== null && prev > 0 ? ((price - prev) / prev) * 100 : null
-      q = { name: symbol.replace(/^hf_/, ''), price, prev, open: num(parts[3]), high: num(parts[4]), low: num(parts[5]), pct: sanePct(pct) }
+      const name = typeof parts[13] === 'string' && parts[13].trim() !== '' ? parts[13].trim() : symbol.replace(/^hf_/, '')
+      const hfDay = typeof parts[12] === 'string' ? parts[12].trim() : ''
+      const hfTime = typeof parts[6] === 'string' ? parts[6].trim() : ''
+      const hfStamp = /^\d{2}:\d{2}:\d{2}$/.test(hfTime) && hfDay !== '' ? parseMarketStamp(`${hfDay} ${hfTime}`) : Number.NaN
+      q = {
+        name,
+        price,
+        prev,
+        open: num(parts[8]),
+        high: num(parts[4]),
+        low: num(parts[5]),
+        pct: sanePct(pct),
+        time: Number.isFinite(hfStamp) ? hfStamp : null,
+      }
+    } else if (/^(sh|sz)\d{6}$/.test(symbol)) {
+      /**
+       * 沪/深指数（2026-10-25 实测 `sh000001`）：
+       * `名称, 今开, 昨收, **现价**, 最高, 最低, …, 成交量(股), 成交额(元), …, 日期, 时间, 状态`
+       * ⚠ 与 `nf_`/`hf_` 的下标**完全不同**（现价在 3 而不是 8/0）—— 这就是"两族必须分别单测"的原因。
+       */
+      const price = num(parts[3])
+      const prev = num(parts[2])
+      if (price === null || !(price > 0)) continue
+      const pct = prev !== null && prev > 0 ? ((price - prev) / prev) * 100 : null
+      const day = typeof parts[30] === 'string' ? parts[30].trim() : ''
+      const hhmmss = typeof parts[31] === 'string' ? parts[31].trim() : ''
+      const stamp = day === '' || hhmmss === '' ? null : parseMarketStamp(`${day} ${hhmmss}`)
+      q = {
+        name: parts[0] ?? symbol,
+        price,
+        prev,
+        open: num(parts[1]),
+        high: num(parts[4]),
+        low: num(parts[5]),
+        pct,
+        vol: num(parts[8]),
+        amount: num(parts[9]),
+        time: stamp !== null && Number.isFinite(stamp) ? stamp : null,
+      }
     } else if (symbol.startsWith('gb_')) {
       // 美股：字段语义与 nf_/hf_ 完全不同（下标见 parseSinaGb）⇒ 复用同一个下标表，不另抄一份
       const gb = gbRowOf(parts)

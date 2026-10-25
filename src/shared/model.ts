@@ -1402,7 +1402,7 @@ export function isFiniteNumber(v: unknown): v is number {
  * 行情数据来源的**唯一真源**。此前 api.ts 与 MarketPage.tsx 各自重抄了一份联合类型，
  * 于是"改一边忘另一边"不会变成编译错误（门禁抓不到）——两侧都必须引用本类型。
  */
-export type QuoteSource = 'em' | 'tencent' | 'sina' | 'lkg'
+export type QuoteSource = 'em' | 'tencent' | 'sina' | 'sina-futures' | 'sina-index' | 'lkg'
 
 /** ── 数据出处契约（P0-1）───────────────────────────────────────────────── */
 

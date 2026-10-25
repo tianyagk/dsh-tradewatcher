@@ -1,0 +1,387 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>工具 · 全球期货交易时钟（设计稿）</title>
+<!--
+  工具 · 全球期货交易时钟（设计稿；自包含、无外链、无 CDN）
+  · 头部：工具名 + 描述 + 右侧大号时钟（1 秒跳动）+ 北京 UTC+8 · MM.DD 星期X
+  · 控件行：分组（黄金 / 原油 / 主要股指）、时区（北京 / 本地）、立即校时、刷新时间戳 + 行情源状态
+  · 左：24 小时环形表盘（刻度 01–24、中心当前时间与校时偏差、每段交易时段一条弧、金色指针）
+  · 右：今日交易时段（色条 / 交易所·品种 / 代码 / 距下段开始 / 时段区间 / 状态）
+  · 底：主要指数 6 张卡 + 期货自选·主连 5 张卡（有数据 = 数值，无数据 = — + 原因，不用 0/旧值占位）
+  · 主题：沿用现有 token（浅色为主，深色同一套 token）；弧段用主题色阶；块间 16 / 组内 8；卡片 1px + 圆角 10
+-->
+<style>
+
+  *,*::before,*::after{box-sizing:border-box}
+  html,body{margin:0;padding:0}
+  :root{
+    color-scheme:light;
+    --bg:#f5f6f8; --card:#ffffff; --card2:#f2f4f7; --line:#e2e5ea; --line2:#eceef2; --lineStrong:#cfd3dc;
+    --text:#16181d; --dim:#4c535f; --muted:#6f7787;
+    --accent:#5e6ad2; --accent-soft:rgba(94,106,210,.14); --on-accent-soft:#3a44a8;
+    --up:#e5484d; --down:#0e8f5c;
+    --gold:#c9a227;
+    --arc-1:#4C6EF5; --arc-2:#E8590C; --arc-3:#7048E8; --arc-4:#0C8599; --arc-5:#C2255C; --arc-6:#2F9E44;
+    --radius:10px;
+  }
+  @media (prefers-color-scheme: dark){
+    :root{
+      color-scheme:dark;
+      --bg:#010102; --card:#0f1011; --card2:#16181b; --line:#23252a; --line2:#1b1d21; --lineStrong:#34343a;
+      --text:#f7f8f8; --dim:#c8ced8; --muted:#8a8f98;
+      --accent:#5e6ad2; --accent-soft:rgba(94,106,210,.22); --on-accent-soft:#dde0ff;
+      --up:#ff5f6d; --down:#27a644;
+      --gold:#e0b84a;
+      --arc-1:#91A7FF; --arc-2:#FFA94D; --arc-3:#B197FC; --arc-4:#66D9E8; --arc-5:#F783AC; --arc-6:#8CE99A;
+    }
+  }
+  body{background:var(--bg);color:var(--text);
+    font:12px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI","Inter","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
+    letter-spacing:-0.006em;-webkit-font-smoothing:antialiased}
+  .wrap{max-width:1440px;margin:0 auto;padding:16px;display:flex;flex-direction:column;gap:16px}
+  .muted{color:var(--muted)}
+  .mono,.num{font-variant-numeric:tabular-nums}
+  .up{color:var(--up)} .down{color:var(--down)}
+
+  .card{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);box-shadow:0 1px 2px rgba(16,24,40,.05)}
+  .hd{display:flex;align-items:center;gap:8px;min-height:36px;padding:0 12px;border-bottom:1px solid var(--line)}
+  .hd .t{font-size:14px;font-weight:600}
+  .hd .m{margin-left:auto;display:flex;align-items:center;gap:8px;color:var(--muted);font-size:12px}
+  .bd{padding:12px}
+
+  /* ── 头部 ── */
+  .pagehd{display:flex;align-items:flex-end;gap:16px;flex-wrap:wrap}
+  .pagehd h1{margin:0;font-size:20px;font-weight:700;letter-spacing:-0.02em}
+  .pagehd .desc{margin:2px 0 0;color:var(--muted);font-size:12px}
+  .clockbox{margin-left:auto;text-align:right}
+  .clock{font-size:34px;font-weight:700;line-height:1.1;font-variant-numeric:tabular-nums;letter-spacing:-0.01em}
+  .clockmeta{color:var(--muted);font-size:12px;font-variant-numeric:tabular-nums}
+
+  /* ── 控件行 ── */
+  .controls{display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px;padding:8px 12px;background:var(--card);
+    border:1px solid var(--line);border-radius:var(--radius);box-shadow:0 1px 2px rgba(16,24,40,.05)}
+  .ctl{display:inline-flex;align-items:center;gap:6px}
+  .ctl>span{color:var(--muted);font-size:12px}
+  select{height:26px;padding:0 6px;border:1px solid var(--line);border-radius:6px;background:var(--bg);color:var(--text);
+    font:inherit;font-size:12px;cursor:pointer}
+  .btn{display:inline-flex;align-items:center;justify-content:center;height:26px;padding:0 10px;border:1px solid var(--line);
+    border-radius:8px;background:transparent;color:var(--text);font:inherit;font-size:12px;cursor:pointer}
+  .btn.tonal{background:var(--accent-soft);border-color:transparent;color:var(--on-accent-soft);font-weight:600}
+  .stamp{margin-left:auto;display:flex;align-items:center;gap:8px;color:var(--muted);font-size:11.5px}
+  .src{display:inline-flex;align-items:center;gap:4px;height:20px;padding:0 6px;border-radius:6px;border:1px solid var(--line);background:var(--card2);font-size:11.5px}
+  .src.ok::before{content:"";width:6px;height:6px;border-radius:50%;background:var(--down)}
+  .src.bad::before{content:"";width:6px;height:6px;border-radius:50%;background:var(--up)}
+
+  /* ── 上排：表盘 + 时段列表 ── */
+  .grid{display:grid;grid-template-columns:minmax(0,520px) minmax(0,1fr);gap:16px;align-items:start}
+  @media (max-width:1100px){ .grid{grid-template-columns:minmax(0,1fr)} }
+  .dialwrap{position:relative;padding:8px 8px 4px}
+  .dialwrap svg{display:block;width:100%;max-width:440px;height:auto;margin:0 auto}
+  .dialcenter{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);text-align:center;pointer-events:none}
+  .dialcenter .now{font-size:28px;font-weight:700;font-variant-numeric:tabular-nums;line-height:1.1}
+  .dialcenter .off{color:var(--muted);font-size:11.5px;margin-top:2px}
+  .dialcenter .grp{color:var(--dim);font-size:12px;margin-top:4px}
+  .dial-ring{fill:none;stroke:var(--line);stroke-width:1}
+  .dial-tick{stroke:var(--lineStrong);stroke-width:1}
+  .dial-tick.major{stroke:var(--dim);stroke-width:1.4}
+  .dial-lab{fill:var(--muted);font-size:10px;text-anchor:middle}
+  .dial-arc{fill:none;stroke-width:8.5;stroke-linecap:round}
+  .dial-arc-lab{font-size:9.5px;font-weight:600;fill:var(--text);paint-order:stroke;stroke:var(--card);stroke-width:3.5px;stroke-linejoin:round}
+  .dial-ptr{stroke:var(--gold);stroke-width:2.5;stroke-linecap:round}
+  .dial-hub{fill:var(--gold)}
+  .dial-disc{fill:var(--card);stroke:var(--gold);stroke-opacity:.30;stroke-width:1}
+
+  /* ── 时段表 ── */
+  .quotestrip{display:flex;flex-wrap:wrap;gap:6px;padding:8px 12px;border-bottom:1px solid var(--line2)}
+  .qchip{display:inline-flex;align-items:center;gap:6px;padding:2px 6px;border:1px solid var(--line);border-radius:6px;background:var(--card2);font-size:11.5px}
+  .qchip.bad{border-style:dashed;color:var(--muted)}
+  .qchip .v{font-variant-numeric:tabular-nums;font-weight:600}
+  .tbl{width:100%;border-collapse:collapse;font-size:12px}
+  .tbl th{height:24px;padding:0 8px;font-weight:500;color:var(--muted);text-align:left;white-space:nowrap;background:var(--card2);border-bottom:1px solid var(--line)}
+  .tbl td{height:26px;padding:0 8px;white-space:nowrap;border-bottom:1px solid var(--line2)}
+  .tbl th:first-child,.tbl td:first-child{padding-left:12px}
+  .tbl th:last-child,.tbl td:last-child{padding-right:12px}
+  .tbl tbody tr:last-child td{border-bottom:0}
+  .tbl tbody tr:hover td{background:var(--card2)}
+  .bar{width:10px;padding:0 0 0 12px !important}
+  .bar i{display:block;width:6px;height:14px;border-radius:2px}
+  .pill{display:inline-flex;align-items:center;height:18px;padding:0 6px;border-radius:4px;font-size:11.5px;font-weight:600}
+  .pill.on{color:var(--on-accent-soft);background:var(--accent-soft)}
+  .pill.off{color:var(--muted);background:var(--card2);font-weight:500}
+  .cd{font-variant-numeric:tabular-nums}
+
+  /* ── 底部卡片 ── */
+  .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:8px;padding:12px}
+  .stat{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);padding:10px 12px;display:flex;flex-direction:column;gap:4px}
+  .stat.empty{border-style:dashed}
+  .stat-top{display:flex;align-items:baseline;gap:6px}
+  .stat-top .name{font-weight:600;font-size:12.5px}
+  .stat-top .code{margin-left:auto;color:var(--muted);font-size:11.5px;font-variant-numeric:tabular-nums}
+  .stat-mid{display:flex;align-items:baseline;gap:8px}
+  .stat-mid .value{font-size:20px;font-weight:700;font-variant-numeric:tabular-nums;letter-spacing:-0.01em}
+  .stat-mid .chg{font-size:12.5px;font-weight:600;font-variant-numeric:tabular-nums}
+  .stat-meta{display:flex;align-items:center;gap:8px;color:var(--muted);font-size:11.5px;font-variant-numeric:tabular-nums}
+  .stat-meta .pill{margin-left:auto}
+  .stat-reason{color:var(--muted);font-size:11.5px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="pagehd">
+  <div>
+    <h1>全球期货交易时钟</h1>
+    <p class="desc">24 小时交易时段 · 跨市场对照 · 以北京时间为基准（可切本地）</p>
+  </div>
+  <div class="clockbox">
+    <div class="clock" id="clock">20:37:39</div>
+    <div class="clockmeta" id="clockmeta">北京 UTC+8 · 10.25 星期日</div>
+  </div>
+</header>
+
+<div class="controls">
+  <label class="ctl"><span>分组</span>
+    <select id="group">
+      <option value="gold">黄金</option>
+      <option value="oil">原油</option>
+      <option value="index">主要股指</option>
+    </select>
+  </label>
+  <label class="ctl"><span>时区</span>
+    <select id="tz">
+      <option value="bj">北京 UTC+8</option>
+      <option value="local">本地时区</option>
+    </select>
+  </label>
+  <button class="btn tonal" id="sync" type="button">立即校时</button>
+  <span class="stamp">刷新时间戳 <b id="stamp">2026-10-25 20:37:39</b></span>
+  <span class="src ok">tencent</span>
+  <span class="src ok">sina</span>
+  <span class="src bad">东财 熔断</span>
+</div>
+
+<div class="grid">
+  <section class="card" aria-label="24 小时交易时段">
+    <div class="hd"><span class="t">24 小时交易时段</span><span class="m" id="dialmeta">黄金 · 北京 UTC+8</span></div>
+    <div class="dialwrap">
+      <svg id="dial" viewBox="0 0 520 520" role="img" aria-label="24 小时交易时段表盘"></svg>
+      <div class="dialcenter">
+        <div class="now" id="dialnow">20:37:39</div>
+        <div class="off" id="dialoff">校时偏差 +0.28s</div>
+        <div class="grp" id="dialgrp">黄金</div>
+      </div>
+    </div>
+  </section>
+
+  <section class="card" aria-label="今日交易时段">
+    <div class="hd"><span class="t">今日交易时段</span><span class="m" id="listmeta">5 段 · 北京 UTC+8</span></div>
+    <div class="quotestrip" id="quotes"></div>
+    <table class="tbl">
+      <thead><tr><th>色条</th><th>交易所 · 品种</th><th>代码</th><th class="num">距下段开始</th><th>时段区间</th><th>状态</th></tr></thead>
+      <tbody id="rows"></tbody>
+    </table>
+  </section>
+</div>
+
+<section class="card" aria-label="主要指数">
+  <div class="hd"><span class="t">主要指数</span><span class="m">6 个 · 来源 tencent · 20:37:39</span></div>
+  <div class="cards" id="indices"></div>
+</section>
+
+<section class="card" aria-label="期货自选 · 主连">
+  <div class="hd"><span class="t">期货自选 · 主连</span><span class="m">5 个 · 来源 东财 · 无数据</span></div>
+  <div class="cards" id="futures"></div>
+</section>
+</div>
+<script>
+(function () {
+  'use strict';
+  var DATA = {"base": "2026-10-25T20:37:39+08:00", "sessions": {"gold": [{"ex": "上期所", "name": "AU黄金 夜盘", "code": "AU", "short": "上期所·AU", "start": 1260, "end": 150, "lane": 0}, {"ex": "上期所", "name": "AU黄金 日盘", "code": "AU", "short": "上期所·AU", "start": 540, "end": 900, "lane": 0}, {"ex": "COMEX", "name": "GC黄金", "code": "GC", "short": "COMEX·GC", "start": 360, "end": 1020, "lane": 1}, {"ex": "伦敦", "name": "XAU现货", "code": "XAU", "short": "伦敦·XAU", "start": 900, "end": 1380, "lane": 2}, {"ex": "上金所", "name": "AU9999", "code": "AU9999", "short": "上金所·9999", "start": 1200, "end": 150, "lane": 1}], "oil": [{"ex": "上期能源", "name": "SC原油 夜盘", "code": "SC", "short": "上期能源·SC", "start": 1260, "end": 150, "lane": 0}, {"ex": "上期能源", "name": "SC原油 日盘", "code": "SC", "short": "上期能源·SC", "start": 540, "end": 900, "lane": 0}, {"ex": "NYMEX", "name": "CL原油", "code": "CL", "short": "NYMEX·CL", "start": 360, "end": 1020, "lane": 1}, {"ex": "ICE", "name": "Brent原油", "code": "B", "short": "ICE·B", "start": 900, "end": 60, "lane": 2}, {"ex": "DME", "name": "Oman原油", "code": "O", "short": "DME·O", "start": 540, "end": 930, "lane": 3}], "index": [{"ex": "CME", "name": "ES标普500", "code": "ES", "short": "CME·ES", "start": 360, "end": 1020, "lane": 0}, {"ex": "新交所", "name": "A50 日盘", "code": "CN", "short": "新交所·CN", "start": 540, "end": 990, "lane": 1}, {"ex": "新交所", "name": "A50 夜盘", "code": "CN", "short": "新交所·CN", "start": 1020, "end": 315, "lane": 0}, {"ex": "港交所", "name": "HSI恒指", "code": "HSI", "short": "港交所·HSI", "start": 555, "end": 990, "lane": 2}, {"ex": "港交所", "name": "HSI 夜盘", "code": "HSI", "short": "港交所·HSI", "start": 1035, "end": 180, "lane": 1}]}, "quotes": {"gold": [{"sym": "AU 主连", "code": "113.aum", "state": "bad", "reason": "东财熔断，仅东财一个源"}, {"sym": "GC 主连", "code": "101.GC", "state": "bad", "reason": "东财熔断，仅东财一个源"}, {"sym": "AU9999", "code": "118.AU9999", "state": "bad", "reason": "东财熔断，仅东财一个源"}], "oil": [{"sym": "Brent", "code": "112.B00Y", "value": "112.10", "chg": "+3.17%", "src": "mixed（tencent + sina）", "time": "2026-10-25 20:37:39", "state": "ok"}], "index": [{"sym": "N225", "code": "100.N225", "state": "bad", "reason": "东财熔断，仅东财一个源"}]}, "indices": [{"name": "上证指数", "code": "000001", "value": "3,690.48", "chg": "+0.89%", "src": "tencent", "time": "2026-10-25 20:37:39", "status": "正常"}, {"name": "深证成指", "code": "399001", "value": "11,673.83", "chg": "+2.79%", "src": "tencent", "time": "2026-10-25 20:37:39", "status": "正常"}, {"name": "创业板指", "code": "399006", "value": "2,684.10", "chg": "+4.16%", "src": "tencent", "time": "2026-10-25 20:37:39", "status": "正常"}, {"name": "沪深 300", "code": "000300", "value": "4,105.33", "chg": "+1.71%", "src": "tencent", "time": "2026-10-25 20:37:39", "status": "正常"}, {"name": "中证 500", "code": "000905", "value": "6,814.44", "chg": "+2.39%", "src": "tencent", "time": "2026-10-25 20:37:39", "status": "正常"}, {"name": "中证 1000", "code": "000852", "value": "6,734.55", "chg": "+2.38%", "src": "tencent", "time": "2026-10-25 20:37:39", "status": "正常"}], "futures": [{"name": "AU 黄金", "code": "113.aum", "reason": "东财熔断，仅东财一个源"}, {"name": "AG 白银", "code": "113.agm", "reason": "东财熔断，仅东财一个源"}, {"name": "CU 铜", "code": "113.cum", "reason": "东财熔断，仅东财一个源"}, {"name": "JM 焦煤", "code": "113.jmm", "reason": "东财熔断，仅东财一个源"}, {"name": "LC 碳酸锂", "code": "113.lcm", "reason": "东财熔断，仅东财一个源"}]};
+  var BASE = new Date(DATA.base).getTime();
+  var T0 = Date.now();
+  var OFFSET = 280;               // 服务端校时偏差（ms），点“立即校时”会重算
+  var GROUP_LABEL = { gold: '黄金', oil: '原油', index: '主要股指' };
+  var WD = ['星期日', '星期一', '星期二', '星期三', '星期四', '星期五', '星期六'];
+  var group = 'gold';
+  var zone = 'bj';
+
+  function nowMs() { return BASE + (Date.now() - T0); }
+  function zoneOffsetMin() { return zone === 'bj' ? 480 : -new Date().getTimezoneOffset(); }
+  function zoneName() { return zone === 'bj' ? '北京 UTC+8' : '本地 UTC' + (zoneOffsetMin() >= 0 ? '+' : '') + (zoneOffsetMin() / 60); }
+  function zoned(ms) { return new Date(ms + zoneOffsetMin() * 60000); }
+  function pad(n) { return (n < 10 ? '0' : '') + n; }
+  function hms(d) { return pad(d.getUTCHours()) + ':' + pad(d.getUTCMinutes()) + ':' + pad(d.getUTCSeconds()); }
+  function minOfDay(d) { return d.getUTCHours() * 60 + d.getUTCMinutes(); }
+  function mmss(sec) {
+    if (sec < 0) sec = 0;
+    var h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s = sec % 60;
+    return pad(h) + ':' + pad(m) + ':' + pad(s);
+  }
+
+  /* ── 表盘 ── */
+  var CX = 220, CY = 220, R_OUT = 200;
+  function polar(r, minutes) {
+    var a = (minutes / 1440) * Math.PI * 2 - Math.PI / 2;
+    return [CX + r * Math.cos(a), CY + r * Math.sin(a)];
+  }
+  function arcPath(r, start, end) {
+    if (start === end) return '';
+    var p1 = polar(r, start), p2 = polar(r, end);
+    var large = (end - start) > 720 ? 1 : 0;
+    return 'M ' + p1[0].toFixed(2) + ' ' + p1[1].toFixed(2) +
+           ' A ' + r + ' ' + r + ' 0 ' + large + ' 1 ' + p2[0].toFixed(2) + ' ' + p2[1].toFixed(2);
+  }
+  function arcSegments(r, start, end) {
+    /* 跨零点的时段拆成两段（0–end 与 start–1440），保证弧总是顺时针短弧 */
+    if (end > start) return [arcPath(r, start, end)];
+    return [arcPath(r, 0, end), arcPath(r, start, 1440)];
+  }
+
+  function renderDial(now, shift) {
+    var d = zoned(now);
+    var mod = minOfDay(d);
+    var svg = [];
+    svg.push('<circle class="dial-ring" cx="' + CX + '" cy="' + CY + '" r="' + R_OUT + '"/>');
+    for (var k = 1; k <= 24; k++) {
+      var m = (k * 60) % 1440;
+      var a = polar(R_OUT, m), b = polar(R_OUT - (k % 3 === 0 ? 12 : 7), m);
+      svg.push('<line class="dial-tick' + (k % 3 === 0 ? ' major' : '') + '" x1="' + a[0].toFixed(1) + '" y1="' + a[1].toFixed(1) +
+        '" x2="' + b[0].toFixed(1) + '" y2="' + b[1].toFixed(1) + '"/>');
+      var lp = polar(R_OUT - 24, m);
+      svg.push('<text class="dial-lab" x="' + lp[0].toFixed(1) + '" y="' + (lp[1] + 3.5).toFixed(1) + '">' + pad(k) + '</text>');
+    }
+    var list = DATA.sessions[group];
+    list.forEach(function (s, i) {
+      var r = 160 - s.lane * 24;
+      var start = (s.start + shift + 1440) % 1440;
+      var end = (s.end + shift + 1440) % 1440;
+      var segs = arcSegments(r, start, end);
+      segs.forEach(function (p) {
+        svg.push('<path class="dial-arc" d="' + p + '" stroke="var(--arc-' + ((i % 6) + 1) + ')"/>');
+      });
+      /* 弧内标签：取时段中点，切向旋转 */
+      var span = (end - start + 1440) % 1440 || 1440;
+      var mid = (start + span / 2) % 1440;
+      var tp = polar(r, mid);
+      var deg = (mid / 1440) * 360 - 90 + 90;      /* 切向 */
+      var flip = deg > 90 && deg < 270;
+      var rot = flip ? deg + 180 : deg;
+      svg.push('<text class="dial-arc-lab" x="' + tp[0].toFixed(1) + '" y="' + (tp[1] + 3).toFixed(1) +
+        '" text-anchor="middle" transform="rotate(' + rot.toFixed(1) + ' ' + tp[0].toFixed(1) + ' ' + tp[1].toFixed(1) + ')">' +
+        s.short + '</text>');
+    });
+    /* 金色指针 + 中心盘（盘压在指针上，中心文字再压在盘上）*/
+    var tip = polar(R_OUT - 6, mod);
+    svg.push('<line class="dial-ptr" x1="' + CX + '" y1="' + CY + '" x2="' + tip[0].toFixed(1) + '" y2="' + tip[1].toFixed(1) + '"/>');
+    svg.push('<circle class="dial-hub" cx="' + tip[0].toFixed(1) + '" cy="' + tip[1].toFixed(1) + '" r="3.2"/>');
+    svg.push('<circle class="dial-disc" cx="' + CX + '" cy="' + CY + '" r="64"/>');
+    document.getElementById('dial').innerHTML = svg.join('');
+  }
+
+  /* ── 列表 ── */
+  function inSession(mod, s, shift) {
+    var start = (s.start + shift + 1440) % 1440;
+    var end = (s.end + shift + 1440) % 1440;
+    if (start < end) return mod >= start && mod < end;
+    return mod >= start || mod < end;
+  }
+  function nextStartSec(now, s, shift) {
+    var d = zoned(now);
+    var mod = minOfDay(d) * 60 + d.getUTCSeconds();
+    var start = ((s.start + shift + 1440) % 1440) * 60;
+    var diff = start - mod;
+    if (diff <= 0) diff += 86400;
+    return diff;
+  }
+  function renderList(now, shift) {
+    var rows = [];
+    DATA.sessions[group].forEach(function (s, i) {
+      var trading = inSession(minOfDay(zoned(now)), s, shift);
+      var start = (s.start + shift + 1440) % 1440;
+      var end = (s.end + shift + 1440) % 1440;
+      var range = pad(Math.floor(start / 60)) + ':' + pad(start % 60) + '–' + pad(Math.floor(end / 60)) + ':' + pad(end % 60);
+      var wrap = end < start ? ' <span class="muted">次日</span>' : '';
+      rows.push('<tr>' +
+        '<td class="bar"><i style="background:var(--arc-' + ((i % 6) + 1) + ')"></i></td>' +
+        '<td><b>' + s.ex + '</b> · ' + s.name + '</td>' +
+        '<td class="mono muted">' + s.code + '</td>' +
+        '<td class="num cd">' + mmss(nextStartSec(now, s, shift)) + '</td>' +
+        '<td class="mono">' + range + wrap + '</td>' +
+        '<td><span class="pill ' + (trading ? 'on">交易中' : 'off">时段外') + '</span></td>' +
+        '</tr>');
+    });
+    document.getElementById('rows').innerHTML = rows.join('');
+  }
+
+  function renderQuotes() {
+    var out = DATA.quotes[group].map(function (q) {
+      if (q.state === 'bad') {
+        return '<span class="qchip bad">' + q.sym + '<span class="mono">' + q.code + '</span>—（' + q.reason + '）</span>';
+      }
+      return '<span class="qchip">' + q.sym + '<span class="mono muted">' + q.code + '</span>' +
+        '<span class="v up">' + q.value + ' ' + q.chg + '</span>' +
+        '<span class="muted">' + q.src + ' · ' + q.time + '</span></span>';
+    });
+    document.getElementById('quotes').innerHTML = out.join('');
+  }
+
+  function renderCards() {
+    document.getElementById('indices').innerHTML = DATA.indices.map(function (x) {
+      var cls = x.chg.indexOf('-') === 0 ? 'down' : 'up';
+      return '<div class="stat">' +
+        '<div class="stat-top"><span class="name">' + x.name + '</span><span class="code">' + x.code + '</span></div>' +
+        '<div class="stat-mid"><span class="value">' + x.value + '</span><span class="chg ' + cls + '">' + x.chg + '</span></div>' +
+        '<div class="stat-meta"><span>' + x.src + '</span><span>' + x.time + '</span><span class="pill on">' + x.status + '</span></div>' +
+        '</div>';
+    }).join('');
+    document.getElementById('futures').innerHTML = DATA.futures.map(function (f) {
+      return '<div class="stat empty">' +
+        '<div class="stat-top"><span class="name">' + f.name + '</span><span class="code">' + f.code + '</span></div>' +
+        '<div class="stat-mid"><span class="value muted">—</span><span class="chg muted">—</span></div>' +
+        '<div class="stat-meta"><span>东财</span><span>—</span><span class="pill off">无数据</span></div>' +
+        '<div class="stat-reason">' + f.reason + '</div>' +
+        '</div>';
+    }).join('');
+  }
+
+  function tick() {
+    var now = nowMs();
+    var shift = zoneOffsetMin() - 480;
+    var d = zoned(now);
+    document.getElementById('clock').textContent = hms(d);
+    document.getElementById('clockmeta').textContent = zoneName() + ' · ' + pad(d.getUTCMonth() + 1) + '.' + pad(d.getUTCDate()) + ' ' + WD[d.getUTCDay()];
+    document.getElementById('dialnow').textContent = hms(d);
+    document.getElementById('dialgrp').textContent = GROUP_LABEL[group];
+    document.getElementById('dialmeta').textContent = GROUP_LABEL[group] + ' · ' + zoneName();
+    document.getElementById('listmeta').textContent = DATA.sessions[group].length + ' 段 · ' + zoneName();
+    renderDial(now, shift);
+    renderList(now, shift);
+  }
+
+  document.getElementById('group').addEventListener('change', function (e) {
+    group = e.target.value; renderQuotes(); tick();
+  });
+  document.getElementById('tz').addEventListener('change', function (e) {
+    zone = e.target.value; tick();
+  });
+  document.getElementById('sync').addEventListener('click', function () {
+    /* 立即校时：把页面时间对齐到本机时钟，并重算偏差（±0.4s 内） */
+    var real = Date.now();
+    BASE = real; T0 = Date.now();
+    OFFSET = Math.round((Math.random() * 800 - 400));
+    document.getElementById('dialoff').textContent = '校时偏差 ' + (OFFSET >= 0 ? '+' : '') + (OFFSET / 1000).toFixed(2) + 's';
+    var d = new Date(real);
+    document.getElementById('stamp').textContent = d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()) + ' ' +
+      pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds());
+    tick();
+  });
+
+  renderQuotes(); renderCards(); tick();
+  setInterval(tick, 1000);
+})();
+</script>
+</body>
+</html>
