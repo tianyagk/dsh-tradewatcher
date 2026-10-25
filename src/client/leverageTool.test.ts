@@ -96,8 +96,8 @@ test('① 目录出现「杠杆温度计（锚定 2024）」（全角括号）�
   assert.equal(leverageTool.blurb, 'A股融资杠杆热度')
   assert.equal(leverageTool.page, 'leverage', '工具项必须声明专用版式（通用三段式与"唯一说明文字"冲突）')
   assert.equal(leverageTool.load, undefined, '专用详情页自己取数（走通用 load() 会拿到通用骨架的语义）')
-  assert.deepEqual(catalog.cards.map((c) => c.id), ['cake', 'leverage'], '新工具只追加在末尾，既有卡片不挪位')
-  assert.equal(TOOL_ENTRIES.length, 2)
+  assert.deepEqual(catalog.cards.map((c) => c.id), ['cake', 'leverage', 'globalClock'], '新工具只追加在末尾，既有卡片不挪位')
+  assert.equal(TOOL_ENTRIES.length, 3, '蛋糕 + 杠杆温度计 + 全球期货交易时钟')
   // 页面接线：按判别位分支，而不是按 id 硬编码
   const page = strip(read('ToolsPage.tsx'))
   assert.equal(/entry\.page === 'leverage'/.test(page), true, 'ToolsPage 必须按 `page` 判别位路由到专用详情页')

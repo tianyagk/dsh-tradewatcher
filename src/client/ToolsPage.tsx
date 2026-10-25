@@ -66,6 +66,7 @@ import {
 } from './toolDetailTheme.ts'
 import { FLOW_SERIES_COLORS, hoverRowsOf } from './tools/globalFlowView.ts'
 import { LeverageDetail } from './leveragePage.tsx'
+import { GlobalClockPage } from './GlobalClockPage.tsx'
 import { EmptyHint } from './ui.tsx'
 import {
   BACK_BTN_FOCUS_STYLE,
@@ -238,6 +239,8 @@ export function ToolsPage(): React.ReactElement {
       ? catalogView(model, { category, setCategory, onOpen: setOpenId })
       : entry.page === 'leverage'
         ? React.createElement(LeverageDetail, { back: backToCatalog, title: entry.name })
+        : entry.page === 'globalClock'
+          ? React.createElement(GlobalClockPage, { back: backToCatalog, title: entry.name })
         : detailView(detailModel(entry, data), () => setOpenId(null), {
             loading: loader !== undefined && data === null && loadError === null,
             step,

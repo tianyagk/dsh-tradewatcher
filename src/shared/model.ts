@@ -865,6 +865,11 @@ export interface PortPrefs {
    * `fixed` 用 `fxRates` 里的用户设定汇率折算；`live` 源未验证，宿主会拒绝并说明。
    */
   fxMode?: FxMode
+  /**
+   * 全球期货交易时钟的行情刷新间隔（秒，30–600）。缺省 120。
+   * 与 `refreshSec`（面板全局刷新）分开：时钟页有独立的 24h 时段轮盘，不需要跟着面板节拍刷。
+   */
+  clockRefreshSec?: number
   /** 固定汇率表（1 外币 = N 人民币），仅 fxMode='fixed' 时生效 */
   fxRates?: FxRates
   /**

@@ -884,6 +884,50 @@ color-scheme:dark}
 
 @media (max-width:899px){.tw-prism-right{display:flex;flex-direction:column;gap:16px}.tw-prism-right>.tw-prism-equitycard{order:1}.tw-prism-right>.tw-prism-researchcard{order:2}.tw-prism-right>.tw-prism-evalcard{order:3}.tw-prism-right>.tw-prism-timecard{order:4}.tw-prism-right>.tw-prism-modelcard{order:5}}
 @media (max-width:639px){.tw-prism-cards{grid-template-columns:minmax(0,1fr)}}
+/* ── 工具 · 全球期货交易时钟（clock） ─────────────────────────────────── */
+.tw-clock-head{display:flex;align-items:flex-end;gap:16px;flex-wrap:wrap}
+.tw-clock-title{margin:0;font-size:20px;font-weight:700;letter-spacing:-.02em;color:var(--tw-text)}
+.tw-clock-sub{margin:2px 0 0;color:var(--tw-muted);font-size:12px}
+.tw-clock-clockbox{margin-left:auto;text-align:right}
+.tw-clock-big{font-size:34px;font-weight:700;line-height:1.1;font-variant-numeric:tabular-nums;letter-spacing:-.01em;color:var(--tw-text)}
+.tw-clock-meta{color:var(--tw-muted);font-size:12px;font-variant-numeric:tabular-nums}
+.tw-clock-controls{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.tw-clock-stamp{margin-left:auto;color:var(--tw-muted);font-size:12px;font-variant-numeric:tabular-nums}
+.tw-clock-grid{display:grid;grid-template-columns:minmax(0,520px) minmax(0,1fr);gap:16px;align-items:start}
+@media (max-width:1100px){.tw-clock-grid{grid-template-columns:minmax(0,1fr)}}
+.tw-clock-dialbox{position:relative;width:100%;max-width:440px;margin:0 auto;aspect-ratio:1/1}
+.tw-clock-dialbox>svg{position:absolute;inset:0;display:block;width:100%;height:100%}
+.tw-clock-center{position:absolute;inset:0;display:grid;place-items:center;pointer-events:none}
+.tw-clock-text{display:flex;flex-direction:column;align-items:center;justify-content:center}
+.tw-clock-text>div{height:18px;line-height:18px;white-space:nowrap}
+.tw-clock-text .tw-clock-now{font-size:24px;font-weight:700;font-variant-numeric:tabular-nums;color:var(--tw-text)}
+.tw-clock-text .tw-clock-off{font-size:12px;color:var(--tw-muted);font-variant-numeric:tabular-nums}
+.tw-clock-text .tw-clock-grp{font-size:12px;color:var(--tw-dim)}
+.tw-clock-ring{fill:none;stroke:var(--tw-border);stroke-width:1}
+.tw-clock-tick{stroke:var(--tw-border-strong);stroke-width:1}
+.tw-clock-tick.major{stroke:var(--tw-dim);stroke-width:1.4}
+.tw-clock-lab{fill:var(--tw-muted);font-size:12px;text-anchor:middle}
+.tw-clock-arc{fill:none;stroke-width:12;stroke-linecap:round}
+.tw-clock-arclab{font-size:12px;font-weight:600;fill:var(--tw-text);paint-order:stroke;stroke:var(--tw-card);stroke-width:4px;stroke-linejoin:round}
+.tw-clock-needle{stroke:#c9a227;stroke-width:2.5;stroke-linecap:round}
+.tw-clock-hub{fill:#c9a227}
+.tw-clock-disc{fill:var(--tw-card);stroke:#c9a227;stroke-opacity:.30;stroke-width:1}
+.tw-clock-cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:8px}
+.tw-clock-stat{display:flex;flex-direction:column;gap:4px;padding:10px 12px;border:1px solid var(--tw-border);border-radius:10px;background:var(--tw-card);min-width:0}
+.tw-clock-stat[data-empty=true]{border-style:dashed}
+.tw-clock-stat-top{display:flex;align-items:baseline;gap:6px;font-size:12.5px;color:var(--tw-text)}
+.tw-clock-stat-top .code{margin-left:auto;color:var(--tw-muted);font-size:12px;font-variant-numeric:tabular-nums}
+.tw-clock-stat-mid{display:flex;align-items:baseline;gap:8px}
+.tw-clock-stat-value{font-size:20px;font-weight:700;font-variant-numeric:tabular-nums;letter-spacing:-.01em;color:var(--tw-text)}
+.tw-clock-stat-pct{font-size:12.5px;font-weight:600;font-variant-numeric:tabular-nums}
+.tw-clock-stat-meta{display:flex;align-items:center;gap:8px;color:var(--tw-muted);font-size:12px;font-variant-numeric:tabular-nums}
+.tw-clock-stat-reason{color:var(--tw-muted);font-size:12px}
+.tw-clock-missingline{color:var(--tw-muted);font-size:12px;line-height:20px}
+.tw-clock-pill{display:inline-flex;align-items:center;height:18px;padding:0 6px;border-radius:4px;font-size:12px;font-weight:600;margin-left:auto}
+.tw-clock-pill.on{color:var(--tw-md-on-accent);background:var(--tw-md-accent-soft)}
+.tw-clock-pill.off{color:var(--tw-muted);background:var(--tw-card2);font-weight:500}
+.tw-clock-cd{font-variant-numeric:tabular-nums}
+
 `
 
 let injected = false

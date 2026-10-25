@@ -13,6 +13,7 @@
  */
 import { cakeTool } from './tools/cake.ts'
 import { leverageTool } from './tools/leverage.ts'
+import { globalClockTool } from './tools/globalClock.ts'
 
 /** 详情页的五个区（顺序即渲染顺序；测试锁这个顺序） */
 export type ToolSectionKey = 'kpi' | 'curve' | 'pie' | 'market' | 'boundary'
@@ -62,7 +63,7 @@ export interface ToolEntry {
    * 按 id 硬编码会让下一个想要精简版式的工具继续抄一遍分支；做成字段后，
    * 页面只问"这一项要不要专用版式"，新增工具仍然只改两处（工具文件 + 注册表一行）。
    */
-  page?: 'leverage'
+  page?: 'leverage' | 'globalClock'
   /** 详情页各区（顺序即渲染顺序） */
   sections: readonly ToolSectionSpec[]
   /**
@@ -223,7 +224,7 @@ export const CATEGORY_TABS: ReadonlyArray<{ key: string; label: string }> = [{ k
  * 排序规则只此一条：**按注册顺序**，不按名称/分类/热度重排 —— 新增一个工具不许让既有卡片挪位
  * （`orderEntries` 是这条规则的唯一实现，`toolRegistry.test.ts` 锁它）。
  */
-export const TOOL_ENTRIES: readonly ToolEntry[] = [cakeTool, leverageTool]
+export const TOOL_ENTRIES: readonly ToolEntry[] = [cakeTool, leverageTool, globalClockTool]
 
 /** 排序规则（唯一实现）：注册顺序即展示顺序 */
 export function orderEntries(entries: readonly ToolEntry[]): readonly ToolEntry[] {

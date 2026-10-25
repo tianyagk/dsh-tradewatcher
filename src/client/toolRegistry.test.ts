@@ -52,8 +52,8 @@ test('① 目录页模型：卡片齐全（chip / 标题 / 一句话说明）—
   assert.equal('searchPlaceholder' in model, false, '目录页模型不许再有 searchPlaceholder（搜索框已按用户要求删除）')
   assert.equal('query' in model, false, '目录页模型不许再有 query 字段')
   // v0.116.0（杠杆温度计）：目录从 1 张卡变成 2 张 —— 新增工具只**追加**（顺序见 ⑤ 号用例）
-  assert.equal(model.cards.length, 2, `目录页必须恰好 2 张卡片（蛋糕 + 杠杆温度计；实得 ${model.cards.length}）`)
-  assert.deepEqual(model.cards.map((c) => c.id), ['cake', 'leverage'], '卡片顺序 = 注册顺序（新工具追加在末尾）')
+  assert.equal(model.cards.length, 3, `目录页必须恰好 3 张卡片（蛋糕 + 杠杆温度计 + 全球期货交易时钟；实得 ${model.cards.length}）`)
+  assert.deepEqual(model.cards.map((c) => c.id), ['cake', 'leverage', 'globalClock'], '卡片顺序 = 注册顺序（新工具追加在末尾）')
   // v0.119.0（R5）：目录名带口径括号 —— 与工具条目**同源**（逐字断言在 leverageHeader.test.ts，这里只核一致性）
   assert.equal(model.cards[1]?.title, leverageTool.name, '第二张卡的标题必须等于工具条目的 name（单一来源）')
   const card = model.cards[0]

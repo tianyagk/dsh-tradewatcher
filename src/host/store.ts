@@ -1205,6 +1205,11 @@ export class DataStore {
       if (patch.costBasis !== 'diluted' && patch.costBasis !== 'average') throw new Error('costBasis 必须是 diluted/average')
       this.prefs.costBasis = patch.costBasis
     }
+    if (patch.clockRefreshSec !== undefined) {
+      const r = patch.clockRefreshSec
+      if (!isFiniteNumber(r) || r < 30 || r > 600) throw new Error('时钟刷新间隔需在 30–600 秒之间')
+      this.prefs.clockRefreshSec = r
+    }
     if (patch.refreshSec !== undefined) {
       const r = patch.refreshSec
       if (!isFiniteNumber(r) || r < 3 || r > 600) throw new Error('刷新间隔需在 3–600 秒之间')

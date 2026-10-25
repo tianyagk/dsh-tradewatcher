@@ -11,6 +11,44 @@
 
 ---
 
+## v0.160.0 — 新增【工具】「全球期货交易时钟」
+
+报告 `docs/AUDIT-GLOBAL-CLOCK.md`；设计稿 `docs/mockups/global-clock.html`。`npm run check` **1294 / 1294 × 2 时区**（1286 → 1294）+ selftest + build（73 片段全过）。
+
+### 新增
+
+| 文件 | 内容 |
+| --- | --- |
+| `src/shared/clockSessions.ts` | 三组时段（黄金 / 原油 / 主要股指）+ `Intl` 时区与夏令时换算 + 状态 / 倒计时 / 轮盘角 / 几何常量 |
+| `src/client/clockView.ts` | 卡片模型、时区选项、圆心自检 |
+| `src/client/tools/globalClock.ts` | 工具注册 `name: '全球期货交易时钟'` |
+| `src/client/GlobalClockPage.tsx` | 页面（表盘 + 时段表 + 指数 / 期货卡） |
+| `src/client/clockView.test.ts` | 8 项断言 |
+
+改动：`toolRegistry.ts`（第三项 + `page` 判别位 `'leverage' | 'globalClock'`）、`ToolsPage.tsx`、`styles.ts`（`.tw-clock-*`）、`shared/model.ts` + `host/store.ts`（`clockRefreshSec`，复用 `/tradewatcher/prefs`）。**无新路由**（只消费既有 `/quotes` 与 `/prefs`）。
+
+### 行为
+
+- **表盘**：`wheelAngle = −(分钟 × 0.25°)`，整盘逆时针；**金线固定 12 点**（不带 transform、在旋转组外）；刻度与标签反向自转保持水平；弧宽 **12**、半径 **160/140/120/100**、净空隙 **8**、圆头端点、halo 4px；中心圆盘 `r=64` 与三行文字共用环心。
+- **时钟**：1 秒更新；`立即校时` 用服务端时间差校正。
+- **时区**：默认北京，可切本地 / 常用时区；**只影响显示，不改弧角度**。
+- **数据**：复用报价层（东财优先、失败切新浪）；缺数据 `—` + 原因，每卡带 `source` 与 `at`。
+- **刷新**：行情 **120 秒**（`clockRefreshSec`，30–600 收敛），页面显示上次刷新时刻。
+- 设计稿收尾：缺失代码压成一行小字；期货 5 张卡改为有数据，另留 1 张无数据示例。
+
+### 验证
+
+`npm run check` **1294 / 1294 × 2 时区** + selftest + build（73 项）；本地与 `TZ=UTC` 各跑一遍。
+新增 8 条断言各配反例注入：① 旋转量负且等于 `−(分钟×0.25)`（正转 / 固定 ⇒ 败）｜② 金线 `x1==x2==环心x`、`y2==外圈顶`、`transform===null` 且在旋转组外（随盘转 ⇒ 败）｜③ 弧宽 12 / 半径差 20 / 净空隙 8（8.5 / 24 ⇒ 败）｜④ 文字中心与环心 ≤1.5（`margin-top:24px` ⇒ 败）｜⑤ `20:37` 时 XAU 与 AU9999「交易中」、上期所夜盘「时段外」、倒计时 1380s（全「交易中」⇒ 败）｜⑥ 缺数据 `—` + 原因且不含 `0.00`（0 占位 ⇒ 败）｜⑦ 刷新 120000ms（1000ms ⇒ 败）｜⑧ 切时区角度不变（角度随当地分钟 ⇒ 败）。
+
+### 未做 / 边界
+
+- **未做真实浏览器可视化验收**（本轮不重启）。
+- 分道用「时间重叠贪心」，最多 4 道；极端情况同品种日夜盘共道。
+- 期货 5 个主连只有东财源，熔断即 `—` + 原因。
+- 节假日与临时休市未建模（只按周历）。
+- 为容纳第三张工具卡，改了两处硬编码断言（2 → 3）。
+
 ## v0.159.0 — 新增新浪期货/指数报价源（nf_ / hf_ / sh|sz）
 
 报告 `docs/PROBE-SINA-FUTURES.md` + `docs/AUDIT-SINA-FUTURES.md`。`npm run check` **1286 / 1286 × 2 时区**（1279 → 1286）+ selftest + build（73 片段全过）。
