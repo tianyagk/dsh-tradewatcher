@@ -11,17 +11,16 @@
 import * as React from 'react'
 import { api } from './api.ts'
 import {
-  CLOCK_GROUPS, CLOCK_SESSIONS, DIAL, clockRefreshMs, displayMinuteOfWheel, needleGeometry,
-  nextStartSeconds, sessionStatus, sessionWindows, wallClock, wheelAngle, wheelSegments,
+  CLOCK_GROUPS, CLOCK_SESSIONS, DIAL, arcPathD, clockRefreshMs, displayMinuteOfWheel, needleGeometry,
+  nextStartSeconds, sessionStatus, sessionWheelSpans, wallClock, wheelAngle,
   type ClockGroup, type ClockSession,
 } from '../shared/clockSessions.ts'
 import {
-  FUTURE_SPECS, INDEX_SPECS, ZONE_OPTIONS, formatClock, quoteCard, zoneOffsetOf,
+  FUTURE_SPECS, INDEX_SPECS, ZONE_OPTIONS, formatClock, missingNote, quoteCard, sessionRangeText, zoneOffsetOf,
   type ClockCard, type ZoneOption,
 } from './clockView.ts'
 import type { QuoteRow } from '../shared/model.ts'
 
-const DAY = 86_400_000
 const SERIES = ['var(--tw-prism-series-1)', 'var(--tw-prism-series-2)', 'var(--tw-prism-series-3)', 'var(--tw-prism-series-4)', 'var(--tw-prism-series-5)']
 const ALL_IDS = [...INDEX_SPECS, ...FUTURE_SPECS].map((s) => s.secid)
 
@@ -55,7 +54,6 @@ function lanesOf(group: ClockGroup): Map<ClockSession, number> {
 function Dial(props: { now: number; group: ClockGroup; zoneOffset: number }): React.ReactElement {
   const { now, group, zoneOffset } = props
   const rot = wheelAngle(now)
-  const dayStart = Math.floor(now / DAY) * DAY
   const lanes = lanesOf(group)
   const ticks: React.ReactElement[] = []
   for (let k = 0; k < 24; k += 1) {
@@ -81,22 +79,16 @@ function Dial(props: { now: number; group: ClockGroup; zoneOffset: number }): Re
   }
   const arcs: React.ReactElement[] = []
   CLOCK_SESSIONS.filter((s) => s.group === group).forEach((s, i) => {
-    const wins = sessionWindows(s, dayStart - DAY, dayStart + 2 * DAY).filter((w) => w.end > dayStart && w.start < dayStart + DAY)
+    /* 弧按「当地墙钟」画（不看 days）：周日也必须有弧，状态另算 */
     const lane = lanes.get(s) ?? 0
     const r = DIAL.radii[lane] ?? DIAL.radii[0]
-    wheelSegments(wins, dayStart).forEach((seg, j) => {
-      const a1 = (seg.start / 1440) * Math.PI * 2 - Math.PI / 2
-      const a2 = (seg.end / 1440) * Math.PI * 2 - Math.PI / 2
-      const p1x = DIAL.cx + Math.cos(a1) * r
-      const p1y = DIAL.cy + Math.sin(a1) * r
-      const p2x = DIAL.cx + Math.cos(a2) * r
-      const p2y = DIAL.cy + Math.sin(a2) * r
-      const large = seg.end - seg.start > 720 ? 1 : 0
+    sessionWheelSpans(s, now).forEach((seg, j) => {
       arcs.push(React.createElement('path', {
         key: `a${i}-${j}`, className: 'tw-clock-arc', stroke: SERIES[i % SERIES.length],
-        d: `M ${p1x.toFixed(2)} ${p1y.toFixed(2)} A ${r} ${r} 0 ${large} 1 ${p2x.toFixed(2)} ${p2y.toFixed(2)}`,
+        d: arcPathD(r, seg.start, seg.end),
       }))
-      const mid = (seg.start + (seg.end - seg.start) / 2) % 1440
+      /* 相邻道错开贴标（偶数道 62%、奇数道 38%），避免同角度两段标签叠在一起 */
+      const mid = (seg.start + (seg.end - seg.start) * (lane % 2 === 0 ? 0.62 : 0.38)) % 1440
       const ma = (mid / 1440) * Math.PI * 2 - Math.PI / 2
       const mx = DIAL.cx + Math.cos(ma) * r
       const my = DIAL.cy + Math.sin(ma) * r
@@ -180,7 +172,6 @@ export function GlobalClockPage(props: { back?: React.ReactNode; title: string }
 
   const zone: ZoneOption = ZONE_OPTIONS.find((o) => o.key === zoneKey) ?? ZONE_OPTIONS[0]!
   const zoneOffset = zoneOffsetOf(zone, now)
-  const dayStart = Math.floor(now / DAY) * DAY
   const dateParts = wallClock(zone.tz ?? Intl.DateTimeFormat().resolvedOptions().timeZone, now)
   const weekday = WEEKDAYS[new Date(Date.UTC(dateParts.y, dateParts.mo - 1, dateParts.d)).getUTCDay()] ?? ''
   const items = quotes?.items ?? {}
@@ -190,9 +181,7 @@ export function GlobalClockPage(props: { back?: React.ReactNode; title: string }
 
   const rows = CLOCK_SESSIONS.filter((s) => s.group === group).map((s, i) => {
     const trading = sessionStatus(s, now) === 'trading'
-    const wins = sessionWindows(s, dayStart - DAY, dayStart + 2 * DAY)
-    const win = wins.find((w) => now >= w.start && now < w.end) ?? wins.find((w) => w.start > now) ?? wins[0]
-    const range = win === undefined ? '—' : `${formatClock(win.start, zoneOffset)}–${formatClock(win.end, zoneOffset)}`
+    const range = sessionRangeText(s, now, zoneOffset)
     return React.createElement('tr', { key: `${s.exchange}-${s.name}` },
       React.createElement('td', { className: 'bar' }, React.createElement('i', { style: { background: SERIES[i % SERIES.length] } })),
       React.createElement('td', null, React.createElement('b', null, s.exchange), ' · ', s.name),
@@ -202,8 +191,8 @@ export function GlobalClockPage(props: { back?: React.ReactNode; title: string }
       React.createElement('td', null, React.createElement('span', { className: `tw-clock-pill ${trading ? 'on' : 'off'}` }, trading ? '交易中' : '时段外')),
     )
   })
-  const missingNote = missing.length === 0 ? null : React.createElement('div', { className: 'tw-clock-missingline' },
-    `${missing.length} 个期货代码缺数据：${missing.join(' / ')}（东财熔断）`)
+  const missingText = missingNote(missing)
+  const missingLine = missingText === null ? null : React.createElement('div', { className: 'tw-clock-missingline' }, missingText)
 
   return React.createElement('div', { className: 'tw-tool-detail', style: { display: 'flex', flexDirection: 'column', gap: 16, padding: '12px 16px 24px' } },
     props.back ?? null,
@@ -240,7 +229,7 @@ export function GlobalClockPage(props: { back?: React.ReactNode; title: string }
       React.createElement('section', { className: 'tw-prism-card' },
         React.createElement('div', { className: 'tw-prism-card-title' }, '今日交易时段',
           React.createElement('span', { className: 'tw-prism-muted', style: { marginLeft: 'auto' } }, `${rows.length} 段 · ${zone.label}`)),
-        missingNote,
+        missingLine,
         React.createElement('table', { className: 'tw-prism-table' },
           React.createElement('thead', null, React.createElement('tr', null,
             ...['', '交易所 · 品种', '代码', '距下段开始', '时段区间', '状态'].map((h, i) => React.createElement('th', { key: `h${i}` }, h)))),

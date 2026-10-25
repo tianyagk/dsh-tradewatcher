@@ -895,7 +895,7 @@ color-scheme:dark}
 .tw-clock-stamp{margin-left:auto;color:var(--tw-muted);font-size:12px;font-variant-numeric:tabular-nums}
 .tw-clock-grid{display:grid;grid-template-columns:minmax(0,520px) minmax(0,1fr);gap:16px;align-items:start}
 @media (max-width:1100px){.tw-clock-grid{grid-template-columns:minmax(0,1fr)}}
-.tw-clock-dialbox{position:relative;width:100%;max-width:440px;margin:0 auto;aspect-ratio:1/1}
+.tw-clock-dialbox{position:relative;width:100%;margin:0 auto;aspect-ratio:1/1}
 .tw-clock-dialbox>svg{position:absolute;inset:0;display:block;width:100%;height:100%}
 .tw-clock-center{position:absolute;inset:0;display:grid;place-items:center;pointer-events:none}
 .tw-clock-text{display:flex;flex-direction:column;align-items:center;justify-content:center}

@@ -3,26 +3,28 @@
  * 所有"缺数据"都必须落到 `—` + 原因，**不许 0 或旧值占位**。
  */
 import type { QuoteRow } from '../shared/model.ts'
+import { localInstant, wallClock, type ClockSession } from '../shared/clockSessions.ts'
 
-export interface ClockSpec { secid: string; name: string; code: string }
+export interface ClockSpec { secid: string; name: string; code: string; kind: 'index' | 'future' }
 
 /** 主要指数 6 条（与设计稿一致；secid 由宿主报价层解析） */
 export const INDEX_SPECS: readonly ClockSpec[] = [
-  { secid: '1.000001', name: '上证指数', code: '000001' },
-  { secid: '1.399001', name: '深证成指', code: '399001' },
-  { secid: '1.399006', name: '创业板指', code: '399006' },
-  { secid: '1.000300', name: '沪深 300', code: '000300' },
-  { secid: '1.000905', name: '中证 500', code: '000905' },
-  { secid: '1.000852', name: '中证 1000', code: '000852' },
+  { secid: '1.000001', name: '上证指数', code: '000001', kind: 'index' },
+  { secid: '0.399001', name: '深证成指', code: '399001', kind: 'index' },
+  { secid: '0.399006', name: '创业板指', code: '399006', kind: 'index' },
+  { secid: '1.000300', name: '沪深 300', code: '000300', kind: 'index' },
+  { secid: '1.000905', name: '中证 500', code: '000905', kind: 'index' },
+  { secid: '1.000852', name: '中证 1000', code: '000852', kind: 'index' },
 ]
 
 /** 期货自选 5 条（主连；东财优先、失败切新浪） */
 export const FUTURE_SPECS: readonly ClockSpec[] = [
-  { secid: '112.AU0', name: 'AU 黄金', code: 'AU0' },
-  { secid: '112.AG0', name: 'AG 白银', code: 'AG0' },
-  { secid: '112.CU0', name: 'CU 铜', code: 'CU0' },
-  { secid: '112.LC0', name: 'LC 碳酸锂', code: 'LC0' },
-  { secid: '101.GC00Y', name: 'GC 黄金', code: 'GC00Y' },
+  { secid: '112.AU0', name: 'AU 黄金', code: 'AU0', kind: 'future' },
+  { secid: '112.AG0', name: 'AG 白银', code: 'AG0', kind: 'future' },
+  { secid: '112.CU0', name: 'CU 铜', code: 'CU0', kind: 'future' },
+  { secid: '112.JM0', name: 'JM 焦煤', code: 'JM0', kind: 'future' },
+  { secid: '112.LC0', name: 'LC 碳酸锂', code: 'LC0', kind: 'future' },
+  { secid: '101.GC00Y', name: 'GC 黄金', code: 'GC00Y', kind: 'future' },
 ]
 
 const SOURCE_LABEL: Record<string, string> = { em: '东财', sina: '新浪', tencent: '腾讯' }
@@ -49,6 +51,11 @@ export function formatClock(ms: number, offsetMin: number): string {
   return `${two(d.getUTCHours())}:${two(d.getUTCMinutes())}:${two(d.getUTCSeconds())}`
 }
 
+function formatHM(ms: number, offsetMin: number): string {
+  const d = new Date(ms + offsetMin * 60_000)
+  return `${two(d.getUTCHours())}:${two(d.getUTCMinutes())}`
+}
+
 export function formatStamp(ms: number, offsetMin: number): string {
   const d = new Date(ms + offsetMin * 60_000)
   return `${two(d.getUTCHours())}:${two(d.getUTCMinutes())}:${two(d.getUTCSeconds())}`
@@ -59,7 +66,8 @@ export function formatPrice(n: number): string {
 }
 
 export function formatPct(n: number): string {
-  return `${n >= 0 ? '+' : ''}${n.toFixed(2)}%`
+  if (n === 0) return '0.00%'
+  return `${n > 0 ? '+' : ''}${n.toFixed(2)}%`
 }
 
 /**
@@ -77,7 +85,9 @@ export function quoteCard(spec: ClockSpec, row: QuoteRow | undefined, missing: r
       source: '东财',
       at: '—',
       status: 'missing',
-      reason: missing.includes(spec.secid) ? '东财熔断，仅东财一个源' : '源未给价',
+      reason: spec.kind === 'index'
+        ? (missing.includes(spec.secid) ? '无行情源（东财 + 新浪均失败）' : '源未给价')
+        : (missing.includes(spec.secid) ? '东财熔断，仅东财一个源' : '源未给价'),
     }
   }
   const atMs = row.at ?? row.time
@@ -91,6 +101,31 @@ export function quoteCard(spec: ClockSpec, row: QuoteRow | undefined, missing: r
     status: 'ok',
     reason: null,
   }
+}
+
+/** 缺失清单文案：按**类别**分写（指数 / 期货），绝不把指数写成"期货代码" */
+export function missingNote(missing: readonly string[]): string | null {
+  if (missing.length === 0) return null
+  const hit = (s: ClockSpec): boolean => missing.some((id) => id === s.secid || id.endsWith(s.code))
+  const indexCodes = INDEX_SPECS.filter(hit).map((s) => s.code)
+  const futureCodes = FUTURE_SPECS.filter(hit).map((s) => s.code)
+  const parts: string[] = []
+  if (indexCodes.length > 0) parts.push(`指数 ${indexCodes.length} 个（${indexCodes.join('/')}）`)
+  if (futureCodes.length > 0) parts.push(`期货 ${futureCodes.length} 个（${futureCodes.join('/')}）`)
+  const rest = missing.filter((id) => !INDEX_SPECS.some((s) => id === s.secid || id.endsWith(s.code)) && !FUTURE_SPECS.some((s) => id === s.secid || id.endsWith(s.code)))
+  if (rest.length > 0) parts.push(`其它 ${rest.length} 个（${rest.join('/')}）`)
+  return `缺数据：${parts.join(' · ')}`
+}
+
+/** 时段表的「时段区间」列：配置的 start–end 换算到显示时区（跨日加「次日」），**不是当前时刻** */
+export function sessionRangeText(s: ClockSession, atMs: number, zoneOffsetMin: number): string {
+  const w = wallClock(s.tz, atMs)
+  const start = localInstant(s.tz, w.y, w.mo, w.d, s.start)
+  let end = localInstant(s.tz, w.y, w.mo, w.d, s.end)
+  if (end <= start) end += 86_400_000
+  const dayOf = (ms: number): number => Math.floor((ms + zoneOffsetMin * 60_000) / 86_400_000)
+  const text = `${formatHM(start, zoneOffsetMin)}–${formatHM(end, zoneOffsetMin)}`
+  return dayOf(end) === dayOf(start) ? text : `${text} 次日`
 }
 
 /** 时区下拉：默认北京；「本地」按浏览器时区；其余是常用市场时区 */

@@ -42,8 +42,8 @@ export const CLOCK_SESSIONS: readonly ClockSession[] = [
   // 黄金
   { group: 'gold', exchange: '上期所', name: 'AU黄金 夜盘', code: 'AU', start: '21:00', end: '02:30', days: WEEKDAYS, tz: 'Asia/Shanghai' },
   { group: 'gold', exchange: '上期所', name: 'AU黄金 日盘', code: 'AU', start: '09:00', end: '15:00', days: WEEKDAYS, tz: 'Asia/Shanghai' },
-  { group: 'gold', exchange: 'COMEX', name: 'GC黄金', code: 'GC', start: '18:00', end: '17:00', days: WEEKDAYS, tz: 'America/New_York' },
-  { group: 'gold', exchange: '伦敦', name: 'XAU现货', code: 'XAU', start: '08:00', end: '16:30', days: WEEKDAYS, tz: 'Europe/London' },
+  { group: 'gold', exchange: 'COMEX', name: 'GC黄金', code: 'GC', start: '06:00', end: '17:00', days: WEEKDAYS, tz: 'Asia/Shanghai' },
+  { group: 'gold', exchange: '伦敦', name: 'XAU现货', code: 'XAU', start: '15:00', end: '23:00', days: WEEKDAYS, tz: 'Asia/Shanghai' },
   { group: 'gold', exchange: '上金所', name: 'AU9999', code: 'AU9999', start: '20:00', end: '02:30', days: WEEKDAYS, tz: 'Asia/Shanghai' },
   // 原油
   { group: 'oil', exchange: '上期能源', name: 'SC原油 夜盘', code: 'SC', start: '21:00', end: '02:30', days: WEEKDAYS, tz: 'Asia/Shanghai' },
@@ -131,9 +131,35 @@ export function sessionStatus(s: ClockSession, atMs: number): 'trading' | 'outsi
 
 /** 距下一段开始的秒数（当前正在交易 ⇒ 指下一段，通常为次日同一时刻） */
 export function nextStartSeconds(s: ClockSession, atMs: number): number {
-  const next = sessionWindows(s, atMs, atMs + 3 * DAY).find((w) => w.start > atMs)
-  if (next === undefined) return 0
-  return Math.max(0, Math.round((next.start - atMs) / 1000))
+  /* 按轮盘分钟取模：只看"下一段起点"在 24h 环上的位置，永远落在 [0, 86400) */
+  const wheelMinute = (((atMs % DAY) + DAY) % DAY) / MIN
+  const starts = sessionWheelSpans(s, atMs).map((x) => x.start).sort((a, b) => a - b)
+  if (starts.length === 0) return 0
+  const next = starts.find((x) => x > wheelMinute) ?? starts[0]! + 1440
+  const sec = Math.round((next - wheelMinute) * 60)
+  return ((sec % 86400) + 86400) % 86400
+}
+
+/** 某条时段**当天的轮盘弧段**：只看当地墙钟（不看 `days`）——周日也要把该组所有时段画出来，
+ *  是否「交易中」由 `sessionStatus` 判断，与画弧解耦。 */
+export function sessionWheelSpans(s: ClockSession, atMs: number): { start: number; end: number }[] {
+  const w = wallClock(s.tz, atMs)
+  const start = localInstant(s.tz, w.y, w.mo, w.d, s.start)
+  let end = localInstant(s.tz, w.y, w.mo, w.d, s.end)
+  if (end <= start) end += DAY
+  return wheelSegments([{ start, end }], Math.floor(atMs / DAY) * DAY)
+}
+
+/** 一条弧的 `d`（空串 = 非法输入；页面据此跳过而不是画 NaN 路径） */
+export function arcPathD(r: number, startMin: number, endMin: number, cx: number = DIAL.cx, cy: number = DIAL.cy): string {
+  if (![r, startMin, endMin].every((n) => Number.isFinite(n))) return ''
+  const a1 = (startMin / 1440) * Math.PI * 2 - Math.PI / 2
+  const a2 = (endMin / 1440) * Math.PI * 2 - Math.PI / 2
+  const x1 = cx + Math.cos(a1) * r, y1 = cy + Math.sin(a1) * r
+  const x2 = cx + Math.cos(a2) * r, y2 = cy + Math.sin(a2) * r
+  if (![x1, y1, x2, y2].every((n) => Number.isFinite(n))) return ''
+  const large = endMin - startMin > 720 ? 1 : 0
+  return `M ${x1.toFixed(2)} ${y1.toFixed(2)} A ${r} ${r} 0 ${large} 1 ${x2.toFixed(2)} ${y2.toFixed(2)}`
 }
 
 /** 表盘旋转角：绝对 24 小时轮盘，**只取决于时刻**（与时区无关）；逆时针，0.25°/分钟 */
