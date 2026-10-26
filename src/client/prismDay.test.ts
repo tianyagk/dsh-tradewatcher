@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
-  beijingDayOf, dayTableEmpty, dayTableTitle, todayBeijing, todayFillsOf, todayOrdersOf,
+  beijingDayOf, dayTableEmpty, dayTableTitle, mergedFillsOf, todayBeijing, todayFillsOf, todayOrdersOf,
 } from './prismView.ts'
 
 const here = dirname(fileURLToPath(import.meta.url))
@@ -69,4 +69,16 @@ test('⑤ 客户端只过滤不删除：无 prism-orders 写入，源数组不�
   const src = [order('y', '2026-10-25', 1), order('t', '2026-10-26', 2)]
   todayOrdersOf(src, '2026-10-26')
   assert.equal(src.length, 2)
+})
+
+test('26 笔同 bar 同价 ⇒ 成交表合并 1 行，数量/费用合计；磁盘明细不变', () => {
+  const at = Date.parse('2026-10-26T11:16:00+08:00')
+  const raw = Array.from({ length: 26 }, () => ({
+    secid: '1.600000', name: '测试', side: 'buy' as const, price: 0.7, shares: 5062, fee: 8.6, at, source: '1min' as const,
+  }))
+  const merged = mergedFillsOf(raw)
+  assert.equal(merged.length, 1)
+  assert.equal(merged[0]?.shares, 26 * 5062)
+  assert.equal(merged[0]?.fee, 223.6)
+  assert.equal(raw.length, 26, '合并只在渲染层，原始明细不删')
 })

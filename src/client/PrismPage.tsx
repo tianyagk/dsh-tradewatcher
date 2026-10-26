@@ -25,6 +25,7 @@ import {
   todayBeijing,
   todayFillsOf,
   todayOrdersOf,
+  mergedFillsOf,
   analysisText,
   compositionItems,
   decisionErrorText,
@@ -265,6 +266,7 @@ export function PrismPage(props: { active: boolean }): React.ReactElement {
 
   const todaysOrders = trading === null ? [] : todayOrdersOf(trading.orders, today)
   const todaysFills = trading === null ? [] : todayFillsOf(trading.fills, today)
+  const mergedFills = mergedFillsOf(todaysFills)
 
   return (
     <div className="tw-prism">
@@ -381,17 +383,17 @@ export function PrismPage(props: { active: boolean }): React.ReactElement {
 
             {tab === 'fills' ? (
               <div className="tw-prism-stack">
-                <div className="tw-prism-card-title">{dayTableTitle('fills', todaysFills.length)}</div>
-                {todaysFills.length === 0
+                <div className="tw-prism-card-title">{dayTableTitle('fills', mergedFills.length)}</div>
+                {mergedFills.length === 0
                   ? <div className="tw-prism-muted">{dayTableEmpty('fills')}</div>
                   : (
                   <table className="tw-prism-table">
                     <thead><tr><th>时间</th><th>方向</th><th className="tw-prism-num">价格</th><th className="tw-prism-num">数量</th><th className="tw-prism-num">费用</th><th>来源</th></tr></thead>
                     <tbody>
-                      {todaysFills.slice().reverse().map((f) => (
-                        <tr key={`${f.orderId}-${f.at}`}>
-                          <td className="tw-prism-mono">{shClockText(f.at)}</td>
-                          <td>{f.side === 'buy' ? '买' : '卖'} {f.name}</td>
+                      {mergedFills.slice().reverse().map((f) => (
+                        <tr key={`${f.secid}-${f.barTime}-${f.side}`}>
+                          <td className="tw-prism-mono">{shClockText(f.barTime)}</td>
+                          <td>{f.side === 'buy' ? '买' : '卖'} {f.name}{f.count > 1 ? `（${f.count} 笔）` : ''}</td>
                           <td className="tw-prism-num tw-prism-mono">{PRISM_MONEY(f.price)}</td>
                           <td className="tw-prism-num tw-prism-mono">{f.shares}</td>
                           <td className="tw-prism-num tw-prism-mono">{PRISM_MONEY(f.fee)}</td>

@@ -161,6 +161,8 @@ export interface PrismFill {
   shares: number
   amount: number
   fee: number
+  /** 本笔佣金（累计口径；同一委托最低佣金只收一次） */
+  commission?: number
   at: number
   source: '1min' | 'trend'
 }
@@ -177,6 +179,8 @@ export interface PrismOrder {
   /** 挂单所属交易日（`YYYY-MM-DD`）；跨日自动失效 */
   day: string
   status: 'pending' | 'filled' | 'cancelled' | 'rejected'
+  /** 最近处理的 bar 时间；同一 bar 不重复下单，下一根 bar 才推进 */
+  lastBarTime?: number
   /** 已成交股数（部分成交时 < shares；status 仍 pending，余量排队） */
   filledShares?: number
   /** 本轮不成交的稳定原因码（vol-missing / vol-zero / trend-no-1min / transient-source） */

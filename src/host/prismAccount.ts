@@ -46,10 +46,21 @@ export interface FeeBreakdown {
   total: number
 }
 
-/** 三项费用（逐笔；佣金最低 5 元，印花税只在卖出） */
-export function feesOf(side: 'buy' | 'sell', price: number, shares: number): FeeBreakdown {
+/**
+ * 三项费用。`priorAmount/priorCommission` 用于同一委托的累计佣金：
+ * 只在本笔补足「累计应收佣金 − 已收佣金」，最低 5 元不会每笔重复收。
+ */
+export function feesOf(
+  side: 'buy' | 'sell',
+  price: number,
+  shares: number,
+  priorAmount = 0,
+  priorCommission = 0,
+): FeeBreakdown {
   const amount = price * shares
-  const commission = Math.max(COMMISSION_MIN, money(amount * COMMISSION_RATE))
+  const totalAmount = priorAmount + amount
+  const dueCommission = Math.max(COMMISSION_MIN, money(totalAmount * COMMISSION_RATE))
+  const commission = money(Math.max(0, dueCommission - priorCommission))
   const stamp = side === 'sell' ? money(amount * STAMP_RATE) : 0
   const transfer = money(amount * TRANSFER_RATE)
   return { commission, stamp, transfer, total: money(commission + stamp + transfer) }
@@ -825,9 +836,14 @@ export async function matchTick(
       skipped.push({ id: order.id, code: order.skipCode, reason: order.skipReason })
       continue
     }
-    const hit = matchOrder(order, barsResult.bars)
+    // 同一 bar 只处理一次；下一根 bar 才推进（避免同一分钟 volume 被每个 tick 重复使用）
+    const bars = order.lastBarTime === undefined
+      ? barsResult.bars
+      : barsResult.bars.filter((b) => b.t > (order.lastBarTime as number))
+    const hit = matchOrder(order, bars)
     if (hit === null) continue
     const bar = barsResult.bars.find((b) => b.t === hit.at)
+    order.lastBarTime = hit.at
     const volume = bar?.volume
     if (volume === null || volume === undefined) {
       order.skipCode = 'vol-missing'
@@ -842,10 +858,12 @@ export async function matchTick(
       continue
     }
     const remaining = order.shares - (order.filledShares ?? 0)
-    const take = Math.min(remaining, Math.floor(volume * rate))
+    const barFilled = fills.filter((f) => f.secid === order.secid && f.at === hit.at).reduce((sum, f) => sum + f.shares, 0)
+    const barCap = Math.max(0, Math.floor(volume * rate) - barFilled)
+    const take = Math.min(remaining, barCap)
     if (take <= 0) {
-      order.skipCode = 'participation'
-      order.skipReason = '按参与率裁剪后不足 1 股，本轮不成交并保持 pending'
+      order.skipCode = 'bar-volume-used'
+      order.skipReason = `该 bar 量能上限已用完（${barFilled}/${Math.floor(volume * rate)} 股），下一根 bar 再处理`
       skipped.push({ id: order.id, code: order.skipCode, reason: order.skipReason })
       continue
     }
@@ -858,7 +876,11 @@ export async function matchTick(
       continue
     }
     const amount = money(hit.price * take)
-    const fee = feesOf(order.side, hit.price, take).total
+    const prior = fills.filter((f) => f.orderId === order.id)
+    const priorAmount = prior.reduce((sum, f) => sum + f.amount, 0)
+    const priorCommission = prior.reduce((sum, f) => sum + (typeof f.commission === 'number' ? f.commission : 0), 0)
+    const feeParts = feesOf(order.side, hit.price, take, priorAmount, priorCommission)
+    const fee = feeParts.total
     const fill: PrismFill = {
       orderId: order.id,
       secid: order.secid,
@@ -868,6 +890,7 @@ export async function matchTick(
       shares: take,
       amount,
       fee,
+      commission: feeParts.commission,
       at: hit.at,
       source: '1min',
     }

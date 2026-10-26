@@ -507,3 +507,36 @@ export function tableScrollOk(css: string): boolean {
   const block = /\.tw-prism-tablecard\{([^}]*)\}/.exec(css)?.[1] ?? ''
   return /flex:1 1 auto/.test(block) && /min-height:0/.test(block) && /overflow:auto/.test(block)
 }
+
+/* ── 成交渲染合并：磁盘 fills 保留逐笔，UI 按 bar 合并 ── */
+export interface MergedFill {
+  day: string
+  barTime: number
+  secid: string
+  name: string
+  side: 'buy' | 'sell'
+  price: number
+  shares: number
+  fee: number
+  source: '1min' | 'trend'
+  count: number
+}
+
+export function mergedFillsOf(fills: ReadonlyArray<{
+  secid: string; name: string; side: 'buy' | 'sell'; price: number; shares: number; fee: number; at: number; source: '1min' | 'trend'
+}>): MergedFill[] {
+  const map = new Map<string, MergedFill>()
+  for (const f of fills) {
+    const day = beijingDayOf(f.at)
+    const key = `${day}|${f.at}|${f.secid}|${f.side}|${f.price}`
+    const cur = map.get(key)
+    if (cur === undefined) {
+      map.set(key, { day, barTime: f.at, secid: f.secid, name: f.name, side: f.side, price: f.price, shares: f.shares, fee: f.fee, source: f.source, count: 1 })
+    } else {
+      cur.shares += f.shares
+      cur.fee = Math.round((cur.fee + f.fee) * 100) / 100
+      cur.count += 1
+    }
+  }
+  return [...map.values()]
+}
