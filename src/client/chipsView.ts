@@ -41,45 +41,6 @@ export function axisTicks(centers: readonly number[], max = 5): number[] {
 }
 
 /**
- * 口径**是否偏离默认**（偏离才给一行原因；正常情况一个字都不显示）。
- * 默认 = A股/深沪 + 有 floatMv + 支持前复权 + 样本够 ⇒ 换手率衰减 k=1.5、三角形、近 45 日。
- *
- * `bucketNote`（档数被夹住的原因）**必须**并进这一行（v0.99.x 自适应档数）：
- * 档数被上限夹住 = 价格分辨率比目标粗，这是"口径偏离"，**不许静默** ——
- * 它优先于其它原因一起显示（不是二选一），所以这里是"拼接"而不是"提前 return"。
- */
-export function caliberDeviates(input: {
-  decay: 'turnover' | 'half-life'
-  decayReason: string | null
-  fqSupported: boolean
-  why: string | null
-  samples: number
-  window: number
-  /** 档数规划给的夹取说明（未夹 ⇒ null/缺省） */
-  bucketNote?: string | null
-  /**
-   * 成交量量纲归一的标注（未归一 ⇒ null/缺省）：科创板日线在腾讯一侧是「股」，
-   * 插件按「手」算换手率 ⇒ 归一过就必须说出来（否则用户不知道"这份数字被换算过"）。
-   */
-  unitNote?: string | null
-}): string | null {
-  const base = ((): string | null => {
-    if (input.why !== null) return input.why
-    // ⚠ 前半句是 `build.mjs` 锁定的 UI 片段（73 项校验之一），**不许改它**；
-    // 美股的原因作为括号补在后面（锁定用的是 includes()，追加不影响校验）。
-    if (!input.fqSupported) return '该标的不支持前复权（指数/期货/板块）⇒ 不提供筹码分布（美股另有原因：上游只给未复权原始价，拆股/分红未调整）'
-    if (input.decay !== 'turnover') return input.decayReason ?? '按固定半衰期 10 日衰减（经验口径）'
-    if (input.samples < input.window) return `只取到近 ${input.samples} 日（不足 ${input.window} 日）——历史越长越准`
-    return null
-  })()
-  const notes = [input.bucketNote, input.unitNote]
-    .filter((x): x is string => typeof x === 'string' && x.trim() !== '')
-  if (notes.length === 0) return base
-  const note = notes.join('；⚠ ')
-  return base === null ? note : `${base}；⚠ ${note}`
-}
-
-/**
  * 档数口径的**一行元组**（用户要求：界面/悬停必须能读到「窗口 N 天 · 档数 M · 档宽 X 元」）。
  *
  * 为什么档宽必须露出来：档数固定时，窗口越长价格区间越宽 ⇒ 档宽越粗（45 天 1.25 元 → 805 天 6.10 元）。

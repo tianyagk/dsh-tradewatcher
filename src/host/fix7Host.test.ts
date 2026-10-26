@@ -62,7 +62,7 @@ function stubEm(fields: Record<string, unknown>): void {
 const bar = (date: string, vol: number | null, close = 50) =>
   ({ date, open: close, close, high: close, low: close, vol, pct: null as number | null })
 
-test('D1-a 量纲判据：只有 ≈100× 才动手；60× 必须「判不了且不改数」（注入旧 band ⇒ 必败）', () => {
+test('D1-a 量纲判据：只有 ≈100× 才动手；60× 必须「无法判定且不改数」（注入旧 band ⇒ 必败）', () => {
   /**
    * 旧行为：`ratio ∉ [1/20, 20]` 就无条件 ×/÷100 ⇒ 60× 也照乘（归一到手之后变成 0.6×，更远）。
    * 新增判据：`|log10(ratio/100)| ≤ 0.1`（或反向）才动手。
@@ -75,9 +75,10 @@ test('D1-a 量纲判据：只有 ≈100× 才动手；60× 必须「判不了且
   // ① 60×：判不了，且**一根都不许动**
   const sixty = [bar('2026-10-15', 2_000_000), bar('2026-10-16', 2_000_000)]
   const r60 = alignVolUnitWithQuote(sixty, { date: '2026-10-16', vol: 33_333 })
-  assert.equal(judgement(r60), 'noop-unsure', `60× 必须判「判不了」（实际 ${judgement(r60)}，reason=${String(r60.reason)}）`)
-  assert.match(String(r60.reason), /判不了/, '原因里必须出现「判不了」')
-  assert.match(String(r60.reason), /未改动/, '原因里必须写明「未改动」')
+  assert.equal(judgement(r60), 'noop-unsure', `60× 必须判「无法判定」（实际 ${judgement(r60)}，reason=${String(r60.reason)}）`)
+  // v0.159.0：用户要求页面不再出现「判不了/只报数」⇒ 宿主文案改成等价表述（语义不变）
+  assert.match(String(r60.reason), /无法判定/, '原因里必须写明无法判定')
+  assert.match(String(r60.reason), /不改数/, '原因里必须写明「不改数」')
   assert.equal(r60.bars[1].vol, 2_000_000, '判不了时最后一根的量**不许**被改（注入旧 band ⇒ 这里会变成 20000）')
   // ⚠ 反例注入：旧实现的算式（任何 >20 的比值都 ÷100）必须被判据拒绝
   const oldFactor = 2_000_000 / 33_333 > 20 ? 1 / VOL_UNIT_FACTOR : VOL_UNIT_FACTOR
@@ -97,7 +98,7 @@ test('D1-a 量纲判据：只有 ≈100× 才动手；60× 必须「判不了且
   // ④ 同口径（≈1×）仍然是"无需处理"，且不给 reason（既有行为不许退化）
   const same = [bar('2026-10-16', 46_532)]
   const rSame = alignVolUnitWithQuote(same, { date: '2026-10-16', vol: 46_532 })
-  assert.equal(judgement(rSame), 'noop-clear', '同口径不许报「判不了」，也不许改数')
+  assert.equal(judgement(rSame), 'noop-clear', '同口径不许报「无法判定」，也不许改数')
 
   // ⑤ 反向（缓存比手还小 100×）仍要 ×100
   const tiny = [bar('2026-10-16', 465)]

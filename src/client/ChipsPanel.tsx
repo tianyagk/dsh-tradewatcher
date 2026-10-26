@@ -14,7 +14,7 @@ import { clampIndex } from './chipsView.ts'
 import { countMount } from './mounts.ts'
 import { CHIPS_LINE_TOKENS } from './theme.ts'
 import {
-  bucketCaliberOf, bucketCenterTicks, caliberDeviates, chipAxisOf, chipsLinesOf, chipsPlotHeightOf, chipsProfileOf,
+  bucketCaliberOf, bucketCenterTicks, chipAxisOf, chipsLinesOf, chipsPlotHeightOf, chipsProfileOf,
   chipProfitDirOf, chipsDayPriceOf, chipsRowsLayoutOf, chipsRowsOf, mergeForRows, CHIPS_ROW_GAP_PX,
 } from './chipsView.ts'
 import type { ChipsState } from './useChips.ts'
@@ -48,7 +48,7 @@ export function ChipsPanel(props: ChipsPanelProps): React.ReactElement | null {
 
   if (!props.fqSupported || d?.why !== null && d?.why !== undefined) {
     return React.createElement('div', { className: 'tw-chips tw-chips-off' },
-      React.createElement('span', { className: 'tw-muted' }, d?.why ?? '该标的不提供筹码分布：本插件没有它的前复权序列（指数/期货无除权概念；美股上游只给未复权原始价）'))
+      React.createElement('span', { className: 'tw-muted' }, d?.why ?? '该标的不支持前复权（指数/期货/板块）⇒ 不提供筹码分布（美股上游只给未复权原始价，拆股/分红未调整）'))
   }
   if (props.state.error !== null) {
     return React.createElement('div', { className: 'tw-chips tw-chips-off' },
@@ -62,14 +62,6 @@ export function ChipsPanel(props: ChipsPanelProps): React.ReactElement | null {
   const hint0 = `${d.methodology}`
   // 档数口径一行（用户要求）：窗口 N 天 · 档数 M · 档宽 X 元 —— 分辨率必须能读到，不能只说"96 档"
   const bucketLine = bucketCaliberOf({ window: d.window, bucketCount: d.bucketCount, bucketWidth: d.bucketWidth ?? null })
-  const deviate = caliberDeviates({
-    decay: d.decay, decayReason: d.decayReason, fqSupported: props.fqSupported,
-    why: d.why, samples: d.samples, window: d.window,
-    // 档数被夹住 = 分辨率比目标粗 ⇒ 必须出现在**可见**那一行（不许静默变粗）
-    bucketNote: d.bucketNote ?? null,
-    // 量纲被归一过 ⇒ 同样必须可见（只改 vol，但用户有权知道）
-    unitNote: d.unitNote ?? null,
-  })
   /**
    * 档位轴（档中心价）：**新宿主在顶层只给一份**（`payload.centers`），逐日不再重复同一数组
    * （REVIEW-9-PERF §2.1①：166 KB 回包里 83 KB 是 45 份相同 242 元数组）。
@@ -86,9 +78,9 @@ export function ChipsPanel(props: ChipsPanelProps): React.ReactElement | null {
   const viewCenters = centers.slice(win.from, win.to + 1)
   const viewBuckets = day.buckets.slice(win.from, win.to + 1)
   // 行布局：由**实际会渲染**的固定项反推绘图区高度 ⇒ 所有行都装得下（不再按 split.bottom 估行高被裁）
-  const optionalLines = (deviate !== null ? 1 : 0) + (d.narrow ? 1 : 0)
+  const optionalLines = d.narrow ? 1 : 0
   // 绘图区高度 = 筹码块真实高度 − 固定项（按**实际会渲染**的可选行计）
-  // ⚠ 不设下限：设了就会"按 48px 排行高、实际只有 6px"⇒ 末行再次被静默裁掉。
+  // 注意：不设下限 —— 设了就会"按 48px 排行高、实际只有 6px"⇒ 末行再次被静默裁掉。
   //   空间真不够时 `rowsLayout.fits === false` 如实报出去（不假装装得下）。
   const plotH = chipsPlotHeightOf({
     blockPx: props.maxBottom === undefined ? 220 : props.maxBottom,
@@ -125,7 +117,6 @@ export function ChipsPanel(props: ChipsPanelProps): React.ReactElement | null {
   })
   const lines = chipsLinesOf({ avgCost: day.avgCost, support: day.support, resistance: day.resistance })
   const hint = `${hint0}\n${bucketLine}` +
-    (d.bucketNote === null || d.bucketNote === undefined ? '' : `\n⚠ ${d.bucketNote}`) +
     (merged.merged > 1 ? `\n显示按 ${merged.merged} 档合并（可画行数 ${rowCapacity}，档数 ${d.bucketCount}）—— 权重相加、行中心取加权均价，统计口径未变` : '') + `\n` +
     `显示区间按筹码质量覆盖裁剪：${(axis.window.covered * 100).toFixed(2)}% 的筹码在轴内，` +
     `${(axis.window.dropped * 100).toFixed(2)}% 在轴外（未显示，权重未改）\n` +
@@ -157,14 +148,10 @@ export function ChipsPanel(props: ChipsPanelProps): React.ReactElement | null {
             `${dayPrice.price === null ? '未取到' : dayPrice.price.toFixed(2)}` +
             `（${priceLabel === '现价' ? `来源 ${d.priceSource ?? '未取到'}` : '该展示日为历史日，用当日收盘价'}，` +
             `价格空间 fqt=${d.fqt}，换算因子 ${d.priceScale}，最新一根 ${d.latestBarDate ?? '—'}）` +
-            (dayPrice.note === null ? '' : `\n⚠ ${dayPrice.note}`),
+            (dayPrice.note === null ? '' : `\n${dayPrice.note}`),
         }, `盈利比例 ${pct(profitPct)}`),
       ),
     ),
-    // 只有**偏离默认口径**时才给一行原因（正常情况一个字都不显示：k=1.5 + 三角形是写死的默认）
-    deviate !== null
-      ? React.createElement('div', { className: 'tw-chips-narrow', tabIndex: 0, role: 'note', title: `${deviate}\n${d.methodology}` }, deviate)
-      : null,
     d.narrow && open
       ? React.createElement('div', { className: 'tw-chips-narrow' }, '区间过窄（P95−P5 不足价格区间 3%），仅供参考')
       : null,

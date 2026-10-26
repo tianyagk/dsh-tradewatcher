@@ -7,7 +7,7 @@ import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 import {
-  axisTicks, bucketCenterTicks, caliberDeviates, chipAxisOf, chipBarPxOf, chipProfitDirOf, chipsColumnsOf, chipsDayPriceOf, chipsProfileOf, chipsRowsLayoutOf, chipsRowsOf, drawerFillOf, CHIPS_AXIS_MIN_PX, CHIPS_CHART_GAP_PX, CHIPS_LABEL_RESERVE_PX, mergeForRows,
+  axisTicks, bucketCenterTicks, chipAxisOf, chipBarPxOf, chipProfitDirOf, chipsColumnsOf, chipsDayPriceOf, chipsProfileOf, chipsRowsLayoutOf, chipsRowsOf, drawerFillOf, CHIPS_AXIS_MIN_PX, CHIPS_CHART_GAP_PX, CHIPS_LABEL_RESERVE_PX, mergeForRows,
 } from './chipsView.ts'
 import { loadChips, resetChipsCache } from './chipsLoader.ts'
 import { createRequire } from 'node:module'
@@ -96,16 +96,7 @@ test('① 结构保证：筹码取数不接收页签/复权/图表重试；抽�
   assert.equal(/\[secid, tab, fqt, retry\]/.test(drawer), true, 'K 线依赖数组必须含 secid/tab/fqt/retry')
 })
 
-test('② 正常情况面板零口径文案；偏离默认才给一行原因', () => {
-  // 正常 A股（换手率口径、有 floatMv、样本够）⇒ null（界面一个字都不显示）
-  assert.equal(caliberDeviates({ decay: 'turnover', decayReason: null, fqSupported: true, why: null, samples: 180, window: 180 }), null)
-  // 港股回落 ⇒ 必须给原因
-  const hk = caliberDeviates({ decay: 'half-life', decayReason: '港股 vol/amount 的缩放与 A股不同（实测比值≈9926，单位未标定）⇒ …', fqSupported: true, why: null, samples: 180, window: 180 })
-  assert.ok(hk !== null && hk.includes('9926'), String(hk))
-  // 样本不足（不足累积窗口）⇒ 如实说
-  assert.ok((caliberDeviates({ decay: 'turnover', decayReason: null, fqSupported: true, why: null, samples: 60, window: 180 }) ?? '').includes('60'))
-  // 指数/期货 ⇒ 面板给原因
-  assert.ok((caliberDeviates({ decay: 'turnover', decayReason: null, fqSupported: false, why: null, samples: 0, window: 180 }) ?? '').includes('前复权'))
+test('② 面板不再渲染口径偏离行（用户要求整段删除）', () => {
   // 只看**非注释**的代码文本（注释不是界面文案；tooltip 里的 methodology 是数据，不在源码里）
   const panel = read('./ChipsPanel.tsx')
     .split('\n')
@@ -232,15 +223,7 @@ test('task-64：筹码与页签无关（六页签全显示；那行"只在分时
   assert.equal(panel.includes('不符合'), false)
   assert.equal(panel.includes('fqSupported'), true, '不复权标的的原因保留')
   assert.equal(panel.includes('why'), true, '样本不足/不提供模块的原因保留')
-  assert.equal(panel.includes('caliberDeviates'), true, '口径偏离默认的原因保留')
-  // ③ 六页签逐个核对：原因判定函数与页签无关 ⇒ 每个页签结果一致
-  const tabs = ['1m', '5d', 'day', 'week', 'month', 'year']
-  const base = caliberDeviates({ decay: 'turnover', decayReason: null, fqSupported: true, why: null, samples: 360, window: 360 })
-  for (const _t of tabs) {
-    assert.equal(caliberDeviates({ decay: 'turnover', decayReason: null, fqSupported: true, why: null, samples: 360, window: 360 }), base,
-      `页签 ${_t} 下筹码的原因判定必须与其它页签一致（筹码与页签无关）`)
-  }
-  assert.equal(base, null, '正常标的 + 足够样本 ⇒ 一个字都不显示')
+  assert.equal(panel.includes('caliberDeviates'), false, '口径偏离行已按用户要求整段删除')
 })
 
 test('task-64 + 保留上一帧：切页签时旧图仍渲染、加载态与旧图共存、首帧才骨架', () => {

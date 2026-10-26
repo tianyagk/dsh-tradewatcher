@@ -184,7 +184,7 @@ export function planBuckets(input: {
     const before = buckets
     buckets = byPayload
     clamped = 'payload'
-    note = `回包体积预算 ${Math.round(CHIPS_PAYLOAD_MAX_BYTES / 1024)} KB（每档·日实测 ${CHIPS_BYTES_PER_BUCKET_DAY} B × 展示 ${days} 天）只允许 ${byPayload} 档 ⇒ 从 ${before} 档降到 ${byPayload}，实际档宽 ${r4(span / buckets)} 元（比目标 ${r4(target)} 元粗 ${ratio(buckets).toFixed(2)}×）`
+    note = `回包大小上限 ${Math.round(CHIPS_PAYLOAD_MAX_BYTES / 1024)} KB（每档·日实测 ${CHIPS_BYTES_PER_BUCKET_DAY} B × 展示 ${days} 天）只允许 ${byPayload} 档 ⇒ 档数 ${before} → ${byPayload}，实际档宽 ${r4(span / buckets)} 元（比目标 ${r4(target)} 元粗 ${ratio(buckets).toFixed(2)}×）`
   }
   return finish(buckets, clamped, note)
 }
@@ -687,8 +687,7 @@ export function chipSeriesOf(bars: readonly ChipBar[], opts: ChipOptions = {}): 
       `。新增筹码按${shape === 'triangle' ? '三角形分布（峰在当日均价 (high+low+close)/3）' : '均匀分布'}铺到当日 [low, high]` +
       `（均价均值 ${(peakSum / Math.max(1, win.length)).toFixed(4)}）；` +
       `窗口：用了近 ${samples} 根日线${samples < CHIPS_WINDOW ? `（不足累积窗口 ${CHIPS_WINDOW} 根 ⇒ 历史越短越不准，如实标注）` : ''}（fqt=1 前复权）；` +
-      `档数 ${buckets}（自适应：窗口价格区间 ${round(high - low, 4)} 元 ÷ ${buckets} = 档宽 ${plan.width} 元；目标 = 中间价 ${plan.mid} × ${(CHIPS_WIDTH_TARGET_PCT * 100).toFixed(2)}% = ${plan.target} 元；限制 [${CHIPS_BUCKETS_AUTO_MIN}, ${CHIPS_BUCKETS_AUTO_MAX}] 与回包体积预算 ${Math.round(CHIPS_PAYLOAD_MAX_BYTES / 1024)} KB）` +
-      (bucketNote === null ? '' : `；⚠ ${bucketNote}`) +
+      `档数 ${buckets}（自适应：窗口价格区间 ${round(high - low, 4)} 元 ÷ ${buckets} = 档宽 ${plan.width} 元；目标 = 中间价 ${plan.mid} × ${(CHIPS_WIDTH_TARGET_PCT * 100).toFixed(2)}% = ${plan.target} 元；限制 [${CHIPS_BUCKETS_AUTO_MIN}, ${CHIPS_BUCKETS_AUTO_MAX}] 与回包大小上限 ${Math.round(CHIPS_PAYLOAD_MAX_BYTES / 1024)} KB）` +
       `（显示区间裁剪：先按筹码质量 99% 覆盖，再隐去权重低于窗口峰值 20% 的稀疏行；被裁到轴外的权重不显示、也不参与四数统计口径）；支撑/压力 = 筹码累积分布的 P5/P95 价位；平均成本 = Σ(桶价×权重)/Σ权重；盈利比例 = Σ(桶价 < 现价 的权重)/Σ权重；价格空间：fqt=1 前复权（桶价与现价同一空间）；换算因子 ${scaleRaw}（1 = 恒等）；现价来源 ${priceSource ?? '未取到'}（原始价 ${priceRaw ?? '未取到'} × ${scaleRaw}）；"最新一根" = 递推窗口最后一根 ${latestBarDate ?? '—'}：最新一根用换算后的现价，展示日与它不一致时该展示日用当天收盘价，不混用。`,
   }
 }

@@ -242,7 +242,7 @@ export function alignVolUnitWithQuote<T extends VolBearingBar>(
       dropped: 0,
       reason:
         `${ref.date} 的日线成交量 ${String(bars[i].vol)} 与同日报价 ${String(ref.vol)}（手）相差 ${ratio.toFixed(1)}×，` +
-        `既不是 ≈1×（同口径）也不是 ≈${VOL_UNIT_FACTOR}×（股/手）⇒ 判不了，未改动（只报数，不猜量纲）`,
+        `既不是 ≈1×（同口径）也不是 ≈${VOL_UNIT_FACTOR}×（股/手）⇒ 无法判定量纲 ⇒ 不改数（只陈述数字，不推断单位）`,
     }
   }
   const factor = ratio > 1 ? 1 / VOL_UNIT_FACTOR : VOL_UNIT_FACTOR

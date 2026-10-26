@@ -12,14 +12,14 @@
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync } from 'node:fs'
+import { mkdtempSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { usWallToEpoch, newYorkParts, lastUsCloseBoundary, inUsSession, isUsSettledOffline } from './time.ts'
 import { parseTencentUsStamp } from './tencent.ts'
 import { positionRefusal, US_NO_FQ_WHY, positionOfBars } from './position.ts'
 
-import { caliberDeviates } from '../client/chipsView.ts'
 
 /** 隔离：必须在 `em.ts` 首次加载之前钉住 DSH_HOME（K 线缓存、归档都会写这里） */
 const HOME = mkdtempSync(join(tmpdir(), 'tw-uschart-home-'))
@@ -213,9 +213,13 @@ test('④ 复权缺失 ⇒ 筹码/位置不给结论（注入：照算 ⇒ 必�
   const wouldBe = positionOfBars('106.FRO', splitBars, 52, { fq: 0, fqSupported: true })
   assert.notEqual(wouldBe.posPct, null, '反例：若不拦，拆股窗口照样能算出一个百分比（所以必须由 positionRefusal 拦）')
   assert.equal(positionRefusal('106.FRO') !== null, true, '⚠ 拦住它的就是这条判据：改成 null 就变成"照算"')
-  // 筹码：不支持时的文案必须点明美股是"上游只给未复权价"（不是"不适用"）
-  const chipsWhy = caliberDeviates({ decay: 'turnover', decayReason: null, fqSupported: false, why: null, samples: 0, window: 45 })
-  assert.ok(String(chipsWhy).includes('美股'), `筹码不提供的文案要能对上美股（实得 ${String(chipsWhy)}）`)
+  /**
+   * 筹码：不支持时的文案必须点明美股是"上游只给未复权价"（不是"不适用"）。
+   * v0.159.0（用户要求删掉筹码卡的冗长注解）：那段文案改由面板自己的兜底句承担 ——
+   * 断言改为**直接读面板源码**，不再经过已删除的 `caliberDeviates`。
+   */
+  const panelSrc = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '../client/ChipsPanel.tsx'), 'utf8')
+  assert.ok(panelSrc.includes('美股上游只给未复权原始价'), '筹码不提供的文案要能对上美股（面板兜底句）')
 
   // ⚠ 本轮（AUDIT-IMPL69）聚合出周/月/年之后，**不许顺手放开**这两处：
   const wk = await withStubs({ daily: SINA_DAILY }, () => em.fetchKline('106.FRO', 102, 10, 1)) as { fqSupported: boolean } | null

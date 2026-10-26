@@ -19,7 +19,7 @@ import {
   CHIPS_BUCKETS_AUTO_MAX, CHIPS_BUCKETS_AUTO_MIN, CHIPS_BUCKETS_MAX, CHIPS_PAYLOAD_MAX_BYTES,
   CHIPS_WIDTH_BAND, CHIPS_WIDTH_TARGET_PCT, chipSeriesOf, planBuckets, type BucketPlan,
 } from './chips.ts'
-import { bucketCaliberOf, caliberDeviates } from '../client/chipsView.ts'
+import { bucketCaliberOf } from '../client/chipsView.ts'
 
 const here = dirname(fileURLToPath(import.meta.url))
 
@@ -153,7 +153,7 @@ test('④ 回包字节有上界（预算先撞上时降档数并留痕）', () =
   const bytes = JSON.stringify({ secid: '1.600519', ...r, missing: [] }).length
   assert.ok(bytes <= CHIPS_PAYLOAD_MAX_BYTES, `回包 ${bytes} B 必须 ≤ 预算 ${CHIPS_PAYLOAD_MAX_BYTES} B`)
   assert.equal(r.bucketClamped, 'payload', `展示 60 天 + 宽区间 ⇒ 预算应当是先撞上的那道（实际 ${r.bucketClamped}）`)
-  assert.ok(r.bucketNote !== null && r.bucketNote.includes('预算'), `降档必须留痕（${r.bucketNote}）`)
+  assert.ok(r.bucketNote !== null && r.bucketNote.includes('回包大小上限'), `降档必须留痕（${r.bucketNote}）`)
   // 判据 + 反例注入：去掉预算（按目标档宽放开到上限）⇒ 字节必超预算
   const judge = (b: number): boolean => b <= CHIPS_PAYLOAD_MAX_BYTES
   const unbounded = chipSeriesOf(bars, { fqSupported: true, floatMv: 1.6e12, window: 1200, display: 60, minSamples: 1, buckets: CHIPS_BUCKETS_AUTO_MAX })
@@ -169,42 +169,27 @@ test('④ 回包字节有上界（预算先撞上时降档数并留痕）', () =
 
 // ── ⑤ 夹取必须出现在界面（不许静默变粗）────────────────────────────────────
 
-test('⑤ 夹取时界面必须能读到「窗口 N 天 · 档数 M · 档宽 X 元」+ 夹取说明', () => {
+test('⑤ 面板只保留「窗口 N 天 · 档数 M · 档宽 X 元」元组；夹取说明**不再渲染**（v0.159.0 纯删除）', () => {
   const line = bucketCaliberOf({ window: 805, bucketCount: 242, bucketWidth: 2.2913 })
   assert.equal(line, '窗口 805 天 · 档数 242 · 档宽 2.2913 元')
   assert.ok(/窗口 \d+ 天 · 档数 \d+ · 档宽 [\d.]+ 元/.test(line), '元组形状：窗口 N 天 · 档数 M · 档宽 X 元')
   assert.equal(bucketCaliberOf({ window: 45, bucketCount: 96, bucketWidth: null }), '窗口 45 天 · 档数 96 · 档宽 —', '档宽缺失 ⇒ —（不是 0）')
-  // 正常情况下**不出**偏离行（一个字都不显示）
+  /**
+   * 夹取说明仍留在**载荷**里（`bucketNote`，供接口/agent 核对"不是静默变粗"），
+   * 但面板**不再渲染它** —— 用户要求把筹码卡那段冗长注解整段删除（`caliberDeviates` 已下线）。
+   */
   const pinned = planBuckets({ low: 1160.6, high: 1740.5, displayDays: 45 })
-  assert.equal(
-    caliberDeviates({ decay: 'turnover', decayReason: null, fqSupported: true, why: null, samples: 805, window: 805, bucketNote: null }),
-    null, '没夹取、口径没偏离 ⇒ 零文案',
-  )
-  // 夹取 ⇒ 那一行**必须**带上说明（可见）：必须写明"分辨率比目标粗"这件事
-  const shown = caliberDeviates({ decay: 'turnover', decayReason: null, fqSupported: true, why: null, samples: 805, window: 805, bucketNote: pinned.note ?? '（应有说明）' })
-  const judgeNote = (row: string | null): boolean => row !== null && /粗|夹|降到/.test(row) && row.includes('档')
-  assert.equal(judgeNote(shown), true, `夹取说明必须可见且写明粗了多少（实际 ${String(shown)}）`)
-  // 与其它偏离并存时也要带上（拼接，不是二选一）
-  const both = caliberDeviates({ decay: 'half-life', decayReason: '港股回落半衰期', fqSupported: true, why: null, samples: 800, window: 805, bucketNote: pinned.note })
-  assert.ok(typeof both === 'string' && both.includes('半衰期') && both.includes('⚠'), `夹取说明必须与其它偏离并存（实际 ${String(both)}）`)
-  // 反例注入：夹住了却把说明丢掉（= 静默变粗）⇒ 判据必败
-  const silent = caliberDeviates({ decay: 'turnover', decayReason: null, fqSupported: true, why: null, samples: 805, window: 805, bucketNote: null })
-  assert.equal(judgeNote(silent), false, '⚠ 反例（静默夹取）确实被判据判为不合格')
-  assert.throws(
-    () => assert.equal(judgeNote(silent), true, '夹取时界面必须出现档数/档宽标注'),
-    /夹取时界面必须出现档数\/档宽标注/,
-    '⚠ 反例注入（静默夹取）必须让断言失败',
-  )
-  // 接线：面板必须把 bucketNote 传给那一行、并把元组塞进悬停（源码级 + 注入）
+  assert.ok((pinned.note ?? '').includes('档'), `夹取时计划里必须留痕（实得 ${pinned.note}）`)
   const panel = readFileSync(join(here, '..', 'client', 'ChipsPanel.tsx'), 'utf8')
-  assert.ok(panel.includes('bucketNote: d.bucketNote ?? null'), '面板必须把宿主给的夹取说明接进那一行')
-  assert.ok(panel.includes('bucketCaliberOf({ window: d.window'), '面板必须渲染“窗口/档数/档宽”元组')
-  const cut = panel.replace('bucketNote: d.bucketNote ?? null', 'bucketNote: null')
-  assert.notEqual(cut, panel, '反例注入必须真改到源码')
+  assert.equal(panel.includes('bucketNote'), false, '面板不得再引用 bucketNote（纯删除，不留替代文案）')
+  assert.equal(panel.includes('caliberDeviates'), false, '口径偏离行已删除')
+  assert.ok(panel.includes('bucketCaliberOf({ window: d.window'), '元组仍必须在（标题悬停里保留）')
+  // 反例注入：把 bucketNote 接回面板 ⇒ 判据必败
+  const cut = panel.replace("const hint0 = `${d.methodology}`", "const hint0 = `${d.methodology} ${d.bucketNote ?? ''}`")
   assert.throws(
-    () => assert.equal(cut.includes('bucketNote: d.bucketNote ?? null'), true, '面板必须传 bucketNote'),
-    /面板必须传 bucketNote/,
-    '⚠ 反例注入（面板丢掉夹取说明）必须让断言失败',
+    () => assert.equal(cut.includes('d.bucketNote'), false, '面板不得引用 bucketNote'),
+    /面板不得引用 bucketNote/,
+    '⚠ 反例注入（把夹取说明接回面板）必须失败',
   )
 })
 
