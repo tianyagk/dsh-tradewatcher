@@ -360,6 +360,22 @@ function roundMoney(n: number): number {
  * 原则不变：坏值不阻断启动（回退默认），排序键按白名单收敛、隐藏集合按宽容规则归一，
  * `live` 汇率档位按 `none` 处理（未验证源不给假象）。
  */
+/** 「做T窗口」开关归一：键必须是 secid 形状（`市.码`），值必须 `=== true`；最多 500 个键 */
+export function normalizeTWindowPrefs(raw: unknown): Record<string, boolean> {
+  const out: Record<string, boolean> = {}
+  if (raw === null || typeof raw !== 'object') return out
+  let n = 0
+  for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
+    if (v !== true) continue
+    const key = k.trim().toUpperCase()
+    if (!/^\d{1,3}\.[A-Z0-9]+$/.test(key)) continue
+    out[key] = true
+    n += 1
+    if (n >= 500) break
+  }
+  return out
+}
+
 function prefsFrom(loaded: Partial<PortPrefs>): PortPrefs {
   return {
     ...DEFAULT_PREFS,
@@ -382,6 +398,8 @@ function prefsFrom(loaded: Partial<PortPrefs>): PortPrefs {
     panelOpacity: normalizePanelOpacity(loaded.panelOpacity, DEFAULT_PREFS.panelOpacity ?? 1),
     blurDigits: loaded.blurDigits === true,
     trendArchive: loaded.trendArchive !== false, // 默认开；只有显式 false 才关
+    // 做T开关来自明文文件（可手改）：只收 `true` 的合法 secid 键，其它一律丢（坏值不阻断启动）
+    tWindow: normalizeTWindowPrefs(loaded.tWindow),
     // live 是"未验证源"，装载时按 none 处理（启动不该因为一个不可用档位就崩）
     fxMode: loaded.fxMode === 'fixed' ? 'fixed' : 'none',
     fxRates: normalizeFxRates(loaded.fxRates),

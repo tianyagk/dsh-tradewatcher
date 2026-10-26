@@ -1,0 +1,241 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>做T窗口 · 终稿</title>
+<!--
+  「做T窗口」终稿（单方案）：基准 = 当日均价（随均价实时漂移）；档距 = ATR% ÷ 4；
+  档数规则 ATR% ≤ 2% → 4 档 / 2–3.5% → 6 档 / > 3.5% → 8 档；上下轨由规则算出，不可手动调整。
+  横虚线 stroke-dasharray 4 3、1px；买区 --buy（蓝）/ 卖区 --sell（橙），不与涨跌红绿混淆；
+  标签「价格 + 偏离均价%」11px、等宽数字、右对齐、与虚线留 6px；开关「做T」按标的记忆。
+-->
+<style>
+
+  *,*::before,*::after{box-sizing:border-box}
+  html,body{margin:0;padding:0}
+  :root{
+    color-scheme:light;
+    --bg:#f5f6f8; --card:#fff; --card2:#f2f4f7; --line:#e2e5ea; --line2:#eceef2; --lineStrong:#cfd3dc;
+    --text:#16181d; --dim:#4c535f; --muted:#6f7787;
+    --accent:#5e6ad2; --accent-soft:rgba(94,106,210,.14);
+    --buy:#4C6EF5; --sell:#E8590C; --band:rgba(76,110,245,.05);
+    --up:#e5484d; --down:#0e8f5c; --vwap:#B08900; --price:#2B3440;
+  }
+  html[data-theme=dark]{
+    color-scheme:dark;
+    --bg:#010102; --card:#0f1011; --card2:#16181b; --line:#23252a; --line2:#1b1d21; --lineStrong:#34343a;
+    --text:#f7f8f8; --dim:#c8ced8; --muted:#8a8f98;
+    --accent:#5e6ad2; --accent-soft:rgba(94,106,210,.22);
+    --buy:#91A7FF; --sell:#FFA94D; --band:rgba(145,167,255,.07);
+    --up:#ff5f6d; --down:#27a644; --vwap:#E0B84A; --price:#DDE3EC;
+  }
+  body{background:var(--bg);color:var(--text);
+    font:12px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI","Inter","PingFang SC","Microsoft YaHei",sans-serif;
+    letter-spacing:-.006em;-webkit-font-smoothing:antialiased}
+  .wrap{max-width:980px;margin:0 auto;padding:16px;display:flex;flex-direction:column;gap:16px}
+  .bar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:8px 12px;background:var(--card);
+    border:1px solid var(--line);border-radius:10px;box-shadow:0 1px 2px rgba(16,24,40,.05)}
+  .badge{display:inline-flex;align-items:center;height:20px;padding:0 6px;border-radius:4px;background:var(--accent-soft);color:var(--accent);font-size:11px;font-weight:600}
+  .hint{margin-left:auto;color:var(--muted);font-size:11.5px}
+  .btn{height:26px;padding:0 10px;border:1px solid var(--line);border-radius:8px;background:var(--card2);color:var(--dim);font:inherit;font-size:12px;cursor:pointer}
+  .atrbadge{color:var(--muted);font-size:11px;font-variant-numeric:tabular-nums}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:10px;box-shadow:0 1px 2px rgba(16,24,40,.05)}
+  .hd{display:flex;align-items:center;gap:8px;padding:8px 12px;border-bottom:1px solid var(--line);min-height:40px}
+  .hd .t{font-size:14px;font-weight:600}
+  .hd .m{color:var(--muted);font-size:11.5px;font-variant-numeric:tabular-nums}
+  .hd .right{margin-left:auto;display:flex;align-items:center;gap:8px}
+  .toggle{display:inline-flex;align-items:center;gap:6px;height:26px;padding:0 8px;border:1px solid var(--line);border-radius:8px;
+    background:transparent;color:var(--dim);font:inherit;font-size:12px;cursor:pointer}
+  .toggle .sw{position:relative;width:26px;height:14px;border-radius:7px;background:var(--lineStrong);transition:background .15s}
+  .toggle .sw::after{content:"";position:absolute;left:1px;top:1px;width:12px;height:12px;border-radius:50%;background:#fff;transition:transform .15s}
+  .toggle[aria-pressed=true]{color:var(--accent);border-color:var(--accent-soft);background:var(--accent-soft)}
+  .toggle[aria-pressed=true] .sw{background:var(--accent)}
+  .toggle[aria-pressed=true] .sw::after{transform:translateX(12px)}
+  .meta{display:flex;gap:12px;flex-wrap:wrap;padding:6px 12px 0;color:var(--muted);font-size:11.5px;font-variant-numeric:tabular-nums}
+  .meta b{color:var(--dim);font-weight:600}
+  .chartwrap{padding:4px 12px 12px}
+  svg{display:block;width:100%;height:auto}
+  .axis{fill:var(--muted);font-size:11px;font-variant-numeric:tabular-nums}
+  .gridline{stroke:var(--line2);stroke-width:1}
+  .pline{fill:none;stroke:var(--price);stroke-width:1.4}
+  .vline{fill:none;stroke:var(--vwap);stroke-width:1;stroke-dasharray:4 3}
+  .volbar{fill:var(--lineStrong)}
+  .macdbar.up{fill:var(--up)}
+  .macdbar.down{fill:var(--down)}
+  .macdline{fill:none;stroke:var(--accent);stroke-width:1.1}
+  .tgrid line{stroke-width:1;stroke-dasharray:4 3}
+  .tgrid .buy{stroke:var(--buy)}
+  .tgrid .sell{stroke:var(--sell)}
+  .tlab{font-size:11px;font-variant-numeric:tabular-nums;text-anchor:end}
+  .tprice{font-size:12px;font-variant-numeric:tabular-nums;text-anchor:end;fill:var(--dim);font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+  .tpct{font-size:11px;font-variant-numeric:tabular-nums;text-anchor:end;fill:var(--muted)}
+  .rprice{font-size:12px;font-variant-numeric:tabular-nums;text-anchor:end;fill:var(--text)}
+  .tlab.buy{fill:var(--buy)}
+  .tlab.sell{fill:var(--sell)}
+  .band{fill:var(--band)}
+  .curline{stroke:var(--text);stroke-width:1}
+  .curdot{fill:var(--text)}
+  .curbox{fill:var(--card);stroke:var(--text);stroke-width:1}
+  .curtext2{fill:var(--text);font-size:11px;font-weight:600;font-variant-numeric:tabular-nums}
+  .curtext{fill:var(--card);font-size:11px;font-weight:600;font-variant-numeric:tabular-nums}
+</style>
+</head>
+<body>
+
+<div class="wrap">
+  <div class="bar">
+    <span class="badge">设计稿 · 终稿</span>
+    <button class="btn" type="button" id="drift">▶ 演示漂移</button>
+    <span class="hint">基准=当日均价（随均价漂移）· 档距=ATR%÷4 · 档数按 ATR% 规则 · 不提供手动调整</span>
+  </div>
+  <section class="card" data-card="A">
+    <div class="hd"><span class="t">1.601872 招商轮船</span><span class="m" data-quote>A</span>
+      <span class="right"><span class="atrbadge" data-badge="A"></span><button class="toggle" type="button" aria-pressed="true" data-toggle="A"><span class="sw"></span>做T</button></span></div>
+    <div class="meta" data-meta="A"></div>
+    <div class="chartwrap"><svg data-svg="A" viewBox="0 0 640 344" role="img" aria-label="分时图与做T网格"></svg></div>
+  </section>
+  <section class="card" data-card="B">
+    <div class="hd"><span class="t">0.300750 宁德时代</span><span class="m" data-quote>B</span>
+      <span class="right"><span class="atrbadge" data-badge="B"></span><button class="toggle" type="button" aria-pressed="true" data-toggle="B"><span class="sw"></span>做T</button></span></div>
+    <div class="meta" data-meta="B"></div>
+    <div class="chartwrap"><svg data-svg="B" viewBox="0 0 640 344" role="img" aria-label="分时图与做T网格"></svg></div>
+  </section>
+</div>
+
+<script>
+(function () {
+  'use strict';
+  var PLOT = { x: 104, w: 428 }, PRICE = { top: 14, h: 170 }, VOL = { top: 196, h: 44 }, MACD = { top: 252, h: 56 };
+  var N = 240;
+  var SPEC = {
+    A: { code: '1.601872', name: '招商轮船', base: 16.62, cur: 16.72, atrPct: 1.62 },
+    B: { code: '0.300750', name: '宁德时代', base: 214.8, cur: 215.6, atrPct: 2.84 },
+  };
+  function rng(seed) { var s = seed; return function () { s = (s * 1103515245 + 12345) & 0x7fffffff; return s / 0x7fffffff; }; }
+  function build(sp) {
+    var r = rng(20261026), series = [], p = sp.base;
+    for (var i = 0; i < N; i++) {
+      p += (r() - 0.48) * sp.base * 0.0012;
+      if (i > 200) p += (sp.cur - p) * 0.08;
+      series.push(+p.toFixed(3));
+    }
+    series[N - 1] = sp.cur;
+    var vol = series.map(function () { return 60 + r() * 120; });
+    var cumPV = 0, cumV = 0, vwap = series.map(function (v, i) { cumPV += v * vol[i]; cumV += vol[i]; return cumPV / cumV; });
+    function ema(arr, n) { var k = 2 / (n + 1), out = [], e = arr[0]; for (var i = 0; i < arr.length; i++) { e = i === 0 ? arr[0] : arr[i] * k + e * (1 - k); out.push(e); } return out; }
+    var e12 = ema(series, 12), e26 = ema(series, 26), dif = series.map(function (_, i) { return e12[i] - e26[i]; });
+    var dea = ema(dif, 9), hist = dif.map(function (v, i) { return (v - dea[i]) * 2; });
+    return { series: series, vol: vol, vwap: vwap, dif: dif, hist: hist };
+  }
+  /* 规则：档距 = ATR% ÷ 4；档数 4 / 6 / 8；半跨度 = 档距 × 档数/2 */
+  function rule(atrPct) {
+    var tiers = atrPct <= 2 ? 4 : (atrPct <= 3.5 ? 6 : 8);
+    var stepPct = atrPct / 4;
+    return { tiers: tiers, stepPct: stepPct, halfPct: stepPct * tiers / 2 };
+  }
+  var DATA = {};
+  Object.keys(SPEC).forEach(function (k) { DATA[k] = build(SPEC[k]); });
+
+  function yOf(v, lo, hi) { return PRICE.top + (hi - v) / (hi - lo) * PRICE.h; }
+  function xOf(i) { return PLOT.x + (i / (N - 1)) * PLOT.w; }
+
+  function draw(key) {
+    var sp = SPEC[key], d = DATA[key], rl = rule(sp.atrPct);
+    var center = d.vwap[N - 1];
+    var lo = center * (1 - rl.halfPct / 100) * 0.998, hi = center * (1 + rl.halfPct / 100) * 1.002;
+    var svg = document.querySelector('[data-svg="' + key + '"]');
+    var s = [];
+    for (var g = 0; g <= 3; g++) {
+      var price = lo + (hi - lo) * g / 3, y = yOf(price, lo, hi);
+      s.push('<line class="gridline" x1="' + PLOT.x + '" y1="' + y.toFixed(1) + '" x2="' + (PLOT.x + PLOT.w) + '" y2="' + y.toFixed(1) + '"/>');
+
+    }
+    s.push('<text class="axis" x="' + PLOT.x + '" y="' + (VOL.top - 6) + '">成交量</text>');
+    s.push('<text class="axis" x="' + PLOT.x + '" y="' + (MACD.top - 6) + '">MACD(12,26,9)</text>');
+    s.push('<path class="pline" d="' + d.series.map(function (v, i) { return (i === 0 ? 'M ' : 'L ') + xOf(i).toFixed(1) + ' ' + yOf(v, lo, hi).toFixed(1); }).join(' ') + '"/>');
+    s.push('<path class="vline" d="' + d.vwap.map(function (v, i) { return (i === 0 ? 'M ' : 'L ') + xOf(i).toFixed(1) + ' ' + yOf(v, lo, hi).toFixed(1); }).join(' ') + '"/>');
+    var vmax = Math.max.apply(null, d.vol);
+    d.vol.forEach(function (vv, i) { var h = vv / vmax * VOL.h; s.push('<rect class="volbar" x="' + (xOf(i) - 0.9).toFixed(1) + '" y="' + (VOL.top + VOL.h - h).toFixed(1) + '" width="1.8" height="' + h.toFixed(1) + '"/>'); });
+    var mh = Math.max.apply(null, d.hist.map(Math.abs));
+    d.hist.forEach(function (vv, i) {
+      var h = Math.abs(vv) / mh * (MACD.h / 2 - 2);
+      var y = vv >= 0 ? MACD.top + MACD.h / 2 - h : MACD.top + MACD.h / 2;
+      s.push('<rect class="macdbar ' + (vv >= 0 ? 'up' : 'down') + '" x="' + (xOf(i) - 0.9).toFixed(1) + '" y="' + y.toFixed(1) + '" width="1.8" height="' + Math.max(0.6, h).toFixed(1) + '"/>');
+    });
+    s.push('<path class="macdline" d="' + d.dif.map(function (vv, i) { return (i === 0 ? 'M ' : 'L ') + xOf(i).toFixed(1) + ' ' + (MACD.top + MACD.h / 2 - vv / mh * (MACD.h / 2 - 2)).toFixed(1); }).join(' ') + '"/>');
+
+    /* 时间轴：09:30 / 10:30 / 11:30·13:00 / 14:00 / 15:00（含午休分段） */
+    var ticks = [['09:30', 0], ['10:30', 0.25], ['11:30·13:00', 0.5], ['14:00', 0.75], ['15:00', 1]];
+    ticks.forEach(function (tk) {
+      var x = PLOT.x + tk[1] * PLOT.w;
+      s.push('<line class="gridline" x1="' + x.toFixed(1) + '" y1="' + PRICE.top + '" x2="' + x.toFixed(1) + '" y2="' + (MACD.top + MACD.h) + '"/>');
+      s.push('<text class="axis" x="' + x.toFixed(1) + '" y="' + (MACD.top + MACD.h + 14) + '" text-anchor="' + (tk[1] === 0 ? 'start' : tk[1] === 1 ? 'end' : 'middle') + '">' + tk[0] + '</text>');
+    });
+
+    /* 做T 网格：以均价为中轴，上下各 tiers/2 档 */
+    var t = [];
+    var half = rl.tiers / 2;
+    var b0 = yOf(center * (1 + rl.halfPct / 100), lo, hi), b1 = yOf(center * (1 - rl.halfPct / 100), lo, hi);
+    t.push('<rect class="band" x="' + PLOT.x + '" y="' + b0.toFixed(1) + '" width="' + PLOT.w + '" height="' + Math.max(1, b1 - b0).toFixed(1) + '"/>');
+    for (var k = -half; k <= half; k++) {
+      if (k === 0) continue;
+      var price2 = center * (1 + k * rl.stepPct / 100), y2 = yOf(price2, lo, hi);
+      if (y2 < PRICE.top - 2 || y2 > PRICE.top + PRICE.h + 2) continue;
+      var side = k < 0 ? 'buy' : 'sell';
+      var outer = (k === -half || k === half);
+      var pctText = (k > 0 ? '+' : '') + (k * rl.stepPct).toFixed(2) + '%';
+      var rw = 42;                                      /* 右价格 12px 近似宽 */
+      var xEnd = 632 - rw - 6;                          /* 右侧价格右对齐 + 6px 间隙 */
+      t.push('<line class="' + side + '" x1="' + PLOT.x + '" y1="' + y2.toFixed(1) + '" x2="' + xEnd.toFixed(1) + '" y2="' + y2.toFixed(1) + '" stroke-width="' + (outer ? 1.5 : 1) + '"/>');
+      /* 左：价格（12px 等宽）+ 偏离%（11px 次要色），同行右对齐，间距 4px */
+      t.push('<text class="tprice" x="' + (PLOT.x - 10) + '" y="' + (y2 + 4).toFixed(1) + '">' + price2.toFixed(2) + '</text>');
+      t.push('<text class="tpct" x="' + (PLOT.x - 10 - 56) + '" y="' + (y2 + 4).toFixed(1) + '">' + pctText + '</text>');
+      /* 右：价格标签 */
+      t.push('<text class="rprice" x="632" y="' + (y2 + 4).toFixed(1) + '">' + price2.toFixed(2) + '</text>');
+    }
+    var cy = yOf(sp.cur, lo, hi);
+    t.push('<line class="curline" x1="' + PLOT.x + '" y1="' + cy.toFixed(1) + '" x2="' + (PLOT.x + PLOT.w) + '" y2="' + cy.toFixed(1) + '"/>');
+    t.push('<circle class="curdot" cx="' + (PLOT.x + PLOT.w) + '" cy="' + cy.toFixed(1) + '" r="2.4"/>');
+    t.push('<rect class="curbox" x="' + (PLOT.x + PLOT.w - 58) + '" y="' + (cy - 20).toFixed(1) + '" width="58" height="17" rx="6"/>');
+    t.push('<text class="curtext2" x="' + (PLOT.x + PLOT.w - 29) + '" y="' + (cy - 8).toFixed(1) + '" text-anchor="middle">' + sp.cur.toFixed(2) + '</text>');
+    s.push('<g class="tgrid" data-grid="' + key + '">' + t.join('') + '</g>');
+    svg.innerHTML = s.join('');
+    document.querySelector('[data-card="' + key + '"] [data-meta]').innerHTML =
+      '均价 <b>' + center.toFixed(2) + '</b> · ATR% <b>' + sp.atrPct.toFixed(2) + '%</b> ÷ 4 = 档距 <b>' + rl.stepPct.toFixed(3) + '%</b> · 档数 <b>' + rl.tiers + '</b> 档 · 半跨度 <b>' + rl.halfPct.toFixed(3) + '%</b>';
+    document.querySelector('[data-card="' + key + '"] [data-quote]').textContent = '现价 ' + sp.cur.toFixed(2) + ' · 均价 ' + center.toFixed(2);
+    document.querySelector('[data-badge="' + key + '"]').textContent = 'ATR ' + sp.atrPct.toFixed(2) + '% · ' + rl.tiers + ' 档';
+  }
+
+  /* 开关：按标的记忆 */
+  var on = { A: true, B: true };
+  function apply(key) {
+    var btn = document.querySelector('[data-toggle="' + key + '"]');
+    var grid = document.querySelector('[data-svg="' + key + '"] .tgrid');
+    if (btn) btn.setAttribute('aria-pressed', on[key] ? 'true' : 'false');
+    if (grid) grid.style.display = on[key] ? '' : 'none';
+  }
+  document.querySelectorAll('[data-toggle]').forEach(function (b) {
+    b.addEventListener('click', function () { var k = b.getAttribute('data-toggle'); on[k] = !on[k]; apply(k); });
+  });
+
+  Object.keys(SPEC).forEach(function (k) { draw(k); apply(k); });
+
+  /* 演示漂移：点一次 ⇒ 均价 +0.05%，全部档价与偏离% 重算（仅设计稿用） */
+  var driftBtn = document.getElementById('drift');
+  var baseVwap = { A: DATA.A.vwap[N - 1], B: DATA.B.vwap[N - 1] };
+  var driftPct = 0;
+  driftBtn.addEventListener('click', function () {
+    driftPct += 0.05;
+    Object.keys(DATA).forEach(function (k) {
+      DATA[k].vwap[N - 1] = baseVwap[k] * (1 + driftPct / 100);
+      draw(k);
+    });
+    driftBtn.textContent = '▶ 演示漂移（均价 +' + driftPct.toFixed(2) + '%）';
+  });
+
+  document.documentElement.setAttribute('data-theme', window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+})();
+</script>
+</body>
+</html>

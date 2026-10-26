@@ -892,6 +892,13 @@ export interface PortPrefs {
    * 就只能是当日 —— 界面会如实说明"未归档"，不会假装有历史。
    */
   trendArchive?: boolean
+  /**
+   * 「做T窗口」开关（**按标的**记忆）：键 = secid 大写，值 `true` = 开。
+   *
+   * 为什么存"开着的标的"而不是全部：老 profile 没有这个键 ⇒ 全关 ⇒ 新功能默认不打扰；
+   * 关掉的标的直接从表里删键（`tWindowPatchOf`），不会积累成千上万个 false。
+   */
+  tWindow?: Record<string, boolean>
 }
 
 export const DEFAULT_PREFS: PortPrefs = {
@@ -908,6 +915,7 @@ export const DEFAULT_PREFS: PortPrefs = {
   fxMode: 'none',
   fxRates: {},
   trendArchive: true,
+  tWindow: {},
   /** 行情卡片配置：存**隐藏集合**（老 profile 无此键 ⇒ 全可见；将来新增的卡片默认可见） */
   stripCfg: { hidden: [] },
   chipsDecay: 1.5,

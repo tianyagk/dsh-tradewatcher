@@ -9,6 +9,7 @@ import { createRafCoalescer, type RafCoalescer } from './rafThrottle.ts'
 import type { CandleMarker, SparkMarker } from './charts.tsx'
 import { fmtAxis, ma, macd, niceTicks } from './indicators.ts'
 import { hasVolumeSeries, isUsableAvg, isUsableBaseline, plausibleAvgs, trendDayAxis, trendScale } from './trendView.ts'
+import { T_WINDOW_COLORS, type TWindow } from './tWindowView.ts'
 import { sessionAxis, type SessionDef } from './sessionAxis.ts'
 import { klineReadout, nearestIndex, tipPlacement, toneClass, trendReadout, upDownColors, type TipLine } from './chartCursor.ts'
 import { trendDayCount } from '../shared/model.ts'
@@ -238,6 +239,11 @@ export function TrendChart(props: {
   mainH?: number
   volH?: number
   macdH?: number
+  /**
+   * 「做T窗口」网格（`null` = 不画：开关关闭 / ATR 取不到）。
+   * 只画**虚线 + 标签**；不画成交点、不出现棱镜/挂单内容（用户第 6 条）。
+   */
+  tWindow?: TWindow | null
 }): React.ReactElement {
   const { points, width, redUp } = props
   const mainH = props.mainH ?? 200
@@ -337,6 +343,64 @@ export function TrendChart(props: {
   children.push(React.createElement('path', { key: 'line', d: linePath, fill: 'none', style: { stroke: mainColor }, strokeWidth: 1.4 }))
   if (avgPath !== '') {
     children.push(React.createElement('path', { key: 'avg', d: avgPath, fill: 'none', style: { stroke: '#e8a33d' }, strokeWidth: 1, opacity: 0.95 }))
+  }
+  /**
+   * 「做T窗口」网格（用户定稿）：以**当日均价**为基准的对称档位虚线 + 两侧标签 + 当前价实线/气泡。
+   *
+   * 只画线、标签、气泡：**没有**成交点、没有拖拽/输入/重设，也不含任何棱镜/挂单内容。
+   * `props.tWindow === null`（开关关闭 / ATR 缺失）⇒ 一个节点都不加（DOM 里没有空 div）。
+   */
+  if (props.tWindow !== undefined && props.tWindow !== null) {
+    const tw = props.tWindow
+    const magnitudes = tw.levels.map((l) => Math.abs(l.devPct)).sort((a, b) => b - a)
+    const outer = new Set(magnitudes.slice(0, 2)) // 外两档：全局最大的两个偏离
+    for (const lv of tw.levels) {
+      const y = yOf(lv.price)
+      if (!Number.isFinite(y)) continue
+      const color = T_WINDOW_COLORS[lv.side]
+      const strokeW = outer.has(Math.abs(lv.devPct)) ? 1.5 : 1
+      children.push(React.createElement('line', {
+        key: `tw-${lv.side}-${lv.devPct}`,
+        x1: PAD_X, y1: y, x2: PAD_X + innerW, y2: y,
+        style: { stroke: color }, strokeWidth: strokeW, strokeDasharray: '4 3', opacity: 0.9,
+      }))
+      // 左侧：偏离%（11px 次要）+ 价格（12px 等宽 tabular-nums），同一行右对齐、间距 4px
+      children.push(React.createElement('text', {
+        key: `twl-${lv.devPct}`, x: PAD_X - 6, y: y + 3.5, textAnchor: 'end',
+        style: { fontVariantNumeric: 'tabular-nums' },
+      },
+        React.createElement('tspan', { style: { fill: 'var(--tw-muted)', fontSize: 12 } }, `${lv.devPct >= 0 ? '+' : ''}${lv.devPct.toFixed(2)}%`),
+        React.createElement('tspan', { style: { fill: 'var(--tw-text)', fontSize: 12, fontFamily: 'var(--tw-mono)', dx: 4 } }, lv.price.toFixed(2)),
+      ))
+      // 右侧：价格右对齐、距线 6px
+      children.push(React.createElement('text', {
+        key: `twr-${lv.devPct}`, x: PAD_X + innerW + 6, y: y + 3.5, textAnchor: 'start',
+        style: { className: 'tw-muted', fill: 'var(--tw-muted)', fontSize: 12, fontFamily: 'var(--tw-mono)', fontVariantNumeric: 'tabular-nums' },
+      }, lv.price.toFixed(2)))
+    }
+    // 当前价：实线 + 气泡（圆角 6、1px 边框、白底、11px）
+    const lastPrice = values[values.length - 1]
+    if (typeof lastPrice === 'number' && Number.isFinite(lastPrice)) {
+      const y = yOf(lastPrice)
+      if (Number.isFinite(y)) {
+        children.push(React.createElement('line', {
+          key: 'tw-now', x1: PAD_X, y1: y, x2: PAD_X + innerW, y2: y,
+          style: { stroke: mainColor }, strokeWidth: 1, opacity: 0.9,
+        }))
+        const label = lastPrice.toFixed(2)
+        const w = Math.max(40, label.length * 6.6 + 10)
+        children.push(React.createElement('g', { key: 'tw-bubble' },
+          React.createElement('rect', {
+            x: PAD_X + innerW - w, y: y - 9, width: w, height: 18, rx: 6, ry: 6,
+            style: { fill: '#ffffff', stroke: mainColor }, strokeWidth: 1,
+          }),
+          React.createElement('text', {
+            x: PAD_X + innerW - w / 2, y: y + 4, textAnchor: 'middle',
+            style: { fill: 'var(--tw-text)', fontSize: 12, fontFamily: 'var(--tw-mono)', fontVariantNumeric: 'tabular-nums' },
+          }, label),
+        ))
+      }
+    }
   }
   children.push(React.createElement('circle', { key: 'last', cx: xAt(lastIndex), cy: yOf(values[lastIndex]), r: 2.6, style: { fill: mainColor, stroke: 'var(--tw-card)' }, strokeWidth: 1 }))
 

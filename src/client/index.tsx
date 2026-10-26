@@ -17,6 +17,7 @@ import { ToolsPage } from './ToolsPage.tsx'
 import { FupanPage } from './FupanPage.tsx'
 import { PrismPage } from './PrismPage.tsx'
 import { QuoteDrawer } from './QuoteDrawer.tsx'
+import { tWindowPatchOf } from './tWindowView.ts'
 import { ensureCss } from './styles.ts'
 import { isMoneyMasked, setMoneyMask } from './format.ts'
 import { Toast, useToast } from './ui.tsx'
@@ -579,6 +580,10 @@ function Dashboard(): React.ReactElement {
           redUp: (prefs ?? DEFAULT_PREFS).redUp,
           // 实时价那一行的来源（口径行要把"报价源"与"分钟源"分开写，见 chartNote.trendLagNote）
           quoteSource: engine.quotes[detail.secid]?.source ?? null,
+          // 做T窗口：开关按标的记忆（prefs.tWindow），行情节拍变一次就重算一次网格
+          tWindowOn: (prefs ?? DEFAULT_PREFS).tWindow?.[detail.secid.toUpperCase()] === true,
+          onTWindowChange: (on: boolean) => setPrefs({ tWindow: tWindowPatchOf(prefs ?? DEFAULT_PREFS, detail.secid, on) }),
+          quoteTs: engine.ts,
           // 上下分区比例：读写都走 prefs（老 profile 缺键 ⇒ 抽屉内用默认值）
           splitRatio: (prefs ?? DEFAULT_PREFS).splitRatio,
           onSplitRatio: (ratio: number) => setPrefs({ splitRatio: ratio }),

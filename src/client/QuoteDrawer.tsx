@@ -17,6 +17,7 @@ import type { CandleMarker, SparkMarker } from './charts.tsx'
 import { KlineChart, TrendChart } from './kline.tsx'
 import { caliberWithStats, tradeMarkersOf, tradeStatsOf } from './klineStats.ts'
 import { trendDayCount } from '../shared/model.ts'
+import { tWindowOf, type TWindow } from './tWindowView.ts'
 import {
   FQ_ORDER,
   KLINE_PLAN,
@@ -95,6 +96,11 @@ export function QuoteDrawer(props: {
    * 只标一处会让"报价是新的"被读成"分时也是新的"。缺省不影响既有行为。
    */
   quoteSource?: string | null
+  /** 「做T窗口」开关（按标的记忆；由宿主组件读写 prefs） */
+  tWindowOn?: boolean
+  onTWindowChange?: (on: boolean) => void
+  /** 行情节拍（毫秒时间戳）：每次行情刷新都变 ⇒ 网格随均价重算（用户第 2 条） */
+  quoteTs?: number
 }): React.ReactElement {
   const { secid, name, redUp, onClose } = props
   // 记住上次看的周期：关掉再打开、换一只标的时不必重新点一次
@@ -118,6 +124,11 @@ export function QuoteDrawer(props: {
    */
   const [auction, setAuction] = useState<AuctionInfo | null>(null)
   const [industry, setIndustry] = useState<{ name: string; pct: number | null } | null>(null)
+  /**
+   * ATR%（做T窗口的间距来源）：**只在开关打开时取**（`/tradewatcher/atr`）。
+   * 取不到 ⇒ `reason` 非空 ⇒ 整组不渲染并在这里给原因（绝不回落默认 2%）。
+   */
+  const [atr, setAtr] = useState<{ pct: number | null; reason: string | null } | null>(null)
   const [infoErr, setInfoErr] = useState(false)
   const [trades, setTrades] = useState<TradeMark[]>([])
   /** K 线可见窗口（KlineChart 上报；口径行据此把区间 B/S 统计并进同一行） */
@@ -228,6 +239,25 @@ export function QuoteDrawer(props: {
       })
     return () => { alive = false }
   }, [secid, tab, fqt, retry])
+
+  useEffect(() => {
+    if (props.tWindowOn !== true) {
+      setAtr(null)
+      return
+    }
+    let alive = true
+    setAtr(null)
+    api
+      .atr(secid)
+      .then((r) => {
+        if (!alive) return
+        setAtr({ pct: typeof r.atr?.pct === 'number' ? r.atr.pct : null, reason: r.atr?.reason ?? null })
+      })
+      .catch((e: Error) => {
+        if (alive) setAtr({ pct: null, reason: e.message })
+      })
+    return () => { alive = false }
+  }, [secid, props.tWindowOn, retry])
 
   // Esc 走层级栈（P2-5）：抽屉与弹窗叠开时只关最上面那层
   useEscapeLayer(onClose)
@@ -428,6 +458,7 @@ export function QuoteDrawer(props: {
       if (tab === 'trend') {
         return React.createElement(TrendChart, {
           points: t.points.map((p) => ({ t: p.t, value: p.price, vol: p.vol, avg: p.avg, label: p.label, amount: p.amount ?? null })),
+          tWindow: tWin !== null && !('reason' in tWin) ? tWin : null,
           baseline: isUsableBaseline(t.prePrice) ? t.prePrice : null,
           markers: dayMarkers,
           // 交易时段网格：有表的市场横轴固定为完整时段（部分数据右侧留白），其余回落压缩轴
@@ -644,6 +675,19 @@ export function QuoteDrawer(props: {
     : null
   const caliber = caliberWithStats(caliberLine(), payload !== null && payload.kind === 'kline' ? klineStats : null)
   /**
+   * 做T窗口（用户定稿）：基准 = **当日均价**（分时序列的 avg 线），间距 = ATR% ÷ 4，档数按 ATR% 分三档。
+   * `quoteTs` 依赖不是装饰：每次行情刷新都要按最新均价重算（用户第 2 条"随行情实时漂移"）。
+   */
+  const tWin: TWindow | { reason: string } | null = (() => {
+    if (props.tWindowOn !== true) return null
+    if (payload === null || payload.kind !== 'trend') return { reason: '分时数据未取到' }
+    const pts = payload.trend.points
+    const last = pts[pts.length - 1]
+    void (props.quoteTs ?? 0)
+    return tWindowOf({ atrPct: atr?.pct ?? null, avg: last?.avg ?? null })
+  })()
+  const tReason = tWin !== null && 'reason' in tWin ? tWin.reason : (props.tWindowOn === true && atr?.reason != null ? atr.reason : null)
+  /**
    * 口径条的**完整解释**（title/aria）：五日的"只有当日/本地拼接覆盖"属于**结构性限制**，
    * 因此按用户要求不单独占一条横幅，而是并入口径条 —— 但完整解释必须鼠标与键盘都能读到。
    */
@@ -738,8 +782,24 @@ export function QuoteDrawer(props: {
           }, TAB_LABEL[t]),
         ),
         React.createElement('span', { style: { flex: 1, minWidth: 4 } }),
+        // 「做T」开关（按标的记忆，宿主读写 prefs）：关闭时整组不渲染（无虚线/标签/底色）
+        React.createElement('button', {
+          className: 'tw-tab',
+          title: '做T窗口：以当日均价为基准，ATR14÷4 为间距，按 ATR% 自动 4/6/8 档（不可手动调整）',
+          'data-on': props.tWindowOn === true,
+          'aria-pressed': props.tWindowOn === true,
+          onClick: () => props.onTWindowChange?.(props.tWindowOn !== true),
+        }, '做T'),
+        // 开关旁徽标：`ATR x.xx% · n 档`（11px 次要色；ATR 取不到时不显示徽标，只显示下面那句原因）
+        props.tWindowOn === true && tWin !== null && !('reason' in tWin)
+          ? React.createElement('span', { className: 'tw-muted', style: { fontSize: 12, fontVariantNumeric: 'tabular-nums' } }, `ATR ${tWin.atrPct.toFixed(2)}% · ${tWin.bands} 档`)
+          : null,
         fqControl(),
       ),
+      // ATR 取不到时**只给一句原因**（不画任何网格节点，不用默认值顶替）
+      props.tWindowOn === true && tReason !== null
+        ? React.createElement('div', { className: 'tw-muted', style: { fontSize: 12, padding: '2px 0 0' }, role: 'note' }, `做T 不可用：${tReason}`)
+        : null,
       React.createElement('div', { ref: containerRef, className: 'tw-drawer-body' },
         caliber !== ''
           ? React.createElement('div', {

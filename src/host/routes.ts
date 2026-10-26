@@ -5,6 +5,7 @@ import type { CorporateAction, MissingField, MutatePortBody, MutateWatchBody, Qu
 import { stripKindOf, RESCUE_LEVEL_LABEL, SECID_RE, SUGGEST_FULL_COUNT, SUGGEST_MAX_COUNT } from '../shared/model.ts'
 import { isTrustedApiRequest } from './fence.ts'
 import * as em from './em.ts'
+import { atr14PctOf } from './atr.ts'
 import { ledgerTotal, assemblePortfolio, ledgerViews } from './portfolio.ts'
 import { DataStore, secidKey } from './store.ts'
 import { CalendarStore, calToday, type CalSyncSourceResult } from './calendar.ts'
@@ -991,8 +992,38 @@ export function makeTradeRoutes(
             ...(trend === null ? [em.trendMissingReason(secid)] : []),
             ...(amountReason === null ? [] : [amountReason]),
           ]
+          /**
+           * 「做T窗口」的 ATR（v0.166.0，用户定稿）：**按需计算**（`?atr=1`）——
+           * 关着开关的标的完全不付这份成本（走 `fetchKline` 的日线缓存，不新建旁路）。
+           * 取不到只回 `{reason}`，**绝不给默认值**（用户第 3 条）。
+           */
+          const atr = req.url !== undefined && /(?:^|[?&])atr=1(?:&|$)/.test(req.url)
+            ? await atr14PctOf(secid)
+            : undefined
           // 二级瘦身（AUDIT-IMPL77 第 2 项）：单日序列逐点 label 只留 HH:mm（日期在 labelDay）
-          send(res, 200, { trend: wireTrend(trend), ...(missing.length === 0 ? {} : { missing }) })
+          send(res, 200, {
+            trend: wireTrend(trend),
+            ...(atr === undefined ? {} : { atr }),
+            ...(missing.length === 0 ? {} : { missing }),
+          })
+        } catch (error) {
+          fail(res, error)
+        }
+      },
+    },
+    {
+      kind: 'exact',
+      path: '/tradewatcher/atr',
+      handler: async (req, res) => {
+        if (!needGate(req, res)) return
+        try {
+          const secid = String(queryOf(req).get('secid') ?? '').trim()
+          if (!SECID_RE.test(secid)) throw new HttpError('secid 非法', 400)
+          /**
+           * 「做T窗口」的 ATR14（`ATR% = ATR14 ÷ 收盘 × 100`）。**只在开关打开时被调用**，
+           * 所以不给它做常驻预算；取不到回 `{reason}`，客户端据此整组不渲染（不用默认值顶替）。
+           */
+          send(res, 200, { atr: await atr14PctOf(secid) })
         } catch (error) {
           fail(res, error)
         }

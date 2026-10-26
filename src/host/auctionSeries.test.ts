@@ -180,20 +180,21 @@ test('⑥ 竞价随**独立出口**下发（series/seriesDay），路由账同�
   /**
    * 路由账（v0.139.0 起口径相反）：竞价现在有**独立出口** `/tradewatcher/auction`
    * （AUDIT-AUCTION-DECOUPLE：详情只有东财一个上游，东财熔断时本地采样读不到）。
-   * 写了路由就**必须**登记：注册表里在、设计文档的路由账对得上（core 16 / 总 33）。
+   * 写了路由就**必须**登记：注册表里在、设计文档的路由账对得上（core 17 / 总 33）。
    */
   const routesSrc = await readFile(new URL('./routes.ts', import.meta.url), 'utf8')
   const registered = [...routesSrc.matchAll(/path: '(\/tradewatcher\/[a-z0-9/-]+)'/g)].map((m) => m[1])
   assert.equal(registered.includes('/tradewatcher/auction'), true, '竞价路由必须存在（东财熔断时的唯一出口）')
+  assert.equal(registered.includes('/tradewatcher/atr'), true, '做T窗口的 ATR 路由必须存在')
   const design = await readFile(new URL('../../docs/DESIGN-SUBPLUGINS.md', import.meta.url), 'utf8')
   const ledger = /路由账\s*(\d+)\s*=\s*core\s*(\d+)/.exec(design)
   assert.notEqual(ledger, null, '设计文档必须有路由账行')
-  assert.equal(Number(ledger![1]), 33, '路由账总数必须同步（30 + 棱镜 2 + 竞价 1 = 33）')
-  assert.equal(Number(ledger![2]), 16, 'core 计数必须同步（15 + 竞价 1 = 16）')
+  assert.equal(Number(ledger![1]), 34, '路由账总数必须同步（30 + 棱镜 2 + 竞价 1 + 做T的 ATR 1 = 34）')
+  assert.equal(Number(ledger![2]), 17, 'core 计数必须同步（15 + 竞价 1 + ATR 1 = 17）')
   // 反例注入：写了路由不登记 ⇒ 文档数字对不上
   const staleLedger = '路由账 32 = core 15'
   assert.throws(
-    () => assert.equal(Number(/路由账\s*(\d+)/.exec(staleLedger)![1]), 33, '反例上：旧路由账必须对不上'),
+    () => assert.equal(Number(/路由账\s*(\d+)/.exec(staleLedger)![1]), 34, '反例上：旧路由账必须对不上'),
     /反例上/,
     '⚠ 反例注入（写了路由不登记）必须失败',
   )

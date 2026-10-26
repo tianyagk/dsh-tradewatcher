@@ -750,6 +750,12 @@ export const api = {
     return request(`/tradewatcher/trend?secid=${encodeURIComponent(secid)}&ndays=${ndays}`)
   },
   /**
+   * ATR14（「做T窗口」的间距来源）。只在开关打开时调用；`reason` 非空 ⇒ 界面整组不渲染并给原因。
+   */
+  atr(secid: string): Promise<{ atr: { atr?: number; close?: number; pct?: number; bars?: number; reason: string | null } }> {
+    return request(`/tradewatcher/atr?secid=${encodeURIComponent(secid)}`)
+  },
+  /**
    * 大盘页的**附加行情**（v0.81.2，只读镜像 `/tradewatcher/market-extras`）：
    * 涨停/跌停家数（池接口，含样本）、两融（深交所官方 + 东财**双源交叉**，不一致时两个读数都带）、
    * 全天成交额预测（只在盘中给值；收盘后回落实际值）。
