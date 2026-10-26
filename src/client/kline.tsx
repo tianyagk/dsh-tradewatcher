@@ -9,7 +9,7 @@ import { createRafCoalescer, type RafCoalescer } from './rafThrottle.ts'
 import type { CandleMarker, SparkMarker } from './charts.tsx'
 import { fmtAxis, ma, macd, niceTicks } from './indicators.ts'
 import { hasVolumeSeries, isUsableAvg, isUsableBaseline, plausibleAvgs, trendDayAxis, trendScale } from './trendView.ts'
-import { T_WINDOW_COLORS, type TWindow } from './tWindowView.ts'
+import { T_WINDOW_COLORS, tWindowLabelsOf, type TWindow } from './tWindowView.ts'
 import { sessionAxis, type SessionDef } from './sessionAxis.ts'
 import { klineReadout, nearestIndex, tipPlacement, toneClass, trendReadout, upDownColors, type TipLine } from './chartCursor.ts'
 import { trendDayCount } from '../shared/model.ts'
@@ -364,19 +364,42 @@ export function TrendChart(props: {
         x1: PAD_X, y1: y, x2: PAD_X + innerW, y2: y,
         style: { stroke: color }, strokeWidth: strokeW, strokeDasharray: '4 3', opacity: 0.9,
       }))
-      // 左侧：偏离%（11px 次要）+ 价格（12px 等宽 tabular-nums），同一行右对齐、间距 4px
-      children.push(React.createElement('text', {
-        key: `twl-${lv.devPct}`, x: PAD_X - 6, y: y + 3.5, textAnchor: 'end',
-        style: { fontVariantNumeric: 'tabular-nums' },
+      // 档位标签统一画在**绘图区左内侧**（见下方统一渲染；右侧 Y 轴不再叠加任何做T 文字）
+    }
+    /**
+     * 档位标签：**全部在绘图区左内侧**（`x = plotLeft + 6`，`text-anchor:start`，垂直居中）。
+     * 1px 白底描边 halo（`paint-order: stroke`）⇒ 压在线上也能读；纵向位置由 `tWindowLabelsOf`
+     * 在折线经过时轻推 ±8px（不超出绘图区）。
+     */
+    const labels = tWindowLabelsOf({
+      levels: tw.levels,
+      yOf,
+      plotLeft: PAD_X,
+      plotTop: PAD_TOP,
+      plotBottom: PAD_TOP + mainH,
+      pathYsAt: (x0, x1) => {
+        // 折线在该 x 区间内的 y 采样：用点的线性插值近似（足够判断"是否压在标签上"）
+        const ys: number[] = []
+        for (let i = 1; i < points.length; i += 1) {
+          const xa = xAt(i - 1)
+          const ya = yOf(values[i - 1])
+          const xb = xAt(i)
+          const yb = yOf(values[i])
+          if (xb < x0 || xa > x1) continue
+          const k = xb === xa ? 0 : Math.max(0, Math.min(1, (x0 - xa) / (xb - xa)))
+          ys.push(ya + (yb - ya) * k)
+        }
+        return ys
       },
-        React.createElement('tspan', { style: { fill: 'var(--tw-muted)', fontSize: 12 } }, `${lv.devPct >= 0 ? '+' : ''}${lv.devPct.toFixed(2)}%`),
-        React.createElement('tspan', { style: { fill: 'var(--tw-text)', fontSize: 12, fontFamily: 'var(--tw-mono)', dx: 4 } }, lv.price.toFixed(2)),
-      ))
-      // 右侧：价格右对齐、距线 6px
+    })
+    for (const lb of labels) {
       children.push(React.createElement('text', {
-        key: `twr-${lv.devPct}`, x: PAD_X + innerW + 6, y: y + 3.5, textAnchor: 'start',
-        style: { className: 'tw-muted', fill: 'var(--tw-muted)', fontSize: 12, fontFamily: 'var(--tw-mono)', fontVariantNumeric: 'tabular-nums' },
-      }, lv.price.toFixed(2)))
+        key: lb.key, x: lb.x, y: lb.y, textAnchor: 'start', dominantBaseline: 'middle',
+        style: {
+          fill: 'var(--tw-text)', fontSize: 12, fontFamily: 'var(--tw-mono)', fontVariantNumeric: 'tabular-nums',
+          paintOrder: 'stroke', stroke: '#fff', strokeWidth: 2, strokeLinejoin: 'round',
+        },
+      }, lb.text))
     }
     // 当前价：实线 + 气泡（圆角 6、1px 边框、白底、11px）
     const lastPrice = values[values.length - 1]

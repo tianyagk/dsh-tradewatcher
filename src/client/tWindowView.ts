@@ -104,3 +104,67 @@ export function tWindowPatchOf(prefs: { tWindow?: Record<string, boolean> } | nu
 function round2(v: number): number {
   return Math.round(v * 100) / 100
 }
+
+/** 标签几何（左侧内侧）：`x = plotLeft + 6`、`text-anchor: start`、垂直居中 */
+export interface TWindowLabel {
+  key: string
+  x: number
+  y: number
+  text: string
+  width: number
+}
+
+/** 估算文本宽度（12px 等宽 + 11px 小数：按字符数 × 6.6px，含 4px 间隙） */
+export function tWindowLabelWidthOf(text: string): number {
+  return Math.ceil(text.length * 6.6)
+}
+
+/** 标签矩形（用于"不得与分时线重叠"的几何判据） */
+export function tWindowLabelRect(label: TWindowLabel, h = 14): { x0: number; x1: number; y0: number; y1: number } {
+  return { x0: label.x, x1: label.x + label.width, y0: label.y - h / 2, y1: label.y + h / 2 }
+}
+
+/** 两个矩形的交集面积（0 = 不重叠） */
+export function rectOverlapArea(
+  a: { x0: number; x1: number; y0: number; y1: number },
+  b: { x0: number; x1: number; y0: number; y1: number },
+): number {
+  const w = Math.min(a.x1, b.x1) - Math.max(a.x0, b.x0)
+  const h = Math.min(a.y1, b.y1) - Math.max(a.y0, b.y0)
+  return w > 0 && h > 0 ? w * h : 0
+}
+
+/**
+ * 做T 档位标签（**全部在绘图区左内侧**，用户 2026-10-26 反馈：原来压在右侧 Y 轴刻度上）。
+ *
+ * - `x = plotLeft + 6`，不超过 `plotLeft + 80`；
+ * - 纵向按价格排布（与档位 y 对齐）；若该 x 区间内有折线/均价线经过（`pathYsAt` 给样本），
+ *   上下轻推最多 6px，避免文字压在线上（配合 1px 白底描边 halo）。
+ */
+export function tWindowLabelsOf(args: {
+  levels: ReadonlyArray<Pick<TWindowLevel, 'price' | 'devPct'>>
+  yOf: (price: number) => number
+  plotLeft: number
+  pathYsAt?: (x0: number, x1: number) => readonly number[]
+  plotTop?: number
+  plotBottom?: number
+}): TWindowLabel[] {
+  const out: TWindowLabel[] = []
+  const top = args.plotTop ?? -Infinity
+  const bottom = args.plotBottom ?? Infinity
+  for (const lv of args.levels) {
+    const text = tWindowLabelOf(lv)
+    const width = Math.min(80, tWindowLabelWidthOf(text) + 6)
+    const x = args.plotLeft + 6
+    const baseY = args.yOf(lv.price)
+    if (!Number.isFinite(baseY)) continue
+    let y = baseY
+    const near = (args.pathYsAt?.(x, x + width) ?? []).filter((py) => Number.isFinite(py))
+    for (const shift of [0, -8, 8, -12, 12]) {
+      const cand = Math.max(top + 8, Math.min(bottom - 8, baseY + shift))
+      if (!near.some((py) => Math.abs(py - cand) < 9)) { y = cand; break }
+    }
+    out.push({ key: `twl-${lv.devPct}`, x, y, text, width })
+  }
+  return out
+}
