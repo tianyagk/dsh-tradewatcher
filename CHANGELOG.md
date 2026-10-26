@@ -11,6 +11,37 @@
 
 ---
 
+## v0.165.0 — 订正历史拆单佣金（退回 99.05 元）
+
+报告 `docs/AUDIT-FEE-CORRECTION.md`。`npm run check` **1319 / 1319 × 2 时区**（1316 → 1319）+ selftest + build（73 片段全过）。
+
+### 数据订正（用户批准）
+
+| 项 | 数值 |
+| --- | --- |
+| 同组实际 fills | **24 笔**（23 × 5 062 @8.60 + 1 × 3 574 @7.54）——界面按 bar 合并显示为 26 行统计口径不同，磁盘实际 24 笔 |
+| 旧费用 | **205.34** |
+| 重算应收 | **106.29**（佣金 21.09 + 印花税 84.36 + 过户费 0.84） |
+| **订正金额** | **99.05** |
+| 现金 | 263 795.28 → **263 894.33**（+99.05） |
+| 已实现盈亏 | −43 773.36 → **−43 674.31**（+99.05） |
+
+`feeCorrections` 新增 1 条：`{secid:'1.588170', orderIds:['o-1792984516628-1.588170-sell-0.703-120000'], beforeFee:205.34, afterFee:106.29, credit:99.05, reason:'拆单重复收取最低佣金'}`。
+**原始 fills 未改**；`prism-orders.json` 与备份 `deepEqual`；备份在 `/tmp/prism-{account,orders}-feecredit-20261026-115236.json`。
+
+### 未按 223.60 硬编码
+
+用户口径为 `26 × 8.60 = 223.60`，但磁盘同组只有 24 笔、旧费用 205.34。若按 223.60 加钱会**多退 18.26**，因此按实际 `beforeFee` 计算。
+
+### 验证
+
+`npm run check` **1319 / 1319 × 2 时区** + selftest + build（73 项）。
+新增 `prismFeeCorrection.test.ts`：夹具 26 笔 ⇒ `beforeFee 223.60 / afterFee 116.58 / credit 107.02`（硬编码 125 ⇒ 败）｜现金与 realized 增量各 = credit（不等 ⇒ 败）｜原始 fills `deepEqual`（改动 ⇒ 败）｜重复执行 `duplicate=true`、`credit=0`、`feeCorrections.length=1`、现金不变（二次加钱 ⇒ 败）｜无匹配 fills ⇒ 拒绝且不写账。
+
+### 生效条件
+
+live `prism-account.json` 已写；**宿主内存需重启读盘后体现**。
+
 ## v0.164.0 — 棱镜：拆单根因（量能按 bar 累计、成交合并显示、最低佣金只收一次）
 
 `npm run check` **1316 / 1316 × 2 时区**（1312 → 1316）+ selftest + build（73 片段全过）。

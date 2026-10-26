@@ -16,6 +16,7 @@ import { join } from 'node:path'
 import type {
   PrismAccount,
   PrismClampEvent,
+  PrismFeeCorrection,
   PrismIndustryLimits,
   PrismCopyLog,
   PrismDecision,
@@ -64,6 +65,55 @@ export function feesOf(
   const stamp = side === 'sell' ? money(amount * STAMP_RATE) : 0
   const transfer = money(amount * TRANSFER_RATE)
   return { commission, stamp, transfer, total: money(commission + stamp + transfer) }
+}
+
+export interface FeeCorrectionInput {
+  orderId: string
+  secid: string
+  at: number
+  price: number
+}
+
+export interface FeeCorrectionResult {
+  account: PrismAccount
+  correction: PrismFeeCorrection
+  credit: number
+  duplicate: boolean
+}
+
+/** 对同一委托/bar/价的拆单重算整单费用；只改 cash/realized + 一条留痕，不改 fills */
+export function applyFeeCorrection(
+  account: PrismAccount,
+  fills: readonly PrismFill[],
+  input: FeeCorrectionInput,
+  now = Date.now(),
+): FeeCorrectionResult {
+  const group = fills.filter((f) => f.orderId === input.orderId && f.secid === input.secid && f.at === input.at && f.price === input.price)
+  if (group.length === 0) throw new Error('没有匹配的 fills，拒绝订正')
+  const orderKey = `${input.orderId}|${input.secid}|${input.at}|${input.price}`
+  const beforeFee = money(group.reduce((sum, f) => sum + f.fee, 0))
+  const amount = money(group.reduce((sum, f) => sum + f.amount, 0))
+  const side = group[0]?.side ?? 'buy'
+  const commission = Math.max(COMMISSION_MIN, money(amount * COMMISSION_RATE))
+  const stamp = side === 'sell' ? money(amount * STAMP_RATE) : 0
+  const transfer = money(amount * 0.00001)
+  const afterFee = money(commission + stamp + transfer)
+  const credit = money(Math.max(0, beforeFee - afterFee))
+  const correction: PrismFeeCorrection = {
+    at: now, secid: input.secid, orderIds: [...new Set(group.map((f) => f.orderId))],
+    orderKey, beforeFee, afterFee, credit, reason: '拆单重复收取最低佣金',
+  }
+  const duplicate = (account.feeCorrections ?? []).some((c) => c.orderKey === orderKey)
+  if (duplicate) return { account, correction: { ...correction, credit: 0 }, credit: 0, duplicate: true }
+  return {
+    account: {
+      ...account,
+      cash: money(account.cash + credit),
+      realized: money(account.realized + credit),
+      feeCorrections: [...(account.feeCorrections ?? []), correction],
+    },
+    correction, credit, duplicate: false,
+  }
 }
 
 export interface OrderLimits {
@@ -470,6 +520,7 @@ function normalizeAccount(raw: Record<string, unknown>): PrismAccount {
     positions: positions.filter((p): p is PrismPosition => p !== null && typeof p === 'object' && typeof (p as PrismPosition).secid === 'string'),
     copiedAt: typeof raw['copiedAt'] === 'number' ? raw['copiedAt'] : null,
     copyLogs: Array.isArray(raw['copyLogs']) ? (raw['copyLogs'] as PrismCopyLog[]) : [],
+    ...(Array.isArray(raw['feeCorrections']) ? { feeCorrections: raw['feeCorrections'] as PrismFeeCorrection[] } : {}),
   }
 }
 

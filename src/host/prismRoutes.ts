@@ -13,7 +13,7 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { PluginWebRoute } from './context.ts'
 import type { PrismStore } from './prismStore.ts'
-import { PrismTradingStore, clampDecision, copyAtCost, dayStartMismatchOf, equityPointOf, matchTick, placeDecision, rebuildFromOrders, upsertEquity, type QuoteLite } from './prismAccount.ts'
+import { PrismTradingStore, applyFeeCorrection, clampDecision, copyAtCost, dayStartMismatchOf, equityPointOf, matchTick, placeDecision, rebuildFromOrders, upsertEquity, type QuoteLite } from './prismAccount.ts'
 import type { DataStore } from './store.ts'
 import type { PrismAccount, PrismFill, PrismSettings, PrismState } from '../shared/prism.ts'
 import { PRISM_MAX_TIMES, PRISM_SKELETON_MAX } from '../shared/prism.ts'
@@ -343,7 +343,7 @@ export function makePrismRoutes(deps: PrismRouteDeps): PluginWebRoute[] {
           return
         }
         try {
-          const body = (await readBody(req)) as { action?: unknown; times?: unknown; text?: unknown; slot?: unknown; capitalLimit?: unknown; orderId?: unknown; provider?: unknown; model?: unknown; industryLimits?: unknown } | null
+          const body = (await readBody(req)) as { action?: unknown; times?: unknown; text?: unknown; slot?: unknown; capitalLimit?: unknown; orderId?: unknown; provider?: unknown; model?: unknown; industryLimits?: unknown; secid?: unknown; at?: unknown; price?: unknown } | null
           const action = body !== null && typeof body.action === 'string' ? body.action : ''
           if (action === 'settings') {
             const raw = body !== null && Array.isArray(body.times) ? body.times : null
@@ -378,6 +378,19 @@ export function makePrismRoutes(deps: PrismRouteDeps): PluginWebRoute[] {
             }
             const settings = await store.saveIndustryLimits(clean)
             send(res, 200, { ok: true, settings })
+            return
+          }
+          if (action === 'feeCorrection') {
+            const orderId = typeof body?.orderId === 'string' ? body.orderId : ''
+            const secid = typeof body?.secid === 'string' ? body.secid : ''
+            const at = typeof body?.at === 'number' ? body.at : NaN
+            const price = typeof body?.price === 'number' ? body.price : NaN
+            if (orderId === '' || secid === '' || !Number.isFinite(at) || !Number.isFinite(price)) {
+              send(res, 400, { ok: false, error: 'feeCorrection 缺 orderId/secid/at/price' }); return
+            }
+            const result = applyFeeCorrection(deps.trading.account(), deps.trading.fills(), { orderId, secid, at, price })
+            await deps.trading.saveAccount(result.account, { explicitReset: true })
+            send(res, 200, { ok: true, ...result, account: result.account })
             return
           }
           if (action === 'model') {

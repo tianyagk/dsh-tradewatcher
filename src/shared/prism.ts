@@ -222,6 +222,17 @@ export interface PrismCopyLog {
   skipped?: string[]
 }
 
+export interface PrismFeeCorrection {
+  at: number
+  secid: string
+  orderIds: string[]
+  orderKey: string
+  beforeFee: number
+  afterFee: number
+  credit: number
+  reason: '拆单重复收取最低佣金'
+}
+
 export interface PrismAccount {
   /** 当前账本所属交易日（T+1/挂单当日有效的基准） */
   day: string
@@ -234,6 +245,8 @@ export interface PrismAccount {
   positions: PrismPosition[]
   copiedAt: number | null
   copyLogs: PrismCopyLog[]
+  /** 历史费用订正（幂等；原始 fills 不动） */
+  feeCorrections?: PrismFeeCorrection[]
 }
 
 export type PrismIndustryLimits = Record<string, number> | Array<{ name: string; limitPct: number }>
