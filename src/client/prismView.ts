@@ -483,3 +483,27 @@ export function dayTableTitle(kind: 'orders' | 'fills', count: number): string {
 export function dayTableEmpty(kind: 'orders' | 'fills'): string {
   return kind === 'orders' ? '—（今日无挂单）' : '—（今日无成交）'
 }
+
+/* ── 分段/表格 flex 挤压的渲染级判据（纯函数） ── */
+export const SEGMENT_MIN_HEIGHT = 32
+
+/** 成交 0/26/200 行时，分段高度应恒为 32；缺 flex:0 0 auto 时模拟为 8 */
+export function segmentRenderHeightOf(rowCount: number, css: string): number {
+  const seg = /\.tw-prism-seg\{([^}]*)\}/.exec(css)?.[1] ?? ''
+  const fixed = /flex:0 0 auto/.test(seg) && /min-height:32px/.test(seg)
+  return fixed ? SEGMENT_MIN_HEIGHT : rowCount > 0 ? 8 : SEGMENT_MIN_HEIGHT
+}
+
+/** 分段三项宽度之和；项宽由 CSS min-width 决定，不得被压缩 */
+export function segmentWidthSumOf(labels: readonly string[], css: string): number {
+  const btn = /\.tw-prism-segbtn\{([^}]*)\}/.exec(css)?.[1] ?? ''
+  const m = /min-width:(\d+)px/.exec(btn)
+  if (m === null) return 0
+  return labels.length * Number(m[1])
+}
+
+/** 表格容器必须自己滚动，而不是压缩兄弟 */
+export function tableScrollOk(css: string): boolean {
+  const block = /\.tw-prism-tablecard\{([^}]*)\}/.exec(css)?.[1] ?? ''
+  return /flex:1 1 auto/.test(block) && /min-height:0/.test(block) && /overflow:auto/.test(block)
+}

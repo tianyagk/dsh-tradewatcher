@@ -38,7 +38,7 @@ test('⑤ 两个字段 CSS/页面不含 nowrap/line-clamp/ellipsis；仍可换�
   }
   assert.match(TW_CSS, /\.tw-prism-decision\{[^}]*table-layout:fixed/)
   assert.match(TW_CSS, /\.tw-prism-decisioncard\{[^}]*min-width:0;overflow:hidden/)
-  assert.match(TW_CSS, /\.tw-prism-left\{[^}]*min-width:0;overflow:hidden/)
+  assert.match(TW_CSS, /\.tw-prism-left\{[^}]*min-width:0;[^}]*overflow:hidden/)
   assert.ok(page.includes('tw-prism-decision-reason') && page.includes('tw-prism-basis-block'))
   assert.equal(page.includes('title={r.value}'), false, '决策理由不得用 title 截断')
   const injected = `${reason}white-space:nowrap`

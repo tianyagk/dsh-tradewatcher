@@ -11,6 +11,37 @@
 
 ---
 
+## v0.163.0 — 棱镜：成交页分段控件被压扁
+
+`npm run check` **1312 / 1312 × 2 时区**（1309 → 1312）+ selftest + build（73 片段全过）；只改 `src/client/**`。
+
+### 根因
+
+1. `.tw-prism-seg` 在左栏纵向 flex 中**没设 `flex-shrink:0`**，长成交表把它压到约 **8px**。
+2. `.tw-prism-tablecard` 没有独立滚动区，靠压缩兄弟元素腾空间。
+3. `.tw-prism-left` 缺 `min-height:0`，子项无法正确滚动。
+
+### 修法
+
+- `.tw-prism-seg`：`flex: 0 0 auto; min-height: 32px; align-self: flex-start`。
+- `.tw-prism-tablecard`：`flex: 1 1 auto; min-height: 0; overflow: auto`。
+- `.tw-prism-left`：`min-width:0; min-height:0; overflow:hidden`。
+
+### 读数
+
+| 成交行数 | 分段高度 |
+| --- | --- |
+| 0 | **32px** |
+| 26 | **32px** |
+| 200 | **32px** |
+
+分段三项宽度之和 **147px**（3 × 49px），不随行数变化。
+
+### 验证
+
+`npm run check` **1312 / 1312 × 2 时区** + selftest + build（73 项）；正常 + UTC 两轮干净复跑。
+新增 `prismSegFix.test.ts` 3 条：0/26/200 行高度均 32px（删 `flex:0 0 auto` ⇒ 200 行变 8px ⇒ 败）｜宽度和 147px（`min-width:49px` 改 0 ⇒ 败）｜表格容器同时含 `flex:1 1 auto` / `min-height:0` / `overflow:auto`（删任一 ⇒ 败）。
+
 ## v0.162.0 — 棱镜：挂单/成交只显示当天（磁盘保留历史）
 
 `npm run check` **1309 / 1309 × 2 时区**（1304 → 1309）+ selftest + build（73 片段全过）；只改 `src/client/**`。

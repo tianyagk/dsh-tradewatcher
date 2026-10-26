@@ -776,7 +776,7 @@ color-scheme:dark}
 .tw-prism-notice{margin-left:auto;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:40%}
 .tw-prism-body{display:grid;grid-template-columns:minmax(0,62fr) 6px minmax(0,38fr);gap:0;align-items:stretch;min-width:0;min-height:0}
 .tw-prism-col{display:flex;flex-direction:column;gap:16px;min-width:0}
-.tw-prism-left{min-width:0;overflow:hidden}
+.tw-prism-left{min-width:0;min-height:0;overflow:hidden}
 .tw-prism-right{min-width:0}
 .tw-prism-sep{position:relative;width:6px;align-self:stretch;cursor:col-resize;border:0;background:transparent;padding:0;border-radius:0;touch-action:none}
 .tw-prism-sep::before{content:"";position:absolute;top:16px;bottom:16px;left:2px;width:2px;border-radius:2px;background:var(--tw-border-strong);transition:background .12s ease}
@@ -805,7 +805,7 @@ color-scheme:dark}
 .tw-prism-ripple{position:absolute;width:100px;height:100px;border-radius:50%;background:currentColor;pointer-events:none;animation:tw-ripple .55s ease-out forwards}
 @keyframes tw-ripple{from{transform:scale(0);opacity:.22}to{transform:scale(1);opacity:0}}
 @media (prefers-reduced-motion:reduce){.tw-prism-ripple{animation:none;display:none}}
-.tw-prism-seg{display:inline-flex;align-items:stretch;gap:4px;padding:2px;border:1px solid var(--tw-border-strong);border-color:var(--tw-border-strong);border-radius:8px;overflow:hidden;background:var(--tw-card);box-shadow:var(--tw-elev-3);width:max-content;max-width:100%}
+.tw-prism-seg{display:inline-flex;flex:0 0 auto;min-height:32px;align-self:flex-start;align-items:stretch;gap:4px;padding:2px;border:1px solid var(--tw-border-strong);border-color:var(--tw-border-strong);border-radius:8px;overflow:hidden;background:var(--tw-card);box-shadow:var(--tw-elev-3);width:max-content;max-width:100%}
 .tw-prism-segbtn{position:relative;overflow:hidden;border:0;border-radius:6px;background:transparent;color:var(--tw-dim);font-size:12.5px;padding:0 12px;cursor:pointer;height:28px;min-height:28px;min-width:49px}
 .tw-prism-segbtn::after{content:"";position:absolute;inset:0;background:currentColor;opacity:0;transition:opacity .12s;pointer-events:none}
 .tw-prism-segbtn:hover::after{opacity:var(--tw-state-hover)}
@@ -869,6 +869,7 @@ color-scheme:dark}
 .tw-prism-decision td:last-child{white-space:normal;overflow-wrap:anywhere;word-break:break-word;line-height:1.6;height:auto;min-height:26px;padding-top:4px;padding-bottom:4px}
 .tw-prism-netseg{display:inline-flex;align-items:center;gap:4px;padding:2px;border:1px solid var(--tw-border);border-radius:6px;background:var(--tw-prism-surface-3)}
 .tw-prism-netseg .tw-prism-segbtn{min-width:0;height:22px;min-height:22px;padding:0 8px;font-size:12px;white-space:nowrap}
+.tw-prism-tablecard{flex:1 1 auto;min-height:0;overflow:auto}
 .tw-prism-decisioncard{min-width:0;overflow:hidden}
 .tw-prism-basis{display:flex;flex-direction:column;gap:2px;color:var(--tw-muted);font-size:12px;line-height:1.5;font-weight:400;min-width:0;overflow:hidden}
 .tw-prism-decision-reason{display:block;white-space:normal;overflow-wrap:anywhere;word-break:break-word;max-width:100%;line-height:1.6}
