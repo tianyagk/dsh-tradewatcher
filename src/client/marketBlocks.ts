@@ -10,6 +10,29 @@ export const DIST_BUCKETS = 11
 /** 分钟成交额柱数（用户定稿 240 根；48 根就是错的） */
 export const MINUTE_BARS = 240
 
+/** 北交所口径（分布只统计沪深A股；北交所行情未接入） */
+export const DIST_BJ_NOTE = '北交所 未接入（本轮只统计沪深A股）'
+
+/**
+ * 涨跌分布卡的副标题（口径随数据走）：
+ *   · 全覆盖   ⇒ `9 档 · 覆盖 N 只`（N = 有报价只数）
+ *   · 覆盖不足 ⇒ `9 档 · 已扫 k/N 批`（**不写"覆盖 N 只"**，避免把少扫的批次读成全市场）
+ *   · 没拿到覆盖信息 ⇒ 只写档数
+ * 档数取**本轮实际返回的档名数**（今天 9 档；11 档是另一张单），不写死常量。
+ */
+export function distTitleOf(input: {
+  buckets: number
+  coverage: { codes: number; quoted: number; suspended: number } | null
+  partial: boolean
+  scannedBatches: number
+  totalBatches: number
+}): string {
+  const head = `${input.buckets} 档`
+  if (input.coverage === null) return head
+  if (input.partial) return `${head} · 已扫 ${input.scannedBatches}/${input.totalBatches} 批`
+  return `${head} · 覆盖 ${input.coverage.quoted} 只`
+}
+
 export interface BreadthCell { label: string; value: number | null; pct: number | null }
 
 /** 5 格 + 占比（占比分母 = 上涨+平盘+下跌；取不到 ⇒ null，不写 0） */

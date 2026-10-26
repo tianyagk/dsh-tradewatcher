@@ -4,7 +4,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import type { BoardRow, QuoteRow, StockDetail, TrendData } from '../shared/model.ts'
 import { api } from './api.ts'
-import { DIST_BUCKETS, MINUTE_BARS, X_TICKS, breadthCellsOf, cumulativeOf, daySeriesOf, gridYsOf, minuteDeltaBarsOf, missingCellText, yTicksOf } from './marketBlocks.ts'
+import { DIST_BJ_NOTE, MINUTE_BARS, X_TICKS, breadthCellsOf, cumulativeOf, daySeriesOf, distTitleOf, gridYsOf, minuteDeltaBarsOf, missingCellText, yTicksOf } from './marketBlocks.ts'
 import { UPDOWN_MISSING_NOTE, breadthCells, distToneOf, pickBreadthCounts, upDownPair } from './breadthView.ts'
 import { distAxisOf, distBarPctOf, forecastCellOf, limitNoteOf, marginRowOf } from './distView.ts'
 import { dirClass, fmtAmt, fmtBig, fmtPct, fmtPrice, fmtSigned } from './format.ts'
@@ -514,13 +514,21 @@ export function MarketPage(props: {
         })()),
       )
       const right = React.createElement('div', { className: 'tw-mk-col tw-mk-col-r' },
-        card('涨跌分布', `${DIST_BUCKETS} 档`, distCounts === null || distCounts.length !== DIST_BUCKETS
+        card('涨跌分布', distTitleOf({
+          buckets: distLabels.length,
+          coverage: dist?.coverage ?? null,
+          partial: dist?.partial === true,
+          scannedBatches: dist?.scannedBatches ?? 0,
+          totalBatches: dist?.totalBatches ?? 0,
+        }), distCounts === null || distCounts.length !== distLabels.length
           ? React.createElement('div', { className: 'tw-mk-empty' }, missingCellText(dist?.reason ?? '分布未扫描（需 56 页全市场）'))
-          : React.createElement('div', { className: 'tw-mk-dist' },
-              distCounts.map((n, i) => React.createElement('div', { key: distLabels[i] ?? String(i), className: 'tw-mk-dist-col' },
-                React.createElement('span', { className: 'tw-mk-dist-n' }, String(n)),
-                React.createElement('i', { style: { height: `${Math.max(2, (n / Math.max(1, ...distCounts)) * 70)}px` }, 'data-dir': i < 5 ? 'down' : i === 5 ? 'flat' : 'up' }),
-                React.createElement('span', { className: 'tw-mk-dist-l' }, distLabels[i] ?? ''))))),
+          : React.createElement(React.Fragment, null,
+              React.createElement('div', { className: 'tw-mk-dist' },
+                distCounts.map((n, i) => React.createElement('div', { key: distLabels[i] ?? String(i), className: 'tw-mk-dist-col' },
+                  React.createElement('span', { className: 'tw-mk-dist-n' }, String(n)),
+                  React.createElement('i', { style: { height: `${Math.max(2, (n / Math.max(1, ...distCounts)) * 70)}px` }, 'data-dir': distToneOf(distLabels[i] ?? '') }),
+                  React.createElement('span', { className: 'tw-mk-dist-l' }, distLabels[i] ?? '')))),
+              React.createElement('div', { className: 'tw-hint tw-dim', 'data-role': 'dist-bj' }, DIST_BJ_NOTE))),
         card('分钟成交额较昨日增减', '亿元', (() => {
           const W = 320, H = 160, TOP = 6, BOT = H - 16
           const maxAbs = delta.bars === null ? 1 : Math.max(1, ...delta.bars.map((x) => Math.abs(x)))
@@ -721,7 +729,9 @@ export function MarketPage(props: {
  * 柱宽用百分比、不用固定 px：面板窄了也不会把某个档挤成 0 宽（同 v0.54.0 的宽度契约）。
  */
 function DistHistogram(props: {
-  distribution: { labels: string[]; counts: number[] | null; blank: number; scanned: number; total: number | null; reason: string | null } | null
+  distribution: { labels: string[]; counts: number[] | null; blank: number; scanned: number; total: number | null; reason: string | null
+    source?: string | null; coverage?: { codes: number; quoted: number; suspended: number } | null; partial?: boolean
+    scannedBatches?: number; totalBatches?: number; warn?: string | null } | null
   distErr: string | null
 }): React.ReactElement {
   const d = props.distribution
@@ -750,7 +760,9 @@ function DistHistogram(props: {
   return React.createElement('div', {
     className: 'tw-dist-chart',
     'data-role': 'dist-chart',
-    title: `纵轴上界 ${axis.max}（按数据取整）；覆盖 ${d.scanned} 只 / 全市场 ${d.total ?? '未知'} 只；无涨跌幅（停牌等）${d.blank} 只未计入任何档`,
+    title: `纵轴上界 ${axis.max}（按数据取整）；覆盖 ${d.coverage?.quoted ?? d.scanned} 只 / 池内 ${d.coverage?.codes ?? d.total ?? '未知'} 只；无涨跌幅（停牌等）${d.blank} 只未计入任何档`
+      + (d.partial === true ? `；已扫 ${d.scannedBatches ?? 0}/${d.totalBatches ?? 0} 批` : '')
+      + (d.warn === undefined || d.warn === null ? '' : `；${d.warn}`),
   },
     yAxis,
     grid,

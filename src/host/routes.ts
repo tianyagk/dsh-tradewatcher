@@ -23,10 +23,12 @@ import { YTD_MAX_IDS, computeYtds } from './ytd.ts'
 import { TONE_MAX_IDS, computeTones } from './tonesService.ts'
 import { BREADTH_MIN_DAYS, BREADTH_WINDOW, BreadthStore, breadthUsable, percentileOf, upRatio } from './breadth.ts'
 import { BREADTH_METHODOLOGY, BREADTH_COUNT_CALIBER, BREADTH_CLIST_MAX_PAGES, BREADTH_PAGE_SIZE, BreadthCountCache, resolveBreadthCount } from './breadthCount.ts'
+import { tencentBreadthAggregate } from './breadthScan.ts'
+import { fetchTextHost } from './hostFetch.ts'
 import * as extras from './marketExtras.ts'
 import { emptyLeveragePayload, LeverageService, parseLeverageRange } from './leverage.ts'
 import { dayOf } from './time.ts'
-import { distributionBinsOf } from '../client/breadthView.ts'
+import { DIST_LABELS, distributionBinsOf } from '../client/breadthView.ts'
 import { log, type PluginWebRoute } from './context.ts'
 import { dayTradesOf } from './dayTrade.ts'
 import { CHIPS_DISPLAY, CHIPS_DISPLAY_MAX, CHIPS_MIN_SAMPLES, CHIPS_WINDOW, CHIPS_WINDOW_MAX, chipSeriesOf } from './chips.ts'
@@ -57,19 +59,55 @@ const DIST_TTL_MS = 60_000
 const BREADTH_PAGES_MAX = BREADTH_CLIST_MAX_PAGES
 /** 分布扫描的并发（页数上限仍写死在常量里；顺序无关，故可乱序完成） */
 const DIST_CONCURRENCY = 6
+
+/**
+ * 涨跌分布快照。两条源：
+ *   · `em-clist`    —— 东财 clist 分页自统计（原有唯一路子）
+ *   · `tencent-agg` —— 腾讯批量报价聚合（东财不可用时的兜底，路径见 docs/PROBE-BREADTH-SOURCES.md）
+ *
+ * `counts === null` = 本轮没扫全 —— **不拿扫到的那部分冒充全市场**；此时 `reason` 必给。
+ * `coverage` 三个数（池内代码 / 有报价 / 停牌）与 `partial` 一起上屏，界面据此写「覆盖 N 只」或「已扫 k/N 批」。
+ */
 interface DistSnapshot {
   labels: readonly string[]
   counts: number[] | null
+  /** 无涨跌幅（停牌等）的行数，未计入任何档 */
   blank: number
+  /** 参与分档的行数（= 有报价 − 停牌） */
   scanned: number
+  /** 池内总数（东财=上游 total；腾讯=代码表条数） */
   total: number | null
   asOf: number
   reason: string | null
+  source: 'em-clist' | 'tencent-agg' | null
+  coverage: { codes: number; quoted: number; suspended: number } | null
+  partial: boolean
+  scannedBatches: number
+  totalBatches: number
+  warn: string | null
 }
+
 let distCache: DistSnapshot | null = null
 
-async function distributionSnapshot(now = Date.now()): Promise<DistSnapshot> {
-  if (distCache !== null && now - distCache.asOf < DIST_TTL_MS) return distCache
+const distEmpty = (reason: string, source: DistSnapshot['source'], extra: Partial<DistSnapshot> = {}): DistSnapshot => ({
+  labels: DIST_LABELS,
+  counts: null,
+  blank: 0,
+  scanned: 0,
+  total: null,
+  asOf: Date.now(),
+  reason,
+  source,
+  coverage: null,
+  partial: false,
+  scannedBatches: 0,
+  totalBatches: 0,
+  warn: null,
+  ...extra,
+})
+
+/** 东财 clist 分页自统计（原有逻辑原样搬进来，只改回包形状） */
+async function emDistribution(now: number): Promise<DistSnapshot> {
   const pcts: Array<number | null> = []
   let total: number | null = null
   let reason: string | null = null
@@ -85,8 +123,10 @@ async function distributionSnapshot(now = Date.now()): Promise<DistSnapshot> {
     // 不知道总数就无法确认"扫全了没有" ⇒ 宁可报失败，也不给一个看起来正常的截面
     reason = '上游未给出总数（无法确认是否扫全）'
   }
+  let scannedPages = reason === null ? 1 : 0
+  let pageCount = 0
   if (reason === null && total !== null) {
-    const pageCount = Math.max(1, Math.ceil(total / BREADTH_PAGE_SIZE))
+    pageCount = Math.max(1, Math.ceil(total / BREADTH_PAGE_SIZE))
     if (pageCount > BREADTH_PAGES_MAX) {
       reason = `需要 ${pageCount} 页 > 上限 ${BREADTH_PAGES_MAX} 页（总数 ${total}）`
     } else {
@@ -103,6 +143,7 @@ async function distributionSnapshot(now = Date.now()): Promise<DistSnapshot> {
               failures.push(`第 ${pn} 页为空（上游限流或分页被截断）`)
             } else {
               pcts.push(...page.rows)
+              scannedPages += 1
             }
           } catch (error) {
             failures.push(`第 ${pn} 页取数失败（${String(error).slice(0, 80)}）`)
@@ -115,19 +156,68 @@ async function distributionSnapshot(now = Date.now()): Promise<DistSnapshot> {
   }
   const bins = distributionBinsOf(pcts)
   const full = reason === null && total !== null && pcts.length >= total
-  const snap: DistSnapshot = {
+  return {
     labels: bins.labels,
+    // 没扫全 ⇒ `counts: null`（**不拿扫到的那部分冒充全市场**；原因在 `reason`）
     counts: full ? bins.counts : null,
     blank: bins.blank,
-    scanned: pcts.length,
+    scanned: pcts.length - bins.blank,
     total,
     asOf: now,
     reason: full
       ? null
       : `${reason ?? `只扫到 ${pcts.length} 只 / 全市场 ${total ?? '未知'} 只（页数上限 ${BREADTH_PAGES_MAX}）`}⇒ 没有扫全，不给部分分布冒充全市场`,
+    source: 'em-clist',
+    coverage: total === null ? null : { codes: total, quoted: pcts.length, suspended: bins.blank },
+    partial: !full,
+    scannedBatches: scannedPages,
+    totalBatches: pageCount,
+    warn: bins.blank > 0 ? `${bins.blank} 只无涨跌幅（停牌等）未计入任何档` : null,
   }
-  distCache = snap
-  return snap
+}
+
+/** 腾讯聚合路径（东财失败后的兜底）：代码表 → 600/批 → 11 桶 → 9 档 */
+async function tencentDistribution(now: number, emReason: string | null): Promise<DistSnapshot> {
+  try {
+    const agg = await tencentBreadthAggregate({
+      fetchText: (host, url, opts) => fetchTextHost(host, url, opts),
+      sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+      now,
+    })
+    const warn: string[] = []
+    if (emReason !== null) warn.push(`东财不可用（${emReason}），已切腾讯聚合`)
+    if (agg.warn !== null) warn.push(agg.warn)
+    return {
+      labels: DIST_LABELS,
+      counts: agg.counts,
+      blank: agg.suspendedCount,
+      scanned: agg.quoted - agg.suspendedCount,
+      total: agg.codes,
+      asOf: agg.asOf,
+      reason: null,
+      source: 'tencent-agg',
+      coverage: { codes: agg.codes, quoted: agg.quoted, suspended: agg.suspendedCount },
+      // 覆盖不足（少批/少报价）仍给分布，但要如实标 `partial` 并写 `warn`（不静默）
+      partial: agg.failedBatches.length > 0 || agg.quoted < agg.codes,
+      scannedBatches: agg.scannedBatches,
+      totalBatches: agg.totalBatches,
+      warn: warn.length > 0 ? warn.join('；') : null,
+    }
+  } catch (error) {
+    return distEmpty(
+      `腾讯聚合失败（${String(error).slice(0, 80)}）${emReason === null ? '' : `；东财：${emReason}`}`,
+      null,
+      { asOf: now },
+    )
+  }
+}
+
+/** 两级：东财优先 → 失败切腾讯聚合（都失败 ⇒ `counts:null` + 两句原因） */
+async function distributionSnapshot(now = Date.now()): Promise<DistSnapshot> {
+  if (distCache !== null && now - distCache.asOf < DIST_TTL_MS) return distCache
+  const emSnap = await emDistribution(now)
+  distCache = emSnap.counts === null ? await tencentDistribution(now, emSnap.reason) : emSnap
+  return distCache
 }
 
 const MAX_BODY = 256 * 1024

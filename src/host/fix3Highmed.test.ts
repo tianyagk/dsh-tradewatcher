@@ -112,6 +112,7 @@ test('H1 回归防线：`src/host` 里不得再出现"不过熔断器"的裸 fet
    */
   const ALLOW: Array<{ file: string; fn: string; why: string }> = [
     { file: 'em.ts', fn: 'fetchFromHost', why: '`fetchFromHost` 是低层单主机 helper：调用方只有 `fetchAny`（已 allow/probe/记账）与 `fetchHostThroughBreaker`（同一套）' },
+    { file: 'hostFetch.ts', fn: 'fetchTextHost', why: '`fetchTextHost` 是低层单主机 helper（H1）：函数体内 `withHostBreaker(host, run)`，熔断打开抛 `breaker-open: <host>`' },
   ]
   /** 该行所在的函数名（向上找最近的 `function NAME(` 声明；找不到返回 null） */
   const enclosingFnOf = (lines: string[], at: number): string | null => {
@@ -141,6 +142,31 @@ test('H1 回归防线：`src/host` 里不得再出现"不过熔断器"的裸 fet
   walk(HERE)
   assert.deepEqual(offenders, [], `这些站点绕过了熔断记账（H1）：\n${offenders.join('\n')}`)
   assert.ok(ALLOW.length <= 2, '白名单不得超过两条（否则容易变成"到处豁免"）')
+})
+
+test('H1 低层 helper：熔断打开 ⇒ 不发请求且抛 breaker-open', async () => {
+  const { fetchTextHost, BreakerOpenError } = await import('./hostFetch.ts')
+  const { breakerFor } = await import('./breaker.ts')
+  const host = 'h1-breadth-probe.invalid'
+  const b = breakerFor(host)
+  for (let i = 0; i < 5; i += 1) b.recordFailure(new Error('probe boom'))
+  let calls = 0
+  const realFetch = globalThis.fetch
+  globalThis.fetch = (async () => {
+    calls += 1
+    throw new Error('熔断打开时不得发请求')
+  }) as typeof fetch
+  try {
+    await assert.rejects(
+      () => fetchTextHost(host, `https://${host}/x`),
+      (error: unknown) => error instanceof BreakerOpenError && (error as Error).message === `breaker-open: ${host}`,
+      '必须抛 breaker-open: <host>',
+    )
+    assert.equal(calls, 0, '熔断打开时一条请求都不许发')
+  } finally {
+    globalThis.fetch = realFetch
+    b.recordSuccess()
+  }
 })
 
 // ─────────────────────────────── H2 ───────────────────────────────

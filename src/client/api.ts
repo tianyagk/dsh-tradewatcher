@@ -656,6 +656,16 @@ export const api = {
       total: number | null
       asOf: number
       reason: string | null
+      /** 本轮实际答话的源：`em-clist`（东财分页）| `tencent-agg`（腾讯聚合）| null（都没成） */
+      source?: 'em-clist' | 'tencent-agg' | null
+      /** 覆盖三数：池内代码 / 有报价 / 停牌（停牌是"有报价"的子集，未计入任何档） */
+      coverage?: { codes: number; quoted: number; suspended: number } | null
+      /** 覆盖不足（少批/少报价）—— 此时界面写「已扫 k/N 批」，不写「覆盖 N 只」 */
+      partial?: boolean
+      scannedBatches?: number
+      totalBatches?: number
+      /** 口径告警（切源、失败批次、停牌数等），界面照原样展示，不吞 */
+      warn?: string | null
     }
     missing: Array<{ what: string; why: string; note: string }>
   }> {
