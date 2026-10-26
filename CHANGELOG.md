@@ -11,6 +11,43 @@
 
 ---
 
+## v0.168.0 — 分时均价（VWAP）补齐：逐点累计，缺成交额时近似并标注
+
+报告 `docs/AUDIT-VWAP.md`。`npm run check` **1339 / 1339 × 2 时区**（1332 → 1339）+ selftest + build（73 片段全过）。
+
+### 根因
+
+主源每分钟带 `amount`（可算精确 VWAP）；备用新浪分钟此前只解析 `volume`，`avg` 为空 ⇒ 均价线缺失 ⇒ 做T 网格不可用。实现只取「载荷最后一点的 `avg`」，未自行累计。
+
+### 修复
+
+新增 `src/shared/trendVwap.ts`：`backfillTrendAvg(points, { lotSize })` + `lastAvgOf(points)`：
+
+| 条件 | 口径 | 标记 |
+| --- | --- | --- |
+| 有 `amount` | `Σamount ÷ Σvolume` | `avgApprox = false`（精确） |
+| 无 `amount` | `Σ(典型价 × volume) ÷ Σvolume`，典型价 `(H+L+C)/3` | `avgApprox = true`（近似） |
+| `volume = 0` | 沿用前值；首点无前值 ⇒ `null` | 不写 0 |
+
+接入 `em.ts` 两条备用链：`sinaMinuteTrend`（A股/ETF，`lotSize:100`）、`sinaGlobalMinuteTrend`。`QuoteDrawer` 用 `lastAvgOf` 作网格中心；近似时在**既有口径行**追加 `· 均价为近似（缺成交额）`。
+
+**单位坑（实测踩到）**：A股/ETF 分钟量是**手**、额是**元** ⇒ 必须 `lotSize:100`；漏乘会让均价差 100×，被「均价须落在价格区间」判据丢成 `null`。
+
+### 真实末点 avg（2026-10-26 14:0x）
+
+| secid | 源 | 末点价 | 末点 avg | 标记 |
+| --- | --- | --- | --- | --- |
+| `1.600519` | sina-minute | 1341.01 | **1335.639** | 精确 |
+| `0.000636` | sina-minute | 37.35 | **38.295** | 精确 |
+| `1.510300` | sina-minute | 4.16 | **4.147** | 精确 |
+
+实测确认新浪 CN 分钟**带 `amount`**（226 803 266 元 / 545 889 手）⇒ 精确口径；近似分支留给真正缺成交额的源。
+
+### 验证
+
+`npm run check` **1339 / 1339 × 2 时区** + selftest + build（73 项）。
+`trendVwap.test.ts` 7 条：① vol 100/200/300、amount 1000/2200/3600 ⇒ 末点 `11.333`（单点算 =12 ⇒ 败）｜② 无 amount ⇒ `avg≈11.33` 且 `avgApprox=true`（写死 close=11 ⇒ 败）｜③ `vol=0` 沿用前值、首点为 null（写 0 ⇒ 败）｜④ 有 amount ⇒ `avgApprox=false`（误标 ⇒ 败）｜⑤ 全无 avg ⇒ 做T 给原因；部分有 ⇒ 正常（任一点缺就禁用 ⇒ 败）｜⑥ `lotSize=100`：546k 手 / 2.27 亿元 ⇒ 均价 4.15 量级（漏乘 ⇒ 415.5 ⇒ 败）。
+
 ## v0.167.0 — 分时图「做T窗口」（可开关、按 ATR 自适应网格）
 
 报告 `docs/AUDIT-TWINDOW.md`；设计稿 `docs/mockups/t-window.html`。`npm run check` **1332 / 1332 × 2 时区**（1323 → 1332）+ selftest + build（73 片段全过）。

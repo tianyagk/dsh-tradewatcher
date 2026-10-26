@@ -18,6 +18,7 @@ import { KlineChart, TrendChart } from './kline.tsx'
 import { caliberWithStats, tradeMarkersOf, tradeStatsOf } from './klineStats.ts'
 import { trendDayCount } from '../shared/model.ts'
 import { tWindowOf, type TWindow } from './tWindowView.ts'
+import { lastAvgOf } from '../shared/trendVwap.ts'
 import {
   FQ_ORDER,
   KLINE_PLAN,
@@ -599,9 +600,14 @@ export function QuoteDrawer(props: {
         const last = t.points[t.points.length - 1]
         // 宿主给了 caliber（美股：来源/时区/单位/昨收口径）就照它显示 —— 只写"不复权"会隐藏
         // "这是美东时间、成交量单位是股、昨收来自分钟末根"这三个会影响读数的前提
-        const base = t.caliber !== undefined && t.caliber !== ''
+        /**
+         * 均价口径（用户口径 2026-10-26）：备用源缺成交额时均价是**近似值**（典型价加权），
+         * 必须在**既有口径行**里追加一句（不新增提示块、不加免责文案）。
+         */
+        const avgNote = t.avgApprox === true ? ' · 均价为近似（缺成交额）' : ''
+        const base = (t.caliber !== undefined && t.caliber !== ''
           ? `${TAB_LABEL[payload.tab]} · ${t.caliber} · 截至 ${last !== undefined ? last.label : '—'}`
-          : `${TAB_LABEL[payload.tab]} · 不复权（分时序列无除权概念） · 截至 ${last !== undefined ? last.label.slice(5, 16) : '—'}`
+          : `${TAB_LABEL[payload.tab]} · 不复权（分时序列无除权概念） · 截至 ${last !== undefined ? last.label.slice(5, 16) : '—'}`) + avgNote
         // 五日：覆盖情况写进**这一行**（结构性限制不配单独横幅）。
         // 本地拼接时给出 have/limit 与缺口；真实多日源只有 1 天时明说"仅当日（该市场无多日源）"。
         const cov = t.coverage
@@ -681,10 +687,9 @@ export function QuoteDrawer(props: {
   const tWin: TWindow | { reason: string } | null = (() => {
     if (props.tWindowOn !== true) return null
     if (payload === null || payload.kind !== 'trend') return { reason: '分时数据未取到' }
-    const pts = payload.trend.points
-    const last = pts[pts.length - 1]
     void (props.quoteTs ?? 0)
-    return tWindowOf({ atrPct: atr?.pct ?? null, avg: last?.avg ?? null })
+    // 均价：取**最后一个非空** avg（部分点缺 ⇒ 仍可用；全缺 ⇒ 才给原因）
+    return tWindowOf({ atrPct: atr?.pct ?? null, avg: lastAvgOf(payload.trend.points) })
   })()
   const tReason = tWin !== null && 'reason' in tWin ? tWin.reason : (props.tWindowOn === true && atr?.reason != null ? atr.reason : null)
   /**

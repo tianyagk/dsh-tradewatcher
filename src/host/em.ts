@@ -16,6 +16,7 @@ import type {
 import { MISSING_TIER_ADVICE, SECID_RE, TREND_LAG_WARN_MINUTES, TREND_SOURCE_LABEL, normalizeTrendSeries, type AuctionInfo, type TrendSource } from '../shared/model.ts'
 import { BREADTH_HS_A_FS, BREADTH_PAGE_SIZE, type CountPage } from './breadthCount.ts'
 import { isMultiDayTrend, stitchTrendDays } from '../shared/trendStitch.ts'
+import { backfillTrendAvg } from '../shared/trendVwap.ts'
 import { TREND_ARCHIVE_KEEP_DAYS, archiveTrendDays, loadTrendArchive, type TrendArchiveEntry } from './trendArchive.ts'
 import { payloadFingerprint } from '../shared/fingerprint.ts'
 import { TrendLkgStore } from './trendLkgStore.ts'
@@ -1857,8 +1858,17 @@ async function sinaMinuteTrend(secid: string): Promise<TrendData | null> {
     // 股 → 手（上游给的是股数；东财/腾讯分钟给的是手）
     vol: b.vol === null ? null : Math.round(b.vol / 100),
     amount: b.amount,
-  }))
-  const clean = normalizeTrendSeries(points)
+    // 典型价近似要用到 high/low（新浪分钟不给，退回 price）
+    high: null,
+    low: null,
+  } as TrendPoint))
+  /**
+   * 逐点累计回填均价（用户口径 2026-10-26）：新浪没有成交额 ⇒ 典型价近似，标 `avgApprox`。
+   * 均价线因此不再缺失（做T 网格也就有了基准）。
+   */
+  // A股/ETF 的分钟量是「手」、成交额是「元」⇒ lotSize=100（否则均价会差 100×）
+  const bf = backfillTrendAvg(points, { lotSize: 100 })
+  const clean = normalizeTrendSeries(bf.points)
   return {
     secid,
     prePrice: prevBars.length === 0 ? null : prevBars[prevBars.length - 1].price,
@@ -1866,6 +1876,7 @@ async function sinaMinuteTrend(secid: string): Promise<TrendData | null> {
     last: clean[clean.length - 1]?.price ?? null,
     source: 'sina-minute',
     timeZone: 'Asia/Shanghai',
+    ...(bf.approx ? { avgApprox: true } : {}),
     caliber: [
       '来源：新浪 1 分钟线（当日分时的备用源）',
       '时区：北京',
@@ -1962,7 +1973,7 @@ async function sinaGlobalMinuteTrend(secid: string): Promise<TrendData | null> {
   const { symbol, proxy } = mapped
   const series = await ttlCache(`sina-global-min:${symbol}`, 60_000, () => fetchSinaGlobalMin(symbol))
   if (series.bars.length < 2) return null
-  const points: TrendPoint[] = series.bars.map((b) => ({
+  const rawPoints: TrendPoint[] = series.bars.map((b) => ({
     t: b.t,
     label: b.label,
     price: b.price,
@@ -1970,6 +1981,8 @@ async function sinaGlobalMinuteTrend(secid: string): Promise<TrendData | null> {
     vol: null,
     amount: null,
   }))
+  const bf2 = backfillTrendAvg(rawPoints)
+  const points = bf2.points
   const clean = normalizeTrendSeries(points)
   if (clean.length < 2) return null
   const tail = clean[clean.length - 1]
@@ -1981,6 +1994,7 @@ async function sinaGlobalMinuteTrend(secid: string): Promise<TrendData | null> {
     sessionDay: tail === undefined ? undefined : dayOf(tail.t),
     timeZone: 'Asia/Shanghai',
     source: 'sina-global-min',
+    ...(bf2.approx ? { avgApprox: true } : {}),
     caliber: [
       '来源：新浪全球期货分时（GlobalFuturesService）',
       '时区：北京',

@@ -366,6 +366,11 @@ export interface TrendData {
    */
   labelDay?: string
   labelFormat?: 'hhmm'
+  /**
+   * 均价是**近似值**（上游缺成交额，用典型价 (H+L+C)/3 按成交量加权累计）。
+   * 界面必须在既有口径行里追加 `· 均价为近似（缺成交额）`（不新增提示块）。
+   */
+  avgApprox?: boolean
   /** 拼接的覆盖报告（`source === 'local-stitch'` 时给出） */
   coverage?: TrendCoverage
   /**
