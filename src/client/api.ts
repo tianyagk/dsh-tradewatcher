@@ -752,6 +752,10 @@ export const api = {
   /**
    * ATR14（「做T窗口」的间距来源）。只在开关打开时调用；`reason` 非空 ⇒ 界面整组不渲染并给原因。
    */
+  /** 宿主健康（只读）：熔断状态 `breaker.open` 用于轮询退避（60s 内最多读一次） */
+  health(): Promise<{ breaker?: { open?: boolean } }> {
+    return request('/tradewatcher/health')
+  },
   atr(secid: string): Promise<{ atr: { atr?: number; close?: number; pct?: number; bars?: number; reason: string | null } }> {
     return request(`/tradewatcher/atr?secid=${encodeURIComponent(secid)}`)
   },

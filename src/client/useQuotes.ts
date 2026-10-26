@@ -1,8 +1,13 @@
 /** Quote polling engine shared by the topbar & watch page. */
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { QuoteRow } from '../shared/model.ts'
+import { planQuotePoll } from './quotePoll.ts'
+import { QUOTE_POLL_MS, shouldPollQuotes } from '../shared/pollGate.ts'
 import { api } from './api.ts'
 import { createRequestGen } from './requestGen.ts'
+
+/** 纯东财标的（无腾讯/新浪映射）：熔断 open 时跳过轮询 */
+const pureEmOnly = (secid: string): boolean => !/^(113|101|118)\./.test(secid)
 
 /**
  * Page-session quote store: survives component remounts (inner-tab switches,
@@ -124,9 +129,14 @@ export function useQuoteEngine(secids: string[], intervalMs: number, enabled: bo
     alive.current = true
     // 新 key/新 enabled：开新一代 ⇒ 在途的旧请求落地时会被 stale() 丢弃
     gen.current.next()
+    // 统一 60s 轮询：只有连续竞价时段才发起；熔断 open 时只留有备用源的标的
+    const tick = (): void => {
+      if (!shouldPollQuotes(Date.now())) return
+      void planQuotePoll(ids, pureEmOnly).then((plan) => { if (plan.ids.length > 0) load() })
+    }
     load()
     if (!enabled || ids.length === 0) return () => { alive.current = false }
-    const t = setInterval(load, intervalMs)
+    const t = setInterval(tick, QUOTE_POLL_MS)
     return () => {
       alive.current = false
       clearInterval(t)

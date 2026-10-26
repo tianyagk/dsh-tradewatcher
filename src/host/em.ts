@@ -2186,9 +2186,25 @@ async function sinaUsTrend(secid: string, days: 1 | 5): Promise<TrendData | null
 }
 
 /** 多日分时（五日）：用 5 分钟 K 线拼出最近 N 个交易日。 */
+/** 指数 secid 判据（沪 `1.000xxx` / 深 `0.399xxx`）——只用于分时源优先级 */
+function isIndexSecid(secid: string): boolean {
+  return secid.startsWith('1.000') || secid.startsWith('0.399')
+}
+
 async function fetchMultiDayTrend(secid: string, days: number): Promise<TrendData | null> {
   // 美股：新浪 5 分钟线实测覆盖 14 个交易日 ⇒ 五日视图是**真实多日源**（不必等本地归档累积）
   if (isUsSecid(secid)) return sinaUsTrend(secid, 5)
+  /**
+   * 指数分时源优先级（用户 2026-10-26 定稿）：**trends2 → 新浪 1 分钟 → 新浪 5 分钟兜底**。
+   * trends2 已在上游单日链里先试过（失败才会走到这里）⇒ 这里先试**新浪 1 分钟**（每分钟一根、带 amount），
+   * 只有它也失败才落到 5 分钟（48 根/日、**无成交额**，必须标记 `noAmount`，不许插值冒充 240 根）。
+   */
+  if (isIndexSecid(secid)) {
+    const oneMin = await sinaMinuteTrend(secid).catch(() => null)
+    if (oneMin !== null && oneMin.points.length >= 200) {
+      return { ...oneMin, caliber: `${oneMin.caliber ?? ''} · 单日 1 分钟（多日需本地归档）` }
+    }
+  }
   // ⚠ 两条渠道的**符号体系是分开的**：新浪只认沪/深（`sh600519`），腾讯覆盖沪/深/**港股**（`hk00700`）。
   // 此前这里先算一个 `sinaSymbol` 并让腾讯档复用它 ⇒ 港股/国际/商品/期货**在结构上永远进不去**
   // （不是"上游没有多日分钟源"，而是"我们的入口把非沪深挡死了"）。现在两条各用自己的符号。
@@ -2224,7 +2240,25 @@ async function fetchMultiDayTrend(secid: string, days: number): Promise<TrendDat
     .map((b) => ({ t: b.t, label: b.label, price: b.price, avg: null, vol: b.vol }))
   if (points.length === 0) return null
   const clean = normalizeTrendSeries(points)
-  return { secid, prePrice: null, points: clean, last: clean[clean.length - 1]?.price ?? null, source: got.source }
+  const noAmount = isIndexSecid(secid) && got.source !== 'sina-minute'
+  /**
+   * 昨日完整日（用户 2026-10-26 批准：从本地归档拼）。只有 **≥200 根且带 amount** 才算数；
+   * 不足就**不给**（界面 `—（昨日分钟额不可得）`），绝不拿今日或插值冒充。
+   */
+  const today = clean[clean.length - 1]?.label.slice(0, 10) ?? ''
+  let prev: { day: string; points: TrendPoint[] } | undefined
+  if (isIndexSecid(secid)) {
+    const arch = await loadTrendArchive(secid, { keepDays: 5 }).catch(() => null)
+    const yday = arch?.days.filter((d) => d.day < today).sort((a, b) => (a.day < b.day ? 1 : -1))[0]
+    if (yday !== undefined && yday.points.length >= 200 && yday.points.some((p) => typeof p.amount === 'number' && p.amount > 0)) {
+      prev = { day: yday.day, points: yday.points }
+    }
+  }
+  return {
+    secid, prePrice: null, points: clean, last: clean[clean.length - 1]?.price ?? null, source: got.source,
+    ...(noAmount ? { noAmount: true, noAmountReason: '该源无成交额、48 根/日' } : {}),
+    ...(prev === undefined ? {} : { prev, prevSource: 'archive' as const, prevDay: prev.day }),
+  }
 }
 
  // 结论（task-50 实测）：**我们的两条多日渠道（新浪 5 分钟线、腾讯 5 分钟线）只覆盖沪/深**；

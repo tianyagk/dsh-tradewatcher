@@ -387,7 +387,6 @@ export function RescuePanel(props: {
   const [data, setData] = React.useState<RescueData | null>(null)
   const [error, setError] = React.useState<string | null>(null)
   const [loading, setLoading] = React.useState(true)
-  const [manualOpen, setManualOpen] = React.useState<boolean | null>(null)
   const [settings, setSettings] = React.useState(false)
   const [lane, setLane] = React.useState<string>(RESCUE_ETF_CATALOG[0].secid)
   const [trend, setTrend] = React.useState<TrendData | null>(null)
@@ -538,8 +537,11 @@ export function RescuePanel(props: {
    *    否则默认收起。
    */
   const rescueEmpty = snapshot !== null && snapshot.etfs.length === 0
-  // 取数失败/无通道（etfs 为空）时不许默认展开空壳 —— 塌成一行即可，空壳只会挡住下面的内容
-  const expanded = manualOpen ?? (level >= 2 && snapshot !== null && snapshot.etfs.length > 0)
+  /**
+   * v0.170.0（用户定稿）：护盘信号**删除展开/缩回**，全部常驻。
+   * `expanded` 恒 true ⇒ 下面所有区块（共振/六卡/因子/分时量能/时间线/抽样/历史）同时渲染。
+   */
+  const expanded = true
 
   const lanes: RescueEtfMeta[] = rescueUniverseMeta(config.universe)
   const laneBase = snapshot?.etfs.find((e) => e.secid === lane)?.avgAmt20 ?? null
@@ -656,7 +658,6 @@ export function RescuePanel(props: {
           )
         : null,
       React.createElement(Btn, { onClick: () => load(true) }, loading ? '刷新中…' : '立即采样'),
-      React.createElement(Btn, { onClick: () => setManualOpen(expanded ? false : true) }, expanded ? '收起' : '展开'),
       React.createElement(Btn, { onClick: () => setSettings(true) }, '设置'),
       snapshot !== null && snapshot.etfs.length > 0
         ? React.createElement(Btn, { onClick: () => exportCsv(snapshot.etfs, snapshot) }, '导出')

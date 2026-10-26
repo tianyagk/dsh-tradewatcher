@@ -4,6 +4,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import type { BoardRow, QuoteRow, StockDetail, TrendData } from '../shared/model.ts'
 import { api } from './api.ts'
+import { DIST_BUCKETS, MINUTE_BARS, breadthCellsOf, cumulativeOf, daySeriesOf, minuteDeltaBarsOf, missingCellText } from './marketBlocks.ts'
 import { UPDOWN_MISSING_NOTE, breadthCells, distToneOf, pickBreadthCounts, upDownPair } from './breadthView.ts'
 import { distAxisOf, distBarPctOf, forecastCellOf, limitNoteOf, marginRowOf } from './distView.ts'
 import { dirClass, fmtAmt, fmtBig, fmtPct, fmtPrice, fmtSigned } from './format.ts'
@@ -135,6 +136,8 @@ export function MarketPage(props: {
   // 附加行情（v0.81.2）：涨停/跌停家数、两融（双源交叉）、全天成交额预测。
   // 预测要把"页面自己已经显示的那个当日成交额"带过去（宿主不再抓一遍）；缺/0 ⇒ 预测部分如实缺失。
   const [extras, setExtras] = useState<Awaited<ReturnType<typeof api.marketExtras>> | null>(null)
+  /** 成交额分时/分钟增减的数据（指数 2 日分时；每分钟带 amount） */
+  const [amtTrend, setAmtTrend] = useState<Awaited<ReturnType<typeof api.trend>> | null>(null)
   const amountForForecast = breadth?.current?.amount ?? null
   /**
    * 附加行情（U3）：同样从"每拍一次"改成**按节拍 + 30s 最小间隔**。
@@ -162,6 +165,24 @@ export function MarketPage(props: {
     // 节拍（quoteTs）驱动重取，成交额变化也顺带重取；两条路都受 30s 最小间隔约束
     // （宿主侧有缓存，预测本身每分钟才该变；数据最多旧 30s，见各格 title）
   }, [props.quoteTs, amountForForecast])
+
+  /**
+   * 成交额分时 / 分钟增减：取指数（沪指）**2 日**分时 —— 每分钟 bar 自带 `amount`，
+   * 今日/昨日各自逐分钟累加即可；预测线用 `extras.forecast.forecast` 画水平虚线。
+   * 昨日序列拿不到 ⇒ 分钟卡 `—（昨日分钟额不可得）`，不拿今日冒充。
+   */
+  const amtAt = useRef<number | null>(null)
+  useEffect(() => {
+    const at = Date.now()
+    if (!dueByInterval(at, amtAt.current, EXTRAS_MIN_INTERVAL_MS)) return
+    amtAt.current = at
+    let alive = true
+    api
+      .trend('1.000001', 2)
+      .then((r) => { if (alive) setAmtTrend(r) })
+      .catch(() => { if (alive) setAmtTrend(null) })
+    return () => { alive = false }
+  }, [props.quoteTs])
 
   const sh = quotes['1.000001']
   const sz = quotes['0.399001']
@@ -401,6 +422,99 @@ export function MarketPage(props: {
       ),
       // 家数整体取不到时的说明已并入上面三格（`countsNote`）；本模块不再单开常驻提示行
     ),
+    /**
+     * 大盘页 V1（`docs/mockups/market-v1.html` A 单列）：涨跌 / 成交额 / 两融两列块。
+     * 左列 4 卡（涨跌趋势 → 成交量 → 两融 → 成交额分时），右列 2 卡（涨跌分布 → 分钟成交额）。
+     * 取不到的数据格统一 `—（原因）`，**不写 0、不拿旧值顶替**。
+     */
+    (() => {
+      const pts = amtTrend?.trend?.points ?? []
+      const days = [...new Set(pts.map((p) => p.label.slice(0, 10)))].sort()
+      const today = days[days.length - 1] ?? ''
+      const yday = days[days.length - 2] ?? ''
+      const todayPts = today === '' ? [] : daySeriesOf(pts, today).points
+      /** 昨日：优先用宿主回包里的归档昨日（`prev`，≥200 根且带 amount 才给） */
+      const prev = amtTrend?.trend?.prev ?? null
+      const ydayPts = prev !== null ? prev.points : (yday === '' ? [] : daySeriesOf(pts, yday).points)
+      const cumToday = cumulativeOf(todayPts)
+      const cumYday = cumulativeOf(ydayPts)
+      const delta = minuteDeltaBarsOf(todayPts, ydayPts.length > 0 ? ydayPts : null)
+      const fc = extras?.forecast?.forecast ?? null
+      /** 5 分钟兜底源无成交额 ⇒ ③④ 一起 `—`（不许插值成 240 根） */
+      const noAmountReason = amtTrend?.trend?.noAmount === true ? (amtTrend.trend.noAmountReason ?? '该源无成交额') : null
+      const cell = (label: string, value: string, sub?: string): React.ReactElement =>
+        React.createElement('div', { className: 'tw-mk-cell' },
+          React.createElement('div', { className: 'tw-mk-v' }, value),
+          React.createElement('div', { className: 'tw-mk-l' }, label),
+          sub === undefined ? null : React.createElement('div', { className: 'tw-mk-s' }, sub),
+        )
+      const card = (title: string, hint: string, body: React.ReactNode): React.ReactElement =>
+        React.createElement('div', { className: 'tw-mk-card' },
+          React.createElement('div', { className: 'tw-mk-h' }, React.createElement('i', { className: 'tw-mk-bar' }), React.createElement('span', { className: 't' }, title), React.createElement('span', { className: 'tw-mk-hint' }, hint)),
+          body,
+        )
+      const b = breadth?.current ?? null
+      const cells = breadthCellsOf({
+        up: b?.up ?? null,
+        even: b?.even ?? null,
+        down: b?.down ?? null,
+        limitUp: extras?.limits.up.count ?? null,
+        limitDown: extras?.limits.down.count ?? null,
+      })
+      const m = extras?.margin.szse ?? extras?.margin.em ?? null
+      const amt = b?.amount ?? null
+      const prevAmt = breadth?.prevAmount?.amount ?? null
+      const forecast = extras?.forecast ?? null
+      const dist = breadth?.distribution
+      const distCounts = dist?.counts ?? null
+      const distLabels = dist?.labels ?? []
+      const left = React.createElement('div', { className: 'tw-mk-col' },
+        card('涨跌趋势', b === null ? '未取到' : '', React.createElement('div', { className: 'tw-mk-grid5' },
+          cells.map((c) => cell(c.label, c.value === null ? '—' : String(c.value), c.pct === null ? undefined : `${c.pct.toFixed(1)}%`)))),
+        card('成交量', '亿元', React.createElement('div', { className: 'tw-mk-grid4' },
+          cell('当日成交额', amt === null ? '—' : (amt / 1e8).toFixed(0), amt === null ? '未取到' : undefined),
+          cell('昨日同期', prevAmt === null ? '—' : (prevAmt / 1e8).toFixed(0), prevAmt === null ? '无昨日快照' : undefined),
+          cell('较昨同期', amt === null || prevAmt === null ? '—' : `${((amt - prevAmt) / 1e8).toFixed(0)}`, amt === null || prevAmt === null ? '缺一侧' : undefined),
+          cell('预测全天', forecast?.forecast == null ? '—' : (forecast.forecast / 1e8).toFixed(0), forecast?.forecast == null ? '仅盘中给预测' : undefined))),
+        card('两融', m?.day ?? 'T-1', React.createElement('div', { className: 'tw-mk-grid3' },
+          cell('融资余额', m?.marginBalance == null ? '—' : m.marginBalance.toFixed(0), m?.marginBalance == null ? '未取到' : '亿元'),
+          cell('融券余额', m?.shortBalance == null ? '—' : m.shortBalance.toFixed(0), m?.shortBalance == null ? '未取到' : '亿元'),
+          cell('融资买入', m?.marginBuy == null ? '—' : m.marginBuy.toFixed(0), m?.marginBuy == null ? '未取到' : '亿元'))),
+        card('成交额分时', '累计 · 亿元', (() => {
+          if (noAmountReason !== null) return React.createElement('div', { className: 'tw-mk-empty' }, missingCellText(noAmountReason))
+          if (cumToday.length < 2) return React.createElement('div', { className: 'tw-mk-empty' }, missingCellText('分时分钟额未取到'))
+          const W = 320, H = 96
+          const maxV = Math.max(...cumToday, ...(cumYday.length > 0 ? cumYday : [0]), fc ?? 0, 1)
+          const y = (v: number): number => H - (v / maxV) * (H - 6)
+          const line = (arr: number[]): string => arr.map((v, i) => `${i === 0 ? 'M' : 'L'}${(i / Math.max(1, arr.length - 1)) * W} ${y(v)}`).join(' ')
+          return React.createElement('div', null,
+            React.createElement('svg', { width: '100%', height: H, viewBox: `0 0 ${W} ${H}`, role: 'img', 'aria-label': '成交额累计' },
+              cumYday.length > 1 ? React.createElement('path', { d: line(cumYday), fill: 'none', stroke: 'var(--tw-muted)', strokeWidth: 1, strokeDasharray: '3 3' }) : null,
+              React.createElement('path', { d: line(cumToday), fill: 'none', stroke: 'var(--tw-accent)', strokeWidth: 1.5 }),
+              fc !== null ? React.createElement('line', { x1: 0, y1: y(fc), x2: W, y2: y(fc), stroke: 'var(--tw-muted)', strokeWidth: 1, strokeDasharray: '4 3' }) : null,
+            ),
+            React.createElement('div', { className: 'tw-mk-l' }, `今日 ${(cumToday[cumToday.length - 1]! / 1e8).toFixed(0)} 亿 · 昨 ${cumYday.length > 0 ? (cumYday[cumYday.length - 1]! / 1e8).toFixed(0) + ' 亿' : '—'} · 预测 ${fc === null ? '—' : (fc / 1e8).toFixed(0) + ' 亿'}`))
+        })()),
+      )
+      const right = React.createElement('div', { className: 'tw-mk-col' },
+        card('涨跌分布', `${DIST_BUCKETS} 档`, distCounts === null || distCounts.length !== DIST_BUCKETS
+          ? React.createElement('div', { className: 'tw-mk-empty' }, missingCellText(dist?.reason ?? '分布未扫描（需 56 页全市场）'))
+          : React.createElement('div', { className: 'tw-mk-dist' },
+              distCounts.map((n, i) => React.createElement('div', { key: distLabels[i] ?? String(i), className: 'tw-mk-dist-col' },
+                React.createElement('span', { className: 'tw-mk-dist-n' }, String(n)),
+                React.createElement('i', { style: { height: `${Math.max(2, (n / Math.max(1, ...distCounts)) * 70)}px` }, 'data-dir': i < 5 ? 'down' : i === 5 ? 'flat' : 'up' }),
+                React.createElement('span', { className: 'tw-mk-dist-l' }, distLabels[i] ?? ''))))),
+        card('分钟成交额较昨日增减', '亿元', delta.bars === null
+          ? React.createElement('div', { className: 'tw-mk-empty' }, missingCellText(noAmountReason ?? delta.reason))
+          : React.createElement('div', { className: 'tw-mk-min' },
+              delta.bars.map((v, i) => React.createElement('i', {
+                key: i,
+                className: v >= 0 ? 'pos' : 'neg',
+                style: { height: `${Math.max(1, (Math.abs(v) / Math.max(1, ...delta.bars.map((x) => Math.abs(x)))) * 44)}px` },
+              })))),
+      )
+      return React.createElement('div', { className: 'tw-mk-grid2', 'data-bars': String(MINUTE_BARS) }, left, right)
+    })(),
     React.createElement(RescuePanel, { prefs, redUp, onPrefs: props.onPrefs }),
     React.createElement('div', { className: 'tw-panel' },
       React.createElement('div', { className: 'tw-panel-h' },

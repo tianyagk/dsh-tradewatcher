@@ -465,7 +465,9 @@ color-scheme:dark}
 .tw-rescue{display:flex;flex-direction:column;gap:6px}
 .tw-rescue-dot{width:9px;height:9px;border-radius:50%;flex:none;transition:background .2s}
 .tw-rescue-resonance{display:flex;align-items:center;gap:8px;font-size:12px;padding:4px 8px;border:1px solid var(--tw-border);border-radius:8px;background:var(--tw-bg);flex-wrap:wrap}
-.tw-rescue-cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(232px,1fr));gap:8px}
+.tw-rescue-cards{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:6px}
+@media (max-width:1100px){.tw-rescue-cards{grid-template-columns:repeat(3,minmax(0,1fr))}}
+@media (max-width:700px){.tw-rescue-cards{grid-template-columns:repeat(2,minmax(0,1fr))}}
 .tw-rescue-card{border:1px solid var(--tw-border);border-radius:9px;padding:7px 9px;background:var(--tw-card);transition:border-color .15s}
 .tw-rescue-card-h{display:flex;align-items:baseline;justify-content:space-between;gap:6px;margin-bottom:5px}
 .tw-rescue-card-h b{font-size:12px;font-weight:600;letter-spacing:-0.1px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -929,6 +931,32 @@ color-scheme:dark}
 .tw-clock-pill.off{color:var(--tw-muted);background:var(--tw-card2);font-weight:500}
 .tw-clock-cd{font-variant-numeric:tabular-nums}
 
+.tw-mk-grid2{display:grid;grid-template-columns:1fr 1fr;gap:6px}
+@media (max-width:1100px){.tw-mk-grid2{grid-template-columns:1fr}}
+.tw-mk-col{display:flex;flex-direction:column;gap:6px;min-width:0}
+.tw-mk-card{background:var(--tw-card);border-radius:10px;padding:12px;box-shadow:var(--tw-elev-1)}
+.tw-mk-h{display:flex;align-items:center;gap:8px;margin-bottom:8px}
+.tw-mk-bar{width:3px;height:14px;border-radius:2px;background:var(--tw-accent);display:inline-block}
+.tw-mk-hint{margin-left:auto;font-size:12px;color:var(--tw-muted)}
+.tw-mk-grid5{display:grid;grid-template-columns:repeat(5,1fr);gap:6px}
+.tw-mk-grid4{display:grid;grid-template-columns:repeat(4,1fr);gap:6px}
+.tw-mk-grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:6px}
+.tw-mk-cell{padding:8px;border-radius:8px;background:var(--tw-card-2)}
+.tw-mk-v{font-size:22px;line-height:1.15;font-variant-numeric:tabular-nums;font-family:var(--tw-mono)}
+.tw-mk-l{font-size:12px;color:var(--tw-muted);margin-top:2px}
+.tw-mk-s{font-size:12px;color:var(--tw-muted)}
+.tw-mk-empty{padding:8px;border-radius:8px;background:var(--tw-card-2);font-size:12px;color:var(--tw-muted)}
+.tw-mk-min{display:flex;align-items:center;gap:1px;height:56px;overflow:hidden}
+.tw-mk-min i{flex:1 1 0;min-width:1px;border-radius:1px}
+.tw-mk-min i.pos{background:var(--tw-up);align-self:flex-end}
+.tw-mk-min i.neg{background:var(--tw-down);align-self:flex-start}
+.tw-mk-dist{display:grid;grid-template-columns:repeat(11,1fr);gap:4px;align-items:end;height:96px}
+.tw-mk-dist-col{display:flex;flex-direction:column;align-items:center;gap:2px;min-width:0}
+.tw-mk-dist-n{font-size:12px;font-variant-numeric:tabular-nums}
+.tw-mk-dist-l{font-size:12px;color:var(--tw-muted);white-space:nowrap;transform:scale(.9)}
+.tw-mk-dist i[data-dir=up]{background:var(--tw-up)}
+.tw-mk-dist i[data-dir=down]{background:var(--tw-down)}
+.tw-mk-dist i[data-dir=flat]{background:var(--tw-muted)}
 `
 
 let injected = false
@@ -967,3 +995,4 @@ export function ensureCss(): void {
   style.textContent = TW_CSS
   document.head.appendChild(style)
 }
+/* 大盘页 V1（market-v1.html A 单列）：两列块 + 小格（padding 8 / 圆角 8 / 数值 22px / 标签 11.5px） */

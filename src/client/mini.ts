@@ -1,6 +1,7 @@
 /**
  */
 import { useEffect, useMemo, useState } from 'react'
+import { shouldPollQuotes } from '../shared/pollGate.ts'
 import { api } from './api.ts'
 import { isUsableAvg } from './trendView.ts'
 
@@ -126,6 +127,7 @@ export function useMiniTrends(secids: string[], enabled: boolean): Record<string
     }
     void fill()
     const t = setInterval(() => {
+      if (!shouldPollQuotes(Date.now())) return
       retries = 0
       void fill()
     }, 150_000)

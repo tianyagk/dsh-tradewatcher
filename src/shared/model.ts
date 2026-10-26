@@ -371,6 +371,22 @@ export interface TrendData {
    * 界面必须在既有口径行里追加 `· 均价为近似（缺成交额）`（不新增提示块）。
    */
   avgApprox?: boolean
+  /**
+   * 该分时源**不带成交额**（目前只有新浪 5 分钟兜底档）：③④ 两卡据此显示 `—（原因）`，
+   * **不许**把 5 分钟插值成 240 根冒充每分量。
+   */
+  noAmount?: boolean
+  /** 无成交额时的一句话原因（随 `noAmount` 一起给） */
+  noAmountReason?: string
+  /**
+   * 昨日完整日序列（来自本地归档 `trends/<secid>/`，已批准）：用于「分钟成交额较昨日增减」。
+   * 只有 ≥200 根且带 `amount` 才会给；不足则不给（界面 `—（昨日分钟额不可得）`）。
+   */
+  prev?: { day: string; points: TrendPoint[] }
+  /** 昨日序列的来源（目前只有归档） */
+  prevSource?: 'archive'
+  /** 昨日日期 YYYY-MM-DD */
+  prevDay?: string
   /** 拼接的覆盖报告（`source === 'local-stitch'` 时给出） */
   coverage?: TrendCoverage
   /**
@@ -913,7 +929,7 @@ export const DEFAULT_PREFS: PortPrefs = {
   costBasis: 'diluted',
   watchSort: { key: 'default', desc: true },
   portSort: { key: 'default', desc: true },
-  rescue: { enabled: true, intervalSec: 30, tailIntervalSec: 15, tailFrom: '14:30', universe: [], rescueCoverageEnabled: false },
+  rescue: { enabled: true, intervalSec: 60, tailIntervalSec: 15, tailFrom: '14:30', universe: [], rescueCoverageEnabled: false },
   viewMode: 'full',
   panelOpacity: 1,
   blurDigits: false,

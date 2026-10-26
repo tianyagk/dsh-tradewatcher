@@ -1,5 +1,6 @@
 /** 持仓 page: ledger-driven portfolio groups + group/position trade history. */
 import React, { useCallback, useEffect, useRef, useState } from 'react'
+import { shouldPollQuotes } from '../shared/pollGate.ts'
 import type {
   CorporateAction,
   LedgerEntry,
@@ -154,6 +155,7 @@ export function PortfolioPage(props: {
     reload()
     let last = Date.now()
     const t = setInterval(() => {
+      if (!shouldPollQuotes(Date.now())) return
       if (quoteTs !== null && quoteTs !== lastAtRef.current) {
         lastAtRef.current = quoteTs
         last = Date.now()

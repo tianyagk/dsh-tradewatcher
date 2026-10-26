@@ -11,6 +11,57 @@
 
 ---
 
+## v0.171.0 — 大盘页 V1 改版；指数分时换源；轮询降频与单一报价源
+
+报告 `docs/AUDIT-MARKET-UI.md`、`docs/AUDIT-BACKOFF.md`。`npm run check` **1381 / 1381 × 2 时区**（1349 → 1381）+ selftest + build（73 片段全过）。
+
+### 1) 大盘页 V1（设计稿 `docs/mockups/market-v1.html`，A 单列）
+
+- **护盘信号删除展开/缩回**，全部区块常驻；六张 ETF 卡同容器 **6 等分**（<1100 三列、<700 两列）；**因子明细 / 分时量能左右并排**；再往下 今日信号时间线（6 条）→ 5 分钟抽样（47 根）→ 历史回顾（30 天）。
+- 新增「涨跌 / 成交额 / 两融」两列块：左 = 涨跌趋势 5 格 → 成交量 4 格 → 两融 3 格 → 成交额分时（今日/昨日/预测三线）；右 = 涨跌分布 **11 档**（柱顶家数）→ 分钟成交额较昨日增减 **240 根**。
+- 小格 22px / `padding 8` / 圆角 8 / 格距 6 / 卡头 3px 主色竖条；缺数据 `—（原因）`；**无 `⚠`、无免责文案**。
+- 偏差：标签 11.5px → **12px**（`uiuxDiscipline` 字号阶梯）。
+
+### 2) 指数分时换源（③④ 的数据前提）
+
+`src/host/em.ts` 指数分时优先级改为 **trends2 → 新浪 1 分钟 → 新浪 5 分钟兜底**：
+
+| secid | source | 点数 | amount |
+| --- | --- | --- | --- |
+| `1.000001` | `local-stitch`（今段 sina-minute） | **239** | 239/239 |
+| `1.000300` | `sina-minute` | **239** | 239/239 |
+| `0.399001` | `local-stitch` | **239** | 239/239 |
+
+5 分钟兜底标 `noAmount:'该源无成交额、48 根/日'`，③④ 显示 `—`，**不插值**。沪指由 48 根/日 → **239 根/日**。
+
+### 3) 「昨日分钟额」从本地归档拼
+
+`ndays>1` 回包从 `trends/<secid>/` 取昨日完整日（≥200 根且带 `amount`），附 `prev` + `prevSource:'archive'` + `prevDay`；不足则不附。**本机归档当前只有今天 ⇒ ④ 仍 `—（昨日分钟额不可得）`，明日归档有昨日后自动成形。**
+
+### 4) 轮询降频与单一报价源
+
+- 新 `src/shared/pollGate.ts`：`QUOTE_POLL_MS = 60s`、`RESCUE_DEFAULT_SEC = 60`（[30,600]）、`shouldPollQuotes`（午休/盘后/非交易日 false）、`shouldPollRescue`、`pollableSecids`（熔断 open ⇒ 仅保留有腾讯/新浪映射的）、`dedupeSecids`。
+- 新 `src/client/quotePoll.ts`：`planQuotePoll` = 时段 → 去重 → 熔断过滤；`breakerOpenCached()` 读 `/health.breaker.open`，**60s 内只读一次**。
+- `useQuotes` 成为**唯一发起报价请求**的 60s 轮询源；`mini` / `PortfolioPage` / `index.tsx` 回调首行加 `shouldPollQuotes` 闸门（非时段直接 return）；时钟页 1s 时钟未动。
+
+### 每 5 分钟请求数（估算）
+
+| 场景 | 改前 | 改后 |
+| --- | --- | --- |
+| 护盘（15s→60s） | 20 | **5** |
+| 行情（5 页各自轮询） | 15–30 | **5** |
+| 午休 / 盘后 | 15–30 | **0** |
+| 熔断期·纯东财 | 每轮撞墙 | **0** |
+
+### 验证
+
+`npm run check` **1381 / 1381 × 2 时区** + selftest + build（73 项）。
+新增断言合计 **32 条**：market V1 8 条（无折叠、6 等分、左右并排、22/8/8、240 根、11 档、`—（原因）`、无 `⚠`）｜指数源 4 条（首选 trends2、1 分钟在 5 分钟前、`<200 根` 判失败、`noAmount` 不插值、三 source 互斥）｜归档 3 条｜降频 6 条｜接线 7 条（唯一报价定时器、15:05 与周末 0 请求、午休 0 与 13:01 恢复、熔断退避、去重、恢复）。
+
+### 已知差距
+
+`setInterval` 字面量仍 **5 个**（useQuotes / mini / PortfolioPage / index / GlobalClock）；其中**只有 `useQuotes` 会发报价请求**，其余已加闸门不发。若要「字面量只剩 1 个」，需改为共享 ticker 订阅（下一轮）。
+
 ## v0.170.0 — 做T 网格：间距按当日振幅收紧、右端不再压轴
 
 `npm run check` **1349 / 1349 × 2 时区**（1344 → 1349）+ selftest + build（73 片段全过）；只改 `src/client/**`。
