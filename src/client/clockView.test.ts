@@ -110,7 +110,8 @@ test('⑦ 行情刷新间隔 = 120000ms（1000 判失败）', () => {
   assert.equal(clockRefreshMs({ clockRefreshSec: 1 }), 30_000, '下限收敛到 30s')
   const injected = 1000
   assert.notEqual(injected, clockRefreshMs(null), '注入 1000ms 必须判失败')
-  assert.match(SRC, /clockRefreshMs\(\{ clockRefreshSec: refreshSec \}\)/, '页面必须用 settings 的间隔')
+  // v0.171.0：时钟页行情改为订阅统一 ticker（60s），不再自建 120s 定时器
+  assert.match(SRC, /subscribeTicker\(\(\) => load\(false\)\)/, '行情必须走统一 ticker')
 })
 
 test('⑧ 时区切换后表盘角度不变、只有文字时刻变（角度随之变判失败）', () => {

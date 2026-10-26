@@ -946,6 +946,13 @@ color-scheme:dark}
 .tw-mk-l{font-size:12px;color:var(--tw-muted);margin-top:2px}
 .tw-mk-s{font-size:12px;color:var(--tw-muted)}
 .tw-mk-empty{padding:8px;border-radius:8px;background:var(--tw-card-2);font-size:12px;color:var(--tw-muted)}
+/* 主要指数 6 张一行 / 期货自选 5 张一行（22px·padding 8·圆角 8；窄屏 2 列 / 单列） */
+.tw-idx-grid{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:6px}
+@media (max-width:900px){.tw-idx-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media (max-width:600px){.tw-idx-grid{grid-template-columns:1fr}}
+.tw-fut-grid{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:6px}
+@media (max-width:900px){.tw-fut-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+.tw-idx-grid .tw-mk-v,.tw-fut-grid .tw-mk-v{font-size:22px}
 .tw-mk-min{display:flex;align-items:center;gap:1px;height:56px;overflow:hidden}
 .tw-mk-min i{flex:1 1 0;min-width:1px;border-radius:1px}
 .tw-mk-min i.pos{background:var(--tw-up);align-self:flex-end}

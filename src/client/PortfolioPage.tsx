@@ -1,6 +1,7 @@
 /** 持仓 page: ledger-driven portfolio groups + group/position trade history. */
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { shouldPollQuotes } from '../shared/pollGate.ts'
+import { subscribeTicker } from './ticker.ts'
 import type {
   CorporateAction,
   LedgerEntry,
@@ -154,7 +155,7 @@ export function PortfolioPage(props: {
     if (!active) return
     reload()
     let last = Date.now()
-    const t = setInterval(() => {
+    const off = subscribeTicker(() => {
       if (!shouldPollQuotes(Date.now())) return
       if (quoteTs !== null && quoteTs !== lastAtRef.current) {
         lastAtRef.current = quoteTs
@@ -166,8 +167,8 @@ export function PortfolioPage(props: {
         last = Date.now()
         reload()
       }
-    }, Math.max(1000, refreshSec * 1000))
-    return () => clearInterval(t)
+    })
+    return () => off()
   }, [active, refreshSec, reload, quoteTs])
 
   /**

@@ -11,6 +11,33 @@
 
 ---
 
+## v0.172.0 — 大盘页收口：单一 ticker、工具页卡片重排、去掉大盘多余模块
+
+`npm run check` **1388 / 1388 × 2 时区**（1381 → 1388）+ selftest + build（73 片段全过）。
+
+### 1) 报价轮询合并为单一 ticker
+
+- 新增 `src/client/ticker.ts`：`subscribeTicker(fn)` 返回退订函数，`TICK_MS = 60_000`，订阅为 0 时自动 `clearInterval`。
+- `useQuotes` / `mini` / `PortfolioPage` / `index.tsx` / `GlobalClockPage`（行情段）全部改为订阅；卸载退订。
+- 回调仍先过 `shouldPollQuotes`（护盘过 `shouldPollRescue`）。
+- **报价相关 `setInterval` 字面量：5 → 1**（时钟页 1 秒时钟、`useNow`、`PrismPage` 日期、`RescuePanel` 采样在白名单内）。
+
+### 2) 工具页「全球期货交易时钟」卡片重排
+
+- 主要指数 **6 张一行**、期货自选 **5 张一行**（22px、`padding 8`、圆角 8）；窄屏 6→2→1、5→2。
+- 该改动属**工具页**，不回退。
+
+### 3) 大盘页去掉多余模块（用户裁定）
+
+- 大盘页**不渲染**「主要指数」与「期货自选」；`MarketPage.tsx` 确认无这两块与 `GlobalClockPage` 引用。
+- `docs/mockups/market-v1.html` 删除这两块，模块清单改为 `涨跌家数 → 成交额 → 两融余额 → 护盘信号`。
+
+### 验证
+
+`npm run check` **1388 / 1388 × 2 时区** + selftest + build（73 项）。
+新增断言：`ticker.test.ts` 4 条（6/5 列与两档断点、容器接线、22px、报价 `setInterval` = 1、退订后订阅数 0、回调走闸门）｜`marketModules.test.ts` 3 条（设计稿与 `MarketPage` 均不含 `主要指数` / `期货自选` / `GlobalClockPage`；`tw-mk-grid2` 在 `RescuePanel` 之前）。
+`clockView.test.ts` ⑦ 有意反转为「行情走统一 ticker」。
+
 ## v0.171.0 — 大盘页 V1 改版；指数分时换源；轮询降频与单一报价源
 
 报告 `docs/AUDIT-MARKET-UI.md`、`docs/AUDIT-BACKOFF.md`。`npm run check` **1381 / 1381 × 2 时区**（1349 → 1381）+ selftest + build（73 片段全过）。

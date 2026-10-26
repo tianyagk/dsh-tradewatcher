@@ -19,7 +19,7 @@ test('① 只有一个行情 setInterval（第二个报价定时器 ⇒ 败）',
     if (n > 0) hits.push(`${f}:${n}`)
   }
   // 唯一允许的行情定时器 = useQuotes；全局时钟页的 1s 时钟不在此列
-  assert.equal(hits.some((h) => h.startsWith('useQuotes.ts')), true, '缺少统一报价定时器')
+  assert.equal(hits.some((h) => h.startsWith('ticker.ts')), true, '统一报价定时器必须在 ticker.ts')
   assert.throws(() => assert.equal(hits.length, 0, '反例上：另有定时器仍在跑'), /反例上/, '⚠ 反例注入必须失败')
 })
 

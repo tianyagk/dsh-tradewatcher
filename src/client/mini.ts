@@ -1,6 +1,7 @@
 /**
  */
 import { useEffect, useMemo, useState } from 'react'
+import { subscribeTicker } from './ticker.ts'
 import { shouldPollQuotes } from '../shared/pollGate.ts'
 import { api } from './api.ts'
 import { isUsableAvg } from './trendView.ts'
@@ -126,14 +127,14 @@ export function useMiniTrends(secids: string[], enabled: boolean): Record<string
       }
     }
     void fill()
-    const t = setInterval(() => {
+    const off = subscribeTicker(() => {
       if (!shouldPollQuotes(Date.now())) return
       retries = 0
       void fill()
-    }, 150_000)
+    })
     return () => {
       alive = false
-      clearInterval(t)
+      off()
       if (retryTimer !== 0) window.clearTimeout(retryTimer)
     }
   }, [key, enabled, ids.join('|')]) // eslint-disable-line react-hooks/exhaustive-deps

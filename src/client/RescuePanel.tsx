@@ -1,6 +1,7 @@
 /**
  */
 import * as React from 'react'
+import { shouldPollRescue } from '../shared/pollGate.ts'
 import { abnormalColorOf, abnormalLabelOf, calibrationHeaderOf, caliberEntryOf, dayHistoryStateOf, ringDashOf } from './rescueView.ts'
 import { breakerBadgeOf } from './rescueView.ts'
 import type {
@@ -450,7 +451,7 @@ export function RescuePanel(props: {
 
   React.useEffect(() => {
     const sec = snapshot !== null && snapshot.trading ? Math.max(10, snapshot.activeIntervalSec) : 60
-    const timer = window.setInterval(() => load(false), sec * 1000)
+    const timer = window.setInterval(() => { if (!shouldPollRescue(Date.now())) return; load(false) }, sec * 1000)
     return () => window.clearInterval(timer)
   }, [load, snapshot?.trading, snapshot?.activeIntervalSec])
 

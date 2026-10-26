@@ -10,8 +10,9 @@
  */
 import * as React from 'react'
 import { api } from './api.ts'
+import { subscribeTicker } from './ticker.ts'
 import {
-  CLOCK_GROUPS, CLOCK_SESSIONS, DIAL, arcPathD, clockRefreshMs, displayMinuteOfWheel, needleGeometry,
+  CLOCK_GROUPS, CLOCK_SESSIONS, DIAL, arcPathD, displayMinuteOfWheel, needleGeometry,
   nextStartSeconds, sessionStatus, sessionWheelSpans, wallClock, wheelAngle,
   type ClockGroup, type ClockSession,
 } from '../shared/clockSessions.ts'
@@ -166,8 +167,8 @@ export function GlobalClockPage(props: { back?: React.ReactNode; title: string }
   // 行情：默认 120 秒一次（可配置）
   React.useEffect(() => {
     load(false)
-    const timer = setInterval(() => load(false), clockRefreshMs({ clockRefreshSec: refreshSec }))
-    return () => clearInterval(timer)
+    const off = subscribeTicker(() => load(false))
+    return () => off()
   }, [load, refreshSec])
 
   const zone: ZoneOption = ZONE_OPTIONS.find((o) => o.key === zoneKey) ?? ZONE_OPTIONS[0]!
@@ -237,10 +238,10 @@ export function GlobalClockPage(props: { back?: React.ReactNode; title: string }
     React.createElement('section', { className: 'tw-prism-card' },
       React.createElement('div', { className: 'tw-prism-card-title' }, '主要指数',
         React.createElement('span', { className: 'tw-prism-muted', style: { marginLeft: 'auto' } }, '6 个')),
-      React.createElement('div', { className: 'tw-clock-cards' }, ...indexCards.map((c) => React.createElement(StatCard, { key: c.code, card: c })))),
+      React.createElement('div', { className: 'tw-idx-grid' }, ...indexCards.map((c) => React.createElement(StatCard, { key: c.code, card: c })))),
     React.createElement('section', { className: 'tw-prism-card' },
       React.createElement('div', { className: 'tw-prism-card-title' }, '期货自选 · 主连',
         React.createElement('span', { className: 'tw-prism-muted', style: { marginLeft: 'auto' } }, '5 个')),
-      React.createElement('div', { className: 'tw-clock-cards' }, ...futureCards.map((c) => React.createElement(StatCard, { key: c.code, card: c })))),
+      React.createElement('div', { className: 'tw-fut-grid' }, ...futureCards.map((c) => React.createElement(StatCard, { key: c.code, card: c })))),
   )
 }

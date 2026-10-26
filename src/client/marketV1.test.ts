@@ -31,7 +31,7 @@ test('② 六张 ETF 卡同一容器 6 等分（<1100 三列 / <700 两列）', 
   const panel = strip(read('RescuePanel.tsx'))
   assert.equal(/className: 'tw-rescue-cards'/.test(panel), true, '六卡容器类缺失')
   // 反例注入：auto-fit（会分两行）⇒ 必败
-  const legacy = css.replace('repeat(6,minmax(0,1fr))', 'repeat(auto-fit,minmax(232px,1fr))')
+  const legacy = css.replaceAll('repeat(6,minmax(0,1fr))', 'repeat(auto-fit,minmax(232px,1fr))')
   assert.throws(() => assert.equal(/repeat\(6,minmax\(0,1fr\)\)/.test(legacy), true, '反例上：分两行'), /反例上/, '⚠ 反例注入必须失败')
 })
 

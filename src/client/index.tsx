@@ -2,6 +2,7 @@
  */
 import React, { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { shouldPollQuotes } from '../shared/pollGate.ts'
+import { subscribeTicker } from './ticker.ts'
 import { DEFAULT_PREFS, TW_ROWS, VIEW_MODES, normalizePanelOpacity, type PortPrefs, type QuoteRow, type ViewMode } from '../shared/model.ts'
 import { api } from './api.ts'
 import { badgeView, type BadgeState } from './badgeView.ts'
@@ -82,11 +83,11 @@ function startBadgePolling(): () => void {
   }
   badgeRefresh = load
   load()
-  const timer = window.setInterval(() => { if (!shouldPollQuotes(Date.now())) return; load() }, 60_000)
+  const timer = subscribeTicker(() => { if (!shouldPollQuotes(Date.now())) return; load() })
   return () => {
     alive = false
     badgeRefresh = null
-    window.clearInterval(timer)
+    timer()
   }
 }
 

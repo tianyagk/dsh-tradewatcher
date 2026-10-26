@@ -2,7 +2,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { QuoteRow } from '../shared/model.ts'
 import { planQuotePoll } from './quotePoll.ts'
-import { QUOTE_POLL_MS, shouldPollQuotes } from '../shared/pollGate.ts'
+import { subscribeTicker } from './ticker.ts'
+import { shouldPollQuotes } from '../shared/pollGate.ts'
 import { api } from './api.ts'
 import { createRequestGen } from './requestGen.ts'
 
@@ -136,10 +137,10 @@ export function useQuoteEngine(secids: string[], intervalMs: number, enabled: bo
     }
     load()
     if (!enabled || ids.length === 0) return () => { alive.current = false }
-    const t = setInterval(tick, QUOTE_POLL_MS)
+    const off = subscribeTicker(tick)
     return () => {
       alive.current = false
-      clearInterval(t)
+      off()
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key, intervalMs, enabled])
