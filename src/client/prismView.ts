@@ -3,7 +3,7 @@
  * 字号只用 12 / 14（Material 低端子集）；不写免责文案；缺数据 `—` + 一句原因。
  */
 import type { PrismAnalysis, PrismNewsStatus, PrismSettings, PrismState, PrismTradingState } from '../shared/prism.ts'
-import { shStampText } from './marketTime.ts'
+import { shDayText, shStampText } from './marketTime.ts'
 
 export const PRISM_FONT = { body: 12, title: 14 } as const
 
@@ -454,4 +454,32 @@ export function decisionReasonFits(contentWidth: number, renderedWidth: number):
 export function leftColumnPctOf(bodyWidth: number, leftWidth: number): number {
   if (!(bodyWidth > 0)) return 0
   return Math.round((leftWidth / bodyWidth) * 10000) / 100
+}
+
+/* ── 挂单/成交只显示北京时间当天；历史留在磁盘，不做 UI 物理删除 ── */
+export function beijingDayOf(ms: number): string {
+  return shDayText(ms)
+}
+
+export function todayBeijing(now = Date.now()): string {
+  return shDayText(now)
+}
+
+export function todayOrdersOf<T extends { day?: string; decidedAt?: number }>(orders: readonly T[], today: string): T[] {
+  return orders.filter((o) => {
+    const day = typeof o.day === 'string' && o.day !== '' ? o.day : (typeof o.decidedAt === 'number' ? beijingDayOf(o.decidedAt) : '')
+    return day === today
+  })
+}
+
+export function todayFillsOf<T extends { at: number }>(fills: readonly T[], today: string): T[] {
+  return fills.filter((f) => beijingDayOf(f.at) === today)
+}
+
+export function dayTableTitle(kind: 'orders' | 'fills', count: number): string {
+  return kind === 'orders' ? `挂单（今日 ${count} 笔）` : `成交（今日 ${count} 笔）`
+}
+
+export function dayTableEmpty(kind: 'orders' | 'fills'): string {
+  return kind === 'orders' ? '—（今日无挂单）' : '—（今日无成交）'
 }

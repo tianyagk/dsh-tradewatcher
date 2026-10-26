@@ -20,6 +20,11 @@ import {
   SEGMENT_GAP, SEGMENT_PADDING,
   basisBlocksOf,
   segmentItemWidthOf,
+  dayTableEmpty,
+  dayTableTitle,
+  todayBeijing,
+  todayFillsOf,
+  todayOrdersOf,
   analysisText,
   compositionItems,
   decisionErrorText,
@@ -116,6 +121,7 @@ export function PrismPage(props: { active: boolean }): React.ReactElement {
   const [notice, setNotice] = useState<string | null>(null)
   const [tab, setTab] = useState<TabKey>('positions')
   const [netMode, setNetMode] = useState<'nominal' | 'adjusted'>('adjusted')
+  const [today, setToday] = useState<string>(() => todayBeijing())
   const [split, setSplit] = useState(62)
   const [selftest, setSelftest] = useState<{ ok: boolean; error: string | null; model: string | null; elapsedMs: number; text: string | null } | null>(null)
   const bodyRef = useRef<HTMLDivElement | null>(null)
@@ -140,6 +146,11 @@ export function PrismPage(props: { active: boolean }): React.ReactElement {
   useEffect(() => {
     if (props.active) load()
   }, [props.active, load])
+
+  useEffect(() => {
+    const timer = setInterval(() => setToday(todayBeijing()), 30_000)
+    return () => clearInterval(timer)
+  }, [])
 
   const act = <T,>(p: Promise<T>, then?: (v: T) => void): void => {
     setBusy(true)
@@ -252,6 +263,9 @@ export function PrismPage(props: { active: boolean }): React.ReactElement {
     : `单日 −3% / 累计 −10% / 状态 ${dd.status}\n当前 单日 ${evalPct(dd.dailyPct)} · 自高点 ${evalPct(dd.cumulativePct)} · 目标总仓 ≤${dd.targetTotalPct}% · 现金 ≥${dd.cashMinPct}% · 样本 n=${dd.n}${dd.freezeRound ? ' · 连续两次触发，本轮冻结新开仓' : ''}`
   const dRows = [...decisionRows(latest?.decision, { cash: trading?.account.cash, minPrice: lowPrice }).map((r) => r.key === '仓位上限依据' ? { ...r, value: basisBlocks[0] as string } : r), { key: '回撤闸门', value: ddText }]
 
+  const todaysOrders = trading === null ? [] : todayOrdersOf(trading.orders, today)
+  const todaysFills = trading === null ? [] : todayFillsOf(trading.fills, today)
+
   return (
     <div className="tw-prism">
       <div className="tw-prism-head">
@@ -341,13 +355,15 @@ export function PrismPage(props: { active: boolean }): React.ReactElement {
             ) : null}
 
             {tab === 'orders' ? (
-              trading === null || trading.orders.length === 0
-                ? <div className="tw-prism-muted">—（没有挂单）</div>
-                : (
+              <div className="tw-prism-stack">
+                <div className="tw-prism-card-title">{dayTableTitle('orders', todaysOrders.length)}</div>
+                {todaysOrders.length === 0
+                  ? <div className="tw-prism-muted">{dayTableEmpty('orders')}</div>
+                  : (
                   <table className="tw-prism-table">
                     <thead><tr><th>方向</th><th className="tw-prism-num">价格</th><th className="tw-prism-num">数量</th><th>状态</th><th>原因</th><th /></tr></thead>
                     <tbody>
-                      {trading.orders.slice(-30).reverse().map((o) => (
+                      {todaysOrders.slice().reverse().map((o) => (
                         <tr key={o.id}>
                           <td>{o.side === 'buy' ? '买' : '卖'} {o.name}</td>
                           <td className="tw-prism-num tw-prism-mono">{PRISM_MONEY(o.price)}</td>
@@ -359,17 +375,20 @@ export function PrismPage(props: { active: boolean }): React.ReactElement {
                       ))}
                     </tbody>
                   </table>
-                )
+                  )}
+              </div>
             ) : null}
 
             {tab === 'fills' ? (
-              trading === null || trading.fills.length === 0
-                ? <div className="tw-prism-muted">—（没有成交）</div>
-                : (
+              <div className="tw-prism-stack">
+                <div className="tw-prism-card-title">{dayTableTitle('fills', todaysFills.length)}</div>
+                {todaysFills.length === 0
+                  ? <div className="tw-prism-muted">{dayTableEmpty('fills')}</div>
+                  : (
                   <table className="tw-prism-table">
                     <thead><tr><th>时间</th><th>方向</th><th className="tw-prism-num">价格</th><th className="tw-prism-num">数量</th><th className="tw-prism-num">费用</th><th>来源</th></tr></thead>
                     <tbody>
-                      {trading.fills.slice(-30).reverse().map((f) => (
+                      {todaysFills.slice().reverse().map((f) => (
                         <tr key={`${f.orderId}-${f.at}`}>
                           <td className="tw-prism-mono">{shClockText(f.at)}</td>
                           <td>{f.side === 'buy' ? '买' : '卖'} {f.name}</td>
@@ -381,7 +400,8 @@ export function PrismPage(props: { active: boolean }): React.ReactElement {
                       ))}
                     </tbody>
                   </table>
-                )
+                  )}
+              </div>
             ) : null}
           </section>
 
