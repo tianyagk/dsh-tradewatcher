@@ -938,9 +938,9 @@ color-scheme:dark}
 .tw-mk-h{display:flex;align-items:center;gap:8px;margin-bottom:8px}
 .tw-mk-bar{width:3px;height:14px;border-radius:2px;background:var(--tw-accent);display:inline-block}
 .tw-mk-hint{margin-left:auto;font-size:12px;color:var(--tw-muted)}
-.tw-mk-grid5{display:grid;grid-template-columns:repeat(5,1fr);gap:6px}
-.tw-mk-grid4{display:grid;grid-template-columns:repeat(4,1fr);gap:6px}
-.tw-mk-grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:6px}
+.tw-mk-grid5{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:6px;align-items:stretch}
+.tw-mk-grid4{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:6px;align-items:stretch}
+.tw-mk-grid3{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px;align-items:stretch}
 .tw-mk-cell{padding:8px;border-radius:8px;background:var(--tw-card-2)}
 .tw-mk-v{font-size:22px;line-height:1.15;font-variant-numeric:tabular-nums;font-family:var(--tw-mono)}
 .tw-mk-l{font-size:12px;color:var(--tw-muted);margin-top:2px}

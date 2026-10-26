@@ -2,6 +2,7 @@
  */
 import * as React from 'react'
 import { shouldPollRescue } from '../shared/pollGate.ts'
+import { shortSignalOf } from './rescueView.ts'
 import { abnormalColorOf, abnormalLabelOf, calibrationHeaderOf, caliberEntryOf, dayHistoryStateOf, ringDashOf } from './rescueView.ts'
 import { breakerBadgeOf } from './rescueView.ts'
 import type {
@@ -939,7 +940,7 @@ export function RescuePanel(props: {
                         e.engine === undefined
                           ? React.createElement('span', { className: 'tw-badge', title: '该事件由更早的评分口径记录（因子构成与当前不同，仅作历史留痕）' }, '旧口径')
                           : null,
-                        React.createElement('span', { className: 'tw-muted', style: { fontSize: 12, flex: 1, minWidth: 0 } }, e.reason),
+                        React.createElement('span', { className: 'tw-muted', style: { fontSize: 12, flex: 1, minWidth: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' } }, shortSignalOf(e)),
                       ),
                     ),
                   ),
@@ -1008,10 +1009,6 @@ export function RescuePanel(props: {
           onClose: () => setOpenDay(null),
         })
       : null,
-    React.createElement('div', { className: 'tw-hint', style: { fontSize: 12, padding: '4px 10px 0' } },
-      '口径说明：识别的是「符合国家队历史行为模式的宽基 ETF 放量 + 超大单净流入」，' +
-      '汇金/国新/诚通不披露日内成交，因此这是概率性信号而非身份确认；超大单为东财按单笔金额的分类口径，ETF 天量含做市与套利盘。',
-    ),
   )
 }
 

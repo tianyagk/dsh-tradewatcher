@@ -102,6 +102,8 @@ export function MarketPage(props: {
 
   // Breadth & turnover from the two composite indices (full-market counters).
  // 涨跌家数历史分位。宿主持每日快照（收盘后写），这里只读。
+  /** 四类数据块的统一重试令牌（点一次 +1，相关 effect 重新拉取） */
+  const [mkRetry, setMkRetry] = useState(0)
   const [breadth, setBreadth] = useState<Awaited<ReturnType<typeof api.breadth>> | null>(null)
   const [breadthErr, setBreadthErr] = useState<string | null>(null)
   /**
@@ -131,7 +133,7 @@ export function MarketPage(props: {
       alive = false
     }
     // 只跟节拍走：不再依赖 quotes 对象身份（分位只在收盘后变化，当日数值跟着 60s 节拍动）
-  }, [props.quoteTs])
+  }, [props.quoteTs, mkRetry])
 
   // 附加行情（v0.81.2）：涨停/跌停家数、两融（双源交叉）、全天成交额预测。
   // 预测要把"页面自己已经显示的那个当日成交额"带过去（宿主不再抓一遍）；缺/0 ⇒ 预测部分如实缺失。
@@ -164,7 +166,7 @@ export function MarketPage(props: {
     }
     // 节拍（quoteTs）驱动重取，成交额变化也顺带重取；两条路都受 30s 最小间隔约束
     // （宿主侧有缓存，预测本身每分钟才该变；数据最多旧 30s，见各格 title）
-  }, [props.quoteTs, amountForForecast])
+  }, [props.quoteTs, amountForForecast, mkRetry])
 
   /**
    * 成交额分时 / 分钟增减：取指数（沪指）**2 日**分时 —— 每分钟 bar 自带 `amount`，
@@ -182,7 +184,7 @@ export function MarketPage(props: {
       .then((r) => { if (alive) setAmtTrend(r) })
       .catch(() => { if (alive) setAmtTrend(null) })
     return () => { alive = false }
-  }, [props.quoteTs])
+  }, [props.quoteTs, mkRetry])
 
   const sh = quotes['1.000001']
   const sz = quotes['0.399001']
@@ -444,13 +446,19 @@ export function MarketPage(props: {
       const noAmountReason = amtTrend?.trend?.noAmount === true ? (amtTrend.trend.noAmountReason ?? '该源无成交额') : null
       const cell = (label: string, value: string, sub?: string): React.ReactElement =>
         React.createElement('div', { className: 'tw-mk-cell' },
-          React.createElement('div', { className: 'tw-mk-v' }, value),
           React.createElement('div', { className: 'tw-mk-l' }, label),
+          React.createElement('div', { className: 'tw-mk-v' }, value),
           sub === undefined ? null : React.createElement('div', { className: 'tw-mk-s' }, sub),
         )
-      const card = (title: string, hint: string, body: React.ReactNode): React.ReactElement =>
+      const card = (title: string, hint: string, body: React.ReactNode, retry = true): React.ReactElement =>
         React.createElement('div', { className: 'tw-mk-card' },
-          React.createElement('div', { className: 'tw-mk-h' }, React.createElement('i', { className: 'tw-mk-bar' }), React.createElement('span', { className: 't' }, title), React.createElement('span', { className: 'tw-mk-hint' }, hint)),
+          React.createElement('div', { className: 'tw-mk-h' },
+            React.createElement('i', { className: 'tw-mk-bar' }),
+            React.createElement('span', { className: 't' }, title),
+            React.createElement('span', { className: 'tw-mk-hint' }, hint),
+            retry
+              ? React.createElement('button', { className: 'tw-tab', style: { fontSize: 12 }, onClick: () => setMkRetry((n) => n + 1) }, '重试')
+              : null),
           body,
         )
       const b = breadth?.current ?? null
@@ -483,7 +491,7 @@ export function MarketPage(props: {
         card('成交额分时', '累计 · 亿元', (() => {
           if (noAmountReason !== null) return React.createElement('div', { className: 'tw-mk-empty' }, missingCellText(noAmountReason))
           if (cumToday.length < 2) return React.createElement('div', { className: 'tw-mk-empty' }, missingCellText('分时分钟额未取到'))
-          const W = 320, H = 96
+          const W = 320, H = 180
           const maxV = Math.max(...cumToday, ...(cumYday.length > 0 ? cumYday : [0]), fc ?? 0, 1)
           const y = (v: number): number => H - (v / maxV) * (H - 6)
           const line = (arr: number[]): string => arr.map((v, i) => `${i === 0 ? 'M' : 'L'}${(i / Math.max(1, arr.length - 1)) * W} ${y(v)}`).join(' ')
@@ -493,7 +501,7 @@ export function MarketPage(props: {
               React.createElement('path', { d: line(cumToday), fill: 'none', stroke: 'var(--tw-accent)', strokeWidth: 1.5 }),
               fc !== null ? React.createElement('line', { x1: 0, y1: y(fc), x2: W, y2: y(fc), stroke: 'var(--tw-muted)', strokeWidth: 1, strokeDasharray: '4 3' }) : null,
             ),
-            React.createElement('div', { className: 'tw-mk-l' }, `今日 ${(cumToday[cumToday.length - 1]! / 1e8).toFixed(0)} 亿 · 昨 ${cumYday.length > 0 ? (cumYday[cumYday.length - 1]! / 1e8).toFixed(0) + ' 亿' : '—'} · 预测 ${fc === null ? '—' : (fc / 1e8).toFixed(0) + ' 亿'}`))
+            React.createElement('div', { className: 'tw-mk-l' }, `X 09:30–15:00 · Y 亿元 · 今日 ${(cumToday[cumToday.length - 1]! / 1e8).toFixed(0)} 亿 · 昨 ${cumYday.length > 0 ? (cumYday[cumYday.length - 1]! / 1e8).toFixed(0) + ' 亿' : '—'} · 预测 ${fc === null ? '—' : (fc / 1e8).toFixed(0) + ' 亿'}`))
         })()),
       )
       const right = React.createElement('div', { className: 'tw-mk-col' },
@@ -505,8 +513,14 @@ export function MarketPage(props: {
                 React.createElement('i', { style: { height: `${Math.max(2, (n / Math.max(1, ...distCounts)) * 70)}px` }, 'data-dir': i < 5 ? 'down' : i === 5 ? 'flat' : 'up' }),
                 React.createElement('span', { className: 'tw-mk-dist-l' }, distLabels[i] ?? ''))))),
         card('分钟成交额较昨日增减', '亿元', delta.bars === null
-          ? React.createElement('div', { className: 'tw-mk-empty' }, missingCellText(noAmountReason ?? delta.reason))
-          : React.createElement('div', { className: 'tw-mk-min' },
+          ? React.createElement('div', { className: 'tw-mk-empty', style: { height: 160, display: 'flex', flexDirection: 'column', gap: 4 } },
+              React.createElement('svg', { width: '100%', height: 120, viewBox: '0 0 320 120', role: 'img', 'aria-label': '分钟成交额坐标系' },
+                React.createElement('line', { x1: 0, y1: 60, x2: 320, y2: 60, stroke: 'var(--tw-muted)', strokeWidth: 0.5 }),
+                React.createElement('line', { x1: 0, y1: 2, x2: 0, y2: 118, stroke: 'var(--tw-muted)', strokeWidth: 0.5 }),
+                React.createElement('text', { x: 4, y: 114, fontSize: 12, fill: 'var(--tw-muted)' }, '09:30'),
+                React.createElement('text', { x: 280, y: 114, fontSize: 12, fill: 'var(--tw-muted)' }, '15:00')),
+              React.createElement('span', null, missingCellText(noAmountReason ?? delta.reason)))
+          : React.createElement('div', { className: 'tw-mk-min', style: { height: 160 } },
               delta.bars.map((v, i) => React.createElement('i', {
                 key: i,
                 className: v >= 0 ? 'pos' : 'neg',

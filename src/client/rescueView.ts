@@ -159,3 +159,23 @@ export function rescueCardPointsOf(
     price: typeof p.price === 'number' && Number.isFinite(p.price) ? p.price : null,
   }))
 }
+
+/**
+ * 信号时间线的**一行短句**（用户 2026-10-26：压到 ≤40 字，不要 `｜` 长串）：
+ * `时间 · 等级 · x族 · 分数 · 一句结论`。
+ */
+export function shortSignalOf(e: {
+  hhmm: string
+  level: 0 | 1 | 2 | 3
+  score?: number | null
+  families?: number | null
+  reason?: string | null
+  kind?: string | null
+}): string {
+  const label = ['平静', '资金异动', '疑似护盘', '强护盘'][e.level] ?? '—'
+  const fam = typeof e.families === 'number' ? `${e.families}族` : '—'
+  const score = typeof e.score === 'number' && Number.isFinite(e.score) ? `${Math.round(e.score)}分` : '—'
+  const note = (e.reason ?? '').replace(/[｜|]/g, ' ').replace(/\s+/g, ' ').trim()
+  const brief = note.length > 14 ? `${note.slice(0, 13)}…` : (note === '' ? '—' : note)
+  return `${e.hhmm} · ${label} · ${fam} · ${score} · ${brief}`.slice(0, 40)
+}
