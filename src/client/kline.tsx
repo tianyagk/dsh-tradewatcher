@@ -122,7 +122,7 @@ function yGrid(args: {
       const pct = ((v - args.baseline) / args.baseline) * 100
       out.push(React.createElement('text', {
         key: `gp${v}`,
-        x: padX + innerW + 3, y: y - 2, textAnchor: 'start',
+        x: padX + innerW + 4, y: y - 2, textAnchor: 'start',
         className: 'tw-chart-pct',
         style: { fill: pct >= 0 ? 'var(--tw-up)' : 'var(--tw-down)', fontSize: 12 },
       }, `${pct >= 0 ? '+' : ''}${pct.toFixed(2)}%`))
@@ -361,7 +361,7 @@ export function TrendChart(props: {
       const strokeW = outer.has(Math.abs(lv.devPct)) ? 1.5 : 1
       children.push(React.createElement('line', {
         key: `tw-${lv.side}-${lv.devPct}`,
-        x1: PAD_X, y1: y, x2: PAD_X + innerW, y2: y,
+        x1: PAD_X, y1: y, x2: PAD_X + innerW - 8, y2: y,
         style: { stroke: color }, strokeWidth: strokeW, strokeDasharray: '4 3', opacity: 0.9,
       }))
       // 档位标签统一画在**绘图区左内侧**（见下方统一渲染；右侧 Y 轴不再叠加任何做T 文字）
@@ -375,6 +375,7 @@ export function TrendChart(props: {
       levels: tw.levels,
       yOf,
       plotLeft: PAD_X,
+      plotRight: PAD_X + innerW,
       plotTop: PAD_TOP,
       plotBottom: PAD_TOP + mainH,
       pathYsAt: (x0, x1) => {
@@ -414,11 +415,11 @@ export function TrendChart(props: {
         const w = Math.max(40, label.length * 6.6 + 10)
         children.push(React.createElement('g', { key: 'tw-bubble' },
           React.createElement('rect', {
-            x: PAD_X + innerW - w, y: y - 9, width: w, height: 18, rx: 6, ry: 6,
+            x: PAD_X + innerW - 8 - w, y: y - 9, width: w, height: 18, rx: 6, ry: 6,
             style: { fill: '#ffffff', stroke: mainColor }, strokeWidth: 1,
           }),
           React.createElement('text', {
-            x: PAD_X + innerW - w / 2, y: y + 4, textAnchor: 'middle',
+            x: PAD_X + innerW - 8 - w / 2, y: y + 4, textAnchor: 'middle',
             style: { fill: 'var(--tw-text)', fontSize: 12, fontFamily: 'var(--tw-mono)', fontVariantNumeric: 'tabular-nums' },
           }, label),
         ))

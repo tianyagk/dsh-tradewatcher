@@ -80,16 +80,14 @@ test('④ 标签矩形与折线路径不相交（重叠 ⇒ 必败；靠 halo + 
 })
 
 test('⑤ 虚线仍从 plotLeft 到 plotRight（缩短 ⇒ 必败）', () => {
-  const dashLines = chart.split('\n').filter((l) => l.includes('x1: PAD_X, y1: y'))
-  assert.ok(dashLines.length >= 1, '找不到做T 虚线')
-  for (const l of dashLines) {
-    assert.ok(l.includes('x1: PAD_X, y1: y, x2: PAD_X + innerW, y2: y'), `虚线必须贯穿整个绘图区（实际：${l.trim()}）`)
-  }
+  const block = /key: `tw-\$\{lv\.side\}-\$\{lv\.devPct\}`([\s\S]{0,200})/.exec(chart)
+  assert.ok(block !== null, '找不到做T 虚线对象')
+  assert.ok(block[1].includes('x1: PAD_X, y1: y, x2: PAD_X + innerW - 8, y2: y'), '做T 虚线必须从绘图区左边界到 plotRight−8')
   assert.equal(chart.includes('innerW / 2, y2: y'), false, '不许把做T 虚线缩短到一半')
   // 反例注入：构造一条"只画到一半"的虚线 ⇒ 判据必败
   const half = 'x1: PAD_X, y1: y, x2: PAD_X + innerW / 2, y2: y'
   assert.throws(
-    () => assert.ok(half.includes('x2: PAD_X + innerW, y2: y'), '反例上：虚线缩短'),
+    () => assert.ok(half.includes('x2: PAD_X + innerW - 8, y2: y'), '反例上：虚线缩短'),
     /反例上/,
     '⚠ 反例注入（缩短）必须失败',
   )

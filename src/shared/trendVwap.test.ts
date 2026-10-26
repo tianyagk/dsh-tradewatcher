@@ -81,7 +81,7 @@ test('接线：新浪分钟链回填 avg 并标 avgApprox；口径行追加近�
   assert.equal(/bf\.approx \? \{ avgApprox: true \}/.test(em), true, '缺成交额时必须标 avgApprox')
   const drawer = readFileSync(join(HERE, '..', 'client', 'QuoteDrawer.tsx'), 'utf8')
   assert.equal(drawer.includes('均价为近似（缺成交额）'), true, '口径行必须追加近似说明')
-  assert.equal(/lastAvgOf\(payload\.trend\.points\)/.test(drawer), true, '做T 基准必须用最后一个非空 avg')
+  assert.equal(/lastAvgOf\(pts\)/.test(drawer), true, '做T 基准必须用最后一个非空 avg')
 })
 
 test('lotSize=100：量是手、额是元 ⇒ 均价落在价格量级（漏乘 ⇒ 差 100× 被域判据丢掉）', () => {

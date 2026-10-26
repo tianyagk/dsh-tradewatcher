@@ -688,10 +688,22 @@ export function QuoteDrawer(props: {
     if (props.tWindowOn !== true) return null
     if (payload === null || payload.kind !== 'trend') return { reason: '分时数据未取到' }
     void (props.quoteTs ?? 0)
+    const pts = payload.trend.points
+    // 当日振幅% = (当日最高 − 当日最低) ÷ 昨收 × 100（取分时序列的最高/最低）
+    const hi = pts.reduce((m, p) => (typeof p.price === 'number' && p.price > m ? p.price : m), -Infinity)
+    const lo = pts.reduce((m, p) => (typeof p.price === 'number' && p.price > 0 && p.price < m ? p.price : m), Infinity)
+    const prev = payload.trend.prePrice
+    const ampPct = Number.isFinite(hi) && Number.isFinite(lo) && hi > lo && typeof prev === 'number' && prev > 0
+      ? ((hi - lo) / prev) * 100
+      : null
     // 均价：取**最后一个非空** avg（部分点缺 ⇒ 仍可用；全缺 ⇒ 才给原因）
-    return tWindowOf({ atrPct: atr?.pct ?? null, avg: lastAvgOf(payload.trend.points) })
+    return tWindowOf({ atrPct: atr?.pct ?? null, avg: lastAvgOf(pts), ampPct })
   })()
-  const tReason = tWin !== null && 'reason' in tWin ? tWin.reason : (props.tWindowOn === true && atr?.reason != null ? atr.reason : null)
+  const tReason = tWin !== null && 'reason' in tWin
+    ? tWin.reason
+    : (props.tWindowOn === true && atr?.reason != null
+        ? atr.reason
+        : (tWin !== null && 'ampReason' in tWin ? tWin.ampReason ?? null : null))
   /**
    * 口径条的**完整解释**（title/aria）：五日的"只有当日/本地拼接覆盖"属于**结构性限制**，
    * 因此按用户要求不单独占一条横幅，而是并入口径条 —— 但完整解释必须鼠标与键盘都能读到。
