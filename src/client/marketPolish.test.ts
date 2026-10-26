@@ -38,13 +38,13 @@ test('③ 三个小格容器 5/4/3 等分（拉伸或 auto-fit ⇒ 败）', () =
 test('④ 两张图高度 ≥180 / ≥160 且有轴刻度（无轴 ⇒ 败）', () => {
   const page = read('MarketPage.tsx')
   assert.ok(/const W = 320, H = 180/.test(page), '成交额分时高度必须 ≥180')
-  assert.ok(/height: 160/.test(page), '分钟量能高度必须 ≥160')
+  assert.ok(/const W = 320, H = 160/.test(page), '分钟量能高度必须 ≥160')
   assert.ok(/X 09:30–15:00 · Y 亿元/.test(page), '必须有 X/Y 轴说明')
 })
 
 test('⑤ 无数据时仍有坐标系 + 原因（空白 ⇒ 败）', () => {
   const page = read('MarketPage.tsx')
-  assert.ok(/'aria-label': '分钟成交额坐标系'/.test(page), '空态必须有坐标系')
+  assert.ok(/'aria-label': '分钟成交额增减坐标系'/.test(page), '空态必须有坐标系')
   assert.ok(/missingCellText\(noAmountReason \?\? delta\.reason\)/.test(page), '空态必须给原因')
 })
 

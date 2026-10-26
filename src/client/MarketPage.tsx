@@ -4,7 +4,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import type { BoardRow, QuoteRow, StockDetail, TrendData } from '../shared/model.ts'
 import { api } from './api.ts'
-import { DIST_BUCKETS, MINUTE_BARS, breadthCellsOf, cumulativeOf, daySeriesOf, minuteDeltaBarsOf, missingCellText } from './marketBlocks.ts'
+import { DIST_BUCKETS, MINUTE_BARS, X_TICKS, breadthCellsOf, cumulativeOf, daySeriesOf, gridYsOf, minuteDeltaBarsOf, missingCellText, yTicksOf } from './marketBlocks.ts'
 import { UPDOWN_MISSING_NOTE, breadthCells, distToneOf, pickBreadthCounts, upDownPair } from './breadthView.ts'
 import { distAxisOf, distBarPctOf, forecastCellOf, limitNoteOf, marginRowOf } from './distView.ts'
 import { dirClass, fmtAmt, fmtBig, fmtPct, fmtPrice, fmtSigned } from './format.ts'
@@ -478,7 +478,7 @@ export function MarketPage(props: {
       const dist = breadth?.distribution
       const distCounts = dist?.counts ?? null
       const distLabels = dist?.labels ?? []
-      const left = React.createElement('div', { className: 'tw-mk-col' },
+      const left = React.createElement('div', { className: 'tw-mk-col tw-mk-col-l' },
         card('涨跌趋势', b === null ? '未取到' : '', React.createElement('div', { className: 'tw-mk-grid5' },
           cells.map((c) => cell(c.label, c.value === null ? '—' : String(c.value), c.pct === null ? undefined : `${c.pct.toFixed(1)}%`)))),
         card('成交量', '亿元', React.createElement('div', { className: 'tw-mk-grid4' },
@@ -495,10 +495,17 @@ export function MarketPage(props: {
           if (cumToday.length < 2) return React.createElement('div', { className: 'tw-mk-empty' }, missingCellText('分时分钟额未取到'))
           const W = 320, H = 180
           const maxV = Math.max(...cumToday, ...(cumYday.length > 0 ? cumYday : [0]), fc ?? 0, 1)
-          const y = (v: number): number => H - (v / maxV) * (H - 6)
+          const y = (v: number): number => H - (v / maxV) * (H - 14)
           const line = (arr: number[]): string => arr.map((v, i) => `${i === 0 ? 'M' : 'L'}${(i / Math.max(1, arr.length - 1)) * W} ${y(v)}`).join(' ')
+          const yt = yTicksOf(0, maxV, 4)
+          const ys = gridYsOf(0, maxV, 6, H - 14, 4)
           return React.createElement('div', null,
             React.createElement('svg', { width: '100%', height: H, viewBox: `0 0 ${W} ${H}`, role: 'img', 'aria-label': '成交额累计' },
+              ...ys.map((gy, i) => React.createElement('line', { key: `gy${i}`, x1: 0, y1: gy, x2: W, y2: gy, stroke: 'var(--tw-border)', strokeWidth: 0.5 })),
+              ...ys.map((gy, i) => React.createElement('text', { key: `yt${i}`, x: 4, y: gy - 2, fontSize: 12, fill: 'var(--tw-muted)' }, (yt[i]! / 1e8).toFixed(0))),
+              ...X_TICKS.map((t, i) => React.createElement('text', { key: `xt${i}`, x: 4 + (i / (X_TICKS.length - 1)) * (W - 30), y: H - 2, fontSize: 12, fill: 'var(--tw-muted)' }, t)),
+              React.createElement('line', { x1: 0, y1: H - 14, x2: W, y2: H - 14, stroke: 'var(--tw-muted)', strokeWidth: 0.5 }),
+              React.createElement('line', { x1: 1, y1: 0, x2: 1, y2: H - 14, stroke: 'var(--tw-muted)', strokeWidth: 0.5 }),
               cumYday.length > 1 ? React.createElement('path', { d: line(cumYday), fill: 'none', stroke: 'var(--tw-muted)', strokeWidth: 1, strokeDasharray: '3 3' }) : null,
               React.createElement('path', { d: line(cumToday), fill: 'none', stroke: 'var(--tw-accent)', strokeWidth: 1.5 }),
               fc !== null ? React.createElement('line', { x1: 0, y1: y(fc), x2: W, y2: y(fc), stroke: 'var(--tw-muted)', strokeWidth: 1, strokeDasharray: '4 3' }) : null,
@@ -506,7 +513,7 @@ export function MarketPage(props: {
             React.createElement('div', { className: 'tw-mk-l' }, `X 09:30–15:00 · Y 亿元 · 今日 ${(cumToday[cumToday.length - 1]! / 1e8).toFixed(0)} 亿 · 昨 ${cumYday.length > 0 ? (cumYday[cumYday.length - 1]! / 1e8).toFixed(0) + ' 亿' : '—'} · 预测 ${fc === null ? '—' : (fc / 1e8).toFixed(0) + ' 亿'}`))
         })()),
       )
-      const right = React.createElement('div', { className: 'tw-mk-col' },
+      const right = React.createElement('div', { className: 'tw-mk-col tw-mk-col-r' },
         card('涨跌分布', `${DIST_BUCKETS} 档`, distCounts === null || distCounts.length !== DIST_BUCKETS
           ? React.createElement('div', { className: 'tw-mk-empty' }, missingCellText(dist?.reason ?? '分布未扫描（需 56 页全市场）'))
           : React.createElement('div', { className: 'tw-mk-dist' },
@@ -514,20 +521,31 @@ export function MarketPage(props: {
                 React.createElement('span', { className: 'tw-mk-dist-n' }, String(n)),
                 React.createElement('i', { style: { height: `${Math.max(2, (n / Math.max(1, ...distCounts)) * 70)}px` }, 'data-dir': i < 5 ? 'down' : i === 5 ? 'flat' : 'up' }),
                 React.createElement('span', { className: 'tw-mk-dist-l' }, distLabels[i] ?? ''))))),
-        card('分钟成交额较昨日增减', '亿元', delta.bars === null
-          ? React.createElement('div', { className: 'tw-mk-empty', style: { height: 160, display: 'flex', flexDirection: 'column', gap: 4 } },
-              React.createElement('svg', { width: '100%', height: 120, viewBox: '0 0 320 120', role: 'img', 'aria-label': '分钟成交额坐标系' },
-                React.createElement('line', { x1: 0, y1: 60, x2: 320, y2: 60, stroke: 'var(--tw-muted)', strokeWidth: 0.5 }),
-                React.createElement('line', { x1: 0, y1: 2, x2: 0, y2: 118, stroke: 'var(--tw-muted)', strokeWidth: 0.5 }),
-                React.createElement('text', { x: 4, y: 114, fontSize: 12, fill: 'var(--tw-muted)' }, '09:30'),
-                React.createElement('text', { x: 280, y: 114, fontSize: 12, fill: 'var(--tw-muted)' }, '15:00')),
-              React.createElement('span', null, missingCellText(noAmountReason ?? delta.reason)))
-          : React.createElement('div', { className: 'tw-mk-min', style: { height: 160 } },
-              delta.bars.map((v, i) => React.createElement('i', {
-                key: i,
-                className: v >= 0 ? 'pos' : 'neg',
-                style: { height: `${Math.max(1, (Math.abs(v) / Math.max(1, ...delta.bars.map((x) => Math.abs(x)))) * 44)}px` },
-              })))),
+        card('分钟成交额较昨日增减', '亿元', (() => {
+          const W = 320, H = 160, TOP = 6, BOT = H - 16
+          const maxAbs = delta.bars === null ? 1 : Math.max(1, ...delta.bars.map((x) => Math.abs(x)))
+          const yt = yTicksOf(-maxAbs, maxAbs, 4)
+          const ys = gridYsOf(-maxAbs, maxAbs, TOP, BOT, 4)
+          const y0 = gridYsOf(0, 0, TOP, BOT, 3)[2] ?? (TOP + BOT) / 2
+          return React.createElement('svg', { width: '100%', height: H, viewBox: `0 0 ${W} ${H}`, role: 'img', 'aria-label': '分钟成交额增减坐标系' },
+            ...ys.map((gy, i) => React.createElement('line', { key: `gy${i}`, x1: 0, y1: gy, x2: W, y2: gy, stroke: 'var(--tw-border)', strokeWidth: 0.5 })),
+            ...ys.map((gy, i) => React.createElement('text', { key: `yt${i}`, x: 4, y: gy - 2, fontSize: 12, fill: 'var(--tw-muted)' }, (yt[i]! / 1e8).toFixed(0))),
+            ...X_TICKS.map((t, i) => React.createElement('text', { key: `xt${i}`, x: 4 + (i / (X_TICKS.length - 1)) * (W - 30), y: H - 2, fontSize: 12, fill: 'var(--tw-muted)' }, t)),
+            React.createElement('line', { x1: 0, y1: BOT, x2: W, y2: BOT, stroke: 'var(--tw-muted)', strokeWidth: 0.5 }),
+            React.createElement('line', { x1: 1, y1: TOP, x2: 1, y2: BOT, stroke: 'var(--tw-muted)', strokeWidth: 0.5 }),
+            React.createElement('line', { x1: 0, y1: y0, x2: W, y2: y0, stroke: 'var(--tw-muted)', strokeWidth: 0.5 }),
+            ...(delta.bars === null
+              ? [React.createElement('text', { key: 'why', x: W / 2, y: (TOP + BOT) / 2, textAnchor: 'middle', fontSize: 12, fill: 'var(--tw-muted)' }, missingCellText(noAmountReason ?? delta.reason))]
+              : delta.bars.map((v, i) => React.createElement('rect', {
+                  key: `b${i}`,
+                  x: 2 + (i / MINUTE_BARS) * (W - 4),
+                  width: Math.max(0.8, (W - 4) / MINUTE_BARS - 0.3),
+                  y: v >= 0 ? y0 - (v / maxAbs) * (y0 - TOP) : y0,
+                  height: Math.max(1, (Math.abs(v) / maxAbs) * (v >= 0 ? y0 - TOP : BOT - y0)),
+                  fill: v >= 0 ? 'var(--tw-up)' : 'var(--tw-down)',
+                }))),
+          )
+        })()),
       )
       return React.createElement('div', { className: 'tw-mk-grid2', 'data-bars': String(MINUTE_BARS) }, left, right)
     })(),

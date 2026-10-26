@@ -11,6 +11,28 @@
 
 ---
 
+## v0.175.0 — 大盘页：图表坐标系、左列紧凑、右列自适应
+
+`npm run check` **1398 / 1398 × 2 时区**（1395 → 1398）+ selftest + build（73 片段全过）。
+
+| # | 问题 | 修法 |
+| --- | --- | --- |
+| 1 | 两张图缺 Y 轴刻度与网格；空态只剩一条孤立基线 | `marketBlocks.ts` 新增 `X_TICKS`（09:30/10:06/10:42/11:18/13:24/14:00/14:36）、`yTicksOf`、`gridYsOf`；两图各 **4 条网格 + 4 个 Y 刻度 + 7 个 X 刻度** + 左边框 + 底轴；空态同一坐标系 + **图内居中** `—（原因）` |
+| 2 | 左列三卡过高、留白多 | `.tw-mk-col-l .tw-mk-card{padding:10px}`、`.tw-mk-grid2{gap:12px}`、`.tw-mk-card{min-height:0}`、标签行距 `margin-top:0` |
+| 3 | 右列两卡撑满、大块空白 | `.tw-mk-col-r .tw-mk-card{height:auto;min-height:0}`、`.tw-mk-col-r .tw-mk-empty{max-height:220px}` |
+
+分钟成交额的柱改为 SVG `rect`，240 根等分。
+
+### 验证
+
+`npm run check` **1398 / 1398 × 2 时区** + selftest + build（73 项）。
+新增 `marketPolish2.test.ts` 3 条（含注入）：① X 刻度 7 个、`yTicksOf`/`gridYsOf` 各 ≥3、两图都渲染 `gy*`/`yt*`、空态原因为图内居中 `text`（无轴 ⇒ 败）｜② `padding:10px` / `gap:12px` / `min-height:0` / `margin-top:0`（写死高度 ⇒ 败）｜③ `height:auto` + 空态 `max-height:220px` + 两列容器类（撑满 ⇒ 败）。
+另更新 2 条被 DOM 变更取代的旧断言（`H=160` 常量、分钟卡 aria-label），判定不变。
+
+### 未交付
+
+1200px 渲染图未出（上下文耗尽）。
+
 ## v0.174.0 — 大盘页：隐藏重复的旧汇总块（最小改动）
 
 `npm run check` **1395 / 1395 × 2 时区**（1394 → 1395）+ selftest + build（73 片段全过）。

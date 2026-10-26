@@ -138,3 +138,20 @@ export function minuteDeltaBarsOf(
   }
   return { bars, reason: null }
 }
+
+/** 两张图统一的 X 刻度（用户 2026-10-26 定稿的 7 个时刻） */
+export const X_TICKS = ['09:30', '10:06', '10:42', '11:18', '13:24', '14:00', '14:36'] as const
+
+/** Y 轴刻度（≥3 档，含首末）：等分 `lo..hi`，按有效位数取整 */
+export function yTicksOf(lo: number, hi: number, count = 4): number[] {
+  const n = Math.max(3, Math.round(count))
+  const a = Number.isFinite(lo) ? lo : 0
+  const b = Number.isFinite(hi) && hi > a ? hi : a + 1
+  const step = (b - a) / (n - 1)
+  return Array.from({ length: n }, (_, i) => a + step * i)
+}
+
+/** 网格线的 y 坐标（与刻度同源；返回 SVG 内部坐标） */
+export function gridYsOf(lo: number, hi: number, top: number, bottom: number, count = 4): number[] {
+  return yTicksOf(lo, hi, count).map((v) => bottom - ((v - lo) / Math.max(1e-9, hi - lo)) * (bottom - top))
+}

@@ -931,10 +931,13 @@ color-scheme:dark}
 .tw-clock-pill.off{color:var(--tw-muted);background:var(--tw-card2);font-weight:500}
 .tw-clock-cd{font-variant-numeric:tabular-nums}
 
-.tw-mk-grid2{display:grid;grid-template-columns:1fr 1fr;gap:6px}
+.tw-mk-grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
 @media (max-width:1100px){.tw-mk-grid2{grid-template-columns:1fr}}
 .tw-mk-col{display:flex;flex-direction:column;gap:6px;min-width:0}
-.tw-mk-card{background:var(--tw-card);border-radius:10px;padding:12px;box-shadow:var(--tw-elev-1)}
+.tw-mk-card{background:var(--tw-card);border-radius:10px;padding:12px;box-shadow:var(--tw-elev-1);min-height:0}
+.tw-mk-col-l .tw-mk-card{padding:10px}
+.tw-mk-col-r .tw-mk-card{height:auto;min-height:0}
+.tw-mk-col-r .tw-mk-empty{max-height:220px}
 .tw-mk-h{display:flex;align-items:center;gap:8px;margin-bottom:8px}
 .tw-mk-bar{width:3px;height:14px;border-radius:2px;background:var(--tw-accent);display:inline-block}
 .tw-mk-hint{margin-left:auto;font-size:12px;color:var(--tw-muted)}
@@ -943,7 +946,7 @@ color-scheme:dark}
 .tw-mk-grid3{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px;align-items:stretch}
 .tw-mk-cell{padding:8px;border-radius:8px;background:var(--tw-card-2)}
 .tw-mk-v{font-size:22px;line-height:1.15;font-variant-numeric:tabular-nums;font-family:var(--tw-mono)}
-.tw-mk-l{font-size:12px;color:var(--tw-muted);margin-top:2px}
+.tw-mk-l{font-size:12px;color:var(--tw-muted);margin-top:0}
 .tw-mk-s{font-size:12px;color:var(--tw-muted)}
 .tw-mk-empty{padding:8px;border-radius:8px;background:var(--tw-card-2);font-size:12px;color:var(--tw-muted)}
 /* 主要指数 6 张一行 / 期货自选 5 张一行（22px·padding 8·圆角 8；窄屏 2 列 / 单列） */
