@@ -327,7 +327,9 @@ export function MarketPage(props: {
     Object.keys(quotes).length === 0
       ? React.createElement(EmptyHint, null, '行情引擎正在取第一批数据（首次启动通常 5 秒内）。若长时间为空，看各面板的「未取到」原因。')
       : null,
-    React.createElement('div', { className: 'tw-panel' },
+    // 旧版汇总块：**隐藏但保留**（用户 2026-10-26 裁定：新版两列块为唯一可见实现；旧块留着不删，
+    // 以免动到既有断言/常量；`hidden` 特性 + `display:none` 双保险，页面上不可见）
+    React.createElement('div', { className: 'tw-panel', hidden: true, style: { display: 'none' }, 'data-legacy': 'market-summary' },
       React.createElement('div', { className: 'tw-panel-h' },
         React.createElement('span', { className: 't' }, '涨跌分布'),
         React.createElement('span', { className: 'tw-muted' }, '沪深两市'),

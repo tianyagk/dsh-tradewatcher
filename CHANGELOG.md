@@ -11,6 +11,34 @@
 
 ---
 
+## v0.174.0 — 大盘页：隐藏重复的旧汇总块（最小改动）
+
+`npm run check` **1395 / 1395 × 2 时区**（1394 → 1395）+ selftest + build（73 片段全过）。
+
+### 问题
+
+大盘页顶部旧汇总块（`涨跌趋势 · 沪深两市` + 成交额 + 两融一行 + 右侧涨跌分布/日内家数）与新版两列块**重复**，页面上出现两套同名标题。
+
+### 做法（一行级改动）
+
+旧块根节点加三件套：
+
+```js
+React.createElement('div', { className: 'tw-panel', hidden: true, style: { display: 'none' }, 'data-legacy': 'market-summary' },
+```
+
+- **不删任何 JSX / helper / 常量**（`tw-dist-cols` / `item()` / `legendRow()` / 四个 `*_REASON` / `forecastCell` 全部原样），因此 1394 条既有断言继续通过。
+- 新版两列块在旧块之后渲染 ⇒ 页面只剩一套可见标题。
+
+### 验证
+
+`npm run check` **1395 / 1395 × 2 时区** + selftest + build（73 项）。
+新增 `marketLegacyHidden.test.ts` 1 条：① 源码含 `'data-legacy': 'market-summary'`；② 同一 `createElement` 行内同时有 `hidden: true` 与 `display: 'none'`；③ `tw-mk-grid2` 索引 > 旧块索引；④ 去掉 `hidden: true` ⇒ 判据必败。
+
+### 已知限制
+
+这是**隐藏**而非删除。旧块代码仍在源码中；完整的「行为迁移 + 删除旧块 + 重写 8 条脆性断言」需要具备 DOM 测试栈的环境，另单排期。
+
 ## v0.173.0 — 大盘页细节打磨：短句、等分小格、图表尺寸、重试入口
 
 `npm run check` **1394 / 1394 × 2 时区**（1388 → 1394）+ selftest + build（73 片段全过）。
