@@ -4,9 +4,11 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import type { BoardRow, QuoteRow, StockDetail, TrendData } from '../shared/model.ts'
 import { api } from './api.ts'
-import { DIST_BJ_NOTE, MINUTE_BARS, X_TICKS, breadthCellsOf, cumulativeOf, daySeriesOf, distTitleOf, gridYsOf, minuteDeltaBarsOf, missingCellText, yTicksOf } from './marketBlocks.ts'
-import { UPDOWN_MISSING_NOTE, breadthCells, distToneOf, pickBreadthCounts, upDownPair } from './breadthView.ts'
-import { distAxisOf, distBarPctOf, forecastCellOf, limitNoteOf, marginRowOf } from './distView.ts'
+import { DIST_BJ_NOTE, DIST_BJ_TITLE, MINUTE_BARS, X_TICKS, breadthCellsOf, cumulativeOf, daySeriesOf, distTitleOf, gridYsOf, minuteDeltaBarsOf, missingCellText, yTicksOf } from './marketBlocks.ts'
+import { UPDOWN_MISSING_NOTE, breadthCells, pickBreadthCounts, upDownPair } from './breadthView.ts'
+import { distConsistencyOf, trendCellsOf } from './distCard.ts'
+import { DistBarsBody } from './distCardRender.tsx'
+import { distAxisOf, forecastCellOf, limitNoteOf, marginRowOf } from './distView.ts'
 import { dirClass, fmtAmt, fmtBig, fmtPct, fmtPrice, fmtSigned } from './format.ts'
 import { CN_PHASE_LABEL, cnSessionState, shClockText } from './marketTime.ts'
 import { useNow } from './useNow.ts'
@@ -452,7 +454,7 @@ export function MarketPage(props: {
           React.createElement('div', { className: 'tw-mk-v' }, value),
           sub === undefined ? null : React.createElement('div', { className: 'tw-mk-s' }, sub),
         )
-      const card = (title: string, hint: string, body: React.ReactNode, retry = true): React.ReactElement =>
+      const card = (title: string, hint: React.ReactNode, body: React.ReactNode, retry = true): React.ReactElement =>
         React.createElement('div', { className: 'tw-mk-card' },
           React.createElement('div', { className: 'tw-mk-h' },
             React.createElement('i', { className: 'tw-mk-bar' }),
@@ -464,12 +466,23 @@ export function MarketPage(props: {
           body,
         )
       const b = breadth?.current ?? null
+      /**
+       * 5 格**直接取分布回包的同源五数**（`distribution.up/flat/down/limitUp/limitDown`）；
+       * 缺了才退回旧链（`/breadth.current` → 涨跌停接口）。与柱状图同源 ⇒ 不会出现"格子与柱子打架"。
+       */
+      const dist5 = trendCellsOf(breadth?.distribution ?? null, b, extras?.limits ?? null)
+      const consistency = distConsistencyOf({
+        up: dist5[0],
+        flat: dist5[1],
+        down: dist5[2],
+        counts: breadth?.distribution?.counts ?? null,
+      })
       const cells = breadthCellsOf({
-        up: b?.up ?? null,
-        even: b?.even ?? null,
-        down: b?.down ?? null,
-        limitUp: extras?.limits.up.count ?? null,
-        limitDown: extras?.limits.down.count ?? null,
+        up: dist5[0],
+        even: dist5[1],
+        down: dist5[2],
+        limitUp: dist5[3],
+        limitDown: dist5[4],
       })
       const m = extras?.margin.szse ?? extras?.margin.em ?? null
       const amt = b?.amount ?? null
@@ -479,7 +492,7 @@ export function MarketPage(props: {
       const distCounts = dist?.counts ?? null
       const distLabels = dist?.labels ?? []
       const left = React.createElement('div', { className: 'tw-mk-col tw-mk-col-l' },
-        card('涨跌趋势', b === null ? '未取到' : '', React.createElement('div', { className: 'tw-mk-grid5' },
+        card('涨跌趋势', consistency.text ?? (b === null ? '未取到' : ''), React.createElement('div', { className: 'tw-mk-grid5' },
           cells.map((c) => cell(c.label, c.value === null ? '—' : String(c.value), c.pct === null ? undefined : `${c.pct.toFixed(1)}%`)))),
         card('成交量', '亿元', React.createElement('div', { className: 'tw-mk-grid4' },
           cell('当日成交额', amt === null ? '—' : (amt / 1e8).toFixed(0), amt === null ? '未取到' : undefined),
@@ -514,21 +527,19 @@ export function MarketPage(props: {
         })()),
       )
       const right = React.createElement('div', { className: 'tw-mk-col tw-mk-col-r' },
-        card('涨跌分布', distTitleOf({
-          buckets: distLabels.length,
-          coverage: dist?.coverage ?? null,
-          partial: dist?.partial === true,
-          scannedBatches: dist?.scannedBatches ?? 0,
-          totalBatches: dist?.totalBatches ?? 0,
-        }), distCounts === null || distCounts.length !== distLabels.length
+        card('涨跌分布', React.createElement(React.Fragment, null,
+          React.createElement('span', { 'data-role': 'dist-title' }, distTitleOf({
+            buckets: distLabels.length,
+            coverage: dist?.coverage ?? null,
+            partial: dist?.partial === true,
+            scannedBatches: dist?.scannedBatches ?? 0,
+            totalBatches: dist?.totalBatches ?? 0,
+          })),
+          // 「北交所 未接入」只在**卡头右侧**（12px 次要色）；放进柱区会压住 X 档名
+          React.createElement('span', { 'data-role': 'dist-bj', title: DIST_BJ_TITLE, style: { fontSize: 12, color: 'var(--tw-muted)', marginLeft: 8 } }, DIST_BJ_NOTE)),
+        distCounts === null || distCounts.length !== distLabels.length
           ? React.createElement('div', { className: 'tw-mk-empty' }, missingCellText(dist?.reason ?? '分布未扫描（需 56 页全市场）'))
-          : React.createElement(React.Fragment, null,
-              React.createElement('div', { className: 'tw-mk-dist' },
-                distCounts.map((n, i) => React.createElement('div', { key: distLabels[i] ?? String(i), className: 'tw-mk-dist-col' },
-                  React.createElement('span', { className: 'tw-mk-dist-n' }, String(n)),
-                  React.createElement('i', { style: { height: `${Math.max(2, (n / Math.max(1, ...distCounts)) * 70)}px` }, 'data-dir': distToneOf(distLabels[i] ?? '') }),
-                  React.createElement('span', { className: 'tw-mk-dist-l' }, distLabels[i] ?? '')))),
-              React.createElement('div', { className: 'tw-hint tw-dim', 'data-role': 'dist-bj' }, DIST_BJ_NOTE))),
+          : React.createElement(DistBarsBody, { counts: distCounts, labels: distLabels, warn: consistency.text })),
         card('分钟成交额较昨日增减', '亿元', (() => {
           const W = 320, H = 160, TOP = 6, BOT = H - 16
           const maxAbs = delta.bars === null ? 1 : Math.max(1, ...delta.bars.map((x) => Math.abs(x)))
@@ -747,16 +758,6 @@ function DistHistogram(props: {
   }
   // 纵轴：值域按数据取整（1/2/5 × 10ⁿ）⇒ 刻度是整洁数字；柱高按**轴的上界**归一（与网格线对齐）
   const axis = distAxisOf(d.counts)
-  const yAxis = React.createElement('div', { className: 'tw-dist-axis', 'data-role': 'dist-axis' },
-    ...axis.ticks.map((t) => React.createElement('span', {
-      key: `t${t}`, className: 'tk', 'data-role': 'dist-ytick', style: { bottom: `${distBarPctOf(t, axis.max)}%` },
-    }, String(t))),
-  )
-  const grid = React.createElement('div', { className: 'tw-dist-grid', 'data-role': 'dist-grid' },
-    ...axis.ticks.filter((t) => t > 0).map((t) => React.createElement('span', {
-      key: `g${t}`, className: 'gl', 'data-role': 'dist-gridline', style: { bottom: `${distBarPctOf(t, axis.max)}%` },
-    })),
-  )
   return React.createElement('div', {
     className: 'tw-dist-chart',
     'data-role': 'dist-chart',
@@ -764,29 +765,7 @@ function DistHistogram(props: {
       + (d.partial === true ? `；已扫 ${d.scannedBatches ?? 0}/${d.totalBatches ?? 0} 批` : '')
       + (d.warn === undefined || d.warn === null ? '' : `；${d.warn}`),
   },
-    yAxis,
-    grid,
-    React.createElement('div', { className: 'tw-dist-hist' },
-      ...d.labels.map((label, i) => {
-        // P3-5：档位计数**缺一个就是一个洞**，不许 `?? 0`（0 会被读成"这一档 0 只"）
-        const raw = d.counts[i]
-        const count = typeof raw === 'number' && Number.isFinite(raw) ? raw : null
-        // 色向按**档名**判（不按下标硬编码 9 档；上游档位变化时不会静默错色）
-        const tone = distToneOf(label)
-        return React.createElement('div', { key: label, className: 'tw-dist-bar-wrap' },
-          React.createElement('div', {
-            className: 'tw-dist-count',
-            ...(count === null
-              ? { title: '该档未取到（上游档位数与档名数不一致）', tabIndex: 0, role: 'note', 'aria-label': '该档未取到' }
-              : {}),
-          }, count === null ? '—' : String(count)),
-          React.createElement('div', { className: `tw-dist-bar ${tone}`, 'data-tone': tone },
-            React.createElement('div', { className: 'tw-dist-bar-fill', style: { height: `${count === null ? 0 : Math.max(1, distBarPctOf(count, axis.max))}%` } }),
-          ),
-          React.createElement('div', { className: 'tw-dist-label' }, label),
-        )
-      }),
-    ),
+    React.createElement(DistBarsBody, { counts: d.counts, labels: d.labels, warn: d.warn ?? null, axisMax: axis.max }),
   )
 }
 

@@ -10,8 +10,10 @@ export const DIST_BUCKETS = 11
 /** 分钟成交额柱数（用户定稿 240 根；48 根就是错的） */
 export const MINUTE_BARS = 240
 
-/** 北交所口径（分布只统计沪深A股；北交所行情未接入） */
-export const DIST_BJ_NOTE = '北交所 未接入（本轮只统计沪深A股）'
+/** 北交所口径（分布只统计沪深A股；北交所行情未接入）——卡头常驻的短标记 */
+export const DIST_BJ_NOTE = '北交所 未接入'
+/** 同一口径的完整说明（进 `title`，不占卡头宽度） */
+export const DIST_BJ_TITLE = '北交所 未接入（本轮只统计沪深A股）'
 
 /**
  * 涨跌分布卡的副标题（口径随数据走）：

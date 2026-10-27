@@ -666,6 +666,12 @@ export const api = {
       totalBatches?: number
       /** 口径告警（切源、失败批次、停牌数等），界面照原样展示，不吞 */
       warn?: string | null
+      /** 同一次扫描里的五个家数（左侧 5 格直接取这五个，缺 ⇒ null 不写 0） */
+      up?: number | null
+      down?: number | null
+      flat?: number | null
+      limitUp?: number | null
+      limitDown?: number | null
     }
     missing: Array<{ what: string; why: string; note: string }>
   }> {

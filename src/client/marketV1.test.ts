@@ -66,7 +66,7 @@ test('⑥ 涨跌分布档数由**档名数**决定（缺档 ⇒ 败），11 档�
   assert.equal(DIST_BUCKETS, 11, '11 档目标常量不得被这一单改掉')
   const page = read('MarketPage.tsx')
   assert.equal(page.includes("repeat(11,1fr)") || read('styles.ts').includes('repeat(11,1fr)'), true, '11 列布局缺失')
-  assert.equal(page.includes('tw-mk-dist-n'), true, '柱顶家数缺失')
+  assert.equal(page.includes('tw-mk-dist-n') || read('distCardRender.tsx').includes("'data-role': 'dist-count'"), true, '柱顶家数缺失')
   assert.equal(/distCounts\.length !== distLabels\.length/.test(page), true, '档数与档名数不符必须走缺数据分支')
   assert.equal(/distTitleOf\(/.test(page), true, '标题必须由 distTitleOf 生成（9 档 · 覆盖 N 只 / 已扫 k/N 批）')
 })

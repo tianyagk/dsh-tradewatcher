@@ -85,6 +85,16 @@ interface DistSnapshot {
   scannedBatches: number
   totalBatches: number
   warn: string | null
+  /**
+   * 分布**同一次扫描**里的五个家数（up/flat/down/limitUp/limitDown）。
+   * 左侧「涨跌趋势」5 格直接取这五个数 —— 与柱状图同源，避免"格子是 A 源、柱子是 B 源"。
+   * 取不到 ⇒ null（界面 `—` + 原因，不写 0）。东财路径的涨跌停不可由分档反推 ⇒ 那两格 null。
+   */
+  up: number | null
+  down: number | null
+  flat: number | null
+  limitUp: number | null
+  limitDown: number | null
 }
 
 let distCache: DistSnapshot | null = null
@@ -103,6 +113,11 @@ const distEmpty = (reason: string, source: DistSnapshot['source'], extra: Partia
   scannedBatches: 0,
   totalBatches: 0,
   warn: null,
+  up: null,
+  down: null,
+  flat: null,
+  limitUp: null,
+  limitDown: null,
   ...extra,
 })
 
@@ -173,6 +188,12 @@ async function emDistribution(now: number): Promise<DistSnapshot> {
     scannedBatches: scannedPages,
     totalBatches: pageCount,
     warn: bins.blank > 0 ? `${bins.blank} 只无涨跌幅（停牌等）未计入任何档` : null,
+    // 只有扫全时才反推（半个截面反推出来的"上涨家数"是错的）；涨跌停无法从分档反推 ⇒ null
+    up: full ? bins.counts.slice(0, 4).reduce((a, c) => a + c, 0) : null,
+    down: full ? bins.counts.slice(5).reduce((a, c) => a + c, 0) : null,
+    flat: full ? (bins.counts[4] ?? 0) : null,
+    limitUp: null,
+    limitDown: null,
   }
 }
 
@@ -202,6 +223,11 @@ async function tencentDistribution(now: number, emReason: string | null): Promis
       scannedBatches: agg.scannedBatches,
       totalBatches: agg.totalBatches,
       warn: warn.length > 0 ? warn.join('；') : null,
+      up: agg.up,
+      down: agg.down,
+      flat: agg.flat,
+      limitUp: agg.limitUp,
+      limitDown: agg.limitDown,
     }
   } catch (error) {
     return distEmpty(

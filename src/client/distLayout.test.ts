@@ -16,7 +16,9 @@ import { dirname, join } from 'node:path'
 import { distAxisOf, distBarPctOf } from './distView.ts'
 
 const here = dirname(fileURLToPath(import.meta.url))
-const page = (): string => readFileSync(join(here, 'MarketPage.tsx'), 'utf8')
+// 分布图的标记已抽到 `distCardRender.tsx`（两处布局共用一棵树）⇒ 结构断言要把渲染层一起读
+const page = (): string =>
+  readFileSync(join(here, 'MarketPage.tsx'), 'utf8') + '\n' + readFileSync(join(here, 'distCardRender.tsx'), 'utf8')
 /** 去注释再断言（注释里会**提到**被删/被禁的字样） */
 const strip = (t: string): string => t.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
 

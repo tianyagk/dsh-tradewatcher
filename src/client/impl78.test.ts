@@ -400,7 +400,8 @@ test('P3-5 涨跌分布：tone 按档名判（不按下标硬编码 9 档），�
   const byIndex = (i: number): string => (i < 4 ? 'up' : i === 4 ? 'flat' : 'down')
   assert.equal(byIndex(0), 'up', '旧判据在重排后的第 0 档（应为 down）给出 up')
   assert.notEqual(byIndex(0), distToneOf(relabeled[0] as string), '⚠ 反例（按下标判色）必须与新判据不同')
-  const page = strip(read('MarketPage.tsx'))
+  // 分布图标记已抽到 `distCardRender.tsx`（两处布局共用）⇒ 判据把渲染层一起读
+  const page = strip(read('MarketPage.tsx') + '\n' + read('distCardRender.tsx'))
   assert.equal(/i < 4 \? 'up' : i === 4 \? 'flat' : 'down'/.test(page), false, '不许再按下标硬编码配色')
   assert.equal(/counts\?\.\[i\] \?\? 0/.test(page), false, '不许再用 `?? 0` 顶替缺失档')
   assert.ok(page.includes('distToneOf(label)'), '配色必须走纯函数')
