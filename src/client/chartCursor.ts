@@ -283,3 +283,98 @@ export function klineReadout(args: KlineReadoutArgs): TipLine[] {
 export function upDownColors(redUp: boolean): { up: string; down: string } {
   return redUp ? { up: 'var(--tw-up)', down: 'var(--tw-down)' } : { up: 'var(--tw-down)', down: 'var(--tw-up)' }
 }
+
+/** 绘图区矩形（像素，相对图表容器） */
+export interface PlotBox {
+  left: number
+  right: number
+  top: number
+  bottom: number
+}
+
+export interface KlineTipArgs {
+  cursorX: number
+  cursorY: number
+  tipW: number
+  tipH: number
+  /** 绘图区（不含右侧价格轴）—— 信息框**不得越出**这块 */
+  plot: PlotBox
+  /** 必须避开的矩形（最后 3 根 K 柱的包围盒）；重叠面积 > 0 ⇒ 退化到左上角 */
+  keepOut?: PlotBox | null
+  gap?: number
+}
+
+export interface KlineTipPos extends TipPos {
+  /** 是否退化到固定的左上角（翻边后仍与最新柱冲突） */
+  fallback: boolean
+}
+
+/** 两个矩形的交集面积（不相交 ⇒ 0） */
+export function overlapAreaOf(a: PlotBox, b: PlotBox): number {
+  const w = Math.min(a.right, b.right) - Math.max(a.left, b.left)
+  const h = Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top)
+  return w > 0 && h > 0 ? w * h : 0
+}
+
+const clampNum = (v: number, lo: number, hi: number): number => Math.max(lo, Math.min(hi, v))
+
+/**
+ * K 线信息框摆放（v0.179.0，替代"右侧放不下才翻边"的旧规则）：
+ *   ① **按光标位置翻边**：`cursorX > plot.left + 0.55 × 绘图区宽` ⇒ 画在光标左侧（`x = cursorX − tipW − 12`），
+ *      否则画右侧；判据是"光标在右半"，不是"右侧放不放得下"（旧规则在最后一根附近会左右横跳）。
+ *   ② **任何情况下不越出绘图区**：x/y 都夹进 `plot`。
+ *   ③ **不与最新 3 根柱重叠**：与 `keepOut` 的交集面积 > 0 ⇒ 退化为**固定左上角**（调用方同时给 `pointer-events:none`）。
+ */
+export function klineTipPlacement(args: KlineTipArgs): KlineTipPos {
+  const gap = args.gap ?? 12
+  const { plot, tipW, tipH } = args
+  const plotW = Math.max(0, plot.right - plot.left)
+  const flip = args.cursorX > plot.left + plotW * 0.55
+  const rawLeft = flip ? args.cursorX - gap - tipW : args.cursorX + gap
+  const left = clampNum(rawLeft, plot.left, Math.max(plot.left, plot.right - tipW))
+  const top = clampNum(args.cursorY - tipH / 2, plot.top, Math.max(plot.top, plot.bottom - tipH))
+  const rect: PlotBox = { left, top, right: left + tipW, bottom: top + tipH }
+  if (args.keepOut !== null && args.keepOut !== undefined && overlapAreaOf(rect, args.keepOut) > 0) {
+    return { left: plot.left + 4, top: plot.top + 4, flipped: true, fallback: true }
+  }
+  return { left, top, flipped: flip, fallback: false }
+}
+
+/* ───────────────────────── K 线画布布局（v0.179.0） ───────────────────────── */
+
+/** 左侧留白（px） */
+export const KLINE_PAD_X = 8
+/** 右侧价格轴预留（px）—— 价格刻度与末日期标签都住在这里 */
+export const KLINE_AXIS_W = 56
+/** 最后一根柱中心到绘图区右缘的最小距离（px） */
+export const KLINE_TAIL_GAP = 28
+
+export interface KlineLayout {
+  padX: number
+  /** 绘图区宽度（PAD_X 到 plotRight） */
+  innerW: number
+  /** 柱子的可用宽度 = innerW − TAIL_GAP */
+  barSpan: number
+  step: number
+  lastBarCenterX: number
+  plotRight: number
+  axisW: number
+  tailGap: number
+}
+
+/** K 线画布几何：右侧 56px 轴 + 28px 尾距，最后一根柱不得贴边 */
+export function klineLayoutOf(width: number, count: number): KlineLayout {
+  const innerW = Math.max(1, width - KLINE_PAD_X - KLINE_AXIS_W)
+  const barSpan = Math.max(1, innerW - KLINE_TAIL_GAP)
+  const step = barSpan / Math.max(1, count)
+  return {
+    padX: KLINE_PAD_X,
+    innerW,
+    barSpan,
+    step,
+    lastBarCenterX: KLINE_PAD_X + barSpan - step / 2,
+    plotRight: KLINE_PAD_X + innerW,
+    axisW: KLINE_AXIS_W,
+    tailGap: KLINE_TAIL_GAP,
+  }
+}

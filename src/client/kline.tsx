@@ -11,7 +11,7 @@ import { fmtAxis, ma, macd, niceTicks } from './indicators.ts'
 import { hasVolumeSeries, isUsableAvg, isUsableBaseline, plausibleAvgs, trendDayAxis, trendScale } from './trendView.ts'
 import { T_WINDOW_COLORS, tWindowLabelsOf, type TWindow } from './tWindowView.ts'
 import { sessionAxis, type SessionDef } from './sessionAxis.ts'
-import { klineReadout, nearestIndex, tipPlacement, toneClass, trendReadout, upDownColors, type TipLine } from './chartCursor.ts'
+import { klineLayoutOf, klineReadout, klineTipPlacement, nearestIndex, tipPlacement, toneClass, trendReadout, upDownColors, type TipLine } from './chartCursor.ts'
 import { trendDayCount } from '../shared/model.ts'
 import { shToday } from './marketTime.ts'
 import { rangeStatsText, tradeStatsOf } from './klineStats.ts'
@@ -20,6 +20,8 @@ const PAD_X = 8
 const PAD_TOP = 8
 const AXIS_H = 16
 const GAP = 6
+/** 右侧价格轴预留宽度（px）：价格刻度 + 末日期标签都住在这里，信息框不得越入 */
+const AXIS_W = 56
 
 /** 拆股/合股标记色（与 MA/涨跌色都区分开） */
 const SPLIT_COLOR = '#d98c1f'
@@ -52,7 +54,7 @@ function tipHeightOf(lines: readonly TipLine[]): number {
 function TipCard(lines: readonly TipLine[], pos: { left: number; top: number }, redUp: boolean): React.ReactElement {
   return React.createElement('div', {
     className: 'tw-chart-tip',
-    style: { left: pos.left, top: pos.top, width: TIP_W },
+    style: { left: pos.left, top: pos.top, width: TIP_W, pointerEvents: 'none' },
     role: 'status',
     'aria-live': 'off',
   },
@@ -598,13 +600,15 @@ export function KlineChart(props: {
   macdH?: number
   /** 可见窗口变化（口径行据此把区间 B/S 统计并进同一行；不新增第二行） */
   onRangeChange?: (range: [number, number]) => void
+  /** **截图/回归专用**：初始光标（缺省 null = 不显示信息框）。运行时不传，行为不变。 */
+  initialCursor?: number | null
 }): React.ReactElement {
   const { bars, width, redUp, klt } = props
   const mainH = props.mainH ?? 230
   const volH = props.volH ?? 54
   const macdH = props.macdH ?? 64
   const height = PAD_TOP + mainH + GAP + volH + GAP + macdH + AXIS_H
-  const innerW = width - PAD_X * 2
+  const innerW = width - PAD_X - AXIS_W
 
   const signature = `${bars.length}|${bars[0]?.date ?? ''}|${bars[bars.length - 1]?.date ?? ''}|${klt}`
   const empty = bars.length === 0
@@ -619,7 +623,7 @@ export function KlineChart(props: {
     rangeCb.current?.(range)
   }, [range])
   /** 光标数据点（null = 不显示卡片）；鼠标移动只改它，不重建图 */
-  const [cursor, setCursor] = useState<number | null>(null)
+  const [cursor, setCursor] = useState<number | null>(props.initialCursor ?? null)
   /** 游标按帧合并（P2-10）：K 线窗口是 240 根柱 + 均线 + MACD，mousemove 不允许每像素重绘一次 */
   const cursorRaf = useRef<RafCoalescer<number | null> | null>(null)
   if (cursorRaf.current === null) cursorRaf.current = createRafCoalescer<number | null>(setCursor)
@@ -640,7 +644,9 @@ export function KlineChart(props: {
   }
   const [s, e] = [Math.max(0, Math.min(range[0], bars.length - 2)), Math.min(Math.max(range[1], 2), bars.length)]
   const count = Math.max(1, e - s)
-  const step = innerW / count
+  /** 画布几何（单一口径）：右侧 56px 轴 + 28px 尾距；柱子在 `barSpan` 内排 */
+  const layout = klineLayoutOf(width, count)
+  const step = layout.step
   const xAt = (i: number): number => PAD_X + (i - s) * step + step / 2
   const barW = Math.max(1.2, Math.min(11, step * 0.62))
 
@@ -821,8 +827,29 @@ export function KlineChart(props: {
     onMouseLeave: () => cursorRaf.current?.push(null),
   }, children)
   const tipLines = cursor === null ? [] : klineReadout({ bars, i: cursor, mas, macd: m })
+  /**
+   * 最新 3 根柱的包围盒（信息框必须完全避开它 —— 用户截图里今日柱被压住）。
+   * 只在可见窗口内取（`s..e-1`），窗口里不足 3 根就取现有的几根。
+   */
+  const tailFrom = Math.max(s, e - 3)
+  let tailTop = Number.POSITIVE_INFINITY
+  let tailBottom = Number.NEGATIVE_INFINITY
+  for (let i = tailFrom; i < e; i += 1) {
+    tailTop = Math.min(tailTop, yOf(bars[i].high))
+    tailBottom = Math.max(tailBottom, yOf(bars[i].low))
+  }
+  const tailBox = e > tailFrom
+    ? { left: xAt(tailFrom) - barW / 2 - 1, right: xAt(e - 1) + barW / 2 + 1, top: tailTop - 1, bottom: tailBottom + 1 }
+    : null
   const tipPos = cursorInWindow
-    ? tipPlacement(xAt(cursor), yOf(bars[cursor].close), width, height, TIP_W, tipHeightOf(tipLines))
+    ? klineTipPlacement({
+        cursorX: xAt(cursor),
+        cursorY: yOf(bars[cursor].close),
+        tipW: TIP_W,
+        tipH: tipHeightOf(tipLines),
+        plot: { left: PAD_X, right: PAD_X + innerW, top: PAD_TOP, bottom: height - AXIS_H - 2 },
+        keepOut: tailBox,
+      })
     : null
 
   const legend = React.createElement('div', { className: 'tw-ma-legend', style: { display: 'flex', gap: 10, flexWrap: 'wrap', fontSize: 12, fontFamily: 'var(--tw-mono)', margin: '4px 0 0' } },
