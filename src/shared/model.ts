@@ -929,7 +929,7 @@ export const DEFAULT_PREFS: PortPrefs = {
   costBasis: 'diluted',
   watchSort: { key: 'default', desc: true },
   portSort: { key: 'default', desc: true },
-  rescue: { enabled: true, intervalSec: 60, tailIntervalSec: 15, tailFrom: '14:30', universe: [], rescueCoverageEnabled: false },
+  rescue: { enabled: true, intervalSec: 300, tailIntervalSec: 15, tailFrom: '14:30', universe: [], rescueCoverageEnabled: false },
   viewMode: 'full',
   panelOpacity: 1,
   blurDigits: false,

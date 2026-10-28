@@ -298,6 +298,8 @@ export interface TencentQuoteFull extends TencentQuote {
   low: number | null
   /** 成交量（手；港股为股） */
   vol: number | null
+  /** 量比：腾讯 **f49**（实测股票/ETF 同一位置：600519=0.90、510300=0.44、159915=0.92） */
+  volumeRatio: number | null
   /** 总市值（元）：腾讯 f45，原始单位为**亿元** */
   totalMv: number | null
   /** 流通市值（元）：腾讯 f44，原始单位为**亿元** */
@@ -393,6 +395,7 @@ export function parseTencentQuoteText(text: string, keyOf: (code: string) => str
       high: num(f[33]),
       low: num(f[34]),
       vol: num(f[6]),
+      volumeRatio: numField(f[49]),
       amount: amountTri ?? amountFallback,
       // 市值字段：腾讯给的是**亿元**（实测 f44/f45 对 sh600519 = 15445.76 亿；usFRO = 75.15370/116.85475 亿），
       // 统一乘 1e8 转元；期货/国际指数无该字段 → null。

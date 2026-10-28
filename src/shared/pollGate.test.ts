@@ -11,13 +11,13 @@ const read = (p: string): string => readFileSync(join(HERE, '..', p), 'utf8')
 /** 北京时间 → epoch（UTC+8） */
 const bj = (h: number, m: number, dow = 1): number => Date.UTC(2026, 9, 26 + ((dow - 1 + 7) % 7), h - 8, m)
 
-test('① 护盘默认 60s，范围 [30,600]（15s ⇒ 败）', () => {
-  assert.equal(RESCUE_DEFAULT_SEC, 60)
+test('① 护盘默认 300s，范围 [30,600]（60s ⇒ 败）', () => {
+  assert.equal(RESCUE_DEFAULT_SEC, 300)
   assert.equal(clampRescueSec(15), 30)
   assert.equal(clampRescueSec(900), 600)
-  assert.equal(clampRescueSec('x'), 60)
+  assert.equal(clampRescueSec('x'), 300)
   const model = read('shared/model.ts')
-  assert.ok(/intervalSec: 60/.test(model), 'DEFAULT_PREFS 护盘间隔必须 60')
+  assert.ok(/intervalSec: 300/.test(model), 'DEFAULT_PREFS 护盘间隔必须 300（5 分钟）')
   // 反例注入：默认改回 15 ⇒ 必败
   assert.throws(() => assert.equal(15, RESCUE_DEFAULT_SEC, '反例上：15s'), /反例上/, '⚠ 反例注入必须失败')
 })

@@ -1,5 +1,6 @@
 /**
  */
+import { fetchSinaSuperNet, superShareOf } from './etfFlow.ts'
 import { mkdir, readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import type {
@@ -2242,7 +2243,8 @@ export class RescueMonitor {
         continue
       }
       const amount = q.amount
-      const superNet = q.superNet
+      // 东财 f66 拿不到 ⇒ 新浪超大单净额兜底（60s 缓存；失败 ⇒ null，界面给 — 不写 0）
+      const superNet = q.superNet ?? (await fetchSinaSuperNet(meta.secid))
       const timeAdjMult = amount !== null && base !== null && base > 0 ? amount / (base * progress) : null
       /**
        * 同刻度 z（v0.17.0）：`(今日累计额 ÷ 20 日均额 − 同 slot 历史均值) ÷ 同 slot 历史 σ`。
@@ -2252,7 +2254,7 @@ export class RescueMonitor {
       const progressNow = amount !== null && base !== null && base > 0 ? amount / base : null
       const volumeZ = sameSlotZ(progressNow, sameSlotMu, sameSlotSd, sameSlotDays)
       const superVsAvg = superNet !== null && base !== null && base > 0 ? superNet / base : null
-      const superShare = superNet !== null && amount !== null && amount > 0 ? superNet / amount : null
+      const superShare = superShareOf(superNet, amount)
       // 脉冲：最近 5 分钟成交额 ÷ 同时点基准 5 分钟额
       let pulseMult: number | null = null
       if (allowPulse && base !== null && base > 0) {

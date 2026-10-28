@@ -2,7 +2,7 @@
  * 轮询闸门（用户 2026-10-26：稳定性降频）。
  *
  * 四条规则集中在这里，页面只调函数、不再各写 `setInterval` 判据：
- *   ① 护盘默认 60s（可调 [30,600]）；
+ *   ① 护盘默认 300s（5 分钟，可调 [30,600]）；
  *   ② 盘后/非交易日 ⇒ 不轮询（手动"立即采样"不受限）；
  *   ③ 熔断全开 ⇒ **纯东财标的**跳过（只有带腾讯/新浪映射的才发）；
  *   ④ 11:30–13:00 午休与 15:00 后 ⇒ 行情不轮询（时钟页 1s 时钟不受影响）。
@@ -12,7 +12,7 @@
 /** 行情统一轮询间隔（60s）——由 `shouldPollQuotes` 的调用方读取 */
 export const QUOTE_POLL_MS = 60_000
 /** 护盘默认/下限/上限（秒） */
-export const RESCUE_DEFAULT_SEC = 60
+export const RESCUE_DEFAULT_SEC = 300
 export const RESCUE_MIN_SEC = 30
 export const RESCUE_MAX_SEC = 600
 

@@ -625,11 +625,11 @@ async function main(): Promise<void> {
       const row = quoteFromTencent('1.510300', {
         secid: '1.510300', name: '沪深300ETF华泰柏瑞', price: 4.47, prev: 4.515, open: 4.51,
         pct: -1.0, high: 4.52, low: 4.46, vol: 1000, amount: 5.25e8, ts: 1_700_000_000_000,
-        totalMv: 1067.7e8, floatMv: 1067.7e8, shares: null,
+        totalMv: 1067.7e8, floatMv: 1067.7e8, shares: null, volumeRatio: 1.2,
       })
       ok(row !== null && row.source === 'tencent' && row.price === 4.47 && row.chg !== null && Math.abs(row.chg + 0.045) < 1e-9, '腾讯行转换：价/涨跌/来源标记正确')
       ok(row?.totalMv === 1067.7e8 && row?.floatMv === 1067.7e8, '腾讯行带上市值（供自选按总市值排序）')
-      ok(quoteFromTencent('1.510300', { secid: '1.510300', name: '', price: null, prev: 1, open: null, pct: null, high: null, low: null, vol: null, amount: null, ts: null, totalMv: null, floatMv: null, shares: null }) === null, '无有效价格的行被丢弃（不污染显示）')
+      ok(quoteFromTencent('1.510300', { secid: '1.510300', name: '', price: null, prev: 1, open: null, pct: null, high: null, low: null, vol: null, amount: null, ts: null, totalMv: null, floatMv: null, shares: null, volumeRatio: null }) === null, '无有效价格的行被丢弃（不污染显示）')
     }
 
     // 搜索备用源（腾讯 smartbox）：转义还原、类型词表与解析

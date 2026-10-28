@@ -749,6 +749,7 @@ export function quoteFromTencent(secid: string, q: TencentQuoteFull): QuoteRow |
     at: Date.now(),
     totalMv: q.totalMv,
     floatMv: q.floatMv,
+    volRatio: q.volumeRatio,
   }
 }
 
