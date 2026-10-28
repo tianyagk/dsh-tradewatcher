@@ -31,7 +31,7 @@ import { fetchTencentAppstock, fetchTencentBoards, fetchTencentMinutes, fetchTen
 import { auctionUnavailable, fetchAuction } from './auction.ts'
 import { join } from 'node:path'
 import { dataHome } from './store.ts'
-import { hhmmOf, dayOf, inSession, isSettledOffline, parseMarketStamp, shStampText, shanghaiParts, usDayOf, inUsSession, isUsSettledOffline } from './time.ts'
+import { hhmmOf, dayOf, inSession, inMarketWindow, isSettledOffline, parseMarketStamp, shStampText, shanghaiParts, usDayOf, inUsSession, isUsSettledOffline, weekdayOf } from './time.ts'
 import { UpstreamCoolingError, withHostBreaker } from './breakerFetch.ts'
 import { noteDegraded, noteHostFailure, noteHostSkipped, noteHostSuccess, shortError } from './degrade.ts'
 import { normalizeVolUnits, tencentVolToHands } from './klineUnits.ts'
@@ -2575,6 +2575,69 @@ export function lastBarOfKline(secid: string, klt: number, fqt: FqMode): {
   }
 }
 
+/**
+ * K 线回源 TTL（v0.180.0，纯函数便于断言）：
+ *   · **盘中每 5 分钟**失效 —— 旧实现"整根 1 小时"会让 09:20 取到的序列在 10:20 前一直缺今日柱；
+ *   · 收盘后（非交易时段）按定稿逻辑走：全量 1h / 增量 2min（定稿后根本不会回源）。
+ */
+export function klineTtlOf(opts: { needFull: boolean; inSession: boolean }): number {
+  if (opts.inSession) return 5 * 60_000
+  return opts.needFull ? 3_600_000 : 120_000
+}
+
+/**
+ * 要不要用实时快照补一根**今日动态柱**（未收盘）。
+ *
+ * 触发条件（缺一不可）：已有序列、最后一日 < 今天、今天是工作日、北京时间 ≥09:15。
+ * 09:15 之前集合竞价还没成交，补出来的"今日柱"会是空的。
+ */
+export function shouldAppendLiveBar(lastDate: string, now: number = Date.now()): boolean {
+  if (lastDate === '') return false
+  if (lastDate >= dayOf(now)) return false
+  const wd = weekdayOf(now)
+  if (wd === 0 || wd === 6) return false
+  return shanghaiParts(now).hhmm >= '09:15'
+}
+
+/**
+ * 由实时快照造今日动态柱：**缺任一价就返回 null**（不编数字）。
+ * `close` 用现价；high/low 取快照与开/现价的最大/最小，避免上游 high 未及时抬升。
+ */
+export function liveDayBarOf(
+  quote: { open: number | null; high: number | null; low: number | null; price: number | null; vol: number | null; amount?: number | null } | undefined,
+  now: number = Date.now(),
+): DayBar | null {
+  if (quote === undefined) return null
+  const { open, high, low, price } = quote
+  if (open === null || high === null || low === null || price === null) return null
+  if (!(price > 0) || !(open > 0)) return null
+  return {
+    date: dayOf(now),
+    open,
+    close: price,
+    high: Math.max(high, price, open),
+    low: Math.min(low, price, open),
+    vol: quote.vol ?? null,
+    amount: quote.amount ?? null,
+  }
+}
+
+/** 快照取今日柱：先读共用行情槽（零请求），槽里没有才补一次单标的行情 */
+async function liveTodayBarOf(secid: string, days: readonly DayBar[]): Promise<DayBar | null> {
+  const last = days[days.length - 1]?.date ?? ''
+  if (!shouldAppendLiveBar(last)) return null
+  const now = Date.now()
+  let q = peekQuotes([secid])[secid]
+  if (q === undefined) {
+    try {
+      q = (await fetchQuotes([secid]))[secid]
+    } catch {
+      q = undefined
+    }
+  }
+  return liveDayBarOf(q, now)
+}
+
 /** 磁盘缓存当前状态（供路由层写原因文案；在 fetchKline 之后调用即为本次实际用的那份） */
 export interface KlineCacheStatus {
   /** 盘上是否有这个 (secid, klt, fqt) 的缓存文件（哪怕是"被判不可用"的那份） */
@@ -3288,6 +3351,16 @@ export async function fetchKline(
     : baseKlt === 103 && klt === 104 ? resampleYearly(entry.bars) : entry.bars
   const want = Math.max(1, Math.min(Math.round(lmt) || series.length, series.length))
   const days = series.slice(series.length - want)
+  /**
+   * **今日动态柱**（v0.180.0）：上游日线（尤其腾讯 qfq 盘中）可能还没吐出今天的 bar，
+   * 于是图上最后一根停在昨天、X 轴末尾是昨日 —— 而页头已是今天的行情。
+   * 这里用实时快照补一根**未收盘柱**（`partial` 由下面的 `barOpen` 判为 true）。
+   * 只进回包、**不落盘**：归档里保持"上游真值"，下次回源拿到真 bar 时按日期覆盖。
+   */
+  if (!us) {
+    const live = await liveTodayBarOf(secid, days)
+    if (live !== null) days.push(live)
+  }
   // 最后一根是否未收盘：只有"该 bar 就是今天"且此刻仍可能产生新数据时才算。
   // 周/月/年 K 的"今天"同理存在，但判断口径一致（date 相等 + inSession）。
   const lastDate = days[days.length - 1]?.date ?? ''
@@ -3727,7 +3800,7 @@ async function refreshKline(secid: string, baseKlt: number, fqt: FqMode, entry: 
     noteKlineAttempt(secid, false, `刚失败过，${Math.max(1, Math.ceil((failUntil - Date.now()) / 1000))}s 内不重复回源`)
   } else {
     try {
-      fetched = await ttlCache<DayBar[]>(key, needFull ? 3600_000 : 120_000, async () => {
+      fetched = await ttlCache<DayBar[]>(key, klineTtlOf({ needFull, inSession: inMarketWindow(Date.now()) }), async () => {
         const got = await requestKlineRaw(secid, baseKlt, needFull ? KLINE_FULL_LMT[baseKlt] : KLINE_RECENT_LMT[baseKlt], fqt)
         // 没拿到 ⇒ 抛信号，让 ttlCache **不写槽**（这正是 R2：失败不许进正缓存）
         if (got === null || got.length === 0) throw new KlineEmptySignal()
