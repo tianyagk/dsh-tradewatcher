@@ -31,6 +31,7 @@ import { fetchTencentAppstock, fetchTencentBoards, fetchTencentMinutes, fetchTen
 import { auctionUnavailable, fetchAuction } from './auction.ts'
 import { join } from 'node:path'
 import { dataHome } from './store.ts'
+import { volToLots, volUnitOf } from './volUnit.ts'
 import { hhmmOf, dayOf, inSession, inMarketWindow, isSettledOffline, parseMarketStamp, shStampText, shanghaiParts, usDayOf, inUsSession, isUsSettledOffline, weekdayOf } from './time.ts'
 import { UpstreamCoolingError, withHostBreaker } from './breakerFetch.ts'
 import { noteDegraded, noteHostFailure, noteHostSkipped, noteHostSuccess, shortError } from './degrade.ts'
@@ -2611,13 +2612,19 @@ export function liveDayBarOf(
   const { open, high, low, price } = quote
   if (open === null || high === null || low === null || price === null) return null
   if (!(price > 0) || !(open > 0)) return null
+  /**
+   * **量纲**：K 线历史柱存的是「手」（东财 f56 / 腾讯 fqkline 都是手），而行情快照 `vol` 实测
+   * 在科创板/新股上是「股」（长鑫科技 292,040,261 股 vs 日线 2,920,403 手）。
+   * 用成交额当锚判一次；判不出来 ⇒ 该柱不带量（`vol:null`），宁缺不错 100 倍。
+   */
+  const unit = volUnitOf(quote.vol ?? null, price, quote.amount ?? null)
   return {
     date: dayOf(now),
     open,
     close: price,
     high: Math.max(high, price, open),
     low: Math.min(low, price, open),
-    vol: quote.vol ?? null,
+    vol: quote.vol === null || quote.vol === undefined ? null : unit.ok ? volToLots(quote.vol, unit.unit) : null,
     amount: quote.amount ?? null,
   }
 }

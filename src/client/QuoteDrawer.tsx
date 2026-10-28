@@ -8,7 +8,7 @@ import React, { useEffect, useRef, useState } from 'react'
 import type { AuctionInfo, FqMode, MissingField, StockDetail, TradeMark } from '../shared/model.ts'
 import { FQ_LABEL } from '../shared/model.ts'
 import { api } from './api.ts'
-import { dirClass, fmtAmt, fmtBig, fmtPct, fmtPrice, fmtSigned } from './format.ts'
+import { dirClass, fmtAmt, fmtPct, fmtPrice, fmtSigned } from './format.ts'
 import { auctionText } from './auctionView.ts'
 import { auctionSeriesText } from './auctionSeries.ts'
 import { AuctionSpark } from './AuctionSpark.tsx'
@@ -18,7 +18,7 @@ import { KlineChart, TrendChart } from './kline.tsx'
 import { caliberWithStats, tradeMarkersOf, tradeStatsOf } from './klineStats.ts'
 import { trendDayCount } from '../shared/model.ts'
 import { tWindowOf, type TWindow } from './tWindowView.ts'
-import { industryCellOf, type DetailSource } from './detailFallback.ts'
+import { industryCellOf, volumeCellOf, type DetailSource } from './detailFallback.ts'
 import { lastAvgOf } from '../shared/trendVwap.ts'
 import {
   FQ_ORDER,
@@ -306,7 +306,7 @@ export function QuoteDrawer(props: {
    * （`auction` 状态），所以**不会**跟着变成 `—`。这一份是唯一渲染点（不再两处各写一遍）。
    */
   const infoGrid = (d: StockDetail | null): React.ReactNode => {
-    const volFmt = d !== null && d.vol !== null && d.vol !== undefined ? fmtBig(d.vol) : null
+    const volCell = d === null ? null : volumeCellOf(d.vol ?? null, d.amount ?? null, d.price ?? null)
     const amtFmt = d !== null && d.amount !== null && d.amount !== undefined ? fmtAmt(d.amount) : null
     const board = industry
     const boardCell = industryCellOf(board, detailSource, fmtPct)
@@ -322,7 +322,7 @@ export function QuoteDrawer(props: {
       kv('换手率', d === null || d.turnover === null ? '—' : `${d.turnover}%`),
       kv('最高', d === null ? '—' : fmtPrice(d.high), d === null ? undefined : dirClass(d.high !== null && d.prev !== null ? d.high - d.prev : 0, redUp)),
       kv('最低', d === null ? '—' : fmtPrice(d.low), d === null ? undefined : dirClass(d.low !== null && d.prev !== null ? d.low - d.prev : 0, redUp)),
-      kv('成交量', volFmt ?? '—'),
+      kv('成交量', volCell?.value ?? '—', undefined, volCell?.title),
       kv('成交额', amtFmt ?? '—'),
       kv('市盈率(动)', d === null || d.pe === null ? '—' : String(d.pe)),
       kv('总市值', d === null || d.totalMv === null ? '—' : fmtAmt(d.totalMv)),

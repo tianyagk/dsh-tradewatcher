@@ -34,3 +34,32 @@ export function industryCellOf(
     pct: null,
   }
 }
+
+/* ───────────────────────── 成交量显示（v0.181.0） ───────────────────────── */
+
+/** 股 → 「亿股 / 万股 / 股」（阈值与标签必须自洽：≥1e8 才允许写"亿股"） */
+export function volLabelOfShares(shares: number): string {
+  if (shares >= 1e8) return `${(shares / 1e8).toFixed(2)} 亿股`
+  if (shares >= 1e4) return `${(shares / 1e4).toFixed(1)} 万股`
+  return `${Math.round(shares)} 股`
+}
+
+export interface VolumeCell {
+  value: string
+  title: string
+}
+
+/**
+ * 详情头「成交量」：显示值 + 单位自洽；`成交量 × 均价` 与成交额差 >5% ⇒ `—` + 「量纲不一致」。
+ * 不传 fmtBig（保持纯函数）：股数直接按亿/万格式化。
+ */
+export function volumeCellOf(volShares: number | null, amount: number | null, price: number | null): VolumeCell {
+  if (volShares === null || !(volShares > 0)) return { value: '—', title: '成交量未取到' }
+  if (amount !== null && price !== null && amount > 0 && price > 0) {
+    const err = Math.abs(volShares * price - amount) / amount * 100
+    if (err > 5) {
+      return { value: '—', title: `量纲不一致：成交量×均价 与成交额相差 ${err.toFixed(1)}%（不显示错值）` }
+    }
+  }
+  return { value: volLabelOfShares(volShares), title: '成交量（股；按成交额与均价校验过）' }
+}

@@ -16,6 +16,7 @@
 import type { MissingField, StockDetail } from '../shared/model.ts'
 import { fetchTextHost } from './hostFetch.ts'
 import { tencentQuoteCode } from './tencent.ts'
+import { volToShares, volUnitOf } from './volUnit.ts'
 
 export interface TencentDetailResult {
   detail: StockDetail
@@ -47,7 +48,6 @@ export function parseTencentDetail(text: string, secid: string): TencentDetailRe
   const prev = numOf(f[4])
   const chg = numOf(f[31]) ?? (prev === null ? null : Math.round((price - prev) * 1000) / 1000)
   const pct = numOf(f[32]) ?? (prev === null || prev <= 0 ? null : Math.round((price / prev - 1) * 10000) / 100)
-  const volLots = numOf(f[36])
   const amountWan = numOf(f[37])
   const floatMvYi = numOf(f[44])
   const totalMvYi = numOf(f[45])
@@ -62,8 +62,17 @@ export function parseTencentDetail(text: string, secid: string): TencentDetailRe
     high: numOf(f[33]),
     low: numOf(f[34]),
     prev,
-    // 手 → 股（页面 `fmtBig` 按股展示）
-    vol: volLots === null ? null : Math.round(volLots * 100),
+    /**
+     * 成交量统一到**股**：腾讯 `[36]` 多数标的是「手」，但科创板/新股实测是「股」
+     * （长鑫科技 `[36]=292,040,261` ×44.25 ≈ 129 亿 = `[37]` ⇒ 它是股不是手）。
+     * 用成交额当锚判单位，判不出 ⇒ null（不让 100 倍错值上屏）。
+     */
+    vol: (() => {
+      const raw = numOf(f[36])
+      if (raw === null) return null
+      const unit = volUnitOf(raw, price, amountWan === null ? null : amountWan * 1e4)
+      return unit.ok ? volToShares(raw, unit.unit) : null
+    })(),
     // 万元 → 元
     amount: amountWan === null ? null : Math.round(amountWan * 1e4),
     turnover: numOf(f[38]),

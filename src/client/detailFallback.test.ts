@@ -7,7 +7,7 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
-import { industryCellOf } from './detailFallback.ts'
+import { industryCellOf, volumeCellOf } from './detailFallback.ts'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const pct = (v: number): string => `${v > 0 ? '+' : ''}${v.toFixed(2)}%`
@@ -37,4 +37,13 @@ test('④ 页面：「详情暂不可用」只在 detail === null 分支里（�
   // 反例注入：把这句话挪到守卫之前 ⇒ 判据必须失败
   const injected = '详情暂不可用\n' + src
   assert.throws(() => assert.ok(injected.indexOf('详情暂不可用') > injected.indexOf('if (detail === null)'), '反例上：文案在守卫之前'), /反例上/, '⚠ 反例注入必须失败')
+})
+
+test('⑥ 详情头成交量：量纲不一致 ⇒ `—` + 「量纲不一致」（显示错值 ⇒ 败）', () => {
+  const ok = volumeCellOf(292_408_630, 12_822_861_737, 44.22)
+  assert.equal(ok.value, '2.92 亿股')
+  const bad = volumeCellOf(29_240_863_000, 12_822_861_737, 44.22)
+  assert.equal(bad.value, '—', '×100 错位的成交量必须显示 —')
+  assert.match(bad.title, /量纲不一致/)
+  assert.throws(() => assert.equal(bad.value, '292.41 亿股', '反例上：显示错值'), /反例上/, '⚠ 反例注入必须失败')
 })
