@@ -202,19 +202,21 @@ test('错误语义：参数 400 / 请求体 413 / 非 JSON 400 / 类型 415', as
  */
 test('错误语义：上游熔断 ⇒ 逐标/批量路由 200 + 原因；聚合路由才可能 503（点名上游与范围）', async () => {
   const h = await harness()
-  const hosts = [...QUOTE_HOSTS, ...HISTORY_HOSTS]
+  // v0.178.0：/detail 多了腾讯兜底 ⇒ "全线不可达"必须把 qt 也一起熔断，否则兜底会真的取到数据
+  const hosts = [...QUOTE_HOSTS, ...HISTORY_HOSTS, 'qt.gtimg.cn']
   try {
     for (const host of hosts) for (let i = 0; i < 3; i++) breakerFor(host).recordFailure(new Error('selftest: fetch failed'))
 
     // ① 逐标的路由：不 503，带逐标原因
     const res = await h.call('/tradewatcher/detail', '/tradewatcher/detail?secid=1.600519')
     assert.equal(res.code, 200, '逐标的路由在上游熔断时仍须 200（页面不得整块报错）')
-    assert.equal(res.body.detail, null, '拿不到详情就如实 null，不编字段')
+    assert.equal(res.body.detail, null, '东财与腾讯都不可达 ⇒ 如实 null，不编字段')
     const miss = (res.body.missing as Array<{ what: string; why: string; note: string }> | undefined) ?? []
     assert.equal(miss.length, 1, '必须给逐标原因')
     assert.equal(miss[0].what, '1.600519')
     assert.equal(miss[0].why, 'transient', '等上游恢复 ⇒ transient（不是"重试无效"）')
     assert.match(miss[0].note, /东财/, '原因里必须点名是哪个上游')
+    assert.equal(res.body.source, null, '两边都挂 ⇒ source 为 null')
     assert.equal(res.headers['retry-after'], undefined, '200 不该带 retry-after')
 
     // ② 逐标的批量路由（行业归属只有东财）：仍是 200 + 逐标原因

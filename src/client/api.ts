@@ -849,7 +849,7 @@ export const api = {
     if (ids === '') return Promise.resolve({ map: {} })
     return request(`/tradewatcher/industries?secids=${encodeURIComponent(ids)}`)
   },
-  detail(secid: string): Promise<{ detail: StockDetail | null; auction?: AuctionInfo; missing?: MissingField[] }> {
+  detail(secid: string): Promise<{ detail: StockDetail | null; auction?: AuctionInfo; source?: 'eastmoney' | 'tencent' | null; missing?: MissingField[] }> {
     return request(`/tradewatcher/detail?secid=${encodeURIComponent(secid)}`)
   },
   /**

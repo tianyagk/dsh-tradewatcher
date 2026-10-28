@@ -31,6 +31,11 @@ export interface FetchTextHostOptions {
   ua?: string
   accept?: string
   timeoutMs?: number
+  /**
+   * 响应编码：缺省 `utf-8`。腾讯行情是 **GBK**，要拿中文（股票名）时必须显式传 `gbk`，
+   * 否则中文会解成 U+FFFD。只取数值字段的调用方可以不传。
+   */
+  charset?: 'utf-8' | 'gbk'
 }
 
 const DEFAULT_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
@@ -55,5 +60,6 @@ export async function fetchTextHost(host: string, url: string, opts: FetchTextHo
     throw error
   }
   if (!res.ok) throw new Error(`HTTP ${res.status} from ${host}`)
-  return await res.text()
+  if (opts.charset === undefined || opts.charset === 'utf-8') return await res.text()
+  return new TextDecoder(opts.charset).decode(await res.arrayBuffer())
 }

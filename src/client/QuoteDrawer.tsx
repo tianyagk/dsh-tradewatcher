@@ -18,6 +18,7 @@ import { KlineChart, TrendChart } from './kline.tsx'
 import { caliberWithStats, tradeMarkersOf, tradeStatsOf } from './klineStats.ts'
 import { trendDayCount } from '../shared/model.ts'
 import { tWindowOf, type TWindow } from './tWindowView.ts'
+import { industryCellOf, type DetailSource } from './detailFallback.ts'
 import { lastAvgOf } from '../shared/trendVwap.ts'
 import {
   FQ_ORDER,
@@ -116,6 +117,8 @@ export function QuoteDrawer(props: {
   /** 头部详情为 null 时的原因（宿主回的 missing[0]）；不为 null 就是"拿得到"或用不着解释 */
   const [infoNote, setInfoNote] = useState<MissingField | null>(null)
   const [detail, setDetail] = useState<StockDetail | null>(null)
+  /** 详情来源：东财优先，东财不可达时腾讯兜底（只用于展示口径，不参与取数） */
+  const [detailSource, setDetailSource] = useState<DetailSource | null>(null)
   /**
    * 竞价（四项 + 采样曲线）——**独立于 `detail` 的一份状态**。
    *
@@ -192,6 +195,7 @@ export function QuoteDrawer(props: {
     api.detail(secid).then((r) => {
       if (!alive) return
       setDetail(r.detail)
+      setDetailSource(r.source ?? null)
       setInfoNote(r.detail === null ? (r.missing?.[0] ?? null) : null)
       // 兼容旧宿主：顶层没有 `auction` 时才回落到 detail 里那份
       if (r.auction !== undefined) setAuction(r.auction)
@@ -305,12 +309,13 @@ export function QuoteDrawer(props: {
     const volFmt = d !== null && d.vol !== null && d.vol !== undefined ? fmtBig(d.vol) : null
     const amtFmt = d !== null && d.amount !== null && d.amount !== undefined ? fmtAmt(d.amount) : null
     const board = industry
+    const boardCell = industryCellOf(board, detailSource, fmtPct)
     // 竞价优先用独立出口那份；旧宿主只有 `detail.auction` 时才回落到它
     const a = auction ?? d?.auction ?? null
     return React.createElement('div', { className: 'tw-dkv-grid', style: { marginTop: 6 } },
-      kv('所属板块', board !== null ? (board.pct !== null ? `${board.name}  ${fmtPct(board.pct)}` : board.name) : '—',
-        board !== null && board.pct !== null ? dirClass(board.pct, redUp) : undefined,
-        board !== null ? '行业板块及当日涨跌幅' : '仅 A股 提供行业板块'),
+      kv('所属板块', boardCell.value,
+        boardCell.pct !== null ? dirClass(boardCell.pct, redUp) : undefined,
+        boardCell.title),
       kv('今开', d === null ? '—' : fmtPrice(d.open)),
       auctionRow(a),
       kv('昨收', d === null ? '—' : fmtPrice(d.prev)),

@@ -25,6 +25,7 @@ import { BREADTH_MIN_DAYS, BREADTH_WINDOW, BreadthStore, breadthUsable, percenti
 import { BREADTH_METHODOLOGY, BREADTH_COUNT_CALIBER, BREADTH_CLIST_MAX_PAGES, BREADTH_PAGE_SIZE, BreadthCountCache, resolveBreadthCount } from './breadthCount.ts'
 import { tencentBreadthAggregate } from './breadthScan.ts'
 import { fetchTextHost } from './hostFetch.ts'
+import { detailWithFallback, fetchTencentDetail } from './detailTencent.ts'
 import * as extras from './marketExtras.ts'
 import { emptyLeveragePayload, LeverageService, parseLeverageRange } from './leverage.ts'
 import { dayOf } from './time.ts'
@@ -1280,21 +1281,19 @@ export function makeTradeRoutes(
            * 顶层 `auction`（新出口，客户端读它）与 `detail.auction`（兼容旧客户端）。
            */
           const auctionPromise = em.fetchAuctionFor(secid)
-          let detail: Awaited<ReturnType<typeof em.fetchStockDetail>> = null
-          let failure: unknown = null
-          try {
-            detail = await em.fetchStockDetail(secid)
-          } catch (error) {
-            failure = error
-          }
           const auction = await auctionPromise
-          const reason = em.detailMissingReason(failure === null ? {} : { emDown: true })
+          // 一级东财 → 兜底腾讯（v0.178.0）：东财熔断时抽屉头部不再全变 `—`
+          const resolved = await detailWithFallback(secid, {
+            eastmoney: (id) => em.fetchStockDetail(id),
+            tencent: (id) => fetchTencentDetail(id),
+          })
+          const detail = resolved.detail
           send(res, 200, {
             detail: detail === null ? null : { ...detail, auction },
             auction,
-            ...(detail === null
-              ? { missing: [{ ...reason, what: secid, ...(failure === null ? {} : { note: `${reason.note}（${shortError(failure)}）` }) }] }
-              : {}),
+            source: resolved.source,
+            // 恒有 `missing`（东财成功时为 []）：客户端不用判断字段在不在
+            missing: resolved.missing,
           })
         } catch (error) {
           fail(res, error, '行情详情')
