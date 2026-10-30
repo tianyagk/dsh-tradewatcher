@@ -12,17 +12,21 @@ export const MAX_CONCURRENCY = 4
 
 export interface QuoteRow { pct: number | null; suspended?: boolean }
 
-/** 11 档分桶：正 5 档 + 平 + 负 5 档（边界左闭右开，±10 各自独立档） */
+/**
+ * 11 档分桶：正 5 档 + 平 + 负 5 档（边界**左闭右开**：`[10,+∞)` 进「>10」，`(-∞,-10]` 进「≤-10」）
+ *
+ * v0.183.0 修：`+10.00%` 此前落到「7~10」（`pct > 10` 是开区间）—— 与负侧 `-10.00 ⇒ ≤-10` 不对称。
+ */
 export function bucketIndexOf(pct: number): number {
-  if (pct > 10) return 0
+  if (pct >= 10) return 0
   if (pct >= 7) return 1
   if (pct >= 5) return 2
   if (pct >= 3) return 3
   if (pct > 0) return 4
   if (pct === 0) return 5
-  if (pct > -3) return 6
-  if (pct > -5) return 7
-  if (pct > -7) return 8
+  if (pct >= -3) return 6
+  if (pct >= -5) return 7
+  if (pct >= -7) return 8
   if (pct > -10) return 9
   return 10
 }
@@ -58,10 +62,20 @@ export function aggregateOf(rows: readonly QuoteRow[], extra: { limitUp?: number
   return { buckets, up, down, flat, limitUp: extra.limitUp ?? 0, limitDown: extra.limitDown ?? 0, suspended, total }
 }
 
-/** 分批（每批 ≤600） */
-export function batchesOf(codes: readonly string[], size = BATCH_SIZE): string[][] {
+/**
+ * 分批（每批 ≤600）。
+ *
+ * v0.183.0 修：`size = 0` 时 `i += 0` **死循环**（把整个进程挂死）。入口先归一成整数并校验：
+ * 非有限数或 <1 ⇒ 抛 `RangeError('batch size must be >= 1')`；空 `codes` 直接 `[]`（不进循环）。
+ */
+export function batchesOf(codes: readonly string[], size: number): string[][] {
+  // 空池先返回（不进循环，也不因 size 报错）—— 这样"空数据 + 默认参数缺失"不会把无害调用变成异常
+  if (codes.length === 0) return []
+  // 参数**必填**：显式传 `undefined` 也走同一分支 ⇒ `Math.floor(undefined)=NaN` ⇒ RangeError（不静默用默认值）
+  const n = Math.floor(size)
+  if (!Number.isFinite(n) || n < 1) throw new RangeError('batch size must be >= 1')
   const out: string[][] = []
-  for (let i = 0; i < codes.length; i += size) out.push(codes.slice(i, i + size))
+  for (let i = 0; i < codes.length; i += n) out.push(codes.slice(i, i + n))
   return out
 }
 

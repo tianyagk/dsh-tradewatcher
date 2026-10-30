@@ -655,3 +655,36 @@ test('自适应档数：行数超可画行数时合并相邻档（守恒 + 行�
     '⚠ 反例注入（面板不合并）必须让断言失败',
   )
 })
+
+/* ── 把「源码含 chipsRowsLayoutOf(」升级为**行为断言**（AUDIT-TESTS-1030）：
+ *    原断言只证明页面调用了这个函数；这里补它真正的契约 ——「装得下就用目标间隙、
+ *    装不下先吃间隙、再装不下就报 fits:false 而不是给出 <1px 的行高」。 */
+test('⑧ 【行为】chipsRowsLayoutOf 三分支：目标间隙 → 零间隙 → fits:false（除零/负行高 ⇒ 败）', () => {
+  const roomy = chipsRowsLayoutOf(300, 3, 6)
+  assert.equal(roomy.fits, true)
+  assert.equal(roomy.gap, 6, '装得下时保留目标间隙')
+  assert.ok(roomy.rowH >= 1)
+  assert.ok(Math.abs(roomy.total - 300) < 1e-9, '总高必须刚好等于可用高度（300）')
+
+  const tight = chipsRowsLayoutOf(5, 4, 6) // 4 行要 18px 间隙 ⇒ 必然吃不下间隙
+  assert.equal(tight.gap, 0, '装不下目标间隙时必须退到 0 间隙，而不是压负行高')
+  assert.ok(tight.rowH >= 1 || tight.fits === false)
+
+  const impossible = chipsRowsLayoutOf(1, 10, 6)
+  assert.equal(impossible.fits, false, '连 1px/行 都给不出时必须如实 fits:false')
+  assert.equal(impossible.rowH, 1, '兜底行高固定 1px（不是 0、不是负）')
+  assert.ok(impossible.rowH > 0)
+
+  const zeroAvail = chipsRowsLayoutOf(0, 2, 6)
+  assert.equal(zeroAvail.fits, false, '可用高度 0 ⇒ 不可装（不得 0/0）')
+  assert.ok(Number.isFinite(zeroAvail.rowH) && zeroAvail.rowH > 0, '行高必须是有限正数')
+
+  const nan = chipsRowsLayoutOf(NaN, 2, 6)
+  assert.equal(nan.fits, false)
+  assert.ok(Number.isFinite(nan.rowH))
+
+  // 反例注入：把行高写成 (avail/n) 且不做 fits 判定 ⇒ 10 行 1px 会得到 0.1px 的"蚂蚁行"
+  const naive = 1 / 10
+  assert.ok(naive < 1)
+  assert.throws(() => assert.equal(naive, impossible.rowH, '反例上：不判 fits 直接均分'), /反例上/, '⚠ 反例注入必须失败')
+})

@@ -2230,6 +2230,19 @@ export class RescueMonitor {
     const triggeredIndexes = new Set<string>()
     const coreTriggered: string[] = []
     const peripheralTriggered: string[] = []
+    /**
+     * 新浪超大单兜底**并发预取**（v0.183.0）：东财 f66 缺失时每只 ETF 一次请求。
+     * 旧写法在 for 循环里逐个 `await` ⇒ 6 只串行 ≈ +1.2s/拍，把 5 分钟采样拖成"慢拍"。
+     * 现在先并发拉一遍（60s 缓存，重复调用零请求），循环里只读 Map。
+     */
+    const sinaSuperNets = new Map<string, number | null>()
+    await Promise.all(
+      metas
+        .filter((m) => quotes[m.secid] !== undefined && quotes[m.secid].superNet === null)
+        .map(async (m) => {
+          sinaSuperNets.set(m.secid, await fetchSinaSuperNet(m.secid))
+        }),
+    )
     for (const meta of metas) {
       const q = quotes[meta.secid]
       const base = this.file.baselines[meta.secid]?.avgAmt20 ?? RESCUE_CALIBRATION.universe.find((u) => u.secid === meta.secid)?.avgAmt20 ?? null
@@ -2244,7 +2257,7 @@ export class RescueMonitor {
       }
       const amount = q.amount
       // 东财 f66 拿不到 ⇒ 新浪超大单净额兜底（60s 缓存；失败 ⇒ null，界面给 — 不写 0）
-      const superNet = q.superNet ?? (await fetchSinaSuperNet(meta.secid))
+      const superNet = q.superNet ?? sinaSuperNets.get(meta.secid) ?? null
       const timeAdjMult = amount !== null && base !== null && base > 0 ? amount / (base * progress) : null
       /**
        * 同刻度 z（v0.17.0）：`(今日累计额 ÷ 20 日均额 − 同 slot 历史均值) ÷ 同 slot 历史 σ`。

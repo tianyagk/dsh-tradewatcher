@@ -11,6 +11,56 @@
 
 ---
 
+## v0.183.0 — 全仓审查：宿主 5 条 P1、客户端 2 条 P1、测试补强 27 条、3 个生产缺陷
+
+`npm run check` **1484 / 1484 × 2 时区**（1446 → 1484）+ `ALL HOST CHECKS PASSED` + build（73 片段全过）。
+
+三份审查报告：`docs/AUDIT-HOST-1030.md`、`docs/AUDIT-CLIENT-1030.md`、`docs/AUDIT-TESTS-1030.md`。
+
+### 宿主层 P1（5 条，已修）
+
+| # | 位置 | 问题 | 修法 |
+| --- | --- | --- | --- |
+| H-01 | `detailTencent.ts:43` | 正则只认 `sh/sz/bj`，美股 `v_usAAPL=` 永远解析失败 | 补 `us[A-Za-z.]+` |
+| H-02 | `detailTencent.ts:57` | 美股 `[37]` 是美元却按万元 ⇒ 成交额 **×10 000** | 按 `105/106/107` 前缀判美股：`×1` |
+| H-03 | `detailTencent.ts:100` | 量纲判不出 ⇒ `vol:null`，`missing[]` 无条目 | 补「成交量」缺失原因 |
+| H-04 | `em.ts:3383` | 补今日柱后返回 `lmt+1` 根 ⇒ 切窗错位 | 抽 `withLiveBar()` 统一截断 |
+| H-05 | `rescue.ts:2238` | 6 只 ETF 超大单兜底串行 `await` ⇒ +1.2 s/拍 | 循环前 `Promise.all` 预取 |
+
+### 客户端层 P1（2 条，已修）
+
+| # | 位置 | 问题 | 修法 |
+| --- | --- | --- | --- |
+| C-01 | `GlobalClockPage.tsx:166` | effect 依赖 `refreshSec`，设置解析后重复请求 `/quotes`；且 `clockRefreshMs` / `api.prefs()` 是死代码 | 删死代码，依赖收窄为 `[load]`，tick 补 `shouldPollQuotes` 闸门 |
+| C-02 | `RescuePanel.tsx:454` | `activeIntervalSec` 缺失 ⇒ `NaN` ⇒ **0 ms 轮询** | 新增 `rescuePollSec()`（`rescueView.ts:190`）：非有限值回落 60 s，夹紧 `[30, 600]` |
+
+### 测试层发现的 3 个生产缺陷（已修）
+
+| # | 缺陷 | 修法 |
+| --- | --- | --- |
+| T-01 | `batchesOf(codes, 0)` **死循环**（`i += 0`） | 空数组返回 `[]`；`size` 必填，`Math.floor` 后非有限或 `<1` ⇒ `RangeError`；6 个非法输入各断言且 <1 s 返回 |
+| T-02 | `bucketIndexOf` ±10% 边界方向相反 | 统一左闭右开：`+10.00 → >10`、`−10.00 → ≤−10`、`−7.00 → −7~−5`；对称性 `idx(10) === 10 − idx(−10)` |
+| T-03 | `dedupeSecids` 强制大写改写 `usAAPL` / `hkHSI` | 新增 `secidKeyOf()`：只对数字码归一，字母市场码原样；返回首次出现的原始串 |
+
+### 测试层补强
+
+| 项 | 数量 |
+| --- | --- |
+| 脆弱断言（只扫源码标识符） | 72 条 / 30 文件（登记） |
+| 无反例注入 | 100 / 205 文件（登记） |
+| 覆盖缺口 | 26 处，补 27 条断言（`hostFetch.ts` 此前零测试） |
+| 3 条最脆弱改行为断言 | `prismDay`、`distCard`、`chipsView` |
+
+### 验证
+
+`npm run check` **1484 / 1484 × 2 时区** + build（73 项）；新增断言均带反例注入（改坏必败）。
+审查过程实录：22:33 出现 1 条红（`clockView.test.ts:114` 源码正则与新 ticker 实现冲突），属并发编辑的旧断言，已随重构更新。
+
+### 未确认
+
+- 31 个真网络测试在 `--test-concurrency=8` 下是否会偶发 429 —— 未长跑验证。
+- 34 条路由未逐条人工复核，只回归 `/kline` 与 `/detail`。
+
 ## v0.182.0 — 护盘卡片补量比/超大单净额/占成交额；刷新降为 5 分钟
 
 `npm run check` **1446 / 1446 × 2 时区**（1440 → 1446）+ `ALL HOST CHECKS PASSED` + build（73 片段全过）。

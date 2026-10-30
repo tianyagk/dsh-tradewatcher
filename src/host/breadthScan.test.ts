@@ -1,7 +1,7 @@
 /** 腾讯聚合扫描核心（AUDIT-PROBE-BREADTH）。 */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { BATCH_GAP_MS, BATCH_SIZE, MAX_CONCURRENCY, SINA_CODE_HOST, __resetCodePoolCache, aggregateOf, batchesOf, nineBucketsOf, parseSinaCodePage, parseTencentQuoteText, scanBatches, tencentBreadthAggregate } from './breadthScan.ts'
+import { BATCH_GAP_MS, BATCH_SIZE, MAX_CONCURRENCY, SINA_CODE_HOST, __resetCodePoolCache, aggregateOf, batchesOf, bucketIndexOf, nineBucketsOf, parseSinaCodePage, parseTencentQuoteText, scanBatches, tencentBreadthAggregate } from './breadthScan.ts'
 
 test('① 11 档合计 + 停牌 = 全量（差一只 ⇒ 败）', () => {
   const rows = [
@@ -164,4 +164,50 @@ test('⑩ 端到端聚合：代码池 → 分批 → 11 桶 → 9 档 + 覆盖�
   assert.equal(r.failedBatches.length, 0)
   assert.ok(calls.some((c) => c.startsWith('qt.gtimg.cn')), '必须真的打腾讯报价')
   assert.throws(() => assert.equal(r.counts.length, 11, '反例上：给 11 档'), /反例上/, '⚠ 反例注入必须失败')
+})
+
+/* ── 边界补强（AUDIT-TESTS-1030）：分桶边界、空池、非法 pct、批量切分 ── */
+
+test('⑨ 分桶边界：±7 / ±10 / 0 的归属与 9 档合并的不变性（合并表被改 ⇒ 败）', () => {
+  const nine = (pct: number): number[] => nineBucketsOf(aggregateOf([{ pct }]).buckets)
+  assert.deepEqual(nine(7), [1, 0, 0, 0, 0, 0, 0, 0, 0], '7.00% 属「≥7%」')
+  assert.deepEqual(nine(10), [1, 0, 0, 0, 0, 0, 0, 0, 0], '+10.00% 也必须并入「≥7%」（11 桶里它在 >10 档）')
+  assert.deepEqual(nine(0), [0, 0, 0, 0, 1, 0, 0, 0, 0], '0 ⇒ 平盘档')
+  assert.deepEqual(nine(-7), [0, 0, 0, 0, 0, 0, 0, 1, 0], 'v0.183.0 左闭：-7.00% 属「-7~-5」（≤-7% 是 (-∞,-7)）')
+  assert.deepEqual(nine(-7.01), [0, 0, 0, 0, 0, 0, 0, 0, 1], '-7.01% 才落「≤-7%」')
+  assert.deepEqual(nine(-10), [0, 0, 0, 0, 0, 0, 0, 0, 1], '-10.00% 也必须并入「≤-7%」（11 桶里它在 <-10 档）')
+  assert.deepEqual(nine(-0.01), [0, 0, 0, 0, 0, 1, 0, 0, 0], '微跌属 -3~0（不是平盘）')
+  // v0.183.0：两侧统一为**左闭右开**（此前 +10 落「7~10」、-10 落「<-10」，方向相反）
+  assert.equal(bucketIndexOf(10), 0, '11 桶：+10.00% 落在「>10」（左闭）')
+  assert.equal(bucketIndexOf(-10), 10, '11 桶：-10.00% 落在「≤-10」（左闭）')
+  assert.equal(bucketIndexOf(10), 10 - bucketIndexOf(-10), '两侧边界方向必须对称')
+  // 反例注入：把「≥7%」的合并从 [0,1] 改成 [0] ⇒ 7.00% 会掉出该档
+  const wrongMerge = [[0], [1], [2], [3], [4], [5], [6], [7], [8, 9, 10]]
+  const wrongNine = wrongMerge.map((idx) => idx.reduce((s, i) => s + (aggregateOf([{ pct: 7 }]).buckets[i] ?? 0), 0))
+  assert.notDeepEqual(wrongNine, nine(7))
+  assert.throws(() => assert.deepEqual(wrongNine, nine(7), '反例上：合并表漏一桶'), /反例上/, '⚠ 反例注入必须失败')
+})
+
+test('⑩ 空池 / 非法 pct：空数组不产桶、不产批；NaN/null 行不计入 total（写 0 冒充平盘 ⇒ 败）', () => {
+  const empty = aggregateOf([])
+  assert.deepEqual(empty.buckets, [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+  assert.equal(empty.total, 0)
+  assert.deepEqual(batchesOf([], BATCH_SIZE), [], '空池不得产出空批')
+  assert.deepEqual(batchesOf(['a'], BATCH_SIZE), [['a']], '单元素必须成一批')
+  assert.deepEqual(batchesOf(['a', 'b', 'c'], 2), [['a', 'b'], ['c']], '最后一批可以不满')
+  const withBad = aggregateOf([{ pct: NaN }, { pct: null }, { pct: 1 }, { pct: 0, suspended: true }])
+  assert.equal(withBad.total, 2, '只有「可计价的一只 + 停牌的一只」进 total；NaN/null 不得冒充平盘')
+  assert.equal(withBad.flat, 0, 'NaN 不得被算成平盘')
+  // 反例注入：把 NaN 当 0（平盘）⇒ flat 会变成 2
+  assert.throws(() => assert.equal(withBad.flat, 2, '反例上：NaN 记平盘'), /反例上/, '⚠ 反例注入必须失败')
+})
+
+test('⑪ 11 桶长度不符 ⇒ 抛错（静默补 0 ⇒ 败）', () => {
+  assert.throws(() => nineBucketsOf([1, 2, 3]), /长度应为 11/)
+  assert.throws(() => nineBucketsOf(new Array(10).fill(0)), /长度应为 11/)
+  assert.equal(nineBucketsOf(new Array(11).fill(1)).reduce((a, b) => a + b, 0), 11, '11 桶全 1 ⇒ 9 档合计仍是 11')
+  // 反例注入：静默补 0 会让短数组返回全 0（看起来"没有涨跌"，其实数据坏了）
+  const silent = Array.from({ length: 9 }, () => 0)
+  assert.notDeepEqual(silent, nineBucketsOf(new Array(11).fill(1)))
+  assert.throws(() => assert.deepEqual(silent, nineBucketsOf(new Array(11).fill(1)), '反例上：静默补 0'), /反例上/, '⚠ 反例注入必须失败')
 })

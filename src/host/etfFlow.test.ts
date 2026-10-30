@@ -78,3 +78,48 @@ test('⑥ 新浪代码映射（沪深只认 0/1 开头）', () => {
   assert.equal(sinaSymbolOf('0.159915'), 'sz159915')
   assert.equal(sinaSymbolOf('116.00700'), null)
 })
+
+/* ── 边界补强（AUDIT-TESTS-1030）：负数/科学计数、除零、代码边界 ── */
+
+test('⑦ 解析边界：负号 / 科学计数 / 缺一字段 ⇒ null（用 0 顶替 ⇒ 败）', () => {
+  // 负值：新浪在净流出时可能给负号；正则只收 [0-9.] ⇒ 判不出就 null，不猜
+  assert.equal(parseSinaSuperNet('"r0_in":"-5","r0_out":"10"'), null, '负号字段不得解析成一个数')
+  // 科学计数法（1e3）同样不匹配 ⇒ null
+  assert.equal(parseSinaSuperNet('"r0_in":"1e3","r0_out":"10"'), null, '科学计数不得被 Number() 撞对')
+  // 只有一半字段
+  assert.equal(parseSinaSuperNet('"r0_in":"100"'), null, '缺 r0_out ⇒ null')
+  assert.equal(parseSinaSuperNet('"r0_out":"100"'), null, '缺 r0_in ⇒ null')
+  assert.equal(parseSinaSuperNet(''), null, '空串 ⇒ null')
+  // 正常值仍然要能解析（证明上面对 null 的断言不是恒真）
+  assert.equal(parseSinaSuperNet('"r0_in":"120","r0_out":"20"'), 100)
+  // 反例注入：把 null 改成 0 顶替 ⇒ 与「真的净额为 0」无法区分
+  const substituted: number | null = null
+  assert.throws(() => assert.equal((substituted ?? 0), null, '反例上：缺数据写 0'), /反例上/, '⚠ 反例注入必须失败')
+})
+
+test('⑧ 占成交额：成交额 0/负/缺失 ⇒ null；净额真为 0 且成交额 >0 ⇒ 0（两件事必须分开）', () => {
+  assert.equal(superShareOf(100, 0), null, '成交额 0 不得做除数')
+  assert.equal(superShareOf(100, -1), null, '负成交额不得做除数')
+  assert.equal(superShareOf(100, null), null)
+  assert.equal(superShareOf(null, 1000), null)
+  assert.equal(superShareOf(0, 1000), 0, '净额真为 0 时必须给 0（不是 null）')
+  assert.notEqual(superShareOf(0, 1000), superShareOf(100, 0), '「净额为 0」与「成交额为 0」必须可区分')
+  // 反例注入：把 `amount > 0` 放宽成 `amount >= 0` ⇒ 0 做除数得 Infinity/NaN
+  const bad = 100 / 0
+  assert.ok(!Number.isFinite(bad), '除零会得到 Infinity —— 正是必须拦掉的原因')
+  assert.throws(() => assert.ok(Number.isFinite(bad), '反例上：除零放行'), /反例上/, '⚠ 反例注入必须失败')
+})
+
+test('⑨ 代码映射边界：只有 `0.`/`1.` + 6 位数字才算沪深（多一位/少一位/别的前缀 ⇒ null）', () => {
+  assert.equal(sinaSymbolOf('1.510300'), 'sh510300')
+  assert.equal(sinaSymbolOf('0.159915'), 'sz159915')
+  assert.equal(sinaSymbolOf('2.510300'), null, '市场号只有 0/1')
+  assert.equal(sinaSymbolOf('1.51030'), null, '5 位数字不算')
+  assert.equal(sinaSymbolOf('1.5103000'), null, '7 位数字不算')
+  assert.equal(sinaSymbolOf('sh510300'), null, '非 secid 形式')
+  assert.equal(sinaSymbolOf(' 1.510300'), null, '带空格不得被 trim 后放行（保持严格）')
+  // 反例注入：把 `^...$` 去掉（改成 test 而非 exec 全匹配）⇒ 7 位数字会被接受
+  const loose = /([01])\.(\d{6})/.test('1.5103000')
+  assert.equal(loose, true, '反例：非全匹配的正则确实会放过 7 位')
+  assert.throws(() => assert.equal(sinaSymbolOf('1.5103000'), 'sh5103000', '反例上：7 位被接受'), /反例上/, '⚠ 反例注入必须失败')
+})

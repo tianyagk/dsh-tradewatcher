@@ -82,3 +82,24 @@ test('26 笔同 bar 同价 ⇒ 成交表合并 1 行，数量/费用合计；磁
   assert.equal(merged[0]?.fee, 223.6)
   assert.equal(raw.length, 26, '合并只在渲染层，原始明细不删')
 })
+
+/* ── 把最脆弱的「源码含标识符」断言升级为**行为断言**（AUDIT-TESTS-1030）：
+ *    原 `page.includes('todayOrdersOf')` 只证明字符串在文件里；改名/换实现都不影响对错。
+ *    这里补的是它真正想保证的事：**今日表只显示今天的行，且不许按天删数据**。 */
+test('⑥ 【行为】todayOrdersOf：只留当日；无 day 字段时按 decidedAt 的北京日归属（按 UTC 日 ⇒ 败）', () => {
+  const rows = [
+    { id: 'a', day: '2026-10-25', decidedAt: 0 },
+    { id: 'b', day: '2026-10-26', decidedAt: 0 },
+    { id: 'c', day: '', decidedAt: Date.parse('2026-10-26T00:30:00+08:00') }, // 北京 10-26 00:30 = UTC 10-25 16:30
+    { id: 'd', day: '', decidedAt: Date.parse('2026-10-25T23:30:00+08:00') },
+  ]
+  const today = todayOrdersOf(rows, '2026-10-26')
+  assert.deepEqual(today.map((r) => r.id), ['b', 'c'], 'day 为空时必须用北京时间的 decidedAt 判日（用 UTC 会把 c 漏掉、把 d 算进来）')
+  assert.equal(rows.length, 4, '过滤不得改动源数组（客户端只过滤、不删除）')
+  assert.deepEqual(todayFillsOf([{ at: Date.parse('2026-10-26T00:30:00+08:00') }, { at: Date.parse('2026-10-25T23:30:00+08:00') }], '2026-10-26').length, 1)
+  assert.equal(beijingDayOf(Date.parse('2026-10-26T00:30:00+08:00')), '2026-10-26', '辅助函数口径自证')
+  // 反例注入：按 UTC 日切（toISOString().slice(0,10)）⇒ 00:30 北京会被算到前一天
+  const utcDay = new Date(Date.parse('2026-10-26T00:30:00+08:00')).toISOString().slice(0, 10)
+  assert.equal(utcDay, '2026-10-25', '反例：UTC 切法确实会错一天')
+  assert.throws(() => assert.equal(today.map((r) => r.id).length, 1, '反例上：按 UTC 日过滤'), /反例上/, '⚠ 反例注入必须失败')
+})

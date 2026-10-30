@@ -2630,6 +2630,18 @@ export function liveDayBarOf(
   }
 }
 
+/**
+ * 追加今日动态柱并**守住 lmt**（纯函数，便于断言）：
+ * 补的这根也算进条数，否则 `/kline?lmt=5` 会回 6 根，调用方按长度切窗口就错位。
+ */
+export function withLiveBar(days: readonly DayBar[], live: DayBar | null, lmt: number): DayBar[] {
+  const out = [...days]
+  if (live === null) return out
+  out.push(live)
+  const cap = Math.max(1, Math.round(lmt))
+  return out.length > cap ? out.slice(out.length - cap) : out
+}
+
 /** 快照取今日柱：先读共用行情槽（零请求），槽里没有才补一次单标的行情 */
 async function liveTodayBarOf(secid: string, days: readonly DayBar[]): Promise<DayBar | null> {
   const last = days[days.length - 1]?.date ?? ''
@@ -3367,7 +3379,9 @@ export async function fetchKline(
    */
   if (!us) {
     const live = await liveTodayBarOf(secid, days)
-    if (live !== null) days.push(live)
+    if (live !== null) {
+      days.splice(0, days.length, ...withLiveBar(days, live, want))
+    }
   }
   // 最后一根是否未收盘：只有"该 bar 就是今天"且此刻仍可能产生新数据时才算。
   // 周/月/年 K 的"今天"同理存在，但判断口径一致（date 相等 + inSession）。

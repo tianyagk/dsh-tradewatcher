@@ -87,3 +87,43 @@ test('④ 东财失败 ⇒ source=tencent 且详情非空（仍返回 null ⇒ �
   assert.equal(none.source, null)
   assert.throws(() => assert.equal(none.detail !== null, true, '反例上：两边都挂还说详情可用'), /反例上/, '⚠ 反例注入必须失败')
 })
+
+/* ── 边界补强（AUDIT-TESTS-1030）：美股成交额单位、量纲判不出、解析失败 ── */
+
+test('⑤ 美股 [37] 是**美元**不乘 1e4（一律 ×1e4 ⇒ 差 10000 倍 ⇒ 败）', () => {
+  const line = qtLine().replace('v_sh600519', 'v_usAAPL')
+  const us = parseTencentDetail(line, '105.AAPL')
+  const cn = parseTencentDetail(qtLine(), '1.600519')
+  assert.ok(us !== null && cn !== null)
+  assert.equal(cn.detail.amount, 295_109 * 1e4, 'A股 [37] 万元 → 元（×1e4）')
+  assert.equal(us.detail.amount, 295_109, '美股 [37] 已是美元 ⇒ 原值')
+  assert.equal(cn.detail.amount! / us.detail.amount!, 10_000, '两条分支必须正好差 10000 倍')
+  // 反例注入：给美股也乘 1e4 ⇒ 详情头成交额放大一万倍
+  const wrong = Math.round(us.detail.amount! * 1e4)
+  assert.notEqual(wrong, us.detail.amount)
+  assert.throws(() => assert.equal(wrong, us.detail.amount, '反例上：美股也 ×1e4'), /反例上/, '⚠ 反例注入必须失败')
+})
+
+test('⑥ 量纲判不出 ⇒ vol:null + missing 里有「成交量」（写 0 或写 100 倍值 ⇒ 败）', () => {
+  // [36] 与 [37] 差 450 倍：既不是股也不是手 ⇒ 不猜
+  const r = parseTencentDetail(qtLine({ 36: '999999999' }), '1.600519')
+  assert.ok(r !== null)
+  assert.equal(r.detail.vol, null, '量纲不自洽时必须 null')
+  assert.ok(r.missing.some((m) => m.what === '成交量'), 'missing 必须点名「成交量」')
+  const note = r.missing.find((m) => m.what === '成交量')!
+  assert.match(note.note ?? '', /量纲|100 倍/, '原因要说清是量纲判不出')
+  // 反例注入：按「手」硬算 ⇒ 得 999 亿股，与成交额明显矛盾
+  const hardValue = 999_999_999 * 100
+  assert.throws(() => assert.equal(hardValue, r.detail.vol, '反例上：按手硬算'), /反例上/, '⚠ 反例注入必须失败')
+})
+
+test('⑦ 解析失败：无匹配 / 现价为空 ⇒ null（返回半条空壳 ⇒ 败）', () => {
+  assert.equal(parseTencentDetail('', '1.600519'), null, '空包必须 null')
+  assert.equal(parseTencentDetail('garbage~garbage', '1.600519'), null, '无 v_ 前缀必须 null')
+  assert.equal(parseTencentDetail(qtLine({ 3: '' }), '1.600519'), null, '现价为空 ⇒ null（不得拿 0 顶）')
+  assert.equal(parseTencentDetail(qtLine({ 3: 'abc' }), '1.600519'), null, '现价非数 ⇒ null')
+  // 现价真的是 0（停牌）也走 null 分支：宁可整条不兜底，也不要 0 价
+  assert.equal(parseTencentDetail(qtLine({ 3: '0' }), '1.600519')?.detail.price, 0, '0 价能解析（调用方另行判停牌）')
+  // 反例注入：把 `price === null` 的闸门去掉 ⇒ 半条空壳会被当成有效详情
+  assert.throws(() => assert.notEqual(parseTencentDetail(qtLine({ 3: '' }), '1.600519'), null, '反例上：空现价放行'), /反例上/, '⚠ 反例注入必须失败')
+})

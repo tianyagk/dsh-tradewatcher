@@ -1,7 +1,7 @@
 /** 成交量量纲（v0.181.0）：① 今日柱/近20中位数 ∈[0.2,5] ② 与历史同单位（手）③ 量×均价≈额 ④ 标签自洽 */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { volToLots, volToShares, volUnitOf } from './volUnit.ts'
+import { VOL_ERR_MAX_PCT, volToLots, volToShares, volUnitOf } from './volUnit.ts'
 import { volLabelOfShares } from '../client/detailFallback.ts'
 
 /** 长鑫科技 1.688825 实测（2026-10-28 13:5x） */
@@ -57,4 +57,49 @@ test('⑤ 判不出单位时不猜（ok:false ⇒ 调用方给 null 而不是错
   const moutai = volUnitOf(22_012, 1331.45, 2_951_090_000)
   assert.equal(moutai.unit, 'lot')
   assert.equal(moutai.ok, true)
+})
+
+/* ── 边界补强（AUDIT-TESTS-1030）：非法量、5% 闭区间、四舍五入方向 ── */
+
+test('⑥ 非法量（0 / 负 / NaN / ±Infinity / 缺失）⇒ ok:false 且 errPct=Infinity（把 0 当合法量 ⇒ 败）', () => {
+  for (const bad of [0, -1, -0.5, NaN, null, undefined, Number.POSITIVE_INFINITY]) {
+    const r = volUnitOf(bad as number | null | undefined, 10, 1000)
+    assert.equal(r.ok, false, `非法量 ${String(bad)} 不得判为 ok:true`)
+    assert.equal(r.errPct, Number.POSITIVE_INFINITY, `非法量 ${String(bad)} 的 errPct 必须是 Infinity（不是 0，也不是某个看起来像误差的数）`)
+  }
+  assert.equal(volUnitOf(100, 0, 1000).ok, false, '价格 0 不得判为 ok')
+  assert.equal(volUnitOf(100, 10, 0).ok, false, '成交额 0 不得判为 ok')
+  assert.equal(volUnitOf(100, null, 1000).ok, false, '价格缺失不得判为 ok')
+  // 反例注入：若把「amount > 0」的闸门去掉，0 成交额会算出 0/0 = NaN，
+  // 而 `NaN <= 5` 恒为 false ⇒ 会走到「取更接近的那个」分支，返回一个**看起来正常**的 unit。
+  const zeroOverZero = (0 * 10 - 0) / 0
+  assert.ok(Number.isNaN(zeroOverZero), '0/0 必须是 NaN —— 这正是必须前置拦掉的原因')
+  assert.throws(() => assert.equal(Number.isNaN(zeroOverZero), false, '反例上：0 成交额当合法'), /反例上/, '⚠ 反例注入必须失败')
+})
+
+test('⑦ 5% 阈值是**闭区间**：正好 5.000% 判 ok，5.005% 判 ok:false（改成严格 < ⇒ 败）', () => {
+  assert.equal(VOL_ERR_MAX_PCT, 5, '阈值常量必须是 5')
+  // |2100×10 − 20000| / 20000 = 5.000% 整
+  const exact = volUnitOf(2100, 10, 20_000)
+  assert.equal(exact.unit, 'share')
+  assert.equal(exact.ok, true, '正好 5% 必须在允许范围内（闭区间）')
+  assert.ok(Math.abs(exact.errPct - 5) < 1e-9, `errPct 必须正好 5（实得 ${exact.errPct}）`)
+  // |2100×10 − 19999| / 19999 = 5.005%
+  const justOver = volUnitOf(2100, 10, 19_999)
+  assert.equal(justOver.ok, false, '5.005% 必须判不可用')
+  assert.ok(justOver.errPct > 5 && justOver.errPct < 5.01, `越界误差应略大于 5（实得 ${justOver.errPct}）`)
+  // 反例注入：把 <= 改成 < ⇒ 正好 5% 会被判不可用
+  assert.throws(() => assert.equal(exact.ok, false, '反例上：正好 5% 被判越界'), /反例上/, '⚠ 反例注入必须失败')
+})
+
+test('⑧ 换算的四舍五入方向：49 股 → 0 手，50 股 → 1 手（截断 ⇒ 50 股变 0 手 ⇒ 败）', () => {
+  assert.equal(volToLots(49, 'share'), 0)
+  assert.equal(volToLots(50, 'share'), 1, '50 股按四舍五入是 1 手（截断会得 0）')
+  assert.equal(volToLots(149, 'share'), 1)
+  assert.equal(volToLots(150, 'share'), 2)
+  assert.equal(volToShares(1, 'lot'), 100, '1 手 = 100 股')
+  // 反例注入：截断（Math.floor）⇒ 50 股变 0 手
+  const truncated = Math.floor(50 / 100)
+  assert.equal(truncated, 0)
+  assert.throws(() => assert.equal(truncated, 1, '反例上：截断'), /反例上/, '⚠ 反例注入必须失败')
 })

@@ -69,5 +69,5 @@ test('接线：五个轮询点全部经过 shouldPollQuotes 闸门', () => {
     assert.equal(read(f).includes('shouldPollQuotes'), true, `${f} 缺少时段闸门`)
   }
   const clock = read('GlobalClockPage.tsx')
-  assert.equal(clock.includes('refreshSec'), true, '时钟页 1s 时钟不受影响（仍保留 refreshSec）')
+  assert.equal(clock.includes('shouldPollQuotes'), true, '时钟页行情 tick 也必须过时段闸门')
 })

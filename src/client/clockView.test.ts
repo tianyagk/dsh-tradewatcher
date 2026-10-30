@@ -111,7 +111,7 @@ test('⑦ 行情刷新间隔 = 120000ms（1000 判失败）', () => {
   const injected = 1000
   assert.notEqual(injected, clockRefreshMs(null), '注入 1000ms 必须判失败')
   // v0.171.0：时钟页行情改为订阅统一 ticker（60s），不再自建 120s 定时器
-  assert.match(SRC, /subscribeTicker\(\(\) => load\(false\)\)/, '行情必须走统一 ticker')
+  assert.match(SRC, /subscribeTicker\(\(\) => \{ if \(!shouldPollQuotes/, '行情必须走统一 ticker + 时段闸门')
 })
 
 test('⑧ 时区切换后表盘角度不变、只有文字时刻变（角度随之变判失败）', () => {
@@ -273,4 +273,17 @@ test('R16⑤ 每张卡的 source / at 取自自己那一行（复用第一张 �
   assert.deepEqual([...new Set(cards.map((c) => c.source))].sort(), ['东财', '新浪'])
   const dup = cards.map((c) => ({ ...c, source: cards[0]!.source, at: cards[0]!.at }))
   assert.equal(new Set(dup.map((c) => c.at)).size, 1, '注入「复用第一张」必须判失败')
+})
+
+// ── 1030 客户端审查：P1（重复请求 / 死代码）────────────────────────────────
+test('P1-1 行情 effect 只依赖 load，不得因设置解析再打一次 /quotes（注入 prefs 依赖 ⇒ 败）', () => {
+  assert.doesNotMatch(SRC, /api\.prefs\(\)/, '页面不许再读 prefs（行情节拍已由共享 ticker 决定）')
+  assert.doesNotMatch(SRC, /refreshSec/, 'refreshSec 已是死代码，留着会让 effect 重跑去重复请求')
+  const effect = /React\.useEffect\(\(\) => \{\s*load\(false\)[\s\S]{0,200}?\}, \[([^\]]*)\]\)/.exec(SRC)
+  assert.ok(effect !== null, '必须能找到行情 effect')
+  assert.equal((effect[1] ?? '').trim(), 'load', `行情 effect 依赖必须只有 load（实得 ${effect?.[1]}）`)
+  // 反例注入：把 refreshSec 放回依赖
+  const injected = SRC.replace('}, [load])', '}, [load, refreshSec])')
+  assert.notEqual(injected, SRC, '注入必须改变源码')
+  assert.match(injected, /\[load, refreshSec\]/, '注入 refreshSec 依赖后必须判失败')
 })

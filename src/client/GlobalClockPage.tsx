@@ -11,6 +11,7 @@
 import * as React from 'react'
 import { api } from './api.ts'
 import { subscribeTicker } from './ticker.ts'
+import { shouldPollQuotes } from '../shared/pollGate.ts'
 import {
   CLOCK_GROUPS, CLOCK_SESSIONS, DIAL, arcPathD, displayMinuteOfWheel, needleGeometry,
   nextStartSeconds, sessionStatus, sessionWheelSpans, wallClock, wheelAngle,
@@ -134,7 +135,6 @@ export function GlobalClockPage(props: { back?: React.ReactNode; title: string }
   const [now, setNow] = React.useState(() => Date.now())
   const offsetRef = React.useRef(0)
   const [offsetMs, setOffsetMs] = React.useState(0)
-  const [refreshSec, setRefreshSec] = React.useState(120)
   const [quotes, setQuotes] = React.useState<{ items: Record<string, QuoteRow>; missing: string[]; ts: number } | null>(null)
   const [lastRefresh, setLastRefresh] = React.useState<number | null>(null)
   const [error, setError] = React.useState<string | null>(null)
@@ -143,13 +143,6 @@ export function GlobalClockPage(props: { back?: React.ReactNode; title: string }
   React.useEffect(() => {
     const timer = setInterval(() => setNow(Date.now() + offsetRef.current), 1000)
     return () => clearInterval(timer)
-  }, [])
-
-  // 行情间隔来自 settings（默认 120s，30–600s）
-  React.useEffect(() => {
-    let alive = true
-    api.prefs().then((r) => { if (alive) setRefreshSec(r.prefs.clockRefreshSec ?? 120) }).catch(() => {})
-    return () => { alive = false }
   }, [])
 
   const load = React.useCallback((syncClock: boolean) => {
@@ -165,11 +158,13 @@ export function GlobalClockPage(props: { back?: React.ReactNode; title: string }
   }, [])
 
   // 行情：默认 120 秒一次（可配置）
+  /* 行情跟随全仓唯一的 60s 主 tick（v0.172.0 统一）；这里不再自建定时器、也不读 prefs，
+     避免设置解析完成后 effect 重跑造成一次重复 /quotes 请求。 */
   React.useEffect(() => {
     load(false)
-    const off = subscribeTicker(() => load(false))
+    const off = subscribeTicker(() => { if (!shouldPollQuotes(Date.now())) return; load(false) })
     return () => off()
-  }, [load, refreshSec])
+  }, [load])
 
   const zone: ZoneOption = ZONE_OPTIONS.find((o) => o.key === zoneKey) ?? ZONE_OPTIONS[0]!
   const zoneOffset = zoneOffsetOf(zone, now)

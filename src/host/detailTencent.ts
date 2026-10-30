@@ -39,7 +39,8 @@ const numOf = (v: string | undefined): number | null => {
  * `[39]` 市盈率(TTM) `[44]` 流通市值(亿) `[45]` 总市值(亿) `[46]` 市净率
  */
 export function parseTencentDetail(text: string, secid: string): TencentDetailResult | null {
-  const m = /v_((?:sh|sz|bj)\d{6})="([^"]*)"/.exec(text)
+  // 必须同时认 `us*`：腾讯美股回包是 `v_usAAPL="…"`，只认沪深北 ⇒ 美股详情兜底永远解析失败
+  const m = /v_((?:sh|sz|bj)\d{6}|us[A-Za-z.]+)="([^"]*)"/.exec(text)
   if (m === null) return null
   const code = (m[1] as string).slice(2)
   const f = (m[2] as string).split('~')
@@ -48,7 +49,13 @@ export function parseTencentDetail(text: string, secid: string): TencentDetailRe
   const prev = numOf(f[4])
   const chg = numOf(f[31]) ?? (prev === null ? null : Math.round((price - prev) * 1000) / 1000)
   const pct = numOf(f[32]) ?? (prev === null || prev <= 0 ? null : Math.round((price / prev - 1) * 10000) / 100)
-  const amountWan = numOf(f[37])
+  const amountRaw = numOf(f[37])
+  /**
+   * ⚠ 美股 `[37]` 是**美元**（见 `tencent.ts:parseTencentQuoteText` 的 `isUs ? 1 : 1e4`），
+   * A股/ETF 才是**万元**。此前一律 ×1e4 ⇒ 美股详情头的成交额差 10000 倍。
+   */
+  const isUs = /^(105|106|107)\./.test(secid)
+  const amount = amountRaw === null ? null : Math.round(amountRaw * (isUs ? 1 : 1e4))
   const floatMvYi = numOf(f[44])
   const totalMvYi = numOf(f[45])
   const detail: StockDetail = {
@@ -70,11 +77,11 @@ export function parseTencentDetail(text: string, secid: string): TencentDetailRe
     vol: (() => {
       const raw = numOf(f[36])
       if (raw === null) return null
-      const unit = volUnitOf(raw, price, amountWan === null ? null : amountWan * 1e4)
+      const unit = volUnitOf(raw, price, amount)
       return unit.ok ? volToShares(raw, unit.unit) : null
     })(),
     // 万元 → 元
-    amount: amountWan === null ? null : Math.round(amountWan * 1e4),
+    amount,
     turnover: numOf(f[38]),
     // 腾讯单票不含量比（f49 语义未确认）⇒ 不猜
     volumeRatio: null,
@@ -90,6 +97,7 @@ export function parseTencentDetail(text: string, secid: string): TencentDetailRe
   if (detail.volumeRatio === null) missing.push({ what: '量比', why: 'no-source', note: '腾讯单票行情不含量比（f49 语义未确认，不猜）' })
   if (detail.up === null || detail.down === null) missing.push({ what: '涨跌家数', why: 'no-source', note: '腾讯单票行情不含指数级的涨跌家数（只在指数快照里有）' })
   if (detail.open === null) missing.push({ what: '今开', why: 'no-source', note: '腾讯回包里今开为空（停牌/集合竞价前可能如此）' })
+  if (detail.vol === null) missing.push({ what: '成交量', why: 'no-source', note: '腾讯 [36] 与成交额不自洽（量纲判不出）⇒ 按未取到处理，不显示可能差 100 倍的数' })
   return { detail, source: 'tencent', missing }
 }
 

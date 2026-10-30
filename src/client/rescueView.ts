@@ -179,3 +179,16 @@ export function shortSignalOf(e: {
   const brief = note.length > 14 ? `${note.slice(0, 13)}…` : (note === '' ? '—' : note)
   return `${e.hhmm} · ${label} · ${fam} · ${score} · ${brief}`.slice(0, 40)
 }
+
+/**
+ * 护盘轮询间隔（秒）：只在交易时段跟随上游 `activeIntervalSec`，**必须做有限性与范围收敛**。
+ *
+ * 为什么不能直接 `Math.max(10, activeIntervalSec)`：线缆里字段缺失/为 null 时
+ * `Math.max(10, undefined) === NaN`，定时器拿到 `NaN*1000` 会被浏览器当成 **0ms**
+ * ⇒ 变成死循环打上游。因此：非有限值一律回落 60s，合法值收敛到 [30, 600]。
+ */
+export function rescuePollSec(activeIntervalSec: unknown, trading: boolean): number {
+  if (!trading) return 60
+  if (typeof activeIntervalSec !== 'number' || !Number.isFinite(activeIntervalSec)) return 60
+  return Math.min(600, Math.max(30, activeIntervalSec))
+}

@@ -63,3 +63,52 @@ test('⑥ 熔断关闭后下一周期恢复轮询（不恢复 ⇒ 败）', () =>
   // 反例注入：关闭后仍跳过 ⇒ 必败
   assert.throws(() => assert.equal(pollableSecids(ids, { open: false }, () => false).length, 0, '反例上：不恢复'), /反例上/, '⚠ 反例注入必须失败')
 })
+
+/* ── 边界补强（AUDIT-TESTS-1030）：钳位数值边界、去重归一、时段四端点 ── */
+
+test('⑦ clampRescueSec 数值边界：NaN/±Infinity/字符串回默认 300，小数四舍五入后再钳（截断 ⇒ 败）', () => {
+  assert.equal(clampRescueSec(30), 30, '下界本身保留')
+  assert.equal(clampRescueSec(29.6), 30, '29.6 先四舍五入到 30，再保留下界')
+  assert.equal(clampRescueSec(600), 600)
+  assert.equal(clampRescueSec(600.4), 600)
+  assert.equal(clampRescueSec(NaN), 300, 'NaN ⇒ 默认')
+  assert.equal(clampRescueSec(Number.POSITIVE_INFINITY), 300, 'Infinity ⇒ 默认（不是 600）')
+  assert.equal(clampRescueSec(Number.NEGATIVE_INFINITY), 300)
+  assert.equal(clampRescueSec(null), 300)
+  assert.equal(clampRescueSec(undefined), 300)
+  assert.equal(clampRescueSec({}), 300)
+  assert.equal(clampRescueSec(-5), 30, '负数先被下界兜住')
+  // 反例注入：把 Number.isFinite 去掉 ⇒ Infinity 会被 Math.min(600, Infinity) 钳成 600（一个"看起来合法"的值）
+  assert.equal(Math.min(600, Math.max(30, Math.round(Number.POSITIVE_INFINITY))), 600)
+  assert.throws(() => assert.equal(Math.min(600, Math.max(30, Math.round(Number.POSITIVE_INFINITY))), 300, '反例上：Infinity 未拦'), /反例上/, '⚠ 反例注入必须失败')
+})
+
+test('⑧ 时段四端点：09:30 开、11:30 仍在（收盘瞬间）、11:31 停、13:00 开、15:00 停（差一分钟 ⇒ 败）', () => {
+  assert.equal(shouldPollQuotes(bj(9, 30)), true, '09:30 开盘即轮询')
+  assert.equal(shouldPollQuotes(bj(9, 29)), false, '09:29 未开盘')
+  assert.equal(shouldPollQuotes(bj(11, 30)), true, '11:30 当分钟仍算（收盘瞬间）')
+  assert.equal(shouldPollQuotes(bj(11, 31)), false, '11:31 已休市')
+  assert.equal(shouldPollQuotes(bj(12, 59)), false, '午后开盘前不轮询')
+  assert.equal(shouldPollQuotes(bj(13, 0)), true, '13:00 开盘即轮询')
+  assert.equal(shouldPollQuotes(bj(14, 59)), true, '14:59 仍在盘中')
+  assert.equal(shouldPollQuotes(bj(15, 0)), false, '15:00 收盘即停')
+  assert.equal(shouldPollRescue(bj(15, 0)), false, '护盘 15:00 也停（m < 900）')
+  assert.equal(shouldPollRescue(bj(9, 15)), true, '护盘 09:15 起（含集合竞价）')
+  assert.equal(shouldPollRescue(bj(9, 14)), false, '护盘 09:14 不起')
+  // 反例注入：把 15:00 的 afterClose 判据漏掉 ⇒ 收盘瞬间会照发一轮
+  assert.throws(() => assert.equal(shouldPollQuotes(bj(15, 0)), true, '反例上：收盘仍轮询'), /反例上/, '⚠ 反例注入必须失败')
+})
+
+test('⑨ dedupeSecids：空白/大小写/空串归一后去重，且**保持首次出现顺序**（打乱顺序 ⇒ 败）', () => {
+  assert.deepEqual(dedupeSecids(['1.510300', ' 1.510300 ', '1.510300']), ['1.510300'], '空白与重复只留一个')
+  assert.deepEqual(dedupeSecids(['b', 'a', 'b']), ['b', 'a'], '保持首次出现顺序，且**不改写大小写**')
+  assert.deepEqual(dedupeSecids(['', '  ', 'a']), ['a'], '空串/纯空白直接丢弃')
+  assert.deepEqual(dedupeSecids([]), [])
+  // v0.183.0：只对 A 股数字码做大小写归一；字母市场的代码原样保留
+  assert.equal(dedupeSecids(['sh600000'])[0], 'sh600000', 'A 股码保持首次出现的原始串（不再 toUpperCase）')
+  assert.deepEqual(dedupeSecids(['usAAPL', 'usaapl']), ['usAAPL', 'usaapl'], '美股代码大小写有别 ⇒ 不许合并')
+  // 反例注入：用 sort 替代"首次出现顺序" ⇒ 顺序会被打乱
+  const sorted = [...new Set(['b', 'a'])].sort()
+  assert.notDeepEqual(sorted, dedupeSecids(['b', 'a']))
+  assert.throws(() => assert.deepEqual(sorted, dedupeSecids(['b', 'a']), '反例上：按字典序'), /反例上/, '⚠ 反例注入必须失败')
+})

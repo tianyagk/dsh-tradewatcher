@@ -81,15 +81,32 @@ export function pollableSecids(
   return secids.filter((s) => hasFallback(s))
 }
 
-/** 同一轮里对 secid 去重（保持首次出现的顺序） */
+/**
+ * 去重用的**归一键**（v0.183.0）：
+ *   · A股数字码（`sh/sz/bj` + 6 位、或纯 6 位、或 `1.600000` 这类数字 secid）⇒ 小写归一（大小写不敏感）；
+ *   · 带字母的市场码（`usAAPL` / `hkHSI` / `hk00700`）⇒ **原样**（美股代码大小写有意义，`AAPL ≠ aapl`）。
+ */
+export function secidKeyOf(s: string): string {
+  if (/^(sh|sz|bj|hk)\d{4,6}$/i.test(s) || /^\d{6}$/.test(s) || /^\d\.\d{6}$/.test(s)) return s.toLowerCase()
+  return s
+}
+
+/**
+ * 同一轮里对 secid 去重（保持首次出现的顺序，返回值是**首次出现的原始串**）。
+ *
+ * v0.183.0 修：旧实现一律 `toUpperCase()`（连 `usAApl` 都改写）⇒ 美股代码区分大小写时被误解；
+ * 且返回值被改写成大写，下游按小写比对会失配。现在只对 A 股数字码做大小写归一。
+ */
 export function dedupeSecids(secids: readonly string[]): string[] {
   const seen = new Set<string>()
   const out: string[] = []
-  for (const s of secids) {
-    const k = s.trim().toUpperCase()
-    if (k === '' || seen.has(k)) continue
+  for (const raw of secids) {
+    const s = raw.trim()
+    if (s === '') continue
+    const k = secidKeyOf(s)
+    if (seen.has(k)) continue
     seen.add(k)
-    out.push(k)
+    out.push(s)
   }
   return out
 }
