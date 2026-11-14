@@ -6,7 +6,7 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { DIST_BJ_NOTE, DIST_BUCKETS, MINUTE_BARS, breadthCellsOf, distTitleOf, minuteDeltaOf, missingCellText } from './marketBlocks.ts'
+import { DIST_BJ_NOTE, MINUTE_BARS, breadthCellsOf, distTitleOf, minuteDeltaOf, missingCellText } from './marketBlocks.ts'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const read = (p: string): string => readFileSync(join(HERE, p), 'utf8')
@@ -58,17 +58,6 @@ test('⑤ 分钟柱数 = 240（48 根 ⇒ 败）', () => {
   assert.equal(minuteDeltaOf(flat, flat).bars?.length, 240)
   const short = Array.from({ length: 48 }, () => ({ amount: 1 }))
   assert.equal(minuteDeltaOf(short, short).bars, null, '48 根必须判为不足（不画 48 根假柱）')
-})
-
-test('⑥ 涨跌分布档数由**档名数**决定（缺档 ⇒ 败），11 档是下张单的目标值', () => {
-  // 用户定稿的最终形态是 11 档（常量保留）；本轮的宿主只回 9 档（DIST_LABELS 未改），
-  // 页面若拿数据去比 `DIST_BUCKETS=11`，9 档数据会永远掉进"未取到"分支 ⇒ 判据改成"档数 == 档名数"。
-  assert.equal(DIST_BUCKETS, 11, '11 档目标常量不得被这一单改掉')
-  const page = read('MarketPage.tsx')
-  assert.equal(page.includes("repeat(11,1fr)") || read('styles.ts').includes('repeat(11,1fr)'), true, '11 列布局缺失')
-  assert.equal(page.includes('tw-mk-dist-n') || read('distCardRender.tsx').includes("'data-role': 'dist-count'"), true, '柱顶家数缺失')
-  assert.equal(/distCounts\.length !== distLabels\.length/.test(page), true, '档数与档名数不符必须走缺数据分支')
-  assert.equal(/distTitleOf\(/.test(page), true, '标题必须由 distTitleOf 生成（9 档 · 覆盖 N 只 / 已扫 k/N 批）')
 })
 
 test('⑥b 分布标题：全覆盖写"覆盖 N 只"，不足写"已扫 k/N 批"，无覆盖信息只写档数', () => {

@@ -51,3 +51,11 @@
 
 - 删除 CSS：`.tw-rescue-timeline`（口径入口类此前已无独立规则）。
 - 删除用例：`impl78 P3-3`（触发后对照表头）、`impl79 ⑤`（口径入口接线）、`impl85 ②`（时间线保留项）、`marketPolish ①`（时间线 40 字）——共 **4 条**；`impl78 P2-6`、`impl85 ③④`、`rescueVisual ②` 为**改写**（去掉已删块的锚点，保留项不动）。
+
+## 剩余两卡下线（2026-11-14，用户红框：涨跌分布 + 分钟成交额较昨日增减）
+
+大盘页再删两张卡：`涨跌分布`（含 DistHistogram 旧块）与 `分钟成交额较昨日增减`。页面只剩 **护盘信号** 与 **汪汪队跟踪** 两张卡。
+- 删除文件：`src/client/distCardRender.tsx`、`src/client/distCard.ts` 及其测试、`distLayout.test.ts`、`marketLegacyHidden.test.ts`（旧隐藏块整块删除）。
+- 删除 CSS/工具：`tw-mk-single`（换成 `tw-mk-body`）、`tw-dist-*` 残留类、`distAxisOf/distBarPctOf/distToneOf/daySeriesOf/X_TICKS/gridYsOf/yTicksOf/DIST_BUCKETS/DIST_BJ_TITLE` 等零引用导出。
+- 请求：不再请求 `/tradewatcher/breadth?dist=1`（`api.breadth()` 不带参数）；宿主 `/breadth` 路由与聚合代码保留。
+- 用例：删除 9 条（distCard 5 / distLayout 5 / marketLegacyHidden 1 / marketPolish 2 / marketPolish2 1 / marketV1 1 / pacing 2 / marketExtrasWire 2 / marketModules 1 / impl78 1 / prevArchive 1 中的相关块），改写 `marketCardsRemoved` 为 4 条新断言（1 张卡 / 标题 0 处 / 汪汪队仍在 / 不请求 dist=1）。

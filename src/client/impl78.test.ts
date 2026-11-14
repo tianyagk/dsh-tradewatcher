@@ -14,7 +14,6 @@ import { createRequestGen } from './requestGen.ts'
 import { createOverlayStack } from './overlay.ts'
 import { createRafCoalescer } from './rafThrottle.ts'
 import { panelVisibleOf } from './idle.ts'
-import { distToneOf } from './breadthView.ts'
 import { MAX_QUOTE_IDS } from '../shared/quoteLimit.ts'
 import { TW_CSS } from './styles.ts'
 
@@ -365,29 +364,6 @@ test('P3-4 做T 明细：超过上限必须如实披露"还有多少次未显示
 })
 
 // ══ P3-5 涨跌分布：不许 0 顶替、档位配色按档名判 ══════════════════════════
-
-test('P3-5 涨跌分布：tone 按档名判（不按下标硬编码 9 档），缺档显示「—」而不是 0', () => {
-  assert.equal(distToneOf('≥7%'), 'up')
-  assert.equal(distToneOf('0~3%'), 'up')
-  assert.equal(distToneOf('平盘'), 'flat')
-  assert.equal(distToneOf('-3~0%'), 'down')
-  assert.equal(distToneOf('≤-7%'), 'down')
-  // 档名换了/顺序变了，颜色仍跟着档名走（旧实现按下标 ⇒ 会静默错色）
-  const relabeled = ['≤-7%', '平盘', '≥7%']
-  assert.deepEqual(relabeled.map(distToneOf), ['down', 'flat', 'up'])
-  // 反例注入：旧的下标判据（i<4 up / i===4 flat / else down）在"档位变了"时会错
-  const byIndex = (i: number): string => (i < 4 ? 'up' : i === 4 ? 'flat' : 'down')
-  assert.equal(byIndex(0), 'up', '旧判据在重排后的第 0 档（应为 down）给出 up')
-  assert.notEqual(byIndex(0), distToneOf(relabeled[0] as string), '⚠ 反例（按下标判色）必须与新判据不同')
-  // 分布图标记已抽到 `distCardRender.tsx`（两处布局共用）⇒ 判据把渲染层一起读
-  const page = strip(read('MarketPage.tsx') + '\n' + read('distCardRender.tsx'))
-  assert.equal(/i < 4 \? 'up' : i === 4 \? 'flat' : 'down'/.test(page), false, '不许再按下标硬编码配色')
-  assert.equal(/counts\?\.\[i\] \?\? 0/.test(page), false, '不许再用 `?? 0` 顶替缺失档')
-  assert.ok(page.includes('distToneOf(label)'), '配色必须走纯函数')
-  assert.ok(page.includes("count === null ? '—'"), '缺档必须显示 —')
-})
-
-// ══ P3-6 工具分类 tablist 的语义 ═══════════════════════════════════════════
 
 test('P3-6 工具分类：tablist 里的按钮必须是 tab（role + aria-selected）', () => {
   const tools = strip(read('ToolsPage.tsx'))

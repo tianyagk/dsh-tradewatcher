@@ -849,6 +849,19 @@ export const api = {
     if (ids === '') return Promise.resolve({ map: {} })
     return request(`/tradewatcher/industries?secids=${encodeURIComponent(ids)}`)
   },
+  /** 汪汪队跟踪（v0.186.0）：沪市 14 只 ETF 的日频份额聚合 */
+  dogwatch(window: '3m' | '6m' | '1y' | '2y'): Promise<{
+    window: string
+    summary: { totalAmount: number | null; ratio: number | null; netBuy: number | null; weightedPct: number | null; baseDate: string | null }
+    series: Array<{ day: string; change: number; index: number }>
+    rows: Array<{ secid: string; name: string; indexName: string; scale: number | null; amount: number | null; ratio20: number | null; netBuy: number | null; pct: number | null; shares: number | null; sharesDelta: number | null }>
+    missing: MissingField[]
+    corporateActions: Array<{ day: string; code: string; ratio: number }>
+    sharesStale: boolean
+    asOf: number
+  }> {
+    return request(`/tradewatcher/dogwatch?window=${window}`)
+  },
   detail(secid: string): Promise<{ detail: StockDetail | null; auction?: AuctionInfo; source?: 'eastmoney' | 'tencent' | null; missing?: MissingField[] }> {
     return request(`/tradewatcher/detail?secid=${encodeURIComponent(secid)}`)
   },

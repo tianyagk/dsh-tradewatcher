@@ -1,0 +1,222 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>汪汪队跟踪 · 设计稿</title>
+<!--
+  汪汪队跟踪（护盘信号卡内新模块）设计稿 v1
+  · 复盘条 → 四指标 → 两张图（份额变化柱 / 加仓指数折线，同一组 3月/6月/1年/2年 切换）→ 14 只 ETF 表 → 一行口径
+  · 两种状态：正常态（全部有数）/ 份额缺数据态（整表 份额变化 = —（份额源未日更）+ 市场级标记）
+  · MD3 + 棱镜同款：圆角 10、padding 12、elevation-1、卡头 10px 主色竖条、数值 22–28px、表格 12px、state layer、ripple 仅按钮
+-->
+<style>
+
+  *,*::before,*::after{box-sizing:border-box}
+  [hidden]{display:none !important}
+  html,body{margin:0;padding:0}
+  :root{
+    color-scheme:light;
+    --bg:#f5f6f8; --card:#fff; --card2:#f2f4f7; --line:#e2e5ea; --line2:#eceef2; --lineStrong:#cfd3dc;
+    --text:#16181d; --dim:#4c535f; --muted:#6f7787;
+    --accent:#5e6ad2; --accent-soft:rgba(94,106,210,.14); --on-accent:#3a44a8;
+    --up:#e5484d; --down:#0e8f5c; --warn:#b34700; --warn-soft:rgba(232,89,12,.12);
+    --elev1:0 1px 2px rgba(16,24,40,.05); --state-hover:.08; --state-press:.12;
+  }
+  html[data-theme=dark]{
+    color-scheme:dark;
+    --bg:#010102; --card:#0f1011; --card2:#16181b; --line:#23252a; --line2:#1b1d21; --lineStrong:#34343a;
+    --text:#f7f8f8; --dim:#c8ced8; --muted:#8a8f98;
+    --accent:#5e6ad2; --accent-soft:rgba(94,106,210,.22); --on-accent:#dde0ff;
+    --up:#ff5f6d; --down:#27a644; --warn:#ffa94d; --warn-soft:rgba(255,169,77,.16);
+    --elev1:0 1px 2px rgba(0,0,0,.24);
+  }
+  body{background:var(--bg);color:var(--text);
+    font:12px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI","Inter","PingFang SC","Microsoft YaHei",sans-serif;
+    letter-spacing:-.006em;-webkit-font-smoothing:antialiased}
+  .wrap{max-width:1240px;margin:0 auto;padding:16px;display:flex;flex-direction:column;gap:16px}
+  .bar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:8px 12px;background:var(--card);border:1px solid var(--line);border-radius:10px;box-shadow:var(--elev1)}
+  .badge{display:inline-flex;align-items:center;height:20px;padding:0 6px;border-radius:4px;background:var(--accent-soft);color:var(--on-accent);font-size:11px;font-weight:600}
+  .seg{display:inline-flex;gap:4px;padding:2px;border:1px solid var(--line);border-radius:8px;background:var(--card2)}
+  .seg button{position:relative;overflow:hidden;height:26px;padding:0 12px;border:0;border-radius:6px;background:transparent;color:var(--dim);font:inherit;font-size:12px;cursor:pointer}
+  .seg button.on{background:var(--accent-soft);color:var(--on-accent);font-weight:700}
+  .hint{margin-left:auto;color:var(--muted);font-size:11.5px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:10px;box-shadow:var(--elev1);padding:12px;display:flex;flex-direction:column;gap:8px}
+  .chd{display:flex;align-items:center;gap:8px;flex-wrap:wrap;min-height:20px}
+  .chd::before{content:"";width:10px;height:10px;border-radius:2px;background:var(--accent);flex:none}
+  .chd .t{font-size:14px;font-weight:600}
+  .chd .right{margin-left:auto;display:flex;align-items:center;gap:8px;color:var(--muted);font-size:11.5px;font-variant-numeric:tabular-nums}
+  /* 复盘条 */
+  .review{display:flex;align-items:flex-end;gap:12px;padding:10px 12px;border:1px solid var(--line2);border-radius:8px;background:var(--card2)}
+  .review .main{display:flex;flex-direction:column;gap:2px}
+  .review .day{color:var(--muted);font-size:11.5px;font-variant-numeric:tabular-nums}
+  .review .verdict{font-size:15px;font-weight:600}
+  .review .big{margin-left:auto;font-size:34px;font-weight:700;font-variant-numeric:tabular-nums;letter-spacing:-.02em;line-height:1}
+  .review .bigsub{color:var(--muted);font-size:11px;text-align:right}
+  /* 四指标 */
+  .kpis{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px}
+  @media (max-width:899px){ .kpis{grid-template-columns:repeat(2,minmax(0,1fr))} }
+  .kpi{display:flex;flex-direction:column;gap:2px;padding:10px;border:1px solid var(--line2);border-radius:8px;background:var(--card2);min-width:0}
+  .kpi .l{color:var(--muted);font-size:11.5px}
+  .kpi .v{font-size:28px;font-weight:700;font-variant-numeric:tabular-nums;letter-spacing:-.02em;line-height:1.15}
+  .kpi .s{color:var(--muted);font-size:11px;font-variant-numeric:tabular-nums}
+  /* 图 */
+  .charts{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+  @media (max-width:999px){ .charts{grid-template-columns:minmax(0,1fr)} }
+  .chartcard{display:flex;flex-direction:column;gap:6px;padding:10px;border:1px solid var(--line2);border-radius:8px;background:var(--card2);min-width:0}
+  .chartcard .h{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+  .chartcard .h .t{font-size:12.5px;font-weight:600}
+  .tabs{display:flex;gap:4px;margin-left:auto}
+  .tabs button{position:relative;overflow:hidden;height:22px;padding:0 8px;border:1px solid var(--line);border-radius:6px;background:transparent;color:var(--dim);font:inherit;font-size:11px;cursor:pointer}
+  .tabs button.on{background:var(--accent-soft);border-color:transparent;color:var(--on-accent);font-weight:600}
+  svg{display:block;width:100%;height:auto}
+  /* 表 */
+  table.t{width:100%;border-collapse:collapse;font-size:12px}
+  table.t th,table.t td{border-bottom:1px solid var(--line2);padding:0 8px;height:26px;white-space:nowrap;font-variant-numeric:tabular-nums}
+  table.t th{height:24px;color:var(--muted);font-weight:500;background:var(--card2);border-bottom-color:var(--line);text-align:left}
+  table.t .num{text-align:right}
+  table.t tr:last-child td{border-bottom:0;font-weight:700;background:var(--card2)}
+  table.t td.na{color:var(--muted)}
+  .up{color:var(--up)} .down{color:var(--down)}
+  .flag{display:inline-flex;align-items:center;height:18px;padding:0 6px;border-radius:4px;background:var(--warn-soft);color:var(--warn);font-size:11px;font-weight:600}
+  .foot{color:var(--muted);font-size:12px}
+  .tscroll{overflow-x:auto;margin:0 -4px;padding:0 4px}
+  .btn{position:relative;overflow:hidden;height:24px;padding:0 8px;border:1px solid var(--line);border-radius:8px;background:transparent;color:var(--dim);font:inherit;font-size:11.5px;cursor:pointer}
+  .btn::after{content:"";position:absolute;inset:0;background:currentColor;opacity:0;transition:opacity .12s;pointer-events:none}
+  .btn:hover::after{opacity:var(--state-hover)} .btn:active::after{opacity:var(--state-press)}
+  .ripple{position:absolute;border-radius:50%;transform:scale(0);background:currentColor;opacity:.22;pointer-events:none;animation:rip .45s ease-out forwards}
+  @keyframes rip{to{transform:scale(2.6);opacity:0}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="bar"><span class="badge">设计稿 · v1</span><div class="seg" id="state"><button data-s="ok" class="on">正常态</button><button data-s="miss">份额缺数据态</button></div><span class="hint">护盘信号卡内的新模块；两种状态可切换核对</span></div>
+
+    <section class="card" data-state="ok">
+      <div class="chd"><span class="t">汪汪队跟踪</span><span class="right"><span>上交所 ETF 规模日报 · 日频</span></span></div>
+      <div class="review">
+        <div class="main"><span class="day">最近交易日复盘 · 2026-11-13 周五</span>
+          <span class="verdict">没看出上班迹象</span></div>
+        <div class="big">0.78×</div>
+        <div class="bigsub">较 20 日均额</div>
+      </div>
+      <div class="kpis">
+        <div class="kpi"><span class="l">汪汪队合计成交额</span><span class="v">413.8 亿</span><span class="s">20 日均额 530.8 亿</span></div>
+        <div class="kpi"><span class="l">成交额放大倍数</span><span class="v">0.78×</span><span class="s">阈值 1.8× 为强信号</span></div>
+        <div class="kpi"><span class="l">合计主动净买入</span><span class="v down">−74.17 亿</span><span class="s">主动买卖口径推算</span></div>
+        <div class="kpi"><span class="l">池内加权涨跌</span><span class="v down">−1.47%</span><span class="s">规模加权</span></div>
+      </div>
+      <div class="charts">
+        <div class="chartcard"><div class="h"><span class="t">汪汪队每日份额变化估算</span>
+          <span class="tabs" data-tabs><button class="on" data-r="3">近3月</button><button data-r="6">6月</button><button data-r="12">1年</button><button data-r="24">2年</button></span></div>
+          <svg data-share viewBox="0 0 560 180" preserveAspectRatio="none" style="height:180px"></svg>
+          <div class="foot">单位：亿份 · 柱 = 当日份额变化估算</div></div>
+        <div class="chartcard"><div class="h"><span class="t">汪汪队加仓指数估算</span><span class="right" style="margin-left:auto;color:var(--muted);font-size:11px">基期 = 100</span></div>
+          <svg data-index viewBox="0 0 560 180" preserveAspectRatio="none" style="height:180px"></svg>
+          <div class="foot">单位：指数 · 虚线 = 基期 100</div></div>
+      </div>
+      <div class="tscroll"><table class="t"><thead><tr><th>ETF</th><th>跟踪指数</th><th class="num">规模(亿)</th><th class="num">成交额(亿)</th><th class="num">较20日均</th><th class="num">主动净买入(亿)</th><th class="num">涨跌</th><th class="num">份额(亿份)</th><th class="num">份额变化</th></tr></thead>
+        <tbody><tr><td>沪深300ETF华泰柏瑞</td><td class="muted">沪深300</td><td class="num">1862.8</td><td class="num">34.89</td><td class="num">0.40×</td><td class="num">−5.37</td><td class="num down">−0.75%</td><td class="num">456.2</td><td class="num down">−30.21</td></tr><tr><td>沪深300ETF易方达</td><td class="muted">沪深300</td><td class="num">1026.2</td><td class="num">8.33</td><td class="num">0.24×</td><td class="num">−2.34</td><td class="num down">−0.73%</td><td class="num">258.6</td><td class="num down">−0.64</td></tr><tr><td>上证50ETF华夏</td><td class="muted">上证50</td><td class="num">468.0</td><td class="num">19.76</td><td class="num">0.57×</td><td class="num">−7.55</td><td class="num up">+0.17%</td><td class="num">162.0</td><td class="num down">−3.90</td></tr><tr><td>沪深300ETF华夏</td><td class="muted">沪深300</td><td class="num">655.6</td><td class="num">8.54</td><td class="num">0.45×</td><td class="num">−2.04</td><td class="num down">−0.79%</td><td class="num">154.0</td><td class="num down">−4.91</td></tr><tr><td>中证1000ETF南方</td><td class="muted">中证1000</td><td class="num">442.4</td><td class="num">61.20</td><td class="num">1.16×</td><td class="num">−18.52</td><td class="num down">−2.82%</td><td class="num">171.4</td><td class="num down">−67.75</td></tr><tr><td>科创50ETF易方达</td><td class="muted">科创50</td><td class="num">447.9</td><td class="num">26.36</td><td class="num">1.15×</td><td class="num">−2.21</td><td class="num down">−2.24%</td><td class="num">341.4</td><td class="num up">+26.76</td></tr><tr><td>中证500ETF南方</td><td class="muted">中证500</td><td class="num">580.5</td><td class="num">36.09</td><td class="num">0.70×</td><td class="num">−1.56</td><td class="num down">−2.01%</td><td class="num">89.4</td><td class="num down">−66.59</td></tr><tr><td>上证180ETF华安</td><td class="muted">上证180</td><td class="num">162.2</td><td class="num">0.45</td><td class="num">0.57×</td><td class="num">−0.01</td><td class="num down">−0.55%</td><td class="num">44.5</td><td class="num up">+0.15</td></tr><tr><td>金融ETF国泰</td><td class="muted">上证180金融</td><td class="num">7.7</td><td class="num">1.08</td><td class="num">0.96×</td><td class="num">+0.05</td><td class="num up">+0.89%</td><td class="num">5.6</td><td class="num down">−0.23</td></tr><tr><td>中证500ETF华夏</td><td class="muted">中证500</td><td class="num">73.8</td><td class="num">4.19</td><td class="num">0.75×</td><td class="num">+0.01</td><td class="num down">−2.13%</td><td class="num">20.1</td><td class="num down">−1.68</td></tr><tr><td>中证800ETF汇添富</td><td class="muted">中证800</td><td class="num">45.9</td><td class="num">1.09</td><td class="num">1.02×</td><td class="num">−0.37</td><td class="num down">−0.98%</td><td class="num">41.2</td><td class="num up">+1.55</td></tr><tr><td>科创50ETF工银</td><td class="muted">科创50</td><td class="num">89.3</td><td class="num">3.96</td><td class="num">0.91×</td><td class="num">−1.07</td><td class="num down">−2.01%</td><td class="num">68.0</td><td class="num down">−5.33</td></tr><tr><td>沪深300ETF嘉实(沪)※</td><td class="muted">沪深300</td><td class="num">88.0</td><td class="num">2.10</td><td class="num">0.68×</td><td class="num">−0.42</td><td class="num down">−0.76%</td><td class="num">41.0</td><td class="num na">—（份额源未日更）</td></tr><tr><td>中证A500ETF国泰(沪)※</td><td class="muted">中证A500</td><td class="num">314.6</td><td class="num">67.62</td><td class="num">1.61×</td><td class="num">+0.07</td><td class="num down">−1.33%</td><td class="num">303.4</td><td class="num na">—（份额源未日更）</td></tr><tr><td>合计</td><td></td><td class="num">6,264.9</td><td class="num">413.8</td><td class="num">0.78×</td><td class="num">−74.17</td><td class="num down">−1.47%</td><td class="num">2,156.8</td><td class="num down">−152.78</td></tr></tbody></table></div>
+      <div class="foot">份额来源：上交所 ETF 规模日报（日频）· 仅沪市 14 只 · 折算已剔除 · 主动净买入为逐笔方向推算</div>
+    </section>
+    <section class="card" data-state="miss" hidden>
+      <div class="chd"><span class="t">汪汪队跟踪</span><span class="right"><span class="flag">沪市份额源未日更</span><span>上交所 ETF 规模日报 · 日频</span></span></div>
+      <div class="review">
+        <div class="main"><span class="day">最近交易日复盘 · 2026-11-13 周五</span>
+          <span class="verdict">没看出上班迹象</span></div>
+        <div class="big">0.78×</div>
+        <div class="bigsub">较 20 日均额</div>
+      </div>
+      <div class="kpis">
+        <div class="kpi"><span class="l">汪汪队合计成交额</span><span class="v">413.8 亿</span><span class="s">20 日均额 530.8 亿</span></div>
+        <div class="kpi"><span class="l">成交额放大倍数</span><span class="v">0.78×</span><span class="s">阈值 1.8× 为强信号</span></div>
+        <div class="kpi"><span class="l">合计主动净买入</span><span class="v down">−74.17 亿</span><span class="s">主动买卖口径推算</span></div>
+        <div class="kpi"><span class="l">池内加权涨跌</span><span class="v down">−1.47%</span><span class="s">规模加权</span></div>
+      </div>
+      <div class="charts">
+        <div class="chartcard"><div class="h"><span class="t">汪汪队每日份额变化估算</span>
+          <span class="tabs" data-tabs><button class="on" data-r="3">近3月</button><button data-r="6">6月</button><button data-r="12">1年</button><button data-r="24">2年</button></span></div>
+          <svg data-share viewBox="0 0 560 180" preserveAspectRatio="none" style="height:180px"></svg>
+          <div class="foot">单位：亿份 · 柱 = 当日份额变化估算</div></div>
+        <div class="chartcard"><div class="h"><span class="t">汪汪队加仓指数估算</span><span class="right" style="margin-left:auto;color:var(--muted);font-size:11px">基期 = 100</span></div>
+          <svg data-index viewBox="0 0 560 180" preserveAspectRatio="none" style="height:180px"></svg>
+          <div class="foot">单位：指数 · 虚线 = 基期 100</div></div>
+      </div>
+      <div class="tscroll"><table class="t"><thead><tr><th>ETF</th><th>跟踪指数</th><th class="num">规模(亿)</th><th class="num">成交额(亿)</th><th class="num">较20日均</th><th class="num">主动净买入(亿)</th><th class="num">涨跌</th><th class="num">份额(亿份)</th><th class="num">份额变化</th></tr></thead>
+        <tbody><tr><td>沪深300ETF华泰柏瑞</td><td class="muted">沪深300</td><td class="num">1862.8</td><td class="num">34.89</td><td class="num">0.40×</td><td class="num">−5.37</td><td class="num down">−0.75%</td><td class="num">456.2</td><td class="num na">—（份额源未日更）</td></tr><tr><td>沪深300ETF易方达</td><td class="muted">沪深300</td><td class="num">1026.2</td><td class="num">8.33</td><td class="num">0.24×</td><td class="num">−2.34</td><td class="num down">−0.73%</td><td class="num">258.6</td><td class="num na">—（份额源未日更）</td></tr><tr><td>上证50ETF华夏</td><td class="muted">上证50</td><td class="num">468.0</td><td class="num">19.76</td><td class="num">0.57×</td><td class="num">−7.55</td><td class="num up">+0.17%</td><td class="num">162.0</td><td class="num na">—（份额源未日更）</td></tr><tr><td>沪深300ETF华夏</td><td class="muted">沪深300</td><td class="num">655.6</td><td class="num">8.54</td><td class="num">0.45×</td><td class="num">−2.04</td><td class="num down">−0.79%</td><td class="num">154.0</td><td class="num na">—（份额源未日更）</td></tr><tr><td>中证1000ETF南方</td><td class="muted">中证1000</td><td class="num">442.4</td><td class="num">61.20</td><td class="num">1.16×</td><td class="num">−18.52</td><td class="num down">−2.82%</td><td class="num">171.4</td><td class="num na">—（份额源未日更）</td></tr><tr><td>科创50ETF易方达</td><td class="muted">科创50</td><td class="num">447.9</td><td class="num">26.36</td><td class="num">1.15×</td><td class="num">−2.21</td><td class="num down">−2.24%</td><td class="num">341.4</td><td class="num na">—（份额源未日更）</td></tr><tr><td>中证500ETF南方</td><td class="muted">中证500</td><td class="num">580.5</td><td class="num">36.09</td><td class="num">0.70×</td><td class="num">−1.56</td><td class="num down">−2.01%</td><td class="num">89.4</td><td class="num na">—（份额源未日更）</td></tr><tr><td>上证180ETF华安</td><td class="muted">上证180</td><td class="num">162.2</td><td class="num">0.45</td><td class="num">0.57×</td><td class="num">−0.01</td><td class="num down">−0.55%</td><td class="num">44.5</td><td class="num na">—（份额源未日更）</td></tr><tr><td>金融ETF国泰</td><td class="muted">上证180金融</td><td class="num">7.7</td><td class="num">1.08</td><td class="num">0.96×</td><td class="num">+0.05</td><td class="num up">+0.89%</td><td class="num">5.6</td><td class="num na">—（份额源未日更）</td></tr><tr><td>中证500ETF华夏</td><td class="muted">中证500</td><td class="num">73.8</td><td class="num">4.19</td><td class="num">0.75×</td><td class="num">+0.01</td><td class="num down">−2.13%</td><td class="num">20.1</td><td class="num na">—（份额源未日更）</td></tr><tr><td>中证800ETF汇添富</td><td class="muted">中证800</td><td class="num">45.9</td><td class="num">1.09</td><td class="num">1.02×</td><td class="num">−0.37</td><td class="num down">−0.98%</td><td class="num">41.2</td><td class="num na">—（份额源未日更）</td></tr><tr><td>科创50ETF工银</td><td class="muted">科创50</td><td class="num">89.3</td><td class="num">3.96</td><td class="num">0.91×</td><td class="num">−1.07</td><td class="num down">−2.01%</td><td class="num">68.0</td><td class="num na">—（份额源未日更）</td></tr><tr><td>沪深300ETF嘉实(沪)※</td><td class="muted">沪深300</td><td class="num">88.0</td><td class="num">2.10</td><td class="num">0.68×</td><td class="num">−0.42</td><td class="num down">−0.76%</td><td class="num">41.0</td><td class="num na">—（份额源未日更）</td></tr><tr><td>中证A500ETF国泰(沪)※</td><td class="muted">中证A500</td><td class="num">314.6</td><td class="num">67.62</td><td class="num">1.61×</td><td class="num">+0.07</td><td class="num down">−1.33%</td><td class="num">303.4</td><td class="num na">—（份额源未日更）</td></tr><tr><td>合计</td><td></td><td class="num">6,264.9</td><td class="num">413.8</td><td class="num">0.78×</td><td class="num">−74.17</td><td class="num down">−1.47%</td><td class="num">2,156.8</td><td class="num na">—（份额源未日更）</td></tr></tbody></table></div>
+      <div class="foot">份额来源：上交所 ETF 规模日报（日频）· 仅沪市 14 只 · 折算已剔除 · 主动净买入为逐笔方向推算</div>
+    </section>
+</div>
+<script>
+(function () {
+  'use strict';
+  document.documentElement.setAttribute('data-theme', window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+  document.querySelectorAll('#state button').forEach(function (b) {
+    b.addEventListener('click', function () {
+      document.querySelectorAll('#state button').forEach(function (x) { x.classList.remove('on'); });
+      b.classList.add('on');
+      var k = b.getAttribute('data-s');
+      document.querySelectorAll('[data-state]').forEach(function (s) { s.hidden = s.getAttribute('data-state') !== k; });
+    });
+  });
+  /* ripple 仅按钮 */
+  document.addEventListener('pointerdown', function (e) {
+    var btn = e.target.closest ? e.target.closest('button') : null;
+    if (!btn) return;
+    var r = btn.getBoundingClientRect(), d = Math.max(r.width, r.height);
+    var s = document.createElement('span'); s.className = 'ripple';
+    s.style.width = s.style.height = d + 'px';
+    s.style.left = (e.clientX - r.left - d / 2) + 'px'; s.style.top = (e.clientY - r.top - d / 2) + 'px';
+    btn.appendChild(s); setTimeout(function () { s.remove(); }, 460);
+  });
+
+  function rng(seed) { var s = seed; return function () { s = (s * 1103515245 + 12345) & 0x7fffffff; return s / 0x7fffffff; }; }
+  var RANGE = { 3: 66, 6: 132, 12: 252, 24: 504 };
+  function draw(months) {
+    var n = RANGE[months];
+    var r = rng(20261113 + n), bars = [], idx = [], v = 100;
+    for (var i = 0; i < n; i++) {
+      var b = (r() - 0.62) * 26;          /* 亿份：多数为负 */
+      bars.push(b);
+      v = v * (1 + b / 4200);
+      idx.push(v);
+    }
+    /* 份额变化柱：正红负绿 */
+    document.querySelectorAll('[data-share]').forEach(function (svg) {
+      var W = 560, H = 180, pad = 6, bw = W / n;
+      var maxAbs = Math.max.apply(null, bars.map(Math.abs));
+      var zero = H / 2, out = [];
+      out.push('<line x1="0" y1="' + zero + '" x2="' + W + '" y2="' + zero + '" stroke="var(--line)" stroke-width="1"/>');
+      bars.forEach(function (b, i) {
+        var h = Math.max(1, Math.abs(b) / maxAbs * (H / 2 - pad));
+        var y = b >= 0 ? zero - h : zero;
+        out.push('<rect x="' + (i * bw + 0.4).toFixed(2) + '" y="' + y.toFixed(1) + '" width="' + Math.max(1, bw - 0.8).toFixed(2) + '" height="' + h.toFixed(1) + '" fill="' + (b >= 0 ? 'var(--up)' : 'var(--down)') + '"/>');
+      });
+      svg.innerHTML = out.join('');
+    });
+    /* 加仓指数：折线 + 基期 100 虚线 */
+    document.querySelectorAll('[data-index]').forEach(function (sv2) {
+      var W2 = 560, H2 = 180, pad2 = 10;
+      var lo = Math.min.apply(null, idx), hi = Math.max.apply(null, idx);
+      var lo2 = Math.min(lo, 100), hi2 = Math.max(hi, 100);
+      var yOf = function (v) { return pad2 + (1 - (v - lo2) / (hi2 - lo2 || 1)) * (H2 - pad2 * 2); };
+      var xOf = function (i) { return (i / (n - 1)) * W2; };
+      var pts = idx.map(function (v, i) { return xOf(i).toFixed(1) + ',' + yOf(v).toFixed(1); }).join(' ');
+      var out2 = [];
+      out2.push('<line x1="0" y1="' + yOf(100).toFixed(1) + '" x2="' + W2 + '" y2="' + yOf(100).toFixed(1) + '" stroke="var(--lineStrong)" stroke-width="1" stroke-dasharray="4 3"/>');
+      out2.push('<polyline fill="none" stroke="var(--accent)" stroke-width="1.6" points="' + pts + '"/>');
+      sv2.innerHTML = out2.join('');
+    });
+  }
+  var months = 3;
+  document.querySelectorAll('[data-tabs] button').forEach(function (b) {
+    b.addEventListener('click', function () {
+      document.querySelectorAll('[data-tabs] button').forEach(function (x) { x.classList.remove('on'); });
+      b.classList.add('on'); months = Number(b.getAttribute('data-r')); draw(months);
+    });
+  });
+  draw(months);
+})();
+</script>
+</body>
+</html>

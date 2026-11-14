@@ -189,12 +189,12 @@ test('⑥ 竞价随**独立出口**下发（series/seriesDay），路由账同�
   const design = await readFile(new URL('../../docs/DESIGN-SUBPLUGINS.md', import.meta.url), 'utf8')
   const ledger = /路由账\s*(\d+)\s*=\s*core\s*(\d+)/.exec(design)
   assert.notEqual(ledger, null, '设计文档必须有路由账行')
-  assert.equal(Number(ledger![1]), 34, '路由账总数必须同步（30 + 棱镜 2 + 竞价 1 + 做T的 ATR 1 = 34）')
-  assert.equal(Number(ledger![2]), 17, 'core 计数必须同步（15 + 竞价 1 + ATR 1 = 17）')
+  assert.equal(Number(ledger![1]), 35, '路由账总数必须同步（… + 汪汪队 1 = 35）')
+  assert.equal(Number(ledger![2]), 18, 'core 计数必须同步（… + 汪汪队 1 = 18）')
   // 反例注入：写了路由不登记 ⇒ 文档数字对不上
   const staleLedger = '路由账 32 = core 15'
   assert.throws(
-    () => assert.equal(Number(/路由账\s*(\d+)/.exec(staleLedger)![1]), 34, '反例上：旧路由账必须对不上'),
+    () => assert.equal(Number(/路由账\s*(\d+)/.exec(staleLedger)![1]), 35, '反例上：旧路由账必须对不上'),
     /反例上/,
     '⚠ 反例注入（写了路由不登记）必须失败',
   )

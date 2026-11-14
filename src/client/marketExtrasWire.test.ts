@@ -10,16 +10,10 @@
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
-import { fileURLToPath } from 'node:url'
-import { dirname, join } from 'node:path'
 import { forecastCellOf, marginRowOf } from './distView.ts'
 import type { AmountForecastWire, MarginCrossWire } from './api.ts'
 
-const here = dirname(fileURLToPath(import.meta.url))
-const read = (p: string): string => readFileSync(join(here, p), 'utf8')
-const src = (): string => read('MarketPage.tsx')
-const strip = (t: string): string => t.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
+// v0.187.0：MarketPage 的卡片下线后，部分用例已删除
 
 const forecast = (over: Partial<AmountForecastWire> = {}): AmountForecastWire => ({
   current: 2_000_000_000_000,
@@ -121,30 +115,3 @@ test('⑤ 两融：单源可得出、双源全缺 ⇒ 未取到（不是 0）', 
 
 // ── ① 涨停/跌停：真值 + 样本；取不到仍是未取到 ─────────────────────────────
 
-test('⑥ 日内家数：仍无源 ⇒ 保留「未取到」+ 原因（本轮不改）', () => {
-  const page = strip(src())
-  assert.ok(page.includes("value: '未取到', note: INTRADAY_REASON"), '日内两序列仍是未取到 + 原因')
-  assert.ok(page.includes('INTRADAY_REASON'), '原因常量必须在')
-})
-
-// ── 路由与行归属 ─────────────────────────────────────────────────────────
-
-test('路由接线与行归属：路由在 market 行、api 有调用、页面真的在调（三者一致）', () => {
-  const indexSrc = readFileSync(join(here, '..', 'index.ts'), 'utf8')
-  const apiSrc = read('api.ts')
-  const page = strip(src())
-  assert.ok(indexSrc.includes("'/tradewatcher/market-extras'"), 'ROW_ROUTES.market 必须登记该路由')
-  assert.ok(/market: \[[^\]]*'\/tradewatcher\/market-extras'/.test(indexSrc), '必须登记在 market 行（不是 core）')
-  assert.ok(apiSrc.includes('/tradewatcher/market-extras'), 'api.ts 必须指向该路由')
-  assert.ok(page.includes('api.marketExtras(') || page.includes('api\n      .marketExtras('), 'MarketPage 必须真的在调它（行归属按调用方推导）')
-  // 预测必须把**页面显示的**成交额带过去（宿主不再抓一遍）
-  assert.ok(/\.marketExtras\(amountForForecast/.test(page), '要带 amount 参数（把页面显示的成交额带过去）')
-  // 反例注入：把路由从 market 行删掉 ⇒ 判据必须失败
-  const injected = indexSrc.replace("'/tradewatcher/board', '/tradewatcher/market-extras'", "'/tradewatcher/board'")
-  assert.notEqual(injected, indexSrc, '反例注入必须真改到源码')
-  assert.throws(
-    () => assert.equal(injected.includes("'/tradewatcher/market-extras'"), true, '反例上"必须登记"必须失败'),
-    /反例上/,
-    '⚠ 反例注入（路由未登记）必须让断言失败',
-  )
-})

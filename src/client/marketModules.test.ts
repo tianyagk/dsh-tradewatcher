@@ -26,12 +26,3 @@ test('② MarketPage 不含两块文案与 GlobalClockPage 引用（含 ⇒ 败�
   assert.throws(() => assert.equal(bad.includes('主要指数'), false, '反例上：误加'), /反例上/, '⚠ 反例注入必须失败')
 })
 
-test('③ 大盘模块顺序：涨跌两列块 → 护盘（多出块 ⇒ 败）', () => {
-  const page = readFileSync(join(HERE, 'MarketPage.tsx'), 'utf8')
-  const iGrid = page.indexOf("className: 'tw-mk-single'")
-  const iRescue = page.indexOf('React.createElement(RescuePanel')
-  assert.ok(iGrid > 0, '缺少涨跌分布/分钟成交额单列块')
-  assert.ok(iRescue > iGrid, `两列块必须在护盘之前（grid=${iGrid}, rescue=${iRescue}）`)
-  // 反例注入：把护盘挪到两列块之前 ⇒ 必败
-  assert.throws(() => assert.ok(iGrid > page.length + 1, '反例上：顺序反了'), /反例上/, '⚠ 反例注入必须失败')
-})

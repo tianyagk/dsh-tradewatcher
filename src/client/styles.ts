@@ -930,6 +930,15 @@ color-scheme:dark}
 .tw-clock-pill.off{color:var(--tw-muted);background:var(--tw-card2);font-weight:500}
 .tw-clock-cd{font-variant-numeric:tabular-nums}
 
+/* 汪汪队跟踪（v0.186.0） */
+.tw-dw-metrics{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:8px;margin-bottom:8px}
+.tw-dw-m{background:var(--tw-card2,#f2f4f7);border-radius:8px;padding:6px 8px}
+.tw-dw-m .k{font-size:12px;color:var(--tw-muted)}
+.tw-dw-m .v{font-size:18px;font-weight:700;font-variant-numeric:tabular-nums}
+.tw-dw-m .s{font-size:12px;color:var(--tw-muted)}
+.tw-dw-table{width:100%;border-collapse:collapse;font-size:12px}
+.tw-dw-table th,.tw-dw-table td{padding:3px 6px;text-align:right;border-bottom:1px solid var(--tw-border)}
+.tw-dw-table th:first-child,.tw-dw-table td:first-child,.tw-dw-table th:nth-child(2),.tw-dw-table td:nth-child(2){text-align:left}
 /* v0.184.0：左列四卡下线后只剩两块 ⇒ 单列铺满 */
 .tw-mk-single{display:grid;grid-template-columns:1fr;gap:12px}
 .tw-mk-col{display:flex;flex-direction:column;gap:6px;min-width:0}

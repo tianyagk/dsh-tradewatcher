@@ -5,15 +5,10 @@
 
 /** 涨跌 5 格（顺序固定） */
 export const BREADTH_CELLS = ['上涨', '平盘', '下跌', '涨停', '跌停'] as const
-/** 涨跌分布档数（用户定稿 11 档） */
-export const DIST_BUCKETS = 11
-/** 分钟成交额柱数（用户定稿 240 根；48 根就是错的） */
 export const MINUTE_BARS = 240
 
 /** 北交所口径（分布只统计沪深A股；北交所行情未接入）——卡头常驻的短标记 */
 export const DIST_BJ_NOTE = '北交所 未接入'
-/** 同一口径的完整说明（进 `title`，不占卡头宽度） */
-export const DIST_BJ_TITLE = '北交所 未接入（本轮只统计沪深A股）'
 
 /**
  * 涨跌分布卡的副标题（口径随数据走）：
@@ -103,19 +98,6 @@ export function minuteSlotsOf(): string[] {
 }
 
 export interface AmountPoint { t?: number; label: string; amount?: number | null }
-export interface DaySeries { day: string; points: AmountPoint[] }
-
-/** 按 `YYYY-MM-DD HH:mm` 标签切日（兼容只到 `HH:mm` 的单日序列） */
-export function daySeriesOf(points: readonly AmountPoint[], day: string): DaySeries {
-  const out: AmountPoint[] = []
-  for (const p of points) {
-    const d = p.label.slice(0, 10)
-    if (d === day) out.push(p)
-  }
-  return { day, points: out }
-}
-
-/** 累计成交额（逐分钟 Σamount）；缺额度的点跳过（不写 0） */
 export function cumulativeOf(points: readonly AmountPoint[]): number[] {
   const out: number[] = []
   let acc = 0
@@ -162,21 +144,4 @@ export function minuteDeltaBarsOf(
     bars.push(x - y)
   }
   return { bars, reason: null }
-}
-
-/** 两张图统一的 X 刻度（用户 2026-10-26 定稿的 7 个时刻） */
-export const X_TICKS = ['09:30', '10:06', '10:42', '11:18', '13:24', '14:00', '14:36'] as const
-
-/** Y 轴刻度（≥3 档，含首末）：等分 `lo..hi`，按有效位数取整 */
-export function yTicksOf(lo: number, hi: number, count = 4): number[] {
-  const n = Math.max(3, Math.round(count))
-  const a = Number.isFinite(lo) ? lo : 0
-  const b = Number.isFinite(hi) && hi > a ? hi : a + 1
-  const step = (b - a) / (n - 1)
-  return Array.from({ length: n }, (_, i) => a + step * i)
-}
-
-/** 网格线的 y 坐标（与刻度同源；返回 SVG 内部坐标） */
-export function gridYsOf(lo: number, hi: number, top: number, bottom: number, count = 4): number[] {
-  return yTicksOf(lo, hi, count).map((v) => bottom - ((v - lo) / Math.max(1e-9, hi - lo)) * (bottom - top))
 }

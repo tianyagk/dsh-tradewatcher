@@ -27,6 +27,7 @@ import { tencentBreadthAggregate } from './breadthScan.ts'
 import { fetchTextHost } from './hostFetch.ts'
 import { detailWithFallback, fetchTencentDetail } from './detailTencent.ts'
 import * as tradingCalendar from './tradingCalendar.ts'
+import { fetchDogwatch } from './dogwatch.ts'
 import * as extras from './marketExtras.ts'
 import { emptyLeveragePayload, LeverageService, parseLeverageRange } from './leverage.ts'
 import { dayOf } from './time.ts'
@@ -1182,6 +1183,22 @@ export function makeTradeRoutes(
           send(res, 200, { kline: wireKline(kline), ...(kline === null ? { missing: [em.klineMissingReason(secid, klt, { cache, fqt })] } : {}) })
         } catch (error) {
           fail(res, error)
+        }
+      },
+    },
+    {
+      /** 汪汪队跟踪（v0.186.0）：沪市 14 只宽基 ETF 的日频份额 + 当日行情聚合 */
+      kind: 'exact',
+      path: '/tradewatcher/dogwatch',
+      handler: async (req, res) => {
+        if (!needGate(req, res)) return
+        try {
+          const raw = String(queryOf(req).get('window') ?? '1y')
+          const window = raw === '3m' || raw === '6m' || raw === '2y' ? raw : '1y'
+          const payload = await fetchDogwatch(window)
+          send(res, 200, payload)
+        } catch (error) {
+          fail(res, error, '汪汪队跟踪')
         }
       },
     },
