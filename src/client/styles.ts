@@ -491,7 +491,6 @@ color-scheme:dark}
 .tw-rescue-factor th{text-align:left;font-weight:500;color:var(--tw-dim);font-size:12px;padding:3px 4px;border-bottom:1px solid var(--tw-border);white-space:nowrap}
 .tw-rescue-factor td{padding:4px;border-bottom:1px solid var(--tw-border);vertical-align:middle;line-height:1.45}
 .tw-rescue-factor tr[data-hit=true] td{background:var(--tw-accent-soft)}
-.tw-rescue-timeline{display:flex;flex-direction:column;gap:3px;max-height:150px;overflow:auto}
 .tw-rescue-tl-row{display:flex;align-items:center;gap:6px;font-size:12px;padding:2px 0}
 .tw-rescue-intraday{display:flex;flex-wrap:wrap;gap:2px}
 .tw-rescue-ip{width:7px;height:14px;border-radius:2px;display:inline-block}
@@ -931,19 +930,13 @@ color-scheme:dark}
 .tw-clock-pill.off{color:var(--tw-muted);background:var(--tw-card2);font-weight:500}
 .tw-clock-cd{font-variant-numeric:tabular-nums}
 
-.tw-mk-grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
-@media (max-width:1100px){.tw-mk-grid2{grid-template-columns:1fr}}
+/* v0.184.0：左列四卡下线后只剩两块 ⇒ 单列铺满 */
+.tw-mk-single{display:grid;grid-template-columns:1fr;gap:12px}
 .tw-mk-col{display:flex;flex-direction:column;gap:6px;min-width:0}
 .tw-mk-card{background:var(--tw-card);border-radius:10px;padding:12px;box-shadow:var(--tw-elev-1);min-height:0}
-.tw-mk-col-l .tw-mk-card{padding:10px}
-.tw-mk-col-r .tw-mk-card{height:auto;min-height:0}
-.tw-mk-col-r .tw-mk-empty{max-height:220px}
 .tw-mk-h{display:flex;align-items:center;gap:8px;margin-bottom:8px}
 .tw-mk-bar{width:3px;height:14px;border-radius:2px;background:var(--tw-accent);display:inline-block}
 .tw-mk-hint{margin-left:auto;font-size:12px;color:var(--tw-muted)}
-.tw-mk-grid5{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:6px;align-items:stretch}
-.tw-mk-grid4{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:6px;align-items:stretch}
-.tw-mk-grid3{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px;align-items:stretch}
 .tw-mk-cell{padding:8px;border-radius:8px;background:var(--tw-card-2)}
 .tw-mk-v{font-size:22px;line-height:1.15;font-variant-numeric:tabular-nums;font-family:var(--tw-mono)}
 .tw-mk-l{font-size:12px;color:var(--tw-muted);margin-top:0}

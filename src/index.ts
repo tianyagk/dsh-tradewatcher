@@ -30,8 +30,8 @@ import { log, type PluginContext, type PluginWebRoute } from './host/context.ts'
 /** Plugin identity for the bundle-patch rows. */
 export const name = 'dsh-tradewatcher'
 
-/** Services required before mounting: webserver routes + web runtime trust. */
-export const inject = ['webServer', 'webRuntime', 'llm']
+/** Services required before mounting: webserver routes + web-startup trust. */
+export const inject = ['webServer', 'webStartup', 'llm']
 
 /** 行标识（配置里写 `config: { row: watchlist }`） */
 export type RowId = 'core' | 'calendar' | 'watchlist' | 'portfolio' | 'market' | 'cloudmap' | 'tools' | 'fupan' | 'prism'
@@ -288,7 +288,7 @@ function applyCore(ctx: PluginContext, full = false): void {
   }
 
   ctx.effect(() => {
-    const { routes: all } = makeTradeRoutes(k.store, ctx.webRuntime.trustedHosts, k.calendar, k.rescue, undefined, undefined, () => [...k.activeRows], k.fupan, undefined, { store: k.prism, trading: k.prismTrading, data: k.store, get: (name) => { try { return ctx.get(name) } catch { return undefined } } })
+    const { routes: all } = makeTradeRoutes(k.store, ctx.webStartup.trustedHosts, k.calendar, k.rescue, undefined, undefined, () => [...k.activeRows], k.fupan, undefined, { store: k.prism, trading: k.prismTrading, data: k.store, get: (name) => { try { return ctx.get(name) } catch { return undefined } } })
     // core 注册**除功能行独占前缀之外**的全部路由（老 profile 只有 core ⇒ 与拆分前逐字一致）
     const owned = full ? [] : Object.values(ROW_ROUTES).flat()
     const mine = all.filter((r) => !owned.some((p) => r.path.startsWith(p)))
@@ -346,7 +346,7 @@ function applyFeatureRow(ctx: PluginContext, row: Exclude<RowId, 'core'>): void 
   const prefixes = ROW_ROUTES[row]
   const tools = ROW_TOOLS[row]
   ctx.effect(() => {
-    const { routes: all } = makeTradeRoutes(k.store, ctx.webRuntime.trustedHosts, k.calendar, k.rescue, undefined, undefined, () => [...k.activeRows], k.fupan, undefined, { store: k.prism, trading: k.prismTrading, data: k.store, get: (name) => { try { return ctx.get(name) } catch { return undefined } } })
+    const { routes: all } = makeTradeRoutes(k.store, ctx.webStartup.trustedHosts, k.calendar, k.rescue, undefined, undefined, () => [...k.activeRows], k.fupan, undefined, { store: k.prism, trading: k.prismTrading, data: k.store, get: (name) => { try { return ctx.get(name) } catch { return undefined } } })
     const mine = all.filter((r) => prefixes.some((p) => r.path.startsWith(p)))
     const disposers = mine.map((route: PluginWebRoute) => {
       try {

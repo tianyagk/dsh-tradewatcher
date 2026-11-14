@@ -24,7 +24,7 @@ test('归档 180 根 ⇒ 判不足给 —（照用 ⇒ 败）', () => {
   const n = 180
   assert.equal(n >= 200, false)
   assert.ok(page.includes("prev !== null ? prev.points"), '客户端必须优先用 prev')
-  assert.ok(page.includes('missingCellText(noAmountReason ?? delta.reason)'), '缺失必须走 —（原因）')
+  assert.ok(page.includes("missingCellText(delta.reason ?? '分时分钟额未取到')"), '缺失必须走 —（原因）')
 })
 
 test('今日冒充昨日 ⇒ 差值全 0 ⇒ 败（判据在 marketAmount.test.ts ③ 已覆盖）', () => {

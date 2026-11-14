@@ -26,6 +26,7 @@ import { BREADTH_METHODOLOGY, BREADTH_COUNT_CALIBER, BREADTH_CLIST_MAX_PAGES, BR
 import { tencentBreadthAggregate } from './breadthScan.ts'
 import { fetchTextHost } from './hostFetch.ts'
 import { detailWithFallback, fetchTencentDetail } from './detailTencent.ts'
+import * as tradingCalendar from './tradingCalendar.ts'
 import * as extras from './marketExtras.ts'
 import { emptyLeveragePayload, LeverageService, parseLeverageRange } from './leverage.ts'
 import { dayOf } from './time.ts'
@@ -487,7 +488,16 @@ export function makeTradeRoutes(
     missing: MissingField[]
   } => {
     const s = calendar.syncStatus()
-    return { syncedAt: s.syncedAt, syncAttemptAt: s.attemptAt, stale: s.stale, syncSources: s.sources, missing: s.missing }
+    /**
+     * 交易日历缺月（v0.185.0）：内置表 / 外部文件都没覆盖当月 ⇒ 必须在 `missing` 里点名，
+     * 不许静默按周末规则跑（那会把法定假日当交易日）。
+     */
+    const month = new Date(Date.now() + 8 * 3_600_000).toISOString().slice(0, 7)
+    const gap = tradingCalendar.builtinCoverageNoteOf(month)
+    const gapMissing = gap !== null && !tradingCalendar.monthCoveredByFile(month)
+      ? [{ what: '交易日历', why: 'no-source' as const, note: gap }]
+      : []
+    return { syncedAt: s.syncedAt, syncAttemptAt: s.attemptAt, stale: s.stale, syncSources: s.sources, missing: [...s.missing, ...gapMissing] }
   }
 
   const routes: PluginWebRoute[] = [

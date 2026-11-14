@@ -90,7 +90,8 @@ test('④ 引用面锁定：只有 3 个文件碰它 —— `detailModel` / 工�
     return src.includes('BOTTOM_INTERVAL_CAVEAT') || src.includes('intervalNote')
   })
   const rel = hit.map((f) => relative(SRC, f)).sort()
-  assert.deepEqual(rel, ['host/bottom.ts', 'shared/model.ts', 'client/RescuePanel.tsx'].sort(), `引用面必须恰好是这三处（实得 ${JSON.stringify(rel)}）`)
+  // v0.184.0：「历史频率」行已下线 ⇒ 前端不再消费 intervalNote，引用面只剩宿主与模型层
+  assert.deepEqual(rel, ['host/bottom.ts', 'shared/model.ts'].sort(), `引用面必须恰好是这两处（实得 ${JSON.stringify(rel)}）`)
   // 工具详情页（模型层 + 页面）不许出现它 —— 它属于大盘页的口径，不属于工具页
   for (const f of ['client/toolRegistry.ts', 'client/ToolsPage.tsx']) {
     const src = readFileSync(join(SRC, f), 'utf8')
@@ -98,19 +99,3 @@ test('④ 引用面锁定：只有 3 个文件碰它 —— `detailModel` / 工�
   }
 })
 
-test('⑤ 大盘页把它挂在「历史频率」的 title / aria-label（源码锚 + 注入删除必败）', () => {
-  const src = readFileSync(join(SRC, 'client/RescuePanel.tsx'), 'utf8')
-  const clean = src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
-  const at = clean.indexOf("'历史频率'")
-  assert.ok(at > 0, '必须能找到「历史频率」这一处文案')
-  const around = clean.slice(Math.max(0, at - 900), at)
-  assert.ok(around.includes('calibration.intervalNote'), '「历史频率」的 title 必须来自校准结果上的 `intervalNote`')
-  assert.ok(around.includes('title:') && around.includes("'aria-label':"), '标题与读屏标签都要有（只有 title 等于键盘/触屏拿不到）')
-  // 注入：把 title 那段删掉 ⇒ 上面的判据必须失败
-  const removed = clean.slice(0, at - 900) + clean.slice(Math.max(0, at - 900), at).replace(/title: snapshot\.bottom\.lanes\[0\]\.calibration\.intervalNote/g, '') + clean.slice(at)
-  assert.throws(
-    () => assert.ok(removed.slice(Math.max(0, at - 900), at).includes('title: snapshot.bottom.lanes[0].calibration.intervalNote'), '反例：删掉 title'),
-    /反例/,
-    '⚠ 删掉 title 后必须失败（判据非空）',
-  )
-})

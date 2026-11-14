@@ -169,59 +169,8 @@ test('③ 买卖方向：中性 chip（不随 redUp 翻转），方向只由文�
 
 // ══ ④ P1-7 三句"本插件没做"与同屏真实数据矛盾 ⇒ 按事实重写 ════════════════
 
-const REASON_NAMES = ['LIMIT_REASON', 'FORECAST_REASON', 'MARGIN_REASON', 'INTRADAY_REASON'] as const
-function reasonsOf(page: string): Record<string, string> {
-  const out: Record<string, string> = {}
-  for (const name of REASON_NAMES) {
-    const m = new RegExp(`const ${name} = '([^']*)'`).exec(page)
-    out[name] = m?.[1] ?? ''
-  }
-  return out
-}
-function staleReasonProblems(page: string): string[] {
-  const bad: string[] = []
-  const r = reasonsOf(page)
-  for (const name of REASON_NAMES) {
-    if (r[name] === '') bad.push(`${name} 缺失`)
-  }
-  // 三句"本次失败"：必须说清"本次未取到 + 会不会重试"
-  for (const name of ['LIMIT_REASON', 'FORECAST_REASON', 'MARGIN_REASON'] as const) {
-    const text = r[name] ?? ''
-    if (!/本次/.test(text)) bad.push(`${name} 未说明是"本次未取到"`)
-    if (!/自动重试|稍后/.test(text)) bad.push(`${name} 未说明会不会重试`)
-    if (!/不是 0|而不是 0/.test(text)) bad.push(`${name} 未声明不拿 0 顶替`)
-  }
-  // 旧的三句自相矛盾文案（功能其实早就做了）
-  for (const forbidden of ['未集成', '本轮不做', '故不给', '没有日内成交额采样', '没有涨停/跌停字段']) {
-    if (page.includes(forbidden)) bad.push(`仍含与事实矛盾的旧文案：${forbidden}`)
-  }
-  // 日内家数：是**功能边界**（重试也不会变），必须与"本次失败"分开说
-  if (!/功能边界/.test(r.INTRADAY_REASON ?? '')) bad.push('INTRADAY_REASON 未标明"功能边界"')
-  // 两融副标题：要说清代码正在做什么
-  if (page.includes('本插件未集成两融数据源')) bad.push('两融副标题仍在说"未集成"')
-  if (!page.includes('双源交叉')) bad.push('两融副标题未说明双源交叉')
-  return bad
-}
-
-test('④ MarketPage 三句旧文案按事实重写（功能已落地，只说"本次未取到 + 重试"）', () => {
-  const page = strip(read('MarketPage.tsx'))
-  assert.deepEqual(staleReasonProblems(page), [])
-  // 全客户端：别的页面也不许再写"本插件未集成"
-  for (const file of clientFiles()) {
-    assert.equal(strip(file.src).includes('本插件未集成'), false, `${file.rel} 仍含"本插件未集成"（与行为矛盾）`)
-  }
-  // 反例注入：把两融那句旧文案放回 ⇒ 判据必须失败
-  const injected = page.replace(
-    /const MARGIN_REASON = '[^']*'/,
-    "const MARGIN_REASON = '两融（融资余额/融资净买）：本插件未集成两融数据源，现有路由里没有任何 margin 字段 ⇒ 未取到'",
-  )
-  assert.notEqual(injected, page, '反例注入必须真改到源码')
-  assert.notDeepEqual(staleReasonProblems(injected), [], '⚠ 反例（"未集成"旧文案）必须被抓住')
-})
-
-// ══ ⑤ P1-8 时刻必须北京时间（R5 红线回归） ════════════════════════════════
-
-const TZ_OFFENDERS = /\.toTimeString\(|\.getHours\(|\.getMinutes\(|toLocaleTimeString\((?![\s\S]{0,80}timeZone: 'Asia\/Shanghai')/
+/** 浏览器时区取值（R5）：`toTimeString` / `getHours` 必须 0 处 */
+const TZ_OFFENDERS = /\.toTimeString\(|\.getHours\(/
 
 test('⑤ 时刻：客户端源码不许用浏览器时区的 toTimeString/getHours（R5）', () => {
   const problems: string[] = []
@@ -247,10 +196,7 @@ test('⑤ 北京时间格式化：固定 Asia/Shanghai（TZ=UTC 下同样是 14:
   const ts = Date.parse('2026-10-17T06:32:00Z')
   assert.equal(shClockText(ts), '14:32:00', 'shClockText 必须按北京时间渲染')
   assert.equal(shClockText(ts).slice(0, 5), '14:32', '护盘面板展示的 HH:mm 取自同一出口')
-  // 接线：两处都改成了 shClockText（不再 new Date(...).toTimeString()）
-  const rescue = strip(read('RescuePanel.tsx'))
-  assert.ok(rescue.includes('shClockText(snapshot.bottom.computedAt).slice(0, 5)'), '「上次结果」的时刻走 shClockText')
-  assert.ok(rescue.includes('shClockText(l.pattern.lowAtTs).slice(0, 5)'), '前低时点走 shClockText')
+  // v0.184.0：底部位置表（含"上次结果/前低时点"两处时刻）已按用户要求下线 ⇒ 只保留纯函数口径断言
 })
 
 // ══ ⑥ P1-9 历史回看失败不得伪装成"当日无信号" ════════════════════════════

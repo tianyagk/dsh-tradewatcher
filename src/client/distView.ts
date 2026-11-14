@@ -42,7 +42,7 @@ export function distBarPctOf(count: number, axisMax: number): number {
 // ── 附加行情（`/tradewatcher/market-extras`，v0.81.2）的**纯视图换算** ──────────
 // 三件事：涨停/跌停（含样本）、预测全天（口径必须随值走）、两融（双源不一致时必须两个都显示）。
 
-import type { AmountForecastWire, LimitCountSideWire, MarginCrossWire, MarginReadingWire } from './api.ts'
+import type { AmountForecastWire, MarginCrossWire, MarginReadingWire } from './api.ts'
 
 /** 亿元 → 显示串（保留 2 位截断，不四舍五入成假精度） */
 export function fmtYi(v: number | null): string {
@@ -50,22 +50,6 @@ export function fmtYi(v: number | null): string {
   return `${v.toFixed(2)} 亿`
 }
 
-/** 涨停/跌停项的悬停说明：口径 + 来源 + 时刻 + 样本（可展开核对，最多 5 只） */
-export function limitNoteOf(side: LimitCountSideWire | null, caliber: string, kind: '涨停' | '跌停'): string {
-  const head = `${kind}家数（${kind}池接口）`
-  if (side === null) return `${head}本次未取到 —— 上游没给池数据（不用 0 顶替）`
-  const t = new Date(side.at).toLocaleTimeString('zh-CN', { hour12: false, timeZone: 'Asia/Shanghai' })
-  const sample = side.sample
-  const list = sample.length === 0
-    ? '（本次没有样本行）'
-    : `；池内前 ${sample.length} 只：${sample.map((r) => `${r.name}${r.pct === null ? '' : ` ${r.pct > 0 ? '+' : ''}${r.pct}%`}`).join(' / ')}`
-  return `${head}：${caliber}；来源 ${side.source}；时刻 ${t}${list}`
-}
-
-/**
- * 「预测全天」这一格：**只在盘中给值**，收盘后回落实际值，其余时段/缺数据一律「未取到」+ 原因。
- * 口径（标定曲线、样本天数、生成时间、区间）**必须随值一起给**（进悬停，不铺正文）。
- */
 export function forecastCellOf(f: AmountForecastWire, amountText: string): { value: string; cls: string; note: string } {
   const cal = `口径：${f.caliber.curve}；样本 ${f.caliber.samples} 天；标定生成于 ${f.caliber.generatedAt}。${f.caliber.note}`
   const band = f.band === null ? '' : `；区间 ${(f.band.low / 1e8).toFixed(0)}~${(f.band.high / 1e8).toFixed(0)} 亿`

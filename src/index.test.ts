@@ -129,7 +129,7 @@ function fakeCtx(kernel?: CoreKernel): FakeCtx {
         return () => undefined
       },
     },
-    webRuntime: { trustedHosts: [] },
+    webStartup: { trustedHosts: [] },
     effect(fn: () => void | (() => void)) {
       const dispose = fn()
       if (typeof dispose === 'function') effects.push(dispose)
@@ -919,7 +919,7 @@ test('真宿主 ctx 是 Proxy：访问未 inject 的属性会抛 —— apply �
       routes.push(r.path)
       return () => undefined
     } },
-    webRuntime: { trustedHosts: [] },
+    webStartup: { trustedHosts: [] },
   }
   const ctx = new Proxy(target, {
     get(t, k) {

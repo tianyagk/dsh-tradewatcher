@@ -95,26 +95,6 @@ export function caliberEntryOf(model: string | null | undefined): { label: strin
   return { label: RESCUE_CALIBER_ENTRY, title, ariaLabel: title }
 }
 
-/**
- * 表头「触发后对照 +X%/N日」的唯一实现（P3-3）。
- *
- * 旧写法是 `(targets.at(-1)?.targetPct ?? 0.02) * 100` —— `targets` 为空时**编造**一个
- * "+2%/日"的阈值印在表头上（读者会以为这是宿主标定值）。没有目标就如实说"未取到"。
- */
-export function calibrationHeaderOf(input: { targetPct: number | null; horizon: number | null }): string {
-  const pct = input.targetPct === null || !Number.isFinite(input.targetPct) ? null : input.targetPct
-  const horizon = input.horizon === null || !Number.isFinite(input.horizon) ? null : input.horizon
-  if (pct === null || horizon === null) return '触发后对照（目标涨幅/持有期未取到）'
-  return `触发后对照 +${(pct * 100).toFixed(0)}%/${horizon}日（历史频率，非胜率/概率）`
-}
-
-/**
- * 历史回看弹窗的状态（P1-9）：**失败不许伪装成"当日无信号/无抽样点"**。
- *
- * - `error`：有失败原因 ⇒ 只显示原因 + 重试（那两句"无信号/无抽样"都不会出现）；
- * - `loading`：没有失败、也还没有结果 ⇒ 骨架；
- * - `ready`：拿到结果 ⇒ 正常渲染（此时 events/intraday 为空才是**真的**"当日没有"）。
- */
 export function dayHistoryStateOf(input: { err: string | null; detail: unknown | null }): 'error' | 'loading' | 'ready' {
   if (input.err !== null) return 'error'
   return input.detail === null ? 'loading' : 'ready'
@@ -160,33 +140,6 @@ export function rescueCardPointsOf(
   }))
 }
 
-/**
- * 信号时间线的**一行短句**（用户 2026-10-26：压到 ≤40 字，不要 `｜` 长串）：
- * `时间 · 等级 · x族 · 分数 · 一句结论`。
- */
-export function shortSignalOf(e: {
-  hhmm: string
-  level: 0 | 1 | 2 | 3
-  score?: number | null
-  families?: number | null
-  reason?: string | null
-  kind?: string | null
-}): string {
-  const label = ['平静', '资金异动', '疑似护盘', '强护盘'][e.level] ?? '—'
-  const fam = typeof e.families === 'number' ? `${e.families}族` : '—'
-  const score = typeof e.score === 'number' && Number.isFinite(e.score) ? `${Math.round(e.score)}分` : '—'
-  const note = (e.reason ?? '').replace(/[｜|]/g, ' ').replace(/\s+/g, ' ').trim()
-  const brief = note.length > 14 ? `${note.slice(0, 13)}…` : (note === '' ? '—' : note)
-  return `${e.hhmm} · ${label} · ${fam} · ${score} · ${brief}`.slice(0, 40)
-}
-
-/**
- * 护盘轮询间隔（秒）：只在交易时段跟随上游 `activeIntervalSec`，**必须做有限性与范围收敛**。
- *
- * 为什么不能直接 `Math.max(10, activeIntervalSec)`：线缆里字段缺失/为 null 时
- * `Math.max(10, undefined) === NaN`，定时器拿到 `NaN*1000` 会被浏览器当成 **0ms**
- * ⇒ 变成死循环打上游。因此：非有限值一律回落 60s，合法值收敛到 [30, 600]。
- */
 export function rescuePollSec(activeIntervalSec: unknown, trading: boolean): number {
   if (!trading) return 60
   if (typeof activeIntervalSec !== 'number' || !Number.isFinite(activeIntervalSec)) return 60

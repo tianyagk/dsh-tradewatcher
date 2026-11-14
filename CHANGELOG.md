@@ -11,6 +11,63 @@
 
 ---
 
+## v0.184.0 — 大盘精简（左列四卡 + 护盘五块下线）；交易日历跨月缺陷修复
+
+`npm run check` **1475 / 1475 × 2 时区**（1484 → 1475，净减 9：删 17 条、增 8 条、再增 4 条日历断言）+ `ALL HOST CHECKS PASSED` + build（73 片段全过）。
+
+### 1) 大盘左列四卡删除
+
+| 删除 | 保留 |
+| --- | --- |
+| `涨跌趋势`（5 格） | `涨跌分布`（9 档柱） |
+| `成交量`（4 格） | `分钟成交额较昨日增减` |
+| `两融`（3 格） | |
+| `成交额分时`（折线） | |
+
+- 删 JSX、`tw-mk-grid5/4/3`、`tw-mk-col-l/r`、`tw-mk-grid2`，改 `.tw-mk-single` 单列铺满。
+- 连带清理 11 个死变量与 5 个死导入；隐藏旧块里的同组左列段也删除。
+- 后端 `/breadth` 的 `up/down/flat/limitUp/limitDown` 保留。
+
+### 2) 护盘卡内五块删除
+
+| 删除 | 保留 |
+| --- | --- |
+| `底部位置 / 形态 / 触发后对照` 表（6 行 × 20 列） | 卡头（等级/族/分数/因子/采样态/按钮） |
+| `历史概率 +1%: 65.7% …` 行 | 共振行 |
+| `口径与边界（悬停查看）` | 六张 ETF 卡 |
+| `今日信号时间线（N）` | 因子明细 |
+| `历史回顾（30 天）` | 分时量能、`今日 5 分钟抽样` |
+
+- 删 `.tw-rescue-timeline` CSS；后端 `/rescue` 的 `history` 与 `bottomPosition` 保留。
+
+### 3) 交易日历跨月缺陷（门禁 6 红的真因）
+
+**现象**：`tradingCalendar.test.ts` 4 条 + `calendar.test.ts` 2 条在 2026-11 全红。
+
+**根因**：`tradingCalendar` 的「当月」按**载入时刻**缓存；内置表只声明覆盖到 2026-10；用例也硬编码 2026-10。跨月后既报错月份又缺覆盖。
+
+**修法**
+
+| 项 | 内容 |
+| --- | --- |
+| 覆盖声明 | 新增 `BUILTIN_CALENDAR_COVERED_UNTIL = '2026-12-31'`（`rescue.ts:1369`）；11/12 月无法定节假日 ⇒ 周一至周五全为交易日，共 42 个工作日 |
+| 状态查询 | `externalCalendarStatus(now)` 支持**注入月份**并从 `monthsByKey` 重算 `coveredThisMonth / closuresThisMonth / source / warning`，缓存不再锁死「当月」 |
+| 文件覆盖判定 | `monthCoveredByFile(month)` 去掉 `source==='external'` 错判（跨月后已覆盖月份被误判为未覆盖） |
+| 缺月兜底 | `calendarStatusPayload().missing` 追加「交易日历」条目，含缺口文案 |
+| 测试 | 全部走 `externalCalendarStatus(NOW)`；`calendar.test.ts` 夹具改为**相对今天 +N 天**动态生成 |
+
+### 验证
+
+`npm run check` **1475 / 1475 × 2 时区** + build（73 项）。
+新增 8 条验收断言（`marketCardsRemoved.test.ts` 4 + `rescuePanelsRemoved.test.ts` 4）与 4 条日历断言（`calendarCoverage.test.ts`），全部含反例注入。
+三日期跑测：**2026-11** 与 **2026-12** 每工作日 `tradingDayState=true`；**2027-01** `builtinCoversMonth=false` 且缺口文案点名。
+渲染核对：`/home/hu/market-1200.png` —— 仅两张卡，无残留。
+
+### 说明
+
+- 渲染图中的「分钟成交额」波形为夹具数据，不是真实行情。
+- 删除用例 17 条、新增 8 条，净减 9；失败数为 0。
+
 ## v0.183.0 — 全仓审查：宿主 5 条 P1、客户端 2 条 P1、测试补强 27 条、3 个生产缺陷
 
 `npm run check` **1484 / 1484 × 2 时区**（1446 → 1484）+ `ALL HOST CHECKS PASSED` + build（73 片段全过）。

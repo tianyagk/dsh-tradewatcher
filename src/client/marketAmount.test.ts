@@ -1,13 +1,8 @@
 /** 成交额分时（③）与分钟增减（④）的断言。 */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
-import { dirname, join } from 'node:path'
-import { fileURLToPath } from 'node:url'
 import { MINUTE_BARS, cumulativeOf, minuteDeltaBarsOf, minuteSlotsOf, missingCellText } from './marketBlocks.ts'
 
-const HERE = dirname(fileURLToPath(import.meta.url))
-const page = readFileSync(join(HERE, 'MarketPage.tsx'), 'utf8')
 const slots = minuteSlotsOf()
 
 const mk = (day: string, n: number, base: number) =>
@@ -51,10 +46,3 @@ test('③ 昨日序列缺失 ⇒ —（昨日分钟额不可得）（用今日�
   assert.throws(() => assert.equal(fake.bars === null, true, '反例上：用今日冒充昨日'), /反例上/, '⚠ 反例注入必须失败')
 })
 
-test('④ 预测线是水平虚线且值 = 全天预测（斜线 ⇒ 败）', () => {
-  assert.equal(/x1: 0, y1: y\(fc\), x2: W, y2: y\(fc\)/.test(page), true, '预测线必须 y1 === y2（水平）')
-  assert.equal(/y1: y\(fc\), x2: W, y2: y\(fc\), stroke: 'var\(--tw-muted\)', strokeWidth: 1, strokeDasharray: '4 3'/.test(page), true, '预测线必须虚线')
-  // 反例注入：改成斜线（y2 = 0）⇒ 判据必败
-  const slanted = page.replace('x2: W, y2: y(fc)', 'x2: W, y2: 0')
-  assert.throws(() => assert.equal(/x2: W, y2: y\(fc\)/.test(slanted), true, '反例上：斜线'), /反例上/, '⚠ 反例注入（斜线）必须失败')
-})

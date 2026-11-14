@@ -9,19 +9,21 @@ import { join } from 'node:path'
 import { CalendarStore, type CalSyncFetchers } from './calendar.ts'
 
 const dir = (): string => mkdtempSync(join(tmpdir(), 'tw-cal-'))
+/** v0.185.0：夹具日期**动态**生成（相对今天 +N 天），不再硬编码年月 —— 跨月就跑不过的用例是假绿 */
+const D = (offsetDays: number): string => new Date(Date.now() + 8 * 3_600_000 + offsetDays * 86_400_000).toISOString().slice(0, 10)
 
 const okFetchers = (): CalSyncFetchers => ({
   report: async (name) => {
     if (name === 'RPTA_APP_IPOAPPLY') {
-      return [{ SECURITY_CODE: '600519', SECURITY_NAME_ABBR: '贵州茅台', APPLY_DATE: '2026-10-09', LISTING_DATE: '2026-10-20' }]
+      return [{ SECURITY_CODE: '600519', SECURITY_NAME_ABBR: '贵州茅台', APPLY_DATE: D(1), LISTING_DATE: D(11) }]
     }
     if (name === 'RPT_PUBLIC_BS_APPOIN') {
-      return [{ SECURITY_CODE: '600519', SECURITY_NAME_ABBR: '贵州茅台', APPOINT_PUBLISH_DATE: '2026-10-25', REPORT_TYPE_NAME: '三季报', IS_PUBLISH: '0', REPORT_DATE: '2026-09-30' }]
+      return [{ SECURITY_CODE: '600519', SECURITY_NAME_ABBR: '贵州茅台', APPOINT_PUBLISH_DATE: D(14), REPORT_TYPE_NAME: '三季报', IS_PUBLISH: '0', REPORT_DATE: '2026-09-30' }]
     }
-    return [{ SECURITY_CODE: '600519', SECURITY_NAME_ABBR: '贵州茅台', EX_DIVIDEND_DATE: '2026-10-15', EQUITY_RECORD_DATE: '2026-10-14', IMPL_PLAN_PROFILE: '10派1元', REPORT_DATE: '2026-06-30' }]
+    return [{ SECURITY_CODE: '600519', SECURITY_NAME_ABBR: '贵州茅台', EX_DIVIDEND_DATE: D(6), EQUITY_RECORD_DATE: D(5), IMPL_PLAN_PROFILE: '10派1元', REPORT_DATE: '2026-06-30' }]
   },
   // ⚠ H4 之后"200 但 0 条"记 `empty`（不算成功）—— 想表达"全源都 ok"就必须真的给一条
-  macroCal: async () => [{ FINNAME: '美国:CPI年率', STARTDATE: '2026/10/15 20:30', ENDDATE: '2026/10/15 20:30', FINCODE: 'USCPI' }],
+  macroCal: async () => [{ FINNAME: '美国:CPI年率', STARTDATE: `${D(7).replace(/-/g, '/')} 20:30`, ENDDATE: `${D(7).replace(/-/g, '/')} 20:30`, FINCODE: 'USCPI' }],
 })
 
 const failFetchers = (): CalSyncFetchers => ({
@@ -42,7 +44,7 @@ test('日历：全部源失败时 syncedAt 保持不变、syncAttemptAt 推进�
   assert.equal(afterOk.allFailed, false)
   assert.equal(afterOk.missing.length, 0)
   const syncedAtAfterOk = afterOk.syncedAt
-  const eventsAfterOk = store.list('2026-10-01', '2026-10-31').length
+  const eventsAfterOk = store.list(D(-10), D(40)).length
   assert.ok(eventsAfterOk >= 3, '成功同步的事件应入库')
 
   // 再一次全失败：数据时刻不得被改写
@@ -56,7 +58,7 @@ test('日历：全部源失败时 syncedAt 保持不变、syncAttemptAt 推进�
   // 措辞统一走 MISSING_TIER_ADVICE.transient（S19）：同一档全局只留一种说法
   assert.ok(afterFail.missing.every((m) => m.why === 'transient' && m.note.includes('稍后自动重试')))
   assert.ok(afterFail.missing.every((m) => m.note.includes('upstream timeout')), '缺失原因里要带上游给的原因')
-  assert.equal(store.list('2026-10-01', '2026-10-31').length, eventsAfterOk, '全失败时不伪造新事件，也不清空旧事件')
+  assert.equal(store.list(D(-10), D(40)).length, eventsAfterOk, '全失败时不伪造新事件，也不清空旧事件')
 
   // 落盘：尝试时刻写进文件（重启后仍能解释"上次尝试是什么时候"）
   const raw = JSON.parse(readFileSync(join(d, 'calendar.json'), 'utf8')) as { syncedAt: number; syncAttemptAt: number }

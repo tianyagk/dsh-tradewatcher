@@ -36,16 +36,6 @@ test('② trends2 失败才落 1 分钟；两者都失败才 5 分钟且 source 
   assert.throws(() => assert.ok(skip.includes('if (oneMin !== null && oneMin.points.length >= 200)'), '反例上：跳级'), /反例上/, '⚠ 反例注入（跳级）必须失败')
 })
 
-test('③ 5 分钟兜底必须标 noAmount 且原因含「无成交额」（插值成 240 根 ⇒ 败）', () => {
-  assert.ok(em.includes("noAmount: true, noAmountReason: '该源无成交额、48 根/日'"), '5 分钟兜底缺少 noAmount 标记')
-  const page = readFileSync(join(HERE, '..', 'client', 'MarketPage.tsx'), 'utf8')
-  assert.ok(page.includes('amtTrend?.trend?.noAmount === true'), '页面必须读 noAmount')
-  assert.ok(page.includes('missingCellText(noAmountReason'), '无成交额必须走 —（原因）')
-  // 反例注入：把 5 分钟插值成 240 根 ⇒ 判据必败
-  const fake = Array.from({ length: 240 }, (_, i) => i)
-  assert.throws(() => assert.equal(fake.length, 48, '反例上：插值冒充'), /反例上/, '⚠ 反例注入（插值）必须失败')
-})
-
 test('④ source 三值互斥且与数据一致（乱标 ⇒ 败）', () => {
   assert.ok(em.includes('as TrendSource'), 'source 字面量缺失')
   const model = readFileSync(join(HERE, '..', 'shared', 'model.ts'), 'utf8')

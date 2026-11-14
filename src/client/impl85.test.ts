@@ -129,42 +129,6 @@ test('① 收件箱已整块移除：模块不存在、运行时源码与构建�
 })
 
 /** 判据（测试侧）：今日信号时间线的四段实现缺一不可 */
-function timelineProblems(panelSrc: string, css: string): string[] {
-  const out: string[] = []
-  if (!panelSrc.includes('今日信号时间线（${snapshot.today.length}）')) out.push('缺少「今日信号时间线（N）」标题')
-  if (!panelSrc.includes('snapshot.today.map(')) out.push('缺少 snapshot.today 的渲染循环')
-  if (!panelSrc.includes("className: 'tw-rescue-timeline'")) out.push('缺少时间线容器类名')
-  if (!panelSrc.includes('e.hhmm')) out.push('时间线每行必须带时刻')
-  if (!css.includes('.tw-rescue-timeline{')) out.push('样式里缺少 .tw-rescue-timeline')
-  return out
-}
-
-test('② 今日信号时间线仍在（保留项）：标题/循环/样式齐全，`?day=` 历史回看链路仍在（注入：删掉 ⇒ 必败）', () => {
-  const panelSrc = read('RescuePanel.tsx')
-  assert.deepEqual(timelineProblems(panelSrc, TW_CSS), [])
-  // `?day=` 历史回看（收件箱曾复用它，但回看本身保留）
-  const apiSrc = read('api.ts')
-  assert.ok(apiSrc.includes('rescueDay(day: string)'), '客户端必须仍能按天取历史（rescueDay）')
-  assert.ok(apiSrc.includes('/tradewatcher/rescue?day='), '`?day=` 查询参数必须保留')
-  assert.ok(panelSrc.includes('const openHistory = (day: string)'), '历史回看入口必须仍在')
-  assert.ok(panelSrc.includes('历史回看（${data?.history.length ?? 0} 天'), '历史回看区块必须仍在')
-  // 反例注入：把时间线整段删掉 ⇒ 同一判据必须非空
-  const removedTimeline = panelSrc
-    .split('今日信号时间线（${snapshot.today.length}）').join('')
-    .split("className: 'tw-rescue-timeline'").join('')
-    .split('snapshot.today.map(').join('')
-  assert.notEqual(removedTimeline, panelSrc, '⚠ 注入点必须存在')
-  assert.notDeepEqual(timelineProblems(removedTimeline, TW_CSS), [], '⚠ 连带删掉时间线必须被抓到')
-  assert.throws(
-    () => assert.deepEqual(timelineProblems(removedTimeline, TW_CSS), [], '反例上"时间线仍在"必须失败'),
-    /反例上/,
-    '⚠ 反例注入（删掉时间线）必须让断言失败',
-  )
-  // 注入：样式被删同样必须被抓到
-  assert.notDeepEqual(timelineProblems(panelSrc, TW_CSS.replace('.tw-rescue-timeline{', '.tw-x{')), [], '⚠ 样式缺失必须被抓到')
-})
-
-/** 判据（测试侧）：覆盖广度徽标（与收件箱无关的保留项）四件套 */
 function coverageProblems(panelSrc: string, css: string): string[] {
   const out: string[] = []
   if (!panelSrc.includes("'data-role': 'rescue-coverage-badge'")) out.push('缺少覆盖广度徽标的 data-role 锚点')
@@ -192,15 +156,13 @@ test('③ 覆盖广度徽标与悬停仍在（保留项）：组件/锚点/样�
   )
 })
 
-test('④ 护盘面板其余保留项不随收件箱一起消失：等级/连续评分分位/当日峰/口径入口/抽样条', () => {
+test('④ 护盘面板其余保留项不随收件箱一起消失：等级/连续评分分位/当日峰/抽样条', () => {
   const panelSrc = read('RescuePanel.tsx')
   const anchors: Array<[string, string]> = [
     ['RESCUE_LEVEL_LABEL', '等级文案'],
     ['continuousPercentile', '连续评分的近 20 日分位'],
     ['当日峰 ${peakToday', '当日抽样峰值'],
-    ["'data-role': 'rescue-caliber'", '口径与边界悬停入口'],
     ['今日 5 分钟抽样（${snapshot.intraday.length}）', '当日 5 分钟抽样'],
-    ['tw-rescue-history', '护盘历史回看列表'],
   ]
   for (const [token, what] of anchors) {
     assert.ok(panelSrc.includes(token), `保留项缺失：${what}（${token}）`)

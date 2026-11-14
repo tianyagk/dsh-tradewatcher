@@ -40,7 +40,7 @@ const validFile = JSON.stringify({
 
 test('① 文件覆盖当月且正确 ⇒ 用它（含"内置表没有的日期"）', async () => {
   const { cal } = await freshEnv(validFile, 'ok')
-  const st = cal.externalCalendarStatus()
+  const st = cal.externalCalendarStatus(NOW)
   assert.notEqual(st, null)
   assert.equal(st?.source, 'external', '覆盖当月 ⇒ 生效来源是外部文件')
   assert.equal(st?.coveredThisMonth, true)
@@ -75,7 +75,7 @@ test('④ 优先级：外部文件与内置表冲突时以文件为准（两个�
 test('② 文件未覆盖当月 ⇒ 退回内置表 + 告警可见（不许静默）', async () => {
   const notCovered = JSON.stringify({ v: 1, months: { '2026-09': ['2026-09-25'] } })
   const { cal } = await freshEnv(notCovered, 'uncovered')
-  const st = cal.externalCalendarStatus()
+  const st = cal.externalCalendarStatus(NOW)
   assert.equal(st?.fileExists, true, '文件确实存在（只是没覆盖本月）')
   assert.equal(st?.coveredThisMonth, false)
   assert.equal(st?.source, 'builtin', '未覆盖 ⇒ 生效来源必须如实写"内置表"')
@@ -118,7 +118,7 @@ test('③ 文件不合法（重复/跨月/坏 JSON/版本不认识）⇒ 隔离�
   const { tradingDayState } = await import('./rescue.ts')
   for (const [name, content, pattern] of cases) {
     const { dir, cal } = await freshEnv(content, `bad-${name}`)
-    const st = cal.externalCalendarStatus()
+    const st = cal.externalCalendarStatus(NOW)
     assert.equal(st?.source, 'builtin', `${name}：必须退回内置表`)
     assert.notEqual(st?.invalid, null, `${name}：必须留痕（invalid 非空）`)
     assert.match(String(st?.invalid?.reason), pattern, `${name}：原因要指名问题`)
@@ -136,7 +136,7 @@ test('③ 文件不合法（重复/跨月/坏 JSON/版本不认识）⇒ 隔离�
 test('③ 周末条目：不计入、不隔离，但如实报数', async () => {
   const withWeekend = JSON.stringify({ v: 1, months: { '2026-10': ['2026-10-03', '2026-10-04', '2026-10-06'] } })
   const { cal } = await freshEnv(withWeekend, 'weekend-entries')
-  const st = cal.externalCalendarStatus()
+  const st = cal.externalCalendarStatus(NOW)
   assert.equal(st?.invalid, null, '周末条目无害 ⇒ 不该隔离')
   assert.equal(st?.ignoredWeekends, 2, '10-03/10-04 是周末 ⇒ 计 2 条')
   assert.deepEqual(st?.closuresThisMonth, ['2026-10-06'])
@@ -144,7 +144,7 @@ test('③ 周末条目：不计入、不隔离，但如实报数', async () => {
 
 test('② 文件不存在 ⇒ 不是"损坏"，也不误报（退回内置、告警为 null）', async () => {
   const { cal } = await freshEnv(null, 'missing')
-  const st = cal.externalCalendarStatus()
+  const st = cal.externalCalendarStatus(NOW)
   assert.equal(st?.fileExists, false)
   assert.equal(st?.source, 'builtin')
   assert.equal(st?.warning, null, '没有文件不算"未更新"（首次使用不该报错）')

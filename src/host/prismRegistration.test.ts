@@ -20,7 +20,7 @@ function injectProblems(src: string): string[] {
 test('② inject 含 llm 且 ctx.get 有 try/catch（删掉 ⇒ 必败）', () => {
   const src = read('src/index.ts')
   assert.deepEqual(injectProblems(src), [])
-  const injected = src.replace("'webRuntime', 'llm'", "'webRuntime'")
+  const injected = src.replace("'webStartup', 'llm'", "'webStartup'")
   assert.notDeepEqual(injectProblems(injected), [], '⚠ 反例（去掉 llm）必须被抓到')
   assert.throws(() => assert.deepEqual(injectProblems(injected), [], '反例'), /反例/, '⚠ 反例注入必须失败')
 })

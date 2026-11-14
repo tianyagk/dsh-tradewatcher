@@ -2,8 +2,8 @@
  */
 import type { IncomingMessage, ServerResponse } from 'node:http'
 
-/** The web runtime face (`ctx.webRuntime.trustedHosts` — the /api gateway's trust source). */
-export interface PluginWebRuntime {
+/** The web-startup face (`ctx.webStartup.trustedHosts` — the /api gateway's trust source). */
+export interface PluginWebStartup {
   trustedHosts: readonly string[]
 }
 
@@ -64,7 +64,7 @@ export interface PluginSystemPrompt {
 /** The host context face this plugin's host half reads. */
 export interface PluginContext {
   webServer: PluginWebServer
-  webRuntime: PluginWebRuntime
+  webStartup: PluginWebStartup
   /** Register a lifecycle callback (DSH-vendored cordis). */
   effect(fn: () => void | (() => void), label?: string): void
   /** Loader 行配置（`config: { row: core }`）。我们未声明 Config schema ⇒ 原样透传，读取要防御性。 */

@@ -33,3 +33,21 @@
 - `useEffect` 清理：`PrismPage`（30s 日历）、`RescuePanel`（轮询）、`PortfolioPage`（主 tick 订阅）、`GlobalClockPage`（1s 时钟）均有 `clearInterval/退订`。
 - 空数组/NaN：`auctionSeries`（`pts.length === 0 ⇒ null`）、`mini.ts`（`points.length >= 2` 才计算）已有守卫；`quoteCard` 用 `Number.isFinite(price)` 判定，缺数据落 `—` + 原因。
 - 文案：未发现用户可见的 `⚠` / 免责 / `undefined` / `NaN`。
+
+## 已按用户要求下线（2026-11-14）
+
+**大盘页左列四张卡整组删除**：`涨跌趋势`（5 格）、`成交量`（4 格）、`两融`（3 格）、`成交额分时`（折线）。
+页面改为**单列**（`.tw-mk-single`），只剩 `涨跌分布` 与 `分钟成交额较昨日增减`；隐藏旧块（`data-legacy=market-summary`）里的同一组左列段也一并删除。
+
+- 删除的 CSS：`.tw-mk-grid5` / `.tw-mk-grid4` / `.tw-mk-grid3` / `.tw-mk-grid2` / `.tw-mk-col-l` / `.tw-mk-col-r`（后者换成 `.tw-mk-single`）。
+- 删除的用例：`marketPolish ③`（5/4/3 等分）、`marketPolish2 ②`（左列三卡紧凑）——共 **2 条**；`④⑤ / ①②③ / ③(modules) / legacy` 为**改写**（不是放宽），断言对象改成保留的两块与单列。
+- 宿主接口 `/breadth` 的 `limitUp/limitDown/up/down/flat` **保留不动**，界面不再展示。
+
+## 护盘卡内五块下线（2026-11-14，按用户红框）
+
+删除：`底部位置 / 形态 / 触发后对照` 整表（表头 + 6 行通道 + 日期列）、表下 `历史概率 … vs 基线` 行与 `口径与边界（悬停查看）` 入口、`今日信号时间线（N）` 整块（含「旧口径」注释行）、`历史回顾（30 天…）` 整块。
+保留：护盘卡头（等级/族/分数/因子/采样态/按钮）、共振行、六张 ETF 卡、因子明细、分时量能、`今日 5 分钟抽样`。
+后端 `/rescue` 的 `history` 与 `bottomPosition` **保留不动**，仅前端不再渲染。
+
+- 删除 CSS：`.tw-rescue-timeline`（口径入口类此前已无独立规则）。
+- 删除用例：`impl78 P3-3`（触发后对照表头）、`impl79 ⑤`（口径入口接线）、`impl85 ②`（时间线保留项）、`marketPolish ①`（时间线 40 字）——共 **4 条**；`impl78 P2-6`、`impl85 ③④`、`rescueVisual ②` 为**改写**（去掉已删块的锚点，保留项不动）。

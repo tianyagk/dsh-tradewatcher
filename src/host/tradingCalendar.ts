@@ -31,6 +31,7 @@ import { mkdir, rename, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { dataHome } from './store.ts'
 import { dayOf as shDayOf, weekdayOf as shWeekdayOf } from './time.ts'
+import { BUILTIN_CALENDAR_COVERED_UNTIL, builtinCoversMonth } from './rescue.ts'
 
 const TRADING_CALENDAR_FILE = 'trading-calendar.json'
 
@@ -229,7 +230,9 @@ export async function loadTradingCalendar(opts: { quarantineBroken?: boolean } =
 /** 外部文件**是否覆盖**该月（缺键 = 未覆盖；`[]` = 已覆盖且本月无法定休市） */
 export function monthCoveredByFile(month: string): boolean {
   const st = cache?.status
-  return st !== undefined && st.source === 'external' && Object.prototype.hasOwnProperty.call(st.monthsByKey, month)
+  if (st === undefined || !st.fileExists || st.invalid !== null) return false
+  // ⚠ 不再要求 `source === 'external'`：那是"载入那一刻的当月"判据，跨月后会把已覆盖的月份误判成未覆盖
+  return Object.prototype.hasOwnProperty.call(st.monthsByKey, month)
 }
 
 /**
@@ -243,8 +246,35 @@ export function externalClosureOf(day: string): boolean {
   return cache?.closures.has(day) ?? false
 }
 
-export function externalCalendarStatus(): TradingCalendarStatus | null {
-  return cache?.status ?? null
+/**
+ * 日历状态（v0.185.0）：`now` 可注入 ⇒ 测试/多市场都可以问"某个月"的覆盖情况，
+ * 不再把"当月"锁死在进程首次载入的那个月（跨月后旧缓存会说错月份，秋季实测 11 月仍报 10 月）。
+ */
+export function externalCalendarStatus(now: number = Date.now()): TradingCalendarStatus | null {
+  const st = cache?.status ?? null
+  if (st === null) return null
+  const month = shDayOf(now).slice(0, 7)
+  // 文件坏/不存在 ⇒ 原状态（含 invalid 与告警）原样返回
+  if (!st.fileExists || st.invalid !== null) return st
+  const covered = Object.prototype.hasOwnProperty.call(st.monthsByKey, month)
+  if (covered) {
+    return {
+      ...st,
+      source: 'external',
+      coveredThisMonth: true,
+      closuresThisMonth: st.monthsByKey[month] ?? [],
+      warning: null,
+    }
+  }
+  return {
+    ...st,
+    source: 'builtin',
+    coveredThisMonth: false,
+    closuresThisMonth: [],
+    warning: `交易日历未更新到本月（${month}）：文件里只有 ${st.months.join('、') || '（空）'} ⇒ 已退回内置规则。${
+      builtinCoversMonth(month) ? '' : `内置表也未覆盖 ${month}（覆盖至 ${BUILTIN_CALENDAR_COVERED_UNTIL}）⇒ 本月按周末规则处理，属降级。`
+    }请按 README「交易日历维护」一节补上 "${month}": []（或本月休市日）`,
+  }
 }
 
 /** 测试/CLI 用：丢掉缓存（改文件后立即生效） */
@@ -318,4 +348,10 @@ export function printCalendarCheck(report: CalendarCheckReport): void {
 export async function calendarCheckMain(): Promise<void> {
   await mkdir(dataHome(), { recursive: true }).catch(() => undefined)
   printCalendarCheck(await calendarCheckReport())
+}
+
+/** 内置表覆盖缺口的**一句话**（无缺口 ⇒ null）；路由把它写进 `missing`，不静默。 */
+export function builtinCoverageNoteOf(month: string): string | null {
+  if (builtinCoversMonth(month)) return null
+  return `内置表未覆盖 ${month}（覆盖至 ${BUILTIN_CALENDAR_COVERED_UNTIL}）：外部交易日历文件也缺失/未覆盖该月，本月按周末规则降级处理`
 }

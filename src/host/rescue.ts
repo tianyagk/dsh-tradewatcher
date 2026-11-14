@@ -1362,6 +1362,18 @@ export const A_SHARE_HOLIDAYS: readonly { from: string; to: string; name: string
   { from: '2026-10-01', to: '2026-10-07', name: '国庆节' },
 ]
 
+/**
+ * 内置假日表**覆盖到哪一天**（含）：表内没列休市的月份（如 2026-11/12 无长假）也算"已覆盖"，
+ * 只要月份 ≤ 这个末日期。超过 ⇒ `builtinCoversMonth` 返回 false，调用方必须去拉外部源并如实报缺。
+ */
+export const BUILTIN_CALENDAR_COVERED_UNTIL = '2026-12-31'
+
+/** 内置表是否覆盖该月（`YYYY-MM`）：月份在 `2026-01` 与末日期之间 ⇒ true */
+export function builtinCoversMonth(month: string): boolean {
+  if (!/^\d{4}-\d{2}$/.test(month)) return false
+  return month >= '2026-01' && month <= BUILTIN_CALENDAR_COVERED_UNTIL.slice(0, 7)
+}
+
 /** 命中法定休市日则给出假期名（按 `YYYY-MM-DD` 字符串比较，无时区参与） */
 export function holidayOf(day: string): { name: string } | null {
   for (const h of A_SHARE_HOLIDAYS) if (day >= h.from && day <= h.to) return { name: h.name }

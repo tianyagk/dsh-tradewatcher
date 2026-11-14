@@ -13,7 +13,7 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
-import { forecastCellOf, limitNoteOf, marginRowOf } from './distView.ts'
+import { forecastCellOf, marginRowOf } from './distView.ts'
 import type { AmountForecastWire, MarginCrossWire } from './api.ts'
 
 const here = dirname(fileURLToPath(import.meta.url))
@@ -120,51 +120,6 @@ test('⑤ 两融：单源可得出、双源全缺 ⇒ 未取到（不是 0）', 
 })
 
 // ── ① 涨停/跌停：真值 + 样本；取不到仍是未取到 ─────────────────────────────
-
-test('① 涨停/跌停：口径与池内样本进悬停；没取到 ⇒ 未取到 + 原因（不得 0）', () => {
-  const note = limitNoteOf({ count: 52, sample: [{ code: '600000', name: '浦发银行', pct: 10.02 }], source: 'push2ex-ZT', at: Date.parse('2026-10-13T14:05:00+08:00') }, '池接口给名单与家数，口径同源', '涨停')
-  for (const must of ['涨停家数', '池接口给名单与家数', 'push2ex-ZT', '14:05:00', '浦发银行', '+10.02%']) {
-    assert.ok(note.includes(must), `悬停里必须能核对到：${must}（实际 ${note}）`)
-  }
-  const miss = limitNoteOf(null, '池接口', '跌停')
-  assert.ok(miss.includes('未取到') && miss.includes('不用 0 顶替'), `取不到要说清（实际 ${miss}）`)
-  // 源码接线：两格都必须走 `extras.limits.*.count`，缺时回落「未取到」
-  const page = strip(src())
-  assert.ok(page.includes("extras.limits.up.count === null ? '未取到'"), '涨停格：缺数回落未取到')
-  assert.ok(page.includes("extras.limits.down.count === null ? '未取到'"), '跌停格：缺数回落未取到')
-  assert.equal(/item\('涨停', '0'/.test(page), false, '涨停不许写死 0')
-  // 反例注入：把涨停渲染成 0 ⇒ 判据必须失败
-  const injected = page.replace("extras.limits.up.count === null ? '未取到'", "'0'")
-  assert.notEqual(injected, page, '反例注入必须真改到源码')
-  assert.throws(
-    () => assert.equal(injected.includes("extras.limits.up.count === null ? '未取到'"), true, '反例上"缺数必须未取到"必须失败'),
-    /反例上/,
-    '⚠ 反例注入（缺数写 0）必须让断言失败',
-  )
-})
-
-// ── ②③ 昨日成交 / 较昨日变动：原有接线（本地快照），缺 ⇒ null + 原因 ───────
-
-test('②③ 昨日成交与较昨日变动：缺本地快照 ⇒ 「未取到」+ 原因；**不得**用 0 或今天的数顶替', () => {
-  const page = strip(src())
-  assert.ok(page.includes("item('昨日成交', prevAmt === null ? '未取到'"), '昨日成交缺快照必须是未取到')
-  assert.ok(page.includes('不用今天的数顶替'), '原因里必须点明"不用今天的数顶替"')
-  assert.ok(page.includes("item('较昨日变动', delta === null ? '未取到'"), '较昨日变动缺昨日必须是未取到')
-  assert.ok(page.includes('取不到昨日成交就无法算变动（不是 0）'), '原因里必须点明"不是 0"')
-  // 有数据时给真值（走 fmtAmt）
-  assert.ok(/item\('昨日成交', prevAmt === null \? '未取到' : fmtAmt\(prevAmt\.amount\)/.test(page), '有快照时给真值')
-  assert.ok(/item\('较昨日变动', delta === null \? '未取到' : `\$\{delta >= 0 \? '\+' : ''\}\$\{fmtAmt\(delta\)\}`/.test(page), '有昨日时给真值（带符号）')
-  // 反例注入：缺昨日时写 0 ⇒ 判据必须失败
-  const injected = page.replace("item('较昨日变动', delta === null ? '未取到'", "item('较昨日变动', delta === null ? '0'")
-  assert.notEqual(injected, page, '反例注入必须真改到源码')
-  assert.throws(
-    () => assert.equal(injected.includes("item('较昨日变动', delta === null ? '未取到'"), true, '反例上"缺昨日必须未取到"必须失败'),
-    /反例上/,
-    '⚠ 反例注入（缺昨日写 0）必须让断言失败',
-  )
-})
-
-// ── ⑥ 日内家数：仍无源（本轮不动）─────────────────────────────────────────
 
 test('⑥ 日内家数：仍无源 ⇒ 保留「未取到」+ 原因（本轮不改）', () => {
   const page = strip(src())

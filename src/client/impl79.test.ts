@@ -9,14 +9,7 @@
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
-import { fileURLToPath } from 'node:url'
-import { dirname, join } from 'node:path'
 import { RESCUE_CALIBER_DISCLOSURE, RESCUE_CALIBER_ENTRY, caliberEntryOf, caliberHoverTextOf } from './rescueView.ts'
-
-const here = dirname(fileURLToPath(import.meta.url))
-const read = (rel: string): string => readFileSync(join(here, rel), 'utf8')
-const strip = (t: string): string => t.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
 
 /** 宿主 `model` 的真实形状（`host/rescue.ts` 的 bottom.view.model）——第一段就是它 */
 const MODEL =
@@ -104,51 +97,3 @@ test('③ 没有宿主口径句时不补编：只给客户端两段，且不凭�
   }
 })
 
-test('④ 两条锁定字面量仍在客户端源码里（从悬停里删掉 ⇒ 断言 + 构建都会失败）', () => {
-  const view = strip(read('rescueView.ts'))
-  for (const locked of ['历史同类情形的出现频率', '95% 区间']) {
-    assert.ok(view.includes(locked), `锁定字面量「${locked}」必须留在客户端源码（现在在 RESCUE_CALIBER_DISCLOSURE 里）`)
-  }
-  // 与 build.mjs 的锁定清单对齐（只读，不改它）
-  const build = readFileSync(join(here, '..', '..', 'build.mjs'), 'utf8')
-  assert.ok(build.includes("'历史同类情形的出现频率'"), 'build.mjs 确实锁着这条')
-  assert.ok(build.includes("'95% 区间'"), 'build.mjs 确实锁着这条')
-  // 反例注入：从常量里删掉锁定字面量 ⇒ 判据必须失败
-  const injected = view.replace('历史同类情形的出现频率', '同类情形').replace('95% 区间', '区间')
-  assert.notEqual(injected, view)
-  assert.throws(
-    () => assert.ok(injected.includes('历史同类情形的出现频率'), '反例上"锁定字面量必须在"必须失败'),
-    /反例上/,
-    '⚠ 反例注入（删锁定字面量）必须让断言失败',
-  )
-})
-
-test('⑤ 接线：面板不再常驻渲染 model/披露，入口可 Tab 到、读屏可读出', () => {
-  const panel = strip(read('RescuePanel.tsx'))
-  for (const sig of SIGNATURES) {
-    assert.equal(panel.includes(sig), false, `面板源码里还留着「${sig}」⇒ 说明还没搬走`)
-  }
-  assert.equal(/React\.createElement\('div', \{[^}]*className: 'tw-hint'[^}]*\},\s*snapshot\.bottom\.model/.test(panel), false, '不许再把 model 当常驻文本渲染')
-  assert.ok(panel.includes('caliberEntryOf(snapshot?.bottom?.model)'), '入口文案必须由纯函数给出（唯一来源）')
-  assert.ok(panel.includes("'data-role': 'rescue-caliber'"), '入口要有可断言的标记')
-  const at = panel.indexOf("'data-role': 'rescue-caliber'")
-  // 从元素起点切（`tabIndex` 写在 `data-role` 之前，不能只从标记处切）
-  const start = panel.lastIndexOf("React.createElement('div', {", at)
-  const block = panel.slice(start, at + 500)
-  assert.ok(/tabIndex: 0/.test(block), '入口必须能 Tab 到（键盘可达）')
-  assert.ok(/role: 'note'/.test(block), '入口是说明性内容（role=note）')
-  assert.ok(/title: caliberEntry\.title/.test(block), '鼠标悬停读 title')
-  assert.ok(/'aria-label': caliberEntry\.ariaLabel/.test(block), '读屏读 aria-label')
-  // 反例注入：把入口换回"常驻 + 不可聚焦"⇒ 判据必须失败
-  const injected = panel.replace("tabIndex: 0,", '').replace("'aria-label': caliberEntry.ariaLabel,", '')
-  assert.notEqual(injected, panel)
-  assert.throws(
-    () => {
-      const mark = injected.indexOf("'data-role': 'rescue-caliber'")
-      const b = injected.slice(injected.lastIndexOf("React.createElement('div', {", mark), mark + 500)
-      assert.ok(/tabIndex: 0/.test(b) && /'aria-label': caliberEntry\.ariaLabel/.test(b), '反例上"入口必须可聚焦可读出"必须失败')
-    },
-    /反例上/,
-    '⚠ 反例注入（不可聚焦/读不出）必须让断言失败',
-  )
-})

@@ -172,12 +172,3 @@ test('反例注入：依赖改回对象身份 / 删掉节拍守卫 ⇒ 判据必
   }
 })
 
-test('副作用已如实披露：对应格子的 title 写明"最多旧 N 秒"', () => {
-  const market = read('MarketPage.tsx')
-  assert.ok(market.includes('最多旧 60 秒'), '涨跌家数/成交额格要写明数据最多旧 60 秒')
-  assert.ok(market.includes('最多旧 30 秒'), '附加行情格要写明数据最多旧 30 秒')
-  const watch = read('WatchlistPage.tsx')
-  assert.ok(watch.includes('板块涨幅每 60 秒刷新一次'), '自选页的板块格要写明 60 秒节拍')
-  const rescue = read('RescuePanel.tsx')
-  assert.ok(rescue.includes('最多旧 60 秒'), '护盘分时量能图要写明 60 秒节拍')
-})

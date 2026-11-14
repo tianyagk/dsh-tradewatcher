@@ -15,7 +15,6 @@ import { createOverlayStack } from './overlay.ts'
 import { createRafCoalescer } from './rafThrottle.ts'
 import { panelVisibleOf } from './idle.ts'
 import { distToneOf } from './breadthView.ts'
-import { calibrationHeaderOf } from './rescueView.ts'
 import { MAX_QUOTE_IDS } from '../shared/quoteLimit.ts'
 import { TW_CSS } from './styles.ts'
 
@@ -210,7 +209,7 @@ function keyboardProblems(block: string, where: string): string[] {
   return bad
 }
 
-test('P2-6 点击型 span/div 键盘可达（日历胶囊/+N、自选异动徽标、护盘历史行）', () => {
+test('P2-6 点击型 span/div 键盘可达（日历胶囊/+N、自选异动徽标）', () => {
   const cal = strip(read('CalendarPage.tsx'))
   const pillAt = cal.indexOf("className: 'tw-cal-pill'")
   assert.ok(pillAt > 0)
@@ -225,11 +224,6 @@ test('P2-6 点击型 span/div 键盘可达（日历胶囊/+N、自选异动徽�
   const alertAt = watch.indexOf("setAlertsOpen((v) => !v)")
   assert.ok(alertAt > 0)
   assert.deepEqual(keyboardProblems(watch.slice(Math.max(0, alertAt - 700), alertAt + 700), '异动徽标'), [])
-  // 护盘历史行
-  const rescue = strip(read('RescuePanel.tsx'))
-  const histAt = rescue.indexOf("openHistory(h.day)")
-  assert.ok(histAt > 0)
-  assert.deepEqual(keyboardProblems(rescue.slice(Math.max(0, histAt - 400), histAt + 400), '历史回看行'), [])
   // 反例注入：去掉日历胶囊的 role ⇒ 判据必须非空
   const injected = pill.replace("role: 'button',", '')
   assert.notEqual(injected, pill)
@@ -357,21 +351,6 @@ test('P3-2 badgeView 删掉从未被读取的入参；做T 摘要不再有同字
 })
 
 // ══ P3-3 不再编造「+2%/日」表头 ══════════════════════════════════════════
-
-test('P3-3 触发后对照表头：没有目标涨幅/持有期就说"未取到"，不编造 +2%', () => {
-  assert.equal(calibrationHeaderOf({ targetPct: null, horizon: null }), '触发后对照（目标涨幅/持有期未取到）')
-  assert.ok(calibrationHeaderOf({ targetPct: 0.02, horizon: 1 }).includes('+2%/1日'), '有标定值时照旧显示')
-  assert.ok(calibrationHeaderOf({ targetPct: 0.02, horizon: 1 }).includes('非胜率/概率'), '诚实边界保留')
-  // 反例注入：旧写法（?? 0.02）⇒ 表头会编造 +2%
-  const legacy = (targets: Array<{ targetPct: number }>): string => `触发后对照 +${((targets.at(-1)?.targetPct ?? 0.02) * 100).toFixed(0)}%`
-  assert.equal(legacy([]), '触发后对照 +2%', '⚠ 反例（编造 +2%）必须能被复现出来')
-  assert.notEqual(legacy([]), calibrationHeaderOf({ targetPct: null, horizon: null }), '两句话必须不同（不许用编造值冒充未取到）')
-  const panel = strip(read('RescuePanel.tsx'))
-  assert.equal(panel.includes('?? 0.02'), false, '源码里不许再有 ?? 0.02')
-  assert.ok(panel.includes('calibrationHeaderOf('), '表头必须走纯函数')
-})
-
-// ══ P3-4 做T 明细不静默截断 ════════════════════════════════════════════════
 
 test('P3-4 做T 明细：超过上限必须如实披露"还有多少次未显示"', () => {
   const port = strip(read('PortfolioPage.tsx'))

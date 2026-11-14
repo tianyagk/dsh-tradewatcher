@@ -15,8 +15,8 @@ test('旧块被隐藏且带 data-legacy，新块在它之后', () => {
   const line = page.slice(page.lastIndexOf('React.createElement(', i), page.indexOf('\n', i))
   assert.ok(/hidden:\s*(true|!0)/.test(line), `旧块根节点必须带 hidden（实际：${line.trim().slice(0, 120)}）`)
   assert.ok(/display:\s*'none'/.test(line), '旧块根节点必须带 display:none')
-  // 新版两列块必须排在旧块之后
-  const j = page.indexOf("className: 'tw-mk-grid2'")
+  // 新版单列块必须排在旧块之后
+  const j = page.indexOf("className: 'tw-mk-single'")
   assert.ok(j > i, `新版两列块必须在旧块之后（legacy=${i}, grid=${j}）`)
   // 反例注入：去掉 hidden ⇒ 判据必败
   const cut = page.replace("hidden: true, style: { display: 'none' }", "style: { display: 'none' }")

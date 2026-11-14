@@ -57,18 +57,6 @@ test('① 归属复核：/suggest 仍有 ≥2 个客户端消费者 + agent 工�
 
 // ── ② 涨跌分布：名字、两列、分档语义、未取到不许编数 ──────────────────────
 
-test('② 命名与布局：标题由「A股全景」改为「涨跌分布」，两列结构 + 五个小节标题都在', () => {
-  const page = strip(read('./MarketPage.tsx'))
-  assert.ok(page.includes("'涨跌分布'"), '区块标题必须是「涨跌分布」')
-  assert.equal(page.includes('A股全景'), false, '「A股全景」不许再作为标题出现')
-  for (const t of ['涨跌趋势', '成交量', '两融走势', '日内家数']) {
-    assert.ok(page.includes(`'${t}'`), `小节「${t}」必须在`)
-  }
-  assert.ok(page.includes('tw-dist-cols') && page.includes('tw-dist-col'), '两列容器必须在（样式见 styles.ts）')
-  const css = read('./styles.ts')
-  assert.ok(/\.tw-dist-cols\{[^}]*display:flex/.test(css), '两列容器样式必须真的定义在 styles.ts')
-})
-
 test('② 分档语义：对称 9 档、平盘单独一档；**无涨跌幅的行不计入任何档**（不许当 0）', () => {
   // 边界值逐点验（正负对称）
   const { counts, blank, total } = distributionBinsOf([7, 6, 4, 1, 0, -1, -4, -6, -7, null, Number.NaN])
@@ -95,45 +83,6 @@ test('② 分档语义：对称 9 档、平盘单独一档；**无涨跌幅的�
   assert.notDeepEqual(wrong, counts, '⚠ 反例（blank 当平盘）与真实现不同 ⇒ 断言必然抓住它')
   assert.throws(() => assert.deepEqual(wrong, counts, '反例上"不许把 blank 当 0"必须失败'), /反例上/,
     '⚠ 反例注入（无涨跌幅当 0）必须让断言失败')
-})
-
-test('② 未取到的格子：常驻只写「未取到」，原因进 title/aria；四处原因必须都在，且不许用 0 顶替', () => {
-  const page = strip(read('./MarketPage.tsx'))
-  for (const [name, reason] of [
-    ['涨停/跌停', 'LIMIT_REASON'],
-    ['预测全天', 'FORECAST_REASON'],
-    ['两融', 'MARGIN_REASON'],
-    ['日内家数', 'INTRADAY_REASON'],
-  ] as Array<[string, string]>) {
-    const m = new RegExp(`const ${reason} = '([^']+)'`).exec(page)
-    assert.ok(m !== null, `${name}的原因常量必须在（${reason}）`)
-    assert.ok(m[1].length > 20, `${name}的原因必须说清而不是"未取到"三个字`)
-    // v0.81.0 重排后，"未取到"由 `item()`（内联项）与 `legendRow()`（图例行）渲染 ⇒ 原因必须以
-    // **调用点实参**的形式出现（`..., ${REASON})` 或 `note: ${REASON}`），不能靠通用兜底掩盖漏传。
-    assert.ok(
-      // 形态一：`, REASON)`（item/legendRow 实参）；形态二：`note: REASON,`（图例对象）；
-      // 形态三：`? REASON`（v0.81.2 起涨停/跌停/预测全天走"有数据 ? 真值 : 未取到+原因"的三元回落）
-      new RegExp(`(?:,\\s*${reason}\\)|note:\\s*${reason}\\s*[,}]|\\?\\s*${reason}\\b)`).test(page),
-      `${name}的原因必须由一条 item()/legendRow() 调用点实际传入`,
-    )
-    const uses = page.split(reason).length - 1
-    assert.ok(uses >= 2, `${name}的原因常量必须被真正用到（声明 + 至少一处实参；实际出现 ${uses} 次）`)
-  }
-  // 常驻可见的只有「未取到」四个字（没有把原因铺成正文）：值一律以实参形式给出
-  assert.ok(/'未取到'/.test(page), '未取到的常驻文本就是四个字')
-  assert.equal(/'未取到'\s*\+/.test(page), false, '常驻里不许把原因拼在"未取到"后面')
-  // 反例注入：把预测全天写成编的数 ⇒ 判据必须非空
-  // v0.81.2：预测全天接了真值 ⇒ "没数据时"的回落分支就是这里（`forecastCell` 的 else 分支）
-  const anchor = "{ value: '未取到', cls: 'tw-dim', note: FORECAST_REASON }"
-  assert.ok(page.includes(anchor), '反例锚点必须还在（预测全天没数据时的回落分支）')
-  const injected = page.replace(anchor, "{ value: '1.23 万亿', cls: 'tw-dim', note: FORECAST_REASON }")
-  assert.notEqual(injected, page, '反例注入必须真改到源码')
-  assert.ok(injected.includes("'1.23 万亿'"), '⚠ 反例（编一个预测数）必须能被识别出来')
-  assert.throws(
-    () => assert.equal(injected.includes(anchor), true, '反例上"必须显示未取到"必须失败'),
-    /反例上/,
-    '⚠ 反例注入（给预测全天编数）必须让断言失败',
-  )
 })
 
 test('② 路由：分布是 `/breadth?dist=1` 的可选字段；没扫全 ⇒ counts: null（不给部分分布冒充全市场）', () => {

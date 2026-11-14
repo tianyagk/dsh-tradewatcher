@@ -2,8 +2,8 @@
  */
 import * as React from 'react'
 import { shouldPollRescue } from '../shared/pollGate.ts'
-import { rescuePollSec, shortSignalOf } from './rescueView.ts'
-import { abnormalColorOf, abnormalLabelOf, calibrationHeaderOf, caliberEntryOf, dayHistoryStateOf, ringDashOf } from './rescueView.ts'
+import { rescuePollSec } from './rescueView.ts'
+import { abnormalColorOf, abnormalLabelOf, dayHistoryStateOf, ringDashOf } from './rescueView.ts'
 import { breakerBadgeOf } from './rescueView.ts'
 import type {
   PortPrefs, RescueConfig, RescueDaySummary, RescueEtfMeta, RescueEtfView, RescueFactor,
@@ -402,11 +402,6 @@ export function RescuePanel(props: {
 
   const config: RescueConfig = props.prefs.rescue
   const snapshot = data?.snapshot ?? null
-  /**
-   * 「口径与边界」常驻入口（IMPL-79）：三段披露（宿主口径句 + 两段红线）的**唯一来源**，
-   * 常驻区只渲染 `label` 一行，三段原文进 `title`/`aria-label`（见 `rescueView.caliberEntryOf`）。
-   */
-  const caliberEntry = caliberEntryOf(snapshot?.bottom?.model)
   /**
    * 本拍的覆盖广度（阶段一）：优先 `snapshot.coverage`，老宿主退回最新一条带该字段的事件。
    * 缺失时不补 0 —— `coverageBadgeOf` 会给 `—` + 原因。
@@ -815,137 +810,8 @@ export function RescuePanel(props: {
               ),
             ),
           ),
-          snapshot.bottom !== undefined && snapshot.bottom.lanes.length > 0
-            ? React.createElement('div', { className: 'tw-panel', style: { padding: '6px 8px' } },
-                React.createElement('div', { className: 'tw-sub-h' }, '底部位置 / 形态 / 触发后对照',
-                  React.createElement('span', { style: { flex: 1 } }),
-                  // 保留视图必须显式标注：这是「日线/校准样本暂时拿不到」时的上次结果，
-                  // 不是本次计算 —— 否则会被当成刚算出来的实时结论
-                  snapshot.bottom.stale === true
-                    ? React.createElement('span', {
-                        className: 'tw-badge',
-                        title: '日线或校准样本暂时不可用，这里展示上一次成功计算的结果（位置/形态/触发后对照都是慢变量，仍可参考）',
-                        style: { fontSize: 12, color: 'var(--tw-warn)' },
-                      }, `上次结果${
-                        typeof snapshot.bottom.computedAt === 'number'
-                          // R5：这里曾用 `new Date(x).toTimeString()` ⇒ 按**浏览器时区**渲染
-                          // （UTC 浏览器里 14:32 会显示 06:32），与页面其它"数据时刻"不同源。
-                          // 一律走 `shClockText`（固定 Asia/Shanghai）。
-                          ? ` · ${shClockText(snapshot.bottom.computedAt).slice(0, 5)}`
-                          : ''
-                      }`)
-                    : null,
-                  React.createElement('span', { className: 'tw-muted', style: { fontSize: 12 } }, snapshot.bottom.asOf),
-                ),
-                React.createElement('table', { className: 'tw-rescue-factor' },
-                  React.createElement('thead', null, React.createElement('tr', null,
-                    React.createElement('th', null, '通道'),
-                    React.createElement('th', null, '位置分'), React.createElement('th', null, '60日分位'),
-                    React.createElement('th', null, '距60日高'), React.createElement('th', null, '距60日低'), React.createElement('th', null, '连跌'),
-                    React.createElement('th', null, '形态分'), React.createElement('th', null, '日内回升'), React.createElement('th', null, '下影线'), React.createElement('th', null, '收回前低'),
-                    // P3-3：目标涨幅/持有期缺失时**不再编造 +2%**（表头如实说"未取到"）
-                    React.createElement('th', null, calibrationHeaderOf({
-                      targetPct: snapshot.bottom.lanes[0].calibration.targets.at(-1)?.targetPct ?? null,
-                      horizon: snapshot.bottom.lanes[0].calibration.horizon,
-                    })),
-                  )),
-                  React.createElement('tbody', null,
-                    ...snapshot.bottom.lanes.map((l) =>
-                      React.createElement('tr', { key: l.secid, 'data-hit': l.positionScore >= 70 },
-                        React.createElement('td', null, l.name),
-                        React.createElement('td', { style: { fontFamily: 'var(--tw-mono)' } }, String(l.positionScore)),
-                        React.createElement('td', { className: 'tw-muted' }, l.position.percentile60 === null ? '—' : `${(l.position.percentile60 * 100).toFixed(0)}%`),
-                        React.createElement('td', { className: 'tw-muted' }, l.position.drawdown60 === null ? '—' : `${(l.position.drawdown60 * 100).toFixed(1)}%`),
-                        React.createElement('td', { className: 'tw-muted' }, l.position.aboveLow60 === null ? '—' : `+${(l.position.aboveLow60 * 100).toFixed(1)}%`),
-                        React.createElement('td', { className: 'tw-muted' }, `${l.position.downStreak} 日`),
-                        React.createElement('td', { style: { fontFamily: 'var(--tw-mono)' } }, String(l.patternScore)),
-                        React.createElement('td', { className: 'tw-muted' }, l.pattern.bouncePct === null ? '—' : `${l.pattern.bouncePct.toFixed(2)}%`),
-                        React.createElement('td', { className: 'tw-muted' }, l.pattern.lowerShadow === null ? '—' : `${(l.pattern.lowerShadow * 100).toFixed(0)}%`),
-                        React.createElement('td', { className: 'tw-muted' }, l.pattern.reclaimedPrevLow ? '是' : '否'),
-                        React.createElement('td', { className: 'tw-muted', title: '前低时点（北京时间）' }, l.pattern.lowAtTs !== null ? shClockText(l.pattern.lowAtTs).slice(0, 5) : '—'),
-                      ),
-                    ),
-                  ),
-                ),
-                snapshot.bottom.lanes.length > 0
-                  ? React.createElement('div', { className: 'tw-rescue-resonance', style: { marginTop: 6 } },
-                      // 区间口径的已知局限（R2 测量后上屏）：**只挂在 title / aria-label**，不占常驻行、
-                      // 不写任何数字。来源是校准结果上的 `intervalNote`（单一来源在 shared/model.ts），
-                      // 客户端不自己算、也不在这里编一句。
-                      React.createElement('span', {
-                        className: 'tw-muted',
-                        ...(snapshot.bottom.lanes[0].calibration.intervalNote === undefined || snapshot.bottom.lanes[0].calibration.intervalNote === ''
-                          ? {}
-                          : {
-                              title: snapshot.bottom.lanes[0].calibration.intervalNote,
-                              'aria-label': `历史频率：${snapshot.bottom.lanes[0].calibration.intervalNote}`,
-                            }),
-                      }, '历史频率'),
-                      // P1-9：概率必须带 Wilson 95% 区间 —— 20 个样本的 80% 与 500 个样本的
-                      // 80% 不是一回事，只给点估计会被读成"准确率"
-                      ...snapshot.bottom.lanes[0].calibration.targets.map((t) => {
-                        const ci = (lo: number | null | undefined, hi: number | null | undefined): string =>
-                          lo === null || lo === undefined || hi === null || hi === undefined
-                            ? ''
-                            : `（95% 区间 ${(lo * 100).toFixed(1)}–${(hi * 100).toFixed(1)}%）`
-                        return React.createElement('span', {
-                          key: t.targetPct,
-                          title:
-                            `同类 ${t.prob === null ? '—' : (t.prob * 100).toFixed(1) + '%'}${ci(t.probLo, t.probHi)}` +
-                            ` · 基线 ${t.baseRate === null ? '—' : (t.baseRate * 100).toFixed(1) + '%'}${ci(t.baseLo, t.baseHi)}`,
-                        },
-                          `+${(t.targetPct * 100).toFixed(0)}%：${t.prob === null ? '—' : (t.prob * 100).toFixed(1) + '%'}` +
-                          (t.probLo != null && t.probHi != null ? `［${(t.probLo * 100).toFixed(1)}–${(t.probHi * 100).toFixed(1)}］` : '') +
-                          ` vs 基线 ${t.baseRate === null ? '—' : (t.baseRate * 100).toFixed(1) + '%'}`,
-                        )
-                      }),
-                      // 样本量必须与区间一起读：不足以支撑结论时要显式说出来
-                      snapshot.bottom.lanes[0].calibration.sampleSmall === true
-                        ? React.createElement('span', {
-                            className: 'tw-badge',
-                            style: { color: 'var(--tw-warn)', borderColor: 'var(--tw-warn)' },
-                            title: `同类样本 N=${snapshot.bottom.lanes[0].calibration.n} < 30：样本不足，仅作参考`,
-                          }, '样本少')
-                        : null,
-                      React.createElement('span', { className: 'tw-muted' }, `样本 N=${snapshot.bottom.lanes[0].calibration.n}（基线 ${snapshot.bottom.lanes[0].calibration.baseN}${snapshot.bottom.lanes[0].calibration.baseSampleSmall === true ? ' · 偏少' : ''}）`),
-                      React.createElement('span', null, `前向${snapshot.bottom.lanes[0].calibration.horizon}日收益中位数 ${snapshot.bottom.lanes[0].calibration.medianForward === null ? '—' : (snapshot.bottom.lanes[0].calibration.medianForward * 100).toFixed(2) + '%'}`),
-                      React.createElement('span', null, `期间最大回撤中位数 ${snapshot.bottom.lanes[0].calibration.medianDrawdown === null ? '—' : (snapshot.bottom.lanes[0].calibration.medianDrawdown * 100).toFixed(2) + '%'}`),
-                    )
-                  : null,
-                // IMPL-79（用户要求）：这三段披露（宿主口径句 + 两段红线）不再常驻占版面，
-                // 收进**一行**入口：鼠标悬停读 title、键盘 Tab 到读 aria-label（事实一条不少）。
-                React.createElement('div', {
-                  className: 'tw-hint tw-rescue-caliber-entry',
-                  tabIndex: 0,
-                  role: 'note',
-                  'data-role': 'rescue-caliber',
-                  title: caliberEntry.title,
-                  'aria-label': caliberEntry.ariaLabel,
-                  style: { fontSize: 12, marginTop: 4, cursor: 'help' },
-                }, caliberEntry.label),
-              )
-            : null,
           React.createElement('div', { className: 'tw-rescue-split' },
             React.createElement('div', null,
-              React.createElement('div', { className: 'tw-sub-h' }, `今日信号时间线（${snapshot.today.length}）`),
-              snapshot.today.length === 0
-                ? React.createElement('div', { className: 'tw-hint', style: { padding: '6px 2px' } }, '今日暂无信号事件。')
-                : React.createElement('div', { className: 'tw-rescue-timeline' },
-                    ...snapshot.today.map((e) =>
-                      React.createElement('div', { key: `${e.ts}-${e.level}`, className: 'tw-rescue-tl-row' },
-                        React.createElement('span', { style: { fontFamily: 'var(--tw-mono)', color: LEVEL_COLOR[e.level] } }, e.hhmm),
-                        React.createElement('span', { className: 'tw-badge', style: { color: LEVEL_COLOR[e.level], borderColor: LEVEL_COLOR[e.level] } }, RESCUE_LEVEL_LABEL[e.level]),
-                        // 时间线每条也给同一枚覆盖广度短标记（缺字段 ⇒ `—` + 原因，不写 0 顶替）
-                        React.createElement(CoverageMark, { cov: e.coverage, why: e.coverageWhy, enabled: snapshot.coverageEnabled === true }),
-                        e.engine === undefined
-                          ? React.createElement('span', { className: 'tw-badge', title: '该事件由更早的评分口径记录（因子构成与当前不同，仅作历史留痕）' }, '旧口径')
-                          : null,
-                        React.createElement('span', { className: 'tw-muted', style: { fontSize: 12, flex: 1, minWidth: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' } }, shortSignalOf(e)),
-                      ),
-                    ),
-                  ),
-              React.createElement('div', { className: 'tw-hint', style: { fontSize: 12 } },
-                '注：「旧口径」标记的事件是升级前记录的，其评分逻辑与当前不同（例如尾盘脉冲口径、时点系数未接入），不得与今天的信号比较。'),
               React.createElement('div', { className: 'tw-sub-h', style: { marginTop: 8 } }, `今日 5 分钟抽样（${snapshot.intraday.length}）`),
               snapshot.intraday.length === 0
                 ? React.createElement('div', { className: 'tw-hint' }, '尚未累积当日抽样点。')
@@ -955,37 +821,6 @@ export function RescuePanel(props: {
                         key: p.hhmm, className: 'tw-rescue-ip', title: `${p.hhmm} 评分 ${p.score} · 量能 ${fmtX(p.timeAdjMult)} · 超大单比均额 ${fmtX(p.superVsAvg, 3)}`,
                         style: { background: LEVEL_COLOR[p.level], opacity: Math.max(0.25, Math.min(1, p.score / 100)) },
                       }),
-                    ),
-                  ),
-            ),
-            React.createElement('div', null,
-              React.createElement('div', { className: 'tw-sub-h', style: { marginTop: 8 } }, `历史回看（${data?.history.length ?? 0} 天，自采样器上线起）`),
-              (data?.history.length ?? 0) === 0
-                ? React.createElement('div', { className: 'tw-hint', style: { padding: '6px 2px' } },
-                    '尚无历史记录：host 采样器已启动，交易时段会自动累积（免费源无 ETF 资金流历史，历史回看只能从上线日算起）。')
-                : React.createElement('div', { className: 'tw-rescue-history' },
-                    ...(data?.history ?? []).map((h) =>
-                      // 键盘可达（P2-6）：历史回看行是点击型 div
-                      React.createElement('div', {
-                        key: h.day,
-                        className: 'tw-rescue-h-row',
-                        role: 'button',
-                        tabIndex: 0,
-                        'aria-label': `${h.day} 历史回看（峰值 ${h.maxScore}）`,
-                        onClick: () => openHistory(h.day),
-                        onKeyDown: (e: React.KeyboardEvent) => {
-                          if (e.key === 'Enter' || e.key === ' ') {
-                            e.preventDefault()
-                            openHistory(h.day)
-                          }
-                        },
-                      },
-                        React.createElement('span', { style: { fontFamily: 'var(--tw-mono)', fontSize: 12 } }, h.day),
-                        React.createElement('span', { className: 'tw-badge', style: { color: LEVEL_COLOR[h.maxLevel], borderColor: LEVEL_COLOR[h.maxLevel] } }, RESCUE_LEVEL_LABEL[h.maxLevel]),
-                        React.createElement('span', { className: 'tw-muted', style: { fontSize: 12 } }, `峰值 ${h.maxScore}${h.peakHhmm !== null ? ` @${h.peakHhmm}` : ''}`),
-                        React.createElement('span', { style: { flex: 1 } }),
-                        React.createElement('span', { className: 'tw-muted', style: { fontSize: 12 } }, `触发 ${h.events} 次`),
-                      ),
                     ),
                   ),
             ),
