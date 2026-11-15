@@ -15,7 +15,7 @@ const page = (): string => strip(read('MarketPage.tsx'))
 
 test('① 页面只剩 1 张卡（多于 1 ⇒ 败）', () => {
   const src = page()
-  const cards = (src.match(/card\('/g) ?? []).length
+  const cards = (src.match(/card\(\s*'/g) ?? []).length
   assert.equal(cards, 1, `只允许 1 张卡（实际 ${cards}）`)
   assert.throws(() => assert.equal(cards + 1, 1, '反例上：多一张卡'), /反例上/, '⚠ 反例注入必须失败')
 })
@@ -30,7 +30,7 @@ test('② 两个标题 0 处（出现 ⇒ 败）', () => {
 
 test('③ 汪汪队跟踪仍在（删多 ⇒ 败）', () => {
   const src = page()
-  assert.equal(src.includes("card('汪汪队跟踪'"), true, '汪汪队跟踪卡必须保留')
+  assert.equal(/card\(\s*'汪汪队跟踪'/.test(src), true, '汪汪队跟踪卡必须保留')
   assert.equal(/\bdistCardRender\b/.test(src), false, 'distCardRender 引用必须清零')
   assert.equal(/\btw-mk-single\b/.test(src), false, 'tw-mk-single 必须清零')
   assert.throws(() => assert.equal(src.split('汪汪队跟踪').join('').includes('汪汪队跟踪'), true, '反例上：删多了'), /反例上/, '⚠ 反例注入必须失败')

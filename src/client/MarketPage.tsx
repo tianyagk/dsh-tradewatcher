@@ -4,6 +4,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import type { BoardRow, QuoteRow, StockDetail, TrendData } from '../shared/model.ts'
 import { api } from './api.ts'
+import { DW_FOOTNOTE, dwKpis, dwReview, dwSeries, dwTable } from './dogwatchView.ts'
 import { MINUTE_BARS, missingCellText } from './marketBlocks.ts'
 import { UPDOWN_MISSING_NOTE, upDownPair } from './breadthView.ts'
 import { dirClass, fmtAmt, fmtBig, fmtPct, fmtPrice, fmtSigned } from './format.ts'
@@ -246,53 +247,92 @@ export function MarketPage(props: {
         )
       // v0.187.0：随两张卡下线，下列 helper/常量已无渲染点；保留定义但显式声明"暂未使用"，避免误读为活跃代码
   void INTRADAY_REASON; void seg; void legendRow; void amountForForecast; void EXTRAS_MIN_INTERVAL_MS
-  const dwMetric = (k: string, v: string, sub: string): React.ReactElement =>
-        React.createElement('div', { className: 'tw-dw-m' },
-          React.createElement('div', { className: 'k' }, k),
-          React.createElement('div', { className: 'v' }, v),
-          sub === '' ? null : React.createElement('div', { className: 's' }, sub))
+
       const b = breadth?.current ?? null
       void b
       // v0.184.0：用户要求下线左列四卡 —— 单列只剩「涨跌分布」与「分钟成交额较昨日增减」
       // v0.187.0：用户要求下线「涨跌分布」「分钟成交额较昨日增减」；页面只剩护盘信号 + 汪汪队跟踪
-      const dogwatchCard = (
-        card('汪汪队跟踪', React.createElement(React.Fragment, null,
-          React.createElement('div', { className: 'tw-seg' },
-          ...(['3m', '6m', '1y', '2y'] as const).map((w) => React.createElement('button', {
-            key: w, className: `tw-tab${dwWindow === w ? ' is-on' : ''}`, style: { fontSize: 12 },
-            onClick: () => setDwWindow(w),
-          }, w === '3m' ? '3月' : w === '6m' ? '6月' : w === '1y' ? '1年' : '2年')))),
-          dwErr !== null
-            ? React.createElement('div', { className: 'tw-mk-empty' }, missingCellText(dwErr))
-            : dogwatch === null
-              ? React.createElement('div', { className: 'tw-mk-empty' }, missingCellText('加载中'))
-              : React.createElement(React.Fragment, null,
-                  React.createElement('div', { className: 'tw-dw-metrics', 'data-role': 'dw-metrics' },
-                    dwMetric('总份额', dogwatch.rows.reduce((a, r) => a + (r.shares ?? 0), 0).toFixed(1), '亿份'),
-                    dwMetric('合计成交额', dogwatch.summary.totalAmount === null ? '—' : (dogwatch.summary.totalAmount / 1e8).toFixed(1), '亿元'),
-                    dwMetric('放大倍数', dogwatch.summary.ratio === null ? '—' : `${dogwatch.summary.ratio.toFixed(2)}x`, '当日 ÷ 20日均'),
-                    dwMetric('主动净买入', dogwatch.summary.netBuy === null ? '—' : (dogwatch.summary.netBuy / 1e8).toFixed(2), '亿元'),
-                    dwMetric('加权涨跌', dogwatch.summary.weightedPct === null ? '—' : `${dogwatch.summary.weightedPct.toFixed(2)}%`, ''),
-                    dwMetric('加仓指数', dogwatch.series.length === 0 ? '—' : dogwatch.series[dogwatch.series.length - 1]!.index.toFixed(1), dogwatch.summary.baseDate ?? '')),
-                  dogwatch.sharesStale
-                    ? React.createElement('div', { className: 'tw-hint', style: { fontSize: 12, color: 'var(--tw-warn)' } }, '—（份额源未日更）')
-                    : null,
-                  React.createElement('table', { className: 'tw-dw-table', 'data-role': 'dw-table' },
-                    React.createElement('thead', null, React.createElement('tr', null,
-                      React.createElement('th', null, 'ETF'), React.createElement('th', null, '指数'),
-                      React.createElement('th', null, '规模(亿份)'), React.createElement('th', null, '份额变化(亿份)'),
-                      React.createElement('th', null, '成交额(亿)'), React.createElement('th', null, '涨跌'))),
-                    React.createElement('tbody', null, ...dogwatch.rows.map((r) => React.createElement('tr', { key: r.secid },
-                      React.createElement('td', null, r.name),
-                      React.createElement('td', { className: 'tw-muted' }, r.indexName),
-                      React.createElement('td', null, r.scale === null ? '—' : r.scale.toFixed(1)),
-                      React.createElement('td', { title: dogwatch.sharesStale ? '份额源未日更' : (r.sharesDelta === null ? '缺上一交易日份额' : undefined) }, dogwatch.sharesStale || r.sharesDelta === null ? '—' : `${r.sharesDelta > 0 ? '+' : ''}${r.sharesDelta.toFixed(2)}`),
-                      React.createElement('td', null, r.amount === null ? '—' : (r.amount / 1e8).toFixed(2)),
-                      React.createElement('td', null, r.pct === null ? '—' : `${r.pct > 0 ? '+' : ''}${r.pct.toFixed(2)}%`))))),
-                  dogwatch.missing.length > 0
-                    ? React.createElement('div', { className: 'tw-hint tw-dim', style: { fontSize: 12 }, title: dogwatch.missing.map((m) => m.note).join('；') }, `缺 ${dogwatch.missing.length} 项（悬停看原因）`)
-                    : null))
-      )
+      const dwView = dogwatch === null ? null : dwTable(dogwatch.rows, dogwatch.summary, dogwatch.sharesStale)
+      const dwRev = dogwatch === null ? null : dwReview(dogwatch.summary.baseDate ?? '—', dogwatch.summary)
+      const dwK = dogwatch === null ? null : dwKpis(dogwatch.summary)
+      const dwS = dogwatch === null ? null : dwSeries(dogwatch.series)
+      const dwBarsOf = (vals: number[]): React.ReactElement[] => {
+        const maxAbs = Math.max(1e-9, ...vals.map((v) => Math.abs(v)))
+        const W = 560, H = 180, zero = H / 2, bw = W / Math.max(1, vals.length)
+        return vals.map((v, i) => {
+          const h = Math.max(1, (Math.abs(v) / maxAbs) * (H / 2 - 6))
+          return React.createElement('rect', {
+            key: i, x: (i * bw + 0.4).toFixed(2), y: (v >= 0 ? zero - h : zero).toFixed(1),
+            width: Math.max(1, bw - 0.8).toFixed(2), height: h.toFixed(1),
+            fill: v >= 0 ? 'var(--tw-up)' : 'var(--tw-down)',
+          })
+        })
+      }
+      const dwLineOf = (vals: number[]): React.ReactElement[] => {
+        if (vals.length < 2) return []
+        const W = 560, H = 180, pad = 10
+        const lo = Math.min(100, ...vals), hi = Math.max(100, ...vals)
+        const yOf = (v: number): number => pad + (1 - (v - lo) / ((hi - lo) || 1)) * (H - pad * 2)
+        const xOf = (i: number): number => (i / (vals.length - 1)) * W
+        return [
+          React.createElement('line', {
+            key: 'base', x1: 0, y1: yOf(100).toFixed(1), x2: W, y2: yOf(100).toFixed(1),
+            stroke: 'var(--tw-border-strong)', strokeWidth: 1, strokeDasharray: '4 3',
+          }),
+          React.createElement('polyline', {
+            key: 'line', fill: 'none', stroke: 'var(--tw-accent)', strokeWidth: 1.6,
+            points: vals.map((v, i) => `${xOf(i).toFixed(1)},${yOf(v).toFixed(1)}`).join(' '),
+          }),
+        ]
+      }
+      const dwReviewEl = React.createElement('div', { className: 'tw-dw-review', 'data-role': 'dw-review' },
+        React.createElement('div', { className: 'tw-dw-review-main' },
+          React.createElement('div', { className: 'tw-dw-review-day' }, dwRev?.day ?? '—'),
+          React.createElement('div', { className: 'tw-dw-review-verdict' }, dwRev?.verdict ?? '—')),
+        React.createElement('div', { className: 'tw-dw-review-big' }, dwRev?.big ?? '—'),
+        React.createElement('div', { className: 'tw-dw-review-sub' }, dwRev?.bigSub ?? '较 20 日均额'))
+      const dwKpiEl = React.createElement('div', { className: 'tw-dw-kpis', 'data-role': 'dw-kpis' },
+        ...(dwK ?? []).map((k) => React.createElement('div', { key: k.label, className: 'tw-dw-kpi' },
+          React.createElement('span', { className: 'l' }, k.label),
+          React.createElement('span', { className: 'v' }, k.value),
+          React.createElement('span', { className: 's' }, k.sub))))
+      const dwTabsEl = React.createElement('div', { className: 'tw-seg' },
+        ...(['3m', '6m', '1y', '2y'] as const).map((w) => React.createElement('button', {
+          key: w, className: `tw-tab${dwWindow === w ? ' is-on' : ''}`,
+          onClick: () => setDwWindow(w),
+        }, w === '3m' ? '近3月' : w === '6m' ? '6月' : w === '1y' ? '1年' : '2年')))
+      const dwBarsEl = React.createElement('div', { className: 'tw-dw-chart', 'data-role': 'dw-chart-bars' },
+        React.createElement('div', { className: 'tw-dw-chart-h' },
+          React.createElement('span', { className: 't' }, '汪汪队每日份额变化估算'), dwTabsEl),
+        React.createElement('svg', { viewBox: '0 0 560 180', preserveAspectRatio: 'none', className: 'tw-dw-svg' },
+          ...dwBarsOf(dwS?.bars ?? [])),
+        React.createElement('div', { className: 'tw-dw-chart-f' }, '单位：亿份 · 柱 = 当日份额变化估算'))
+      const dwLineEl = React.createElement('div', { className: 'tw-dw-chart', 'data-role': 'dw-chart-line' },
+        React.createElement('div', { className: 'tw-dw-chart-h' },
+          React.createElement('span', { className: 't' }, '汪汪队加仓指数估算'),
+          React.createElement('span', { className: 'tw-dw-chart-note' }, '基期 = 100')),
+        React.createElement('svg', { viewBox: '0 0 560 180', preserveAspectRatio: 'none', className: 'tw-dw-svg' },
+          ...dwLineOf(dwS?.line ?? [])),
+        React.createElement('div', { className: 'tw-dw-chart-f' }, '单位：指数 · 虚线 = 基期 100'))
+      const dwTableEl = React.createElement('div', { className: 'tw-dw-tscroll' },
+        React.createElement('table', { className: 'tw-dw-table', 'data-role': 'dw-table' },
+          React.createElement('thead', null, React.createElement('tr', null,
+            ...(dwView?.head ?? []).map((h) => React.createElement('th', { key: h }, h)))),
+          React.createElement('tbody', null,
+            ...(dwView?.rows ?? []).map((r) => React.createElement('tr', { key: r.key },
+              ...r.cells.map((c, i) => React.createElement('td', {
+                key: i, title: r.titles[i], className: i >= 2 ? 'num' : undefined,
+              }, c)))))))
+      const dogwatchCard = card('汪汪队跟踪', null, dwErr !== null
+        ? React.createElement('div', { className: 'tw-mk-empty' }, missingCellText(dwErr))
+        : dogwatch === null
+          ? React.createElement('div', { className: 'tw-mk-empty' }, missingCellText('加载中'))
+          : React.createElement('div', { className: 'tw-dw-body', 'data-role': 'dw-body' },
+              dwReviewEl, dwKpiEl,
+              React.createElement('div', { className: 'tw-dw-charts' }, dwBarsEl, dwLineEl),
+              dwTableEl,
+              React.createElement('div', { className: 'tw-dw-foot', 'data-role': 'dw-foot' }, DW_FOOTNOTE)))
+
       return React.createElement('div', {
         className: 'tw-mk-body',
         'data-bars': String(MINUTE_BARS),

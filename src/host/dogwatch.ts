@@ -253,14 +253,18 @@ export async function mapWithConcurrency<T, R>(items: readonly T[], limit: numbe
 
 export interface DogwatchRow {
   secid: string; name: string; indexName: string
+  /** 规模（亿份）—— 与 `sharesYi` 同值，供加权与表格共用；**已是亿份，客户端不得再换算** */
   scale: number | null; amount: number | null; ratio20: number | null
   netBuy: number | null; pct: number | null
-  shares: number | null; sharesDelta: number | null
+  /** 份额（**亿份**）：`TOT_VOL(万份) / 1e4`，全链路只此一次换算 */
+  sharesYi: number | null
+  /** 份额变化（亿份）；缺上一交易日 ⇒ null */
+  sharesDelta: number | null
 }
 
 export interface DogwatchPayload {
   window: string
-  summary: { totalAmount: number | null; ratio: number | null; netBuy: number | null; weightedPct: number | null; baseDate: string | null }
+  summary: { totalAmount: number | null; ratio: number | null; netBuy: number | null; weightedPct: number | null; baseDate: string | null; /** 总份额（亿份，Σ14） */ totalSharesYi: number | null }
   series: Array<{ day: string; change: number; index: number }>
   rows: DogwatchRow[]
   missing: Array<{ what: string; why: 'no-source' | 'transient'; note: string }>
@@ -355,10 +359,19 @@ export async function fetchDogwatch(
       scale: sharesWan === null ? null : wanToYi(sharesWan),
       amount: q?.amount ?? null, ratio20: null, netBuy: null,
       pct: q?.pct ?? null,
-      shares: sharesWan === null ? null : wanToYi(sharesWan),
+      sharesYi: sharesWan === null ? null : wanToYi(sharesWan),
       sharesDelta: sharesWan !== null && prevWan !== null ? wanToYi(sharesWan - prevWan) : null,
     }
   })
+  /**
+   * 零值保护（v0.189.0）：单位只换算一次；若某行 `sharesYi` 恰好为 0（换算两次的典型症状），
+   * 必须把它连同**原始 TOT_VOL** 一起报出来，而不是静默显示 0.0。
+   */
+  const zeroRows = rows.filter((r) => r.sharesYi === 0)
+  for (const r of zeroRows) {
+    const raw = last?.rows.get(r.secid.split('.')[1] ?? '')?.volWan
+    missing.push({ what: r.secid, why: 'no-source', note: `份额换算后为 0（原始 TOT_VOL=${raw ?? '?'} 万份）——量纲可能被二次换算` })
+  }
   // 折算日：单只标的的份额变化同样顺延（避免折算日的巨量"减仓"）
   const actionDays = new Set(actions.map((a) => a.day))
   if (last !== undefined && actionDays.has(last.day)) {
@@ -383,7 +396,11 @@ export async function fetchDogwatch(
   }
   const sharesStale = sharesStaleOf(todayMap, prevMap)
   return {
-    window, summary: { totalAmount, ratio, netBuy, weightedPct, baseDate: totalSeries[0]?.day ?? null },
+    window,
+    summary: {
+      totalAmount, ratio, netBuy, weightedPct, baseDate: totalSeries[0]?.day ?? null,
+      totalSharesYi: rows.some((r) => r.sharesYi !== null) ? rows.reduce((a, r) => a + (r.sharesYi ?? 0), 0) : null,
+    },
     series, rows, missing, corporateActions: actions, sharesStale, asOf: now,
   }
 }

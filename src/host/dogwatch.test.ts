@@ -3,7 +3,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { DOGWATCH_POOL, cacheUsableOf, detectCorporateActions, indexSeriesOf, isShenzhenCode, loadSharesOf, parseSseShares, poolCoverageOf, ratioOf, sharesStaleOf, sharesCachePath, weightedPctOf } from './dogwatch.ts'
+import { DOGWATCH_POOL, cacheUsableOf, fetchDogwatch, wanToYi, detectCorporateActions, indexSeriesOf, isShenzhenCode, loadSharesOf, parseSseShares, poolCoverageOf, ratioOf, sharesStaleOf, sharesCachePath, weightedPctOf } from './dogwatch.ts'
 
 test('① 加仓指数首日 = 100（不等于 100 ⇒ 败）', () => {
   const s = indexSeriesOf([{ day: 'd1', volWan: 1000 }, { day: 'd2', volWan: 1100 }], [])
@@ -155,4 +155,32 @@ test('⑥ 卡头不含 涨停 / 跌停（残留 ⇒ 败）', () => {
   assert.equal(page.includes('涨停'), false, '卡头不许再有涨停家数')
   assert.equal(page.includes('跌停'), false, '卡头不许再有跌停家数')
   assert.throws(() => assert.equal(`${page}\n'涨停 37'`.includes('涨停'), false, '反例上：残留涨停'), /反例上/, '⚠ 反例注入必须失败')
+})
+
+// ── v0.189.0：单位只换算一次（sharesYi = TOT_VOL/1e4） ─────────────────────
+
+test('⑦ 510300 ⇒ sharesYi ≈ 456.2（±0.1）；总份额 Σ14 ≈ 2969.6（±1）', async () => {
+  const one = parseSseShares(JSON.stringify({ result: [{ STAT_CODE: 'x', SEC_CODE: '510300', SEC_NAME: '沪深300ETF华泰柏瑞', TOT_VOL: '4562328.77' }] }))
+  assert.ok(Math.abs(wanToYi(one.get('510300')!.volWan) - 456.2) <= 0.1, `510300 应为 456.2 亿份（实得 ${wanToYi(one.get('510300')!.volWan)}）`)
+  // 14 只：首只 456.23，其余 13 只均分到 2969.6
+  const others = (2969.6 - 456.23) / 13
+  const rows = Object.fromEntries(DOGWATCH_POOL.map((p, i) => [p.code, { name: p.name, volWan: (i === 0 ? 4562328.77 : others * 1e4) }]))
+  const payload = await fetchDogwatch('3m', {
+    now: Date.parse('2026-11-13T18:00:00+08:00'),
+    loadShares: async () => new Map(Object.entries(rows)),
+    quotes: async () => ({}),
+  })
+  assert.equal(payload.rows.length, 14)
+  assert.ok(payload.rows.every((r) => r.sharesYi !== null && r.sharesYi > 0), '14 行都必须有正份额')
+  assert.ok(Math.abs(payload.summary.totalSharesYi! - 2969.6) <= 1, `总份额应为 2969.6（实得 ${payload.summary.totalSharesYi}）`)
+  assert.throws(() => assert.equal(payload.summary.totalSharesYi, 0.0, '反例上：显示 0.0'), /反例上/, '⚠ 反例注入（二次换算）必须失败')
+})
+
+test('⑧ 任一行 sharesYi === 0 ⇒ 判失败并带出原始 TOT_VOL', () => {
+  const zero = parseSseShares(JSON.stringify({ result: [{ SEC_CODE: '510300', SEC_NAME: 'x', TOT_VOL: '0' }] }))
+  assert.equal(zero.size, 0, 'TOT_VOL=0 的行不得进入结果（宁缺不错）')
+  const ok = parseSseShares(JSON.stringify({ result: [{ SEC_CODE: '510300', SEC_NAME: 'x', TOT_VOL: '4562328.77' }] }))
+  assert.equal(wanToYi(ok.get('510300')!.volWan), 456.232877)
+  assert.notEqual(wanToYi(ok.get('510300')!.volWan), 0)
+  assert.throws(() => assert.equal(wanToYi(ok.get('510300')!.volWan), 0, '反例上：0.0'), /反例上/, '⚠ 反例注入必须失败')
 })

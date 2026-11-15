@@ -969,6 +969,32 @@ color-scheme:dark}
 .tw-mk-dist i[data-dir=up]{background:var(--tw-up)}
 .tw-mk-dist i[data-dir=down]{background:var(--tw-down)}
 .tw-mk-dist i[data-dir=flat]{background:var(--tw-muted)}
+
+/* ── 汪汪队跟踪（dogwatch）───────────────────────────────────────────── */
+.tw-dw-body{display:flex;flex-direction:column;gap:8px}
+.tw-dw-review{display:flex;align-items:flex-end;gap:12px;padding:10px 12px;border:1px solid var(--tw-border);border-radius:8px;background:var(--tw-card2)}
+.tw-dw-review-main{display:flex;flex-direction:column;gap:2px}
+.tw-dw-review-day{color:var(--tw-muted);font-size:12px;font-variant-numeric:tabular-nums}
+.tw-dw-review-verdict{font-size:15px;font-weight:600}
+.tw-dw-review-big{margin-left:auto;font-size:34px;font-weight:700;font-variant-numeric:tabular-nums;line-height:1}
+.tw-dw-review-sub{color:var(--tw-muted);font-size:12px;text-align:right}
+.tw-dw-kpis{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px}
+@media (max-width:899px){.tw-dw-kpis{grid-template-columns:repeat(2,minmax(0,1fr))}}
+.tw-dw-kpi{display:flex;flex-direction:column;gap:2px;padding:10px;border:1px solid var(--tw-border);border-radius:8px;background:var(--tw-card2);min-width:0}
+.tw-dw-kpi .l{color:var(--tw-muted);font-size:12px}
+.tw-dw-kpi .v{font-size:28px;font-weight:700;font-variant-numeric:tabular-nums;line-height:1.15}
+.tw-dw-kpi .s{color:var(--tw-muted);font-size:12px}
+.tw-dw-charts{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+@media (max-width:999px){.tw-dw-charts{grid-template-columns:minmax(0,1fr)}}
+.tw-dw-chart{display:flex;flex-direction:column;gap:6px;padding:10px;border:1px solid var(--tw-border);border-radius:8px;background:var(--tw-card2);min-width:0}
+.tw-dw-chart-h{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.tw-dw-chart-h .t{font-size:12.5px;font-weight:600}
+.tw-dw-chart-note{margin-left:auto;color:var(--tw-muted);font-size:12px}
+.tw-dw-svg{display:block;width:100%;height:180px}
+.tw-dw-chart-f{color:var(--tw-muted);font-size:12px}
+.tw-dw-tscroll{overflow-x:auto}
+.tw-dw-foot{color:var(--tw-muted);font-size:12px}
+
 `
 
 let injected = false
