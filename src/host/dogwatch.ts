@@ -163,11 +163,29 @@ export function sharesCachePath(day: string): string {
 }
 
 /** 读磁盘缓存（历史永久）；没有 ⇒ null */
+/**
+ * 池覆盖率（纯函数）：缓存里命中的池内代码 / 池大小。
+ * v0.188.0：早期缓存只存了一页（≈10 行）⇒ 池内只剩 1 只，界面总份额退化成单只。
+ */
+export function poolCoverageOf(rows: Map<string, { name: string; volWan: number }> | null): { hit: number; total: number; ratio: number } {
+  const total = DOGWATCH_POOL.length
+  if (rows === null) return { hit: 0, total, ratio: 0 }
+  const hit = DOGWATCH_POOL.filter((p) => rows.has(p.code)).length
+  return { hit, total, ratio: hit / total }
+}
+
+/** 缓存是否可用：覆盖率 ≥ 90%（<13/14 ⇒ 判残缺，必须重拉） */
+export function cacheUsableOf(rows: Map<string, { name: string; volWan: number }> | null): boolean {
+  return poolCoverageOf(rows).ratio >= 0.9
+}
+
 function readDiskShares(day: string): Map<string, { name: string; volWan: number }> | null {
   try {
     const raw = JSON.parse(readFileSync(sharesCachePath(day), 'utf8')) as { day?: string; rows?: Record<string, { name: string; volWan: number }> }
     if (raw.day !== day || raw.rows === undefined) return null
-    return new Map(Object.entries(raw.rows))
+    const rows = new Map(Object.entries(raw.rows))
+    // 残缺缓存（池覆盖 <90%）⇒ 视为未命中，调用方会重拉并覆盖
+    return cacheUsableOf(rows) ? rows : null
   } catch {
     return null
   }
@@ -191,7 +209,7 @@ export async function loadSharesOf(day: string, now: number = Date.now()): Promi
     const hit = memToday.get(day)
     if (hit !== undefined && now - hit.at < TODAY_TTL_MS) return hit.rows
   }
-  const url = `https://${SSE_HOST}/commonQuery.do?sqlId=COMMON_SSE_ZQPZ_ETFZL_XXPL_ETFGM_SEARCH_L&STAT_DATE=${day}`
+  const url = `https://${SSE_HOST}/commonQuery.do?sqlId=COMMON_SSE_ZQPZ_ETFZL_XXPL_ETFGM_SEARCH_L&type=inParams&STAT_DATE=${day}&pageHelp.pageSize=2000&pageHelp.pageNo=1`
   const text = await fetchTextHost(SSE_HOST, url, { referer: 'http://www.sse.com.cn/' })
   const rows = parseSseShares(text)
   if (rows.size > 0) {

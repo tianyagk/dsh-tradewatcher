@@ -257,8 +257,6 @@ export function MarketPage(props: {
       // v0.187.0：用户要求下线「涨跌分布」「分钟成交额较昨日增减」；页面只剩护盘信号 + 汪汪队跟踪
       const dogwatchCard = (
         card('汪汪队跟踪', React.createElement(React.Fragment, null,
-          React.createElement('span', { className: 'tw-muted', style: { fontSize: 12, marginRight: 8 } },
-            `涨停 ${extras?.limits.up.count ?? '—'} / 跌停 ${extras?.limits.down.count ?? '—'}`),
           React.createElement('div', { className: 'tw-seg' },
           ...(['3m', '6m', '1y', '2y'] as const).map((w) => React.createElement('button', {
             key: w, className: `tw-tab${dwWindow === w ? ' is-on' : ''}`, style: { fontSize: 12 },
@@ -288,14 +286,19 @@ export function MarketPage(props: {
                       React.createElement('td', null, r.name),
                       React.createElement('td', { className: 'tw-muted' }, r.indexName),
                       React.createElement('td', null, r.scale === null ? '—' : r.scale.toFixed(1)),
-                      React.createElement('td', null, dogwatch.sharesStale || r.sharesDelta === null ? '—' : `${r.sharesDelta > 0 ? '+' : ''}${r.sharesDelta.toFixed(2)}`),
+                      React.createElement('td', { title: dogwatch.sharesStale ? '份额源未日更' : (r.sharesDelta === null ? '缺上一交易日份额' : undefined) }, dogwatch.sharesStale || r.sharesDelta === null ? '—' : `${r.sharesDelta > 0 ? '+' : ''}${r.sharesDelta.toFixed(2)}`),
                       React.createElement('td', null, r.amount === null ? '—' : (r.amount / 1e8).toFixed(2)),
                       React.createElement('td', null, r.pct === null ? '—' : `${r.pct > 0 ? '+' : ''}${r.pct.toFixed(2)}%`))))),
                   dogwatch.missing.length > 0
                     ? React.createElement('div', { className: 'tw-hint tw-dim', style: { fontSize: 12 }, title: dogwatch.missing.map((m) => m.note).join('；') }, `缺 ${dogwatch.missing.length} 项（悬停看原因）`)
                     : null))
       )
-      return React.createElement('div', { className: 'tw-mk-body', 'data-bars': String(MINUTE_BARS) }, dogwatchCard)
+      return React.createElement('div', {
+        className: 'tw-mk-body',
+        'data-bars': String(MINUTE_BARS),
+        // 附加行情仍在使用（供 agent/排障读原始家数；界面不再展示）
+        'data-limits': `${extras?.limits.up.count ?? ''}/${extras?.limits.down.count ?? ''}`,
+      }, dogwatchCard)
     })(),
     React.createElement(RescuePanel, { prefs, redUp, onPrefs: props.onPrefs }),
     React.createElement('div', { className: 'tw-panel' },
