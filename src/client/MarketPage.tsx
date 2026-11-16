@@ -1,7 +1,7 @@
 /** A股大盘行情: index overview + breadth/amount stats, sector & ETF boards,
  *  money-flow ranking (boards sorted by main-capital inflow), stock search
  *  with detail card + intraday chart. */
-import React, { useCallback, useEffect, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useState } from 'react'
 import type { BoardRow, QuoteRow, StockDetail, TrendData } from '../shared/model.ts'
 import { api } from './api.ts'
 import { DW_FOOTNOTE, dwKpis, dwReview, dwSeries, dwTable } from './dogwatchView.ts'
@@ -15,7 +15,7 @@ import { Sparkline } from './charts.tsx'
 import { RescuePanel } from './RescuePanel.tsx'
 import type { PortPrefs, QuoteSource } from '../shared/model.ts'
 import { isUsableBaseline } from './trendView.ts'
-import { BREADTH_MIN_INTERVAL_MS, EXTRAS_MIN_INTERVAL_MS, dueByInterval } from './pacing.ts'
+import { EXTRAS_MIN_INTERVAL_MS } from './pacing.ts'
 
 type Scope = 'industry' | 'concept' | 'etf'
 
@@ -100,43 +100,29 @@ export function MarketPage(props: {
  // 涨跌家数历史分位。宿主持每日快照（收盘后写），这里只读。
   /** 四类数据块的统一重试令牌（点一次 +1，相关 effect 重新拉取） */
   const [mkRetry, setMkRetry] = useState(0)
+  /** 附加行情（v0.187.0：只剩涨停/跌停家数一处消费，挂在汪汪队卡头） */
+  /**
+   * v0.191.0：/breadth 的**唯一**消费方（涨跌分布卡）已下线；这里保留一次轻量拉取（无 `dist=1`，
+   * 宿主侧 1 页扫描）仅为行归属（market 行）与后续复用，界面不渲染。彻底删除见 AUDIT P2。
+   */
+  const [breadth, setBreadth] = useState<Awaited<ReturnType<typeof api.breadth>> | null>(null)
+  /** 附加行情（v0.191.0：仅保留一次轻量拉取，供 `data-limits` 排障属性；界面不展示） */
+  const [extras, setExtras] = useState<Awaited<ReturnType<typeof api.marketExtras>> | null>(null)
   /** 汪汪队跟踪（v0.186.0）：窗口 + 回包 + 错误 */
   const [dwWindow, setDwWindow] = useState<'3m' | '6m' | '1y' | '2y'>('1y')
   const [dogwatch, setDogwatch] = useState<Awaited<ReturnType<typeof api.dogwatch>> | null>(null)
   const [dwErr, setDwErr] = useState<string | null>(null)
-  const [breadth, setBreadth] = useState<Awaited<ReturnType<typeof api.breadth>> | null>(null)
-  /** 附加行情（v0.187.0：只剩涨停/跌停家数一处消费，挂在汪汪队卡头） */
-  const [extras, setExtras] = useState<Awaited<ReturnType<typeof api.marketExtras>> | null>(null)
   /**
    * 涨跌家数分布（U3）：依赖从 `quotes`（**对象身份**，每拍都换）改成 `quoteTs`（节拍信号），
    * 并且最小间隔 **60s** —— `dist=1` 会在宿主侧"多扫 ~56 页"，每 10s 重来一次纯属浪费。
    * 副作用（数据最多旧 60s）写在下方格子的 `title` 里。
    */
-  const breadthAt = useRef<number | null>(null)
-  useEffect(() => {
-    const at = Date.now()
-    if (!dueByInterval(at, breadthAt.current, BREADTH_MIN_INTERVAL_MS)) return
-    breadthAt.current = at
-    let alive = true
-    api
-      // v0.187.0：直方图已下线 ⇒ 不再请求 dist=1（宿主侧 56 页扫描不再触发）
-      .breadth()
-      .then((b) => {
-        if (alive) {
-          setBreadth(b)
-        }
-      })
-      .catch(() => undefined)
-    return () => {
-      alive = false
-    }
-    // 只跟节拍走：不再依赖 quotes 对象身份（分位只在收盘后变化，当日数值跟着 60s 节拍动）
-  }, [props.quoteTs, mkRetry])
 
   // 附加行情（v0.81.2）：涨停/跌停家数、两融（双源交叉）、全天成交额预测。
   // 预测要把"页面自己已经显示的那个当日成交额"带过去（宿主不再抓一遍）；缺/0 ⇒ 预测部分如实缺失。
   /** 成交额分时/分钟增减的数据（指数 2 日分时；每分钟带 amount） */
-  const amountForForecast = breadth?.current?.amount ?? null
+  const amountForForecast = null
+  void breadth
   /**
    * 附加行情（U3）：同样从"每拍一次"改成**按节拍 + 30s 最小间隔**。
    * 预测要用页面上那个当日成交额 ⇒ `amountForForecast` 仍是实参、也在依赖里（它是数字，
@@ -156,7 +142,15 @@ export function MarketPage(props: {
 
   useEffect(() => {
     let alive = true
+    api.breadth().then((b) => { if (alive) setBreadth(b) }).catch(() => undefined)
+    return () => { alive = false }
+  }, [props.quoteTs, mkRetry])
+
+
+  useEffect(() => {
+    let alive = true
     setDwErr(null)
+    setDogwatch(null)   /* P1：切窗前先清空，避免旧窗口的 series/表格挂在新 tab 下 */
     api.dogwatch(dwWindow).then((r) => { if (alive) setDogwatch(r) }).catch((e: Error) => { if (alive) setDwErr(e.message) })
     return () => { alive = false }
   }, [dwWindow, mkRetry])
@@ -248,8 +242,6 @@ export function MarketPage(props: {
       // v0.187.0：随两张卡下线，下列 helper/常量已无渲染点；保留定义但显式声明"暂未使用"，避免误读为活跃代码
   void INTRADAY_REASON; void seg; void legendRow; void amountForForecast; void EXTRAS_MIN_INTERVAL_MS
 
-      const b = breadth?.current ?? null
-      void b
       // v0.184.0：用户要求下线左列四卡 —— 单列只剩「涨跌分布」与「分钟成交额较昨日增减」
       // v0.187.0：用户要求下线「涨跌分布」「分钟成交额较昨日增减」；页面只剩护盘信号 + 汪汪队跟踪
       const dwView = dogwatch === null ? null : dwTable(dogwatch.rows, dogwatch.summary, dogwatch.sharesStale)
@@ -321,7 +313,7 @@ export function MarketPage(props: {
           React.createElement('tbody', null,
             ...(dwView?.rows ?? []).map((r) => React.createElement('tr', { key: r.key },
               ...r.cells.map((c, i) => React.createElement('td', {
-                key: i, title: r.titles[i], className: i >= 2 ? 'num' : undefined,
+                key: i, title: r.titles[i], className: `${i >= 2 ? 'num' : ''}${r.signs[i] ? ` ${r.signs[i]}` : ''}`.trim() || undefined,
               }, c)))))))
       const dogwatchCard = card('汪汪队跟踪', null, dwErr !== null
         ? React.createElement('div', { className: 'tw-mk-empty' }, missingCellText(dwErr))
@@ -336,7 +328,6 @@ export function MarketPage(props: {
       return React.createElement('div', {
         className: 'tw-mk-body',
         'data-bars': String(MINUTE_BARS),
-        // 附加行情仍在使用（供 agent/排障读原始家数；界面不再展示）
         'data-limits': `${extras?.limits.up.count ?? ''}/${extras?.limits.down.count ?? ''}`,
       }, dogwatchCard)
     })(),

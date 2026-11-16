@@ -53,30 +53,6 @@ export function breadthCellsOf(input: {
   ]
 }
 
-/**
- * 分钟成交额"较昨日同分钟"的增减序列。
- *
- * 需要**今日与昨日**两份逐分钟成交额；现网只有今日的（`trends2` 的每分钟 `amount`），
- * 昨日的分钟序列没有留存 ⇒ 返回 `null` + 原因（界面 `—`，不画 48 根假柱）。
- */
-export function minuteDeltaOf(
-  today: ReadonlyArray<{ amount?: number | null }> | null,
-  yesterday: ReadonlyArray<{ amount?: number | null }> | null,
-): { bars: number[]; reason: null } | { bars: null; reason: string } {
-  if (today === null || yesterday === null) return { bars: null, reason: '缺昨日同分钟序列（本地未留存）⇒ 无法比较' }
-  const n = Math.min(today.length, yesterday.length)
-  if (n < MINUTE_BARS) return { bars: null, reason: `分钟序列不足 ${MINUTE_BARS} 根（实际 ${n} 根）` }
-  const bars: number[] = []
-  for (let i = 0; i < MINUTE_BARS; i += 1) {
-    const a = today[i]?.amount
-    const b = yesterday[i]?.amount
-    if (typeof a !== 'number' || typeof b !== 'number') return { bars: null, reason: '分钟成交额有缺口 ⇒ 不给部分柱' }
-    bars.push(a - b)
-  }
-  return { bars, reason: null }
-}
-
-/** 缺数据格的统一显示：`—` + 一句短原因（**绝不 0.00**） */
 export function missingCellText(reason: string | null | undefined): string {
   const r = typeof reason === 'string' && reason.trim() !== '' ? reason.trim() : '未取到'
   return `—（${r}）`

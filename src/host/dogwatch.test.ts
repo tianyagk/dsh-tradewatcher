@@ -12,15 +12,57 @@ test('① 加仓指数首日 = 100（不等于 100 ⇒ 败）', () => {
   assert.throws(() => assert.equal(s[0]!.index, 101, '反例上：首日不是 100'), /反例上/, '⚠ 反例注入必须失败')
 })
 
-test('② 折算：50% 份额跳变 + 价格无跳空 ⇒ 记账且顺延（直接计入 ⇒ 指数缺口 ⇒ 败）', () => {
-  const series = [{ day: 'd1', totalWan: 1000, priceGapPct: 0.5 }, { day: 'd2', totalWan: 1500, priceGapPct: 0.5 }, { day: 'd3', totalWan: 1500, priceGapPct: 0.2 }]
+test('② 折算双向判据：份额跳+价格跳空 ⇒ 折算（顺延并重标定）；份额跳+价格不动 ⇒ 真实申赎（必须计入）', () => {
+  /**
+   * 510300 真实份额台阶（亿份）：888 → 448 → 189 → 241 → 456。
+   * 前两跳是折算（份额减半/再减），后两跳是真实申购。
+   * 折算日的价格跳空按会计恒等式给：份额 × r ⇒ 单位净值 ÷ r（888→448 ⇒ 价格 +98.2%）。
+   */
+  const ladder = [888, 448, 189, 241, 456]
+  const gaps = [0, (888 / 448 - 1) * 100, (448 / 189 - 1) * 100, 0.4, 0.6]
+  const series = ladder.map((v, i) => ({ day: `d${i}`, totalWan: v, priceGapPct: gaps[i]! }))
+
   const actions = detectCorporateActions(series)
-  assert.equal(actions.length, 1, '只有 d2 触发折算（d3 与 d2 等值）')
-  assert.equal(actions[0]!.day, 'd2')
+  assert.deepEqual(actions.map((a) => a.day), ['d1', 'd2'], '只有两个折算日（888→448、448→189）')
+  assert.equal(actions[0]!.ratio, 448 / 888)
+  assert.notEqual(detectCorporateActions(series, { threshold: 0.5 }).length, 2, '阈值 50% 时 888→448(−49.5%) 不该命中 ⇒ 说明阈值真的生效')
+
   const idx = indexSeriesOf(series.map((p) => ({ day: p.day, volWan: p.totalWan })), actions)
-  assert.equal(idx[1]!.index, 100, '折算日指数必须顺延（直接计入 ⇒ 100→150）')
-  assert.equal(idx[1]!.change, 0)
-  assert.throws(() => assert.equal(idx[1]!.index, 150, '反例上：直接计入'), /反例上/, '⚠ 反例注入（计入折算）必须失败')
+  assert.equal(idx[0]!.index, 100, '首日 100')
+  assert.equal(idx[1]!.index, 100, '折算日指数必须顺延（不得掉到 50.4）')
+  assert.equal(idx[2]!.index, 100, '第二次折算同样顺延（不得掉到 21.3）')
+  assert.equal(idx[3]!.change, wanToYi(241 - 189), '折算次日的变化按新标尺算（241−189）')
+  assert.ok(Math.abs(idx[3]!.index - (100 * 241) / 189) < 1e-9, `申购日指数 = 241/189×100（实得 ${idx[3]!.index}）`)
+  assert.ok(Math.abs(idx[4]!.index - (100 * 456) / 189) < 1e-9, `末值 = 456/189×100（实得 ${idx[4]!.index}）`)
+  // 核心验收：折算不再被读成减仓 —— 全程不低于 100，且末值 ≈ 241.3
+  assert.ok(idx.every((p) => p.index >= 100 - 1e-9), `任何一天都不得低于 100（实得 ${idx.map((p) => p.index.toFixed(1)).join(' → ')}）`)
+  assert.ok(Math.abs(idx.at(-1)!.index - 241.27) < 0.01, `1 年加仓指数 ≈ 241.27（实得 ${idx.at(-1)!.index.toFixed(2)}）`)
+
+  // 反例 1（旧判据回潮）：v0.188.0"价格没跳空 ⇒ 判折算" ⇒ 两个真实申购日被抹掉
+  const legacyActions = series.slice(1).map((now, i) => {
+    const prev = series[i]!
+    const ratio = now.totalWan / prev.totalWan
+    const gap = now.priceGapPct
+    return Math.abs(ratio - 1) > 0.2 && (gap === null || Math.abs(gap) <= 5) ? now.day : null
+  }).filter((d): d is string => d !== null)
+  assert.deepEqual(legacyActions, ['d3', 'd4'], '反例：旧判据把两次申购判成折算、把两次折算放行')
+  const legacyIdx = indexSeriesOf(series.map((p) => ({ day: p.day, volWan: p.totalWan })), legacyActions.map((day) => ({ day, code: 'POOL', prevWan: 0, nowWan: 0, ratio: 1, priceGapPct: null })))
+  assert.ok(legacyIdx.at(-1)!.index < 100, `反例：旧判据下末值只有 ${legacyIdx.at(-1)!.index.toFixed(1)}（把折算读成减仓）`)
+  assert.throws(
+    () => assert.equal(legacyIdx.at(-1)!.index, idx.at(-1)!.index, '反例上：旧判据回潮'),
+    /反例上/,
+    '⚠ 真注入：旧判据与现行判据必须给出不同的 1 年指数',
+  )
+
+  // 反例 2（更细的旧形态）："+50% 份额 + 价格不动" 曾被当成折算 —— 现在必须计入
+  const redemption = [{ day: 'r0', totalWan: 1000, priceGapPct: 0 }, { day: 'r1', totalWan: 1500, priceGapPct: 0.3 }]
+  assert.equal(detectCorporateActions(redemption).length, 0, '份额 +50%、价格不动 = 大额申购，不得判折算')
+  assert.equal(indexSeriesOf(redemption.map((p) => ({ day: p.day, volWan: p.totalWan })), []).at(-1)!.index, 150, '申购必须计入 ⇒ 指数 100→150')
+  assert.throws(
+    () => assert.equal(detectCorporateActions(redemption).length, 1, '反例上：把申购当折算'),
+    /反例上/,
+    '⚠ 真注入：旧判据会把它判成折算（1 条）',
+  )
 })
 
 test('③ 份额变化 = 相邻两日差（用当日值 ⇒ 败）', () => {
@@ -78,7 +120,7 @@ test('⑦ 缓存：同一日期第二次请求 0 次上游（重复拉取 ⇒ �
 test('⑧ 路由账：/tradewatcher/dogwatch 已注册，设计文档账目同步（35 = core 18）', () => {
   const routes = readFileSync(new URL('./routes.ts', import.meta.url), 'utf8')
   assert.ok(routes.includes("path: '/tradewatcher/dogwatch'"), '路由必须注册')
-  assert.ok(routes.includes('fetchDogwatch(window)'), '路由必须调用聚合函数')
+  assert.ok(/fetchDogwatch\(\s*window/.test(routes), '路由必须调用聚合函数')
   const design = readFileSync(new URL('../../docs/DESIGN-SUBPLUGINS.md', import.meta.url), 'utf8')
   assert.match(design, /路由账 35 = core 18/, '设计文档账目必须同步')
   assert.throws(() => assert.equal(design.includes('路由账 35 = core 18'), false, '反例上：账目未更新'), /反例上/, '⚠ 反例注入必须失败')
@@ -257,4 +299,85 @@ test('⑥ 进程内缓存命中 elapsedMs < 50（重算整窗 ⇒ 败）', async
   assert.ok(r.stats.elapsedMs < 50, `命中必须 <50ms（实得 ${r.stats.elapsedMs}）`)
   assert.equal(r.stats.fetched, 0)
   assert.throws(() => assert.ok(r.stats.elapsedMs >= 50, '反例上：重算'), /反例上/, '⚠ 反例注入必须失败')
+})
+
+// ── v0.191.0：审计（AUDIT-DOGWATCH-HOST）修复断言 ─────────────────────────
+
+test('A1 解析边界：空行/空值/负数/非数字/带空白代码/重复代码', () => {
+  const text = JSON.stringify({
+    result: [
+      { SEC_CODE: ' 510300 ', SEC_NAME: 'A', TOT_VOL: '4562328.77' },
+      { SEC_CODE: '510300', SEC_NAME: 'A2', TOT_VOL: '4562329.00' }, // 重复 ⇒ 后者覆盖
+      { SEC_CODE: '510310', SEC_NAME: 'B', TOT_VOL: '' },
+      { SEC_CODE: '510330', SEC_NAME: 'C', TOT_VOL: '-5' },
+      { SEC_CODE: '510350', SEC_NAME: 'D', TOT_VOL: 'abc' },
+      { SEC_CODE: '510050', SEC_NAME: 'E', TOT_VOL: '0' },
+      { SEC_CODE: 'bad-code', SEC_NAME: 'F', TOT_VOL: '100' },
+      null,
+      'garbage',
+    ],
+  })
+  const rows = parseSseShares(text)
+  assert.equal(rows.has('510300'), true, '带空白的代码必须 trim 后命中')
+  assert.equal(rows.get('510300')!.volWan, 4562329, '重复代码后者覆盖（行为固定，可断言）')
+  for (const bad of ['510310', '510330', '510350', '510050', 'bad-code']) assert.equal(rows.has(bad), false, `${bad} 必须被丢弃`)
+  assert.equal(parseSseShares('not json').size, 0, '坏 JSON ⇒ 空表（不抛）')
+})
+
+test('A2 真实 510300 序列：10–12% 的份额跃升是申赎不是折算（不误杀）；真折算才顺延', () => {
+  // 真实日频（2026-07-13→11-13）中的三个跃升点：183.2→197.0→217.2→244.2、254.8→285.5
+  const real = [
+    { day: 'd0', totalWan: 183.2, priceGapPct: 0.4 },
+    { day: 'd1', totalWan: 197.0, priceGapPct: 1.2 },   // +7.5%
+    { day: 'd2', totalWan: 217.2, priceGapPct: 0.8 },   // +10.2%（申赎）
+    { day: 'd3', totalWan: 244.2, priceGapPct: 1.1 },   // +12.4%（申赎）
+    { day: 'd4', totalWan: 254.8, priceGapPct: 0.3 },
+    { day: 'd5', totalWan: 285.5, priceGapPct: 0.9 },   // +12.0%（申赎）
+  ]
+  assert.equal(detectCorporateActions(real).length, 0, '真实跃升都 <20% ⇒ 不得误判为折算（误杀会把真加仓抹掉）')
+  // 真折算：份额翻倍、价格 -50%
+  const split = [
+    { day: 's0', totalWan: 200, priceGapPct: 0.2 },
+    { day: 's1', totalWan: 400, priceGapPct: -50 },
+  ]
+  const acts = detectCorporateActions(split)
+  assert.equal(acts.length, 1, '真的 1:2 折算必须被记一笔')
+  const idx = indexSeriesOf(split.map((p) => ({ day: p.day, volWan: p.totalWan })), acts)
+  assert.equal(idx[1]!.index, 100, '折算日指数必须顺延（200→400 不得算成 +100%）')
+  // 反例：把真实跃升当折算 ⇒ 指数被抹平 ⇒ 必败
+  const wrong = indexSeriesOf(real.map((p) => ({ day: p.day, volWan: p.totalWan })), detectCorporateActions(real))
+  assert.ok(wrong[wrong.length - 1]!.index > 150, `真实加仓必须体现在指数上（实得 ${wrong[wrong.length - 1]!.index}）`)
+  assert.throws(() => assert.equal(wrong[wrong.length - 1]!.index, 100, '反例上：把申赎当折算'), /反例上/, '⚠ 反例注入必须失败')
+})
+
+test('A3 1 年 67.98 与 3 月 223.83 是**不同基期**，不是矛盾（同一序列两个基期各自 =100）', () => {
+  const series = [888, 448, 189, 241, 456] // 探测报告里的季度末真实值（亿份）
+  const full = indexSeriesOf(series.map((v, i) => ({ day: `q${i}`, volWan: v })), [])
+  assert.equal(full[0]!.index, 100)
+  assert.ok(Math.abs(full[full.length - 1]!.index - 51.35) < 0.1, '1 年口径（基期 888）⇒ 51.35')
+  const last3m = indexSeriesOf(series.slice(2).map((v, i) => ({ day: `m${i}`, volWan: v })), [])
+  assert.equal(last3m[0]!.index, 100, '3 月口径基期 = 189 ⇒ 100')
+  assert.ok(Math.abs(last3m[last3m.length - 1]!.index - 241.27) < 0.1, '3 月口径 ⇒ 241.27')
+  assert.notEqual(full[full.length - 1]!.index, last3m[last3m.length - 1]!.index, '两个值必须不同（基期不同）')
+  assert.throws(() => assert.equal(full[full.length - 1]!.index, last3m[last3m.length - 1]!.index, '反例上：当成同一个数'), /反例上/, '⚠ 反例注入必须失败')
+})
+
+test('A4 同日并发：两个 loadSharesOf 合并为一次上游（重复请求 ⇒ 败）', async () => {
+  const day = '2026-12-03'
+  try { unlinkSync(sharesCachePath(day)) } catch { /* 不存在就好 */ }
+  let calls = 0
+  const orig = globalThis.fetch
+  globalThis.fetch = (async () => {
+    calls += 1
+    await new Promise((r) => setTimeout(r, 30))
+    return new Response(sseJson(DOGWATCH_POOL.map((p) => p.code), () => 7), { status: 200 })
+  }) as typeof fetch
+  try {
+    const [a, b] = await Promise.all([loadSharesOf(day), loadSharesOf(day)])
+    // 合并的判据：两次拿到**同一个 Map 实例**（未合并且各拉一次 ⇒ 两个不同对象）
+    assert.equal(a, b, '同日并发必须复用同一个在飞 Promise（对象同一性）')
+    assert.ok(calls <= 1, `并发同一天最多 1 次上游（实得 ${calls}）`)
+    assert.equal(poolCoverageOf(a).hit, 14)
+    assert.throws(() => assert.notEqual(a, b, '反例上：各拉一次'), /反例上/, '⚠ 反例注入必须失败')
+  } finally { globalThis.fetch = orig }
 })

@@ -6,7 +6,7 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { DIST_BJ_NOTE, MINUTE_BARS, breadthCellsOf, distTitleOf, minuteDeltaOf, missingCellText } from './marketBlocks.ts'
+import { DIST_BJ_NOTE, breadthCellsOf, distTitleOf, missingCellText } from './marketBlocks.ts'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const read = (p: string): string => readFileSync(join(HERE, p), 'utf8')
@@ -48,16 +48,6 @@ test('④ 小格 22px / padding 8 / 圆角 8（改回 28/12/10 ⇒ 败）', () =
   assert.equal(/\.tw-mk-cell\{padding:8px;border-radius:8px/.test(css), true, '小格 padding 8 / 圆角 8')
   assert.equal(/\.tw-mk-card\{[^}]*border-radius:10px[^}]*padding:12px/.test(css), true, '卡片圆角 10 / padding 12')
   assert.equal(/\.tw-mk-bar\{width:3px/.test(css), true, '卡头 3px 主色竖条')
-})
-
-test('⑤ 分钟柱数 = 240（48 根 ⇒ 败）', () => {
-  assert.equal(MINUTE_BARS, 240)
-  const page = read('MarketPage.tsx')
-  assert.equal(page.includes('MINUTE_BARS'), true, '页面必须用 240 常量')
-  const flat = Array.from({ length: 240 }, () => ({ amount: 1 }))
-  assert.equal(minuteDeltaOf(flat, flat).bars?.length, 240)
-  const short = Array.from({ length: 48 }, () => ({ amount: 1 }))
-  assert.equal(minuteDeltaOf(short, short).bars, null, '48 根必须判为不足（不画 48 根假柱）')
 })
 
 test('⑥b 分布标题：全覆盖写"覆盖 N 只"，不足写"已扫 k/N 批"，无覆盖信息只写档数', () => {

@@ -51,7 +51,7 @@ export function dwKpis(summary: DwSummary): DwKpi[] {
 
 export interface DwRow { secid: string; name: string; indexName: string; scale: number | null; amount: number | null; ratio20: number | null; netBuy: number | null; pct: number | null; sharesYi: number | null; sharesDelta: number | null }
 
-export interface DwCells { key: string; cells: string[]; titles: Array<string | undefined>; missing: boolean }
+export interface DwCells { key: string; cells: string[]; titles: Array<string | undefined>; signs: Array<'up' | 'down' | undefined>; missing: boolean }
 
 /** 一行 → 9 个单元格（缺数据 `—` + title 原因；永不返回空串） */
 export function dwCells(r: DwRow, sharesStale: boolean): DwCells {
@@ -78,7 +78,8 @@ export function dwCells(r: DwRow, sharesStale: boolean): DwCells {
     r.sharesYi === null ? '份额源未日更' : undefined,
     deltaMissing ? staleReason : undefined,
   ]
-  return { key: r.secid, cells, titles, missing: deltaMissing }
+  const signs: Array<'up' | 'down' | undefined> = cells.map((c, i) => (i === 6 || i === 8) && c !== '—' ? (c.startsWith('+') ? 'up' : c.startsWith('−') ? 'down' : undefined) : undefined)
+  return { key: r.secid, cells, titles, signs, missing: deltaMissing }
 }
 
 /** 表格模型：按规模降序 + 末行合计（合计也永不空） */
@@ -98,6 +99,7 @@ export function dwTable(rows: readonly DwRow[], summary: DwSummary, sharesStale:
       sharesStale ? '—' : dwNum(null, 2),
     ],
     titles: [undefined, undefined, '后端未给规模合计', undefined, undefined, undefined, undefined, undefined, sharesStale ? '份额源未日更' : '后端未给合计份额变化'],
+    signs: [undefined, undefined, undefined, undefined, undefined, 'down', 'down', undefined, undefined],
     missing: sharesStale,
   }
   return { head: DW_COLUMNS, rows: [...body, total] }

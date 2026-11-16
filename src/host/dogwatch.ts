@@ -56,7 +56,9 @@ export function parseSseShares(text: string): Map<string, { name: string; volWan
   }
   const rows = ((json as { result?: unknown[] })?.result ?? []) as Array<Record<string, unknown>>
   for (const r of rows) {
-    const code = String(r.SEC_CODE ?? '').trim()
+    // v0.191.0：上游偶尔回 null/非对象行 ⇒ 直接跳过，不许整表崩
+    if (r === null || typeof r !== 'object') continue
+    const code = String((r as Record<string, unknown>).SEC_CODE ?? '').trim()
     const vol = Number(r.TOT_VOL)
     if (!/^\d{6}$/.test(code) || !Number.isFinite(vol) || vol <= 0) continue
     out.set(code, { name: String(r.SEC_NAME ?? ''), volWan: vol })
@@ -71,8 +73,22 @@ export interface SharePoint { day: string; volWan: number }
 export interface CorporateAction { day: string; code: string; prevWan: number; nowWan: number; ratio: number; priceGapPct: number | null }
 
 /**
- * 折算检测（纯函数）：相邻两日 |份额比 − 1| > 20% 且当日价格无 >5% 跳空 ⇒ 判为折算。
- * 命中 ⇒ 该日**不进入**份额变化与加仓指数（用前值顺延），并返回记账条目。
+ * 折算检测（纯函数）：份额跳变 **且价格大幅跳空** ⇒ 判为折算。
+ * 命中 ⇒ 该日不进入份额变化、并按折算比例重标定加仓指数的标尺（见 `indexSeriesOf`）。
+ *
+ * 两条互补的充分条件（v0.192.0 定稿）：
+ *  ① **真实申赎** = 份额跳变 且**价格不跳空**（|gap| ≤ 5%）——申购/赎回按当日净值成交，
+ *     只改变份额、**不改变净值**，所以价格必须几乎不动；这类变化必须**计入**加仓指数。
+ *  ② **份额折算** = 份额跳变 且**价格大幅跳空**（|gap| > 5%）——折算按比例重定义份额单位，
+ *     单位净值同步反向缩放，价格必然大跳空。
+ *
+ * 方向为什么不参与判定：折算的会计恒等式是「份额 × r ⇒ 单位净值 ÷ r」，理论方向相反；
+ * 但不同产品的折算公告（拆分/合并/份额调整）落地方向并不统一，写死方向会让另一方向的折算
+ * 退回"读成减仓"。因此只认**幅度**。已知残余风险：市场暴跌（>5%）与巨额赎回同日会误判为
+ * 折算 —— 概率极低，且误判方向是"少记一次减仓"（保守），不会把折算读成减仓。
+ *
+ * 价格未知（`null`）⇒ **不判折算**（无证据不猜），按申赎计入。这与 v0.188.0 的旧实现相反：
+ * 旧实现 `gap === null` 时按折算处理，把所有大额申赎一并抹掉，正是"折算读成减仓"的根因。
  */
 export function detectCorporateActions(
   series: Array<{ day: string; totalWan: number; priceGapPct: number | null }>,
@@ -87,8 +103,8 @@ export function detectCorporateActions(
     if (!(prev.totalWan > 0) || !(now.totalWan > 0)) continue
     const ratio = now.totalWan / prev.totalWan
     const gap = now.priceGapPct
-    // 价格有 >5% 跳空 ⇒ 更像真实申购赎回/市场暴跌，不判折算
-    if (Math.abs(ratio - 1) > threshold && (gap === null || Math.abs(gap) <= priceGapMax)) {
+    // 份额跳变 且 价格**反向**大幅跳空 ⇒ 折算；价格不动 ⇒ 申赎（AUDIT-DOGWATCH-HOST P0-1）
+    if (Math.abs(ratio - 1) > threshold && gap !== null && Math.abs(gap) > priceGapMax && Math.sign(gap) !== Math.sign(ratio - 1)) {
       out.push({ day: now.day, code: 'POOL', prevWan: prev.totalWan, nowWan: now.totalWan, ratio, priceGapPct: gap })
     }
   }
@@ -103,18 +119,36 @@ export function sharesStaleOf(today: Record<string, number>, prev: Record<string
   return same / codes.length >= threshold
 }
 
-/** 加仓指数序列：首日 = 100；折算日顺延（用前值，不把折算读成减仓） */
+/**
+ * 加仓指数序列：首日 = 100；**折算日顺延，并按折算比例重标定标尺**。
+ *
+ * 为什么必须重标定（v0.192.0 修）：折算把份额单位整个换掉（1 份拆成 2 份、或 2 份并成 1 份），
+ * 只把**当日**顺延、不动标尺，会让此后每一天的指数都被永久乘上那一次的 `ratio`
+ * —— 一次 1:2 折算就能让"加仓指数"从 100 掉到 50 并再也回不来，看起来像连续减仓。
+ * 正确做法：折算日指数不变、同时把 `base` 乘上 `ratio`，后续指数在新标尺上继续算。
+ */
 export function indexSeriesOf(series: SharePoint[], actions: readonly CorporateAction[]): Array<{ day: string; change: number; index: number }> {
   if (series.length === 0) return []
-  const actionDays = new Set(actions.map((a) => a.day))
-  const base = series[0].volWan
-  let prev = series[0].volWan
+  const actionByDay = new Map(actions.map((a) => [a.day, a]))
+  const first = series[0]!.volWan
+  let base = first
+  let prev = first
+  let lastIndex = 100
   const out: Array<{ day: string; change: number; index: number }> = []
   for (let i = 0; i < series.length; i += 1) {
-    const raw = series[i].volWan
-    const vol = i > 0 && actionDays.has(series[i].day) ? prev : raw
-    out.push({ day: series[i].day, change: i === 0 ? 0 : wanToYi(vol - prev), index: base > 0 ? (100 * vol) / base : 100 })
-    prev = vol
+    const raw = series[i]!.volWan
+    const act = i > 0 ? actionByDay.get(series[i]!.day) : undefined
+    if (act !== undefined) {
+      // 折算：当日指数不变（顺延），标尺按比例缩放，prev 对齐到新的份额单位
+      base = base * act.ratio
+      prev = raw
+      out.push({ day: series[i]!.day, change: 0, index: lastIndex })
+      continue
+    }
+    const index = base > 0 ? (100 * raw) / base : 100
+    out.push({ day: series[i]!.day, change: i === 0 ? 0 : wanToYi(raw - prev), index })
+    lastIndex = index
+    prev = raw
   }
   return out
 }
@@ -156,6 +190,8 @@ export function weightedPctOf(rows: ReadonlyArray<{ pct: number | null; scale: n
 
 const SSE_HOST = 'query.sse.com.cn'
 const memToday = new Map<string, { at: number; rows: Map<string, { name: string; volWan: number }> }>()
+/** 同日**在飞合并**：两个请求同时拉同一天 ⇒ 只发一次上游（并发写同一文件也只会写一次） */
+const inflightShares = new Map<string, Promise<Map<string, { name: string; volWan: number }>>>()
 const TODAY_TTL_MS = 5 * 60_000
 
 export function sharesCachePath(day: string): string {
@@ -211,14 +247,41 @@ export async function loadSharesOf(day: string, now: number = Date.now()): Promi
     const hit = memToday.get(day)
     if (hit !== undefined && now - hit.at < TODAY_TTL_MS) return hit.rows
   }
-  const url = `https://${SSE_HOST}/commonQuery.do?sqlId=COMMON_SSE_ZQPZ_ETFZL_XXPL_ETFGM_SEARCH_L&type=inParams&STAT_DATE=${day}&pageHelp.pageSize=2000&pageHelp.pageNo=1`
-  const text = await fetchTextHost(SSE_HOST, url, { referer: 'http://www.sse.com.cn/' })
-  const rows = parseSseShares(text)
-  if (rows.size > 0) {
-    writeDiskShares(day, rows)
-    if (isToday) memToday.set(day, { at: now, rows })
-  }
-  return rows
+  const existing = inflightShares.get(day)
+  if (existing !== undefined) return existing
+  const task = (async () => {
+    const url = `https://${SSE_HOST}/commonQuery.do?sqlId=COMMON_SSE_ZQPZ_ETFZL_XXPL_ETFGM_SEARCH_L&type=inParams&STAT_DATE=${day}&pageHelp.pageSize=2000&pageHelp.pageNo=1`
+    const text = await fetchTextHost(SSE_HOST, url, { referer: 'http://www.sse.com.cn/' })
+    const rows = parseSseShares(text)
+    if (rows.size > 0) {
+      writeDiskShares(day, rows)
+      if (isToday) memToday.set(day, { at: now, rows })
+    }
+    return rows
+  })().finally(() => { inflightShares.delete(day) })
+  inflightShares.set(day, task)
+  return task
+}
+
+/**
+ * 用**既有** 510300 不复权日线（`em.fetchKline`，走其磁盘缓存）算逐日跳空%。
+ * 折算的会计恒等式只在**不复权**序列上才留下跳空 —— 前复权会把折算抹平，用它等于检测不到。
+ * 取不到 ⇒ 空表（调用方 `?? null`）⇒ 不判折算，不猜。
+ */
+export async function priceGapSeriesOf(): Promise<Map<string, number>> {
+  const out = new Map<string, number>()
+  try {
+    const { fetchKline } = await import('./em.ts')
+    const bars = (await fetchKline('1.510300', 101, 520, 0))?.days ?? []
+    for (let i = 1; i < bars.length; i += 1) {
+      const prev = bars[i - 1]?.close
+      const cur = bars[i]?.close
+      if (typeof prev === 'number' && typeof cur === 'number' && prev > 0 && cur > 0) {
+        out.set(bars[i]!.date, (cur / prev - 1) * 100)
+      }
+    }
+  } catch { /* 取不到 ⇒ 空表 */ }
+  return out
 }
 
 /** 回测窗口的交易日列表（含今天；跳过周末与法定假日） */
@@ -307,6 +370,12 @@ export async function fetchDogwatch(
     now?: number
     loadShares?: (day: string) => Promise<Map<string, { name: string; volWan: number }>>
     quotes?: (codes: string[]) => Promise<Record<string, { amount: number | null; pct: number | null; outer: number | null; inner: number | null }>>
+    /**
+     * 某交易日的「池价跳空%」（当日收盘 / 前收 − 1，单位 %）。
+     * 缺省 ⇒ 全部按 `null` 传入 ⇒ `detectCorporateActions` **不判折算**（无证据不猜，按申赎计入）。
+     * 生产侧由 `routes.ts` 用既有 510300 日线缓存提供；测试可注入假序列。
+     */
+    priceGapOf?: (day: string) => number | null
   } = {},
 ): Promise<DogwatchPayload> {
   const now = deps.now ?? Date.now()
@@ -341,8 +410,16 @@ export async function fetchDogwatch(
     return { day, totalWan: sum, rows }
   }).filter((p) => p.totalWan > 0)
   if (totalSeries.length === 0) missing.push({ what: '份额', why: 'no-source', note: '上交所规模日报未取到任何池内标的' })
-  // 价格跳空：用当日池内加权涨跌近似（无历史价 ⇒ 折算检测按"无跳空"处理，保守判折算）
-  const actions = detectCorporateActions(totalSeries.map((p) => ({ day: p.day, totalWan: p.totalWan, priceGapPct: null })))
+  /**
+   * 价格跳空：优先用注入的「池价日跳空」（生产由 routes 用 510300 日线缓存提供）。
+   * 取不到 ⇒ `null` ⇒ **不判折算**（无证据不猜，按申赎计入）。
+   * ⚠ v0.188.0 的旧实现把 `null` 当"无跳空 ⇒ 判折算"，于是每一次 >20% 的份额变化
+   *   都被顺延掉（含真实申赎），加仓指数因此只跌不涨 —— 这是"折算读成减仓"的根因。
+   */
+  const priceGapOf = deps.priceGapOf
+  const actions = detectCorporateActions(
+    totalSeries.map((p) => ({ day: p.day, totalWan: p.totalWan, priceGapPct: priceGapOf === undefined ? null : priceGapOf(p.day) })),
+  )
   const series = indexSeriesOf(totalSeries.map((p) => ({ day: p.day, volWan: p.totalWan })), actions)
   const last = totalSeries[totalSeries.length - 1]
   const prev = totalSeries[totalSeries.length - 2]

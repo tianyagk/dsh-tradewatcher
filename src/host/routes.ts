@@ -27,7 +27,7 @@ import { tencentBreadthAggregate } from './breadthScan.ts'
 import { fetchTextHost } from './hostFetch.ts'
 import { detailWithFallback, fetchTencentDetail } from './detailTencent.ts'
 import * as tradingCalendar from './tradingCalendar.ts'
-import { fetchDogwatch } from './dogwatch.ts'
+import { fetchDogwatch, priceGapSeriesOf } from './dogwatch.ts'
 import * as extras from './marketExtras.ts'
 import { emptyLeveragePayload, LeverageService, parseLeverageRange } from './leverage.ts'
 import { dayOf } from './time.ts'
@@ -1195,7 +1195,10 @@ export function makeTradeRoutes(
         try {
           const raw = String(queryOf(req).get('window') ?? '1y')
           const window = raw === '3m' || raw === '6m' || raw === '2y' ? raw : '1y'
-          const payload = await fetchDogwatch(window)
+          // 折算检测需要「价格跳空」：用既有 510300 不复权日线（缓存命中即零网络）；
+          // 取不到 ⇒ 空表 ⇒ fetchDogwatch 传 null ⇒ 不判折算（无证据不猜，按申赎计入）
+          const gaps = await priceGapSeriesOf().catch(() => new Map<string, number>())
+          const payload = await fetchDogwatch(window, { priceGapOf: (day) => gaps.get(day) ?? null })
           send(res, 200, payload)
         } catch (error) {
           fail(res, error, '汪汪队跟踪')

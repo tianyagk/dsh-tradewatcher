@@ -4,7 +4,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
-import { DW_COLUMNS, DW_FOOTNOTE, dwCells, dwKpis, dwReview, dwTable, type DwRow, type DwSummary } from './dogwatchView.ts'
+import { DW_COLUMNS, DW_FOOTNOTE, dwCells, dwKpis, dwReview, dwTable, type DwCells, type DwRow, type DwSummary } from './dogwatchView.ts'
 
 const SRC = readFileSync(new URL('./MarketPage.tsx', import.meta.url), 'utf8')
 const SUM: DwSummary = { totalAmount: 413.8e8, ratio: 0.78, netBuy: -74.17e8, weightedPct: -1.47, baseDate: '2026-11-13 周五', totalSharesYi: 2156.8 }
@@ -66,4 +66,56 @@ test('表格：按规模降序 + 末行合计', () => {
   const t = dwTable(rows, SUM, false)
   assert.deepEqual(t.rows.slice(0, 3).map((r) => r.cells[0]), ['沪深300ETF华泰柏瑞', '大', '小'])
   assert.equal(t.rows[t.rows.length - 1]!.cells[0], '合计')
+})
+
+/* ── 审计补强（AUDIT-DOGWATCH-TESTS §3）：stale 分支此前**一次都没被走过** ── */
+
+test('⑦ dwCells/dwTable 的 stale 分支：份额变化列必须落 — + 「份额源未日更」（忽略 stale ⇒ 败）', () => {
+  const fresh = dwCells(ROW, false)
+  const stale = dwCells(ROW, true)
+  assert.equal(fresh.cells[8], '−30.21', '未 stale 时必须给数字')
+  assert.equal(fresh.missing, false)
+  assert.equal(stale.cells[8], '—', 'stale 时份额变化必须落 —（不得照抄一个可能已过期的数）')
+  assert.equal(stale.titles[8], '份额源未日更')
+  assert.equal(stale.missing, true, 'stale 必须让整行 missing=true（表格据此标告警）')
+  assert.equal(fresh.titles[8], undefined, '未 stale 时不该有 stale 原因')
+
+  // 合计行：stale 与非 stale 的 title 必须不同（两者都是 —，只能靠 title 区分）
+  const tStale = dwTable([ROW], SUM, true).rows.at(-1)!
+  const tFresh = dwTable([ROW], SUM, false).rows.at(-1)!
+  assert.equal(tStale.cells[8], '—')
+  assert.equal(tStale.titles[8], '份额源未日更', 'stale 时合计行也要说明原因')
+  assert.equal(tFresh.titles[8], '后端未给合计份额变化', '非 stale 时原因是"后端未给"，不能混用 stale 文案')
+  assert.notEqual(tStale.titles[8], tFresh.titles[8])
+  assert.equal(tStale.missing, true)
+
+  // 反例注入：把 sharesStale 忽略掉（永远按未 stale 渲染）⇒ 同一断言必须红
+  const ignoreStale = (row: DwRow): DwCells => dwCells(row, false)
+  assert.throws(
+    () => assert.equal(ignoreStale(ROW).cells[8], '—', '反例上：忽略 stale'),
+    /反例上/,
+    '⚠ 真注入：忽略 sharesStale 后，stale 断言必须红',
+  )
+})
+
+test('⑧ 缺数据的每一列都必须带**可读原因**，且原因不许同质化（全塞同一句 ⇒ 败）', () => {
+  const c = dwCells(NULL_ROW, false)
+  const dashIndexes = c.cells.map((x, i) => (x === '—' ? i : -1)).filter((i) => i >= 0)
+  assert.deepEqual(dashIndexes, [2, 3, 4, 5, 6, 7, 8], '这一行应当只有 7 个 —（0/1 列是名称与指数）')
+  for (const i of dashIndexes) {
+    const t = c.titles[i]
+    assert.ok(typeof t === 'string' && t.trim().length > 0, `第 ${i} 列是 — 却没有原因`)
+    assert.notEqual(t, '—', `第 ${i} 列的原因不得只是重复一个 —`)
+  }
+  const reasons = dashIndexes.map((i) => c.titles[i]!)
+  assert.ok(new Set(reasons).size >= 5, `7 个 — 至少要有 5 种不同原因（实得 ${new Set(reasons).size} 种：${[...new Set(reasons)].join(' / ')}）`)
+  assert.equal(c.missing, true, '有缺失 ⇒ 整行 missing=true')
+
+  // 反例注入：把第 4 列的原因抹掉（模拟漏写一个 title）⇒ 判据必须红
+  const broken = { ...c, titles: c.titles.map((t, i) => (i === 4 ? undefined : t)) }
+  assert.throws(
+    () => { for (const i of dashIndexes) assert.ok(typeof broken.titles[i] === 'string' && broken.titles[i]!.trim().length > 0, `第 ${i} 列是 — 却没有原因`) },
+    /第 4 列/,
+    '⚠ 真注入：漏写一个 title 后判据必须红',
+  )
 })
