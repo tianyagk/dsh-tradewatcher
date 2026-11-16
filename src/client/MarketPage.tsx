@@ -108,6 +108,7 @@ export function MarketPage(props: {
   const [breadth, setBreadth] = useState<Awaited<ReturnType<typeof api.breadth>> | null>(null)
   /** 附加行情（v0.191.0：仅保留一次轻量拉取，供 `data-limits` 排障属性；界面不展示） */
   const [extras, setExtras] = useState<Awaited<ReturnType<typeof api.marketExtras>> | null>(null)
+  /** 附加行情（v0.191.0：仅保留一次轻量拉取，供 `data-limits` 排障属性；界面不展示） */
   /** 汪汪队跟踪（v0.186.0）：窗口 + 回包 + 错误 */
   const [dwWindow, setDwWindow] = useState<'3m' | '6m' | '1y' | '2y'>('1y')
   const [dogwatch, setDogwatch] = useState<Awaited<ReturnType<typeof api.dogwatch>> | null>(null)
@@ -136,12 +137,6 @@ export function MarketPage(props: {
   /** 附加行情（涨停/跌停/两融/预测）的节拍说明：写进各自 `title`，别让用户以为它跟行情条同频 */
   useEffect(() => {
     let alive = true
-    api.marketExtras(null).then((x) => { if (alive) setExtras(x) }).catch(() => undefined)
-    return () => { alive = false }
-  }, [mkRetry])
-
-  useEffect(() => {
-    let alive = true
     api.breadth().then((b) => { if (alive) setBreadth(b) }).catch(() => undefined)
     return () => { alive = false }
   }, [props.quoteTs, mkRetry])
@@ -149,8 +144,14 @@ export function MarketPage(props: {
 
   useEffect(() => {
     let alive = true
+    api.marketExtras(null).then((x) => { if (alive) setExtras(x) }).catch(() => undefined)
+    return () => { alive = false }
+  }, [mkRetry])
+
+  useEffect(() => {
+    let alive = true
+    setDogwatch(null) /* P1：切窗前先清空，避免旧窗口数据挂新 tab */
     setDwErr(null)
-    setDogwatch(null)   /* P1：切窗前先清空，避免旧窗口的 series/表格挂在新 tab 下 */
     api.dogwatch(dwWindow).then((r) => { if (alive) setDogwatch(r) }).catch((e: Error) => { if (alive) setDwErr(e.message) })
     return () => { alive = false }
   }, [dwWindow, mkRetry])
@@ -248,34 +249,60 @@ export function MarketPage(props: {
       const dwRev = dogwatch === null ? null : dwReview(dogwatch.summary.baseDate ?? '—', dogwatch.summary)
       const dwK = dogwatch === null ? null : dwKpis(dogwatch.summary)
       const dwS = dogwatch === null ? null : dwSeries(dogwatch.series)
-      const dwBarsOf = (vals: number[]): React.ReactElement[] => {
-        const maxAbs = Math.max(1e-9, ...vals.map((v) => Math.abs(v)))
-        const W = 560, H = 180, zero = H / 2, bw = W / Math.max(1, vals.length)
-        return vals.map((v, i) => {
-          const h = Math.max(1, (Math.abs(v) / maxAbs) * (H / 2 - 6))
-          return React.createElement('rect', {
-            key: i, x: (i * bw + 0.4).toFixed(2), y: (v >= 0 ? zero - h : zero).toFixed(1),
-            width: Math.max(1, bw - 0.8).toFixed(2), height: h.toFixed(1),
-            fill: v >= 0 ? 'var(--tw-up)' : 'var(--tw-down)',
-          })
+      const W = 560, H = 180, PAD_L = 34, PAD_R = 22, PAD_T = 8, PAD_B = 18
+      /** 左图：柱（正负分两侧）+ Y 轴 ≥3 档 + 水平网格 + X 轴日期刻度 */
+      const dwBarsOf = (d: ReturnType<typeof dwSeries>): React.ReactElement[] => {
+        const inner = H - PAD_T - PAD_B
+        const zero = PAD_T + inner / 2
+        const bw = (W - PAD_L - PAD_R) / Math.max(1, d.barPct.length)
+        const lo = d.yTicksBar[0]!, hi = d.yTicksBar[d.yTicksBar.length - 1]!
+        const els: React.ReactElement[] = []
+        for (const t of d.yTicksBar) {
+          const y = PAD_T + (1 - (t - lo) / ((hi - lo) || 1)) * inner
+          els.push(React.createElement('line', { key: `g${t}`, x1: PAD_L, y1: y.toFixed(1), x2: W - PAD_R, y2: y.toFixed(1), stroke: 'var(--tw-border)', strokeWidth: 0.5, 'data-role': 'dw-grid' }))
+          els.push(React.createElement('text', { key: `yt${t}`, x: PAD_L - 4, y: (y + 3).toFixed(1), fontSize: 12, textAnchor: 'end', fill: 'var(--tw-muted)', 'data-role': 'dw-ytick' }, String(t)))
+        }
+        for (const x of d.xTicks) {
+          els.push(React.createElement('text', { key: `xt${x.i}`, x: (PAD_L + x.i * bw + bw / 2).toFixed(1), y: H - 4, fontSize: 12, textAnchor: 'middle', fill: 'var(--tw-muted)', 'data-role': 'dw-xtick' }, x.label))
+        }
+        d.barPct.forEach((pct, i) => {
+          const v = d.bars[i] ?? 0
+          const h = Math.max(0.8, (pct / 100) * (inner / 2 - 4))
+          els.push(React.createElement('rect', {
+            key: `b${i}`, x: (PAD_L + i * bw + 0.4).toFixed(2), y: (v >= 0 ? zero - h : zero).toFixed(1),
+            width: Math.max(0.8, bw - 0.8).toFixed(2), height: h.toFixed(1),
+            fill: v >= 0 ? 'var(--tw-up)' : 'var(--tw-down)', 'data-role': 'dw-bar', 'data-pct': pct.toFixed(1),
+          }))
         })
+        return els
       }
-      const dwLineOf = (vals: number[]): React.ReactElement[] => {
-        if (vals.length < 2) return []
-        const W = 560, H = 180, pad = 10
-        const lo = Math.min(100, ...vals), hi = Math.max(100, ...vals)
-        const yOf = (v: number): number => pad + (1 - (v - lo) / ((hi - lo) || 1)) * (H - pad * 2)
-        const xOf = (i: number): number => (i / (vals.length - 1)) * W
-        return [
-          React.createElement('line', {
-            key: 'base', x1: 0, y1: yOf(100).toFixed(1), x2: W, y2: yOf(100).toFixed(1),
-            stroke: 'var(--tw-border-strong)', strokeWidth: 1, strokeDasharray: '4 3',
-          }),
-          React.createElement('polyline', {
-            key: 'line', fill: 'none', stroke: 'var(--tw-accent)', strokeWidth: 1.6,
-            points: vals.map((v, i) => `${xOf(i).toFixed(1)},${yOf(v).toFixed(1)}`).join(' '),
-          }),
-        ]
+      /** 右图：折线（按区间实际范围）+ Y 轴 ≥3 档 + 水平网格 + X 轴日期刻度 */
+      const dwLineOf = (d: ReturnType<typeof dwSeries>): React.ReactElement[] => {
+        if (d.line.length < 2) return []
+        const inner = H - PAD_T - PAD_B
+        const lo = d.yTicksLine[0]!, hi = d.yTicksLine[d.yTicksLine.length - 1]!
+        const yOf = (v: number): number => PAD_T + (1 - (v - lo) / ((hi - lo) || 1)) * inner
+        const xOf = (i: number): number => PAD_L + (i / (d.line.length - 1)) * (W - PAD_L - PAD_R)
+        const els: React.ReactElement[] = []
+        for (const t of d.yTicksLine) {
+          const y = yOf(t)
+          els.push(React.createElement('line', { key: `lg${t}`, x1: PAD_L, y1: y.toFixed(1), x2: W - PAD_R, y2: y.toFixed(1), stroke: 'var(--tw-border)', strokeWidth: 0.5, 'data-role': 'dw-grid' }))
+          els.push(React.createElement('text', { key: `lyt${t}`, x: PAD_L - 4, y: (y + 3).toFixed(1), fontSize: 12, textAnchor: 'end', fill: 'var(--tw-muted)', 'data-role': 'dw-ytick' }, String(t)))
+        }
+        for (const x of d.xTicks) {
+          els.push(React.createElement('text', { key: `lxt${x.i}`, x: xOf(x.i).toFixed(1), y: H - 4, fontSize: 12, textAnchor: 'middle', fill: 'var(--tw-muted)', 'data-role': 'dw-xtick' }, x.label))
+        }
+        if (lo <= 100 && 100 <= hi) {
+          els.push(React.createElement('line', {
+            key: 'base100', x1: PAD_L, y1: yOf(100).toFixed(1), x2: W - PAD_R, y2: yOf(100).toFixed(1),
+            stroke: 'var(--tw-border-strong)', strokeWidth: 1, strokeDasharray: '4 3', 'data-role': 'dw-base',
+          }))
+        }
+        els.push(React.createElement('polyline', {
+          key: 'line', fill: 'none', stroke: 'var(--tw-accent)', strokeWidth: 1.6,
+          points: d.line.map((v, i) => `${xOf(i).toFixed(1)},${yOf(v).toFixed(1)}`).join(' '), 'data-role': 'dw-line',
+        }))
+        return els
       }
       const dwReviewEl = React.createElement('div', { className: 'tw-dw-review', 'data-role': 'dw-review' },
         React.createElement('div', { className: 'tw-dw-review-main' },
@@ -286,45 +313,44 @@ export function MarketPage(props: {
       const dwKpiEl = React.createElement('div', { className: 'tw-dw-kpis', 'data-role': 'dw-kpis' },
         ...(dwK ?? []).map((k) => React.createElement('div', { key: k.label, className: 'tw-dw-kpi' },
           React.createElement('span', { className: 'l' }, k.label),
-          React.createElement('span', { className: 'v' }, k.value, React.createElement('span', { className: 'u' }, k.unit)),
+          React.createElement('span', { className: 'v' }, k.value),
           React.createElement('span', { className: 's' }, k.sub))))
-      const dwTabsEl = React.createElement('div', { className: 'tw-seg' },
-        ...(['3m', '6m', '1y', '2y'] as const).map((w) => React.createElement('button', {
-          key: w, className: `tw-tab${dwWindow === w ? ' is-on' : ''}`,
-          onClick: () => setDwWindow(w),
-        }, w === '3m' ? '近3月' : w === '6m' ? '6月' : w === '1y' ? '1年' : '2年')))
       const dwBarsEl = React.createElement('div', { className: 'tw-dw-chart', 'data-role': 'dw-chart-bars' },
-        React.createElement('div', { className: 'tw-dw-chart-h' },
-          React.createElement('span', { className: 't' }, '汪汪队每日份额变化估算'), dwTabsEl),
-        React.createElement('svg', { viewBox: '0 0 560 180', preserveAspectRatio: 'none', className: 'tw-dw-svg' },
-          ...dwBarsOf(dwS?.bars ?? [])),
+        React.createElement('div', { className: 'tw-dw-chart-h' }, React.createElement('span', { className: 't' }, '汪汪队每日份额变化估算')),
+        React.createElement('svg', { viewBox: `0 0 ${W} ${H}`, preserveAspectRatio: 'none', className: 'tw-dw-svg' },
+          ...dwBarsOf(dwS ?? dwSeries([]))),
         React.createElement('div', { className: 'tw-dw-chart-f' }, '单位：亿份 · 柱 = 当日份额变化估算'))
       const dwLineEl = React.createElement('div', { className: 'tw-dw-chart', 'data-role': 'dw-chart-line' },
         React.createElement('div', { className: 'tw-dw-chart-h' },
           React.createElement('span', { className: 't' }, '汪汪队加仓指数估算'),
           React.createElement('span', { className: 'tw-dw-chart-note' }, '基期 = 100')),
-        React.createElement('svg', { viewBox: '0 0 560 180', preserveAspectRatio: 'none', className: 'tw-dw-svg' },
-          ...dwLineOf(dwS?.line ?? [])),
+        React.createElement('svg', { viewBox: `0 0 ${W} ${H}`, preserveAspectRatio: 'none', className: 'tw-dw-svg' },
+          ...dwLineOf(dwS ?? dwSeries([]))),
         React.createElement('div', { className: 'tw-dw-chart-f' }, '单位：指数 · 虚线 = 基期 100'))
       const dwTableEl = React.createElement('div', { className: 'tw-dw-tscroll' },
         React.createElement('table', { className: 'tw-dw-table', 'data-role': 'dw-table' },
           React.createElement('thead', null, React.createElement('tr', null,
             ...(dwView?.head ?? []).map((h) => React.createElement('th', { key: h }, h)))),
-          React.createElement('tbody', null,
-            ...(dwView?.rows ?? []).map((r) => React.createElement('tr', { key: r.key },
-              ...r.cells.map((c, i) => React.createElement('td', {
-                key: i, title: r.titles[i], className: `${i >= 2 ? 'num' : ''}${r.signs[i] ? ` ${r.signs[i]}` : ''}`.trim() || undefined,
-              }, c)))))))
-      const dogwatchCard = card('汪汪队跟踪', null, dwErr !== null
-        ? React.createElement('div', { className: 'tw-mk-empty' }, missingCellText(dwErr))
-        : dogwatch === null
-          ? React.createElement('div', { className: 'tw-mk-empty' }, missingCellText('加载中'))
-          : React.createElement('div', { className: 'tw-dw-body', 'data-role': 'dw-body' },
-              dwReviewEl, dwKpiEl,
-              React.createElement('div', { className: 'tw-dw-charts' }, dwBarsEl, dwLineEl),
-              dwTableEl,
-              React.createElement('div', { className: 'tw-dw-foot', 'data-role': 'dw-foot' }, DW_FOOTNOTE)))
-
+          React.createElement('tbody', null, ...(dwView?.rows ?? []).map((r) => React.createElement('tr', { key: r.key },
+            ...r.cells.map((c, i) => React.createElement('td', { key: i, title: r.titles[i], tabIndex: r.titles[i] ? 0 : undefined, className: `${i >= 2 ? 'num' : ''}${c.startsWith('-') ? ' neg' : c.startsWith('+') ? ' pos' : ''}` }, c)))))))
+      const dogwatchCard = card('汪汪队跟踪', React.createElement('div', { className: 'tw-seg' },
+        ...(['3m', '6m', '1y', '2y'] as const).map((w) => React.createElement('button', {
+          key: w, className: `tw-tab${dwWindow === w ? ' is-on' : ''}`, onClick: () => { setDwWindow(w) },
+        }, w === '3m' ? '近3月' : w === '6m' ? '6月' : w === '1y' ? '1年' : '2年'))),
+        dwErr !== null
+          ? React.createElement('div', { className: 'tw-mk-empty' }, missingCellText(dwErr))
+          : dogwatch === null
+            ? React.createElement('div', { className: 'tw-dw-body', 'data-role': 'dw-skeleton' },
+                React.createElement('div', { className: 'tw-dw-skel-charts' },
+                  React.createElement('div', { className: 'tw-dw-skel-block' }),
+                  React.createElement('div', { className: 'tw-dw-skel-block' })),
+                React.createElement('div', { className: 'tw-dw-skel-rows' },
+                  ...[0, 1, 2].map((i) => React.createElement('div', { key: i, className: 'tw-dw-skel-row' }))))
+            : React.createElement('div', { className: 'tw-dw-body', 'data-role': 'dw-body' },
+                dwReviewEl, dwKpiEl,
+                React.createElement('div', { className: 'tw-dw-charts' }, dwBarsEl, dwLineEl),
+                dwTableEl,
+                React.createElement('div', { className: 'tw-dw-foot', 'data-role': 'dw-foot' }, DW_FOOTNOTE)))
       return React.createElement('div', {
         className: 'tw-mk-body',
         'data-bars': String(MINUTE_BARS),

@@ -86,29 +86,80 @@ export function dwCells(r: DwRow, sharesStale: boolean): DwCells {
 export function dwTable(rows: readonly DwRow[], summary: DwSummary, sharesStale: boolean): { head: readonly string[]; rows: DwCells[] } {
   const sorted = [...rows].sort((a, b) => (b.scale ?? -1) - (a.scale ?? -1))
   const body = sorted.map((r) => dwCells(r, sharesStale))
+  const scaleRows = sorted.filter((r) => r.scale !== null)
+  const scaleSum = scaleRows.reduce((a, r) => a + (r.scale as number), 0)
+  const scaleSkip = sorted.length - scaleRows.length
+  const deltaRows = sorted.filter((r) => r.sharesDelta !== null)
+  const deltaSum = deltaRows.reduce((a, r) => a + (r.sharesDelta as number), 0)
+  const deltaSkip = sorted.length - deltaRows.length
+  const cross = (mine: number | null, theirs: number | null, label: string): { text: string; title?: string } => {
+    if (mine === null) return { text: '—', title: `${label}：前端无可用行` }
+    if (theirs !== null && Math.abs(mine - theirs) > 0.005) return { text: '—', title: `${label} 与后端不一致：前端 ${mine.toFixed(2)} / 后端 ${theirs.toFixed(2)}` }
+    return { text: mine.toFixed(2), title: undefined }
+  }
   const total: DwCells = {
     key: 'total',
     cells: [
       '合计', '—',
-      dwNum(summary.totalAmount === null ? null : null, 1),           // 规模合计：后端未给 ⇒ —
+      scaleRows.length === 0 ? '—' : cross(scaleSum, null, '规模合计').text,
       dwNum(summary.totalAmount === null ? null : summary.totalAmount / 1e8, 2),
       dwNum(summary.ratio, 2, '×'),
       dwNum(summary.netBuy === null ? null : summary.netBuy / 1e8, 2, '', true),
       dwNum(summary.weightedPct, 2, '%', true),
       dwNum(summary.totalSharesYi, 1),
-      sharesStale ? '—' : dwNum(null, 2),
+      sharesStale || deltaRows.length === 0 ? '—' : cross(deltaSum, null, '份额变化合计').text,
     ],
-    titles: [undefined, undefined, '后端未给规模合计', undefined, undefined, undefined, undefined, undefined, sharesStale ? '份额源未日更' : '后端未给合计份额变化'],
-    signs: [undefined, undefined, undefined, undefined, undefined, 'down', 'down', undefined, undefined],
+    titles: [
+      undefined, undefined,
+      scaleSkip > 0 ? `跳过 ${scaleSkip} 行缺规模` : undefined,
+      undefined, undefined, undefined, undefined, undefined,
+      sharesStale ? '份额源未日更' : deltaSkip > 0 ? `跳过 ${deltaSkip} 行缺份额变化` : undefined,
+    ],
+    signs: [undefined, undefined, undefined, undefined, undefined, 'down', 'down', undefined, sharesStale ? undefined : deltaSum < 0 ? 'down' : 'up'],
     missing: sharesStale,
   }
   return { head: DW_COLUMNS, rows: [...body, total] }
 }
 
 /** 图数据：柱（每日份额变化）与线（加仓指数） */
-export function dwSeries(series: readonly { day: string; change: number; index: number }[]): { bars: number[]; line: number[] } {
-  return {
-    bars: series.map((s) => (Number.isFinite(s.change) ? s.change : 0)),
-    line: series.map((s) => (Number.isFinite(s.index) ? s.index : Number.NaN)).filter((v) => Number.isFinite(v)),
-  }
+/** 好看的整数刻度（步长 1/2/5×10ⁿ），≥3 档且包含 anchor */
+export function niceTicksOf(min: number, max: number, anchor: number, minCount = 3): number[] {
+  const lo = Math.min(min, anchor)
+  const hi = Math.max(max, anchor)
+  if (!(Number.isFinite(lo) && Number.isFinite(hi)) || hi === lo) return [lo, lo + 1, lo + 2]
+  const target = Math.max(minCount, 4)
+  const raw = (hi - lo) / (target - 1)
+  const mag = 10 ** Math.floor(Math.log10(raw))
+  const step = [1, 2, 5, 10].map((m) => m * mag).find((st) => st >= raw) ?? 10 * mag
+  const start = Math.floor(lo / step) * step
+  const out: number[] = []
+  for (let v = start; v <= hi + step * 0.5; v += step) out.push(Number(v.toFixed(6)))
+  if (!out.includes(anchor)) out.push(anchor)
+  return out.sort((a, b) => a - b)
+}
+
+/** X 轴日期刻度：至少 5 个（首/中/尾均匀取），标签为 `MM-DD` */
+export function xTicksOf(days: readonly string[], minCount = 5): Array<{ i: number; label: string }> {
+  if (days.length === 0) return []
+  const n = Math.min(days.length, Math.max(minCount, 5))
+  const idx = new Set<number>()
+  for (let k = 0; k < n; k += 1) idx.add(Math.round((k * (days.length - 1)) / (n - 1)))
+  return [...idx].sort((a, b) => a - b).map((i) => ({ i, label: (days[i] ?? '').slice(5) }))
+}
+
+export function dwSeries(series: readonly { day: string; change: number; index: number }[]): {
+  bars: number[]; line: number[]; days: string[]
+  barPct: number[]; yTicksBar: number[]; yTicksLine: number[]; xTicks: Array<{ i: number; label: string }>
+} {
+  const bars = series.map((s) => (Number.isFinite(s.change) ? s.change : 0))
+  const line = series.map((s) => (Number.isFinite(s.index) ? s.index : Number.NaN)).filter((v) => Number.isFinite(v))
+  const days = series.map((s) => s.day)
+  // 柱高按 |峰值|/|谷值| 归一：max(|change|) ⇒ 100%
+  const peak = Math.max(0, ...bars)
+  const valley = Math.min(0, ...bars)
+  const scale = Math.max(Math.abs(peak), Math.abs(valley), 1e-9)
+  const barPct = bars.map((v) => (Math.abs(v) / scale) * 100)
+  const yTicksBar = niceTicksOf(valley, peak, 0, 3)
+  const yTicksLine = niceTicksOf(Math.min(100, ...line), Math.max(100, ...line), 100, 3)
+  return { bars, line, days, barPct, yTicksBar, yTicksLine, xTicks: xTicksOf(days) }
 }

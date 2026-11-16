@@ -97,16 +97,24 @@ export function parseTencentDetail(text: string, secid: string): TencentDetailRe
   if (detail.volumeRatio === null) missing.push({ what: '量比', why: 'no-source', note: '腾讯单票行情不含量比（f49 语义未确认，不猜）' })
   if (detail.up === null || detail.down === null) missing.push({ what: '涨跌家数', why: 'no-source', note: '腾讯单票行情不含指数级的涨跌家数（只在指数快照里有）' })
   if (detail.open === null) missing.push({ what: '今开', why: 'no-source', note: '腾讯回包里今开为空（停牌/集合竞价前可能如此）' })
-  if (detail.vol === null) missing.push({ what: '成交量', why: 'no-source', note: '腾讯 [36] 与成交额不自洽（量纲判不出）⇒ 按未取到处理，不显示可能差 100 倍的数' })
+  if (detail.vol === null) missing.push({ what: '成交量', why: 'no-source', note: '量纲判不出（成交额锚校验失败或字段缺失）' })
   return { detail, source: 'tencent', missing }
 }
 
 /** 拉腾讯单票详情（走 `fetchTextHost` ⇒ 内部过熔断器） */
-export async function fetchTencentDetail(secid: string): Promise<TencentDetailResult | null> {
+/** 60 秒内存缓存（键 = secid）；失败（null/抛错）不写缓存，下次仍重试 */
+const detailCache = new Map<string, { at: number; result: TencentDetailResult }>()
+const DETAIL_TTL_MS = 60_000
+
+export async function fetchTencentDetail(secid: string, now: number = Date.now()): Promise<TencentDetailResult | null> {
   const code = tencentQuoteCode(secid)
   if (code === null) return null
+  const hit = detailCache.get(secid)
+  if (hit !== undefined && now - hit.at < DETAIL_TTL_MS) return hit.result
   const text = await fetchTextHost('qt.gtimg.cn', `https://qt.gtimg.cn/q=${encodeURIComponent(code)}`, { referer: 'https://gu.qq.com/', charset: 'gbk' })
-  return parseTencentDetail(text, secid)
+  const result = parseTencentDetail(text, secid)
+  if (result !== null) detailCache.set(secid, { at: now, result })
+  return result
 }
 
 export type DetailSource = 'eastmoney' | 'tencent'

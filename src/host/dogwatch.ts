@@ -70,7 +70,7 @@ export function parseSseShares(text: string): Map<string, { name: string; volWan
 export const wanToYi = (wan: number): number => wan / 1e4
 
 export interface SharePoint { day: string; volWan: number }
-export interface CorporateAction { day: string; code: string; prevWan: number; nowWan: number; ratio: number; priceGapPct: number | null }
+export interface CorporateAction { day: string; code: string; prevWan: number; nowWan: number; ratio: number; priceGapPct: number | null; /** 区间累积 >20% 且无单日 >20% 锚点 ⇒ 疑似多次折算（只披露，不进指数顺延） */ suspectedMultiDay?: boolean }
 
 /**
  * 折算检测（纯函数）：份额跳变 **且价格大幅跳空** ⇒ 判为折算。
@@ -108,6 +108,27 @@ export function detectCorporateActions(
       out.push({ day: now.day, code: 'POOL', prevWan: prev.totalWan, nowWan: now.totalWan, ratio, priceGapPct: gap })
     }
   }
+  // ── 累积折算（披露口径，v0.192.0，AUDIT P2-1）──────────────────────────
+  // 锚点 = 上面判出的单日折算日；锚点之间若**区间累积** |ratio−1| > 20%，说明可能有多日小额折算
+  // 被摊平，逐日判据看不见。这里只**如实披露**（suspectedMultiDay），不改指数口径（避免误杀真实申赎）。
+  const anchorIdx = out.map((a) => series.findIndex((p) => p.day === a.day)).filter((i) => i > 0).sort((a, b) => a - b)
+  // 首个锚点之前的区间由该锚点自己解释（锚点已单独记账）⇒ 从第一个锚点起分段
+  const bounds = anchorIdx.length > 0 ? [anchorIdx[0] as number, ...anchorIdx.slice(1), series.length - 1] : [0, series.length - 1]
+  for (let k = 0; k + 1 < bounds.length; k += 1) {
+    const from = bounds[k] as number
+    const to = bounds[k + 1] as number
+    if (to - from < 2) continue // 两日区间只有一跳，已有单日判据覆盖（不算「多日小额」）
+    const a = series[from]
+    const b = series[to]
+    if (!(a.totalWan > 0) || !(b.totalWan > 0)) continue
+    const cum = b.totalWan / a.totalWan
+    if (Math.abs(cum - 1) > threshold) {
+      out.push({
+        day: b.day, code: 'POOL', prevWan: a.totalWan, nowWan: b.totalWan, ratio: cum,
+        priceGapPct: b.priceGapPct, suspectedMultiDay: true,
+      })
+    }
+  }
   return out
 }
 
@@ -129,7 +150,8 @@ export function sharesStaleOf(today: Record<string, number>, prev: Record<string
  */
 export function indexSeriesOf(series: SharePoint[], actions: readonly CorporateAction[]): Array<{ day: string; change: number; index: number }> {
   if (series.length === 0) return []
-  const actionByDay = new Map(actions.map((a) => [a.day, a]))
+  // 只把**已确认**的折算日顺延；`suspectedMultiDay` 仅披露，不改进指数口径
+  const actionByDay = new Map(actions.filter((a) => a.suspectedMultiDay !== true).map((a) => [a.day, a]))
   const first = series[0]!.volWan
   let base = first
   let prev = first
@@ -203,16 +225,18 @@ export function sharesCachePath(day: string): string {
  * 池覆盖率（纯函数）：缓存里命中的池内代码 / 池大小。
  * v0.188.0：早期缓存只存了一页（≈10 行）⇒ 池内只剩 1 只，界面总份额退化成单只。
  */
-export function poolCoverageOf(rows: Map<string, { name: string; volWan: number }> | null): { hit: number; total: number; ratio: number } {
+export function poolCoverageOf(rows: Map<string, { name: string; volWan: number }> | null): { hit: number; total: number; ratio: number; needed: number; usable: boolean } {
   const total = DOGWATCH_POOL.length
-  if (rows === null) return { hit: 0, total, ratio: 0 }
+  // v0.192.0：显式规则 `hit >= ceil(pool × 0.9)`（14 只 ⇒ 需 ≥13；12 只判残缺）
+  const needed = Math.ceil(total * 0.9)
+  if (rows === null) return { hit: 0, total, ratio: 0, needed, usable: false }
   const hit = DOGWATCH_POOL.filter((p) => rows.has(p.code)).length
-  return { hit, total, ratio: hit / total }
+  return { hit, total, ratio: hit / total, needed, usable: hit >= needed }
 }
 
-/** 缓存是否可用：覆盖率 ≥ 90%（<13/14 ⇒ 判残缺，必须重拉） */
+/** 缓存是否可用：命中数 ≥ ceil(pool × 90%)（14 只时 13 可用 / 12 残缺） */
 export function cacheUsableOf(rows: Map<string, { name: string; volWan: number }> | null): boolean {
-  return poolCoverageOf(rows).ratio >= 0.9
+  return poolCoverageOf(rows).usable
 }
 
 function readDiskShares(day: string): Map<string, { name: string; volWan: number }> | null {
@@ -337,7 +361,7 @@ export interface DogwatchPayload {
   sharesStale: boolean
   asOf: number
   /** 缓存排障：磁盘命中日数 / 网络拉取日数 / 耗时 / 是否命中汇总缓存 */
-  stats: { fromDisk: number; fetched: number; elapsedMs: number; cached?: boolean }
+  stats: { fromDisk: number; fetched: number; elapsedMs: number; cached?: boolean; /** 池大小与当日命中数（覆盖率排障） */ pool: number; hit: number }
 }
 
 /** 20 日均额档案（每日落盘，供次日算放大倍数；历史不变 ⇒ 永久缓存） */
@@ -360,7 +384,28 @@ function writeAmountArchive(day: string, total: number): void {
 }
 
 /** 拉一次完整回包（依赖注入便于断言：quotes / shares 可替身） */
-/** 汇总结果 5 分钟缓存：键 = `window|asOfDay`（命中即零请求、零重算） */
+/** 汇总结果落盘：`dogwatch/summary-<window>-<asOfDay>.json`，命中即零读盘、零重算 */
+export function summaryCachePath(window: string, day: string): string {
+  return join(dataHome(), 'dogwatch', `summary-${window}-${day}.json`)
+}
+
+function readSummaryCache(window: string, day: string): DogwatchPayload | null {
+  try {
+    const raw = JSON.parse(readFileSync(summaryCachePath(window, day), 'utf8')) as { payload?: DogwatchPayload }
+    const p = raw.payload
+    if (p === undefined || p.window !== window || p.rows === undefined || p.series === undefined) return null
+    return p
+  } catch { return null }
+}
+
+function writeSummaryCache(window: string, day: string, payload: DogwatchPayload): void {
+  try {
+    mkdirSync(dirname(summaryCachePath(window, day)), { recursive: true })
+    writeFileSync(summaryCachePath(window, day), JSON.stringify({ payload }))
+  } catch { /* 写失败不影响回包 */ }
+}
+
+/** 汇总结果 5 分钟内存缓存：键 = `window|asOfDay`（命中即零请求、零重算） */
 const summaryCache = new Map<string, { at: number; payload: DogwatchPayload }>()
 const SUMMARY_TTL_MS = 5 * 60_000
 
@@ -383,7 +428,13 @@ export async function fetchDogwatch(
   const cacheKey = `${window}|${dayOf(now)}`
   const hit = summaryCache.get(cacheKey)
   if (hit !== undefined && now - hit.at < SUMMARY_TTL_MS) {
-    return { ...hit.payload, stats: { fromDisk: hit.payload.stats.fromDisk, fetched: 0, elapsedMs: Date.now() - t0, cached: true } }
+    return { ...hit.payload, stats: { ...hit.payload.stats, fetched: 0, elapsedMs: Date.now() - t0, cached: true } }
+  }
+  // ② 汇总落盘：命中即零读盘、零重算（跨零点/新交易日自然换键）
+  const asOfDay = dayOf(now)
+  const diskSummary = readSummaryCache(window, asOfDay)
+  if (diskSummary !== null) {
+    return { ...diskSummary, stats: { ...diskSummary.stats, fromDisk: 0, fetched: 0, elapsedMs: Date.now() - t0, cached: true } }
   }
   const days = Math.max(21, DOGWATCH_WINDOWS[window] ?? DOGWATCH_WINDOWS['1y'] as number) + 21
   const tradingDays = tradingDaysBack(days, now)
@@ -473,7 +524,7 @@ export async function fetchDogwatch(
     missing.push({ what: r.secid, why: 'no-source', note: `份额换算后为 0（原始 TOT_VOL=${raw ?? '?'} 万份）——量纲可能被二次换算` })
   }
   // 折算日：单只标的的份额变化同样顺延（避免折算日的巨量"减仓"）
-  const actionDays = new Set(actions.map((a) => a.day))
+  const actionDays = new Set(actions.filter((a) => a.suspectedMultiDay !== true).map((a) => a.day))
   if (last !== undefined && actionDays.has(last.day)) {
     for (const r of rows) r.sharesDelta = null
   }
@@ -502,8 +553,9 @@ export async function fetchDogwatch(
       totalSharesYi: rows.some((r) => r.sharesYi !== null) ? rows.reduce((a, r) => a + (r.sharesYi ?? 0), 0) : null,
     },
     series, rows, missing, corporateActions: actions, sharesStale, asOf: now,
-    stats: { fromDisk, fetched, elapsedMs: Date.now() - t0 },
+    stats: { fromDisk, fetched, elapsedMs: Date.now() - t0, pool: pool.length, hit: last === undefined ? 0 : pool.filter((p) => last.rows.has(p.code)).length },
   }
   summaryCache.set(cacheKey, { at: now, payload })
+  writeSummaryCache(window, asOfDay, payload)
   return payload
 }

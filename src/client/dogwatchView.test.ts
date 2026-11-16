@@ -85,8 +85,9 @@ test('⑦ dwCells/dwTable 的 stale 分支：份额变化列必须落 — + 「�
   const tFresh = dwTable([ROW], SUM, false).rows.at(-1)!
   assert.equal(tStale.cells[8], '—')
   assert.equal(tStale.titles[8], '份额源未日更', 'stale 时合计行也要说明原因')
-  assert.equal(tFresh.titles[8], '后端未给合计份额变化', '非 stale 时原因是"后端未给"，不能混用 stale 文案')
-  assert.notEqual(tStale.titles[8], tFresh.titles[8])
+  assert.equal(tFresh.cells[8], '-30.21', '非 stale 且有一行数据 ⇒ 合计现算')
+  assert.equal(tFresh.titles[8], undefined, '非 stale 且无跳过行 ⇒ 不写原因')
+  assert.notEqual(tStale.titles[8], tFresh.titles[8], 'stale 与非 stale 的合计原因必须不同')
   assert.equal(tStale.missing, true)
 
   // 反例注入：把 sharesStale 忽略掉（永远按未 stale 渲染）⇒ 同一断言必须红

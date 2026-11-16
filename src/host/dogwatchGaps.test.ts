@@ -66,8 +66,8 @@ test('G2 覆盖率：null ⇒ 0；满池 ⇒ 可用；12/14 ⇒ 不可用（门�
   const m13 = new Map(DOGWATCH_POOL.slice(0, 13).map((p) => [p.code, { name: p.name, volWan: 1 }]))
   const m12 = new Map(DOGWATCH_POOL.slice(0, 12).map((p) => [p.code, { name: p.name, volWan: 1 }]))
 
-  assert.deepEqual(poolCoverageOf(null), { hit: 0, total: DOGWATCH_POOL.length, ratio: 0 }, 'null 不得当成"空 Map 但有数据"')
-  assert.deepEqual(poolCoverageOf(full), { hit: 14, total: 14, ratio: 1 })
+  assert.deepEqual(poolCoverageOf(null), { hit: 0, total: DOGWATCH_POOL.length, ratio: 0, needed: 13, usable: false }, 'null 不得当成"空 Map 但有数据"')
+  assert.deepEqual(poolCoverageOf(full), { hit: 14, total: 14, ratio: 1, needed: 13, usable: true })
   assert.equal(cacheUsableOf(full), true, '满池必须可用（原测试只断言过 false 分支）')
   assert.equal(cacheUsableOf(m13), true, '13/14 = 92.9% ≥ 90% ⇒ 可用（边界）')
   assert.equal(cacheUsableOf(m12), false, '12/14 = 85.7% < 90% ⇒ 不可用')

@@ -943,16 +943,10 @@ color-scheme:dark}
 .tw-dw-table th,.tw-dw-table td{padding:0 8px;height:32px;text-align:left;border-bottom:1px solid var(--tw-border);white-space:nowrap}
 .tw-dw-table th:first-child,.tw-dw-table td:first-child,.tw-dw-table th:nth-child(2),.tw-dw-table td:nth-child(2){text-align:left}
 /* v0.184.0：左列四卡下线后只剩两块 ⇒ 单列铺满 */
-.tw-mk-single{display:grid;grid-template-columns:1fr;gap:12px}
-.tw-mk-col{display:flex;flex-direction:column;gap:6px;min-width:0}
 .tw-mk-card{background:var(--tw-card);border-radius:10px;padding:12px;box-shadow:var(--tw-elev-1);min-height:0}
 .tw-mk-h{display:flex;align-items:center;gap:8px;margin-bottom:8px}
 .tw-mk-bar{width:3px;height:14px;border-radius:2px;background:var(--tw-accent);display:inline-block}
 .tw-mk-hint{margin-left:auto;font-size:12px;color:var(--tw-muted)}
-.tw-mk-cell{padding:8px;border-radius:8px;background:var(--tw-card-2)}
-.tw-mk-v{font-size:22px;line-height:1.15;font-variant-numeric:tabular-nums;font-family:var(--tw-mono)}
-.tw-mk-l{font-size:12px;color:var(--tw-muted);margin-top:0}
-.tw-mk-s{font-size:12px;color:var(--tw-muted)}
 .tw-mk-empty{padding:8px;border-radius:8px;background:var(--tw-card-2);font-size:12px;color:var(--tw-muted)}
 /* 主要指数 6 张一行 / 期货自选 5 张一行（22px·padding 8·圆角 8；窄屏 2 列 / 单列） */
 .tw-idx-grid{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:6px}
@@ -960,7 +954,15 @@ color-scheme:dark}
 @media (max-width:600px){.tw-idx-grid{grid-template-columns:1fr}}
 .tw-fut-grid{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:6px}
 @media (max-width:900px){.tw-fut-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+
+/* ── 汪汪队跟踪（dogwatch）───────────────────────────────────────────── */
+.tw-mk-v{font-size:22px;line-height:1.15;font-variant-numeric:tabular-nums;font-family:var(--tw-mono)}
 .tw-idx-grid .tw-mk-v,.tw-fut-grid .tw-mk-v{font-size:22px}
+.tw-mk-single{display:grid;grid-template-columns:1fr;gap:12px}
+.tw-mk-col{display:flex;flex-direction:column;gap:6px;min-width:0}
+.tw-mk-cell{padding:8px;border-radius:8px;background:var(--tw-card-2)}
+.tw-mk-l{font-size:12px;color:var(--tw-muted);margin-top:0}
+.tw-mk-s{font-size:12px;color:var(--tw-muted)}
 .tw-mk-min{display:flex;align-items:center;gap:1px;height:56px;overflow:hidden}
 .tw-mk-min i{flex:1 1 0;min-width:1px;border-radius:1px}
 .tw-mk-min i.pos{background:var(--tw-up);align-self:flex-end}
@@ -972,8 +974,6 @@ color-scheme:dark}
 .tw-mk-dist i[data-dir=up]{background:var(--tw-up)}
 .tw-mk-dist i[data-dir=down]{background:var(--tw-down)}
 .tw-mk-dist i[data-dir=flat]{background:var(--tw-muted)}
-
-/* ── 汪汪队跟踪（dogwatch）───────────────────────────────────────────── */
 .tw-dw-body{display:flex;flex-direction:column;gap:8px}
 .tw-dw-review{display:flex;align-items:flex-end;gap:12px;padding:12px 12px 10px;border:1px solid var(--tw-border);border-radius:8px;background:var(--tw-card2)}
 .tw-dw-review-main{display:flex;flex-direction:column;gap:2px}
@@ -998,6 +998,13 @@ color-scheme:dark}
 .tw-dw-chart-f{color:var(--tw-muted);font-size:12px}
 .tw-dw-tscroll{overflow-x:auto}
 .tw-dw-foot{margin-top:10px;color:var(--tw-muted);font-size:12px}
+.tw-dw-table td[title]:focus-visible{outline:1px solid var(--tw-accent);outline-offset:-1px}
+.tw-dw-skel-charts{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+@media (max-width:999px){.tw-dw-skel-charts{grid-template-columns:minmax(0,1fr)}}
+.tw-dw-skel-block{height:208px;border-radius:8px;background:var(--tw-card2);animation:twDwPulse 1.4s ease-in-out infinite}
+.tw-dw-skel-rows{display:flex;flex-direction:column;gap:6px;margin-top:10px}
+.tw-dw-skel-row{height:32px;border-radius:6px;background:var(--tw-card2);animation:twDwPulse 1.4s ease-in-out infinite}
+@keyframes twDwPulse{0%,100%{opacity:.55}50%{opacity:.95}}
 
 `
 

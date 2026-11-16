@@ -61,7 +61,7 @@ test('双图（10 条）', () => {
   assert.ok(has('.tw-dw-chart-f', 'font-size:12px'), '图底说明 12px')
   assert.match(SRC, /'data-role': 'dw-chart-bars'/, '左图容器')
   assert.match(SRC, /'data-role': 'dw-chart-line'/, '右图容器')
-  assert.match(SRC, /strokeDasharray: '4 3'/, '虚线 4 3')
+  assert.match(SRC, /strokeDasharray: '4 3'|stroke-dasharray:4 3/, '虚线 4 3')
   assert.match(SRC, /'基期 = 100'/, '右图基期标注')
   assert.match(SRC, /'单位：亿份 · 柱 = 当日份额变化估算'/, '左图底部说明')
   assert.match(SRC, /'单位：指数 · 虚线 = 基期 100'/, '右图底部说明')

@@ -3,7 +3,8 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { DOGWATCH_POOL, cacheUsableOf, fetchDogwatch, wanToYi, detectCorporateActions, indexSeriesOf, isShenzhenCode, loadSharesOf, parseSseShares, poolCoverageOf, ratioOf, sharesStaleOf, sharesCachePath, weightedPctOf } from './dogwatch.ts'
+import { dayOf } from './time.ts'
+import { DOGWATCH_POOL, cacheUsableOf, summaryCachePath, fetchDogwatch, wanToYi, detectCorporateActions, indexSeriesOf, isShenzhenCode, loadSharesOf, parseSseShares, poolCoverageOf, ratioOf, sharesStaleOf, sharesCachePath, weightedPctOf } from './dogwatch.ts'
 
 test('① 加仓指数首日 = 100（不等于 100 ⇒ 败）', () => {
   const s = indexSeriesOf([{ day: 'd1', volWan: 1000 }, { day: 'd2', volWan: 1100 }], [])
@@ -22,10 +23,10 @@ test('② 折算双向判据：份额跳+价格跳空 ⇒ 折算（顺延并重�
   const gaps = [0, (888 / 448 - 1) * 100, (448 / 189 - 1) * 100, 0.4, 0.6]
   const series = ladder.map((v, i) => ({ day: `d${i}`, totalWan: v, priceGapPct: gaps[i]! }))
 
-  const actions = detectCorporateActions(series)
+  const actions = detectCorporateActions(series).filter((a) => a.suspectedMultiDay !== true)
   assert.deepEqual(actions.map((a) => a.day), ['d1', 'd2'], '只有两个折算日（888→448、448→189）')
   assert.equal(actions[0]!.ratio, 448 / 888)
-  assert.notEqual(detectCorporateActions(series, { threshold: 0.5 }).length, 2, '阈值 50% 时 888→448(−49.5%) 不该命中 ⇒ 说明阈值真的生效')
+  assert.notEqual(detectCorporateActions(series, { threshold: 0.5 }).filter((a) => a.suspectedMultiDay !== true).length, 2, '阈值 50% 时 888→448(−49.5%) 不该命中 ⇒ 说明阈值真的生效')
 
   const idx = indexSeriesOf(series.map((p) => ({ day: p.day, volWan: p.totalWan })), actions)
   assert.equal(idx[0]!.index, 100, '首日 100')
@@ -56,10 +57,10 @@ test('② 折算双向判据：份额跳+价格跳空 ⇒ 折算（顺延并重�
 
   // 反例 2（更细的旧形态）："+50% 份额 + 价格不动" 曾被当成折算 —— 现在必须计入
   const redemption = [{ day: 'r0', totalWan: 1000, priceGapPct: 0 }, { day: 'r1', totalWan: 1500, priceGapPct: 0.3 }]
-  assert.equal(detectCorporateActions(redemption).length, 0, '份额 +50%、价格不动 = 大额申购，不得判折算')
+  assert.equal(detectCorporateActions(redemption).filter((a) => a.suspectedMultiDay !== true).length, 0, '份额 +50%、价格不动 = 大额申购，不得判折算')
   assert.equal(indexSeriesOf(redemption.map((p) => ({ day: p.day, volWan: p.totalWan })), []).at(-1)!.index, 150, '申购必须计入 ⇒ 指数 100→150')
   assert.throws(
-    () => assert.equal(detectCorporateActions(redemption).length, 1, '反例上：把申购当折算'),
+    () => assert.equal(detectCorporateActions(redemption).filter((a) => a.suspectedMultiDay !== true).length, 1, '反例上：把申购当折算'),
     /反例上/,
     '⚠ 真注入：旧判据会把它判成折算（1 条）',
   )
@@ -135,7 +136,7 @@ const sseJson = (codes: string[], volOf: (c: string) => number): string =>
 
 test('① 池覆盖率 = 14/14（只命中 1 只 ⇒ 败）', () => {
   const all = parseSseShares(sseJson(POOL14.map((p) => p.code), () => 100))
-  assert.deepEqual(poolCoverageOf(all), { hit: 14, total: 14, ratio: 1 })
+  assert.deepEqual(poolCoverageOf(all), { hit: 14, total: 14, ratio: 1, needed: 13, usable: true })
   const one = parseSseShares(sseJson(['510300'], () => 100))
   assert.equal(poolCoverageOf(one).hit, 1, '只回一页 ⇒ 只命中 1 只（这正是线上缺陷）')
   assert.equal(cacheUsableOf(one), false, '1/14 < 90% ⇒ 缓存不可用')
@@ -272,6 +273,7 @@ test('④ 删掉某一天文件 ⇒ 只补该 1 天（补全窗 ⇒ 败）', asy
   const victim = tradingDaysBack(84, now)[10]!
   unlinkSync(sharesCachePath(victim))
   const refill = Object.fromEntries(DOGWATCH_POOL.map((p, i) => [p.code, { name: p.name, volWan: 100000 + i * 1000 }]))
+  try { unlinkSync(summaryCachePath('3m', dayOf(now))) } catch { /* ignore */ }
   const r = await fetchDogwatch('3m', { now: now + 6 * 60_000, quotes: async () => ({}), loadShares: async () => new Map(Object.entries(refill)) })
   assert.equal(r.stats.fetched, 1, `只补 1 天（实得 ${r.stats.fetched}）`)
   assert.equal(r.stats.fromDisk, tradingDaysBack(84, now).length - 1, `其余日必须全部命中磁盘（实得 ${r.stats.fromDisk}）`)
@@ -286,6 +288,7 @@ test('⑤ 损坏文件 ⇒ 仅重拉该日（整窗重拉 ⇒ 败）', async () 
   await fetchDogwatch('3m', { now, quotes: async () => ({}), loadShares: async () => new Map(Object.entries(refill0b)) })
   writeFileSync(sharesCachePath(tradingDaysBack(84, now)[20]!), '{broken json')
   const refill2 = Object.fromEntries(DOGWATCH_POOL.map((p, i) => [p.code, { name: p.name, volWan: 100000 + i * 1000 }]))
+  try { unlinkSync(summaryCachePath('3m', dayOf(now))) } catch { /* ignore */ }
   const r = await fetchDogwatch('3m', { now: now + 6 * 60_000, quotes: async () => ({}), loadShares: async () => new Map(Object.entries(refill2)) })
   assert.equal(r.stats.fetched, 1, '损坏只影响该日')
   assert.throws(() => assert.equal(r.stats.fetched, days.length, '反例上：整窗重拉'), /反例上/, '⚠ 反例注入必须失败')
@@ -334,13 +337,13 @@ test('A2 真实 510300 序列：10–12% 的份额跃升是申赎不是折算（
     { day: 'd4', totalWan: 254.8, priceGapPct: 0.3 },
     { day: 'd5', totalWan: 285.5, priceGapPct: 0.9 },   // +12.0%（申赎）
   ]
-  assert.equal(detectCorporateActions(real).length, 0, '真实跃升都 <20% ⇒ 不得误判为折算（误杀会把真加仓抹掉）')
+  assert.equal(detectCorporateActions(real).filter((a) => a.suspectedMultiDay !== true).length, 0, '真实跃升都 <20% ⇒ 不得误判为折算（误杀会把真加仓抹掉）')
   // 真折算：份额翻倍、价格 -50%
   const split = [
     { day: 's0', totalWan: 200, priceGapPct: 0.2 },
     { day: 's1', totalWan: 400, priceGapPct: -50 },
   ]
-  const acts = detectCorporateActions(split)
+  const acts = detectCorporateActions(split).filter((a) => a.suspectedMultiDay !== true)
   assert.equal(acts.length, 1, '真的 1:2 折算必须被记一笔')
   const idx = indexSeriesOf(split.map((p) => ({ day: p.day, volWan: p.totalWan })), acts)
   assert.equal(idx[1]!.index, 100, '折算日指数必须顺延（200→400 不得算成 +100%）')
@@ -380,4 +383,89 @@ test('A4 同日并发：两个 loadSharesOf 合并为一次上游（重复请求
     assert.equal(poolCoverageOf(a).hit, 14)
     assert.throws(() => assert.notEqual(a, b, '反例上：各拉一次'), /反例上/, '⚠ 反例注入必须失败')
   } finally { globalThis.fetch = orig }
+})
+
+// ── v0.192.0：P2 清理（AUDIT-DOGWATCH-HOST §P2） ──────────────────────────
+
+test('P2-1 多日累积折算：无单日 >20% 但区间 >20% ⇒ suspectedMultiDay 披露（静默 ⇒ 败）', () => {
+  const slow = [
+    { day: 'a', totalWan: 100, priceGapPct: 0.1 },
+    { day: 'b', totalWan: 110, priceGapPct: 0.2 }, // +10%
+    { day: 'c', totalWan: 121, priceGapPct: 0.1 }, // +10%
+    { day: 'd', totalWan: 133, priceGapPct: 0.3 }, // +10%
+  ]
+  const acts = detectCorporateActions(slow)
+  assert.equal(acts.filter((a) => a.suspectedMultiDay !== true).length, 0, '没有单日锚点')
+  assert.equal(acts.filter((a) => a.suspectedMultiDay === true).length, 1, '区间累积 +33% ⇒ 必须披露 1 条')
+  const idx = indexSeriesOf(slow.map((p) => ({ day: p.day, volWan: p.totalWan })), acts)
+  assert.ok(Math.abs(idx[idx.length - 1]!.index - 133) < 0.01, '披露不改变指数口径（仍是 +33%）')
+  assert.throws(() => assert.equal(acts.length, 0, '反例上：静默'), /反例上/, '⚠ 反例注入必须失败')
+})
+
+test('P2-1b 有单日锚点时按锚点分段（区间累积不被重复计入）', () => {
+  const s = [
+    { day: 'a', totalWan: 100, priceGapPct: 0.1 },
+    { day: 'b', totalWan: 150, priceGapPct: -33 }, // 真折算锚点（份额×1.5、价 −33%）
+    { day: 'c', totalWan: 155, priceGapPct: 0.2 },
+  ]
+  const acts = detectCorporateActions(s)
+  assert.equal(acts.filter((a) => a.suspectedMultiDay === true).length, 0, '锚点后区间仅 +3.3% ⇒ 不披露')
+  assert.equal(acts.length, 1, '只有那个真折算锚点')
+})
+
+test('P2-2 90% 阈值边界：14 只池 hit=12 ⇒ 残缺、hit=13 ⇒ 可用', () => {
+  const mk = (n: number): Map<string, { name: string; volWan: number }> =>
+    new Map(DOGWATCH_POOL.slice(0, n).map((p) => [p.code, { name: p.name, volWan: 1 }]))
+  const c12 = poolCoverageOf(mk(12))
+  const c13 = poolCoverageOf(mk(13))
+  assert.deepEqual([c12.hit, c12.total, c12.needed], [12, 14, 13])
+  assert.equal(c12.usable, false, '12/14 = 85.7% < 90% ⇒ 残缺')
+  assert.equal(c13.usable, true, '13/14 = 92.9% ≥ 90% ⇒ 可用')
+  assert.equal(cacheUsableOf(mk(12)), false)
+  assert.equal(cacheUsableOf(mk(13)), true)
+  assert.throws(() => assert.equal(c12.usable, true, '反例上：12 只也当可用'), /反例上/, '⚠ 反例注入必须失败')
+})
+
+test('P2-3 fetchTencentDetail 60 秒缓存：同 secid 两次上游 ≤1 次，60 秒内 cached', async () => {
+  const { fetchTencentDetail } = await import('./detailTencent.ts')
+  let calls = 0
+  const orig = globalThis.fetch
+  const payload = 'v_sh510300="1~沪深300ETF~510300~4.082~4.09~4.08~100~50~50~4.082~0~0~0~0~0~0~0~0~0~0~0~0~0~0~0~0~0~0~0~0~0~0~0~0~0~1000~4082000~0~0~0~0~0~0~0~0~0~0~0~0~0~0~0~0~0~0~0~0~0~0~0~0~0~0~0~0~0"'
+  globalThis.fetch = (async () => { calls += 1; return new Response(payload, { status: 200 }) }) as typeof fetch
+  try {
+    const t0 = Date.now()
+    await fetchTencentDetail('1.510300', t0)
+    await fetchTencentDetail('1.510300', t0 + 30_000)
+    assert.ok(calls <= 1, `60 秒内两次调用上游必须 ≤1（实得 ${calls}）`)
+    await fetchTencentDetail('1.510300', t0 + 61_000)
+    assert.equal(calls, 2, '超过 60 秒必须重拉')
+    assert.throws(() => assert.equal(calls, 1, '反例上：不重拉'), /反例上/, '⚠ 反例注入必须失败')
+  } finally { globalThis.fetch = orig }
+})
+
+test('P2-4 量纲判不出 ⇒ missing 含固定原因文本（缺 ⇒ 败）', async () => {
+  const { parseTencentDetail } = await import('./detailTencent.ts')
+  // 价格 4.08、成交额 100 元、成交量 5 ⇒ 既不是股也不是手（100 倍都对不上）⇒ 判不出
+  const r = parseTencentDetail('v_sh510300="1~X~510300~4.08~4.09~4.07~5~50~50~4.08~0~0~0~0~0~0~0~0~0~0~0~0~0~0~0~0~0~0~0~0~0~0~0~0~0~5~100~0~0~0~0~0~0~0~0~0~0~0~0~0~0~0~0~0~0~0~0~0~0~0~0~0~0~0~0"', '1.510300')
+  assert.notEqual(r, null)
+  const entry = r!.missing.find((m) => m.what === '成交量')
+  assert.notEqual(entry, undefined, '判不出时必须有一条 成交量 missing')
+  assert.equal(entry!.note, '量纲判不出（成交额锚校验失败或字段缺失）')
+  assert.throws(() => assert.equal(r!.missing.filter((m) => m.what === '成交量').length, 0, '反例上：缺条目'), /反例上/, '⚠ 反例注入必须失败')
+})
+
+test('P3-1 二次打开：elapsedMs < 100 且 fetched = 0（内存/落盘汇总命中）', async () => {
+  const now = Date.parse('2026-11-23T10:00:00+08:00')
+  seedDays(tradingDaysBack(95, now), (i) => 100000 + i * 1000)
+  await fetchDogwatch('3m', { now, quotes: async () => ({}) })
+  const second = await fetchDogwatch('3m', { now: now + 1000, quotes: async () => ({}) })
+  assert.equal(second.stats.fetched, 0)
+  assert.ok(second.stats.elapsedMs < 100, `二次打开必须 <100ms（实得 ${second.stats.elapsedMs}）`)
+  // 内存 TTL 过期后走**落盘汇总**：零读盘、零重算
+  const third = await fetchDogwatch('3m', { now: now + 6 * 60_000, quotes: async () => ({}) })
+  assert.equal(third.stats.fromDisk, 0, '落盘汇总命中时不得逐日读盘')
+  assert.equal(third.stats.fetched, 0)
+  assert.equal(third.stats.cached, true)
+  assert.ok(third.stats.elapsedMs < 100, `落盘命中必须 <100ms（实得 ${third.stats.elapsedMs}）`)
+  assert.throws(() => assert.equal(third.stats.fromDisk, 84, '反例上：逐日读盘'), /反例上/, '⚠ 反例注入必须失败')
 })
