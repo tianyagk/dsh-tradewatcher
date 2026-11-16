@@ -11,6 +11,41 @@
 
 ---
 
+## v0.190.0 — 三方审查收口：客户端 P1（切窗旧数据）+ 宿主 P1 四条 + 测试补强
+
+`npm run check` **1503 / 1503 × 2 时区** + `ALL HOST CHECKS PASSED` + build（73 片段全过）。三份报告：`docs/AUDIT-DOGWATCH-{HOST,CLIENT,TESTS}.md`。
+
+### 客户端层（P0 0 / P1 1 / P2 6）
+
+**P1-1 切窗时旧窗口数据挂在新 tab 下**：切 `3m/6m/1y/2y` 后 `dogwatch` 仍保留上一窗口回包直到新请求返回——tab 显示「近3月」、图表还是 1 年数据。修法：effect 内 `setDwErr(null)` 后立即 `setDogwatch(null)` 走加载态；旧响应由既有 `alive` 标志丢弃。断言注入「删除 `setDogwatch(null)`」⇒ 必败。
+
+审查同时确认：`dwErr`/`dogwatch===null` 独立分支、`summary` 全 null 时四指标与合计全 `—`、`series` 空数组两图不崩、`dwTable` 动态行数、`sharesStale` 时合计行同步降级、`redUp` 反转跟随。
+
+### 宿主层（P0 1 / P1 4 / P2 4，P0 已随 v0.189.0 发布）
+
+| # | 问题 | 修法 |
+| --- | --- | --- |
+| P1-1 | `parseSseShares` 遇 `null`/非对象行抛 TypeError ⇒ 整表 500 | 跳过非对象行；A1 覆盖空值/负数/非数字/空白代码/重复代码 |
+| P1-2 | 同日并发重复拉取 + 并发写同一文件 | `inflightShares: Map<day, Promise>` 合并在飞请求，`.finally` 清理；A4 并发两次 ⇒ 上游 ≤1 次 |
+| P1-3 | `stats` 语义未文档化 | `elapsedMs` 为毫秒；命中汇总缓存 `fetched=0`、`cached=true` |
+| P1-4 | 5 分钟 TTL 与 `asOfDay` 边界 | 键含 `dayOf(now)`，跨零点失效重拉 1 次（设计取舍，已记录） |
+
+### 测试层
+
+- 189 条断言中 71 条（37.6%）为源码扫描；38 条「必败」注入仅 6 条真注入 ⇒ 补 6 条真注入（G1–G8）。
+- 揪出 `dogwatch.test.ts ②` 把错误行为固化成契约（已随 v0.189.0 修复）。
+- 定位 1 条误删（pacing 节拍 effect）与 1 处死代码（`__pacingHelpers`）。
+
+### 验证
+
+`npm run check` **1503 / 1503 × 2 时区** + build（73 项）。
+渲染核对：`/tmp/dogwatch-audit-1200.png`（修后）。
+
+### P2（登记，共 16 条）
+
+客户端 6：td title 不可聚焦 / `.tw-mk-*` 死 CSS / 切窗无骨架屏 / `dwSeries` 柱线长度不同步 / `marketExtras` 死请求 / 合计行规模与份额变化恒 `—`。
+宿主 4：多日小额折算漏判 / 90% 阈值边界 / `fetchTencentDetail` 无缓存 / `volUnitOf` 无原因文本。
+
 ## v0.189.0 — 加仓指数折算修正：判据改向 + 基期重标定；审查三件套收口
 
 `npm run check` **1503 / 1503 × 2 时区**（1487 → 1503）+ `ALL HOST CHECKS PASSED` + build（73 片段全过）。
