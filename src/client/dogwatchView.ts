@@ -35,17 +35,17 @@ export function dwReview(day: string, summary: DwSummary): { day: string; verdic
   return { day: `最近交易日复盘 · ${day}`, verdict, big: dwNum(ratio, 2, '×'), bigSub: '较 20 日均额' }
 }
 
-export interface DwKpi { label: string; value: string; sub: string }
+export interface DwKpi { label: string; value: string; unit: string; sub: string }
 
 /** 四指标（每条都带副行） */
 export function dwKpis(summary: DwSummary): DwKpi[] {
   const avg20 = summary.totalAmount !== null && summary.ratio !== null && summary.ratio > 0
     ? summary.totalAmount / summary.ratio : null
   return [
-    { label: '汪汪队合计成交额', value: `${dwNum(summary.totalAmount === null ? null : summary.totalAmount / 1e8, 1)} 亿`, sub: `20 日均额 ${dwNum(avg20 === null ? null : avg20 / 1e8, 1)} 亿` },
-    { label: '成交额放大倍数', value: dwNum(summary.ratio, 2, '×'), sub: '阈值 1.8× 为强信号' },
-    { label: '合计主动净买入', value: `${dwNum(summary.netBuy === null ? null : summary.netBuy / 1e8, 2)} 亿`, sub: '主动买卖口径推算' },
-    { label: '池内加权涨跌', value: dwNum(summary.weightedPct, 2, '%'), sub: '规模加权' },
+    { label: '汪汪队合计成交额', value: `${dwNum(summary.totalAmount === null ? null : summary.totalAmount / 1e8, 1)}亿`, unit: '', sub: `20 日均额 ${dwNum(avg20 === null ? null : avg20 / 1e8, 1)} 亿` },
+    { label: '成交额放大倍数', value: `${dwNum(summary.ratio, 2)}×`, unit: '', sub: '阈值 1.8× 为强信号' },
+    { label: '合计主动净买入', value: `${dwNum(summary.netBuy === null ? null : summary.netBuy / 1e8, 2)}亿`, unit: '', sub: '主动买卖口径推算' },
+    { label: '池内加权涨跌', value: `${dwNum(summary.weightedPct, 2)}%`, unit: '', sub: '规模加权' },
   ]
 }
 

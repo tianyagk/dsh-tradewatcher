@@ -294,7 +294,7 @@ export function MarketPage(props: {
       const dwKpiEl = React.createElement('div', { className: 'tw-dw-kpis', 'data-role': 'dw-kpis' },
         ...(dwK ?? []).map((k) => React.createElement('div', { key: k.label, className: 'tw-dw-kpi' },
           React.createElement('span', { className: 'l' }, k.label),
-          React.createElement('span', { className: 'v' }, k.value),
+          React.createElement('span', { className: 'v' }, k.value, React.createElement('span', { className: 'u' }, k.unit)),
           React.createElement('span', { className: 's' }, k.sub))))
       const dwTabsEl = React.createElement('div', { className: 'tw-seg' },
         ...(['3m', '6m', '1y', '2y'] as const).map((w) => React.createElement('button', {

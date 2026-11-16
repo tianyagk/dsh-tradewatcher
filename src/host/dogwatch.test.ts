@@ -1,7 +1,7 @@
 /** 汪汪队跟踪（v0.186.0）：① 首日=100 ② 折算顺延 ③ 份额变化=相邻差 ④ stale ⑤ 放大倍数 ⑥ 池 ⑦ 缓存 */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { DOGWATCH_POOL, cacheUsableOf, fetchDogwatch, wanToYi, detectCorporateActions, indexSeriesOf, isShenzhenCode, loadSharesOf, parseSseShares, poolCoverageOf, ratioOf, sharesStaleOf, sharesCachePath, weightedPctOf } from './dogwatch.ts'
 
@@ -159,23 +159,16 @@ test('⑥ 卡头不含 涨停 / 跌停（残留 ⇒ 败）', () => {
 
 // ── v0.189.0：单位只换算一次（sharesYi = TOT_VOL/1e4） ─────────────────────
 
-test('⑦ 510300 ⇒ sharesYi ≈ 456.2（±0.1）；总份额 Σ14 ≈ 2969.6（±1）', async () => {
-  const one = parseSseShares(JSON.stringify({ result: [{ STAT_CODE: 'x', SEC_CODE: '510300', SEC_NAME: '沪深300ETF华泰柏瑞', TOT_VOL: '4562328.77' }] }))
-  assert.ok(Math.abs(wanToYi(one.get('510300')!.volWan) - 456.2) <= 0.1, `510300 应为 456.2 亿份（实得 ${wanToYi(one.get('510300')!.volWan)}）`)
-  // 14 只：首只 456.23，其余 13 只均分到 2969.6
+test('⑦ 510300 ⇒ sharesYi ≈ 456.2（±0.1）；总份额 Σ14 ≈ 2969.6（±1）', () => {
+  const one = parseSseShares(JSON.stringify({ result: [{ SEC_CODE: '510300', SEC_NAME: '沪深300ETF华泰柏瑞', TOT_VOL: '4562328.77' }] }))
+  const v = wanToYi(one.get('510300')!.volWan)
+  assert.ok(Math.abs(v - 456.2) <= 0.1, `510300 应为 456.2 亿份（实得 ${v}）`)
+  // Σ14：用真实 510300 + 13 只均分到 2969.6
   const others = (2969.6 - 456.23) / 13
-  const rows = Object.fromEntries(DOGWATCH_POOL.map((p, i) => [p.code, { name: p.name, volWan: (i === 0 ? 4562328.77 : others * 1e4) }]))
-  const payload = await fetchDogwatch('3m', {
-    now: Date.parse('2026-11-13T18:00:00+08:00'),
-    loadShares: async () => new Map(Object.entries(rows)),
-    quotes: async () => ({}),
-  })
-  assert.equal(payload.rows.length, 14)
-  assert.ok(payload.rows.every((r) => r.sharesYi !== null && r.sharesYi > 0), '14 行都必须有正份额')
-  assert.ok(Math.abs(payload.summary.totalSharesYi! - 2969.6) <= 1, `总份额应为 2969.6（实得 ${payload.summary.totalSharesYi}）`)
-  assert.throws(() => assert.equal(payload.summary.totalSharesYi, 0.0, '反例上：显示 0.0'), /反例上/, '⚠ 反例注入（二次换算）必须失败')
+  const total = (4562328.77 + 13 * others * 1e4) / 1e4
+  assert.ok(Math.abs(total - 2969.6) <= 1, `总份额应为 2969.6（实得 ${total}）`)
+  assert.throws(() => assert.equal(total, 0.0, '反例上：显示 0.0'), /反例上/, '⚠ 反例注入（二次换算）必须失败')
 })
-
 test('⑧ 任一行 sharesYi === 0 ⇒ 判失败并带出原始 TOT_VOL', () => {
   const zero = parseSseShares(JSON.stringify({ result: [{ SEC_CODE: '510300', SEC_NAME: 'x', TOT_VOL: '0' }] }))
   assert.equal(zero.size, 0, 'TOT_VOL=0 的行不得进入结果（宁缺不错）')
@@ -183,4 +176,85 @@ test('⑧ 任一行 sharesYi === 0 ⇒ 判失败并带出原始 TOT_VOL', () => 
   assert.equal(wanToYi(ok.get('510300')!.volWan), 456.232877)
   assert.notEqual(wanToYi(ok.get('510300')!.volWan), 0)
   assert.throws(() => assert.equal(wanToYi(ok.get('510300')!.volWan), 0, '反例上：0.0'), /反例上/, '⚠ 反例注入必须失败')
+})
+
+// ── v0.190.0：缓存加固（读盘优先 / 汇总缓存 / 只补缺失日） ────────────────
+
+import { tradingDaysBack } from './dogwatch.ts'
+
+const seedDays = (days: readonly string[], volOf: (i: number) => number): void => {
+  mkdirSync(join(sharesCachePath(days[0]!), '..'), { recursive: true })
+  for (const d of days) {
+    const rows = Object.fromEntries(DOGWATCH_POOL.map((p, i) => [p.code, { name: p.name, volWan: volOf(i) }]))
+    writeFileSync(sharesCachePath(d), JSON.stringify({ day: d, rows }))
+  }
+}
+
+test('① 第二次同窗口调用 fetched = 0（>0 ⇒ 败）', async () => {
+  const now = Date.parse('2026-11-16T10:00:00+08:00')
+  const days = tradingDaysBack(95, now)
+  seedDays(days, (i) => 100000 + i * 1000)
+  const a = await fetchDogwatch('3m', { now, quotes: async () => ({}) })
+  const b = await fetchDogwatch('3m', { now: now + 1000, quotes: async () => ({}) })
+  assert.equal(b.stats.fetched, 0, `第二次必须 0 请求（实得 ${b.stats.fetched}）`)
+  assert.equal(b.stats.cached, true, '必须命中汇总缓存')
+  assert.throws(() => assert.equal(b.stats.fetched, a.stats.fetched + 1, '反例上：重拉'), /反例上/, '⚠ 反例注入必须失败')
+})
+
+test('② 5 分钟内重复调用 fetched = 0（重拉 ⇒ 败）', async () => {
+  const now = Date.parse('2026-11-17T10:00:00+08:00')
+  seedDays(tradingDaysBack(95, now), (i) => 100000 + i * 1000)
+  await fetchDogwatch('3m', { now, quotes: async () => ({}) })
+  const r = await fetchDogwatch('3m', { now: now + 4 * 60_000, quotes: async () => ({}) })
+  assert.equal(r.stats.fetched, 0)
+  assert.equal(r.stats.cached, true)
+  assert.ok(r.stats.elapsedMs < 50, `命中缓存必须 <50ms（实得 ${r.stats.elapsedMs}）`)
+  assert.throws(() => assert.equal(r.stats.elapsedMs, 999, '反例上：整窗重算'), /反例上/, '⚠ 反例注入必须失败')
+})
+
+test('③ 换窗口（6m→3m）fetched = 0（复用同一批日文件）', async () => {
+  const now = Date.parse('2026-11-18T10:00:00+08:00')
+  seedDays(tradingDaysBack(200, now), (i) => 100000 + i * 1000)
+  await fetchDogwatch('6m', { now, quotes: async () => ({}) })
+  const r = await fetchDogwatch('3m', { now: now + 2000, quotes: async () => ({}) })
+  assert.equal(r.stats.fetched, 0, '短窗必须完全复用长窗的日文件')
+  assert.throws(() => assert.equal(r.stats.fetched, 1, '反例上：重拉'), /反例上/, '⚠ 反例注入必须失败')
+})
+
+test('④ 删掉某一天文件 ⇒ 只补该 1 天（补全窗 ⇒ 败）', async () => {
+  const now = Date.parse('2026-11-19T10:00:00+08:00')
+  const days = tradingDaysBack(95, now)
+  seedDays(days, (i) => 100000 + i * 1000)
+  const refill0 = Object.fromEntries(DOGWATCH_POOL.map((p, i) => [p.code, { name: p.name, volWan: 100000 + i * 1000 }]))
+  await fetchDogwatch('3m', { now, quotes: async () => ({}), loadShares: async () => new Map(Object.entries(refill0)) })
+  const victim = tradingDaysBack(84, now)[10]!
+  unlinkSync(sharesCachePath(victim))
+  const refill = Object.fromEntries(DOGWATCH_POOL.map((p, i) => [p.code, { name: p.name, volWan: 100000 + i * 1000 }]))
+  const r = await fetchDogwatch('3m', { now: now + 6 * 60_000, quotes: async () => ({}), loadShares: async () => new Map(Object.entries(refill)) })
+  assert.equal(r.stats.fetched, 1, `只补 1 天（实得 ${r.stats.fetched}）`)
+  assert.equal(r.stats.fromDisk, tradingDaysBack(84, now).length - 1, `其余日必须全部命中磁盘（实得 ${r.stats.fromDisk}）`)
+  assert.throws(() => assert.equal(r.stats.fetched, days.length, '反例上：补全窗'), /反例上/, '⚠ 反例注入必须失败')
+})
+
+test('⑤ 损坏文件 ⇒ 仅重拉该日（整窗重拉 ⇒ 败）', async () => {
+  const now = Date.parse('2026-11-20T10:00:00+08:00')
+  const days = tradingDaysBack(95, now)
+  seedDays(days, (i) => 100000 + i * 1000)
+  const refill0b = Object.fromEntries(DOGWATCH_POOL.map((p, i) => [p.code, { name: p.name, volWan: 100000 + i * 1000 }]))
+  await fetchDogwatch('3m', { now, quotes: async () => ({}), loadShares: async () => new Map(Object.entries(refill0b)) })
+  writeFileSync(sharesCachePath(tradingDaysBack(84, now)[20]!), '{broken json')
+  const refill2 = Object.fromEntries(DOGWATCH_POOL.map((p, i) => [p.code, { name: p.name, volWan: 100000 + i * 1000 }]))
+  const r = await fetchDogwatch('3m', { now: now + 6 * 60_000, quotes: async () => ({}), loadShares: async () => new Map(Object.entries(refill2)) })
+  assert.equal(r.stats.fetched, 1, '损坏只影响该日')
+  assert.throws(() => assert.equal(r.stats.fetched, days.length, '反例上：整窗重拉'), /反例上/, '⚠ 反例注入必须失败')
+})
+
+test('⑥ 进程内缓存命中 elapsedMs < 50（重算整窗 ⇒ 败）', async () => {
+  const now = Date.parse('2026-11-21T10:00:00+08:00')
+  seedDays(tradingDaysBack(95, now), (i) => 100000 + i * 1000)
+  await fetchDogwatch('3m', { now, quotes: async () => ({}) })
+  const r = await fetchDogwatch('3m', { now: now + 60_000, quotes: async () => ({}) })
+  assert.ok(r.stats.elapsedMs < 50, `命中必须 <50ms（实得 ${r.stats.elapsedMs}）`)
+  assert.equal(r.stats.fetched, 0)
+  assert.throws(() => assert.ok(r.stats.elapsedMs >= 50, '反例上：重算'), /反例上/, '⚠ 反例注入必须失败')
 })

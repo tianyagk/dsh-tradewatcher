@@ -10,7 +10,7 @@
  *
  * 两个保护：折算检测（份额跳 >20% 且价格无 >5% 跳空 ⇒ 该日顺延并记账）、未日更自检（≥70% 同值 ⇒ stale）。
  */
-import { mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { dataHome } from './store.ts'
 import { fetchTextHost } from './hostFetch.ts'
@@ -187,6 +187,8 @@ function readDiskShares(day: string): Map<string, { name: string; volWan: number
     // 残缺缓存（池覆盖 <90%）⇒ 视为未命中，调用方会重拉并覆盖
     return cacheUsableOf(rows) ? rows : null
   } catch {
+    // 损坏文件：删掉该日，下一次请求只补这一天（不影响其它日）
+    try { unlinkSync(sharesCachePath(day)) } catch { /* ignore */ }
     return null
   }
 }
@@ -271,6 +273,8 @@ export interface DogwatchPayload {
   corporateActions: CorporateAction[]
   sharesStale: boolean
   asOf: number
+  /** 缓存排障：磁盘命中日数 / 网络拉取日数 / 耗时 / 是否命中汇总缓存 */
+  stats: { fromDisk: number; fetched: number; elapsedMs: number; cached?: boolean }
 }
 
 /** 20 日均额档案（每日落盘，供次日算放大倍数；历史不变 ⇒ 永久缓存） */
@@ -293,6 +297,10 @@ function writeAmountArchive(day: string, total: number): void {
 }
 
 /** 拉一次完整回包（依赖注入便于断言：quotes / shares 可替身） */
+/** 汇总结果 5 分钟缓存：键 = `window|asOfDay`（命中即零请求、零重算） */
+const summaryCache = new Map<string, { at: number; payload: DogwatchPayload }>()
+const SUMMARY_TTL_MS = 5 * 60_000
+
 export async function fetchDogwatch(
   window: string,
   deps: {
@@ -302,6 +310,12 @@ export async function fetchDogwatch(
   } = {},
 ): Promise<DogwatchPayload> {
   const now = deps.now ?? Date.now()
+  const t0 = Date.now()
+  const cacheKey = `${window}|${dayOf(now)}`
+  const hit = summaryCache.get(cacheKey)
+  if (hit !== undefined && now - hit.at < SUMMARY_TTL_MS) {
+    return { ...hit.payload, stats: { fromDisk: hit.payload.stats.fromDisk, fetched: 0, elapsedMs: Date.now() - t0, cached: true } }
+  }
   const days = Math.max(21, DOGWATCH_WINDOWS[window] ?? DOGWATCH_WINDOWS['1y'] as number) + 21
   const tradingDays = tradingDaysBack(days, now)
   const loadShares = deps.loadShares ?? ((d: string) => loadSharesOf(d, now))
@@ -311,7 +325,16 @@ export async function fetchDogwatch(
     if (isShenzhenCode(p.code)) { missing.push({ what: p.code, why: 'no-source', note: '深市无日频份额' }); return false }
     return true
   })
-  const perDay = await mapWithConcurrency(tradingDays, 4, 120, async (day) => ({ day, rows: await loadShares(day) }))
+  let fromDisk = 0
+  let fetched = 0
+  const perDay = await mapWithConcurrency(tradingDays, 4, 120, async (day) => {
+    // 读盘优先：磁盘已有 ⇒ 零网络；缺失/损坏 ⇒ 只补这一天
+    const disk = readDiskShares(day)
+    if (disk !== null) { fromDisk += 1; return { day, rows: disk } }
+    const rows = await loadShares(day)
+    if (rows.size > 0) fetched += 1
+    return { day, rows }
+  })
   const totalSeries = perDay.map(({ day, rows }) => {
     let sum = 0
     for (const p of pool) sum += rows.get(p.code)?.volWan ?? 0
@@ -395,12 +418,15 @@ export async function fetchDogwatch(
     if (y !== undefined) prevMap[p.code] = y
   }
   const sharesStale = sharesStaleOf(todayMap, prevMap)
-  return {
+  const payload: DogwatchPayload = {
     window,
     summary: {
       totalAmount, ratio, netBuy, weightedPct, baseDate: totalSeries[0]?.day ?? null,
       totalSharesYi: rows.some((r) => r.sharesYi !== null) ? rows.reduce((a, r) => a + (r.sharesYi ?? 0), 0) : null,
     },
     series, rows, missing, corporateActions: actions, sharesStale, asOf: now,
+    stats: { fromDisk, fetched, elapsedMs: Date.now() - t0 },
   }
+  summaryCache.set(cacheKey, { at: now, payload })
+  return payload
 }

@@ -27,7 +27,7 @@ test('② 四指标且各带副行（缺副行 ⇒ 败）', () => {
   assert.equal(k.length, 4)
   assert.deepEqual(k.map((x) => x.label), ['汪汪队合计成交额', '成交额放大倍数', '合计主动净买入', '池内加权涨跌'])
   for (const x of k) assert.ok(x.sub.length > 0, `${x.label} 必须有副行`)
-  assert.deepEqual(k.map((x) => x.value), ['413.8 亿', '0.78×', '−74.17 亿', '−1.47%'])
+  assert.deepEqual(k.map((x) => x.value), ['413.8亿', '0.78×', '−74.17亿', '−1.47%'])
   const injected = k.map((x) => ({ ...x, sub: '' }))
   assert.equal(injected.some((x) => x.sub === ''), true, '注入空副行必须判失败')
 })

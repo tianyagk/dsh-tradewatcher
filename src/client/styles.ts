@@ -227,7 +227,7 @@ color-scheme:dark}
 .tw-body::-webkit-scrollbar-thumb:hover{background:var(--tw-muted)}
 .tw-body::-webkit-scrollbar-track{background:transparent}
 .tw-muted{color:var(--tw-muted)} .tw-dim{color:var(--tw-dim)}
-.tw-panel{background:var(--tw-card);border:1px solid var(--tw-border);border-radius:10px;padding:10px 12px}
+.tw-panel{background:var(--tw-card);border:1px solid var(--tw-border);border-radius:10px;padding:10px 12px;box-shadow:var(--tw-elev-1)}
 .tw-panel-h{display:flex;align-items:center;gap:8px;padding-bottom:7px;min-height:24px}
 .tw-panel-h .t{font-weight:600;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;letter-spacing:-0.2px}
 .tw-statrow{display:flex;gap:8px;flex-wrap:wrap;padding:2px 0 8px}
@@ -936,8 +936,11 @@ color-scheme:dark}
 .tw-dw-m .k{font-size:12px;color:var(--tw-muted)}
 .tw-dw-m .v{font-size:18px;font-weight:700;font-variant-numeric:tabular-nums}
 .tw-dw-m .s{font-size:12px;color:var(--tw-muted)}
-.tw-dw-table{width:100%;border-collapse:collapse;font-size:12px}
-.tw-dw-table th,.tw-dw-table td{padding:3px 6px;text-align:right;border-bottom:1px solid var(--tw-border)}
+.tw-dw-table{width:100%;border-collapse:collapse;font-size:12px;table-layout:auto}
+.tw-dw-table th{font-size:12px;color:var(--tw-muted);font-weight:500}
+.tw-dw-table td.num,.tw-dw-table th.num{text-align:right}
+.tw-dw-table tbody tr:last-child td{font-weight:700;background:var(--tw-card2)}
+.tw-dw-table th,.tw-dw-table td{padding:0 8px;height:32px;text-align:left;border-bottom:1px solid var(--tw-border);white-space:nowrap}
 .tw-dw-table th:first-child,.tw-dw-table td:first-child,.tw-dw-table th:nth-child(2),.tw-dw-table td:nth-child(2){text-align:left}
 /* v0.184.0：左列四卡下线后只剩两块 ⇒ 单列铺满 */
 .tw-mk-single{display:grid;grid-template-columns:1fr;gap:12px}
@@ -972,28 +975,29 @@ color-scheme:dark}
 
 /* ── 汪汪队跟踪（dogwatch）───────────────────────────────────────────── */
 .tw-dw-body{display:flex;flex-direction:column;gap:8px}
-.tw-dw-review{display:flex;align-items:flex-end;gap:12px;padding:10px 12px;border:1px solid var(--tw-border);border-radius:8px;background:var(--tw-card2)}
+.tw-dw-review{display:flex;align-items:flex-end;gap:12px;padding:12px 12px 10px;border:1px solid var(--tw-border);border-radius:8px;background:var(--tw-card2)}
 .tw-dw-review-main{display:flex;flex-direction:column;gap:2px}
 .tw-dw-review-day{color:var(--tw-muted);font-size:12px;font-variant-numeric:tabular-nums}
-.tw-dw-review-verdict{font-size:15px;font-weight:600}
+.tw-dw-review-verdict{font-size:20px;font-weight:700}
 .tw-dw-review-big{margin-left:auto;font-size:34px;font-weight:700;font-variant-numeric:tabular-nums;line-height:1}
 .tw-dw-review-sub{color:var(--tw-muted);font-size:12px;text-align:right}
-.tw-dw-kpis{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px}
+.tw-dw-kpis{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}
 @media (max-width:899px){.tw-dw-kpis{grid-template-columns:repeat(2,minmax(0,1fr))}}
 .tw-dw-kpi{display:flex;flex-direction:column;gap:2px;padding:10px;border:1px solid var(--tw-border);border-radius:8px;background:var(--tw-card2);min-width:0}
 .tw-dw-kpi .l{color:var(--tw-muted);font-size:12px}
 .tw-dw-kpi .v{font-size:28px;font-weight:700;font-variant-numeric:tabular-nums;line-height:1.15}
 .tw-dw-kpi .s{color:var(--tw-muted);font-size:12px}
-.tw-dw-charts{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+.tw-dw-kpi .u{font-size:14px;font-weight:600;margin-left:2px}
+.tw-dw-charts{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
 @media (max-width:999px){.tw-dw-charts{grid-template-columns:minmax(0,1fr)}}
 .tw-dw-chart{display:flex;flex-direction:column;gap:6px;padding:10px;border:1px solid var(--tw-border);border-radius:8px;background:var(--tw-card2);min-width:0}
 .tw-dw-chart-h{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
-.tw-dw-chart-h .t{font-size:12.5px;font-weight:600}
+.tw-dw-chart-h .t{font-size:13px;font-weight:600}
 .tw-dw-chart-note{margin-left:auto;color:var(--tw-muted);font-size:12px}
 .tw-dw-svg{display:block;width:100%;height:180px}
 .tw-dw-chart-f{color:var(--tw-muted);font-size:12px}
 .tw-dw-tscroll{overflow-x:auto}
-.tw-dw-foot{color:var(--tw-muted);font-size:12px}
+.tw-dw-foot{margin-top:10px;color:var(--tw-muted);font-size:12px}
 
 `
 
