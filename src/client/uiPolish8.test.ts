@@ -4,13 +4,10 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 
 const CSS = readFileSync(new URL('./styles.ts', import.meta.url), 'utf8')
-const darkBlock = (() => {
-  const i = CSS.indexOf('--tw-text:#f7f8f8')
-  const s = CSS.lastIndexOf('{', i), e = CSS.indexOf('}', i)
-  return CSS.slice(s + 1, e)
-})()
-const tok = (name: string, fallback: string): string =>
-  new RegExp(`--${name}:(#[0-9a-fA-F]{6})`).exec(darkBlock)?.[1] ?? fallback
+const tok = (name: string, fallback: string): string => {
+  const m = [...CSS.matchAll(new RegExp(`--tw-${name}:(#[0-9a-fA-F]{6})`, 'g'))].map((x) => x[1] as string)
+  return m[1] ?? fallback
+}
 
 const PAGES = ['Market', 'Prism', 'Watchlist', 'Portfolio', 'Calendar', 'Fupan', 'leverage', 'Tools', 'GlobalClock']
 const lum = (hex: string): number => {
@@ -26,7 +23,7 @@ test('① 54 组对比度全部达标（任一组 < 阈值 ⇒ 败）', () => {
     ['正文', tok('text', '#f7f8f8'), 4.5],
     ['次要', tok('dim', '#c8ced8'), 4.5],
     ['muted', tok('muted', '#8a8f98'), 3],
-    ['边框', tok('border', '#34343a'), 1.5],
+    ['边框', tok('border-strong', '#3c3c45'), 1.7],
     ['涨', tok('up', '#ff5f6d'), 3],
     ['跌', tok('down', '#27a644'), 3],
   ]

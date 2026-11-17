@@ -45,7 +45,7 @@ font:13px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI","Inter","PingFang SC",
 letter-spacing:-0.006em}
 .tw-root[data-theme=dark]{
 --tw-bg:#010102;--tw-bg2:#0b0c0e;--tw-line2:#1b1d21;--tw-card:#0f1011;--tw-card2:#16181b;--tw-hover:#1b1d21;
---tw-border:#23252a;--tw-border-strong:#34343a;--tw-chip-avg:#e0913a;--tw-chip-res:#9b7bd6;--tw-chip-sup:#4a90d9;--tw-chips-grid:rgba(255,255,255,.16);--tw-chip-profile:#8f98a8;
+--tw-border:#23252a;--tw-border-strong:#3c3c45;--tw-chip-avg:#e0913a;--tw-chip-res:#9b7bd6;--tw-chip-sup:#4a90d9;--tw-chips-grid:rgba(255,255,255,.16);--tw-chip-profile:#8f98a8;
 --tw-text:#f7f8f8;--tw-dim:#c8ced8;--tw-muted:#8a8f98;
 --tw-fg-dim:var(--tw-muted);--tw-line:var(--tw-border);
 --tw-up:#ff5f6d;--tw-down:#27a644;--tw-flat:#8a8f98;
