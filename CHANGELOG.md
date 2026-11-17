@@ -11,6 +11,35 @@
 
 ---
 
+## v0.192.0 — 汪汪队 6 处数据与逻辑错误修复
+
+`npm run check` **1524 / 1524 × 2 时区**（1518 → 1524）+ `ALL HOST CHECKS PASSED` + build（73 片段全过）。
+
+| # | 症状 | 根因 | 修法 |
+| --- | --- | --- | --- |
+| 1 | 复盘日期 `2026-07-15` | `dwReview` 传的是 `summary.baseDate`（窗口首日） | 改传 `series[last].day`（实测 **2026-11-16**） |
+| 2 | 柱贴零线、Y 轴只有 0/1/2 | `dwSeries` 未做刻度与归一 | `niceTicksOf`（1/2/5×10ⁿ）+ `barPct = |v| / max(|峰|,|谷|) × 100`；Y 轴 4 档含 0 |
+| 3 | 加仓指数 100→102 平线 | 折线用固定区间压缩 | 按 `yTicksLine` 实际范围绘制，Y 轴含基期 100；实测 **100 → 221.6** |
+| 4 | `规模(亿)` 与 `份额(亿份)` 同值 | host 的 `scale` 直接复用 `wanToYi(sharesWan)` | **`scale = sharesYi × nav`**（nav = 腾讯 `[3]` 现价），`sharesYi` 保持份数 |
+| 5 | `份额变化` 全 `—` | 汇总落盘缓存早于「前一日文件」，缓存里 `sharesDelta` 为 null | 缓存键含 `asOfDay`，新日自动重算；实测 **14/14 行有值** |
+| 6 | 表格按规模升序 | 排序方向 | `dwTable` 按 `scale` **降序**（断言固定） |
+
+### 取证（2026-11-16 收盘）
+
+```json
+rows[0] = {"secid":"1.510300","name":"沪深300ETF华泰柏瑞","scale":1899.788,"amount":8114730000,"sharesYi":470.0119,"sharesDelta":13.779,"pct":-0.3}
+series.head = 2026-07-15 (100.0) → 07-16 (103.749) → 07-17 (110.529)
+series.tail = 11-12 (220.265) → 11-13 (217.924) → 11-16 (221.613)
+summary = {baseDate:"2026-07-15", totalSharesYi:3019.86, totalAmount:40488420000, ratio:1.0672, netBuy:6169779298.6, weightedPct:0.0059}
+```
+
+`510300`：`sharesYi = 470.01 亿份`、`scale = 1 899.79 亿`（× 4.042 元）；11-13 对照 `456.23 亿份 × 4.08 ≈ 1 861.4 亿`，落在 `[1500, 2200]` 区间。
+
+### 验证
+
+`npm run check` **1524 / 1524 × 2 时区** + build（73 项）。
+新增 `dogwatchRows.test.ts` 6 条（含反例注入）：① 复盘日期 = `series` 末日（用 `baseDate` ⇒ 败）｜② 3m `series.length ≥ 20` 且 `change` 非全 0｜③ `scale ≠ sharesYi`｜④ 510300 `sharesYi ∈ [450,460]`、`scale ∈ [1500,2200]` 且 `scale = sharesYi × 4.082`｜⑤ `sharesDelta` 非 null ≥ 13 行｜⑥ 首行 = `scale` 最大者。
+
 ## v0.191.0 — 16 条 P2 清理 + 汪汪队二次打开 1ms + 两图坐标轴重做
 
 `npm run check` **1518 / 1518 × 2 时区**（1503 → 1518）+ `ALL HOST CHECKS PASSED` + build（73 片段全过）。

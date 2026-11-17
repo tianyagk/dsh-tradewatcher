@@ -414,7 +414,9 @@ export async function fetchDogwatch(
   deps: {
     now?: number
     loadShares?: (day: string) => Promise<Map<string, { name: string; volWan: number }>>
-    quotes?: (codes: string[]) => Promise<Record<string, { amount: number | null; pct: number | null; outer: number | null; inner: number | null }>>
+    quotes?: (codes: string[]) => Promise<Record<string, { amount: number | null; pct: number | null; nav?: number | null; outer: number | null; inner: number | null }>>
+    /** 测试/强制刷新：跳过内存与落盘汇总缓存 */
+    bypassCache?: boolean
     /**
      * 某交易日的「池价跳空%」（当日收盘 / 前收 − 1，单位 %）。
      * 缺省 ⇒ 全部按 `null` 传入 ⇒ `detectCorporateActions` **不判折算**（无证据不猜，按申赎计入）。
@@ -426,13 +428,13 @@ export async function fetchDogwatch(
   const now = deps.now ?? Date.now()
   const t0 = Date.now()
   const cacheKey = `${window}|${dayOf(now)}`
-  const hit = summaryCache.get(cacheKey)
+  const hit = deps.bypassCache === true ? undefined : summaryCache.get(cacheKey)
   if (hit !== undefined && now - hit.at < SUMMARY_TTL_MS) {
     return { ...hit.payload, stats: { ...hit.payload.stats, fetched: 0, elapsedMs: Date.now() - t0, cached: true } }
   }
   // ② 汇总落盘：命中即零读盘、零重算（跨零点/新交易日自然换键）
   const asOfDay = dayOf(now)
-  const diskSummary = readSummaryCache(window, asOfDay)
+  const diskSummary = deps.bypassCache === true ? null : readSummaryCache(window, asOfDay)
   if (diskSummary !== null) {
     return { ...diskSummary, stats: { ...diskSummary.stats, fromDisk: 0, fetched: 0, elapsedMs: Date.now() - t0, cached: true } }
   }
@@ -482,7 +484,7 @@ export async function fetchDogwatch(
          * 之前走 `fetchQuotesDetailed(emFields)` 在休市时段拿到的是空壳（amount/pct 为 undefined）。
          */
         const codes = pool.map((p) => `sh${p.code}`).join(',')
-        const out: Record<string, { amount: number | null; pct: number | null; outer: number | null; inner: number | null }> = {}
+        const out: Record<string, { amount: number | null; pct: number | null; nav?: number | null; outer: number | null; inner: number | null }> = {}
         try {
           const text = await fetchTextHost('qt.gtimg.cn', `https://qt.gtimg.cn/q=${codes}`, { referer: 'https://gu.qq.com/', charset: 'gbk' })
           for (const line of text.split('\n')) {
@@ -494,6 +496,7 @@ export async function fetchDogwatch(
             out[`1.${(m[1] as string).slice(2)}`] = {
               amount: amountWan === null ? null : amountWan * 1e4,
               pct: num(f[32]),
+              nav: num(f[3]),
               outer: num(f[7]),
               inner: num(f[8]),
             }
@@ -507,7 +510,8 @@ export async function fetchDogwatch(
     const prevWan = prev?.rows.get(p.code)?.volWan ?? null
     return {
       secid: `1.${p.code}`, name: p.name, indexName: p.indexName,
-      scale: sharesWan === null ? null : wanToYi(sharesWan),
+      // v0.194.0：规模 = 份额（亿份）× 净值（元）= 亿元；与 sharesYi 不再是同一个数
+      scale: sharesWan === null || q?.nav === null || q?.nav === undefined ? null : wanToYi(sharesWan) * q.nav,
       amount: q?.amount ?? null, ratio20: null, netBuy: null,
       pct: q?.pct ?? null,
       sharesYi: sharesWan === null ? null : wanToYi(sharesWan),

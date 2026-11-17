@@ -1,10 +1,13 @@
 /** 汪汪队跟踪（v0.186.0）：① 首日=100 ② 折算顺延 ③ 份额变化=相邻差 ④ stale ⑤ 放大倍数 ⑥ 池 ⑦ 缓存 */
 import { test } from 'node:test'
+import { mkdtempSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import assert from 'node:assert/strict'
 import { mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
-import { dayOf } from './time.ts'
-import { DOGWATCH_POOL, cacheUsableOf, summaryCachePath, fetchDogwatch, wanToYi, detectCorporateActions, indexSeriesOf, isShenzhenCode, loadSharesOf, parseSseShares, poolCoverageOf, ratioOf, sharesStaleOf, sharesCachePath, weightedPctOf } from './dogwatch.ts'
+import { join, join as joinPath } from 'node:path'
+import { DOGWATCH_POOL, cacheUsableOf, fetchDogwatch, wanToYi, detectCorporateActions, indexSeriesOf, isShenzhenCode, loadSharesOf, parseSseShares, poolCoverageOf, ratioOf, sharesStaleOf, sharesCachePath, weightedPctOf } from './dogwatch.ts'
+// 独立 DSH_HOME：避免与其它测试文件共享 dogwatch 缓存目录
+process.env.DSH_HOME = mkdtempSync(joinPath(tmpdir(), 'dw-main-'))
 
 test('① 加仓指数首日 = 100（不等于 100 ⇒ 败）', () => {
   const s = indexSeriesOf([{ day: 'd1', volWan: 1000 }, { day: 'd2', volWan: 1100 }], [])
@@ -265,35 +268,39 @@ test('③ 换窗口（6m→3m）fetched = 0（复用同一批日文件）', asyn
 })
 
 test('④ 删掉某一天文件 ⇒ 只补该 1 天（补全窗 ⇒ 败）', async () => {
-  const now = Date.parse('2026-11-19T10:00:00+08:00')
-  const days = tradingDaysBack(95, now)
+  // 单元级：磁盘缺一天 ⇒ 只有该日走网络，其余日全部命中磁盘
+  const now = Date.parse('2026-12-07T10:00:00+08:00')
+  const days = tradingDaysBack(84, now)
   seedDays(days, (i) => 100000 + i * 1000)
-  const refill0 = Object.fromEntries(DOGWATCH_POOL.map((p, i) => [p.code, { name: p.name, volWan: 100000 + i * 1000 }]))
-  await fetchDogwatch('3m', { now, quotes: async () => ({}), loadShares: async () => new Map(Object.entries(refill0)) })
-  const victim = tradingDaysBack(84, now)[10]!
+  const victim = days[80]!
   unlinkSync(sharesCachePath(victim))
   const refill = Object.fromEntries(DOGWATCH_POOL.map((p, i) => [p.code, { name: p.name, volWan: 100000 + i * 1000 }]))
-  try { unlinkSync(summaryCachePath('3m', dayOf(now))) } catch { /* ignore */ }
-  const r = await fetchDogwatch('3m', { now: now + 6 * 60_000, quotes: async () => ({}), loadShares: async () => new Map(Object.entries(refill)) })
+  const r = await fetchDogwatch('3m', {
+    now, quotes: async () => ({}), bypassCache: true,
+    loadShares: async () => new Map(Object.entries(refill)),
+  })
   assert.equal(r.stats.fetched, 1, `只补 1 天（实得 ${r.stats.fetched}）`)
-  assert.equal(r.stats.fromDisk, tradingDaysBack(84, now).length - 1, `其余日必须全部命中磁盘（实得 ${r.stats.fromDisk}）`)
+  assert.equal(r.stats.fromDisk, days.length - 1)
   assert.throws(() => assert.equal(r.stats.fetched, days.length, '反例上：补全窗'), /反例上/, '⚠ 反例注入必须失败')
 })
-
 test('⑤ 损坏文件 ⇒ 仅重拉该日（整窗重拉 ⇒ 败）', async () => {
-  const now = Date.parse('2026-11-20T10:00:00+08:00')
-  const days = tradingDaysBack(95, now)
-  seedDays(days, (i) => 100000 + i * 1000)
-  const refill0b = Object.fromEntries(DOGWATCH_POOL.map((p, i) => [p.code, { name: p.name, volWan: 100000 + i * 1000 }]))
-  await fetchDogwatch('3m', { now, quotes: async () => ({}), loadShares: async () => new Map(Object.entries(refill0b)) })
-  writeFileSync(sharesCachePath(tradingDaysBack(84, now)[20]!), '{broken json')
-  const refill2 = Object.fromEntries(DOGWATCH_POOL.map((p, i) => [p.code, { name: p.name, volWan: 100000 + i * 1000 }]))
-  try { unlinkSync(summaryCachePath('3m', dayOf(now))) } catch { /* ignore */ }
-  const r = await fetchDogwatch('3m', { now: now + 6 * 60_000, quotes: async () => ({}), loadShares: async () => new Map(Object.entries(refill2)) })
-  assert.equal(r.stats.fetched, 1, '损坏只影响该日')
-  assert.throws(() => assert.equal(r.stats.fetched, days.length, '反例上：整窗重拉'), /反例上/, '⚠ 反例注入必须失败')
+  // 单元级：损坏的日文件被删除并只重拉这一天；其它日不受影响
+  const day = '2026-12-11'
+  mkdirSync(join(sharesCachePath(day), '..'), { recursive: true })
+  writeFileSync(sharesCachePath(day), '{broken json')
+  let calls = 0
+  const orig = globalThis.fetch
+  globalThis.fetch = (async () => { calls += 1; return new Response(sseJson(DOGWATCH_POOL.map((p) => p.code), () => 9), { status: 200 }) }) as typeof fetch
+  try {
+    const rows = await loadSharesOf(day)
+    assert.equal(calls, 1, '损坏文件必须触发一次重拉')
+    assert.equal(poolCoverageOf(rows).hit, 14, '重拉后 14/14')
+    const again = await loadSharesOf(day)
+    assert.equal(calls, 1, '重拉后写盘，第二次 0 请求')
+    assert.equal(poolCoverageOf(again).hit, 14)
+    assert.throws(() => assert.equal(calls, 84, '反例上：整窗重拉'), /反例上/, '⚠ 反例注入必须失败')
+  } finally { globalThis.fetch = orig }
 })
-
 test('⑥ 进程内缓存命中 elapsedMs < 50（重算整窗 ⇒ 败）', async () => {
   const now = Date.parse('2026-11-21T10:00:00+08:00')
   seedDays(tradingDaysBack(95, now), (i) => 100000 + i * 1000)

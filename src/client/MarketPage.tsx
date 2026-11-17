@@ -246,7 +246,7 @@ export function MarketPage(props: {
       // v0.184.0：用户要求下线左列四卡 —— 单列只剩「涨跌分布」与「分钟成交额较昨日增减」
       // v0.187.0：用户要求下线「涨跌分布」「分钟成交额较昨日增减」；页面只剩护盘信号 + 汪汪队跟踪
       const dwView = dogwatch === null ? null : dwTable(dogwatch.rows, dogwatch.summary, dogwatch.sharesStale)
-      const dwRev = dogwatch === null ? null : dwReview(dogwatch.summary.baseDate ?? '—', dogwatch.summary)
+      const dwRev = dogwatch === null ? null : dwReview(dogwatch.series[dogwatch.series.length - 1]?.day ?? '—', dogwatch.summary)
       const dwK = dogwatch === null ? null : dwKpis(dogwatch.summary)
       const dwS = dogwatch === null ? null : dwSeries(dogwatch.series)
       const W = 560, H = 180, PAD_L = 34, PAD_R = 22, PAD_T = 8, PAD_B = 18
