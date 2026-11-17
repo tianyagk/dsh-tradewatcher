@@ -1,9 +1,13 @@
 import assert from 'node:assert/strict'
+
+/** 令牌化后：把 var(--tw-c-xxxxxx) 还原成 #xxxxxx 再比对（等价于浏览器解析） */
+const resolveColors = (s: string): string => s.replace(/var\(--tw-c-([0-9a-f]{6})\)/g, '#$1')
 import test from 'node:test'
 import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { TW_CSS } from './styles.ts'
+import { TW_CSS as RAW_CSS } from './styles.ts'
+const TW_CSS = resolveColors(RAW_CSS)
 import { PRISM_DEFAULT_TIMES } from '../shared/prism.ts'
 import { decisionRows, stripMarkdown, summaryBullets } from './prismView.ts'
 import { finalCardShadow } from './prismLayout.ts'

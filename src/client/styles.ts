@@ -150,7 +150,80 @@ color-scheme:dark}
   .tw-wlist,.tw-poslist{columns:520px;column-gap:16px}
   /* 多列下行不能被拦腰截断 */
   .tw-wlist>.tw-wrow,.tw-poslist>.tw-posrow{break-inside:avoid}
+/* 颜色令牌 · 浅色值 = 原硬编码值 */
+--tw-c-5da5ff:#5da5ff;
+--tw-c-2b4c9b:#2b4c9b;
+--tw-c-176b87:#176b87;
+--tw-c-5a6270:#5a6270;
+--tw-c-7b3fa8:#7b3fa8;
+--tw-c-a32c7a:#a32c7a;
+--tw-c-7ea6ff:#7ea6ff;
+--tw-c-57c7e0:#57c7e0;
+--tw-c-a7b0c0:#a7b0c0;
+--tw-c-c4a2ff:#c4a2ff;
+--tw-c-f08bc7:#f08bc7;
+--tw-c-5e6ad2:#5e6ad2;
+--tw-c-3a44a8:#3a44a8;
+--tw-c-4c6ef5:#4c6ef5;
+--tw-c-e8590c:#e8590c;
+--tw-c-7048e8:#7048e8;
+--tw-c-0c8599:#0c8599;
+--tw-c-c2255c:#c2255c;
+--tw-c-2f9e44:#2f9e44;
+--tw-c-f08c00:#f08c00;
+--tw-c-868e96:#868e96;
+--tw-c-dde0ff:#dde0ff;
+--tw-c-16181b:#16181b;
+--tw-c-1b1d21:#1b1d21;
+--tw-c-23252a:#23252a;
+--tw-c-91a7ff:#91a7ff;
+--tw-c-ffa94d:#ffa94d;
+--tw-c-b197fc:#b197fc;
+--tw-c-66d9e8:#66d9e8;
+--tw-c-f783ac:#f783ac;
+--tw-c-8ce99a:#8ce99a;
+--tw-c-ffd43b:#ffd43b;
+--tw-c-adb5bd:#adb5bd;
+--tw-c-2f3aa0:#2f3aa0;
+--tw-c-c9a227:#c9a227;
+--tw-c-f2f4f7:#f2f4f7;
 }
+--tw-c-5da5ff:#5da5ff;
+--tw-c-2b4c9b:#2b4c9b;
+--tw-c-176b87:#176b87;
+--tw-c-5a6270:#5a6270;
+--tw-c-7b3fa8:#7b3fa8;
+--tw-c-a32c7a:#a32c7a;
+--tw-c-7ea6ff:#7ea6ff;
+--tw-c-57c7e0:#57c7e0;
+--tw-c-a7b0c0:#a7b0c0;
+--tw-c-c4a2ff:#c4a2ff;
+--tw-c-f08bc7:#f08bc7;
+--tw-c-5e6ad2:#5e6ad2;
+--tw-c-3a44a8:#3a44a8;
+--tw-c-4c6ef5:#4c6ef5;
+--tw-c-e8590c:#e8590c;
+--tw-c-7048e8:#7048e8;
+--tw-c-0c8599:#0c8599;
+--tw-c-c2255c:#c2255c;
+--tw-c-2f9e44:#2f9e44;
+--tw-c-f08c00:#f08c00;
+--tw-c-868e96:#868e96;
+--tw-c-dde0ff:#dde0ff;
+--tw-c-16181b:#16181b;
+--tw-c-1b1d21:#1b1d21;
+--tw-c-23252a:#23252a;
+--tw-c-91a7ff:#91a7ff;
+--tw-c-ffa94d:#ffa94d;
+--tw-c-b197fc:#b197fc;
+--tw-c-66d9e8:#66d9e8;
+--tw-c-f783ac:#f783ac;
+--tw-c-8ce99a:#8ce99a;
+--tw-c-ffd43b:#ffd43b;
+--tw-c-adb5bd:#adb5bd;
+--tw-c-2f3aa0:#2f3aa0;
+--tw-c-c9a227:#c9a227;
+--tw-c-f2f4f7:#f2f4f7;
 /* 行内数字面（额 / 市值 / α / YTD）：与其它数字面同一套等宽数字，并且**必须**出现在
    上面的模糊选择器清单里（漏一个就等于隐身不彻底）。 */
 .tw-num,.tw-ytd{font-family:var(--tw-mono);font-variant-numeric:tabular-nums}
@@ -235,7 +308,7 @@ color-scheme:dark}
    左列三段紧凑内联行 + 右列两块；每段一个小色条 + 标题 */
 .tw-dist-seg{display:flex;flex-direction:column;gap:5px;min-width:0}
 .tw-dist-seg-h{display:flex;align-items:center;gap:6px;min-width:0}
-.tw-dist-seg-bar{flex:none;width:3px;height:12px;border-radius:2px;background:var(--tw-accent, #5da5ff)}
+.tw-dist-seg-bar{flex:none;width:3px;height:12px;border-radius:2px;background:var(--tw-accent, var(--tw-c-5da5ff))}
 .tw-dist-seg-t{font-size:12px;font-weight:600;color:var(--tw-dim);letter-spacing:.02em;white-space:nowrap}
 .tw-dist-seg-sub{font-size:12px;color:var(--tw-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
 /* 内联统计行：一行 5 个（或 4 个）紧凑项，不做磁贴 */
@@ -610,17 +683,17 @@ color-scheme:dark}
 .tw-qcard[data-tone] .tw-qdot{right:42px}
 .tw-qcard .tw-kind{color:var(--tw-muted);font-size:12px;margin-left:3px}
 /* 五档色（浅色主题） */
-.tw-tone[data-tone=过冷]{color:#2B4C9B;background:#2B4C9B1f;border-color:#2B4C9B}
-.tw-tone[data-tone=偏冷]{color:#176B87;background:#176B871f;border-color:#176B87}
-.tw-tone[data-tone=适中]{color:#5A6270;background:#5A62701f;border-color:#5A6270}
-.tw-tone[data-tone=偏热]{color:#7B3FA8;background:#7B3FA81f;border-color:#7B3FA8}
-.tw-tone[data-tone=过热]{color:#A32C7A;background:#A32C7A1f;border-color:#A32C7A}
+.tw-tone[data-tone=过冷]{color:var(--tw-c-2b4c9b);background:#2B4C9B1f;border-color:var(--tw-c-2b4c9b)}
+.tw-tone[data-tone=偏冷]{color:var(--tw-c-176b87);background:#176B871f;border-color:var(--tw-c-176b87)}
+.tw-tone[data-tone=适中]{color:var(--tw-c-5a6270);background:#5A62701f;border-color:var(--tw-c-5a6270)}
+.tw-tone[data-tone=偏热]{color:var(--tw-c-7b3fa8);background:#7B3FA81f;border-color:var(--tw-c-7b3fa8)}
+.tw-tone[data-tone=过热]{color:var(--tw-c-a32c7a);background:#A32C7A1f;border-color:var(--tw-c-a32c7a)}
 /* 深色主题：同色系更亮的一档（对比度 ≥4.5:1，见设计 §4 的实算） */
-.tw-root[data-theme=dark] .tw-tone[data-tone=过冷]{color:#7EA6FF;background:#7EA6FF29;border-color:#7EA6FF}
-.tw-root[data-theme=dark] .tw-tone[data-tone=偏冷]{color:#57C7E0;background:#57C7E029;border-color:#57C7E0}
-.tw-root[data-theme=dark] .tw-tone[data-tone=适中]{color:#A7B0C0;background:#A7B0C029;border-color:#A7B0C0}
-.tw-root[data-theme=dark] .tw-tone[data-tone=偏热]{color:#C4A2FF;background:#C4A2FF29;border-color:#C4A2FF}
-.tw-root[data-theme=dark] .tw-tone[data-tone=过热]{color:#F08BC7;background:#F08BC729;border-color:#F08BC7}
+.tw-root[data-theme=dark] .tw-tone[data-tone=过冷]{color:var(--tw-c-7ea6ff);background:#7EA6FF29;border-color:var(--tw-c-7ea6ff)}
+.tw-root[data-theme=dark] .tw-tone[data-tone=偏冷]{color:var(--tw-c-57c7e0);background:#57C7E029;border-color:var(--tw-c-57c7e0)}
+.tw-root[data-theme=dark] .tw-tone[data-tone=适中]{color:var(--tw-c-a7b0c0);background:#A7B0C029;border-color:var(--tw-c-a7b0c0)}
+.tw-root[data-theme=dark] .tw-tone[data-tone=偏热]{color:var(--tw-c-c4a2ff);background:#C4A2FF29;border-color:var(--tw-c-c4a2ff)}
+.tw-root[data-theme=dark] .tw-tone[data-tone=过热]{color:var(--tw-c-f08bc7);background:#F08BC729;border-color:var(--tw-c-f08bc7)}
 
 /* 行情卡片配置窗（设计 §1）：z-index 1180 ⇒ 高于 .tw-menu(1150)/.tw-suggest(1100)，
    低于 .tw-mask(1200)；打开时父组件隐藏悬浮卡（.tw-pop 是 9999）。 */
@@ -769,8 +842,8 @@ color-scheme:dark}
 }
 
 /* ── 棱镜（hybrid：现有底色 token + MD 强调/tonal；elevation 0/1/3） ── */
-.tw-root{--tw-elev-0:none;--tw-elev-1:0 1px 2px rgba(16,24,40,.05);--tw-prism-card-shadow:0 1px 2px rgba(0,0,0,.06),0 1px 3px rgba(0,0,0,.04);--tw-elev-3:0 1px 2px rgba(16,24,40,.05),0 10px 28px rgba(16,24,40,.13);--tw-elev-6:0 2px 6px rgba(16,24,40,.10),0 8px 16px rgba(16,24,40,.08);--tw-elev-8:0 4px 8px rgba(16,24,40,.10),0 12px 24px rgba(16,24,40,.10);--tw-elev-12:0 8px 16px rgba(16,24,40,.12),0 20px 40px rgba(16,24,40,.14);--tw-state-hover:.08;--tw-state-press:.12;--tw-md-accent:#5e6ad2;--tw-md-accent-soft:rgba(94,106,210,.14);--tw-md-on-accent:#3a44a8;--tw-prism-series-1:#4C6EF5;--tw-prism-series-2:#E8590C;--tw-prism-series-3:#7048E8;--tw-prism-series-4:#0C8599;--tw-prism-series-5:#C2255C;--tw-prism-series-6:#2F9E44;--tw-prism-series-7:#F08C00;--tw-prism-series-8:#868E96;--tw-prism-surface-1:var(--tw-card);--tw-prism-surface-2:var(--tw-card2);--tw-prism-surface-3:var(--tw-hover)}
-.tw-root[data-theme=dark]{--tw-elev-0:none;--tw-elev-1:0 1px 2px rgba(0,0,0,.24);--tw-prism-card-shadow:0 1px 2px rgba(0,0,0,.4);--tw-elev-3:0 1px 3px rgba(0,0,0,.28);--tw-elev-6:0 2px 6px rgba(0,0,0,.32);--tw-elev-8:0 4px 8px rgba(0,0,0,.36);--tw-elev-12:0 8px 16px rgba(0,0,0,.4);--tw-md-accent:#5e6ad2;--tw-md-accent-soft:rgba(94,106,210,.22);--tw-md-on-accent:#dde0ff;--tw-prism-surface-1:#16181b;--tw-prism-surface-2:#1b1d21;--tw-prism-surface-3:#23252a;--tw-prism-series-1:#91A7FF;--tw-prism-series-2:#FFA94D;--tw-prism-series-3:#B197FC;--tw-prism-series-4:#66D9E8;--tw-prism-series-5:#F783AC;--tw-prism-series-6:#8CE99A;--tw-prism-series-7:#FFD43B;--tw-prism-series-8:#ADB5BD}
+.tw-root{--tw-elev-0:none;--tw-elev-1:0 1px 2px rgba(16,24,40,.05);--tw-prism-card-shadow:0 1px 2px rgba(0,0,0,.06),0 1px 3px rgba(0,0,0,.04);--tw-elev-3:0 1px 2px rgba(16,24,40,.05),0 10px 28px rgba(16,24,40,.13);--tw-elev-6:0 2px 6px rgba(16,24,40,.10),0 8px 16px rgba(16,24,40,.08);--tw-elev-8:0 4px 8px rgba(16,24,40,.10),0 12px 24px rgba(16,24,40,.10);--tw-elev-12:0 8px 16px rgba(16,24,40,.12),0 20px 40px rgba(16,24,40,.14);--tw-state-hover:.08;--tw-state-press:.12;--tw-md-accent:var(--tw-c-5e6ad2);--tw-md-accent-soft:rgba(94,106,210,.14);--tw-md-on-accent:var(--tw-c-3a44a8);--tw-prism-series-1:var(--tw-c-4c6ef5);--tw-prism-series-2:var(--tw-c-e8590c);--tw-prism-series-3:var(--tw-c-7048e8);--tw-prism-series-4:var(--tw-c-0c8599);--tw-prism-series-5:var(--tw-c-c2255c);--tw-prism-series-6:var(--tw-c-2f9e44);--tw-prism-series-7:var(--tw-c-f08c00);--tw-prism-series-8:var(--tw-c-868e96);--tw-prism-surface-1:var(--tw-card);--tw-prism-surface-2:var(--tw-card2);--tw-prism-surface-3:var(--tw-hover)}
+.tw-root[data-theme=dark]{--tw-elev-0:none;--tw-elev-1:0 1px 2px rgba(0,0,0,.24);--tw-prism-card-shadow:0 1px 2px rgba(0,0,0,.4);--tw-elev-3:0 1px 3px rgba(0,0,0,.28);--tw-elev-6:0 2px 6px rgba(0,0,0,.32);--tw-elev-8:0 4px 8px rgba(0,0,0,.36);--tw-elev-12:0 8px 16px rgba(0,0,0,.4);--tw-md-accent:var(--tw-c-5e6ad2);--tw-md-accent-soft:rgba(94,106,210,.22);--tw-md-on-accent:var(--tw-c-dde0ff);--tw-prism-surface-1:var(--tw-c-16181b);--tw-prism-surface-2:var(--tw-c-1b1d21);--tw-prism-surface-3:var(--tw-c-23252a);--tw-prism-series-1:var(--tw-c-91a7ff);--tw-prism-series-2:var(--tw-c-ffa94d);--tw-prism-series-3:var(--tw-c-b197fc);--tw-prism-series-4:var(--tw-c-66d9e8);--tw-prism-series-5:var(--tw-c-f783ac);--tw-prism-series-6:var(--tw-c-8ce99a);--tw-prism-series-7:var(--tw-c-ffd43b);--tw-prism-series-8:var(--tw-c-adb5bd)}
 .tw-prism{display:flex;flex:1 1 auto;flex-direction:column;gap:16px;padding:16px;box-shadow:var(--tw-elev-0);min-height:0;width:100%;overflow-y:auto;overflow-x:auto}
 .tw-prism-head{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
 .tw-prism-title{font-weight:650;color:var(--tw-text)}
@@ -811,8 +884,8 @@ color-scheme:dark}
 .tw-prism-segbtn::after{content:"";position:absolute;inset:0;background:currentColor;opacity:0;transition:opacity .12s;pointer-events:none}
 .tw-prism-segbtn:hover::after{opacity:var(--tw-state-hover)}
 .tw-prism-segbtn:active::after{opacity:var(--tw-state-press)}
-.tw-prism-segbtn.on{background:rgba(94,106,210,.18);color:#2f3aa0;font-weight:700;box-shadow:none}
-.tw-root[data-theme=dark] .tw-prism-segbtn.on{background:rgba(138,180,248,.22);color:#dde0ff}
+.tw-prism-segbtn.on{background:rgba(94,106,210,.18);color:var(--tw-c-2f3aa0);font-weight:700;box-shadow:none}
+.tw-root[data-theme=dark] .tw-prism-segbtn.on{background:rgba(138,180,248,.22);color:var(--tw-c-dde0ff)}
 .tw-prism-table{width:100%;border-collapse:collapse;table-layout:auto}
 .tw-prism-table th,.tw-prism-table td{border-bottom:1px solid var(--tw-line2);padding:0 8px;text-align:left;font-size:12px;line-height:1.2;height:26px;white-space:normal;overflow-wrap:anywhere;font-variant-numeric:tabular-nums}
 .tw-prism-table th{height:24px;color:var(--tw-muted);font-weight:500;background:var(--tw-card2);border-bottom-color:var(--tw-border)}
@@ -911,9 +984,9 @@ color-scheme:dark}
 .tw-clock-lab{fill:var(--tw-muted);font-size:12px;text-anchor:middle}
 .tw-clock-arc{fill:none;stroke-width:12;stroke-linecap:round}
 .tw-clock-arclab{font-size:12px;font-weight:600;fill:var(--tw-text);paint-order:stroke;stroke:var(--tw-card);stroke-width:4px;stroke-linejoin:round}
-.tw-clock-needle{stroke:#c9a227;stroke-width:2.5;stroke-linecap:round}
-.tw-clock-hub{fill:#c9a227}
-.tw-clock-disc{fill:var(--tw-card);stroke:#c9a227;stroke-opacity:.30;stroke-width:1}
+.tw-clock-needle{stroke:var(--tw-c-c9a227);stroke-width:2.5;stroke-linecap:round}
+.tw-clock-hub{fill:var(--tw-c-c9a227)}
+.tw-clock-disc{fill:var(--tw-card);stroke:var(--tw-c-c9a227);stroke-opacity:.30;stroke-width:1}
 .tw-clock-cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:8px}
 .tw-clock-stat{display:flex;flex-direction:column;gap:4px;padding:10px 12px;border:1px solid var(--tw-border);border-radius:10px;background:var(--tw-card);min-width:0}
 .tw-clock-stat[data-empty=true]{border-style:dashed}
@@ -932,7 +1005,7 @@ color-scheme:dark}
 
 /* 汪汪队跟踪（v0.186.0） */
 .tw-dw-metrics{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:8px;margin-bottom:8px}
-.tw-dw-m{background:var(--tw-card2,#f2f4f7);border-radius:8px;padding:6px 8px}
+.tw-dw-m{background:var(--tw-card2,var(--tw-c-f2f4f7));border-radius:8px;padding:6px 8px}
 .tw-dw-m .k{font-size:12px;color:var(--tw-muted)}
 .tw-dw-m .v{font-size:18px;font-weight:700;font-variant-numeric:tabular-nums}
 .tw-dw-m .s{font-size:12px;color:var(--tw-muted)}
