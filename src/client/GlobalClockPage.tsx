@@ -233,10 +233,14 @@ export function GlobalClockPage(props: { back?: React.ReactNode; title: string }
     React.createElement('section', { className: 'tw-prism-card' },
       React.createElement('div', { className: 'tw-prism-card-title' }, '主要指数',
         React.createElement('span', { className: 'tw-prism-muted', style: { marginLeft: 'auto' } }, '6 个')),
-      React.createElement('div', { className: 'tw-idx-grid' }, ...indexCards.map((c) => React.createElement(StatCard, { key: c.code, card: c })))),
+      React.createElement('div', { className: 'tw-idx-grid' }, quotes === null && error === null
+        ? Array.from({ length: 6 }, (_, i) => React.createElement('div', { key: i, className: 'tw-skel tw-skel-card', 'data-role': 'clock-skel' }))
+        : indexCards.map((c) => React.createElement(StatCard, { key: c.code, card: c })))),
     React.createElement('section', { className: 'tw-prism-card' },
       React.createElement('div', { className: 'tw-prism-card-title' }, '期货自选 · 主连',
         React.createElement('span', { className: 'tw-prism-muted', style: { marginLeft: 'auto' } }, '5 个')),
-      React.createElement('div', { className: 'tw-fut-grid' }, ...futureCards.map((c) => React.createElement(StatCard, { key: c.code, card: c })))),
+      React.createElement('div', { className: 'tw-fut-grid' }, quotes === null && error === null
+        ? Array.from({ length: 5 }, (_, i) => React.createElement('div', { key: i, className: 'tw-skel tw-skel-card', 'data-role': 'clock-skel' }))
+        : futureCards.map((c) => React.createElement(StatCard, { key: c.code, card: c })))),
   )
 }

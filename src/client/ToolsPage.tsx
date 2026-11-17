@@ -577,7 +577,7 @@ function detailView(
             'aria-label': model.statusTitle,
             style: { margin: 0, fontSize: 12, lineHeight: 1.5, color: 'var(--tw-muted)', flex: 1, minWidth: 0 },
           },
-          io.loading ? '正在取数…' : model.status,
+          io.loading ? React.createElement('span', { className: 'tw-skel', style: { display: 'inline-block', width: 72, height: 12 }, 'data-role': 'tool-skel' }) : model.status,
         ),
         model.chartAsOf === null
           ? null

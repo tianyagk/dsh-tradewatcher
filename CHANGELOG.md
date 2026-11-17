@@ -11,6 +11,33 @@
 
 ---
 
+## v0.197.0 — 界面细节打磨（第 5 轮）：加载态全覆盖 + 数字对齐
+
+`npm run check` **1549 / 1549 × 2 时区**（1544 → 1549）+ `ALL HOST CHECKS PASSED` + build（73 片段全过）。
+
+### 1) 加载态 9 页全覆盖
+
+| 页面 | 形态 | 本轮 |
+| --- | --- | --- |
+| `GlobalClockPage` | 6 + 5 块 `.tw-skel.tw-skel-card`（64px） | **新增**（此前 0 处） |
+| `ToolsPage` | 内联 `.tw-skel`（72×12） | **新增**（「正在取数…」→ 骨架） |
+| `MarketPage` / `PrismPage` / `WatchlistPage` / `PortfolioPage` / `CalendarPage` / `FupanPage` / `leveragePage` | 既有 `Skeleton` | 复核通过 |
+
+例外：<24px 行内位置（表格单元格）仍用纯文字「加载中」。
+
+### 2) 数字对齐
+
+新增/复核 7 条 `tabular-nums`：`.tw-mk-v`、`.tw-idx-grid/.tw-fut-grid .tw-mk-v`、`.tw-mk-s`、`.tw-clock-pill`、`.tw-dw-kpi .v`、`.tw-dw-review-big`、`.tw-dw-table td.num/th.num`。抽样 10 条数值规则 100% 覆盖；文字类未加。
+
+### 3) 骨架动画
+
+`@keyframes twshimmer` 由 `translateX` 改为 **纯 opacity**（`.45 → .9`）；全文件无 `background-position` / `width` / `height` 动画。
+
+### 验证
+
+`npm run check` **1549 / 1549 × 2 时区** + build（73 项）。
+新增 `uiPolish5.test.ts` 5 条（含注入必败）：① 9 页均有骨架/加载态（缺一 ⇒ 败）｜② 骨架 64px vs 卡片 64px（误差 0；注入 100px ⇒ 败）｜③ 10 条数值规则 `tabular-nums` 100%（缺一 ⇒ 败）｜④ 文字类无误加（≥1 ⇒ 败）｜⑤ 动画只含 opacity（出现尺寸/位置动画 ⇒ 败）。
+
 ## v0.196.0 — 界面细节打磨（第 4 轮）：键盘可达与焦点可见性
 
 `npm run check` **1544 / 1544 × 2 时区**（1538 → 1544）+ `ALL HOST CHECKS PASSED` + build（73 片段全过）。
