@@ -11,6 +11,46 @@
 
 ---
 
+## v0.193.0 — 界面细节打磨（第 1 轮）：`⚠` 清零、失败文案收敛、数值兜底
+
+`npm run check` **1528 / 1528 × 2 时区**（1524 → 1528）+ `ALL HOST CHECKS PASSED` + build（73 片段全过）。
+
+### 1) 用户可见 `⚠` 清零（8 处）
+
+| # | 文件:行 | 前 → 后 |
+| --- | --- | --- |
+| 1 | `RescuePanel.tsx:653` | ` · ⚠ 采样失败 t` → ` · 采样失败 t` |
+| 2 | `RescuePanel.tsx:654` | ` · ⚠ 当日有采样缺口` → ` · 当日有采样缺口（非当前故障）` |
+| 3 | `RescuePanel.tsx:714` | `⚠ warning` → `warning` |
+| 4 | `distView.ts:62` | `⚠ 两源不一致（…）` → `两源不一致（…）` |
+| 5 | `distView.ts:65` | `head ⚠不一致` → `head 两源不一致` |
+| 6 | `globalFlowView.ts:537` | `⚠ 上游全部失败 ⇒ …` → `上游全部失败 ⇒ …` |
+| 7 | `globalFlowView.ts:539` | `⚠ 上游本次全部失败…` → `上游本次全部失败…` |
+| 8 | `globalFlowView.ts:547` | `⚠ 另有 N 天…` → `另有 N 天…` |
+
+`styles.ts` 的 4 处经核为块注释，按纪律保留（注释中 `⚠` 实测 140 处，不减少）。
+
+### 2) 失败文案收敛
+
+| 前 | 后 |
+| --- | --- |
+| `最后错误：` | `最后失败：` |
+| `上游不可用：…` | `上游未取到：…` |
+| `（上游不可用时只提供复盘数据）` | `（上游未取到时只提供复盘数据）` |
+| `分单数据稀疏，不可用。` | `分单数据稀疏，未取到。` |
+
+`build.mjs` 对应 UI 片段同步更新，条数仍 73。
+
+### 3) 数值兜底
+
+新增 `src/client/uiText.ts`：`missText / failText / numText / pctText / ratioText`，非有限值一律 `—`。
+`distView.ts:62` 相对差 `toFixed` 前补 `Number.isFinite`（原会输出 `NaN%`）；band / progress 同步加守卫。
+
+### 验证
+
+`npm run check` **1528 / 1528 × 2 时区** + build（73 项）。
+新增 `uiPolish1.test.ts` 4 条（含注入必败）：① 用户可见 `⚠` = 0（注入一条 ⇒ 败）｜② 注释 `⚠` ≥ 85（实测 140；注入 84 ⇒ 败）｜③ 三文件内「异常/错误/不可用」= 0（出现 ⇒ 败）｜④ 20 组边界输入逐个过 `numText/pctText/ratioText/missText/failText`，输出无 `undefined|NaN|null`（注入裸 `toFixed` ⇒ 败）。
+
 ## v0.192.0 — 汪汪队 6 处数据与逻辑错误修复
 
 `npm run check` **1524 / 1524 × 2 时区**（1518 → 1524）+ `ALL HOST CHECKS PASSED` + build（73 片段全过）。

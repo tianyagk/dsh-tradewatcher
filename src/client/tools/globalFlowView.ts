@@ -534,9 +534,9 @@ export function globalFlowToolData(payload: GlobalFlowPayloadDto, step = 0, rang
   const degrade = payload.source === 'snapshot'
     ? `快照只读（累积 ${payload.snapshot.days} 天）`
     : payload.source === 'fallback'
-      ? `⚠ 上游全部失败 ⇒ 快照回退${payload.fallbackDay === null ? '' : `（${payload.fallbackDay}）`}，不是实时值`
+      ? `上游全部失败 ⇒ 快照回退${payload.fallbackDay === null ? '' : `（${payload.fallbackDay}）`}，不是实时值`
       : allMissing
-        ? '⚠ 上游本次全部失败，且本地还没有任何快照 ⇒ 这一屏没有数据（逐行原因见下）'
+        ? '上游本次全部失败，且本地还没有任何快照 ⇒ 这一屏没有数据（逐行原因见下）'
         : null
   /**
    * 「另有 N 天旧口径快照已作废」：**不再常驻**（用户口径：一次性迁移说明不该占常驻行）。
@@ -544,7 +544,7 @@ export function globalFlowToolData(payload: GlobalFlowPayloadDto, step = 0, rang
    */
   const purgeMark = purged.length === 0
     ? null
-    : `⚠ 另有 ${purged.length} 天旧口径快照已作废（成分变更；留痕见快照文件，如 ${purged[purged.length - 1].day}）`
+    : `另有 ${purged.length} 天旧口径快照已作废（成分变更；留痕见快照文件，如 ${purged[purged.length - 1].day}）`
   const status = [
     `数据时刻 ${fmtBeijing(payload.asOf, payload.day)}（北京时间）`,
     degrade,

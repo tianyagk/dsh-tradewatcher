@@ -16,8 +16,8 @@ export function fmtYi(v: number | null): string {
 
 export function forecastCellOf(f: AmountForecastWire, amountText: string): { value: string; cls: string; note: string } {
   const cal = `口径：${f.caliber.curve}；样本 ${f.caliber.samples} 天；标定生成于 ${f.caliber.generatedAt}。${f.caliber.note}`
-  const band = f.band === null ? '' : `；区间 ${(f.band.low / 1e8).toFixed(0)}~${(f.band.high / 1e8).toFixed(0)} 亿`
-  const progress = f.progress === null ? '' : `；已过时段占比 ${(f.progress * 100).toFixed(1)}%`
+  const band = f.band === null || !Number.isFinite(f.band.low) || !Number.isFinite(f.band.high) ? '' : `；区间 ${(f.band.low / 1e8).toFixed(0)}~${(f.band.high / 1e8).toFixed(0)} 亿`
+  const progress = f.progress === null || !Number.isFinite(f.progress) ? '' : `；已过时段占比 ${(f.progress * 100).toFixed(1)}%`
   if (f.phase === 'closed') {
     // 收盘后：实际值就是全天值 ⇒ 不给预测（避免"预测"被当成第二份数据）
     return {
@@ -59,10 +59,10 @@ export function marginRowOf(
   const head = parts.length === 0
     ? '未取到'
     : parts.join(' / ')
-  const mismatch = m.mismatch ? `⚠ 两源不一致（融资余额相对差 ${m.diffPct === null ? '未知' : `${(m.diffPct * 100).toFixed(1)}%`}）：深交所是深市口径、东财是沪深汇总，差异属口径 + 更新时点 ⇒ 两个读数都列出，不取其一` : m.note
+  const mismatch = m.mismatch ? `两源不一致（融资余额相对差 ${Number.isFinite(m.diffPct) ? `${((m.diffPct as number) * 100).toFixed(1)}%` : '未知'}）：深交所是深市口径、东财是沪深汇总，差异属口径 + 更新时点 ⇒ 两个读数都列出，不取其一` : m.note
   const days = [m.szse?.day, m.em?.day].filter((d): d is string => typeof d === 'string')
   return {
-    value: mismatch.startsWith('⚠') ? `${head} ⚠不一致` : head,
+    value: m.mismatch ? `${head} 两源不一致` : head,
     note: `${mismatch}${days.length === 0 ? '' : `；数据日 ${[...new Set(days)].join(' / ')}`}`,
   }
 }

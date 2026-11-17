@@ -250,7 +250,7 @@ function EtfCard(props: { etf: RescueEtfView; redUp: boolean }): React.ReactElem
         ? React.createElement('span', { className: 'tw-badge', title: '核心护盘通道：F2 以核心通道为主，且大额净流出会封顶信号等级' }, '核心')
         : null,
       etf.provisional === true
-        ? React.createElement('span', { className: 'tw-badge', title: '上游不可用：这张卡是当日峰值的复盘数据，非实时快照' }, '复盘')
+        ? React.createElement('span', { className: 'tw-badge', title: '上游未取到：这张卡是当日峰值的复盘数据，非实时快照' }, '复盘')
         : null,
       etf.secid !== '' && !RESCUE_ETF_CATALOG.some((c) => c.secid === etf.secid)
         ? React.createElement('span', { className: 'tw-badge', title: '自定义通道（通常为板块 ETF）：仅作量能与脉冲观察，不计入护盘评分与共振' }, '板块')
@@ -618,7 +618,7 @@ export function RescuePanel(props: {
             // 东财源下的缺因子才是"冷启动/采样满 5 分钟自动补齐"。此前一律写"5 分钟后自动补齐"，
             // 在备用数据源场景下是空头承诺。
             title: snapshot.flowSource === 'tencent'
-              ? `本次快照缺少因子：${snapshot.completeness?.missing.join('、')} —— 数据来自「腾讯备用数据源」，该源不含分单资金流（超大单/主力净额），因此「持续性」无法计算，不是等几分钟就能补齐的；量能、脉冲、背离仍为真实数据，评分偏保守。（「超大单强度」已整体剔除：宽基 ETF 分单数据稀疏，不可用。）`
+              ? `本次快照缺少因子：${snapshot.completeness?.missing.join('、')} —— 数据来自「腾讯备用数据源」，该源不含分单资金流（超大单/主力净额），因此「持续性」无法计算，不是等几分钟就能补齐的；量能、脉冲、背离仍为真实数据，评分偏保守。（「超大单强度」已整体剔除：宽基 ETF 分单数据稀疏，未取到。）`
               : `本次快照缺少因子：${snapshot.completeness?.missing.join('、')}（评分偏保守；冷启动回填完成或盘中采样 5 分钟后自动补齐）`,
             style: { color: LEVEL_COLOR[2], borderColor: LEVEL_COLOR[2] },
           }, `因子 ${snapshot.completeness?.available}/${snapshot.completeness?.total}`)
@@ -650,8 +650,8 @@ export function RescuePanel(props: {
                 ? ` · 当日曾采样失败 ${shClockText(snapshot.lastFailTs)}`
                 : snapshot.gap ? ' · 当日采样曾中断（非当前故障）' : ''
               : snapshot.gap && snapshot.lastFailTs !== null && snapshot.lastFailTs !== undefined
-                ? ` · ⚠ 采样失败 ${shClockText(snapshot.lastFailTs)}`
-                : snapshot.gap ? ' · ⚠ 当日有采样缺口' : ''}`,
+                ? ` · 采样失败 ${shClockText(snapshot.lastFailTs)}`
+                : snapshot.gap ? ' · 当日有采样缺口（非当前故障）' : ''}`,
           )
         : null,
       React.createElement(Btn, { onClick: () => load(true) }, loading ? '刷新中…' : '立即采样'),
@@ -694,7 +694,7 @@ export function RescuePanel(props: {
           title: [
             badge.reason,
             `熔断明细（按主机独立计数）：${b.detail.filter((h) => h.open).map((h) => `${h.host} 剩余 ${h.minutesLeft} 分钟（连续熔断 ${h.trips} 次）`).join('；')}`,
-            `最后错误：${b.lastError ?? '—'}`,
+            `最后失败：${b.lastError ?? '—'}`,
             '熔断期间不再请求「熔断中的东财主机」（避免把限流推成封锁）；腾讯/新浪备用数据源不受影响，「立即采样」照常可用。',
             '熔断是进程级状态，不随面板开关变化。',
           ].join('\n'),
@@ -711,7 +711,7 @@ export function RescuePanel(props: {
           className: 'tw-muted',
           style: { fontSize: 12, color: 'var(--tw-warn)', padding: '2px 0' },
           title: `交易日历文件：${snapshot.calendarStatus.path}`,
-        }, `⚠ ${snapshot.calendarStatus.warning}`)
+        }, snapshot.calendarStatus.warning)
       : null,
     loading && data === null ? React.createElement(Skeleton, { lines: 3, height: 20 }) : null,
     // B3 缺失收缩（DESIGN-DASHBOARD §4）：取数失败（空壳）或没有快照时，塌成**一行**
@@ -784,7 +784,7 @@ export function RescuePanel(props: {
                     timeCoef: snapshot.timeCoef,
                     total: snapshot.score,
                   })
-                : React.createElement('div', { className: 'tw-hint' }, '无实时数据：本次快照没有因子得分（上游不可用时只提供复盘数据）。'),
+                : React.createElement('div', { className: 'tw-hint' }, '无实时数据：本次快照没有因子得分（上游未取到时只提供复盘数据）。'),
             ),
             React.createElement('div', null,
               React.createElement('div', { className: 'tw-sub-h' },
