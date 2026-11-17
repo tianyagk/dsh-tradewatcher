@@ -26,8 +26,8 @@ test('滚动②：两栏容器 min-height:0（删 ⇒ 败）', () => {
 })
 
 test('滚动③：移动端折叠容器可滚（加固定高度 ⇒ 败）', () => {
-  assert.match(TW_CSS, /@media \(max-width:899px\)\{[^\n]*\.tw-prism-body\{[^}]*min-height:0/)
-  const injected = TW_CSS.replace('@media (max-width:899px){.tw-prism-body{display:flex;flex-direction:column;gap:16px;min-height:0}', '@media (max-width:899px){.tw-prism-body{display:flex;flex-direction:column;gap:16px;height:600px')
+  assert.match(TW_CSS, /@media \(max-width:900px\)\{[^@]*?\.tw-prism-body\{[^}]*min-height:0/)
+  const injected = TW_CSS.replace(/@media \(max-width:900px\)\{\.tw-prism-body\{[^}]*\}/, '@media (max-width:900px){.tw-prism-body{height:600px}')
   assert.notEqual(injected, TW_CSS)
   assert.notDeepEqual(scrollProblems(injected), [], '固定高度必须败')
 })

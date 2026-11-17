@@ -36,7 +36,7 @@ test('① 两栏可拖拽且夹在 40–75（固定 50/50 或 20% ⇒ 败）', (
 })
 
 test('② <900px 折叠为上下（仍两栏 ⇒ 败）', () => {
-  assert.match(TW_CSS, /@media \(max-width:899px\)\{[^}]*\.tw-prism-body\{display:flex;flex-direction:column/)
+  assert.match(TW_CSS, /@media \(max-width:900px\)\{[^}]*\.tw-prism-body\{display:flex;flex-direction:column/)
   assert.match(page, /className="tw-prism-body"/)
   assert.match(TW_CSS, /\.tw-prism-left>\.tw-prism-seg\{order:1\}/)
   assert.match(TW_CSS, /\.tw-prism-left>\.tw-prism-cards\{order:2\}/)

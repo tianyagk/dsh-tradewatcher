@@ -27,7 +27,7 @@ test('② 六张 ETF 卡同一容器 6 等分（<1100 三列 / <700 两列）', 
   const css = read('styles.ts')
   assert.equal(/\.tw-rescue-cards\{display:grid;grid-template-columns:repeat\(6,minmax\(0,1fr\)\);gap:6px\}/.test(css), true, '六卡必须同一容器 6 等分')
   assert.equal(/@media \(max-width:1100px\)\{\.tw-rescue-cards\{grid-template-columns:repeat\(3/.test(css), true, '<1100 三列')
-  assert.equal(/@media \(max-width:700px\)\{\.tw-rescue-cards\{grid-template-columns:repeat\(2/.test(css), true, '<700 两列')
+  assert.equal(/@media \(max-width:760px\)\{\.tw-rescue-cards\{grid-template-columns:repeat\(2/.test(css), true, '<700 两列')
   const panel = strip(read('RescuePanel.tsx'))
   assert.equal(/className: 'tw-rescue-cards'/.test(panel), true, '六卡容器类缺失')
   // 反例注入：auto-fit（会分两行）⇒ 必败

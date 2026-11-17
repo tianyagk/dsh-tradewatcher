@@ -93,8 +93,10 @@ export function scrollProblems(css: string): string[] {
   if (/(^|;)\s*height\s*:\s*\d/.test(root)) bad.push('页面根不得写固定 height')
   const body = rule('.tw-prism-body')
   if (!/min-height\s*:\s*0/.test(body)) bad.push('两栏容器缺 min-height:0')
-  const mobile = /@media\s*\(max-width:899px\)\{([^\n]*)/.exec(css)?.[1] ?? ''
-  if (!/@media\s*\(max-width:899px\)/.test(css)) bad.push('缺 <900px 折叠媒体查询')
+  const mobile = /@media\s*\(max-width:900px\)\{([^\n]*)/.exec(css)?.[1] ?? ''
+  if (!/@media\s*\(max-width:900px\)/.test(css)) bad.push('缺 <900px 折叠媒体查询')
+  const m900 = /@media \(max-width:900px\)\{\.tw-prism-body\{([^}]*)\}/.exec(css)
+  if (m900 !== null && /(^|;)height:/.test(m900[1] ?? '')) bad.push('移动端折叠容器不许写死高度')
   if (/(^|;)\s*height\s*:\s*\d/.test(mobile)) bad.push('移动端折叠容器不得写固定 height')
   return bad
 }

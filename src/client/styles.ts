@@ -6,7 +6,7 @@
  * 为什么放在这里：断言（`styles.test.ts`）直接读 CSS 文本比对，常量与样式同文件就不会漂。
  * v0.36.0 起列头排序已删除，这条断点只服务多列网格（`.tw-wlist`/`.tw-poslist`）。
  */
-export const WIDE_MIN_PX = 1080
+export const WIDE_MIN_PX = 1100
 
 export const STYLE_ID = 'dsh-tradewatcher-style'
 
@@ -150,7 +150,7 @@ color-scheme:dark}
       ⚠ 断点必须与同文件的 WIDE_MIN_PX 一致（由 styles.test.ts 直接读 CSS 文本比对；
       写死在注释里的一致性迟早会漂）。v0.36.0 起列头排序已删除；client/wide.ts 已于 v0.39.0 删除，
       常量现在就在本文件，这条断点只服务多列网格。 */
-@media (min-width:1080px){
+@media (min-width:1100px){
   .tw-wlist,.tw-poslist{columns:520px;column-gap:16px}
   /* 多列下行不能被拦腰截断 */
   .tw-wlist>.tw-wrow,.tw-poslist>.tw-posrow{break-inside:avoid}
@@ -391,7 +391,7 @@ color-scheme:dark}
    "每列第一行"是第几个子元素取决于条目数，无法用 nth-child 表达；
    组头画线 + 行画线会让除第一列外的每一列都出现双线。
    注意：必须写在这里（.tw-group-h 定义之后）—— 同优先级下 CSS 按出现顺序决胜。 */
-@media (min-width:1080px){.tw-group-h{border-bottom:none}}
+@media (min-width:1100px){.tw-group-h{border-bottom:none}}
 
 /* position row: two-line layout (title/price line + aligned numeric grid) */
 .tw-posrow{display:flex;flex-direction:column;gap:6px;padding:7px 10px 6px;border-top:1px solid var(--tw-border);transition:background .1s;cursor:pointer}
@@ -486,6 +486,7 @@ color-scheme:dark}
 .tw-skel::after{content:"";position:absolute;inset:0;background:linear-gradient(100deg,transparent 30%,var(--tw-hover) 50%,transparent 70%);animation:twshimmer 1.5s infinite}
 @keyframes twshimmer{0%,100%{opacity:.45}50%{opacity:.9}}
 .tw-skel-stack{display:flex;flex-direction:column;gap:8px;padding:8px 2px}
+@media (max-width:430px){.tw-body{padding:8px}.tw-panel{padding:8px 10px}}
 .tw-skel-card{height:64px}
 .tw-empty{display:flex;flex-direction:column;align-items:center;gap:8px;padding:16px 10px;max-height:180px;overflow:auto;color:var(--tw-muted);text-align:center}
 .tw-kline{display:flex;flex-direction:column;gap:2px}
@@ -545,7 +546,7 @@ color-scheme:dark}
 .tw-rescue-resonance{display:flex;align-items:center;gap:8px;font-size:12px;padding:4px 8px;border:1px solid var(--tw-border);border-radius:8px;background:var(--tw-bg);flex-wrap:wrap}
 .tw-rescue-cards{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:6px}
 @media (max-width:1100px){.tw-rescue-cards{grid-template-columns:repeat(3,minmax(0,1fr))}}
-@media (max-width:700px){.tw-rescue-cards{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media (max-width:760px){.tw-rescue-cards{grid-template-columns:repeat(2,minmax(0,1fr))}}
 .tw-rescue-card{border:1px solid var(--tw-border);border-radius:9px;padding:7px 9px;background:var(--tw-card);transition:border-color .15s}
 .tw-rescue-card-h{display:flex;align-items:baseline;justify-content:space-between;gap:6px;margin-bottom:5px}
 .tw-rescue-card-h b{font-size:12px;font-weight:600;letter-spacing:-0.1px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -765,8 +766,7 @@ color-scheme:dark}
    窄屏（移动/窄面板）回落为**上下堆叠**：单列时右列自然落到折线图下方。 */
 .tw-tool-split{display:grid;grid-template-columns:minmax(0,1.9fr) minmax(220px,1fr);align-items:start}
 .tw-tool-pie-legend{display:flex;justify-content:center;flex-wrap:wrap;gap:6px 12px}
-@media (max-width:900px){
-  .tw-tool-split{grid-template-columns:minmax(0,1fr)}
+@media (max-width:900px){  .tw-tool-split{grid-template-columns:minmax(0,1fr)}
 }
 @media (max-width:760px){
   .tw-tool-hero{flex-direction:column}
@@ -961,11 +961,11 @@ color-scheme:dark}
 .tw-prism-field{display:flex;align-items:center;gap:8px;min-width:0}
 .tw-prism-field label{width:64px;flex:none;color:var(--tw-muted);font-size:12px}
 .tw-prism-input{flex:1;min-width:0;border:1px solid var(--tw-border);border-radius:6px;background:var(--tw-bg);color:var(--tw-text);font:12px/1.2 var(--tw-mono);padding:5px 6px}
-@media (max-width:1099px){.tw-prism-cards{grid-template-columns:repeat(2,minmax(0,1fr))}}
-@media (max-width:899px){.tw-prism-body{display:flex;flex-direction:column;gap:16px;min-height:0}.tw-prism-sep{display:none}.tw-prism-cards{grid-template-columns:repeat(2,minmax(0,1fr))}.tw-prism-left{display:flex;flex-direction:column;gap:16px}.tw-prism-left>.tw-prism-seg{order:1}.tw-prism-left>.tw-prism-cards{order:2}.tw-prism-left>.tw-prism-toolbar{order:3}.tw-prism-left>.tw-prism-tablecard{order:4}.tw-prism-left>.tw-prism-exposurecard{order:5}.tw-prism-left>.tw-prism-decisioncard{order:6}.tw-prism-left>.tw-prism-equitycard{order:7}}
+@media (max-width:1100px){.tw-prism-cards{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media (max-width:900px){.tw-prism-body{display:flex;flex-direction:column;gap:16px;min-height:0}.tw-prism-sep{display:none}.tw-prism-cards{grid-template-columns:repeat(2,minmax(0,1fr))}.tw-prism-left{display:flex;flex-direction:column;gap:16px}.tw-prism-left>.tw-prism-seg{order:1}.tw-prism-left>.tw-prism-cards{order:2}.tw-prism-left>.tw-prism-toolbar{order:3}.tw-prism-left>.tw-prism-tablecard{order:4}.tw-prism-left>.tw-prism-exposurecard{order:5}.tw-prism-left>.tw-prism-decisioncard{order:6}.tw-prism-left>.tw-prism-equitycard{order:7}}
 
-@media (max-width:899px){.tw-prism-right{display:flex;flex-direction:column;gap:16px}.tw-prism-right>.tw-prism-equitycard{order:1}.tw-prism-right>.tw-prism-researchcard{order:2}.tw-prism-right>.tw-prism-evalcard{order:3}.tw-prism-right>.tw-prism-timecard{order:4}.tw-prism-right>.tw-prism-modelcard{order:5}}
-@media (max-width:639px){.tw-prism-cards{grid-template-columns:minmax(0,1fr)}}
+@media (max-width:900px){.tw-prism-right{display:flex;flex-direction:column;gap:16px}.tw-prism-right>.tw-prism-equitycard{order:1}.tw-prism-right>.tw-prism-researchcard{order:2}.tw-prism-right>.tw-prism-evalcard{order:3}.tw-prism-right>.tw-prism-timecard{order:4}.tw-prism-right>.tw-prism-modelcard{order:5}}
+@media (max-width:760px){.tw-prism-cards{grid-template-columns:minmax(0,1fr)}}
 /* ── 工具 · 全球期货交易时钟（clock） ─────────────────────────────────── */
 .tw-clock-head{display:flex;align-items:flex-end;gap:16px;flex-wrap:wrap}
 .tw-clock-title{margin:0;font-size:20px;font-weight:700;letter-spacing:-.02em;color:var(--tw-text)}
@@ -1062,14 +1062,14 @@ color-scheme:dark}
 .tw-dw-review-big{font-variant-numeric:tabular-nums;margin-left:auto;font-size:34px;font-weight:700;font-variant-numeric:tabular-nums;line-height:1}
 .tw-dw-review-sub{color:var(--tw-muted);font-size:12px;text-align:right}
 .tw-dw-kpis{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}
-@media (max-width:899px){.tw-dw-kpis{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media (max-width:900px){.tw-dw-kpis{grid-template-columns:repeat(2,minmax(0,1fr))}}
 .tw-dw-kpi{display:flex;flex-direction:column;gap:2px;padding:10px;border:1px solid var(--tw-border);border-radius:8px;background:var(--tw-card2);min-width:0}
 .tw-dw-kpi .l{color:var(--tw-muted);font-size:12px}
 .tw-dw-kpi .v{font-variant-numeric:tabular-nums;font-size:28px;font-weight:700;font-variant-numeric:tabular-nums;line-height:1.15}
 .tw-dw-kpi .s{color:var(--tw-muted);font-size:12px}
 .tw-dw-kpi .u{font-size:14px;font-weight:600;margin-left:2px}
 .tw-dw-charts{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
-@media (max-width:999px){.tw-dw-charts{grid-template-columns:minmax(0,1fr)}}
+@media (max-width:1100px){.tw-dw-charts{grid-template-columns:minmax(0,1fr)}}
 .tw-dw-chart{position:relative;display:flex;flex-direction:column;gap:6px;padding:10px;border:1px solid var(--tw-border);border-radius:8px;background:var(--tw-card2);min-width:0}
 .tw-dw-chart-h{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
 .tw-dw-chart-h .t{font-size:13px;font-weight:600}
@@ -1084,7 +1084,7 @@ color-scheme:dark}
 .tw-dw-foot{margin-top:10px;color:var(--tw-muted);font-size:12px}
 .tw-dw-table td[title]:focus-visible{outline:1px solid var(--tw-accent);outline-offset:-1px}
 .tw-dw-skel-charts{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
-@media (max-width:999px){.tw-dw-skel-charts{grid-template-columns:minmax(0,1fr)}}
+@media (max-width:1100px){.tw-dw-skel-charts{grid-template-columns:minmax(0,1fr)}}
 .tw-dw-skel-block{height:208px;border-radius:8px;background:var(--tw-card2);animation:twDwPulse 1.4s ease-in-out infinite}
 .tw-dw-skel-rows{display:flex;flex-direction:column;gap:6px;margin-top:10px}
 .tw-dw-skel-row{height:32px;border-radius:6px;background:var(--tw-card2);animation:twDwPulse 1.4s ease-in-out infinite}

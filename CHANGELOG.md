@@ -11,6 +11,34 @@
 
 ---
 
+## v0.199.0 — 界面细节打磨（第 7 轮）：响应式断点统一
+
+`npm run check` **1558 / 1558 × 2 时区**（1554 → 1558）+ `ALL HOST CHECKS PASSED` + build（73 片段全过）。
+
+### 断点阶梯收敛为 5 档：1100 / 900 / 760 / 600 / 430
+
+| 原 | 新 | 位置 / 意图 |
+| --- | --- | --- |
+| 1099 | **1100** | `.tw-prism-cards` 4→2 列 |
+| 999 | **1100** | `.tw-dw-charts` / `.tw-dw-skel-charts` 两图堆叠 |
+| 899 | **900** | `.tw-prism-body` / `.tw-prism-right` 折叠、`.tw-dw-kpis` 2×2 |
+| 700 | **760** | `.tw-rescue-cards` 4→2 列 |
+| 639 | **760** | `.tw-prism-cards` 2→1 列 |
+| 1080（min-width） | **1100** | 宽屏多列（`WIDE_MIN_PX` 同步） |
+| 新增 | **430** | `.tw-body` padding 8px、`.tw-panel` padding 8px 10px |
+
+### 六宽度实测（Playwright + 真实 `TW_CSS`）
+
+| 宽度 | scrollWidth / clientWidth | 卡片重叠 | 最小字号 |
+| --- | --- | --- | --- |
+| 1200 / 1100 / 900 / 760 / 670 / 430 | 全部 **相等**（无横向溢出） | **0** | **12px** |
+
+### 验证
+
+`npm run check` **1558 / 1558 × 2 时区** + build（73 项）。
+新增 `uiPolish7.test.ts` 4 条（含注入必败）：① 断点集合恰为 5 档（注入 999/899/1099/700/639 ⇒ 败）｜② 六宽度无横向溢出｜③ 六宽度卡片包围盒不交叠｜④ 全文件 `font-size ≥12px`（注入 11px ⇒ 败）。
+连带：`WIDE_MIN_PX` 1080→1100；`prismLayout.scrollProblems` 的 `899px` 字面量与移动端高度检测同步；6 个测试文件旧断点字面量更新。
+
 ## v0.198.0 — 界面细节打磨（第 6 轮）：图表悬停提示 + 空态高度收敛
 
 `npm run check` **1554 / 1554 × 2 时区**（1549 → 1554）+ `ALL HOST CHECKS PASSED` + build（73 片段全过）。

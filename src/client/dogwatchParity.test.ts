@@ -83,8 +83,8 @@ test('口径小字（2 条）', () => {
 })
 
 test('窄屏（3 条）', () => {
-  assert.match(CSS, /@media \(max-width:999px\)\{\.tw-dw-charts\{grid-template-columns:minmax\(0,1fr\)\}/, '双图堆叠')
-  assert.match(CSS, /@media \(max-width:899px\)\{\.tw-dw-kpis\{grid-template-columns:repeat\(2,minmax\(0,1fr\)\)\}/, '四指标 2×2')
+  assert.match(CSS, /@media \(max-width:1100px\)\{\.tw-dw-charts\{grid-template-columns:minmax\(0,1fr\)\}/, '双图堆叠')
+  assert.match(CSS, /@media \(max-width:900px\)\{\.tw-dw-kpis\{grid-template-columns:repeat\(2,minmax\(0,1fr\)\)\}/, '四指标 2×2')
   assert.ok(has('.tw-dw-tscroll', 'overflow-x:auto'), '表格横向可滚')
 })
 
