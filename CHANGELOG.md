@@ -11,6 +11,34 @@
 
 ---
 
+## v0.196.0 — 界面细节打磨（第 4 轮）：键盘可达与焦点可见性
+
+`npm run check` **1544 / 1544 × 2 时区**（1538 → 1544）+ `ALL HOST CHECKS PASSED` + build（73 片段全过）。
+
+### 改动
+
+| 类别 | 内容 | 数量 |
+| --- | --- | --- |
+| 全局兜底 | `:where(button, a, input, select, textarea, [tabindex]):focus-visible { outline: 2px solid var(--tw-accent); outline-offset: 2px; border-radius: inherit }` | 1 条 |
+| 吞焦点修复 | `input/select` 补 `:focus-visible`；`.tw-fp-cell`、`.tw-fp-trade` 补焦点描边；`.tw-prism-limitinput:focus` 已有 box-shadow ring（合规替代） | 3 条 |
+| 跳转链接 | `.tw-skip`（默认 `left:-9999px`，`:focus` 时显示）+ `index.tsx` 的 `跳至主内容` + 主内容 `id="tw-main" tabIndex={-1}` | 1 套 |
+| 可点击块语义 | 四个重点页面扫描 `div + onClick` 缺 `role`/`tabIndex` 的情况：**0 处** | 0 |
+
+### 可聚焦元素（静态计数）
+
+| 页面 | 数量 |
+| --- | --- |
+| MarketPage | 12 |
+| PrismPage | 17 |
+| WatchlistPage | 20 |
+| PortfolioPage | 44 |
+| CalendarPage | 5+ |
+
+### 验证
+
+`npm run check` **1544 / 1544 × 2 时区** + build（73 项）。
+新增 `uiPolish4.test.ts` 6 条（含注入必败）：① 全局兜底覆盖六类元素（删 textarea ⇒ 败）｜② 无孤立 `outline:none`（注入 ⇒ 败）｜③ 四页 `div+onClick` 均有 `role`/`tabIndex`｜④ 5 页可聚焦元素 ≥5（注入 4 ⇒ 败）｜⑤ 描边 `var(--tw-accent)` 2px（改值 ⇒ 败）｜⑥ 跳转链接默认移出视口、聚焦可见、主内容锚点存在。
+
 ## v0.195.0 — 界面细节打磨（第 3 轮）：颜色令牌化 + 深色主题一致性
 
 `npm run check` **1538 / 1538 × 2 时区**（1533 → 1538）+ `ALL HOST CHECKS PASSED` + build（73 片段全过）。

@@ -11,6 +11,9 @@ export const WIDE_MIN_PX = 1080
 export const STYLE_ID = 'dsh-tradewatcher-style'
 
 export const TW_CSS = `
+:where(button, a, input, select, textarea, [tabindex]):focus-visible { outline: 2px solid var(--tw-accent); outline-offset: 2px; border-radius: inherit; }
+.tw-skip{position:absolute;left:-9999px;top:0;z-index:100;padding:6px 10px;background:var(--tw-card);border:1px solid var(--tw-accent);border-radius:8px;font-size:12px;color:var(--tw-text)}
+.tw-skip:focus{left:8px;top:8px}
 .tw-root{
 --tw-bg:#f5f6f8;--tw-bg2:#eceef2;--tw-line2:#eceef2;--tw-card:#ffffff;--tw-card2:#f2f4f7;--tw-hover:#eef0f5;
 --tw-border:#e2e5ea;--tw-border-strong:#cfd3dc;--tw-chip-avg:#c97a1c;--tw-chip-res:#7a5cc4;--tw-chip-sup:#2f74c0;--tw-chips-grid:rgba(0,0,0,.14);--tw-chip-profile:#9aa3b4;
@@ -62,6 +65,7 @@ color-scheme:dark}
 .tw-root *{box-sizing:border-box}
 .tw-root button{font:inherit;color:inherit;background:none;border:none;padding:0;cursor:pointer}
 .tw-root input,.tw-root select{font:inherit;color:var(--tw-text);background:var(--tw-card);border:1px solid var(--tw-border);border-radius:8px;padding:5px 9px;outline:none}
+.tw-root input:focus-visible,.tw-root select:focus-visible{outline:2px solid var(--tw-accent);outline-offset:2px}
 /* 焦点可见性：此前这里写的是 --tw-focus —— 该 token 全项目**没有定义**，
    等于输入框的焦点提示只剩 1px 边框由灰变紫（滑块还内联 border:none，连边框都没有）。
    改用已定义的 --tw-ring，并且只在键盘聚焦（:focus-visible）时画环：鼠标点击不画。 */
@@ -783,6 +787,7 @@ color-scheme:dark}
 .tw-fp-row{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:4px}
 .tw-fp-dow{text-align:center;font-size:12px;color:var(--tw-muted);padding:2px 0}
 .tw-fp-cell{min-height:56px;border:1px solid var(--tw-border);border-radius:8px;background:var(--tw-card);padding:3px 5px;display:flex;flex-direction:column;gap:2px;cursor:pointer;outline:none;transition:border-color .12s,background .12s}
+.tw-fp-cell:focus-visible{outline:2px solid var(--tw-accent);outline-offset:2px}
 .tw-fp-cell:hover{border-color:var(--tw-accent);background:var(--tw-hover)}
 .tw-fp-cell:focus-visible{border-color:var(--tw-accent);box-shadow:0 0 0 3px var(--tw-ring)}
 .tw-fp-cell[data-out=true]{opacity:.45}
@@ -817,6 +822,7 @@ color-scheme:dark}
 .tw-fp-trades-block{border-top:1px dashed var(--tw-border);padding-top:8px;display:flex;flex-direction:column;gap:6px}
 .tw-fp-trades{display:flex;flex-direction:column;gap:2px;max-height:220px;overflow:auto}
 .tw-fp-trade{display:grid;grid-template-columns:auto minmax(0,1fr) auto auto auto auto;gap:8px;align-items:center;width:100%;font-size:12px;font-family:var(--tw-mono);color:var(--tw-text);background:none;border:1px solid transparent;border-radius:6px;padding:3px 5px;text-align:left;cursor:pointer;outline:none}
+.tw-fp-trade:focus-visible{outline:2px solid var(--tw-accent);outline-offset:2px}
 .tw-fp-trade:hover{background:var(--tw-hover);border-color:var(--tw-border)}
 .tw-fp-trade:focus-visible{border-color:var(--tw-accent);box-shadow:0 0 0 3px var(--tw-ring)}
 .tw-fp-trade-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}

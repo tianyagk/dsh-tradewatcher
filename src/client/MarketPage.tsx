@@ -217,7 +217,7 @@ export function MarketPage(props: {
 
   return React.createElement(
     'div',
-    { className: 'tw-body' },
+    { className: 'tw-body', id: 'tw-main', tabIndex: -1 },
     // 首次启动（行情引擎还没出第一批数据）时给一句能解释"为什么全是 —"的空态；
     // 它**不是**缺失提示：缺失仍然走各面板的「未取到 + 原因」（红线不变）
     Object.keys(quotes).length === 0

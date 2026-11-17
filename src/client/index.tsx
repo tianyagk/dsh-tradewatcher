@@ -526,6 +526,7 @@ function Dashboard(): React.ReactElement {
         opacity: panelOpacity,
       },
     },
+    React.createElement('a', { className: 'tw-skip', href: '#tw-main' }, '跳至主内容'),
     React.createElement(TopBar, {
       quotes,
       missing: engine.missing,
