@@ -218,12 +218,34 @@ function PulseChart(props: {
         fill: 'none', stroke: 'var(--tw-fg-dim, #8b93a7)', strokeWidth: 1, strokeDasharray: '3 3', opacity: 0.8,
       })
     : null
-  const svg = React.createElement('svg', { viewBox: `0 0 ${W} ${H}`, width: '100%', height: H, preserveAspectRatio: 'none', className: 'tw-rescue-svg' },
+  /* 悬停：时间 + 成交额（亿）+ 是否脉冲；提示框 pointer-events:none，跟随光标并做左右翻边 */
+  const onMove = (e: React.MouseEvent<SVGSVGElement>): void => {
+    const el = e.currentTarget
+    const r = el.getBoundingClientRect()
+    const host = el.parentElement
+    const tip = host?.querySelector('.tw-rescue-tip') as HTMLElement | null
+    if (r.width <= 0 || tip === null) return
+    const i = Math.max(0, Math.min(pts.length - 1, Math.floor(((e.clientX - r.left) / r.width) * pts.length)))
+    const p = pts[i]
+    const amt = p?.amount ?? 0
+    const exp = expected[i] ?? 0
+    const pulse = exp > 0 && amt / exp >= 2.5
+    const hhmm = shClockText(p?.t ?? 0).slice(0, 5)  /* 一律北京时间，不跟随本机时区 */
+    tip.textContent = `${hhmm} 成交额 ${(amt / 1e8).toFixed(2)} 亿${pulse ? ' · 脉冲' : ''}`
+    tip.style.display = 'block'
+    const flip = e.clientX - r.left > r.width - 110
+    tip.style.left = `${(e.clientX - r.left) + (flip ? -10 : 10)}px`
+    tip.style.top = `${e.clientY - r.top - 8}px`
+  }
+  const svg = React.createElement('svg', { viewBox: `0 0 ${W} ${H}`, width: '100%', height: H, preserveAspectRatio: 'none', className: 'tw-rescue-svg', onMouseMove: onMove, onMouseLeave: (e: React.MouseEvent<SVGSVGElement>) => { const t = e.currentTarget.parentElement?.querySelector('.tw-rescue-tip') as HTMLElement | null; if (t) t.style.display = 'none' } },
     React.createElement('line', { x1: 0, y1: H, x2: W, y2: H, stroke: 'var(--tw-line, #262a33)', strokeWidth: 1 }),
     ...bars,
     baseline,
   )
-  if (derivedNote === null) return svg
+  const wrapped = React.createElement('div', { className: 'tw-rescue-chart' },
+    svg,
+    React.createElement('div', { className: 'tw-dw-tip tw-rescue-tip', style: { display: 'none' } }, ''))
+  if (derivedNote === null) return wrapped
   // 推导值标记（4 字，常驻）+ 说明进 title/aria（不给常驻长句）
   return React.createElement('div', null,
     React.createElement('span', {
@@ -234,7 +256,7 @@ function PulseChart(props: {
       title: derivedNote,
       'aria-label': derivedNote,
     }, '量能推算'),
-    svg,
+    wrapped,
   )
 }
 

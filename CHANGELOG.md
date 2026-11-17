@@ -11,6 +11,36 @@
 
 ---
 
+## v0.198.0 — 界面细节打磨（第 6 轮）：图表悬停提示 + 空态高度收敛
+
+`npm run check` **1554 / 1554 × 2 时区**（1549 → 1554）+ `ALL HOST CHECKS PASSED` + build（73 片段全过）。
+
+### 1) 汪汪队两图悬停
+
+`onMouseMove` / `onMouseLeave`，按 `clientX` 映射数据下标：左图 `YYYY-MM-DD 份额变化 XX.X 亿份`，右图 `YYYY-MM-DD 加仓指数 XXX.X`。提示框 `.tw-dw-tip` 跟随光标，靠右 120px 内自动翻到左侧（沿用日K 翻边），`pointer-events:none`。
+
+### 2) 护盘分时量能悬停
+
+`HH:MM 成交额 X.XX 亿`，≥2.5× 期望值追加 `· 脉冲`；时间用 `shClockText()`（北京时间，不跟随本机时区）。
+
+### 3) 空态高度收敛
+
+`.tw-empty`：`padding 26px → 16px 10px`、`max-height: 180px`、`overflow:auto`；新增 `.tw-empty-line`（`-webkit-line-clamp:2`），全文进 `title`。
+
+### 4) 未加 hover 的两处及理由
+
+- `GlobalClockPage`：主体是表格式卡片 + SVG 世界时钟盘（刻度/指针，无数据序列可映射），加提示只会重复卡面数字。
+- `CloudMap`：布局图（面积/颜色编码），单块信息已在块内与 `title`，悬停会与块内文字重复并遮挡邻居。
+
+### 验证
+
+`npm run check` **1554 / 1554 × 2 时区** + build（73 项）。
+新增 `uiPolish6.test.ts` 5 条（含注入必败）：① 两图各有 `onMouseMove` 且文案含「份额变化 … 亿份」「加仓指数 …」｜② 量能图含 `onMouseMove` 与「成交额 … 亿」「脉冲」｜③ `.tw-dw-tip` 为 `pointer-events:none`（注入 `auto` ⇒ 败）｜④ `.tw-empty` padding ≤16 且 `max-height ≤180`（注入 26px ⇒ 败）｜⑤ `.tw-empty-line` 截断 2 行（注入 3 行 ⇒ 败）。
+
+### 未验证
+
+悬停为交互态，静态截图不体现；本轮未出渲染图（宿主不可重启）。
+
 ## v0.197.0 — 界面细节打磨（第 5 轮）：加载态全覆盖 + 数字对齐
 
 `npm run check` **1549 / 1549 × 2 时区**（1544 → 1549）+ `ALL HOST CHECKS PASSED` + build（73 片段全过）。

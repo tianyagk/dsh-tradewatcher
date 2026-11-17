@@ -487,7 +487,7 @@ color-scheme:dark}
 @keyframes twshimmer{0%,100%{opacity:.45}50%{opacity:.9}}
 .tw-skel-stack{display:flex;flex-direction:column;gap:8px;padding:8px 2px}
 .tw-skel-card{height:64px}
-.tw-empty{display:flex;flex-direction:column;align-items:center;gap:8px;padding:26px 10px;color:var(--tw-muted);text-align:center}
+.tw-empty{display:flex;flex-direction:column;align-items:center;gap:8px;padding:16px 10px;max-height:180px;overflow:auto;color:var(--tw-muted);text-align:center}
 .tw-kline{display:flex;flex-direction:column;gap:2px}
 .tw-ma-legend{display:flex;gap:10px;flex-wrap:wrap}
 .tw-zoom{margin-top:6px;display:flex;flex-direction:column;gap:5px}
@@ -1070,13 +1070,17 @@ color-scheme:dark}
 .tw-dw-kpi .u{font-size:14px;font-weight:600;margin-left:2px}
 .tw-dw-charts{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
 @media (max-width:999px){.tw-dw-charts{grid-template-columns:minmax(0,1fr)}}
-.tw-dw-chart{display:flex;flex-direction:column;gap:6px;padding:10px;border:1px solid var(--tw-border);border-radius:8px;background:var(--tw-card2);min-width:0}
+.tw-dw-chart{position:relative;display:flex;flex-direction:column;gap:6px;padding:10px;border:1px solid var(--tw-border);border-radius:8px;background:var(--tw-card2);min-width:0}
 .tw-dw-chart-h{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
 .tw-dw-chart-h .t{font-size:13px;font-weight:600}
 .tw-dw-chart-note{margin-left:auto;color:var(--tw-muted);font-size:12px}
 .tw-dw-svg{display:block;width:100%;height:180px}
 .tw-dw-chart-f{color:var(--tw-muted);font-size:12px}
 .tw-dw-tscroll{overflow-x:auto}
+.tw-dw-tip{position:absolute;z-index:5;pointer-events:none;transform:translateY(-100%);padding:4px 8px;border-radius:6px;background:var(--tw-card);border:1px solid var(--tw-border-strong);box-shadow:var(--tw-elev-1);font-size:12px;color:var(--tw-text);white-space:nowrap;font-variant-numeric:tabular-nums}
+.tw-rescue-chart{position:relative}
+.tw-rescue-tip{transform:translateY(-100%);display:none}
+.tw-empty-line{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;max-width:100%}
 .tw-dw-foot{margin-top:10px;color:var(--tw-muted);font-size:12px}
 .tw-dw-table td[title]:focus-visible{outline:1px solid var(--tw-accent);outline-offset:-1px}
 .tw-dw-skel-charts{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}

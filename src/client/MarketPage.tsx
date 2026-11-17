@@ -113,6 +113,7 @@ export function MarketPage(props: {
   const [dwWindow, setDwWindow] = useState<'3m' | '6m' | '1y' | '2y'>('1y')
   const [dogwatch, setDogwatch] = useState<Awaited<ReturnType<typeof api.dogwatch>> | null>(null)
   const [dwErr, setDwErr] = useState<string | null>(null)
+  const [dwTip, setDwTip] = useState<{ x: number; y: number; text: string } | null>(null)
   /**
    * 涨跌家数分布（U3）：依赖从 `quotes`（**对象身份**，每拍都换）改成 `quoteTs`（节拍信号），
    * 并且最小间隔 **60s** —— `dist=1` 会在宿主侧"多扫 ~56 页"，每 10s 重来一次纯属浪费。
@@ -315,16 +316,31 @@ export function MarketPage(props: {
           React.createElement('span', { className: 'l' }, k.label),
           React.createElement('span', { className: 'v' }, k.value),
           React.createElement('span', { className: 's' }, k.sub))))
+      const dwHover = (e: React.MouseEvent<SVGSVGElement>, kind: 'bar' | 'line'): void => {
+        const el = e.currentTarget
+        const r = el.getBoundingClientRect()
+        const vals = kind === 'bar' ? (dwS?.bars ?? []) : (dwS?.line ?? [])
+        if (vals.length === 0 || r.width <= 0) { setDwTip(null); return }
+        const i = Math.max(0, Math.min(vals.length - 1, Math.floor(((e.clientX - r.left) / r.width) * vals.length)))
+        const day = dogwatch?.series[i]?.day ?? '—'
+        const v = vals[i] as number
+        const text = kind === 'bar' ? `${day} 份额变化 ${v.toFixed(1)} 亿份` : `${day} 加仓指数 ${v.toFixed(1)}`
+        /* 翻边：靠右时把提示框放到光标左侧，避免遮挡最新点 */
+        const flip = e.clientX - r.left > r.width - 120
+        setDwTip({ x: (e.clientX - r.left) + (flip ? -12 : 12), y: (e.clientY - r.top) + 12, text })
+      }
+      const dwTipEl = dwTip === null ? null : React.createElement('div', { className: 'tw-dw-tip', style: { left: dwTip.x, top: dwTip.y } }, dwTip.text)
       const dwBarsEl = React.createElement('div', { className: 'tw-dw-chart', 'data-role': 'dw-chart-bars' },
         React.createElement('div', { className: 'tw-dw-chart-h' }, React.createElement('span', { className: 't' }, '汪汪队每日份额变化估算')),
-        React.createElement('svg', { viewBox: `0 0 ${W} ${H}`, preserveAspectRatio: 'none', className: 'tw-dw-svg' },
+        React.createElement('svg', { viewBox: `0 0 ${W} ${H}`, preserveAspectRatio: 'none', className: 'tw-dw-svg', onMouseMove: (e: React.MouseEvent<SVGSVGElement>) => dwHover(e, 'bar'), onMouseLeave: () => setDwTip(null) },
           ...dwBarsOf(dwS ?? dwSeries([]))),
+        dwTipEl,
         React.createElement('div', { className: 'tw-dw-chart-f' }, '单位：亿份 · 柱 = 当日份额变化估算'))
       const dwLineEl = React.createElement('div', { className: 'tw-dw-chart', 'data-role': 'dw-chart-line' },
         React.createElement('div', { className: 'tw-dw-chart-h' },
           React.createElement('span', { className: 't' }, '汪汪队加仓指数估算'),
           React.createElement('span', { className: 'tw-dw-chart-note' }, '基期 = 100')),
-        React.createElement('svg', { viewBox: `0 0 ${W} ${H}`, preserveAspectRatio: 'none', className: 'tw-dw-svg' },
+        React.createElement('svg', { viewBox: `0 0 ${W} ${H}`, preserveAspectRatio: 'none', className: 'tw-dw-svg', onMouseMove: (e: React.MouseEvent<SVGSVGElement>) => dwHover(e, 'line'), onMouseLeave: () => setDwTip(null) },
           ...dwLineOf(dwS ?? dwSeries([]))),
         React.createElement('div', { className: 'tw-dw-chart-f' }, '单位：指数 · 虚线 = 基期 100'))
       const dwTableEl = React.createElement('div', { className: 'tw-dw-tscroll' },
