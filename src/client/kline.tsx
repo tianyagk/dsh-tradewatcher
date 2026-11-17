@@ -301,7 +301,7 @@ export function TrendChart(props: {
   }, [points, innerW, mainH, props.baseline, props.session])
 
   if (view === null) {
-    return React.createElement('div', { className: 'tw-muted', style: { textAlign: 'center', padding: 40 } }, '暂无分时数据')
+    return React.createElement('div', { className: 'tw-muted', style: { textAlign: 'center', padding: 40 } }, '分时未取到数据')
   }
 
   const { xAt, yOf, lo, hi, values, avgs, m, up, barW, ax } = view
@@ -640,7 +640,7 @@ export function KlineChart(props: {
   const m = useMemo(() => macd(closes), [closes])
 
   if (empty) {
-    return React.createElement('div', { className: 'tw-muted', style: { textAlign: 'center', padding: 40 } }, '暂无K线数据')
+    return React.createElement('div', { className: 'tw-muted', style: { textAlign: 'center', padding: 40 } }, '—（K线未取到）')
   }
   const [s, e] = [Math.max(0, Math.min(range[0], bars.length - 2)), Math.min(Math.max(range[1], 2), bars.length)]
   const count = Math.max(1, e - s)
@@ -902,7 +902,7 @@ export function KlineChart(props: {
       ? `（${first.date} 至 ${last.date}）：首收盘 ${fmtAxis(first.close)}，末收盘 ${fmtAxis(last.close)}` +
         (chgPct === null ? '' : `，区间${chgPct >= 0 ? '涨' : '跌'} ${Math.abs(chgPct).toFixed(2)}%`) +
         `，区间最高 ${visHi === null ? '—' : fmtAxis(visHi)}，最低 ${visLo === null ? '—' : fmtAxis(visLo)}`
-      : '（区间内没有数据）') +
+      : '（区间内未取到）') +
     (stats.buyCount + stats.sellCount > 0
       ? `；区间内买入 ${stats.buyCount} 笔、卖出 ${stats.sellCount} 笔，净${stats.netQty >= 0 ? '买入' : '卖出'} ${Math.abs(stats.netQty)} 股`
       : '；区间内没有买卖点') +

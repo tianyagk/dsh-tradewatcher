@@ -124,7 +124,7 @@ function StatCard(props: { card: ClockCard }): React.ReactElement {
       React.createElement('span', { className: `tw-clock-stat-pct ${c.pct.startsWith('-') ? 'down' : c.pct === '—' ? 'muted' : 'up'}` }, c.pct)),
     React.createElement('div', { className: 'tw-clock-stat-meta' },
       React.createElement('span', null, c.source), React.createElement('span', null, c.at),
-      React.createElement('span', { className: `tw-clock-pill ${empty ? 'off' : 'on'}` }, empty ? '无数据' : '正常')),
+      React.createElement('span', { className: `tw-clock-pill ${empty ? 'off' : 'on'}` }, empty ? '未取到' : '正常')),
     empty ? React.createElement('div', { className: 'tw-clock-stat-reason' }, c.reason ?? '') : null,
   )
 }

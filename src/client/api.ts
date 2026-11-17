@@ -315,7 +315,7 @@ export async function requestWithTimeout<T>(path: string, init?: RequestInit, ti
   } catch (error) {
     // 超时与"网络真的断了"是两个原因：前者稍后重试就好，后者要查网络/宿主
     if (sig.timedOut()) throw new ApiError(`请求超时（${Math.max(1, Math.round(timeoutMs / 1000))} 秒未响应）`, 0)
-    throw new ApiError(`网络错误: ${error instanceof Error ? error.message : String(error)}`, 0)
+    throw new ApiError(`网络请求失败: ${error instanceof Error ? error.message : String(error)}`, 0)
   } finally {
     sig.clear()
   }
@@ -511,7 +511,7 @@ async function runSelftest(path: string): Promise<{ ok: boolean; error: string |
     const raw = await res.text()
     return parseSelftestBody(res.status, raw)
   } catch (error) {
-    const why = sig.timedOut() ? '超时/网络错误（30 秒未响应）' : `超时/网络错误（${error instanceof Error ? error.message : String(error)}）`
+    const why = sig.timedOut() ? '超时/网络请求失败（30 秒未响应）' : `超时/网络请求失败（${error instanceof Error ? error.message : String(error)}）`
     return { ok: false, error: why, model: null, elapsedMs: 0, text: null, chunks: [] }
   } finally {
     sig.clear()

@@ -544,7 +544,7 @@ function Dashboard(): React.ReactElement {
       onCycleViewMode: cycleViewMode,
     }),
     engine.error !== null
-      ? React.createElement('div', { className: 'tw-hint', style: { padding: '0 10px 2px' } }, `行情接口暂时不可用：${engine.error}`)
+      ? React.createElement('div', { className: 'tw-hint', style: { padding: '0 10px 2px' } }, `行情接口暂时未取到：${engine.error}`)
       : null,
     // tab 全被关掉时**不渲染整个 tab 条**（不留空壳）
     visibleTabs.length === 0

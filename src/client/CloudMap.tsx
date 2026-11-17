@@ -117,7 +117,7 @@ export function CloudMap(props: {
       ? React.createElement('div', { className: 'tw-placeholder' },
           React.createElement('div', {}, `无法在 ${TIMEOUT_MS / 1000} 秒内加载 ${CLOUD_MAP_HOST}`),
           React.createElement('div', { className: 'tw-hint', style: { margin: '4px 0 0' } },
-            `可能是本机网络不通，或该第三方站点暂时不可用（本插件无法区分二者，也不会去抓取它的内容）。最后成功加载：${lastOkText}`,
+            `可能是本机网络不通，或该第三方站点暂时未取到（本插件无法区分二者，也不会去抓取它的内容）。最后成功加载：${lastOkText}`,
           ),
         )
       : null,

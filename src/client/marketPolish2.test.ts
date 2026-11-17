@@ -10,7 +10,7 @@ const read = (p: string): string => readFileSync(join(HERE, p), 'utf8')
 
 test('③ 单列铺满：`.tw-mk-single` 一列，旧的左右列类已删（残留 ⇒ 败）', () => {
   const css = read('styles.ts')
-  assert.ok(/\.tw-mk-single\{display:grid;grid-template-columns:1fr;gap:12px\}/.test(css), '必须单列铺满')
+  assert.ok(/\.tw-mk-single\{display:grid;grid-template-columns:1fr;gap:16px\}/.test(css), '必须单列铺满')
   assert.equal(/\.tw-mk-col-[lr]/.test(css), false, '左右列专属样式必须删干净')
   const page = read('MarketPage.tsx')
   assert.equal(page.includes('tw-mk-col tw-mk-col-l'), false)

@@ -339,7 +339,7 @@ export function monthBodyStateOf(input: {
  * 「怎么加一条」「怎么钉到」由界面本身的控件承担，不再写说明段。
  */
 export function emptyMonthTextOf(): { title: string } {
-  return { title: '本月暂无笔记' }
+  return { title: '本月未取到笔记' }
 }
 
 export function emptyDayTextOf(): { title: string } {
@@ -369,7 +369,7 @@ export function monthFailTextOf(err: unknown, afterWrite = false): string {
 }
 
 export function monthFailHintOf(): string {
-  return '这不是「本月暂无笔记」：月历没取到时，该月有没有笔记是「未知」的。点「重试」再取一次。'
+  return '这不是「本月未取到笔记」：月历没取到时，该月有没有笔记是「未知」的。点「重试」再取一次。'
 }
 
 export type WriteOp = 'create' | 'update' | 'delete' | 'pin'

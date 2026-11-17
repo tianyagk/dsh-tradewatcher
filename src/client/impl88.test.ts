@@ -131,7 +131,7 @@ test('② 图例 title/aria-label 仍含「法定调休」（删掉 ⇒ 必败�
 /** 判据：空态只有一行短句（不许再跟说明句），且页面真的渲染它 */
 function emptyStateProblems(pageSrc: string, month: { title: string }, day: { title: string }): string[] {
   const bad: string[] = []
-  if (month.title !== '本月暂无笔记') bad.push(`月历空态短句必须是「本月暂无笔记」（实际「${month.title}」）`)
+  if (month.title !== '本月未取到笔记') bad.push(`月历空态短句必须是「本月未取到笔记」（实际「${month.title}」）`)
   if (day.title !== '这一天还没有笔记') bad.push(`右栏空态短句必须是「这一天还没有笔记」（实际「${day.title}」）`)
   if ('hint' in month || 'hint' in day) bad.push('空态不许再带说明句（只留一行短句）')
   if (!/emptyMonthTextOf\(\)\.title/.test(pageSrc)) bad.push('月历空态必须仍在页面上渲染那一行短句')
@@ -144,7 +144,7 @@ test('③ 空态仍有一行短句（连空态一起删 ⇒ 必败）', () => {
   // 反例注入 A：短句被写空 ⇒ 判据必须失败
   assert.notDeepEqual(emptyStateProblems(PAGE, { title: '' }, { title: '' }), [], '⚠ 反例（空态写空）必须被抓住')
   // 反例注入 B：仍带说明句（hint 回来了）⇒ 判据必须失败
-  assert.notDeepEqual(emptyStateProblems(PAGE, { title: '本月暂无笔记', hint: '点月历里任意一天' } as unknown as { title: string }, emptyDayTextOf()), [], '⚠ 反例（说明句回来）必须被抓住')
+  assert.notDeepEqual(emptyStateProblems(PAGE, { title: '本月未取到笔记', hint: '点月历里任意一天' } as unknown as { title: string }, emptyDayTextOf()), [], '⚠ 反例（说明句回来）必须被抓住')
   // 反例注入 C：把空态分支整段删掉（只剩网格）⇒ 判据必须失败
   const noEmpty = PAGE.replace("? React.createElement(EmptyHint, null,\n                  React.createElement('span', { style: { fontWeight: 600, display: 'block' } }, emptyMonthTextOf().title),\n                )", ': null')
   assert.notEqual(noEmpty, PAGE, '反例注入必须真改到源码')

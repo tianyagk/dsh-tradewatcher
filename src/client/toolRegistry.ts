@@ -364,7 +364,7 @@ export function detailModel(entry: ToolEntry, data: ToolData | null = null): Det
   const curveDrawn = curveProblems.length === 0
   const curveEmpty = curveDrawn
     ? emptyOf()
-    : `${NOT_FETCHED}：这一屏的曲线超过上限（${curveProblems.join('；')}）⇒ 不绘制 —— 截断会悄悄少画，读者会把缺线读成"没有数据"`
+    : `${NOT_FETCHED}：这一屏的曲线超过上限（${curveProblems.join('；')}）⇒ 不绘制 —— 截断会悄悄少画，读者会把缺线读成"未取到"`
   return {
     id: entry.id,
     title: entry.name,

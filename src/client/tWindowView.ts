@@ -74,7 +74,7 @@ export function tWindowOf(input: {
   const avg = input.avg
   if (typeof avg !== 'number' || !Number.isFinite(avg) || !(avg > 0)) return { reason: '当日均价未取到（分时序列没有均价线）' }
   const atrPct = input.atrPct
-  if (typeof atrPct !== 'number' || !Number.isFinite(atrPct) || !(atrPct > 0)) return { reason: 'ATR14 未取到（日K 不足或上游不可用）⇒ 不用默认值顶替' }
+  if (typeof atrPct !== 'number' || !Number.isFinite(atrPct) || !(atrPct > 0)) return { reason: 'ATR14 未取到（日K 不足或上游未取到）⇒ 不用默认值顶替' }
   const bands = tWindowBandsOf(atrPct)
   const ampRaw = input.ampPct
   const ampPct = typeof ampRaw === 'number' && Number.isFinite(ampRaw) && ampRaw > 0 ? ampRaw : null

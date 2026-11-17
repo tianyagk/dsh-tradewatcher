@@ -536,7 +536,7 @@ export function globalFlowToolData(payload: GlobalFlowPayloadDto, step = 0, rang
     : payload.source === 'fallback'
       ? `上游全部失败 ⇒ 快照回退${payload.fallbackDay === null ? '' : `（${payload.fallbackDay}）`}，不是实时值`
       : allMissing
-        ? '上游本次全部失败，且本地还没有任何快照 ⇒ 这一屏没有数据（逐行原因见下）'
+        ? '上游本次全部失败，且本地还没有任何快照 ⇒ 这一屏未取到（逐行原因见下）'
         : null
   /**
    * 「另有 N 天旧口径快照已作废」：**不再常驻**（用户口径：一次性迁移说明不该占常驻行）。
@@ -556,7 +556,7 @@ export function globalFlowToolData(payload: GlobalFlowPayloadDto, step = 0, rang
       : payload.source === 'fallback'
         ? `本次上游全部失败 ⇒ 下表与曲线来自最近一次本地快照${payload.fallbackDay === null ? '' : `（${payload.fallbackDay}）`}，不是实时值`
         : allMissing
-          ? '上游本次全部失败，且本地还没有任何快照 ⇒ 这一屏没有数据（逐行原因见市场表下方）'
+          ? '上游本次全部失败，且本地还没有任何快照 ⇒ 这一屏未取到（逐行原因见市场表下方）'
           : '上游现取（宿主三层 TTL：现价类 30 分钟 / 日线 12 小时 / 载荷 10 分钟）',
     `曲线 ${points.length} 个序列日（实测 ${points.filter((p) => p.origin === 'observed').length} / 重建 ${points.filter((p) => p.origin === 'rebuilt').length}）`,
     `窗口 ${points.length} / 可选 ${(payload.curve.windowOptions ?? [payload.curve.window]).join(' / ')} 个序列日`,

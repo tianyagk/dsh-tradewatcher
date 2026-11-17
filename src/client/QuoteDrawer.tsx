@@ -341,11 +341,11 @@ export function QuoteDrawer(props: {
         return React.createElement('div', null,
           React.createElement('div', { className: 'tw-hint tw-hint-icon' },
             React.createElement(NoteIcon, {
-              reason: '详情不可用 · 上游限流，稍后自动重试',
+              reason: '详情未取到 · 上游限流，稍后自动重试',
               detail: long,
               onRetry: () => setRetry((x) => x + 1),
             }),
-            React.createElement('span', { className: 'tw-muted' }, '详情暂不可用'),
+            React.createElement('span', { className: 'tw-muted' }, '详情未取到'),
           ),
           // 竞价不依赖东财：详情挂了它照常显示（其余字段给 —）
           infoGrid(null),
@@ -359,7 +359,7 @@ export function QuoteDrawer(props: {
             infoNote.why === 'no-source'
               ? React.createElement(NoteIcon, { reason: '该标的无详情字段（重试无用）', detail: infoNote.note })
               : React.createElement(NoteIcon, { reason: '上游限流，稍后自动重试', detail: infoNote.note, onRetry: () => setRetry((x) => x + 1) }),
-            React.createElement('span', { className: 'tw-muted' }, infoNote.why === 'no-source' ? '详情不可用' : '详情暂不可用'),
+            React.createElement('span', { className: 'tw-muted' }, infoNote.why === 'no-source' ? '详情未取到' : '详情未取到'),
           ),
           infoGrid(null),
           auctionSpark(auction),
@@ -820,7 +820,7 @@ export function QuoteDrawer(props: {
       ),
       // ATR 取不到时**只给一句原因**（不画任何网格节点，不用默认值顶替）
       props.tWindowOn === true && tReason !== null
-        ? React.createElement('div', { className: 'tw-muted', style: { fontSize: 12, padding: '2px 0 0' }, role: 'note' }, `做T 不可用：${tReason}`)
+        ? React.createElement('div', { className: 'tw-muted', style: { fontSize: 12, padding: '2px 0 0' }, role: 'note' }, `做T 未取到：${tReason}`)
         : null,
       React.createElement('div', { ref: containerRef, className: 'tw-drawer-body' },
         caliber !== ''

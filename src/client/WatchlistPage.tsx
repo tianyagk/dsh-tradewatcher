@@ -268,7 +268,7 @@ export function WatchlistPage(props: {
           ),
           alerts.alerts.length === 0 && alerts.suppressed.length === 0
             ? React.createElement('div', { className: 'tw-hint', style: { margin: 0 } },
-                alerts.calm > 0 ? `${alerts.calm} 条已判定、均无异常。` : '本轮没有可判定的条目。')
+                alerts.calm > 0 ? `${alerts.calm} 条已判定、均正常。` : '本轮没有可判定的条目。')
             : React.createElement('div', null,
                 ...alerts.alerts.map((a) =>
                   React.createElement('div', { key: a.secid, className: 'tw-wrow', style: { borderTop: '1px solid var(--tw-border)', padding: '4px 2px', cursor: 'pointer' }, onClick: () => openDetail(a.secid, a.name) },
@@ -298,7 +298,7 @@ export function WatchlistPage(props: {
                 `${alerts.missing.length} 条未取到日线：${alerts.missing[0].note}`)
             : null,
           alerts.error !== null
-            ? React.createElement('div', { className: 'tw-hint', style: { color: 'var(--tw-up)' } }, `异动判定接口不可用：${alerts.error}`)
+            ? React.createElement('div', { className: 'tw-hint', style: { color: 'var(--tw-up)' } }, `异动判定接口未取到：${alerts.error}`)
             : null,
         )
       : null,
@@ -319,7 +319,7 @@ export function WatchlistPage(props: {
     // v0.69.1：「YTD 缺 N 项」整块**已删** —— 行内已经显示 `YTD —`（`ytdText()` 的缺失态），
     // 事实在受影响的那一格上直接可见，不需要再来一行汇总（用户要求减少常驻提示）。
     active.length === 0
-      ? React.createElement(EmptyHint, { action: React.createElement(Btn, { primary: true, onClick: () => setModal({ kind: 'addGroup' }) }, '+ 新建分组') }, '暂无自选分组：新建分组后，往组里添加证券（支持搜索代码/名称）。')
+      ? React.createElement(EmptyHint, { action: React.createElement(Btn, { primary: true, onClick: () => setModal({ kind: 'addGroup' }) }, '+ 新建分组') }, '—（还没有自选分组：新建分组后，往组里添加证券（支持搜索代码/名称））')
       : null,
     active.map((g) => {
       // 排序在分组内生效；无行情/无市值的条目恒沉底（见 sort.ts）

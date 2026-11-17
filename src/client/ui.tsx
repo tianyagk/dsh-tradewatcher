@@ -177,7 +177,7 @@ export function SuggestInput(props: {
         setHits([])
         setMeta(null)
         // 失败**照样打开**并把原因写出来（空列表 + 关掉弹层会被读成"就是没有匹配"）
-        setReason(`搜索未取到 —— ${e.message}（上游不可用时按缓存与限流自动重试）`)
+        setReason(`搜索未取到 —— ${e.message}（上游未取到时按缓存与限流自动重试）`)
         setActive(-1)
         setOpen(true)
       })
@@ -405,7 +405,7 @@ export function SuggestInput(props: {
                         h.hasFallback === false
                           ? React.createElement('span', {
                               className: 'tw-badge',
-                              title: '腾讯/新浪都没有该标的的映射：东财行情主机不可用时，它不会有价格（加入后会在自选里显示「无行情源」）',
+                              title: '腾讯/新浪都没有该标的的映射：东财行情主机未取到时，它不会有价格（加入后会在自选里显示「无行情源」）',
                               style: { fontSize: 12, color: 'var(--tw-warn)' },
                             }, '仅东财源')
                           : null,

@@ -458,7 +458,7 @@ export function PortfolioPage(props: {
         )
       : null,
     activeGroups.length === 0
-      ? React.createElement(EmptyHint, { action: React.createElement(Btn, { primary: true, onClick: () => setModal({ kind: 'addGroup' }) }, '+ 新建分组') }, '暂无持仓分组：新建分组 → 添加持仓 → 用「买/卖」录入流水。')
+      ? React.createElement(EmptyHint, { action: React.createElement(Btn, { primary: true, onClick: () => setModal({ kind: 'addGroup' }) }, '+ 新建分组') }, '—（还没有持仓分组：新建分组 → 添加持仓 → 用「买/卖」录入流水）')
       : null,
     activeGroups.map((grp) => {
       // 排序在分组内生效；盈亏键跟随当前口径（摊薄=持仓盈亏 / 均价=浮动盈亏），
@@ -1010,7 +1010,7 @@ function LedgerModal(props: {
     props.entries === null
       ? React.createElement('div', { className: 'tw-loading' }, '加载流水…')
       : rows.length === 0
-        ? React.createElement('div', { className: 'tw-muted' }, '暂无记录。')
+        ? React.createElement('div', { className: 'tw-muted' }, '—（没有流水记录）')
         : React.createElement('div', { className: 'tw-scroll', style: { maxHeight: '58vh', overflow: 'auto' } },
             rows.map((r) => {
               // 静态高亮：只加底色条（`data-focus`）+ 读屏的 aria-current，无动效、不闪烁
@@ -1304,7 +1304,7 @@ function FxModal(props: {
       if (t === '') continue
       const n = Number(t)
       if (!Number.isFinite(n) || n < 0.01 || n > 100) {
-        setErr(`${cur === 'HKD' ? '港元' : '美元'}汇率需要在 0.01–100 之间（填错数量级会得到完全错误的人民币市值）`)
+        setErr(`${cur === 'HKD' ? '港元' : '美元'}汇率需要在 0.01–100 之间（填错数量级会得到完全偏离的人民币市值）`)
         return
       }
       rates[cur] = n
@@ -1353,7 +1353,7 @@ function FxModal(props: {
         )
       : null,
     React.createElement('div', { className: 'tw-hint' },
-      '实时汇率暂不可用：汇率源尚未验证连通性与字段口径（中间价还是即期、符号怎么写都没有确认）。' +
+      '实时汇率暂未取到：汇率源尚未验证连通性与字段口径（中间价还是即期、符号怎么写都没有确认）。' +
       '本插件不猜字段 —— 填一个你认可的汇率，比拿一条可能解析错的数据去算人民币市值安全得多。',
     ),
   )

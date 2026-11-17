@@ -65,7 +65,7 @@ test('② 降级事实仍可达：原因挂在「板块 —」「α —」的 ti
   assert.ok(/17:38:06/.test(s1), `要带失败时刻，且**一律北京时间**（TZ=UTC 下也得是 17:38:06，实际 ${s1}）`)
   assert.ok(s1.includes('自动重试'), '要说明会自己重试（不必用户做什么）')
   assert.equal(indReasonOf({ at: null, error: null }).includes('时刻未知'), true, '没有时刻时如实写"时刻未知"')
-  assert.equal(indReasonOf({ at: null, error: null }).includes('上游不可用'), true, '没有原因时给通用词（不留空）')
+  assert.equal(indReasonOf({ at: null, error: null }).includes('上游未取到'), true, '没有原因时给通用词（不留空）')
   // 接线：两格 × (title + aria-label) = 4 处
   const hits = src.match(/\$\{indReasonOf\(indState\)\}/g) ?? []
   assert.equal(hits.length, 4, `原因必须同时出现在两格的 title 与 aria-label（实际 ${hits.length} 处）`)

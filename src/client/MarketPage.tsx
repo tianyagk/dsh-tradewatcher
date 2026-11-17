@@ -375,7 +375,7 @@ export function MarketPage(props: {
               React.createElement('button', {
                 'data-on': sort === 'amount',
                 disabled: !boardMoneyOk,
-                title: boardMoneyOk ? undefined : '当前数据来自备用源（不含成交额字段），该排序暂不可用；东财恢复后自动可用',
+                title: boardMoneyOk ? undefined : '当前数据来自备用源（不含成交额字段），该排序暂未取到；东财恢复后自动可用',
                 onClick: () => { if (boardMoneyOk) setSort('amount') },
               }, '成交额'),
             )
@@ -384,7 +384,7 @@ export function MarketPage(props: {
               React.createElement('button', {
                 'data-on': sort === 'money',
                 disabled: !boardMoneyOk,
-                title: boardMoneyOk ? undefined : '当前数据来自备用源（不含主力净额字段），该排序暂不可用；东财恢复后自动可用',
+                title: boardMoneyOk ? undefined : '当前数据来自备用源（不含主力净额字段），该排序暂未取到；东财恢复后自动可用',
                 onClick: () => { if (boardMoneyOk) setSort('money') },
               }, '主力资金'),
             ),
@@ -429,8 +429,8 @@ export function MarketPage(props: {
       boardMeta !== null && (boardMeta.stale === true || boardMeta.source === 'tencent' || boardMeta.source === 'sina')
         ? React.createElement('div', { className: 'tw-hint', style: { padding: '2px 2px 4px' } },
             boardMeta.source === 'tencent' || boardMeta.source === 'sina'
-              ? `东财行情接口暂不可用，${boardMeta.source === 'sina' ? 'ETF 排行来自新浪备用源' : '板块涨跌来自腾讯备用源'}；`
-              : `东财行情接口暂不可用，显示上次成功数据（${boardMeta.asOf !== undefined ? shClockText(boardMeta.asOf).slice(0, 5) : '—'}）；`,
+              ? `东财行情接口暂未取到，${boardMeta.source === 'sina' ? 'ETF 排行来自新浪备用源' : '板块涨跌来自腾讯备用源'}；`
+              : `东财行情接口暂未取到，显示上次成功数据（${boardMeta.asOf !== undefined ? shClockText(boardMeta.asOf).slice(0, 5) : '—'}）；`,
             scope === 'etf' ? 'ETF 排行的备用源不含资金流。' : '「主力净流入」仅东财提供，备用源下显示为 —。',
           )
         : null,

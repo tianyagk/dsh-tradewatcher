@@ -178,7 +178,7 @@ export function PrismPage(props: { active: boolean }): React.ReactElement {
   }
   const selfTest = (): void => {
     setBusy(true)
-    api.prismSelftest().then(setSelftest).catch((e: Error) => setSelftest({ ok: false, error: `超时/网络错误（${e.message}）`, model: null, elapsedMs: 0, text: null })).finally(() => setBusy(false))
+    api.prismSelftest().then(setSelftest).catch((e: Error) => setSelftest({ ok: false, error: `超时/网络请求失败（${e.message}）`, model: null, elapsedMs: 0, text: null })).finally(() => setBusy(false))
   }
 
   const onSeparatorDown = (ev: React.PointerEvent<HTMLDivElement>): void => {
@@ -426,7 +426,7 @@ export function PrismPage(props: { active: boolean }): React.ReactElement {
                   {expTop.map((r) => <tr key={r.name}><td>{r.name}{r.family === null || r.family === undefined ? null : <span className="tw-prism-muted"> · {r.family}</span>}</td><td className="tw-prism-num tw-prism-mono">{PRISM_MONEY(r.value)}</td><td className="tw-prism-num tw-prism-mono">{r.weight.toFixed(2)}%</td><td className="tw-prism-num"><input key={`${r.name}:${r.limitPct ?? 'none'}`} className="tw-prism-limitinput" aria-label={`${r.name}行业上限`} defaultValue={r.limitPct === null ? '' : String(r.limitPct)} placeholder="—" onBlur={(e) => { if (e.target.value.trim() !== '') saveIndustryLimit(r.name, e.target.value) }} onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur() }} /></td><td className={r.status === '超限' ? 'up' : ''}>{r.status}</td></tr>)}
                   {expRest.length > 0 ? <tr><td>其余 {expRest.length} 行</td><td className="tw-prism-num tw-prism-mono">{PRISM_MONEY(expRest.reduce((s, r) => s + r.value, 0))}</td><td className="tw-prism-num tw-prism-mono">{expRestWeight.toFixed(2)}%</td><td className="tw-prism-num">—</td><td>正常</td></tr> : null}
                   {expFixed.map((r) => <tr key={r.name}><td>{r.name}</td><td className="tw-prism-num tw-prism-mono">{PRISM_MONEY(r.value)}</td><td className="tw-prism-num tw-prism-mono">{r.weight.toFixed(2)}%</td><td className="tw-prism-num">—</td><td>{r.status}</td></tr>)}
-                  {exposureOk ? null : <tr><td colSpan={5} className="tw-prism-muted">—（{exposure.reason ?? '行业数据不可用'}）</td></tr>}
+                  {exposureOk ? null : <tr><td colSpan={5} className="tw-prism-muted">—（{exposure.reason ?? '行业数据未取到'}）</td></tr>}
                 </tbody>
               </table>
             </section>

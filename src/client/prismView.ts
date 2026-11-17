@@ -9,7 +9,7 @@ export const PRISM_FONT = { body: 12, title: 14 } as const
 
 export function newsStatusText(s: PrismNewsStatus | null | undefined): string {
   if (s === null || s === undefined) return '—（尚未取到新闻状态）'
-  if (s.state === 'error') return `—（${s.reason ?? '新闻源不可用'}）`
+  if (s.state === 'error') return `—（${s.reason ?? '新闻源未取到'}）`
   if (s.state === 'backfilling') return `回填中（已 ${s.pages} 页）`
   if (s.state === 'idle') return '—（尚未回填）'
   return `${s.items} 条 · 最近更新 ${s.fetchedAt === null ? '—' : shStampText(s.fetchedAt)}`

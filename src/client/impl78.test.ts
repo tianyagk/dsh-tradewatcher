@@ -85,7 +85,7 @@ test('P2-1 请求超时：挂起的 fetch 必须被 abort 并以「请求超时�
     globalThis.fetch = (() => Promise.reject(new Error('ECONNREFUSED'))) as unknown as typeof fetch
     await assert.rejects(
       requestWithTimeout('/tradewatcher/quotes', undefined, 500),
-      (e: unknown) => e instanceof ApiError && /网络错误/.test(e.message),
+      (e: unknown) => e instanceof ApiError && /网络请求失败/.test(e.message),
     )
   } finally {
     globalThis.fetch = realFetch

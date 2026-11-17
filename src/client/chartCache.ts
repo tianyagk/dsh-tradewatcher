@@ -101,7 +101,7 @@ export function unavailableBlockOf(missing: readonly MissingField[] | undefined)
   const whyLabel = noSource ? '上游无此数据' : '未取到'
   return {
     headline: '该周期未取到',
-    reason: `${m.what}不可用（${noSource ? '上游无此数据，重试无用' : '未取到，等它恢复'}）：${m.note}`,
+    reason: `${m.what}未取到（${noSource ? '上游无此数据，重试无用' : '未取到，等它恢复'}）：${m.note}`,
     whyLabel,
   }
 }

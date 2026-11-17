@@ -218,7 +218,7 @@ color-scheme:dark}
 .tw-tab[data-on=true]::before{opacity:1}
 
 /* ── body & panels ─────────────────────────────────────── */
-.tw-body{display:flex;flex-direction:column;gap:12px;padding:10px;overflow:auto;flex:1;min-height:0}
+.tw-body{display:flex;flex-direction:column;gap:16px;padding:10px;overflow:auto;flex:1;min-height:0}
 /* flex 纵向容器里子块默认会被压缩（overflow:hidden 的卡片尤其会"缩扁"导致内容裁切且无滚动条）：
    禁止压缩，超高内容自然溢出由 .tw-body 滚动。 */
 .tw-body > *{flex-shrink:0}
@@ -958,7 +958,7 @@ color-scheme:dark}
 /* ── 汪汪队跟踪（dogwatch）───────────────────────────────────────────── */
 .tw-mk-v{font-size:22px;line-height:1.15;font-variant-numeric:tabular-nums;font-family:var(--tw-mono)}
 .tw-idx-grid .tw-mk-v,.tw-fut-grid .tw-mk-v{font-size:22px}
-.tw-mk-single{display:grid;grid-template-columns:1fr;gap:12px}
+.tw-mk-single{display:grid;grid-template-columns:1fr;gap:16px}
 .tw-mk-col{display:flex;flex-direction:column;gap:6px;min-width:0}
 .tw-mk-cell{padding:8px;border-radius:8px;background:var(--tw-card-2)}
 .tw-mk-l{font-size:12px;color:var(--tw-muted);margin-top:0}
@@ -974,7 +974,7 @@ color-scheme:dark}
 .tw-mk-dist i[data-dir=up]{background:var(--tw-up)}
 .tw-mk-dist i[data-dir=down]{background:var(--tw-down)}
 .tw-mk-dist i[data-dir=flat]{background:var(--tw-muted)}
-.tw-dw-body{display:flex;flex-direction:column;gap:8px}
+.tw-dw-body{display:flex;flex-direction:column;gap:12px}
 .tw-dw-review{display:flex;align-items:flex-end;gap:12px;padding:12px 12px 10px;border:1px solid var(--tw-border);border-radius:8px;background:var(--tw-card2)}
 .tw-dw-review-main{display:flex;flex-direction:column;gap:2px}
 .tw-dw-review-day{color:var(--tw-muted);font-size:12px;font-variant-numeric:tabular-nums}

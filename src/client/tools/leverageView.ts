@@ -704,7 +704,7 @@ export function leverageChartProblems(chart: LeverageChart, payload: LeveragePay
     if (zeroLines.length !== 1) bad.push(`有柱时必须有且只有一条零轴（实得 ${zeroLines.length}）`)
     if (barMax.length !== 1 || barMin.length !== 1) bad.push(`柱区必须有独立的 ± 小轴（上下界各一个数字；实得 ${barMax.length}/${barMin.length}）`)
   } else {
-    if (zeroLines.length > 0) bad.push('没有柱时不许画零轴（那一格没有数据）')
+    if (zeroLines.length > 0) bad.push('没有柱时不许画零轴（那一格未取到）')
     if (barMax.length > 0 || barMin.length > 0) bad.push('没有柱时不许画柱区小轴')
   }
 

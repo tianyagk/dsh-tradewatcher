@@ -311,7 +311,7 @@ export function CalendarPage(_props: { prefs: PortPrefs }): React.ReactElement {
     React.createElement('div', { className: 'tw-panel' },
       React.createElement('div', { className: 'tw-panel-h' }, React.createElement('span', { className: 't' }, '即将到来')),
       upcoming.length === 0
-        ? React.createElement('div', { className: 'tw-muted', style: { padding: 10 } }, '本区间暂无未来事件（可切换月份或点「同步」拉取新股/财报/分红）')
+        ? React.createElement('div', { className: 'tw-muted', style: { padding: 10 } }, '本区间未取到未来事件（可切换月份或点「同步」拉取新股/财报/分红）')
         : upcoming.map((e) =>
             React.createElement('div', { key: e.id, className: 'tw-wrow', style: { cursor: 'pointer' }, onClick: () => setDayOpen(e.date) },
               React.createElement('span', { className: 'tw-muted', style: { fontFamily: 'var(--tw-mono)', fontSize: 12 } }, e.date),

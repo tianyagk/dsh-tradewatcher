@@ -1,5 +1,5 @@
 /**
- * ⑤ 行业缺失时必须 `—` + 原因（写 0 / 空串 ⇒ 败）；并钉住「详情暂不可用」只出现在
+ * ⑤ 行业缺失时必须 `—` + 原因（写 0 / 空串 ⇒ 败）；并钉住「详情未取到」只出现在
  * `detail === null` 分支里（东财失败但腾讯兜底成功时，页面不得再显示那句话）。
  */
 import { test } from 'node:test'
@@ -25,18 +25,18 @@ test('⑤ 行业缺失 ⇒ `—` + 「东财不可达，行业归属暂缺」（
   assert.throws(() => assert.equal(industryCellOf(null, 'tencent', pct).value, '0', '反例上：0'), /反例上/, '⚠ 反例注入（0）必须失败')
 })
 
-test('④ 页面：「详情暂不可用」只在 detail === null 分支里（兜底成功时不得显示）', () => {
+test('④ 页面：「详情未取到」只在 detail === null 分支里（兜底成功时不得显示）', () => {
   const src = readFileSync(join(here, 'QuoteDrawer.tsx'), 'utf8')
   const guard = src.indexOf('if (detail === null)')
-  const text = src.indexOf('详情暂不可用')
+  const text = src.indexOf('详情未取到')
   assert.ok(guard > 0, '必须有 detail === null 分支')
-  assert.ok(text > guard, '「详情暂不可用」必须写在 detail === null 分支之后')
+  assert.ok(text > guard, '「详情未取到」必须写在 detail === null 分支之后')
   // 兜底成功路径必须走 infoGrid(d)
   assert.ok(src.includes('const d = detail'), '非空分支必须有 const d = detail')
   assert.ok(src.includes('infoGrid(d)'), '非空分支必须渲染真实字段')
   // 反例注入：把这句话挪到守卫之前 ⇒ 判据必须失败
-  const injected = '详情暂不可用\n' + src
-  assert.throws(() => assert.ok(injected.indexOf('详情暂不可用') > injected.indexOf('if (detail === null)'), '反例上：文案在守卫之前'), /反例上/, '⚠ 反例注入必须失败')
+  const injected = '详情未取到\n' + src
+  assert.throws(() => assert.ok(injected.indexOf('详情未取到') > injected.indexOf('if (detail === null)'), '反例上：文案在守卫之前'), /反例上/, '⚠ 反例注入必须失败')
 })
 
 test('⑥ 详情头成交量：量纲不一致 ⇒ `—` + 「量纲不一致」（显示错值 ⇒ 败）', () => {

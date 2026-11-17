@@ -541,7 +541,7 @@ test('⑤ 逐日边界价：切日 ⇒ 翻转点随之移动；与宿主 profitR
   assert.ok(missing.note !== null && missing.note.includes('未带 price'), `回退必须**留痕**（不静默）：${missing.note}`)
   const bad = chipsDayPriceOf({ dayPrice: null, topPriceUsed: 20 })
   assert.equal(bad.price, 20, 'price 为 null 也回退')
-  assert.ok(bad.note !== null && bad.note.includes('不可用'), 'null 的回退原因要和"字段缺失"区分')
+  assert.ok(bad.note !== null && bad.note.includes('未取到'), 'null 的回退原因要和"字段缺失"区分')
   assert.deepEqual(chipsDayPriceOf({ dayPrice: null, topPriceUsed: null }), { price: null, fallback: false, note: null },
     '两个价都没有 ⇒ null（界面按"未取到"处理，不猜一个价）')
 

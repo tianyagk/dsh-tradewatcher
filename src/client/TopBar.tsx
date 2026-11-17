@@ -152,7 +152,7 @@ function HoverCard(props: {
             className: kind === 'error' ? 'tw-error' : 'tw-loading',
             style: { height: 150, display: 'flex', flexDirection: 'column', gap: 6, justifyContent: 'center', padding: '0 12px' },
           },
-            React.createElement('span', null, kind === 'error' ? '走势获取失败' : '暂无当日走势数据'),
+            React.createElement('span', null, kind === 'error' ? '走势获取失败' : '—（当日走势未取到）'),
             // P1-2：原因就地显示（短句常驻、长解释进 title / aria-label，键盘与读屏都能拿到）
             reason !== null
               ? React.createElement('span', {

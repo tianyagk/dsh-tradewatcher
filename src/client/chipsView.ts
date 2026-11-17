@@ -239,7 +239,7 @@ export function chipsDayPriceOf(input: { dayPrice?: number | null; topPriceUsed:
       fallback: true,
       note: input.dayPrice === undefined
         ? `该展示日未带 price（老宿主）⇒ 回退顶层现价 ${top}：柱色与该日盈利比例可能不同源`
-        : `该展示日 price 不可用（${String(input.dayPrice)}）⇒ 回退顶层现价 ${top}：柱色与该日盈利比例可能不同源`,
+        : `该展示日 price 未取到（${String(input.dayPrice)}）⇒ 回退顶层现价 ${top}：柱色与该日盈利比例可能不同源`,
     }
   }
   return { price: null, fallback: false, note: null }
