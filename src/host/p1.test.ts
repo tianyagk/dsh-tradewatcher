@@ -37,11 +37,11 @@ test('P1-5 可用数量：A股当日买入部分不计入可用（T+1）', () =>
   // 昨天买 1000、今天再买 200 → 持有 1200、可用 1000。
   // 时点用相对时间构造：assemblePortfolio 内部按"北京当日 00:00"切分当日成交，
   // 因此"昨日"取 now-36h、"今日买入"取 max(今日 00:00, now-1h) —— 两者都晚于各自的日界。
-  const now = Date.now()
-  const day0 = Date.parse(new Date(now - 8 * 3_600_000).toISOString().slice(0, 10) + 'T00:00:00+08:00')
-  const entries: LedgerEntry[] = [buy(day0 - 86_400_000, 1000, 10, 5), buy(Math.max(day0, now - 3_600_000), 200, 11, 5)]
+  // 固定「现在」为北京 2026-11-19 10:00，避免 00:00–08:00 跑测时「今日买入」落到昨日，T+1 断言漂移
+  const now = Date.parse('2026-11-19T10:00:00+08:00')
+  const entries: LedgerEntry[] = [buy(now - 26 * 3_600_000, 1000, 10, 5), buy(now - 3_600_000, 200, 11, 5)]
   const items: PortItem[] = [{ id: 'p1', groupId: 'g1', secid: '1.600519', name: '贵州茅台', createdAt: 1 }]
-  const { view } = assemblePortfolio(GROUPS, items, entries, {})
+  const { view } = assemblePortfolio(GROUPS, items, entries, {}, { mode: 'none', rates: {} }, now)
   const row = view.positions[0]
   assert.equal(row.qty, 1200)
   assert.equal(row.t0, false)

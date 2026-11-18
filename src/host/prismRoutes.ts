@@ -23,6 +23,8 @@ import { fetchIndustryOverview, fetchKline, fetchQuotes } from './em.ts'
 import { assemblePortfolio } from './portfolio.ts'
 import { industryExposureOf, needsIndustryOf, unavailableExposure } from './prismExposure.ts'
 import { applyDrawdownGate, drawdownGateOf, evaluationOf, EVAL_MIN_SAMPLE } from './prismEval.ts'
+import { prismDeskOf } from './prismData.ts'
+import { appendPrismLedger, applyPositionOp, validateConstraints } from './prismDeskWrite.ts'
 import { dayOf } from './time.ts'
 
 export interface PrismRouteDeps {
@@ -276,10 +278,25 @@ export async function runPrismForSlot(deps: PrismRouteDeps, slot: string): Promi
   const settings = deps.store.settings()
   const decisionIndustry = Array.isArray(run.decision.limits.byIndustry) ? Object.fromEntries(run.decision.limits.byIndustry.map((x) => [x.name, x.limitPct])) : (run.decision.limits.byIndustry ?? {})
   const limits = { ...run.decision.limits, byIndustry: { ...(settings.industryLimits ?? {}), ...decisionIndustry } }
+  const eq = deps.trading.equity()
+  const lastEq = eq.at(-1)
+  const dayDrawdownPct = lastEq !== undefined && lastEq.equity > 0 && account.dayStartEquity !== null
+    ? ((lastEq.equity - account.dayStartEquity) / account.dayStartEquity) * 100
+    : null
   const clamped = clampDecision(run.decision, {
     cash: account.cash,
     positions: account.positions.map((p) => ({ secid: p.secid, qty: p.qty, price: quotes[p.secid]?.price ?? p.cost })),
     limits,
+    constraints: {
+      perStockPct: settings.perStockPct ?? null,
+      stopLossPct: settings.stopLossPct ?? null,
+      perOrderYuan: settings.perOrderYuan ?? null,
+      maxPosPct: settings.maxPosPct ?? null,
+      maxDDPct: settings.maxDDPct ?? null,
+      minCashPct: settings.minCashPct ?? null,
+    },
+    costs: Object.fromEntries(account.positions.map((p) => [p.secid, p.netCost ?? p.cost])),
+    dayDrawdownPct,
     industries: Object.fromEntries(Object.entries(industries).map(([k, v]) => [k, v?.name ?? null])),
     at: run.startedAt,
   })
@@ -328,6 +345,17 @@ export function makePrismRoutes(deps: PrismRouteDeps): PluginWebRoute[] {
           const latestDecision = store.runs().at(-1)?.decision ?? null
           const tradingWithDecision = { ...trading, decision: latestDecision }
           const modelCatalog = await modelCatalogOf(deps.get)
+          // v0.202.0：AGENT DESK 六区块新增字段（只读追加，旧字段一个不删）
+          const desk = prismDeskOf({
+            account: accountView,
+            prices,
+            quotes: Object.fromEntries(Object.entries(quotes).map(([k, v]) => [k, { price: v.price ?? null, prev: (v as { prev?: number | null }).prev ?? null }])),
+            orders: deps.trading.orders(),
+            fills: deps.trading.fills(),
+            runs: store.runs(),
+            equity: deps.trading.equity(),
+            evaluation,
+          })
           // 顶层 `state` 也带模拟盘字段（旧消费者读 state.account；页面读 trading）
           send(res, 200, {
             ok: true,
@@ -335,6 +363,7 @@ export function makePrismRoutes(deps: PrismRouteDeps): PluginWebRoute[] {
             state: { ...stateOf(store, deps.get), ...tradingWithDecision, modelCatalog },
             trading: tradingWithDecision,
             modelCatalog,
+            desk,
           })
           return
         }
@@ -343,8 +372,25 @@ export function makePrismRoutes(deps: PrismRouteDeps): PluginWebRoute[] {
           return
         }
         try {
-          const body = (await readBody(req)) as { action?: unknown; times?: unknown; text?: unknown; slot?: unknown; capitalLimit?: unknown; orderId?: unknown; provider?: unknown; model?: unknown; industryLimits?: unknown; secid?: unknown; at?: unknown; price?: unknown } | null
+          const body = (await readBody(req)) as { op?: unknown; shares?: unknown; cost?: unknown; confirm?: unknown; action?: unknown; times?: unknown; text?: unknown; slot?: unknown; capitalLimit?: unknown; orderId?: unknown; provider?: unknown; model?: unknown; industryLimits?: unknown; secid?: unknown; at?: unknown; price?: unknown } | null
           const action = body !== null && typeof body.action === 'string' ? body.action : ''
+          if (action === 'position') {
+            const op = typeof body?.op === 'string' ? body.op : ''
+            const input = { op, secid: body?.secid, shares: body?.shares, cost: body?.cost, confirm: body?.confirm }
+            const result = applyPositionOp(deps.trading.account(), input, Date.now())
+            if (!result.ok) { send(res, 400, { ok: false, error: result.error }); return }
+            await deps.trading.saveAccount(result.account!, { explicitReset: true })
+            if (result.entry !== undefined) appendPrismLedger(deps.trading.dirOf(), result.entry)
+            send(res, 200, { ok: true, positions: result.account!.positions, note: result.note })
+            return
+          }
+          if (action === 'constraints') {
+            const checked = validateConstraints(body as Record<string, unknown>)
+            if (checked.ok === false) { send(res, 400, { ok: false, error: checked.error }); return }
+            await store.saveConstraints(checked.value)
+            send(res, 200, { ok: true, constraints: checked.value })
+            return
+          }
           if (action === 'settings') {
             const raw = body !== null && Array.isArray(body.times) ? body.times : null
             if (raw === null) {

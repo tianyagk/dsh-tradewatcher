@@ -590,6 +590,18 @@ export const api = {
     }, 20_000)
   },
   /** 运行时自检：真实调用一次 ctx.llm.stream（永远 200） */
+  /** 模拟盘持仓写：op=add|update|remove（remove 必须 confirm:true） */
+  prismPosition(body: { op: 'add' | 'update' | 'remove'; secid: string; shares?: number; cost?: number; confirm?: boolean }): Promise<{ ok: boolean; account?: PrismAccount; error?: string }> {
+    return requestWithTimeout('/tradewatcher/prism', {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action: 'position', ...body }),
+    }, 20_000)
+  },
+  /** 模拟盘六条约束写 */
+  prismConstraints(c: { perStockPct: number; stopLossPct: number; perOrderYuan: number; maxPosPct: number; maxDDPct: number; minCashPct: number }): Promise<{ ok: boolean; error?: string }> {
+    return requestWithTimeout('/tradewatcher/prism', {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action: 'constraints', ...c }),
+    }, 20_000)
+  },
   prismSelftest(): Promise<{ ok: boolean; error: string | null; model: string | null; elapsedMs: number; text: string | null; chunks: Array<{ type: string; keys: string[] }> }> {
     return runSelftest('/tradewatcher/prism/selftest')
   },

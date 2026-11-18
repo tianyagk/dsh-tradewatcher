@@ -11,6 +11,46 @@
 
 ---
 
+## v0.202.0 — 【棱镜】按 AGENT DESK 设计稿从 0 重构
+
+`npm run check` **1560 / 1560 × 2 时区** + `ALL HOST CHECKS PASSED` + build（73 片段全过）。
+
+### 范围
+
+旧棱镜**整页删除**，仅保留导航项与页面名「棱镜」；页面按 `AGENT DESK · 自主交易代理工作台` 设计稿重建为三栏（`344 / 1fr / 374`，≤1100 单列）。
+
+| 栏 | 区块 |
+| --- | --- |
+| 左 | 人类 banner「人类只设边界」→ 资产上限（总额 + 快捷档 + 已用额度条 + 6 条约束）→ 持仓明细（股数/成本/移除）→ 添加持仓 |
+| 中 | 个股详情（现价/涨跌/今开/最高/最低/成交额/换手）→ 决策流时间线（时间/动作胶囊/理由/目标价/状态/来源） |
+| 右 | 账户总览（总资产/现金/持仓占比/可用）→ Agent 绩效（超额/回撤/决策数/胜率/token 用量 `—`） |
+
+### 宿主新增
+
+| 接口 | 内容 |
+| --- | --- |
+| `/tradewatcher/prism` 回包 `desk` | 16 个字段（`limits/positions/holdings/decisionFlow/overview/performance`），旧字段零改动 |
+| `action:'position'` | add / update / remove（`confirm:true`），账本 `manual-adjust` 留痕 |
+| `action:'constraints'` | 六字段持久化：`perStockPct / stopLossPct / perOrderYuan / maxPosPct / maxDDPct / minCashPct` |
+| `clampDecision` | 新增六个维度裁剪（单票 / 单笔金额 / 总仓 / 现金下限 / 日回撤 / 止损线）；**不产生卖单**（R12） |
+
+### 删除
+
+14 个旧 UI 测试、`prismDesignParity.ts`、`prismLayout.ts`、`prismView.ts` 收敛到 2 个函数（约 41 个死导出删除）、`.tw-prism-*` 旧样式。
+
+### 验证
+
+`npm run check` **1560 / 1560 × 2 时区** + build（73 项）+ `tsc --noEmit` 0。
+新增断言：`prismShell.test.ts` 31 条 + `prismB7.test.ts` 30 条；宿主 `prismData.test.ts` 6 条 + `prismDeskWrite.test.ts` 6 条，全部含反例注入。
+对拍：与设计稿 **40 项全部一致**（三栏尺寸、七区块顺序、卡片规格、深色 11 令牌、胶囊五色、六宽度无溢出无重叠）。
+
+### 遗留（不阻塞）
+
+1. 真组件截图需宿主装载后截屏。
+2. 持仓行内编辑 UI（`op:'update'` 通道已具备，界面暂只做移除）。
+3. 决策流未虚拟化（记录多时可能卡顿）。
+4. 约束错误文案未落到输入框下方（当前统一在卡片底部）。
+
 ## v0.201.0 — 界面细节打磨（第 9 轮）：深色边框对比度余量
 
 `npm run check` **1564 / 1564 × 2 时区**（1561 → 1564）+ `ALL HOST CHECKS PASSED` + build（73 片段全过）。

@@ -461,6 +461,9 @@ export class PrismTradingStore {
     }
   }
 
+  /** v0.203.0：数据目录（手工调整的 ledger 与账户同目录） */
+  dirOf(): string { return this.dir }
+
   account(): PrismAccount { return JSON.parse(JSON.stringify(this.accountValue)) as PrismAccount }
   orders(): PrismOrder[] { return this.ordersValue.slice() }
   fills(): PrismFill[] { return this.fillsValue.slice() }
@@ -636,6 +639,19 @@ export interface ClampContext {
   limits: { singlePct?: number | null; totalPct?: number | null; byIndustry?: PrismIndustryLimits }
   industries?: Record<string, string | null>
   at: number
+  /** v0.203.0：settings 六约束（B5）；缺项 ⇒ 不夹紧（R1） */
+  constraints?: {
+    perStockPct?: number | null
+    stopLossPct?: number | null
+    perOrderYuan?: number | null
+    maxPosPct?: number | null
+    maxDDPct?: number | null
+    minCashPct?: number | null
+  }
+  /** 持仓成本（止损判定用） */
+  costs?: Record<string, number>
+  /** 当日回撤（%，负数）；null/缺省 ⇒ 不判熔断 */
+  dayDrawdownPct?: number | null
 }
 
 export interface ClampResult {
@@ -681,6 +697,36 @@ export function clampDecision(decision: PrismDecision, ctx: ClampContext): Clamp
       const currentTotal = positions.reduce((sum, p) => sum + p.value, 0) + accepted.reduce((sum, x) => sum + x.value, 0)
       dims.push({ dimension: 'total', max: totalAssets * ctx.limits.totalPct / 100, current: currentTotal, basis: `总仓 ${ctx.limits.totalPct}% × 总资产` })
     }
+    const c = ctx.constraints ?? {}
+    if (!missingPrice && typeof c.perStockPct === 'number' && totalAssets > 0) {
+      dims.push({ dimension: 'perStock', max: totalAssets * c.perStockPct / 100, current: existing, basis: `单票上限 ${c.perStockPct}% × 总资产` })
+    }
+    if (typeof c.perOrderYuan === 'number' && c.perOrderYuan >= 0) {
+      const maxSharesByOrder = lot(Math.floor(c.perOrderYuan / px))
+      if (shares > maxSharesByOrder) {
+        events.push({ at: ctx.at, secid: order.secid, dimension: 'perOrder', before: shares, after: maxSharesByOrder, basis: `单笔金额上限 ${c.perOrderYuan} 元` })
+        shares = maxSharesByOrder
+      }
+    }
+    if (!missingPrice && typeof c.maxPosPct === 'number' && totalAssets > 0) {
+      const currentTotal = positions.reduce((sum, p) => sum + p.value, 0) + accepted.reduce((sum, x) => sum + x.value, 0)
+      dims.push({ dimension: 'maxPos', max: totalAssets * c.maxPosPct / 100, current: currentTotal, basis: `总仓上限 ${c.maxPosPct}%` })
+    }
+    const dd = ctx.dayDrawdownPct
+    if (typeof c.maxDDPct === 'number' && typeof dd === 'number' && -dd >= c.maxDDPct) {
+      events.push({ at: ctx.at, secid: order.secid, dimension: 'maxDD', before: shares, after: 0, basis: `日回撤 ${dd.toFixed(2)}% 触发熔断 ${c.maxDDPct}%` })
+      rejected.push({ secid: order.secid, side: 'buy', price: order.price, shares: before, reason: `日回撤 ${dd.toFixed(2)}% 触发熔断（${c.maxDDPct}%）` })
+      continue
+    }
+    const cost = ctx.costs?.[order.secid]
+    if (typeof c.stopLossPct === 'number' && typeof cost === 'number' && cost > 0) {
+      const lossPct = (px / cost - 1) * 100
+      if (lossPct <= -c.stopLossPct) {
+        events.push({ at: ctx.at, secid: order.secid, dimension: 'stopLoss', before: shares, after: 0, basis: `现价较成本 ${lossPct.toFixed(2)}% ≤ 止损线 −${c.stopLossPct}%` })
+        rejected.push({ secid: order.secid, side: 'buy', price: order.price, shares: before, reason: `已触及止损线 −${c.stopLossPct}%（当前 ${lossPct.toFixed(2)}%）` })
+        continue
+      }
+    }
     for (const d of dims) {
       if (d.max === null) continue
       const room = Math.max(0, d.max - d.current)
@@ -696,6 +742,15 @@ export function clampDecision(decision: PrismDecision, ctx: ClampContext): Clamp
       const after = cashMax
       events.push({ at: ctx.at, secid: order.secid, dimension: 'cash', before: shares, after, basis: `现金 ${cashLeft.toFixed(2)}` })
       shares = after
+    }
+    if (typeof c.minCashPct === 'number' && totalAssets > 0) {
+      const floor = totalAssets * c.minCashPct / 100
+      const roomCash = Math.max(0, cashLeft - floor)
+      const maxSharesByCashFloor = lot(Math.floor(roomCash / px))
+      if (shares > maxSharesByCashFloor) {
+        events.push({ at: ctx.at, secid: order.secid, dimension: 'minCash', before: shares, after: maxSharesByCashFloor, basis: `现金下限 ${c.minCashPct}%（≥ ${floor.toFixed(0)} 元）` })
+        shares = maxSharesByCashFloor
+      }
     }
     if (shares < 100) {
       rejected.push({ secid: order.secid, side: 'buy', price: order.price, shares: before, reason: '裁剪后不足一手（<100 股）' })
@@ -757,6 +812,8 @@ export async function placeDecision(
       decidedAt: now,
       day,
       status: 'pending',
+      // v0.202.0：引擎落库的委托一律记为自动；人工单不会走这条路径
+      origin: 'auto',
     }
     if (orders.some((o) => o.id === order.id)) {
       skippedReasons.push({ secid: d.secid, reason: '重复决策（同一秒/同一委托已存在）' })

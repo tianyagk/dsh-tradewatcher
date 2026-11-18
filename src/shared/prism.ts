@@ -16,6 +16,13 @@ export interface PrismSettings {
   model?: { provider: string; model: string } | null
   /** 每个交易日已触发的时点（`YYYY-MM-DD` → `HH:MM[]`），进程重启不丢 */
   lastFired: Record<string, string[]>
+  /** v0.203.0 约束六字段（B5）：单票上限% / 止损% / 单笔金额元 / 总仓上限% / 日回撤熔断% / 现金下限% */
+  perStockPct?: number | null
+  stopLossPct?: number | null
+  perOrderYuan?: number | null
+  maxPosPct?: number | null
+  maxDDPct?: number | null
+  minCashPct?: number | null
 }
 
 export interface PrismNewsItem {
@@ -192,6 +199,8 @@ export interface PrismOrder {
   fee?: number
   source?: '1min' | 'trend'
   rejectReason?: string
+  /** v0.202.0：委托来源；旧订单无此字段 ⇒ 读取方按 'unknown' 处理（不回填猜测） */
+  origin?: 'auto' | 'manual'
   cancelledAt?: number
   cancelReason?: string
 }
@@ -254,7 +263,7 @@ export type PrismIndustryLimits = Record<string, number> | Array<{ name: string;
 export interface PrismClampEvent {
   at: number
   secid: string
-  dimension: 'single' | 'industry' | 'total' | 'cash'
+  dimension: 'single' | 'industry' | 'total' | 'cash' | 'perStock' | 'perOrder' | 'maxPos' | 'minCash' | 'maxDD' | 'stopLoss'
   before: number
   after: number
   basis: string

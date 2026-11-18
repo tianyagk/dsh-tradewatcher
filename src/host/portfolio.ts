@@ -260,11 +260,13 @@ export function assemblePortfolio(
   quotes: Readonly<Record<string, QuoteRow>>,
   /** 跨市场折算口径（P1-11）。缺省不折算：总额只含 A股 + 逐项说明 */
   fx: FxOptions = { mode: 'none', rates: {} },
+  /** 注入「现在」：测试可固定时刻，避免跨零点/午夜跑测时 T+1 判定漂移。缺省 Date.now() */
+  now: number = Date.now(),
 ): PortfolioAssembly {
   // Ledger replay must be chronological: sort a copy by (ts, id).
   // 与 store 的校验口径共用同一排序（单一来源），避免"校验用插入序、展示用 ts 序"分叉
   const sorted = sortLedger(entries)
-  const dayStart = shanghaiDayStart(Date.now())
+  const dayStart = shanghaiDayStart(now)
 
   // 每股费用影响（P2-6）：只累计**买入侧**费用（已摊进成本；卖出费用已在 realized 里扣过）
   const buyFeeByPos = new Map<string, number>()

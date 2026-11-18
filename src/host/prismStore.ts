@@ -87,7 +87,7 @@ export class PrismStore {
   }
 
   private async loadSettings(): Promise<void> {
-    const disk = await this.loadJson<{ times?: unknown; lastFired?: unknown; model?: unknown; capital?: unknown; participationRate?: unknown; industryLimits?: unknown }>('prism-settings.json')
+    const disk = await this.loadJson<{ times?: unknown; lastFired?: unknown; model?: unknown; capital?: unknown; participationRate?: unknown; industryLimits?: unknown; perStockPct?: unknown; stopLossPct?: unknown; perOrderYuan?: unknown; maxPosPct?: unknown; maxDDPct?: unknown; minCashPct?: unknown }>('prism-settings.json')
     if (disk === null) return
     const times = Array.isArray(disk.times) ? disk.times.filter((t): t is string => typeof t === 'string' && /^\d{2}:\d{2}$/.test(t)) : []
     const capital = typeof disk.capital === 'number' && Number.isFinite(disk.capital) && disk.capital > 0 ? disk.capital : PRISM_DEFAULT_CAPITAL
@@ -111,7 +111,17 @@ export class PrismStore {
       typeof (rawModel as { model?: unknown }).model === 'string'
         ? { provider: (rawModel as { provider: string }).provider, model: (rawModel as { model: string }).model }
         : null
-    this.settingsValue = { times: times.length > 0 ? times : [...PRISM_DEFAULT_TIMES], lastFired, model, capital, participationRate, industryLimits }
+    const numOrNull = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null)
+    this.settingsValue = {
+      times: times.length > 0 ? times : [...PRISM_DEFAULT_TIMES], lastFired, model, capital, participationRate, industryLimits,
+      // v0.203.0：约束六字段（旧文件没有 ⇒ null，不猜）
+      perStockPct: numOrNull(disk.perStockPct),
+      stopLossPct: numOrNull(disk.stopLossPct),
+      perOrderYuan: numOrNull(disk.perOrderYuan),
+      maxPosPct: numOrNull(disk.maxPosPct),
+      maxDDPct: numOrNull(disk.maxDDPct),
+      minCashPct: numOrNull(disk.minCashPct),
+    }
   }
 
   private async loadNews(): Promise<void> {
@@ -174,6 +184,17 @@ export class PrismStore {
   }
 
   /** 保存行业上限（名称 → 百分比；空对象即清空） */
+  /** v0.203.0：持久化约束六字段（只覆盖传入的非 null 值） */
+  async saveConstraints(patch: Partial<Record<'perStockPct' | 'stopLossPct' | 'perOrderYuan' | 'maxPosPct' | 'maxDDPct' | 'minCashPct', number | null>>): Promise<PrismSettings> {
+    const current = this.settings()
+    const next: PrismSettings = { ...current, ...patch }
+    this.settingsValue = next
+    await updateJsonLocked(this.pathOf('prism-settings.json'), () => ({ v: 1, ...next })).catch((error) => {
+      this.guard.markUnreadable(this.pathOf('prism-settings.json'), error)
+    })
+    return next
+  }
+
   async saveIndustryLimits(limits: Record<string, number>): Promise<PrismSettings> {
     this.settingsValue = { ...this.settingsValue, industryLimits: limits }
     await updateJsonLocked(this.pathOf('prism-settings.json'), () => ({ v: 1, ...this.settingsValue })).catch((error) => {
