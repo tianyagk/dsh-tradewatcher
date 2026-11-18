@@ -1110,6 +1110,10 @@ color-scheme:dark}
 .tw-ad-primary:disabled{opacity:.6;cursor:default}
 .tw-ad-primary:focus-visible{outline:2px solid var(--tw-accent);outline-offset:2px}
 .tw-ad-err{font-size:12px;color:var(--tw-danger)}
+.tw-ad-inline{width:72px;border:1px solid var(--tw-border);border-radius:6px;background:var(--tw-card2);color:var(--tw-text);font-size:12px;text-align:right;padding:2px 6px;font-variant-numeric:tabular-nums}
+.tw-ad-inline:focus-visible{outline:2px solid var(--tw-accent);outline-offset:2px}
+.tw-ad-rowerr{color:var(--tw-danger);font-size:12px;padding:2px 8px 6px}
+.tw-ad-fielderr{color:var(--tw-danger);font-size:12px}
 
 /* 深色：1:1 复刻设计稿（仅作用于 AGENT DESK 页内） */
 .tw-root[data-theme=dark] .tw-ad-root{

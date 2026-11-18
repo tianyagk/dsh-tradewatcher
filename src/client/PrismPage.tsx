@@ -36,6 +36,10 @@ export function PrismPage(): React.ReactElement {
   const [saveErr, setSaveErr] = React.useState<string | null>(null)
   const [draft, setDraft] = React.useState({ code: '510300', shares: '100', cost: '' })
   const [confirmDel, setConfirmDel] = React.useState<string | null>(null)
+  const [editSecid, setEditSecid] = React.useState<string | null>(null)
+  const [editDraft, setEditDraft] = React.useState({ shares: '', cost: '' })
+  const [rowErr, setRowErr] = React.useState<string | null>(null)
+  const [fieldErr, setFieldErr] = React.useState<Record<string, string>>({})
   const [cons, setCons] = React.useState({ perStockPct: '', stopLossPct: '', perOrderYuan: '', maxPosPct: '', maxDDPct: '', minCashPct: '' })
 
   const load = React.useCallback((): void => {
@@ -77,7 +81,34 @@ export function PrismPage(): React.ReactElement {
   const submitCons = (): void => {
     const nums = Object.values(cons).map((v) => Number(v))
     if (nums.some((n) => !Number.isFinite(n) || n < 0)) { setSaveErr('约束必须是非负数'); return }
-    run(api.prismConstraints({ perStockPct: nums[0]!, stopLossPct: nums[1]!, perOrderYuan: nums[2]!, maxPosPct: nums[3]!, maxDDPct: nums[4]!, minCashPct: nums[5]! }))
+    setFieldErr({})
+    setSaving(true); setSaveErr(null)
+    api.prismConstraints({ perStockPct: nums[0]!, stopLossPct: nums[1]!, perOrderYuan: nums[2]!, maxPosPct: nums[3]!, maxDDPct: nums[4]!, minCashPct: nums[5]! })
+      .then((r) => {
+        if (r.ok) { load(); return }
+        const msg = r.error ?? '保存失败'
+        const hit = LIMITS.find(([k]) => msg.includes(k))
+        if (hit === undefined) setSaveErr(msg)
+        else setFieldErr({ [hit[0]]: msg })
+      })
+      .catch((e: Error) => setSaveErr(e.message))
+      .finally(() => setSaving(false))
+  }
+  const editError = ((): string | null => {
+    if (editSecid === null) return null
+    const bad = positionErrorOf(editSecid, Number(editDraft.shares))
+    if (bad !== null) return bad
+    const c = Number(editDraft.cost)
+    if (!Number.isFinite(c) || c <= 0) return '成本必须是正数'
+    return null
+  })()
+  const submitUpdate = (): void => {
+    if (editSecid === null || editError !== null) return
+    setSaving(true); setRowErr(null)
+    api.prismPosition({ op: 'update', secid: editSecid, shares: Number(editDraft.shares), cost: Number(editDraft.cost) })
+      .then((r) => { if (r.ok) { setEditSecid(null); load() } else setRowErr(r.error ?? '保存失败') })
+      .catch((e: Error) => setRowErr(e.message))
+      .finally(() => setSaving(false))
   }
   const removePos = (secid: string): void => { run(api.prismPosition({ op: 'remove', secid, confirm: true })) }
   const setCapital = (v: number): void => { api.prismCapital(v).then(load).catch((e: Error) => setErr(e.message)) }
@@ -90,7 +121,8 @@ export function PrismPage(): React.ReactElement {
       React.createElement('span', null, label),
       React.createElement('div', { className: 'tw-ad-f' },
         React.createElement('input', { type: 'number', 'aria-label': label, placeholder: '—', value: cons[key as keyof typeof cons], onChange: (e: React.ChangeEvent<HTMLInputElement>) => setCons({ ...cons, [key]: e.target.value }) }),
-        React.createElement('span', { className: 'tw-ad-suf' }, suffix)))))
+        React.createElement('span', { className: 'tw-ad-suf' }, suffix)),
+      fieldErr[key] === undefined ? null : React.createElement('span', { className: 'tw-ad-fielderr', 'data-role': 'ad-fielderr' }, fieldErr[key]))))
 
   const cap = React.createElement('section', { className: 'tw-ad-card', 'data-role': 'ad-cap' },
     React.createElement('div', { className: 'tw-ad-card-head' }, React.createElement('h2', null, '资产上限')),
@@ -116,11 +148,28 @@ export function PrismPage(): React.ReactElement {
     React.createElement('thead', null, React.createElement('tr', null,
       React.createElement('th', null, '名称'), React.createElement('th', { className: 'num' }, '持股数'),
       React.createElement('th', { className: 'num' }, '成本价'), React.createElement('th', null, ''))),
-    React.createElement('tbody', null, ...positions.map((p) => React.createElement('tr', { key: p.secid, onClick: () => setPicked(p.secid), className: picked === p.secid ? 'is-on' : undefined },
-      React.createElement('td', null, p.name),
-      React.createElement('td', { className: 'num' }, numText(p.qty, 0)),
-      React.createElement('td', { className: 'num' }, numText(p.cost, 3)),
-      React.createElement('td', null, React.createElement('button', { className: 'tw-ad-chip', 'aria-label': `移除 ${p.name}`, onClick: () => setConfirmDel(p.secid) }, '移除'))))))
+    React.createElement('tbody', null, ...positions.flatMap((p) => {
+      const editing = editSecid === p.secid
+      const row = React.createElement('tr', { key: p.secid, onClick: () => setPicked(p.secid), className: picked === p.secid ? 'is-on' : undefined },
+        React.createElement('td', null, p.name),
+        React.createElement('td', { className: 'num' }, editing
+          ? React.createElement('input', { className: 'tw-ad-inline', type: 'number', 'aria-label': `股数 ${p.name}`, value: editDraft.shares, onChange: (e: React.ChangeEvent<HTMLInputElement>) => setEditDraft({ ...editDraft, shares: e.target.value }) })
+          : numText(p.qty, 0)),
+        React.createElement('td', { className: 'num' }, editing
+          ? React.createElement('input', { className: 'tw-ad-inline', type: 'number', 'aria-label': `成本 ${p.name}`, value: editDraft.cost, onChange: (e: React.ChangeEvent<HTMLInputElement>) => setEditDraft({ ...editDraft, cost: e.target.value }) })
+          : numText(p.cost, 3)),
+        React.createElement('td', null, editing
+          ? React.createElement(React.Fragment, null,
+              React.createElement('button', { className: 'tw-ad-chip', onClick: submitUpdate, disabled: saving || editError !== null, title: editError ?? undefined }, saving ? '保存中…' : '保存'),
+              React.createElement('button', { className: 'tw-ad-chip', onClick: () => { setEditSecid(null); setRowErr(null) } }, '取消'))
+          : React.createElement(React.Fragment, null,
+              React.createElement('button', { className: 'tw-ad-chip', 'aria-label': `编辑 ${p.name}`, onClick: () => { setEditSecid(p.secid); setEditDraft({ shares: String(p.qty), cost: String(p.cost) }); setRowErr(null) } }, '编辑'),
+              React.createElement('button', { className: 'tw-ad-chip', 'aria-label': `移除 ${p.name}`, onClick: () => setConfirmDel(p.secid) }, '移除'))))
+      const errRow = editing && (editError !== null || rowErr !== null)
+        ? [React.createElement('tr', { key: `${p.secid}-err` }, React.createElement('td', { colSpan: 4, className: 'tw-ad-rowerr', 'data-role': 'ad-rowerr' }, editError ?? rowErr))]
+        : []
+      return [row, ...errRow]
+    })))
 
   const pos = React.createElement('section', { className: 'tw-ad-card', 'data-role': 'ad-positions' },
     React.createElement('div', { className: 'tw-ad-card-head' }, React.createElement('h2', null, '持仓明细'), React.createElement('span', { className: 'tw-ad-hint' }, '股数 / 成本可改')),
