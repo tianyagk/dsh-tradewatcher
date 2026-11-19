@@ -11,6 +11,28 @@
 
 ---
 
+## v0.205.0 — 棱镜实机可用：字段对齐、口径修正、资产上限可保存
+
+`npm run check` **1580 / 1580 × 2 时区**（1577 → 1580）+ `ALL HOST CHECKS PASSED` + build（73 片段全过）。
+
+用 CDP 直连实机页面逐屏核对，修掉 5 处字段错位与 2 处口径错误：
+
+| # | 现象 | 根因 | 修法 |
+| --- | --- | --- | --- |
+| 1 | 账户总览「总资产 — 万」 | 客户端读 `ov.total`，宿主字段是 `totalAssets` | 改读 `totalAssets` |
+| 2 | 持仓占比 `+0.78%` | 宿主返回比例 `0.7838`，客户端当百分数 | 新增 `ratioPctOf`（×100） |
+| 3 | 决策流「目标价 —」「来源 unknown」 | 客户端读 `f.target` / `f.source`，宿主是 `targetPrice` / `origin` | 改读 `targetPrice` / `origin`，来源中文化（自动/人工/未知） |
+| 4 | 决策流状态显示 `filled` / `rejected` | 未做状态中文化 | 新增 `statusLabelOf`（已成交/已拒绝/待成交/已撤单/部分成交/已过期） |
+| 5 | Agent 绩效「决策数 —」 | 读 `pf.decisions`，宿主是 `runsCount`；`alpha/maxDD/winRate` 同样错位 | 改读 `excessPct/maxDrawdown/runsCount/hitRate` |
+| 6 | 额度条「已用 145.79 万」与宿主 124.02 万不一致 | 客户端按 `qty×cost` 自算 | 改用 `desk.limits.used/limit`，本地计算仅兜底 |
+| 7 | 资产上限输入框只读 | 之前写接口未接时置灰 | 解除禁用，新增「保存上限」按钮走 `action:'capital'` |
+
+### 验证
+
+`npm run check` **1580 / 1580 × 2 时区** + build（73 项）。
+新增断言：`prismDeskPath.test.ts` ③④⑤（字段名对齐、比例 ×100、状态与来源中文化）；更新 `prismShell.test.ts ㉑`（约束不再 disabled）。
+实机核对（1700px，CDP 截图）：账户总览 158.23 万 / 34.20 万 / +78.38% / 55.98 万；额度条 124.02 / 180.00 万；决策流 8 条含目标价、已成交/已拒绝、未知来源；持仓 8 行；资产上限可编辑并出现「保存上限」。
+
 ## v0.204.0 — 棱镜实机三处数据错误修复（desk 路径 / 万元口径 / 持仓浮盈）
 
 `npm run check` **1577 / 1577 × 2 时区**（1572 → 1577）+ `ALL HOST CHECKS PASSED` + build（73 片段全过）。

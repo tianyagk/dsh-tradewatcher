@@ -82,10 +82,11 @@ test('⑳ B6 四类空态文案', () => {
   assert.match(PAGE, /missText\('个股详情', '选择左侧持仓查看'\)/)
   assert.match(PAGE, /missText\('账户数据'\)/)
 })
-test('㉑ B6 约束恒定 6 条且 disabled + title', () => {
+test('㉑ B6 约束恒定 6 条且可编辑（写接口已接，不得再 disabled）', () => {
   const n = (PAGE.match(/\['(perStockPct|stopLossPct|perOrderYuan|maxPosPct|maxDDPct|minCashPct)'/g) ?? []).length
   assert.equal(n, 6, `约束条数 ${n}`)
-  assert.match(PAGE, /disabled: true, title: '未接写入接口'/)
+  assert.ok(!PAGE.includes("title: '未接写入接口'"), '写接口已就绪，约束输入框不得再置为未接')
+  assert.match(PAGE, /action: 'constraints'|prismConstraints/)
 })
 test('㉒ B6 超限样式与文案', () => {
   assert.match(PAGE, /limitState\?: string[^\n]*desk\?\.limits\?\.limitState === 'exceeded'/)

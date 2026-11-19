@@ -10,13 +10,21 @@ import { missText, numText } from './uiText.ts'
 import { shClockText } from './marketTime.ts'
 import { actionLabelOf, pillClassOf, positionErrorOf, sourceOf } from './prismForm.ts'
 
-interface DeskFlowItem { at?: number; action?: string; reason?: string; target?: number | null; status?: string; source?: string }
-interface DeskOverview { total?: number | null; cash?: number | null; positionPct?: number | null; available?: number | null }
-interface DeskPerformance { alpha?: number | null; maxDD?: number | null; decisions?: number | null; winRate?: number | null; tokenUsage?: number | null }
-interface Desk { decisionFlow?: DeskFlowItem[]; overview?: DeskOverview; performance?: DeskPerformance }
+interface DeskFlowItem { at?: number; action?: string; reason?: string; targetPrice?: number | null; status?: string; origin?: string }
+interface DeskOverview { totalAssets?: number | null; cash?: number | null; positionPct?: number | null; available?: number | null }
+interface DeskPerformance { returnPct?: number | null; excessPct?: number | null; maxDrawdown?: number | null; runsCount?: number | null; hitRate?: number | null; tokenUsage?: number | null }
+interface DeskLimits { limit?: number | null; used?: number | null; available?: number | null; limitState?: string }
+interface Desk { decisionFlow?: DeskFlowItem[]; overview?: DeskOverview; performance?: DeskPerformance; limits?: DeskLimits }
 
 const pctOf = (v: number | null | undefined): string => (typeof v === 'number' && Number.isFinite(v) ? `${v > 0 ? '+' : ''}${v.toFixed(2)}%` : '—')
+/** 比例（0.7838）→ 百分数（78.38%）；与 pctOf（已是百分数）区分，避免 ×100 漏乘 */
+const ratioPctOf = (v: number | null | undefined): string => (typeof v === 'number' && Number.isFinite(v) ? `${v > 0 ? '+' : ''}${(v * 100).toFixed(2)}%` : '—')
 
+
+const STATUS_LABEL: Record<string, string> = { filled: '已成交', partial: '部分成交', pending: '待成交', rejected: '已拒绝', canceled: '已撤单', expired: '已过期' }
+const statusLabelOf = (s: string | undefined): string => (s === undefined || s === '' ? '—' : (STATUS_LABEL[s] ?? s))
+const SOURCE_LABEL: Record<string, string> = { auto: '自动', manual: '人工', unknown: '未知' }
+const sourceLabelOf = (s: string): string => SOURCE_LABEL[s] ?? s
 
 const LIMITS = [
   ['perStockPct', '单票权重上限', '%'],
@@ -65,8 +73,9 @@ export function PrismPage(): React.ReactElement {
   }, [picked])
   const acct = state?.state.account ?? null
   const positions = acct?.positions ?? []
-  const capital = acct?.capital ?? acct?.capitalLimit ?? null
-  const used = positions.reduce((a, p) => a + p.qty * p.cost, 0)
+  // 额度以宿主 desk.limits 为准（含费用与口径修正）；本地按 qty×cost 只作兜底，二者不可混用
+  const capital = desk?.limits?.limit ?? acct?.capital ?? acct?.capitalLimit ?? null
+  const used = desk?.limits?.used ?? positions.reduce((a, p) => a + p.qty * p.cost, 0)
   const exceeded = (state as unknown as { desk?: { limits?: { limitState?: string } } } | null | undefined)?.desk?.limits?.limitState === 'exceeded'
   const run = (p: Promise<{ ok: boolean; error?: string }>): void => {
     setSaving(true); setSaveErr(null)
@@ -131,13 +140,14 @@ export function PrismPage(): React.ReactElement {
     React.createElement('div', { className: 'tw-ad-cap-input' },
       React.createElement('span', { className: 'tw-ad-cur' }, '¥'),
       React.createElement('input', {
-        type: 'number', 'aria-label': '总资产上限（万元）', placeholder: '—', disabled: true, title: '未接写入接口',
+        type: 'number', 'aria-label': '总资产上限（万元）', placeholder: '—',
         value: capital === null ? '' : String(capital / 1e4),
         onChange: (e: React.ChangeEvent<HTMLInputElement>) => setCapital(Math.max(0, Number(e.target.value) || 0) * 1e4),
       }),
       React.createElement('span', { className: 'tw-ad-suf' }, '万')),
     React.createElement('div', { className: 'tw-ad-chips' },
-      ...[100, 200, 300, 500].map((w) => React.createElement('button', { key: w, className: 'tw-ad-chip', onClick: () => setCapital(w * 1e4) }, `${w}万`))),
+      ...[100, 200, 300, 500].map((w) => React.createElement('button', { key: w, className: 'tw-ad-chip', onClick: () => setCapital(w * 1e4) }, `${w}万`)),
+      React.createElement('button', { className: 'tw-ad-chip', 'data-role': 'ad-cap-save', disabled: saving || capital === null, onClick: () => { if (capital !== null) run(api.prismCapital(capital)) } }, saving ? '保存中…' : '保存上限')),
     React.createElement('div', { className: 'tw-ad-usage' },
       React.createElement('div', { className: `tw-ad-bar${exceeded ? ' is-over' : ''}` }, React.createElement('i', { style: { width: `${capital !== null && capital > 0 ? Math.min(100, (used / capital) * 100) : 0}%` } })),
       React.createElement('span', null, exceeded ? '已用超出上限' : `已用 ${numText(used / 1e4, 2)} / ${capital === null ? '—' : numText(capital / 1e4, 2)} 万`)),
@@ -199,23 +209,23 @@ export function PrismPage(): React.ReactElement {
           React.createElement('span', { className: 'tw-ad-time' }, f.at === undefined ? '—' : shClockText(f.at).slice(0, 5)),
           React.createElement('span', { className: `tw-ad-pill ${pillClassOf(f.action)}` }, actionLabelOf(f.action)),
           React.createElement('span', { className: 'tw-ad-reason' }, f.reason ?? '—'),
-          React.createElement('span', null, f.target === null || f.target === undefined ? '—' : numText(f.target, 2)),
-          React.createElement('span', null, f.status ?? '—'),
-          React.createElement('span', null, sourceOf(f.source))))))
+          React.createElement('span', null, f.targetPrice === null || f.targetPrice === undefined ? '—' : numText(f.targetPrice, 2)),
+          React.createElement('span', null, statusLabelOf(f.status)),
+          React.createElement('span', null, sourceLabelOf(sourceOf(f.origin)))))))
 
   const ov = desk?.overview
   const acctCard = React.createElement('section', { className: 'tw-ad-card', 'data-role': 'ad-overview' },
     React.createElement('div', { className: 'tw-ad-card-head' }, React.createElement('h2', null, '账户总览')),
     ov === undefined
       ? React.createElement('div', { className: 'tw-ad-empty' }, missText('账户数据'))
-      : kv([['总资产', `${numText(ov.total === null || ov.total === undefined ? null : ov.total / 1e4, 2)} 万`], ['现金', `${numText(ov.cash === null || ov.cash === undefined ? null : ov.cash / 1e4, 2)} 万`], ['持仓占比', pctOf(ov.positionPct)], ['可用', `${numText(ov.available === null || ov.available === undefined ? null : ov.available / 1e4, 2)} 万`]]))
+      : kv([['总资产', `${numText(ov.totalAssets === null || ov.totalAssets === undefined ? null : ov.totalAssets / 1e4, 2)} 万`], ['现金', `${numText(ov.cash === null || ov.cash === undefined ? null : ov.cash / 1e4, 2)} 万`], ['持仓占比', ratioPctOf(ov.positionPct)], ['可用', `${numText(ov.available === null || ov.available === undefined ? null : ov.available / 1e4, 2)} 万`]]))
 
   const pf = desk?.performance
   const perfCard = React.createElement('section', { className: 'tw-ad-card', 'data-role': 'ad-perf' },
     React.createElement('div', { className: 'tw-ad-card-head' }, React.createElement('h2', null, 'Agent 绩效')),
     pf === undefined
       ? React.createElement('div', { className: 'tw-ad-empty' }, missText('Agent 绩效'))
-      : kv([['超额收益', pctOf(pf.alpha)], ['最大回撤', pctOf(pf.maxDD)], ['决策数', numText(pf.decisions, 0)], ['胜率', pctOf(pf.winRate)], ['token 用量', pf.tokenUsage === null || pf.tokenUsage === undefined ? '—' : numText(pf.tokenUsage, 0)]]))
+      : kv([['超额收益', pctOf(pf.excessPct)], ['最大回撤', pctOf(pf.maxDrawdown)], ['决策数', numText(pf.runsCount, 0)], ['胜率', pctOf(pf.hitRate)], ['token 用量', pf.tokenUsage === null || pf.tokenUsage === undefined ? '—' : numText(pf.tokenUsage, 0)]]))
 
   const human = err !== null
     ? React.createElement('div', { className: 'tw-ad-empty' }, missText('棱镜数据', err))
