@@ -210,6 +210,8 @@ export interface DeskFlowEntry {
   action: string
   basis: string | null
   risk: string | null
+  /** ANALYZE 三要素（观察 / 推理 / 结论）；其它类型为 null */
+  three?: FlowThree | null
   /** 真实耗时（run 的 finishedAt − startedAt）；无源 ⇒ null */
   ms: number | null
   /** 复审置信度；宿主无字段 ⇒ null（不渲染该 chip） */
@@ -243,6 +245,8 @@ export interface FlowRunInput {
   startedAt: number
   finishedAt?: number | null
   error?: string | null
+  /** 本轮整篇汇总（结论段兜底：只取第一句） */
+  summary?: string | null
   analyses?: ReadonlyArray<{ key: string; label: string; text: string | null; error: string | null }>
   decision?: null | {
     note?: string | null
@@ -268,12 +272,118 @@ const CLAMP_DIM: Readonly<Record<string, string>> = {
 }
 const clampDimOf = (d: string): string => CLAMP_DIM[d] ?? d
 
-/** 一段长文压成一行（去 markdown 记号、折叠空白、超长截断）；空 ⇒ null */
-export function digestOf(text: string | null | undefined, max = 72): string | null {
+/** 一段长文压成一行（去 markdown 记号、折叠空白）；空 ⇒ null。**不截断**：DOM 必须保留全文 */
+export function plainOf(text: string | null | undefined): string | null {
   if (typeof text !== 'string') return null
   const flat = text.replace(/[#*`>]/g, ' ').replace(/\s+/g, ' ').trim()
-  if (flat === '') return null
+  return flat === '' ? null : flat
+}
+
+/** 一段长文压成一行（去 markdown 记号、折叠空白、超长截断）；空 ⇒ null。仅用于需要单行摘要的旧位置 */
+export function digestOf(text: string | null | undefined, max = 72): string | null {
+  const flat = plainOf(text)
+  if (flat === null) return null
   return flat.length > max ? `${flat.slice(0, max)}…` : flat
+}
+
+/** ANALYZE 三要素缺失时的统一文案（`—` + 一句原因） */
+export const FLOW_MISSING = '—（本条未给出）'
+
+export interface FlowThree {
+  /** 观察 ← 第一条 `- **依据**：…` */
+  observation: string
+  /** 推理 ← 第一条 `- **判断**：…` */
+  reasoning: string
+  /** 结论 ← 首段 `**总判断：…**`；没有 ⇒ `summary` 第一句 */
+  conclusion: string
+}
+
+/** 行内去 markdown：标题井号 / 列表符号 / 粗体 / 行内代码 / 链接 */
+const cleanInline = (s: string): string =>
+  s
+    .replace(/^\s{0,3}#{1,6}\s*/, '')
+    .replace(/^[-*+]\s+/, '')
+    .replace(/\*\*/g, '')
+    .replace(/`+/g, '')
+    .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
+    .replace(/\s+/g, ' ')
+    .trim()
+
+/** 找 `**标签**：内容`（允许 `-` 前缀、冒号在粗体内、内容在下一行）；找不到 ⇒ null */
+const labelledOf = (text: string, label: '依据' | '判断'): string | null => {
+  const lines = text.split(/\r?\n/)
+  for (let i = 0; i < lines.length; i += 1) {
+    const line = lines[i].replace(/\*\*/g, '').trim()
+    const m = line.match(/^(?:[-*+]\s*)?(依据|判断)\s*(?:[：:]\s*(.*))?$/)
+    if (m === null || m[1] !== label) continue
+    let content = (m[2] ?? '').trim()
+    if (content === '') {
+      for (let j = i + 1; j < lines.length; j += 1) {
+        const raw = lines[j].trim()
+        if (raw === '') continue
+        if (/^#{1,6}\s/.test(raw)) break
+        const next = raw.replace(/\*\*/g, '').trim()
+        if (/^(?:[-*+]\s*)?(依据|判断|总判断)\s*(?:[：:]|$)/.test(next)) break
+        content = next.replace(/^[-*+]\s*/, '').trim()
+        break
+      }
+    }
+    const clean = cleanInline(content)
+    if (clean !== '') return clean
+  }
+  return null
+}
+
+/** 首段 `**总判断：…**`（兼容 `**总判断：** 正文` 与 `**总判断**：正文`）；没有 ⇒ null */
+const totalJudgmentOf = (text: string): string | null => {
+  const lines = text.split(/\r?\n/)
+  for (let i = 0; i < lines.length; i += 1) {
+    const line = lines[i].replace(/\*\*/g, '').trim()
+    const m = line.match(/^(?:[-*+]\s*)?总判断\s*(?:[：:]\s*(.*))?$/)
+    if (m === null) continue
+    let content = (m[1] ?? '').trim()
+    if (content === '') {
+      for (let j = i + 1; j < lines.length; j += 1) {
+        const raw = lines[j].trim()
+        if (raw === '') continue
+        if (/^#{1,6}\s/.test(raw)) break
+        content = raw.replace(/\*\*/g, '').trim()
+        break
+      }
+    }
+    const clean = cleanInline(content)
+    if (clean !== '') return clean
+  }
+  return null
+}
+
+/** 第一句（跳过标题 / 表格 / 空行）：用于 `runs[].summary` 兜底 */
+export function firstSentenceOf(text: string | null | undefined): string | null {
+  if (typeof text !== 'string') return null
+  for (const raw of text.split(/\r?\n/)) {
+    const line = raw.trim()
+    if (line === '' || /^#{1,6}\s/.test(line) || /^\|/.test(line)) continue
+    const plain = cleanInline(line).replace(/^(?:总判断|结论)\s*[：:]\s*/, '')
+    if (plain === '') continue
+    const sentence = plain.match(/^[^。！？!?]*[。！？!?]/)?.[0] ?? plain
+    return sentence.trim()
+  }
+  return null
+}
+
+/**
+ * ANALYZE 三要素抽取（纯函数）：
+ * - 观察 ← 第一条 `- **依据**：…`；推理 ← 第一条 `- **判断**：…`；
+ * - 结论 ← 首段 `**总判断：…**`；没有则取 `summary` 第一句；
+ * - 抽不到就是 `—（本条未给出）`，**绝不用别的段落顶替**。
+ */
+export function threeOf(text: string | null | undefined, summary?: string | null): FlowThree {
+  const md = typeof text === 'string' ? text : ''
+  return {
+    observation: labelledOf(md, '依据') ?? FLOW_MISSING,
+    reasoning: labelledOf(md, '判断') ?? FLOW_MISSING,
+    conclusion: totalJudgmentOf(md) ?? firstSentenceOf(summary) ?? FLOW_MISSING,
+  }
 }
 
 const sideLabelOf = (s: 'buy' | 'sell'): string => (s === 'buy' ? '买入' : '卖出')
@@ -309,7 +419,7 @@ export function flowEntriesOf(input: { runs?: readonly FlowRunInput[]; orders?: 
       cats: ['scan'],
       title: `扫描 · 挂单 ${o} / 撤单 ${c} / 拦截 ${k}`,
       action: `本轮决策产出挂单 ${o} 笔、撤单 ${c} 笔、拦截 ${k} 笔`,
-      basis: digestOf(d?.note) ?? null,
+      basis: plainOf(d?.note) ?? null,
       risk: parseErr !== null ? `解析失败：${digestOf(parseErr, 40)}` : (r.error === null || r.error === undefined ? '风控通过' : `执行失败：${digestOf(r.error, 40)}`),
       ms,
       review: null,
@@ -325,7 +435,7 @@ export function flowEntriesOf(input: { runs?: readonly FlowRunInput[]; orders?: 
           cats: ['risk'],
           title: `拦截 ${sideLabelOf(rej.side)} ${rej.secid}`,
           action: `${sideLabelOf(rej.side)} ${groupInt(rej.shares)} 股 @${num2(rej.price)}`,
-          basis: digestOf(rej.reason) ?? null,
+          basis: plainOf(rej.reason) ?? null,
           risk: '风控拦截',
           ms: null,
           review: null,
@@ -341,7 +451,7 @@ export function flowEntriesOf(input: { runs?: readonly FlowRunInput[]; orders?: 
           cats: ['risk', 'cons'],
           title: `约束裁剪 ${cl.secid}`,
           action: `${clampDimOf(cl.dimension)} ${groupInt(cl.before)} → ${groupInt(cl.after)}`,
-          basis: digestOf(cl.basis) ?? null,
+          basis: plainOf(cl.basis) ?? null,
           risk: '风控拦截',
           ms: null,
           review: null,
@@ -361,7 +471,8 @@ export function flowEntriesOf(input: { runs?: readonly FlowRunInput[]; orders?: 
         action: a.error === null || a.error === ''
           ? `生成${a.label}报告 · ${a.text === null || a.text === '' ? '空文' : `${a.text.length} 字`}`
           : `生成${a.label}报告失败`,
-        basis: digestOf(a.error ?? a.text) ?? null,
+        basis: plainOf(a.error ?? a.text) ?? null,
+        three: threeOf(a.text, r.summary),
         risk: '风控通过',
         ms: null,
         review: null,
@@ -384,7 +495,7 @@ export function flowEntriesOf(input: { runs?: readonly FlowRunInput[]; orders?: 
       cats: rejected ? ['order', 'risk'] : ['order'],
       title: `${sideLabelOf(o.side)} ${o.name} ${groupInt(o.shares)} 股`,
       action: `${sideLabelOf(o.side)} ${groupInt(o.shares)} 股 @${num2(o.price)} · ${orderStatusOf(o.status)}${tag}${src === null ? '' : ` · ${src}`}`,
-      basis: digestOf(o.rejectReason ?? o.reason ?? o.skipReason) ?? null,
+      basis: plainOf(o.rejectReason ?? o.reason ?? o.skipReason) ?? null,
       risk: rejected ? `风控拦截：${digestOf(o.rejectReason, 32) ?? '未给原因'}` : `风控通过 · ${orderStatusOf(o.status)}`,
       ms: null,
       review: null,

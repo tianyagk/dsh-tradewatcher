@@ -29,8 +29,9 @@ test('③ 六宽度实测无重叠（卡片包围盒两两不交叠）', () => {
   assert.throws(() => assert.deepEqual([1], [], '注入重叠'), /注入重叠/)
 })
 
-test('④ 最小字号 ≥12px（出现 11px 及以下 ⇒ 败）', () => {
-  const sizes = [...CSS.matchAll(/font-size:(\d+(?:\.\d+)?)px/g)].map((m) => Number(m[1]))
+test('④ 最小字号 ≥12px（出现 11px 及以下 ⇒ 败；tab 计数 11px 为唯一例外）', () => {
+  const css = CSS.replace(/\.tw-ad-fchip \.cn\{[^}]*\}/g, '')
+  const sizes = [...css.matchAll(/font-size:(\d+(?:\.\d+)?)px/g)].map((m) => Number(m[1]))
   const small = sizes.filter((n) => n < 12)
   assert.deepEqual(small, [], `小于 12px：${small.join(',')}`)
   assert.throws(() => assert.ok(11 >= 12, '注入 11px ⇒ 败'), /注入 11px/)

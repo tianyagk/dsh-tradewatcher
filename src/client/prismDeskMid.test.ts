@@ -8,9 +8,10 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import {
-  FLOW_RENDER_MAX, FLOW_TABS, aiVerdictOf, amountTextOf, amplitudeOf, digestOf,
-  fillMarksOf, flowChipsOf, flowCountsOf, flowEntriesOf, flowFilterOf, flowTimeOf, flowWindowOf,
-  pct2, quoteHeadOf, quoteToneOf, signed2, statCellsOf, type FlowOrderInput, type FlowRunInput,
+  FLOW_MISSING, FLOW_RENDER_MAX, FLOW_TABS, aiVerdictOf, amountTextOf, amplitudeOf, digestOf,
+  fillMarksOf, firstSentenceOf, flowChipsOf, flowCountsOf, flowEntriesOf, flowFilterOf, flowTimeOf, flowWindowOf,
+  pct2, plainOf, quoteHeadOf, quoteToneOf, signed2, statCellsOf, threeOf,
+  type FlowOrderInput, type FlowRunInput,
 } from './prismDeskMid.ts'
 
 const PAGE = readFileSync(new URL('./PrismPage.tsx', import.meta.url), 'utf8')
@@ -296,8 +297,10 @@ test('㉞ 样式：26px 现价 / 26px 时间轴轨道 / 决策流列表可滚动
   assert.match(CSS, /\.tw-ad-feed-list\{[^}]*overflow:auto/)
 })
 
-test('㉟ 样式：中栏字号全部 ≥12（设计稿 9–11.5px 统一抬到 12px）', () => {
+test('㉟ 样式：中栏字号全部 ≥12（tab 计数 11px 为唯一附注例外）', () => {
+  // 仅 `.tw-ad-fchip .cn`（计数）允许 11px；其余 11px 及以下仍判败
   const block = CSS.slice(CSS.indexOf('/* ── 中栏 · 个股详情'), CSS.indexOf('/* B3/B4') < 0 ? undefined : CSS.length)
+    .replace(/\.tw-ad-fchip \.cn\{[^}]*\}/g, '')
   const sizes = [...block.matchAll(/font-size:(\d+(?:\.\d+)?)px/g)].map((m) => Number(m[1]))
   assert.ok(sizes.length > 10, `扫描到的字号太少：${sizes.length}`)
   assert.deepEqual(sizes.filter((n) => n < 12), [])
@@ -307,4 +310,157 @@ test('㊱ 动效纪律：中栏没有 transition:width/height/left（只用 tran
   for (const bad of ['transition:width', 'transition:height', 'transition:left', 'animation:evIn']) {
     assert.ok(!CSS.includes(bad), `违反动效纪律：${bad}`)
   }
+})
+
+
+/* ───────────── ⑥ 决策流三要素 / 展开收起 / tab 按钮（v0.207.2） ───────────── */
+
+test('㊲ threeOf：观察←依据、推理←判断、结论←总判断，且去 markdown 符号', () => {
+  const md = [
+    '# 宏观报告',
+    '',
+    '- **依据**：**沪深300** −0.59%，`成交额` 缩量。',
+    '- **判断**：这是缩圈，不是崩盘。',
+    '',
+    '**总判断：结构偏多，不追高。**',
+  ].join('\n')
+  const t = threeOf(md)
+  assert.equal(t.observation, '沪深300 −0.59%，成交额 缩量。')
+  assert.equal(t.reasoning, '这是缩圈，不是崩盘。')
+  assert.equal(t.conclusion, '结构偏多，不追高。')
+  for (const v of [t.observation, t.reasoning, t.conclusion]) {
+    assert.ok(!v.includes('**'), `残留粗体符号：${v}`)
+    assert.ok(!v.includes('##') && !v.startsWith('#'), `残留标题符号：${v}`)
+    assert.ok(!v.startsWith('-'), `残留列表符号：${v}`)
+  }
+})
+
+test('㊳ threeOf：抽不到的段落严格 —（本条未给出），不得拿别的段落顶替', () => {
+  const t = threeOf('- **判断**：只有推理，没有观察。')
+  assert.equal(t.observation, FLOW_MISSING)
+  assert.equal(t.reasoning, '只有推理，没有观察。')
+  assert.equal(t.conclusion, FLOW_MISSING)
+  assert.ok(!t.observation.includes('推理'), '观察缺失时不得用判断段顶替')
+})
+
+test('㊴ threeOf：没有总判断 ⇒ 取 summary 第一句（跳过标题，不取第二句）', () => {
+  const summary = '## 一页汇总（5 条）\n\n**1｜风险暴露：结论是不主动降，只做结构修正。** 第二句不得出现。'
+  assert.equal(threeOf('- **依据**：x\n- **判断**：y', summary).conclusion, '1｜风险暴露：结论是不主动降，只做结构修正。')
+  assert.equal(firstSentenceOf(summary), '1｜风险暴露：结论是不主动降，只做结构修正。')
+  assert.equal(firstSentenceOf('### 只有标题'), null)
+})
+
+test('㊵ 总判断三种写法（粗体包整段 / 冒号在粗体内 / 粗体只包标签）均可抽取', () => {
+  assert.equal(threeOf('**总判断：外盘处在兑现期。**').conclusion, '外盘处在兑现期。')
+  assert.equal(threeOf('**总判断：** 今日主线是半导体。').conclusion, '今日主线是半导体。')
+  assert.equal(threeOf('**总判断**：贵金属分化，不追。').conclusion, '贵金属分化，不追。')
+  const bold = threeOf('**总判断：** **结构**偏多。').conclusion
+  assert.ok(!bold.includes('**'), '结论必须去掉粗体符号')
+})
+
+test('㊶ ANALYZE 条目带三要素；缺观察时保留 —（本条未给出），不跨段顶替', () => {
+  const full = flowEntriesOf({ runs: [{
+    slot: '14:35', startedAt: 10, finishedAt: 20,
+    summary: '## 汇总\n\n**总判断：** 本轮只减仓。',
+    analyses: [{ key: 'a', label: '宏观', text: '- **依据**：沪深300 跌 0.59%。\n- **判断**：缩圈。', error: null }],
+  }] }).find((e) => e.kind === 'ANALYZE')
+  assert.equal(full?.three?.observation, '沪深300 跌 0.59%。')
+  assert.equal(full?.three?.reasoning, '缩圈。')
+  assert.equal(full?.three?.conclusion, '本轮只减仓。')
+  const missing = flowEntriesOf({ runs: [{
+    startedAt: 30, finishedAt: 40,
+    analyses: [{ key: 'b', label: '外盘', text: '**判断**：只有推理。', error: null }],
+  }] }).find((e) => e.kind === 'ANALYZE')
+  assert.equal(missing?.three?.observation, FLOW_MISSING)
+  assert.equal(missing?.three?.conclusion, FLOW_MISSING)
+})
+
+test('㊷ ORDER / RISK 仍是动作 / 依据 / 风控三段，不注入 three', () => {
+  const entries = flowEntriesOf({ runs: RUNS, orders: ORDERS })
+  const order = entries.find((e) => e.id === 'order-o2')
+  assert.equal(order?.action.includes('买入'), true)
+  assert.equal(order?.basis, '盘后不下单')
+  assert.equal(order?.risk.includes('风控拦截'), true)
+  assert.equal(order?.three, undefined, 'ORDER 不得带 ANALYZE 三要素')
+  const risk = entries.find((e) => e.kind === 'RISK' && e.title.includes('拦截'))
+  assert.equal(risk?.three, undefined)
+})
+
+test('㊸ 数据层不截断：长依据完整进 DOM 字段（… 只允许出现在视觉层）', () => {
+  const long = '长'.repeat(300)
+  const scan = flowEntriesOf({ runs: [{ startedAt: 1, finishedAt: 2, decision: { note: long, orders: [], cancel: [], rejects: [], clampEvents: [], parseError: null } }], orders: [] })
+    .find((e) => e.kind === 'SCAN')
+  assert.equal(scan?.basis, long)
+  assert.equal(scan?.basis?.length, 300)
+  assert.equal(scan?.basis?.includes('…'), false, '数据层不得插省略号')
+  assert.equal(plainOf(long), long)
+  assert.ok(!PAGE.includes('digestOf'), '页面不得再对决策流文本做摘要截断')
+  assert.match(PAGE, /title: text/, '文本节点必须带完整 title')
+})
+
+test('㊹ 展开 / 收起：原生 button + aria-expanded，展开后去掉 is-clamp', () => {
+  assert.match(PAGE, /'data-role': 'ad-flow-expand'/)
+  assert.match(PAGE, /'aria-expanded': open/)
+  assert.match(PAGE, /open \? '收起' : '展开'/)
+  assert.match(PAGE, /!open && overflow \? ' is-clamp' : ''/)
+})
+
+test('㊺ 截断只在视觉层：-webkit-line-clamp 3 行，行高 1.55 不随展开改变', () => {
+  assert.match(CSS, /\.tw-ad-ev-r \.v\.is-clamp\{[^}]*-webkit-line-clamp:3/)
+  assert.match(CSS, /\.tw-ad-ev-r \.v\{[^}]*line-height:1\.55/)
+  assert.ok(!/is-open[^{]*\{[^}]*line-height:/.test(CSS), '展开态不得改行高')
+})
+
+test('㊻ tab 按钮样式：4px 10px / 圆角 6 / 边框 / card2 / 12px / nowrap / gap 6', () => {
+  const rule = CSS.match(/\.tw-ad-fchip\{([^}]*)\}/)?.[1] ?? ''
+  for (const want of ['padding:4px 10px', 'border-radius:6px', 'border:1px solid var(--tw-border)', 'background:var(--tw-card2)', 'font-size:12px', 'white-space:nowrap', 'gap:6px']) {
+    assert.ok(rule.includes(want), `tab 缺少 ${want}`)
+  }
+  assert.match(PAGE, /react\.createElement\('button'/i)
+  assert.match(PAGE, /type: 'button', role: 'tab'/)
+})
+
+test('㊼ tab 选中态：accent 边框 + rgba(91,140,255,.16) 背景 + 正文色', () => {
+  const on = CSS.match(/\.tw-ad-fchip\.on\{([^}]*)\}/)?.[1] ?? ''
+  assert.match(on, /border-color:var\(--tw-accent\)/)
+  assert.match(on, /background:rgba\(91,140,255,\.16\)/)
+  assert.match(on, /color:var\(--tw-text\)/)
+})
+
+test('㊽ 计数用 <b>、11px、同色淡一档', () => {
+  const cn = CSS.match(/\.tw-ad-fchip \.cn\{([^}]*)\}/)?.[1] ?? ''
+  assert.match(cn, /font-size:11px/)
+  assert.match(cn, /color:inherit/)
+  assert.match(cn, /opacity:\.7\d?/)
+  assert.match(PAGE, /react\.createElement\('b', \{ className: 'cn'/i)
+})
+
+test('㊾ tab 容器 flex-wrap + gap 6（374px / 890px 靠换行不溢出）', () => {
+  const bar = CSS.match(/\.tw-ad-flow-bar\{([^}]*)\}/)?.[1] ?? ''
+  assert.match(bar, /flex-wrap:wrap/)
+  assert.match(bar, /gap:6px/)
+  assert.ok(!bar.includes('overflow:hidden'), '不得用 overflow:hidden 硬裁')
+})
+
+test('㊿ 键盘可达：tab / 展开都是原生 button，:focus-visible 有描边', () => {
+  assert.match(CSS, /\.tw-ad-fchip:focus-visible\{[^}]*outline:2px solid var\(--tw-accent\)/)
+  assert.match(CSS, /\.tw-ad-ev-more:focus-visible\{[^}]*outline:2px solid var\(--tw-accent\)/)
+  assert.match(PAGE, /className: 'tw-ad-ev-more'/)
+  assert.ok(!/tabIndex: -1/.test(PAGE), '不得把 tab 从键盘序列里移除')
+})
+
+test('51 threeOf 空输入：三段全部 —（本条未给出），不抛错', () => {
+  for (const v of [threeOf(null), threeOf(''), threeOf(undefined, null)]) {
+    assert.equal(v.observation, FLOW_MISSING)
+    assert.equal(v.reasoning, FLOW_MISSING)
+    assert.equal(v.conclusion, FLOW_MISSING)
+  }
+})
+
+test('52 threeOf 兼容真实报告的“标签独占一行”写法（冒号可省略）', () => {
+  const md = '**依据**\n- 第一条依据。\n\n**判断**\n推理正文。\n\n**总判断**\n结论正文。'
+  const t = threeOf(md)
+  assert.equal(t.observation, '第一条依据。')
+  assert.equal(t.reasoning, '推理正文。')
+  assert.equal(t.conclusion, '结论正文。')
 })

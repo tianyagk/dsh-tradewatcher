@@ -34,8 +34,9 @@ test('⑧ 无说明性长句（中文长串 ⇒ 败）', () => {
   const longs = [...PAGE.matchAll(/'([^'\n]*[\u4e00-\u9fff][^'\n]{40,})'/g)].map((m) => m[1]).filter((x) => !x.includes('${'))
   assert.deepEqual(longs, [], `长句：${longs.join(' | ')}`)
 })
-test('⑨ 字号 ≥12（11px 及以下 ⇒ 败）', () => {
-  const sizes = [...CSS.matchAll(/\.tw-ad-[^{]+\{[^}]*font-size:(\d+(?:\.\d+)?)px/g)].map((m) => Number(m[1]))
+test('⑨ 字号 ≥12（11px 及以下 ⇒ 败；tab 计数 11px 为唯一例外）', () => {
+  const css = CSS.replace(/\.tw-ad-fchip \.cn\{[^}]*\}/g, '')
+  const sizes = [...css.matchAll(/\.tw-ad-[^{]+\{[^}]*font-size:(\d+(?:\.\d+)?)px/g)].map((m) => Number(m[1]))
   assert.deepEqual(sizes.filter((n) => n < 12), [])
 })
 test('⑩ 口径行 ≤3（banner + hint）', () => {

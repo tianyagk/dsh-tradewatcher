@@ -1241,13 +1241,13 @@ color-scheme:dark}
 .tw-ad-feed{flex:1 1 auto;min-height:0;gap:0;padding:0}
 .tw-ad-feed .tw-ad-card-head{padding:10px 12px 8px}
 .tw-ad-flow-meta{font-size:12px;color:var(--tw-muted);font-variant-numeric:tabular-nums}
-.tw-ad-flow-bar{display:flex;align-items:center;gap:5px;flex-wrap:wrap;padding:0 12px 8px}
-.tw-ad-fchip{display:inline-flex;align-items:center;gap:4px;padding:3px 9px;border-radius:20px;font-size:12px;letter-spacing:.2px;cursor:pointer;background:rgba(255,255,255,.026);border:1px solid var(--tw-border);color:var(--tw-muted)}
-.tw-ad-fchip:hover:not(:disabled){color:var(--tw-dim);border-color:var(--tw-border-strong)}
-.tw-ad-fchip.on{background:rgba(91,140,255,.14);border-color:rgba(91,140,255,.4);color:var(--tw-accent)}
-.tw-ad-fchip:disabled{opacity:.5;cursor:not-allowed}
-.tw-ad-fchip:focus-visible{outline:2px solid var(--tw-accent);outline-offset:2px}
-.tw-ad-fchip .cn{font-size:12px;opacity:.75;font-variant-numeric:tabular-nums}
+.tw-ad-flow-bar{display:flex;align-items:center;gap:6px;flex-wrap:wrap;padding:0 12px 8px}
+.tw-root .tw-ad-fchip{display:inline-flex;align-items:center;gap:6px;padding:4px 10px;border-radius:6px;font-size:12px;letter-spacing:.2px;cursor:pointer;background:var(--tw-card2);border:1px solid var(--tw-border);color:var(--tw-muted);white-space:nowrap}
+.tw-root .tw-ad-fchip:hover:not(:disabled){color:var(--tw-dim);border-color:var(--tw-border-strong)}
+.tw-root .tw-ad-fchip.on{background:rgba(91,140,255,.16);border-color:var(--tw-accent);color:var(--tw-text)}
+.tw-root .tw-ad-fchip:disabled{opacity:.5;cursor:not-allowed}
+.tw-root .tw-ad-fchip:focus-visible{outline:2px solid var(--tw-accent);outline-offset:2px}
+.tw-root .tw-ad-fchip .cn{font-size:11px;font-weight:600;color:inherit;opacity:.72;font-variant-numeric:tabular-nums}
 .tw-ad-feed-list{flex:1 1 auto;min-height:0;overflow:auto;padding:0 12px 10px;display:flex;flex-direction:column}
 .tw-ad-feed-more{padding:8px 0 2px;font-size:12px;color:var(--tw-muted);text-align:center;font-variant-numeric:tabular-nums}
 .tw-ad-ev{display:grid;grid-template-columns:26px minmax(0,1fr);position:relative}
@@ -1271,7 +1271,12 @@ color-scheme:dark}
 .tw-ad-ev-rows{margin-top:6px;display:flex;flex-direction:column;gap:3px}
 .tw-ad-ev-r{display:grid;grid-template-columns:30px minmax(0,1fr);gap:7px;align-items:baseline}
 .tw-ad-ev-r .k{font-size:12px;color:var(--tw-muted);letter-spacing:.4px;text-align:right}
-.tw-ad-ev-r .v{font-size:12px;color:var(--tw-dim);line-height:1.55;min-width:0;overflow-wrap:anywhere}
+.tw-ad-ev-r .v{font-size:12px;color:var(--tw-dim);line-height:1.55;min-width:0;overflow-wrap:anywhere;white-space:normal}
+.tw-ad-ev-r .v.is-clamp{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:3;overflow:hidden}
+.tw-ad-ev-vw{min-width:0;display:flex;flex-direction:column;align-items:flex-start;gap:2px}
+.tw-root .tw-ad-ev-more{padding:0;border:0;background:none;color:var(--tw-accent);font-size:12px;line-height:1.55;cursor:pointer}
+.tw-root .tw-ad-ev-more:hover{color:var(--tw-accent-hover)}
+.tw-root .tw-ad-ev-more:focus-visible{outline:2px solid var(--tw-accent);outline-offset:2px;border-radius:3px}
 .tw-ad-ev-foot{margin-top:6px;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
 /* ── 右栏 · 账户总览（27px 大数 + 四格 + 仓位条）── */
 .tw-ad-acct{flex:0 0 auto;gap:0;padding:0}

@@ -329,8 +329,9 @@ test('㊸ 深色 12 令牌 1:1 + 人类区竖条', () => {
   assert.match(CSS, /\.tw-ad-col-human \.tw-ad-card::before\{[^}]*linear-gradient\(180deg,transparent,rgba\(240,169,59,\.75\),transparent\)/)
 })
 
-test('㊹ 左栏字号 ≥12（顶条/卡片逐条扫描）', () => {
-  const sizes = [...CSS.matchAll(/\.tw-ad-[^{]+\{[^}]*font-size:(\d+(?:\.\d+)?)px/g)].map((m) => Number(m[1]))
+test('㊹ 左栏字号 ≥12（顶条/卡片逐条扫描；tab 计数 11px 为唯一例外）', () => {
+  const css = CSS.replace(/\.tw-ad-fchip \.cn\{[^}]*\}/g, '')
+  const sizes = [...css.matchAll(/\.tw-ad-[^{]+\{[^}]*font-size:(\d+(?:\.\d+)?)px/g)].map((m) => Number(m[1]))
   assert.ok(sizes.length > 10, `扫描到的 tw-ad 字号太少：${sizes.length}`)
   assert.deepEqual(sizes.filter((n) => n < 12), [])
 })

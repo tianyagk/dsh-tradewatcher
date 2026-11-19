@@ -24,7 +24,7 @@ import {
   runsBadgeOf, usageOf, wanOf, weightOf, weightTextOf,
 } from './prismDesk.ts'
 import {
-  FLOW_TABS, aiVerdictOf, fillMarksOf, flowChipsOf, flowCountsOf, flowEntriesOf,
+  FLOW_MISSING, FLOW_TABS, aiVerdictOf, fillMarksOf, flowChipsOf, flowCountsOf, flowEntriesOf,
   flowTimeOf, flowWindowOf, quoteHeadOf, statCellsOf,
   type DeskFlowEntry, type DeskFlowTab, type QuoteFacts,
 } from './prismDeskMid.ts'
@@ -65,9 +65,71 @@ const LIMITS = [
 // 双引号：`prismShell ㉑` 按 `['key'` 计六格条数，键表不能算进去
 const LIMIT_KEYS = ["perStockPct", "stopLossPct", "perOrderYuan", "maxPosPct", "maxDDPct", "minCashPct"] as const
 
-/** 决策流单条（时间轴卡）：徽标 / 标题 / 时间 + 动作·依据·风控三段 + chips + 风控结论 */
+/**
+ * 决策流单段文本：视觉层最多 3 行，DOM 里保留完整字符串（title 也是全文）。
+ * 展开只切换 `is-clamp`，行高不动；按钮是原生 button，键盘可达。
+ */
+function FlowTextView(props: { text: string | null; label: string }): React.ReactElement {
+  const [open, setOpen] = React.useState(false)
+  const [overflow, setOverflow] = React.useState(false)
+  const ref = React.useRef<HTMLSpanElement | null>(null)
+  const text = props.text
+  // 只有**真实溢出 3 行**才出「展开」：在 890px 宽能放下的短句不制造无效按钮；
+  // 374px 窄栏由 ResizeObserver 重新测量，同一段会自动变成可展开。
+  React.useLayoutEffect(() => {
+    const el = ref.current
+    if (el === null || text === null) return
+    const check = (): void => {
+      const had = el.classList.contains('is-clamp')
+      if (!had) el.classList.add('is-clamp')
+      const clipped = el.scrollHeight > el.clientHeight + 1
+      if (!had) el.classList.remove('is-clamp')
+      setOverflow(clipped)
+    }
+    check()
+    if (typeof ResizeObserver === 'undefined') return
+    const ro = new ResizeObserver(check)
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [text])
+  if (text === null) {
+    return React.createElement('span', { className: 'v', title: `本条未给出「${props.label}」段（宿主报告里没有对应段落）` }, FLOW_MISSING)
+  }
+  const body = React.createElement('span', { ref, className: `v${!open && overflow ? ' is-clamp' : ''}`, title: text }, text)
+  if (!overflow) return body
+  return React.createElement('span', { className: 'tw-ad-ev-vw' },
+    body,
+    React.createElement('button', {
+      type: 'button',
+      className: 'tw-ad-ev-more',
+      'data-role': 'ad-flow-expand',
+      'aria-expanded': open,
+      title: open ? '收起全文' : '展开全文',
+      onClick: () => setOpen((v) => !v),
+    }, open ? '收起' : '展开'))
+}
+
+/** 一行「标签 + 文本」；ANALYZE 用 观察/推理/结论，其余保持 动作/依据/风控 */
+function flowRowNode(key: string, label: string, text: string | null): React.ReactElement {
+  return React.createElement('div', { key, className: 'tw-ad-ev-r', 'data-role': 'ad-flow-row', 'data-label': label },
+    React.createElement('span', { className: 'k' }, label),
+    React.createElement(FlowTextView, { text, label }))
+}
+
+/** 决策流单条（时间轴卡）：徽标 / 标题 / 时间 + 三段落 + chips + 风控结论 */
 function flowEntryNode(e: DeskFlowEntry): React.ReactElement {
   const chips = flowChipsOf(e)
+  const rows = e.kind === 'ANALYZE'
+    ? [
+        flowRowNode('observation', '观察', e.three?.observation ?? null),
+        flowRowNode('reasoning', '推理', e.three?.reasoning ?? null),
+        flowRowNode('conclusion', '结论', e.three?.conclusion ?? null),
+      ]
+    : [
+        flowRowNode('action', '动作', e.action),
+        flowRowNode('basis', '依据', e.basis),
+        flowRowNode('risk', '风控', e.risk),
+      ]
   return React.createElement('article', { key: e.id, className: `tw-ad-ev is-${e.kind.toLowerCase()}`, 'data-role': 'ad-flow-item', 'data-kind': e.kind },
     React.createElement('div', { className: 'tw-ad-ev-rail' }, React.createElement('i', { className: 'tw-ad-ev-dot' })),
     React.createElement('div', { className: 'tw-ad-ev-body' },
@@ -75,16 +137,7 @@ function flowEntryNode(e: DeskFlowEntry): React.ReactElement {
         React.createElement('span', { className: `tw-ad-tag is-${e.kind.toLowerCase()}` }, e.kind),
         React.createElement('span', { className: 'tw-ad-ev-title' }, e.title),
         React.createElement('span', { className: 'tw-ad-ev-time' }, flowTimeOf(e.at))),
-      React.createElement('div', { className: 'tw-ad-ev-rows' },
-        React.createElement('div', { className: 'tw-ad-ev-r' },
-          React.createElement('span', { className: 'k' }, '动作'),
-          React.createElement('span', { className: 'v' }, e.action)),
-        React.createElement('div', { className: 'tw-ad-ev-r' },
-          React.createElement('span', { className: 'k' }, '依据'),
-          React.createElement('span', { className: 'v', title: e.basis ?? undefined }, e.basis ?? '—')),
-        React.createElement('div', { className: 'tw-ad-ev-r' },
-          React.createElement('span', { className: 'k' }, '风控'),
-          React.createElement('span', { className: 'v' }, e.risk ?? '—'))),
+      React.createElement('div', { className: 'tw-ad-ev-rows' }, ...rows),
       React.createElement('div', { className: 'tw-ad-ev-foot' },
         ...chips.map((c) => React.createElement('span', { key: c.kind, className: 'tw-ad-pill' }, c.text)),
         React.createElement('span', { className: `tw-ad-pill ${e.verdict === 'block' ? 'blk' : 'ok'}`, 'data-role': 'ad-flow-verdict' }, e.verdict === 'block' ? '风控拦截' : '风控通过'))))
@@ -603,10 +656,10 @@ export function PrismPage(props: { active?: boolean; redUp?: boolean } = {}): Re
       React.createElement('button', { className: 'tw-ad-fchip', 'data-role': 'ad-replay', disabled: true, title: '宿主未提供重放接口' }, '↺ 重放今日')),
     React.createElement('div', { className: 'tw-ad-flow-bar', role: 'tablist', 'data-role': 'ad-flow-bar' },
       ...FLOW_TABS.map((t) => React.createElement('button', {
-        key: t.id, role: 'tab', 'aria-selected': flowTab === t.id, 'data-tab': t.id,
+        key: t.id, type: 'button', role: 'tab', 'aria-selected': flowTab === t.id, 'data-tab': t.id,
         className: `tw-ad-fchip${flowTab === t.id ? ' on' : ''}`,
         onClick: () => setFlowTab(t.id),
-      }, t.label, React.createElement('span', { className: 'cn', 'data-role': `ad-flow-count-${t.id}` }, String(flowCounts[t.id]))))),
+      }, t.label, React.createElement('b', { className: 'cn', 'data-role': `ad-flow-count-${t.id}` }, String(flowCounts[t.id]))))),
     flowEntries.length === 0
       ? React.createElement('div', { className: 'tw-ad-empty' }, missText('决策记录'))
       : React.createElement('div', { className: 'tw-ad-feed-list', 'data-role': 'ad-flow-list' },

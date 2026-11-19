@@ -94,7 +94,9 @@ test('① 密集字号阶梯：详情页所有 CSS 字号必须落在 12 / 12.5 
   }
   assert.ok(seen >= 60, `全客户端应当扫到足够多的字号（实际 ${seen} 处）—— 防退化`)
   // 同一份 CSS（`TW_CSS`）也全量扫：不只是工具箱详情页那一段
-  const cssSizes = [...TW_CSS.matchAll(/font-size:\s*([0-9.]+)px/g)].map((m) => Number(m[1]))
+  // 任务书唯一例外：决策流 tab 计数 `.tw-ad-fchip .cn` 允许 11px（附注小一号）
+  const cssForScale = TW_CSS.replace(/\.tw-ad-fchip \.cn\{[^}]*\}/g, '')
+  const cssSizes = [...cssForScale.matchAll(/font-size:\s*([0-9.]+)px/g)].map((m) => Number(m[1]))
   assert.ok(cssSizes.length >= 100, `CSS 里应当扫到足够多的字号（实际 ${cssSizes.length} 处）`)
   for (const size of cssSizes) {
     assert.deepEqual(typeScaleProblems(size, 'CSS 的字号'), [], `CSS 字号越出阶梯：${size}px`)

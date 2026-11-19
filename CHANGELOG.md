@@ -11,6 +11,24 @@
 
 ---
 
+## v0.208.0 — 决策流三处修复（全文展示 / 观察·推理·结论 / 分类按钮）
+
+`npm run check` **1723 / 1723 × 2 时区**（1707 → 1723）+ build（73 项）+ `tsc` 0。
+
+| # | 现象 | 修法 |
+| --- | --- | --- |
+| 1 | 分析信息被单行 `…` 截断，看不全 | `FlowTextView`：视觉 3 行 `-webkit-line-clamp`，真实溢出才显示「展开 / 收起」，DOM 保留全文，`title` 为全文 |
+| 2 | 部分决策缺「观察 / 推理 / 结论」三要素 | 新增纯函数 `threeOf(text, summary?)`：观察 ← 首条 `**依据**`，推理 ← 首条 `**判断**`，结论 ← `**总判断**`（缺则 `runs[].summary` 首句）；缺段严格 `—（本条未给出）`，不拿别的段落顶替；`plainOf` 去掉 markdown 符号 |
+| 3 | 分类按钮拥挤、无按钮样式 | tab 改原生 `button`：`padding:4px 10px`、圆角 6、边框、`gap:6px`、容器 `flex-wrap:wrap`；选中态蓝边 + 浅蓝底；计数 `<b>` 11px；`:focus-visible` 描边 |
+
+`ORDER / RISK / SCAN` 仍为「动作 / 依据 / 风控」；`ANALYZE` 为「观察 / 推理 / 结论」。
+
+### 验证
+
+- `npm run check` **1723 / 1723 × 2 时区** + build（73 项）+ `tsc` 0。
+- 新增 16 条断言（三要素含缺段、markdown 去符号、summary 兜底、展开/收起、tab 样式与计数、截断不影响 DOM 全文）。
+- 静态镜像截图：`docs/shots/PRISM-FLOW-FIX-1700-dark.png`（tab 374px 两行、890px 单行；首卡三段 title 与 DOM 均全文）。
+
 ## v0.207.1 — 决策周期两处修复（保存报 times、下拉文字被裁）
 
 `npm run check` **1707 / 1707 × 2 时区** + build（73 项）。
