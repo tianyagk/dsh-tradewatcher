@@ -11,6 +11,23 @@
 
 ---
 
+## v0.204.0 — 棱镜实机三处数据错误修复（desk 路径 / 万元口径 / 持仓浮盈）
+
+`npm run check` **1577 / 1577 × 2 时区**（1572 → 1577）+ `ALL HOST CHECKS PASSED` + build（73 片段全过）。
+
+实机截图显示：中/右栏四区块全部「未取到」、额度条显示「已用 0.01 / 0.02」、持仓浮盈异常。
+
+| # | 现象 | 根因 | 修法 |
+| --- | --- | --- | --- |
+| 1 | 个股详情 / 决策流 / 账户总览 / Agent 绩效 全部「未取到」 | 页面读 `state.state.desk`，而 `desk` 在**回包顶层**（与 `state` 同级）⇒ 恒 `undefined` | 改为 `state.desk`（顶层） |
+| 2 | `已用 0.01 / 0.02` | 额度条按 `1e8`（亿元）换算，而 UI 语义是「万」 | 改 `1e4`（万元），后缀加 ` 万` |
+| 3 | 持仓浮盈 −4.76 亿 | `prismPositionViewOf` 优先取 `netCost`（**总成本** 63 450）当每股成本，pnl 被放大 `qty` 倍 | 统一取每股成本（`cost`，缺则 `netCost / qty`） |
+
+### 验证
+
+`npm run check` **1577 / 1577 × 2 时区** + build（73 项）。
+新增 `prismPnlCost.test.ts` 3 条（pnl 用每股成本、`cost` 回包为每股、只有 `netCost` 时按 qty 摊回）+ `prismDeskPath.test.ts` 2 条（desk 必须顶层读取、已用/上限必须 ÷1e4），均含反例注入。
+
 ## v0.203.0 — 棱镜收尾：持仓行内编辑 + 约束字段级错误
 
 `npm run check` **1572 / 1572 × 2 时区**（1560 → 1572）+ `ALL HOST CHECKS PASSED` + build（73 片段全过）。

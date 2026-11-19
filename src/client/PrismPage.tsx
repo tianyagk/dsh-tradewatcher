@@ -49,7 +49,8 @@ export function PrismPage(): React.ReactElement {
   }, [])
   React.useEffect(() => { load() }, [load])
 
-  const desk = (state?.state as unknown as { desk?: Desk } | undefined)?.desk
+  // desk 在回包顶层（与 state 同级），不在 state 内——之前读 state.state.desk 恒 undefined，导致四区块全部『未取到』
+  const desk = (state as unknown as { desk?: Desk } | null | undefined)?.desk
   const [picked, setPicked] = React.useState<string | null>(null)
   const [detail, setDetail] = React.useState<{ price: number | null; pct: number | null; open: number | null; high: number | null; low: number | null; amount: number | null; turnover: number | null; name: string | null } | null>(null)
   React.useEffect(() => {
@@ -66,7 +67,7 @@ export function PrismPage(): React.ReactElement {
   const positions = acct?.positions ?? []
   const capital = acct?.capital ?? acct?.capitalLimit ?? null
   const used = positions.reduce((a, p) => a + p.qty * p.cost, 0)
-  const exceeded = (state?.state as unknown as { desk?: { limits?: { limitState?: string } } } | undefined)?.desk?.limits?.limitState === 'exceeded'
+  const exceeded = (state as unknown as { desk?: { limits?: { limitState?: string } } } | null | undefined)?.desk?.limits?.limitState === 'exceeded'
   const run = (p: Promise<{ ok: boolean; error?: string }>): void => {
     setSaving(true); setSaveErr(null)
     p.then((r) => { if (r.ok) { setAdding(false); setConfirmDel(null); load() } else setSaveErr(r.error ?? '保存失败') })
@@ -139,7 +140,7 @@ export function PrismPage(): React.ReactElement {
       ...[100, 200, 300, 500].map((w) => React.createElement('button', { key: w, className: 'tw-ad-chip', onClick: () => setCapital(w * 1e4) }, `${w}万`))),
     React.createElement('div', { className: 'tw-ad-usage' },
       React.createElement('div', { className: `tw-ad-bar${exceeded ? ' is-over' : ''}` }, React.createElement('i', { style: { width: `${capital !== null && capital > 0 ? Math.min(100, (used / capital) * 100) : 0}%` } })),
-      React.createElement('span', null, exceeded ? '已用超出上限' : `已用 ${numText(used / 1e8, 2)} / ${capital === null ? '—' : numText(capital / 1e8, 2)}`)),
+      React.createElement('span', null, exceeded ? '已用超出上限' : `已用 ${numText(used / 1e4, 2)} / ${capital === null ? '—' : numText(capital / 1e4, 2)} 万`)),
     limits,
     React.createElement('button', { className: 'tw-ad-primary', onClick: submitCons, disabled: saving }, saving ? '保存中…' : '保存约束'),
     saveErr === null ? null : React.createElement('div', { className: 'tw-ad-err', 'data-role': 'ad-err' }, saveErr))

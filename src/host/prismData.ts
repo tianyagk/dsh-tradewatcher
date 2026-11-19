@@ -54,8 +54,12 @@ export function prismPositionViewOf(
   const rows: PrismPositionView[] = account.positions.map((p) => {
     const price = num(prices[p.secid])
     const marketValue = price === null ? null : p.qty * price
-    const cost = num(p.netCost) ?? num(p.cost) ?? 0
-    const pnl = price === null ? null : (price - cost) * p.qty
+    // 成本口径：p.cost 是每股摊薄成本；p.netCost 是总成本（历史字段）。两者不可混用——
+    // 之前优先取 netCost 当"每股成本"，导致 pnl 被放大 qty 倍（实测 -4.7 亿）。这里统一取每股成本。
+    const netCost = num(p.netCost)
+    const perShare = num(p.cost) ?? (netCost !== null && p.qty > 0 ? netCost / p.qty : null)
+    const cost = perShare ?? 0
+    const pnl = price === null || perShare === null ? null : (price - perShare) * p.qty
     return { secid: p.secid, name: p.name, qty: p.qty, available: p.available, cost, price, marketValue, pnl, weight: null }
   })
   const cash = num(account.cash)
