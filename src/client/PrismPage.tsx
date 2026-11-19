@@ -18,6 +18,7 @@ interface Desk { decisionFlow?: DeskFlowItem[]; overview?: DeskOverview; perform
 
 const pctOf = (v: number | null | undefined): string => (typeof v === 'number' && Number.isFinite(v) ? `${v > 0 ? '+' : ''}${v.toFixed(2)}%` : '—')
 /** 比例（0.7838）→ 百分数（78.38%）；与 pctOf（已是百分数）区分，避免 ×100 漏乘 */
+const pctPlainOf = (v: number | null | undefined): string => (typeof v === 'number' && Number.isFinite(v) ? `${v.toFixed(2)}%` : '—')
 const ratioPctOf = (v: number | null | undefined): string => (typeof v === 'number' && Number.isFinite(v) ? `${v > 0 ? '+' : ''}${(v * 100).toFixed(2)}%` : '—')
 
 
@@ -198,7 +199,7 @@ export function PrismPage(): React.ReactElement {
       ? React.createElement('div', { className: 'tw-ad-empty' }, missText('个股详情', '选择左侧持仓查看'))
       : detail === null
         ? React.createElement('div', { className: 'tw-ad-empty' }, missText('个股详情', '未取到'))
-        : kv([['现价', numText(detail.price, 2)], ['涨跌', pctOf(detail.pct)], ['今开', numText(detail.open, 2)], ['最高', numText(detail.high, 2)], ['最低', numText(detail.low, 2)], ['成交额', `${numText(detail.amount === null ? null : detail.amount / 1e8, 2)} 亿`], ['换手', pctOf(detail.turnover)]]))
+        : kv([['现价', numText(detail.price, 2)], ['涨跌', pctOf(detail.pct)], ['今开', numText(detail.open, 2)], ['最高', numText(detail.high, 2)], ['最低', numText(detail.low, 2)], ['成交额', `${numText(detail.amount === null ? null : detail.amount / 1e8, 2)} 亿`], ['换手', pctPlainOf(detail.turnover)]]))
 
   const flow = desk?.decisionFlow ?? []
   const feedCard = React.createElement('section', { className: 'tw-ad-card', 'data-role': 'ad-flow' },
