@@ -91,7 +91,27 @@ test('⑤ 页面：底条渲染 <select>（300/600/900/1200），默认 600，�
   assert.match(PAGE, /INTERVAL_OPTIONS\.map/)
   assert.match(PAGE, /\$\{s\}s/)
   assert.match(PAGE, /const \[intervalSec, setIntervalSec\] = React\.useState<number>\(PRISM_DEFAULT_INTERVAL_SEC\)/)
-  assert.match(PAGE, /api\.prismSetInterval\(next\)/)
+  // 旧宿主只认 times：必须带一份有效时点（空数组会被拒或清空时点）
+  assert.match(PAGE, /const timesForSave = settings\?\.times !== undefined && settings\.times\.length > 0 \? settings\.times\.slice\(\) : \[/)
+  assert.match(PAGE, /api\.prismSetInterval\(next, timesForSave\)/)
   assert.match(PAGE, /if \(r\.ok\) \{ load\(\); return \}/, '保存成功后必须重新拉回包')
   assert.match(CSS, /\.tw-ad-sb-select\{[^}]*height:22px/)
+})
+
+test('⑥ interval 请求必须同时带 times（旧宿主只认 times，单独发 intervalSec 会报「times 必须是 HH:MM 数组」）', () => {
+  const API = readFileSync(new URL('./api.ts', import.meta.url), 'utf8')
+  const block = API.slice(API.indexOf('prismSetInterval'), API.indexOf('prismSetIndustryLimits'))
+  assert.match(block, /times\?: string\[\]/, '签名必须接受 times')
+  assert.match(block, /if \(Array\.isArray\(times\)\) body\.times = times/, '必须把 times 并入请求体')
+  assert.ok(!/JSON\.stringify\(\{ action: 'settings', intervalSec \}\)/.test(block), '不得只发 intervalSec')
+})
+
+test('⑦ 底条 select 不得被裁切（min-width ≥ 88px 且有右侧留白给箭头）', () => {
+  const CSS = readFileSync(new URL('./styles.ts', import.meta.url), 'utf8')
+  const m = CSS.match(/\.tw-ad-sb-select\{([^}]*)\}/)
+  assert.ok(m, '必须存在 .tw-ad-sb-select 规则')
+  assert.match(m[1], /min-width:88px/)
+  assert.match(m[1], /padding:0 22px 0 8px/)
+  assert.match(m[1], /height:24px/)
+  assert.match(m[1], /line-height:22px/)
 })

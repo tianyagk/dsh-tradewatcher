@@ -11,6 +11,20 @@
 
 ---
 
+## v0.207.1 — 决策周期两处修复（保存报 times、下拉文字被裁）
+
+`npm run check` **1707 / 1707 × 2 时区** + build（73 项）。
+
+| # | 现象 | 根因 | 修法 |
+| --- | --- | --- | --- |
+| 1 | 调决策周期报「times 必须是 HH:MM 数组」 | 客户端只发了 `intervalSec`；旧宿主/空 `settings.times` 时 `times` 缺失或为空数组 | `submitInterval` 始终带一份有效时点：优先当前 `settings.times`，缺失则回退 `09:35 / 11:15 / 13:10 / 14:35`；不再发空数组 |
+| 2 | 下拉框文字被上下裁切 | `.tw-ad-sb-select` 高 22px、`line-height:18px`，28px 底条内文字溢出被裁 | 高 **24px**、`line-height:22px`、`padding:0 22px 0 8px`、`box-sizing:border-box`、`flex:0 0 auto` |
+
+### 验证
+
+- `npm run check` **1707 / 1707 × 2 时区** + build（73 项）。
+- 实机 CDP 核对：把下拉切到 `1200s` 后页面无报错、值保持 `1200`；截图底条 `1200s` 文字与箭头完整可见。
+
 ## v0.207.0 — 棱镜三处可用性修复（左栏滚动 / 挂单 tab / 决策周期可调）
 
 `npm run check` **1705 / 1705 × 2 时区**（1695 → 1705）+ `ALL HOST CHECKS PASSED` + build（73 片段全过）。

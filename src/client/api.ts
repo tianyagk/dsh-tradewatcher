@@ -550,9 +550,12 @@ export const api = {
    * 棱镜：保存决策周期（秒，300/600/900/1200）。
    * 同一 `action:'settings'` 接口；宿主只落盘展示，**不改变**按 `times` 的触发时点。
    */
-  prismSetInterval(intervalSec: number): Promise<{ ok: boolean; error?: string; settings: PrismSettings }> {
+  prismSetInterval(intervalSec: number, times?: string[]): Promise<{ ok: boolean; error?: string; settings: PrismSettings }> {
+    // 同时带 times：宿主旧版（只认 times）也能接受，避免 'times 必须是 HH:MM 数组'；新版会一并保存 intervalSec
+    const body: { action: string; intervalSec: number; times?: string[] } = { action: 'settings', intervalSec }
+    if (Array.isArray(times)) body.times = times
     return requestWithTimeout('/tradewatcher/prism', {
-      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action: 'settings', intervalSec }),
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
     }, 20_000)
   },
   /** 棱镜：保存行业上限（P-11） */

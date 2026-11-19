@@ -248,7 +248,9 @@ export function PrismPage(props: { active?: boolean; redUp?: boolean } = {}): Re
     const prev = intervalSecOf(settings)
     setIntervalSec(next)
     setSaving(true); setSaveErr(null)
-    api.prismSetInterval(next)
+    // 旧宿主只认 times：为空数组会被当成「清空时点」甚至报 400。这里必须带一份有效时点。
+    const timesForSave = settings?.times !== undefined && settings.times.length > 0 ? settings.times.slice() : ['09:35', '11:15', '13:10', '14:35']
+    api.prismSetInterval(next, timesForSave)
       .then((r) => {
         if (r.ok) { load(); return }
         setSaveErr(r.error ?? '保存失败')
