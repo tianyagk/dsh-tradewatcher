@@ -19,8 +19,9 @@ test('③ 保存请求体：op update + shares + cost', () => {
 test('④ 非法输入禁用保存（disabled: saving || editError !== null）', () => {
   assert.match(PAGE, /disabled: saving \|\| editError !== null/)
 })
-test('⑤ 行内错误展示（colSpan=4 + tw-ad-rowerr）', () => {
-  assert.match(PAGE, /colSpan: 4, className: 'tw-ad-rowerr'/)
+test('⑤ 行内错误展示（编辑条 tw-ad-rowerr，不再用表格 colSpan）', () => {
+  assert.match(PAGE, /className: 'tw-ad-editbar tw-ad-rowerr'/)
+  assert.match(PAGE, /editError \?\? rowErr/)
   assert.match(CSS, /\.tw-ad-rowerr\{color:var\(--tw-danger\);font-size:12px/)
 })
 test('⑥ 约束字段级错误映射', () => {

@@ -40,7 +40,7 @@ test('超限样式：is-over + danger', () => {
 })
 
 test('部分失败隔离：四区块各自判空', () => {
-  for (const k of ['desk?.decisionFlow', 'desk?.overview', 'desk?.performance']) assert.ok(PAGE.includes(k), k)
+  for (const k of ['state?.state.runs', 'desk?.overview', 'desk?.performance']) assert.ok(PAGE.includes(k), k)
   assert.match(PAGE, /missText\('个股详情', '未取到'\)/)
 })
 
@@ -66,7 +66,7 @@ test('浅色 5 组语义色仍在（未被深色覆盖）', () => {
 })
 
 test('三栏与断点', () => {
-  assert.match(CSS, /grid-template-columns:344px minmax\(0,1fr\) 374px/)
+  assert.match(CSS, /grid-template-columns:392px minmax\(0,1fr\) 374px/)
   assert.match(CSS, /@media \(max-width:1100px\)\{\.tw-ad-board\{grid-template-columns:minmax\(0,1fr\)\}/)
 })
 

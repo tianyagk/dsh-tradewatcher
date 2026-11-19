@@ -467,7 +467,7 @@ function Dashboard(): React.ReactElement {
     // 复盘：月历 + 当日笔记（第 7 个页签；零轮询，与日历同款保活）
     if (key === 'fupan') return React.createElement(FupanPage)
     // 棱镜（第 9 行 / 第 8 页签）：只在打开时取状态（active 门控，不轮询）
-    if (key === 'prism') return React.createElement(PrismPage, { active: page === 'prism' })
+    if (key === 'prism') return React.createElement(PrismPage, { active: page === 'prism', redUp: (prefs ?? DEFAULT_PREFS).redUp })
     // 工具箱：目录页 + 工具详情页都在 ToolsPage 里（v0.81.0 起它不接 props）
     return React.createElement(ToolsPage)
   }

@@ -6,18 +6,20 @@ import { readFileSync } from 'node:fs'
 const PAGE = readFileSync(new URL('./PrismPage.tsx', import.meta.url), 'utf8')
 const CSS = readFileSync(new URL('./styles.ts', import.meta.url), 'utf8')
 
-test('① 三栏栅格 344 / 1fr / 374', () => {
-  assert.match(CSS, /\.tw-ad-board\{[^}]*grid-template-columns:344px minmax\(0,1fr\) 374px/)
+test('① 三栏栅格 392 / 1fr / 374（左栏加宽：5+1 列在 344 里装不下）', () => {
+  assert.match(CSS, /\.tw-ad-board\{[^}]*grid-template-columns:392px minmax\(0,1fr\) 374px/)
 })
 test('② ≤1100 单列', () => {
   assert.match(CSS, /@media \(max-width:1100px\)\{\.tw-ad-board\{grid-template-columns:minmax\(0,1fr\)\}/)
 })
-test('③ 六个约束全渲染（少一条 ⇒ 败）', () => {
-  for (const l of ['单票权重上限', '单票止损线', '单笔金额上限', '最大总仓位', '日回撤熔断', '最低现金留存']) assert.ok(PAGE.includes(l), `缺 ${l}`)
+test('③ 六个约束全渲染（设计稿顺序 + 标签，少一条 ⇒ 败）', () => {
+  for (const l of ['单票上限', '单笔金额上限', '最大总仓位', '单票止损线', '日回撤熔断', '最低现金留存']) assert.ok(PAGE.includes(l), `缺 ${l}`)
   assert.equal((PAGE.match(/LIMITS\.map/g) ?? []).length, 1)
 })
-test('④ 约束输入 placeholder —（不空单元格）', () => {
-  assert.match(PAGE, /'aria-label': label, placeholder: '—'/)
+test('④ 约束输入占位 = 设计稿默认值（灰字，不写进草稿）', () => {
+  assert.match(PAGE, /placeholder: LIMIT_FALLBACK\[key\]/)
+  assert.match(PAGE, /title: isDefault \? '默认值，未保存' : undefined/)
+  assert.ok(!PAGE.includes("placeholder: '—'"), '不得再用 — 占位（设计稿是默认值灰字）')
 })
 test('⑤ 空持仓 —（未取到持仓）', () => { assert.match(PAGE, /missText\('持仓'\)/) })
 test('⑥ selftest 指示存在（含 title 与耗时）', () => {
@@ -45,9 +47,11 @@ test('⑫ 添加持仓弹层存在且可关闭', () => {
   assert.match(PAGE, /onClose: \(\) => setAdding\(false\)/)
 })
 
-test('⑬ 中栏：详情 KV 九字段 + 未选空态', () => {
-  for (const k of ['现价', '涨跌', '今开', '最高', '最低', '成交额', '换手']) assert.ok(PAGE.includes(k), k)
+test('⑬ 中栏：九项口径（昨收/今开/最高/最低/持仓 + 成交额/换手率/量比/振幅）+ 未选空态', () => {
+  const MID = readFileSync(new URL('./prismDeskMid.ts', import.meta.url), 'utf8')
+  for (const k of ['昨收', '今开', '最高', '最低', '持仓', '成交额', '换手率', '量比', '振幅']) assert.ok(MID.includes(k), k)
   assert.match(PAGE, /missText\('个股详情', '选择左侧持仓查看'\)/)
+  assert.match(PAGE, /className: `tw-ad-q-price is-\$\{head\.tone\}`/)
 })
 test('⑭ 决策流五动作 + 空态', () => {
   const FORM = readFileSync(new URL('./prismForm.ts', import.meta.url), 'utf8')
@@ -59,12 +63,21 @@ test('⑮ 动作胶囊五色映射', () => {
   assert.match(CSS, /\.tw-ad-pill\.is-buy\{color:var\(--tw-up\)\}/)
   assert.match(CSS, /\.tw-ad-pill\.is-sell\{color:var\(--tw-down\)\}/)
 })
-test('⑯ 右栏四项 + 绩效五项', () => {
-  for (const k of ['总资产', '现金', '持仓占比', '可用']) assert.ok(PAGE.includes(k), k)
-  for (const k of ['超额收益', '最大回撤', '决策数', '胜率', 'token 用量']) assert.ok(PAGE.includes(k), k)
-})
-test('⑰ tokenUsage null ⇒ —（无源不写 0）', () => {
-  assert.match(PAGE, /pf\.tokenUsage === null \|\| pf\.tokenUsage === undefined \? '—'/)
+test('⑯ 右栏四格 + 绩效四格（第二批：设计稿口径）', () => {
+  const SIDE = readFileSync(new URL('./prismDeskSide.ts', import.meta.url), 'utf8')
+  for (const k of ['可用资金', '持仓市值', '浮动盈亏', '今日已实现']) assert.ok(SIDE.includes(k), k)
+  for (const k of ['决策', '胜率', '回撤', '超额']) assert.ok(SIDE.includes(`label: '${k}'`), k)
+  assert.match(PAGE, /acctView\.cells/)
+  assert.match(PAGE, /perfCells\.map/)
+},)
+test('⑰ 绩效无源 ⇒ —（不写 0）；sparkline 少于 2 点写「样本不足」', async () => {
+  const { perfCellsOf, sparkOf } = await import('./prismDeskSide.ts')
+  for (const c of perfCellsOf({ runsCount: 20, hitRate: null, maxDrawdown: null, excessPct: null })) {
+    if (c.key !== 'runs') assert.equal(c.value, '—', `${c.label} 无源必须 —`)
+  }
+  assert.equal(perfCellsOf({ runsCount: 20, hitRate: null, maxDrawdown: null, excessPct: null })[0].value, '20')
+  assert.equal(sparkOf([{ equity: 1 }]).has, false)
+  assert.match(PAGE, /'—（样本不足）'/)
 })
 test('⑱ 深色 1:1 设计稿令牌', () => {
   for (const v of ['#070a0f', '#0f141c', '#1c2532', '#2b3748', '#e8eef7', '#98a7bc', '#5d6a7d', '#ff4d5e', '#00c88a', '#5b8cff', '#f0a93b']) {
@@ -95,7 +108,8 @@ test('㉒ B6 超限样式与文案', () => {
   assert.match(CSS, /\.tw-ad-bar\.is-over i\{background:var\(--tw-danger\)\}/)
 })
 test('㉓ B6 部分失败隔离：各区块独立判空', () => {
-  for (const r of ["desk?.decisionFlow", "desk?.overview", "desk?.performance"]) assert.ok(PAGE.includes(r), r)
+  // 第二批：决策流改由 state.runs 派生（desk.decisionFlow 不再是唯一来源）
+  for (const r of ["state?.state.runs", "desk?.overview", "desk?.performance"]) assert.ok(PAGE.includes(r), r)
 })
 test('㉔ B6 三栏骨架（加载态）', () => {
   assert.ok((PAGE.match(/Skeleton, \{ lines: \d, height: \d+ \}/g) ?? []).length >= 3, '三栏骨架')

@@ -596,8 +596,8 @@ export const api = {
       method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action: 'position', ...body }),
     }, 20_000)
   },
-  /** 模拟盘六条约束写 */
-  prismConstraints(c: { perStockPct: number; stopLossPct: number; perOrderYuan: number; maxPosPct: number; maxDDPct: number; minCashPct: number }): Promise<{ ok: boolean; error?: string }> {
+  /** 模拟盘六条约束写（null = 保留宿主原值；界面不把设计稿默认值写进存档） */
+  prismConstraints(c: { perStockPct: number | null; stopLossPct: number | null; perOrderYuan: number | null; maxPosPct: number | null; maxDDPct: number | null; minCashPct: number | null }): Promise<{ ok: boolean; error?: string }> {
     return requestWithTimeout('/tradewatcher/prism', {
       method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action: 'constraints', ...c }),
     }, 20_000)

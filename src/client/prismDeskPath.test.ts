@@ -4,15 +4,18 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 
 const PAGE = readFileSync(new URL('./PrismPage.tsx', import.meta.url), 'utf8')
+const MID = readFileSync(new URL('./prismDeskMid.ts', import.meta.url), 'utf8')
 
 test('① desk 从顶层读取，不得再读 state.state.desk', () => {
   assert.ok(!/state\?\.state[^\n]*\.desk/.test(PAGE), '不得出现 state?.state … desk（旧错误路径）')
   assert.match(PAGE, /\{\s*desk\?:\s*Desk\s*\}/, '应存在顶层 desk 类型引用')
 })
 
-test('② 已用/上限按万元显示（除以 1e4），不得除以 1e8', () => {
-  assert.match(PAGE, /used \/ 1e4/)
-  assert.ok(!/used \/ 1e8/.test(PAGE), '不得再用 1e8（会显示 0.01/0.02 这类错值）')
+test('② 已用/上限按万元显示（wanOf 除以 1e4），不得除以 1e8', () => {
+  const DESK = readFileSync(new URL('./prismDesk.ts', import.meta.url), 'utf8')
+  assert.match(PAGE, /usageOf\(capital, used\)/)
+  assert.match(DESK, /v \/ 1e4/)
+  assert.ok(!/used \/ 1e8/.test(PAGE) && !/\/ 1e8/.test(DESK), '已用额不得除以 1e8（会显示 0.01/0.02 这类错值）')
 })
 
 test('③ 字段名与宿主 desk 对齐（曾经用 total/target/source/alpha/maxDD/decisions/winRate 全部错位）', () => {
@@ -24,14 +27,17 @@ test('③ 字段名与宿主 desk 对齐（曾经用 total/target/source/alpha/m
   }
 })
 
-test('④ 比例字段必须 ×100（positionPct 0.7838 ⇒ 78.38%）', () => {
-  assert.match(PAGE, /ratioPctOf/)
-  assert.match(PAGE, /v \* 100/)
-  assert.match(PAGE, /ratioPctOf\(ov\.positionPct\)/)
+test('④ 比例字段必须 ×100（positionPct 0.7838 ⇒ 78.4%）', () => {
+  const SIDE = readFileSync(new URL('./prismDeskSide.ts', import.meta.url), 'utf8')
+  assert.match(SIDE, /export function ratioPctOf/)
+  assert.match(SIDE, /\(n \* 100\)/)
+  // 第二批：仓位比例经 accountViewOf 进入视图（页面不再自己 ×100）
+  assert.match(PAGE, /positionPct: ov\?\.positionPct \?\? null/)
+  assert.match(PAGE, /acctView\.positionText/)
 })
 
-test('⑤ 状态与来源中文化', () => {
-  assert.match(PAGE, /filled: '已成交'/)
-  assert.match(PAGE, /auto: '自动'/)
+test('⑤ 状态与来源中文化（第二批起标签表搬到 prismDeskMid，页面仍不得直出英文 status）', () => {
+  assert.match(MID, /filled: '已成交'/)
+  assert.match(MID, /auto: '自动'/)
   assert.ok(!/f\.status \?\? '—'/.test(PAGE), '不得直接显示英文 status')
 })
