@@ -349,8 +349,14 @@ test('㊺ 动效只有 transform/opacity（无 height/left/width 过渡）', () 
 test('㊻ 不新增路由 / 不新增依赖：页面只打既有棱镜接口与既有 trend/kline', () => {
   const calls = [...new Set([...PAGE.matchAll(/api\.(\w+)\(/g)].map((m) => m[1]))].sort()
   // 第二批起按拍板 Q2 复用既有 /tradewatcher/trend、/tradewatcher/kline（只读、无新路由）
-  for (const c of calls) assert.ok(['prismState', 'prismSelftest', 'detail', 'prismPosition', 'prismCapital', 'prismConstraints', 'trend', 'kline'].includes(c as string), `新增了接口调用 ${c}`)
+  // v0.206.x：决策周期下拉复用既有 POST /tradewatcher/prism（action:'settings'），不是新路由
+  for (const c of calls) assert.ok(['prismState', 'prismSelftest', 'detail', 'prismPosition', 'prismCapital', 'prismConstraints', 'prismSetInterval', 'trend', 'kline'].includes(c as string), `新增了接口调用 ${c}`)
   assert.ok(!/prismTrend|prismKline|fetch\(/.test(PAGE), '不得新增 prismTrend/prismKline 之类的新路由封装')
+  // 决策周期走的仍是同一条路由 + 同一个 action
+  const intervalBlock = API.slice(API.indexOf('prismSetInterval'), API.indexOf('prismSetIndustryLimits'))
+  assert.match(intervalBlock, /\/tradewatcher\/prism/)
+  assert.match(intervalBlock, /action: 'settings'/)
+  assert.match(intervalBlock, /intervalSec/)
   const pkg = JSON.parse(readFileSync(new URL('../../package.json', import.meta.url), 'utf8')) as { dependencies?: Record<string, string> }
   assert.deepEqual(pkg.dependencies ?? {}, {}, '不得新增运行时依赖')
 })

@@ -272,6 +272,9 @@ test('㉖ 页面：底条由 statusFactsOf 渲染六项，高度 28px', () => {
   assert.match(PAGE, /statusFactsOf\(\{/)
   assert.match(PAGE, /'data-role': 'ad-sbar'/)
   assert.match(CSS, /\.tw-ad-sbar\{[^}]*height:28px/)
+  // 行情源无源时圆点转灰：绿点不得暗示「有实时源」
+  assert.ok(PAGE.includes("f.value === '—' ? ' is-na' : ''"), '底条圆点要按有无源分色')
+  assert.match(CSS, /\.tw-ad-sb-dot\.is-na\{background:var\(--tw-muted\)\}/)
 })
 
 test('㉗ 样式：右栏四格等宽 + 进度条只动 transform（不动 width）', () => {

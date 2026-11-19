@@ -6,6 +6,12 @@
 export interface PrismSettings {
   /** `HH:MM`（Asia/Shanghai），默认 09:35 / 11:20 / 13:10 / 14:40；可增删、无上限 */
   times: string[]
+  /**
+   * 决策周期（秒）：300 / 600 / 900 / 1200，缺省 600。
+   * ⚠ **仅用于展示与后续扩展**：`PrismScheduler.dueSlots` 仍只按 `times` 触发，
+   * 本字段**不改变**任何现有触发时点；想改触发时点请改 `times`。
+   */
+  intervalSec?: number
   /** 模拟盘资金上限（持久化；入金 = 上限与现金同步 +delta） */
   capital?: number
   /** 成交参与率上限（默认 0.10；成交股数 ≤ volume × 该值） */
@@ -123,6 +129,10 @@ export interface PrismState {
 
 export const PRISM_DEFAULT_CAPITAL = 1_500_000
 export const PRISM_DEFAULT_TIMES = ['09:35', '11:20', '13:10', '14:40'] as const
+/** 决策周期可选值（秒）；与 `PrismSettings.intervalSec` 同一口径 */
+export const PRISM_INTERVAL_OPTIONS = [300, 600, 900, 1200] as const
+/** 决策周期默认值（秒）：未保存过 ⇒ 600s */
+export const PRISM_DEFAULT_INTERVAL_SEC = 600
 export const PRISM_MAX_TIMES = 50
 export const PRISM_SKELETON_MAX = 20_000
 export const PRISM_NEWS_KEEP_MS = 24 * 3_600_000

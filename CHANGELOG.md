@@ -11,6 +11,26 @@
 
 ---
 
+## v0.207.0 — 棱镜三处可用性修复（左栏滚动 / 挂单 tab / 决策周期可调）
+
+`npm run check` **1705 / 1705 × 2 时区**（1695 → 1705）+ `ALL HOST CHECKS PASSED` + build（73 片段全过）。
+
+| # | 现象 | 修法 |
+| --- | --- | --- |
+| 1 | 左栏「持仓明细」被裁切，底部「＋ 添加持仓」与「浮盈合计」看不到，无滚动条 | `.tw-ad-col` 改 `overflow-x:hidden; overflow-y:auto`；持仓卡 `flex:1 1 auto; min-height:0`；列表 `flex:1 1 auto; min-height:0; overflow:auto`；footer `flex:0 0 auto` 且与列表同级常驻 |
+| 2 | 右栏「持仓 / 挂单」两个 tab 拥挤无点击区 | `.tw-ad-ptabs{gap:6px;flex-wrap:nowrap}`；`.tw-ad-pt{min-width:76px;padding:5px 10px}`；选中态浅蓝底 + 2px 底线 |
+| 3 | 底部「决策周期」只读 | 新增 `PrismSettings.intervalSec`（300/600/900/1200，默认 **600**）；`action:'settings'` 同时接受 `times` 与 `intervalSec`（任一或同传，非法 400 + 原因）；底条改 `<select>`，改动即保存并刷新 |
+
+### 关于 intervalSec 的边界
+
+- 只落盘与展示，**不改变 `times` 触发时点**（`prismScheduler.dueSlots` 仍只读 `times`）；已在代码注释与 `SPEC-PRISM-REBUILD.md` §2.5 双处写明。
+
+### 验证
+
+- `npm run check` **1705 / 1705 × 2 时区** + build（73 项）+ `tsc --noEmit` 0。
+- 新增 `prismDeskLayoutFix.test.ts`（5 test / 41 assert）、`prismInterval.test.ts`（5 test / 23 assert）。
+- 实机核对（CDP 1700px 深色）：左栏底部 `＋ 添加持仓 / 浮盈 −217,716` 可见；右栏 `持仓 8 / 挂单 0` 有间距与选中底线；底条出现 `600s` 下拉。
+
 ## v0.206.0 — 棱镜对齐 AGENT DESK 设计稿（B1 + B2）
 
 `npm run check` **1694 / 1694 × 2 时区**（1580 → 1694）+ `ALL HOST CHECKS PASSED` + build（73 片段全过）。

@@ -13,8 +13,10 @@ import { mkdir, readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import {
   PRISM_DEFAULT_CAPITAL,
+  PRISM_DEFAULT_INTERVAL_SEC,
   PRISM_DEFAULT_SKELETON,
   PRISM_DEFAULT_TIMES,
+  PRISM_INTERVAL_OPTIONS,
   PRISM_NEWS_KEEP_MS,
   PRISM_RUNS_KEEP,
   type PrismNewsItem,
@@ -30,7 +32,12 @@ import { beijingIsoOf, dayOf } from './time.ts'
 
 const DEFAULT_STATUS: PrismNewsStatus = { state: 'idle', pages: 0, lastSeenId: null, fetchedAt: null, reason: null, items: 0 }
 
-const defaultSettings = (): PrismSettings => ({ times: [...PRISM_DEFAULT_TIMES], lastFired: {}, model: null, capital: PRISM_DEFAULT_CAPITAL, participationRate: 0.1, industryLimits: {} })
+const defaultSettings = (): PrismSettings => ({ times: [...PRISM_DEFAULT_TIMES], intervalSec: PRISM_DEFAULT_INTERVAL_SEC, lastFired: {}, model: null, capital: PRISM_DEFAULT_CAPITAL, participationRate: 0.1, industryLimits: {} })
+
+/** 合法决策周期：只认 300 / 600 / 900 / 1200；其余（含旧文件缺字段）⇒ 600 */
+const intervalSecOf = (v: unknown): number => (
+  typeof v === 'number' && (PRISM_INTERVAL_OPTIONS as readonly number[]).includes(v) ? v : PRISM_DEFAULT_INTERVAL_SEC
+)
 
 export class PrismStore {
   private readonly dir: string
@@ -87,7 +94,7 @@ export class PrismStore {
   }
 
   private async loadSettings(): Promise<void> {
-    const disk = await this.loadJson<{ times?: unknown; lastFired?: unknown; model?: unknown; capital?: unknown; participationRate?: unknown; industryLimits?: unknown; perStockPct?: unknown; stopLossPct?: unknown; perOrderYuan?: unknown; maxPosPct?: unknown; maxDDPct?: unknown; minCashPct?: unknown }>('prism-settings.json')
+    const disk = await this.loadJson<{ times?: unknown; intervalSec?: unknown; lastFired?: unknown; model?: unknown; capital?: unknown; participationRate?: unknown; industryLimits?: unknown; perStockPct?: unknown; stopLossPct?: unknown; perOrderYuan?: unknown; maxPosPct?: unknown; maxDDPct?: unknown; minCashPct?: unknown }>('prism-settings.json')
     if (disk === null) return
     const times = Array.isArray(disk.times) ? disk.times.filter((t): t is string => typeof t === 'string' && /^\d{2}:\d{2}$/.test(t)) : []
     const capital = typeof disk.capital === 'number' && Number.isFinite(disk.capital) && disk.capital > 0 ? disk.capital : PRISM_DEFAULT_CAPITAL
@@ -113,7 +120,10 @@ export class PrismStore {
         : null
     const numOrNull = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null)
     this.settingsValue = {
-      times: times.length > 0 ? times : [...PRISM_DEFAULT_TIMES], lastFired, model, capital, participationRate, industryLimits,
+      times: times.length > 0 ? times : [...PRISM_DEFAULT_TIMES],
+      // 旧文件没有 intervalSec / 值非法 ⇒ 600（不是"未设置"，界面按 600s 显示）
+      intervalSec: intervalSecOf(disk.intervalSec),
+      lastFired, model, capital, participationRate, industryLimits,
       // v0.203.0：约束六字段（旧文件没有 ⇒ null，不猜）
       perStockPct: numOrNull(disk.perStockPct),
       stopLossPct: numOrNull(disk.stopLossPct),
@@ -164,14 +174,28 @@ export class PrismStore {
     return JSON.parse(JSON.stringify(this.settingsValue)) as PrismSettings
   }
 
-  async saveTimes(times: string[]): Promise<PrismSettings> {
-    const clean = [...new Set(times.map((t) => t.trim()))].filter((t) => /^([01]\d|2[0-3]):[0-5]\d$/.test(t)).sort()
-    const next: PrismSettings = { ...this.settingsValue, times: clean }
+  /**
+   * 保存调度设置：`times`（触发时点）与 `intervalSec`（决策周期，秒）可单独或同时更新。
+   *
+   * ⚠ `intervalSec` **只落盘、只展示**：`PrismScheduler.dueSlots` 读 `settings.times` 触发，
+   * 不读本字段 ⇒ 改决策周期不会改变任何既有触发时点（后续要按周期触发必须另写调度并加断言）。
+   */
+  async saveSchedule(patch: { times?: string[]; intervalSec?: number }): Promise<PrismSettings> {
+    const next: PrismSettings = { ...this.settingsValue }
+    if (patch.times !== undefined) {
+      next.times = [...new Set(patch.times.map((t) => t.trim()))].filter((t) => /^([01]\d|2[0-3]):[0-5]\d$/.test(t)).sort()
+    }
+    if (patch.intervalSec !== undefined) next.intervalSec = patch.intervalSec
     this.settingsValue = next
     await updateJsonLocked(this.pathOf('prism-settings.json'), () => ({ v: 1, ...next })).catch((error) => {
       this.guard.markUnreadable(this.pathOf('prism-settings.json'), error)
     })
     return this.settings()
+  }
+
+  /** 兼容旧调用：只更新时点（行为与 v0.206.0 完全一致） */
+  async saveTimes(times: string[]): Promise<PrismSettings> {
+    return this.saveSchedule({ times })
   }
 
   /** 保存资金上限（与账户同值；入金/改上限走这里） */

@@ -1087,7 +1087,8 @@ color-scheme:dark}
 
 /* ── 三栏 ── */
 .tw-ad-board{display:grid;grid-template-columns:392px minmax(0,1fr) 374px;grid-auto-rows:minmax(0,1fr);gap:10px;padding:10px 12px;min-height:0;flex:1;overflow:auto}
-.tw-ad-col{display:flex;flex-direction:column;gap:10px;min-width:0;min-height:0;overflow:hidden}
+/* 列本身可纵向滚动：内容高于视口时出现滚动条，不再被 overflow:hidden 裁掉（左栏持仓脚注因此可见） */
+.tw-ad-col{display:flex;flex-direction:column;gap:10px;min-width:0;min-height:0;overflow-x:hidden;overflow-y:auto}
 .tw-ad-banner{display:flex;align-items:center;gap:7px;padding:6px 10px;border-radius:8px;border:1px dashed rgba(240,169,59,.32);background:linear-gradient(90deg,rgba(240,169,59,.09),rgba(240,169,59,.02));color:var(--tw-human);font-size:12px;font-weight:600;letter-spacing:.2px;line-height:1.4}
 .tw-ad-lock{width:13px;height:13px;flex:0 0 auto}
 .tw-ad-card{background:var(--tw-card);border:1px solid var(--tw-border);border-radius:10px;box-shadow:var(--tw-elev-1);padding:10px 12px 11px;display:flex;flex-direction:column;gap:7px;min-width:0}
@@ -1145,10 +1146,13 @@ color-scheme:dark}
 .tw-ad-apply:focus-visible{outline:2px solid var(--tw-accent);outline-offset:2px}
 
 /* ── 持仓明细（5+1 列）── */
+/* 持仓卡吃满人类列剩余高度：只有列表滚动，表头/脚注（＋添加持仓、浮盈合计）常驻可见 */
+.tw-ad-pos-card{flex:1 1 auto;min-height:0}
+.tw-ad-pos-card>.tw-ad-card-head,.tw-ad-pos-card>.tw-ad-pos-foot{flex:0 0 auto}
 .tw-ad-pos-head,.tw-ad-pos-row{display:grid;grid-template-columns:minmax(0,1fr) 48px 50px 38px 50px 20px;gap:5px;align-items:center;padding:0 10px}
 .tw-ad-pos-head{height:24px;font-size:12px;color:var(--tw-muted);border-bottom:1px solid var(--tw-border);background:rgba(255,255,255,.014)}
 .tw-ad-pos-head span:not(:first-child){text-align:right}
-.tw-ad-pos-list{display:flex;flex-direction:column;min-height:64px;max-height:46vh;overflow:auto}
+.tw-ad-pos-list{display:flex;flex-direction:column;flex:1 1 auto;min-height:0;overflow:auto}
 .tw-ad-pos-item{position:relative}
 .tw-ad-pos-row{height:34px;border-bottom:1px solid var(--tw-border);cursor:pointer}
 .tw-ad-pos-row:hover{background:rgba(240,169,59,.035)}
@@ -1171,7 +1175,7 @@ color-scheme:dark}
 .tw-ad-menu button:hover{background:var(--tw-card2);color:var(--tw-text)}
 .tw-ad-scrim{position:fixed;inset:0;z-index:41;background:transparent;border:0;cursor:default}
 .tw-ad-editbar{display:flex;align-items:center;gap:6px;padding:4px 10px 6px;font-size:12px;color:var(--tw-muted)}
-.tw-ad-pos-foot{display:flex;align-items:center;gap:8px;padding:8px 10px 2px;border-top:1px solid var(--tw-border)}
+.tw-ad-pos-foot{display:flex;align-items:center;gap:8px;flex:0 0 auto;padding:8px 10px 2px;border-top:1px solid var(--tw-border)}
 .tw-ad-add{display:inline-flex;align-items:center;gap:5px;height:26px;padding:0 9px;border-radius:6px;border:1px dashed rgba(240,169,59,.34);background:rgba(240,169,59,.08);color:var(--tw-human);font-size:12px;cursor:pointer}
 .tw-ad-add:hover:not(:disabled){background:rgba(240,169,59,.15)}
 .tw-ad-add:disabled{opacity:.6;cursor:default}
@@ -1300,11 +1304,13 @@ color-scheme:dark}
 /* ── 右栏 · 持仓 / 挂单 ── */
 .tw-ad-panel{flex:1 1 auto;min-height:0;gap:0;padding:0}
 .tw-ad-panel .tw-ad-card-head{padding:8px 10px;border-bottom:1px solid var(--tw-border)}
-.tw-ad-ptabs{display:flex;gap:2px;padding:2px;border-radius:6px;background:rgba(255,255,255,.028);border:1px solid var(--tw-border)}
-.tw-ad-pt{display:inline-flex;align-items:center;gap:4px;padding:3px 10px;border:0;border-radius:4px;background:none;color:var(--tw-muted);font-size:12px;letter-spacing:.2px;cursor:pointer}
+/* 两个 tab 之间留 6px（点击区不粘连）；374px 栏宽下不换行 */
+.tw-ad-ptabs{display:flex;flex-wrap:nowrap;gap:6px;padding:2px;flex:0 0 auto;border-radius:6px;background:rgba(255,255,255,.028);border:1px solid var(--tw-border)}
+.tw-ad-pt{display:inline-flex;align-items:center;justify-content:center;gap:4px;min-width:76px;padding:5px 10px;flex:0 0 auto;white-space:nowrap;border:0;border-radius:4px;background:none;color:var(--tw-muted);font-size:12px;letter-spacing:.2px;cursor:pointer}
 .tw-ad-pt em{font-style:normal;font-size:12px;color:var(--tw-muted);font-variant-numeric:tabular-nums}
-.tw-ad-pt:hover:not(.on){color:var(--tw-dim)}
-.tw-ad-pt.on{background:rgba(91,140,255,.16);color:var(--tw-accent)}
+.tw-ad-pt:hover:not(.on){color:var(--tw-dim);background:rgba(255,255,255,.03)}
+/* 选中态：浅蓝底 + 2px 底线（不靠颜色单打独斗） */
+.tw-ad-pt.on{background:rgba(91,140,255,.16);color:var(--tw-accent);box-shadow:inset 0 -2px 0 var(--tw-accent)}
 .tw-ad-pt.on em{color:var(--tw-accent)}
 .tw-ad-pt:focus-visible{outline:2px solid var(--tw-accent);outline-offset:2px}
 .tw-ad-panel-hint{font-size:12px;color:var(--tw-muted);font-variant-numeric:tabular-nums;white-space:nowrap}
@@ -1352,6 +1358,11 @@ color-scheme:dark}
 .tw-ad-sb-item{display:flex;align-items:center;gap:5px;white-space:nowrap;min-width:0}
 .tw-ad-sb-item b{font-weight:500;color:var(--tw-dim);font-variant-numeric:tabular-nums;overflow:hidden;text-overflow:ellipsis}
 .tw-ad-sb-dot{width:5px;height:5px;border-radius:50%;background:var(--tw-ok);flex:0 0 auto}
+.tw-ad-sb-dot.is-na{background:var(--tw-muted)}
+.tw-ad-sb-select{height:22px;line-height:18px;padding:0 2px 0 6px;border:1px solid var(--tw-border);border-radius:4px;background:var(--tw-card2);color:var(--tw-dim);font-size:12px;font-variant-numeric:tabular-nums;cursor:pointer}
+.tw-ad-sb-select:hover:not(:disabled){border-color:var(--tw-border-strong);color:var(--tw-text)}
+.tw-ad-sb-select:disabled{opacity:.55;cursor:default}
+.tw-ad-sb-select:focus-visible{outline:2px solid var(--tw-accent);outline-offset:1px}
 .tw-ad-sb-sep{width:1px;height:11px;background:var(--tw-border);flex:0 0 auto}
 
 .tw-ad-primary{height:30px;border:0;border-radius:8px;background:var(--tw-accent);color:#fff;font-size:12px;font-weight:600;cursor:pointer}
@@ -1380,7 +1391,7 @@ color-scheme:dark}
 .tw-root[data-theme=dark] .tw-ad-run-t{color:var(--tw-accent)}
 .tw-root[data-theme=dark] .tw-ad-card{background:linear-gradient(180deg,var(--tw-card2),var(--tw-bg))}
 @media (max-width:1100px){.tw-ad-board{grid-template-columns:minmax(0,1fr)}}
-@media (max-width:1100px){.tw-ad-board{grid-auto-rows:min-content}.tw-ad-col{overflow:visible}.tw-ad-feed-list{max-height:56vh}.tw-ad-pos-list{max-height:40vh}}
+@media (max-width:1100px){.tw-ad-board{grid-auto-rows:min-content}.tw-ad-col{overflow:visible}.tw-ad-feed-list{max-height:56vh}.tw-ad-pos-list{min-height:64px;max-height:40vh}}
 .tw-dw-body{display:flex;flex-direction:column;gap:12px}
 .tw-dw-review{display:flex;align-items:flex-end;gap:12px;padding:12px 12px 10px;border:1px solid var(--tw-border);border-radius:8px;background:var(--tw-card2)}
 .tw-dw-review-main{display:flex;flex-direction:column;gap:2px}

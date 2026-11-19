@@ -546,6 +546,15 @@ export const api = {
       method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action: 'settings', times }),
     }, 20_000)
   },
+  /**
+   * 棱镜：保存决策周期（秒，300/600/900/1200）。
+   * 同一 `action:'settings'` 接口；宿主只落盘展示，**不改变**按 `times` 的触发时点。
+   */
+  prismSetInterval(intervalSec: number): Promise<{ ok: boolean; error?: string; settings: PrismSettings }> {
+    return requestWithTimeout('/tradewatcher/prism', {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action: 'settings', intervalSec }),
+    }, 20_000)
+  },
   /** 棱镜：保存行业上限（P-11） */
   prismSetIndustryLimits(industryLimits: Record<string, number>): Promise<{ ok: boolean; settings: PrismSettings }> {
     return requestWithTimeout('/tradewatcher/prism', {

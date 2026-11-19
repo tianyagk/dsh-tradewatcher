@@ -7,6 +7,11 @@
  *   · 只自动补 **10 分钟内**刚过的时点（更早的错过点不自动追，避免一次刷多轮 token）；
  *   · 已过时点由页面按钮手动补跑（只跑指定时点）。
  * 触发水位落 `prism-settings.json`（`PrismStore.markFired`）。
+ *
+ * ⚠ **`settings.intervalSec` 不参与调度**：本调度器只认 `settings.times`（HH:MM 时点）。
+ * 底部状态条的「决策周期」下拉写入的 `intervalSec` 仅用于展示与后续扩展——改它**不会**
+ * 改变任何既有触发时点；要改触发时点只能改 `times`。若将来要按 `intervalSec` 触发，
+ * 必须新增独立调度分支并配回归断言，不能顺手改 `dueSlots` 的现有语义。
  */
 import { hhmmOf, dayOf } from './time.ts'
 import { tradingDayState } from './rescue.ts'

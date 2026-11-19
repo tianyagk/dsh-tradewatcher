@@ -9,6 +9,7 @@
  * - 行情源 / 温度 / 约束版本宿主无字段 ⇒ `—` + title 原因。
  */
 import type { Tone } from './prismDeskMid.ts'
+import { PRISM_DEFAULT_INTERVAL_SEC, PRISM_INTERVAL_OPTIONS } from '../shared/prism.ts'
 
 const finite = (v: number | null | undefined): number | null =>
   typeof v === 'number' && Number.isFinite(v) ? v : null
@@ -233,24 +234,43 @@ export interface StatusInput {
   /** 温度；宿主无字段 ⇒ null */
   temperature: number | null
   times: ReadonlyArray<string>
+  /**
+   * 决策周期（秒）；页面传 `settings.intervalSec ?? 600`。
+   * 不传 ⇒ `cycle` 仍按 `times` 时点列表显示（兼容旧调用/旧断言）。
+   */
+  intervalSec?: number | null
   /** 约束版本；宿主无字段 ⇒ null */
   constraintVersion: string | null
   /** 今日风控拦截笔数；无法统计 ⇒ null */
   blockedToday: number | null
 }
 
+/** `intervalSec` 只在 300/600/900/1200 内有效；缺失或非法 ⇒ 600（未保存 = 600s） */
+export function intervalSecOf(settings: { intervalSec?: number | null } | null | undefined): number {
+  const v = settings?.intervalSec
+  return typeof v === 'number' && (PRISM_INTERVAL_OPTIONS as readonly number[]).includes(v) ? v : PRISM_DEFAULT_INTERVAL_SEC
+}
+
+/** 底条下拉选项（秒）：300 / 600 / 900 / 1200 */
+export const INTERVAL_OPTIONS: ReadonlyArray<number> = PRISM_INTERVAL_OPTIONS
+
 /**
  * 底部状态条六项：`行情源 / 决策引擎 / T / 决策周期 / 约束版本 / 风控`。
  * 无源的项写 `—` 并把原因放 title（不写 `SIM-FEED` 这类演示值）。
+ * `intervalSec` 有值 ⇒ 决策周期显示 `600s` 这类周期；否则沿用 `times` 时点列表（旧行为）。
  */
 export function statusFactsOf(input: StatusInput): StatusFact[] {
   const times = input.times.filter((t) => typeof t === 'string' && t !== '')
   const t = finite(input.temperature)
+  // 只认 300/600/900/1200；非法回包值按未保存处理（600），不回显 700s 这类假值
+  const interval = input.intervalSec === undefined || input.intervalSec === null ? null : intervalSecOf({ intervalSec: input.intervalSec })
   return [
     { key: 'feed', label: '行情源', value: input.feed ?? '—', title: input.feed === null ? '宿主未提供行情源标识' : null },
     { key: 'engine', label: '决策引擎', value: input.model ?? '—', title: input.model === null ? '宿主没有可用默认模型' : (input.modelProvider === null ? null : `provider ${input.modelProvider}`) },
     { key: 'temp', label: 'T', value: t === null ? '—' : t.toFixed(2), title: t === null ? '宿主未提供温度参数' : '模型温度' },
-    { key: 'cycle', label: '决策周期', value: times.length === 0 ? '—' : times.join(' · '), title: times.length === 0 ? '未配置决策时点' : `每交易日 ${times.length} 个决策时点` },
+    interval === null
+      ? { key: 'cycle', label: '决策周期', value: times.length === 0 ? '—' : times.join(' · '), title: times.length === 0 ? '未配置决策时点' : `每交易日 ${times.length} 个决策时点` }
+      : { key: 'cycle', label: '决策周期', value: `${interval}s`, title: '决策周期（秒）：仅展示与后续扩展，触发仍按配置时点' },
     { key: 'ver', label: '约束版本', value: input.constraintVersion === null ? '—' : input.constraintVersion, title: input.constraintVersion === null ? '宿主未提供约束版本号' : null },
     { key: 'risk', label: '风控', value: input.blockedToday === null ? '—' : input.blockedToday === 0 ? '全部通过' : `拦截 ${input.blockedToday} 笔`, title: input.blockedToday === null ? '缺交易日或委托数据，今日拦截数不可算' : '今日被风控拦截的委托笔数' },
   ]

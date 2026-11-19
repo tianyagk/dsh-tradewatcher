@@ -16,7 +16,7 @@ import type { PrismStore } from './prismStore.ts'
 import { PrismTradingStore, applyFeeCorrection, clampDecision, copyAtCost, dayStartMismatchOf, equityPointOf, matchTick, placeDecision, rebuildFromOrders, upsertEquity, type QuoteLite } from './prismAccount.ts'
 import type { DataStore } from './store.ts'
 import type { PrismAccount, PrismFill, PrismSettings, PrismState } from '../shared/prism.ts'
-import { PRISM_MAX_TIMES, PRISM_SKELETON_MAX } from '../shared/prism.ts'
+import { PRISM_INTERVAL_OPTIONS, PRISM_MAX_TIMES, PRISM_SKELETON_MAX } from '../shared/prism.ts'
 import { backfillNews, incrementalNews } from './prismNews.ts'
 import { runPrismAnalysis, type PrismInputs } from './prismPipeline.ts'
 import { fetchIndustryOverview, fetchKline, fetchQuotes } from './em.ts'
@@ -372,7 +372,7 @@ export function makePrismRoutes(deps: PrismRouteDeps): PluginWebRoute[] {
           return
         }
         try {
-          const body = (await readBody(req)) as { op?: unknown; shares?: unknown; cost?: unknown; confirm?: unknown; action?: unknown; times?: unknown; text?: unknown; slot?: unknown; capitalLimit?: unknown; orderId?: unknown; provider?: unknown; model?: unknown; industryLimits?: unknown; secid?: unknown; at?: unknown; price?: unknown } | null
+          const body = (await readBody(req)) as { op?: unknown; shares?: unknown; cost?: unknown; confirm?: unknown; action?: unknown; times?: unknown; intervalSec?: unknown; text?: unknown; slot?: unknown; capitalLimit?: unknown; orderId?: unknown; provider?: unknown; model?: unknown; industryLimits?: unknown; secid?: unknown; at?: unknown; price?: unknown } | null
           const action = body !== null && typeof body.action === 'string' ? body.action : ''
           if (action === 'position') {
             const op = typeof body?.op === 'string' ? body.op : ''
@@ -392,21 +392,42 @@ export function makePrismRoutes(deps: PrismRouteDeps): PluginWebRoute[] {
             return
           }
           if (action === 'settings') {
-            const raw = body !== null && Array.isArray(body.times) ? body.times : null
-            if (raw === null) {
-              send(res, 400, { ok: false, error: 'times 必须是 HH:MM 数组' })
+            // `times` 与 `intervalSec` 各自可选、可同时传；两者都不传 ⇒ 400（避免空写）
+            const hasTimes = body !== null && body.times !== undefined
+            const hasInterval = body !== null && body.intervalSec !== undefined
+            if (!hasTimes && !hasInterval) {
+              send(res, 400, { ok: false, error: 'settings 需要 times（HH:MM 数组）和/或 intervalSec（300/600/900/1200 秒）' })
               return
             }
-            if (raw.length > PRISM_MAX_TIMES) {
-              send(res, 400, { ok: false, error: `时点最多 ${PRISM_MAX_TIMES} 个` })
-              return
+            let times: string[] | undefined
+            if (hasTimes) {
+              const raw = Array.isArray(body.times) ? body.times : null
+              if (raw === null) {
+                send(res, 400, { ok: false, error: 'times 必须是 HH:MM 数组' })
+                return
+              }
+              if (raw.length > PRISM_MAX_TIMES) {
+                send(res, 400, { ok: false, error: `时点最多 ${PRISM_MAX_TIMES} 个` })
+                return
+              }
+              const clean = raw.filter((t): t is string => typeof t === 'string' && /^([01]\d|2[0-3]):[0-5]\d$/.test(t))
+              if (clean.length !== raw.length) {
+                send(res, 400, { ok: false, error: '存在非法时点（HH:MM）' })
+                return
+              }
+              times = clean
             }
-            const times = raw.filter((t): t is string => typeof t === 'string' && /^([01]\d|2[0-3]):[0-5]\d$/.test(t))
-            if (times.length !== raw.length) {
-              send(res, 400, { ok: false, error: '存在非法时点（HH:MM）' })
-              return
+            let intervalSec: number | undefined
+            if (hasInterval) {
+              const v = body.intervalSec
+              if (typeof v !== 'number' || !(PRISM_INTERVAL_OPTIONS as readonly number[]).includes(v)) {
+                send(res, 400, { ok: false, error: `intervalSec 只允许 ${PRISM_INTERVAL_OPTIONS.join(' / ')} 秒` })
+                return
+              }
+              intervalSec = v
             }
-            const settings: PrismSettings = await store.saveTimes(times)
+            // ⚠ intervalSec 只落盘展示：调度器仍按 times 触发（见 PrismScheduler.dueSlots）
+            const settings: PrismSettings = await store.saveSchedule({ ...(times === undefined ? {} : { times }), ...(intervalSec === undefined ? {} : { intervalSec }) })
             send(res, 200, { ok: true, settings })
             return
           }

@@ -29,8 +29,10 @@ import {
   type DeskFlowEntry, type DeskFlowTab, type QuoteFacts,
 } from './prismDeskMid.ts'
 import {
-  accountViewOf, blockedTodayOf, orderProgressOf, pendingOrdersOf, perfCellsOf, sparkOf, statusFactsOf,
+  accountViewOf, blockedTodayOf, intervalSecOf, orderProgressOf, pendingOrdersOf, perfCellsOf, sparkOf, statusFactsOf,
+  INTERVAL_OPTIONS,
 } from './prismDeskSide.ts'
+import { PRISM_DEFAULT_INTERVAL_SEC } from '../shared/prism.ts'
 
 interface DeskFlowItem { at?: number; action?: string; reason?: string; targetPrice?: number | null; status?: string; origin?: string }
 interface DeskHolding { secid: string; prevClose?: number | null; dayPnl?: number | null }
@@ -181,6 +183,10 @@ export function PrismPage(props: { active?: boolean; redUp?: boolean } = {}): Re
   const acctPositions = acct?.positions ?? []
   const fills = state?.state.fills ?? []
   const settings = state?.state.settings ?? null
+  // 决策周期：显示回包已保存值；未保存（旧宿主/旧文件）⇒ 600s。仅展示，触发仍按 times 时点。
+  const intervalSaved = intervalSecOf(settings)
+  const [intervalSec, setIntervalSec] = React.useState<number>(PRISM_DEFAULT_INTERVAL_SEC)
+  React.useEffect(() => { setIntervalSec(intervalSaved) }, [intervalSaved])
   // 额度以宿主 desk.limits 为准（含费用与口径修正）；本地按 qty×cost 只作兜底，二者不可混用
   const capital = desk?.limits?.limit ?? acct?.capital ?? acct?.capitalLimit ?? null
   const used = desk?.limits?.used ?? null
@@ -235,6 +241,20 @@ export function PrismPage(props: { active?: boolean; redUp?: boolean } = {}): Re
         else setFieldErr({ [hit[0]]: msg })
       })
       .catch((e: Error) => setSaveErr(e.message))
+      .finally(() => setSaving(false))
+  }
+  /** 保存决策周期（秒）：成功 ⇒ 重新拉回包（以宿主落盘值为准）；失败 ⇒ 选择框回退并显示原因 */
+  const submitInterval = (next: number): void => {
+    const prev = intervalSecOf(settings)
+    setIntervalSec(next)
+    setSaving(true); setSaveErr(null)
+    api.prismSetInterval(next)
+      .then((r) => {
+        if (r.ok) { load(); return }
+        setSaveErr(r.error ?? '保存失败')
+        setIntervalSec(prev)
+      })
+      .catch((e: Error) => { setSaveErr(e.message); setIntervalSec(prev) })
       .finally(() => setSaving(false))
   }
   const editError = ((): string | null => {
@@ -448,7 +468,7 @@ export function PrismPage(props: { active?: boolean; redUp?: boolean } = {}): Re
           return React.createElement('div', { key: `${p.secid}-item`, className: 'tw-ad-pos-item', 'data-secid': p.secid }, row, ...editBar, ...errRow, ...menu)
         }))
 
-  const pos = React.createElement('section', { className: 'tw-ad-card', 'data-role': 'ad-positions' },
+  const pos = React.createElement('section', { className: 'tw-ad-card tw-ad-pos-card', 'data-role': 'ad-positions' },
     React.createElement('div', { className: 'tw-ad-card-head' },
       React.createElement('span', { className: 'tw-ad-auth is-human' }, 'HUMAN'),
       React.createElement('h2', null, '持仓明细'),
@@ -738,17 +758,28 @@ export function PrismPage(props: { active?: boolean; redUp?: boolean } = {}): Re
     modelProvider: state?.state.model?.provider ?? null,
     temperature: null,
     times: settings?.times ?? [],
+    intervalSec: intervalSec,
     constraintVersion: null,
     blockedToday: blockedTodayOf(state?.state.orders ?? [], state?.state.runs ?? [], acct?.day ?? null),
   })
+  // 决策周期是唯一可写项：渲染成 300/600/900/1200 的 <select>（其余项只读）
+  const statusItem = (f: (typeof statusFacts)[number], withDot: boolean): React.ReactElement =>
+    React.createElement('span', { key: f.key, className: 'tw-ad-sb-item', 'data-fact': f.key, title: f.title ?? undefined },
+      ...(withDot ? [React.createElement('i', { key: 'dot', className: `tw-ad-sb-dot${f.value === '—' ? ' is-na' : ''}` })] : []),
+      f.label, ' ',
+      f.key === 'cycle'
+        ? React.createElement('select', {
+            key: 'interval', className: 'tw-ad-sb-select', 'data-role': 'ad-interval', 'aria-label': '决策周期（秒）',
+            value: String(intervalSec), disabled: saving,
+            onChange: (e: React.ChangeEvent<HTMLSelectElement>) => submitInterval(Number(e.target.value)),
+          }, ...INTERVAL_OPTIONS.map((s) => React.createElement('option', { key: s, value: String(s) }, `${s}s`)))
+        : React.createElement('b', { key: 'v' }, f.value))
   const statusBar = React.createElement('footer', { className: 'tw-ad-sbar', 'data-role': 'ad-sbar' },
     ...statusFacts.flatMap((f, i) => (i === 0
-      ? [React.createElement('span', { key: f.key, className: 'tw-ad-sb-item', 'data-fact': f.key, title: f.title ?? undefined },
-          React.createElement('i', { className: 'tw-ad-sb-dot' }), f.label, ' ', React.createElement('b', null, f.value))]
+      ? [statusItem(f, true)]
       : [
           React.createElement('span', { key: `${f.key}-sep`, className: 'tw-ad-sb-sep' }),
-          React.createElement('span', { key: f.key, className: 'tw-ad-sb-item', 'data-fact': f.key, title: f.title ?? undefined },
-            f.label, ' ', React.createElement('b', null, f.value)),
+          statusItem(f, false),
         ])))
 
   return React.createElement('div', { className: 'tw-ad-root', 'data-role': 'prism-agentdesk' },

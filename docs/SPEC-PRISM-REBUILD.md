@@ -144,6 +144,11 @@
 ### 2.5 状态栏
 `行情源 SIM-FEED` / `决策引擎 deepseek-v4 · T=0.25` / `决策周期 90s` / `约束版本 v1` / 全局状态点（`pulse-dot`）
 
+> **v0.206.x 修订**：底条「决策周期」改为可调 `<select>`（300s / 600s / 900s / 1200s，默认 **600s**），
+> 通过 `POST /tradewatcher/prism {action:'settings', intervalSec}` 落盘到 `PrismSettings.intervalSec`。
+> **`intervalSec` 只用于展示与后续扩展**：调度器仍按 `times`（`HH:MM` 时点）触发，
+> 改它**不会**改变任何现有触发时点；要改触发时点只能改 `times`。两者可在同一次请求里一起保存。
+
 ### 2.6 断点（设计稿实测）
 | 断点 | 行为 |
 |---|---|
