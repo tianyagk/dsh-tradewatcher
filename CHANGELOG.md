@@ -11,6 +11,25 @@
 
 ---
 
+## v0.210.0 — 棱镜页面静默自动刷新（30s）
+
+`npm run check` **1741 / 1741 × 2 时区**（1737 → 1741）+ build（73 项）。
+
+此前页面只在挂载与自身写操作后调用 `load()`，宿主按周期写入的新决策**必须手动刷新**才可见。
+
+| 项 | 规则 |
+| --- | --- |
+| 刷新间隔 | **30s**（`PRISM_AUTO_REFRESH_MS`）；最短决策周期 300s，30s 足够及时 |
+| 刷新内容 | 只重拉 `/tradewatcher/prism`；**不跑 selftest、不清错误态、不闪骨架** |
+| 页面隐藏 | `document.visibilityState === 'hidden'` 时跳过 |
+| 重新可见 | 立即刷新一次（`visibilitychange`） |
+| 首屏 | 仍走 `load()`（含 selftest），不受影响 |
+
+### 验证
+
+- `npm run check` **1741 / 1741 × 2 时区** + build（73 项）。
+- 新增 `prismAutoRefresh.test.ts` 4 条：30s 常量与定时器、refresh 只拉 prismState、可见性守卫、首屏 load 不被替换。
+
 ## v0.209.1 — 调度拍健壮性：顺带动作同步抛错不得打断周期
 
 `npm run check` **1737 / 1737 × 2 时区**（1736 → 1737）+ build（73 项）。

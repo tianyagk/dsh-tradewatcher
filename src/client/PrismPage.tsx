@@ -34,6 +34,9 @@ import {
 } from './prismDeskSide.ts'
 import { PRISM_DEFAULT_INTERVAL_SEC } from '../shared/prism.ts'
 
+/** 棱镜页面静默刷新间隔：30s（自动决策最短周期 300s，30s 足够及时且不打扰） */
+const PRISM_AUTO_REFRESH_MS = 30_000
+
 interface DeskFlowItem { at?: number; action?: string; reason?: string; targetPrice?: number | null; status?: string; origin?: string }
 interface DeskHolding { secid: string; prevClose?: number | null; dayPnl?: number | null }
 interface DeskOverview { totalAssets?: number | null; cash?: number | null; positionPct?: number | null; available?: number | null }
@@ -198,6 +201,23 @@ export function PrismPage(props: { active?: boolean; redUp?: boolean } = {}): Re
     api.prismSelftest().then((r) => setSelf({ ok: r.ok, ms: r.elapsedMs })).catch(() => setSelf(null))
   }, [])
   React.useEffect(() => { load() }, [load])
+
+  /**
+   * 静默刷新：只重拉 `/tradewatcher/prism`，不跑 selftest、不清错、不闪骨架。
+   * 自动决策由宿主在交易时段按周期写入，页面必须能自己看到新记录，否则要手动刷新。
+   */
+  const refresh = React.useCallback((): void => {
+    api.prismState().then((r) => setState(r)).catch(() => undefined)
+  }, [])
+  React.useEffect(() => {
+    const id = setInterval(() => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return
+      refresh()
+    }, PRISM_AUTO_REFRESH_MS)
+    const onVisible = (): void => { if (document.visibilityState === 'visible') refresh() }
+    document.addEventListener('visibilitychange', onVisible)
+    return () => { clearInterval(id); document.removeEventListener('visibilitychange', onVisible) }
+  }, [refresh])
 
   // desk 在回包顶层（与 state 同级），不在 state 内——之前读 state.state.desk 恒 undefined，导致四区块全部『未取到』
   const desk = (state as unknown as { desk?: Desk } | null | undefined)?.desk
