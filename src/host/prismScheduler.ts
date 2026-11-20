@@ -243,11 +243,15 @@ export class PrismScheduler {
     }
     if (!win.trading) return out
     // 新闻增量：交易日 15 分钟一次（与决策周期解耦；失败留痕在 status，不重试）
+    // 新闻/撮合都是「顺带」动作：**同步抛错也不许打断本拍**。
+    // 事故形态：matchTick / incrementalNews 在行情源熔断时同步 throw ⇒ tick reject ⇒ 周期调度整拍失效（实测 09:54 之后不再触发）。
     if (this.opts.news !== undefined && now - this.lastNewsAt >= (this.opts.newsEveryMs ?? PRISM_NEWS_EVERY_MS)) {
       this.lastNewsAt = now
-      void this.opts.news().catch(() => undefined)
+      try { void Promise.resolve(this.opts.news()).catch(() => undefined) } catch { /* 顺带动作失败不影响调度 */ }
     }
-    if (this.opts.match !== undefined) void this.opts.match().catch(() => undefined)
+    if (this.opts.match !== undefined) {
+      try { void Promise.resolve(this.opts.match()).catch(() => undefined) } catch { /* 同上 */ }
+    }
     if (!plan.due) return out
     if (this.autoInFlight) {
       out.reason = '上一轮自动决策尚未跑完'

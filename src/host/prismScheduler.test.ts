@@ -348,3 +348,26 @@ test('⑬ 调度器：非交易日拍不调用 run（交易日判定复用 tradi
     await rm(dir, { recursive: true, force: true })
   }
 })
+
+test('⑭ 顺带动作同步抛错不得打断本拍（match/news 熔断时仍要按周期触发）', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'prism-interval-sideboom-'))
+  try {
+    const clock = { now: at('2026-10-22 09:30:00') }
+    const store = new PrismStore(dir)
+    await store.init()
+    const calls: string[] = []
+    const scheduler = new PrismScheduler(store, {
+      now: () => clock.now,
+      run: async (slot) => { calls.push(slot); return { ok: true } },
+      // 事故形态：行情源熔断时 matchTick / incrementalNews 同步 throw ⇒ tick 被拒 ⇒ 整拍失效
+      match: () => { throw new Error('match boom') },
+      news: () => { throw new Error('news boom') },
+    })
+    const plan = await scheduler.tick()
+    assert.equal(plan.due, true, '顺带动作抛错时本拍仍必须触发')
+    assert.deepEqual(calls, ['09:30'], 'run 必须被调用一次')
+    await scheduler.whenIdle()
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
