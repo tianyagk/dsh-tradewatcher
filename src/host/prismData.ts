@@ -40,6 +40,106 @@ export function prismLimitUsageOf(
   }
 }
 
+/**
+ * 个股研判（v0.211.0）：`holdings[].thesis`。
+ *
+ * 口径（唯一事实源，不做语义推断）：
+ * - `order`：该 secid **最新一笔委托**的 `reason`（`decidedAt` 倒序）；
+ * - `run-note`：最新一轮 `runs[].decision.note` **明确提到该股**（名称或 6 位代码）时的**首句**；
+ * - 都没有 ⇒ `null`。**不得**拿别的股票的理由、也不得拿宏观研报原文顶替。
+ *
+ * `at` 是 epoch ms：`orders[].decidedAt` 原样；`run.at` 是 ISO 字符串 ⇒ 解析后给出
+ * （解析不了回退 `startedAt`，再不行 ⇒ null）。
+ */
+export interface PrismThesis {
+  /** 研判原文（不截断；UI 的 title 用它显示全文） */
+  text: string
+  /** 研判时刻（epoch ms）；无源 ⇒ null */
+  at: number | null
+  /** 来源：委托理由 / 本轮组合研判；无源 ⇒ null */
+  kind: 'order' | 'run-note' | null
+}
+
+/** 从东方财富 secid（`1.601398`）取 6 位代码；取不到 ⇒ ''（港股 5 位等不硬凑） */
+function codeOfSecid(secid: string): string {
+  return /(?:^|\.)(\d{6})$/.exec(secid)?.[1] ?? ''
+}
+
+/** 同一只标的：secid 完全相同，或 6 位代码相同（兼容 `601398` 与 `1.601398` 两种写法） */
+function sameStock(a: string, b: string): boolean {
+  if (a === b) return true
+  const ca = codeOfSecid(a)
+  const cb = codeOfSecid(b)
+  return ca !== '' && ca === cb
+}
+
+/** note 是否明确提到该股：名称子串，或 6 位代码（前后不能紧邻数字，避免命中金额） */
+function mentionsStock(note: string, name: string, secid: string): boolean {
+  const n = name.trim()
+  if (n !== '' && note.includes(n)) return true
+  const code = codeOfSecid(secid)
+  if (code === '') return false
+  return new RegExp(`(^|\\D)${code}(?!\\d)`).test(note)
+}
+
+/** 首句：第一条非空行里，到第一个 `。！？!?` 为止（含标点）；没有标点 ⇒ 整行 */
+function firstSentenceOfNote(text: string): string {
+  const line = text.split(/\r?\n/).map((s) => s.trim()).find((s) => s !== '') ?? text.trim()
+  return (line.match(/^[^。！？!?]*[。！？!?]/)?.[0] ?? line).trim()
+}
+
+/** run 时刻：`at`（ISO，含 +08:00）优先；解析失败 ⇒ `startedAt`；都没有 ⇒ null */
+function runTimeOf(run: PrismRun): number | null {
+  const raw = (run as unknown as { at?: unknown }).at
+  if (typeof raw === 'number' && Number.isFinite(raw)) return raw
+  if (typeof raw === 'string' && raw !== '') {
+    const parsed = Date.parse(raw)
+    if (Number.isFinite(parsed)) return parsed
+  }
+  return num(run.startedAt)
+}
+
+/** 该股最新一笔委托理由（跳过 reason 为空的笔；没有 ⇒ null） */
+function latestOrderThesisOf(secid: string, orders: readonly PrismOrder[]): { text: string; at: number | null } | null {
+  const own = orders
+    .map((o, i) => ({ o, i, at: num(o.decidedAt), reason: typeof o.reason === 'string' ? o.reason.trim() : '' }))
+    .filter((x) => sameStock(x.o.secid, secid) && x.reason !== '')
+  if (own.length === 0) return null
+  own.sort((a, b) => (b.at ?? Number.NEGATIVE_INFINITY) - (a.at ?? Number.NEGATIVE_INFINITY) || b.i - a.i)
+  const best = own[0]!
+  return { text: best.reason, at: best.at }
+}
+
+/** 最新一轮**提到该股**的组合研判首句（run 时间倒序；都没有 ⇒ null） */
+function latestRunNoteThesisOf(name: string, secid: string, runs: readonly PrismRun[]): { text: string; at: number | null } | null {
+  const list = runs
+    .map((r, i) => ({ r, i, at: runTimeOf(r) }))
+    .sort((a, b) => (b.at ?? Number.NEGATIVE_INFINITY) - (a.at ?? Number.NEGATIVE_INFINITY) || b.i - a.i)
+  for (const { r, at } of list) {
+    const note = typeof r.decision?.note === 'string' ? r.decision.note.trim() : ''
+    if (note === '' || !mentionsStock(note, name, secid)) continue
+    return { text: firstSentenceOfNote(note), at }
+  }
+  return null
+}
+
+/**
+ * 个股研判：最新委托理由 > 最新一条提到该股的组合研判首句 > null。
+ * 反例约束：别的股票的 reason 不会出现在结果里（按 secid 过滤），宏观研报也不参与（只读 decision.note）。
+ */
+export function thesisOf(
+  secid: string,
+  name: string,
+  orders: readonly PrismOrder[],
+  runs: readonly PrismRun[],
+): PrismThesis | null {
+  const order = latestOrderThesisOf(secid, orders)
+  if (order !== null) return { text: order.text, at: order.at, kind: 'order' }
+  const note = latestRunNoteThesisOf(name, secid, runs)
+  if (note !== null) return { text: note.text, at: note.at, kind: 'run-note' }
+  return null
+}
+
 export interface PrismPositionView {
   secid: string; name: string; qty: number; available: number; cost: number
   price: number | null; marketValue: number | null; pnl: number | null; weight: number | null
@@ -188,7 +288,7 @@ export function prismDeskOf(input: {
 }): {
   limits: ReturnType<typeof prismLimitUsageOf>
   positions: ReturnType<typeof prismPositionViewOf>
-  holdings: Array<{ secid: string } & ReturnType<typeof prismHoldingDetailOf>>
+  holdings: Array<{ secid: string; thesis: PrismThesis | null } & ReturnType<typeof prismHoldingDetailOf>>
   decisionFlow: PrismFlowItem[]
   overview: ReturnType<typeof prismAccountOverviewOf>
   performance: ReturnType<typeof prismPerformanceOf>
@@ -196,7 +296,11 @@ export function prismDeskOf(input: {
 } {
   const limits = prismLimitUsageOf(input.account, input.prices)
   const positions = prismPositionViewOf(input.account, input.prices)
-  const holdings = input.account.positions.map((p) => ({ secid: p.secid, ...prismHoldingDetailOf(p, input.quotes[p.secid] ?? null) }))
+  const holdings = input.account.positions.map((p) => ({
+    secid: p.secid,
+    ...prismHoldingDetailOf(p, input.quotes[p.secid] ?? null),
+    thesis: thesisOf(p.secid, p.name, input.orders, input.runs),
+  }))
   const overview = prismAccountOverviewOf(input.account, input.prices)
   const performance = prismPerformanceOf(input.equity, input.evaluation, input.runs)
   const seen = new Set<string>()

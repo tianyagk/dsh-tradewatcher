@@ -24,8 +24,8 @@ import {
   runsBadgeOf, usageOf, wanOf, weightOf, weightTextOf,
 } from './prismDesk.ts'
 import {
-  FLOW_MISSING, FLOW_TABS, aiVerdictOf, fillMarksOf, flowChipsOf, flowCountsOf, flowEntriesOf,
-  flowTimeOf, flowWindowOf, quoteHeadOf, statCellsOf,
+  FLOW_MISSING, FLOW_TABS, fillMarksOf, flowChipsOf, flowCountsOf, flowEntriesOf,
+  flowTimeOf, flowWindowOf, quoteHeadOf, statCellsOf, thesisViewOf,
   type DeskFlowEntry, type DeskFlowTab, type QuoteFacts,
 } from './prismDeskMid.ts'
 import {
@@ -38,7 +38,8 @@ import { PRISM_DEFAULT_INTERVAL_SEC } from '../shared/prism.ts'
 const PRISM_AUTO_REFRESH_MS = 30_000
 
 interface DeskFlowItem { at?: number; action?: string; reason?: string; targetPrice?: number | null; status?: string; origin?: string }
-interface DeskHolding { secid: string; prevClose?: number | null; dayPnl?: number | null }
+interface DeskThesis { text?: string | null; at?: number | null; kind?: string | null }
+interface DeskHolding { secid: string; prevClose?: number | null; dayPnl?: number | null; thesis?: DeskThesis | null }
 interface DeskOverview { totalAssets?: number | null; cash?: number | null; positionPct?: number | null; available?: number | null }
 interface DeskPerformance { returnPct?: number | null; excessPct?: number | null; maxDrawdown?: number | null; runsCount?: number | null; hitRate?: number | null; tokenUsage?: number | null }
 interface DeskLimits { limit?: number | null; used?: number | null; available?: number | null; limitState?: string }
@@ -582,8 +583,9 @@ export function PrismPage(props: { active?: boolean; redUp?: boolean } = {}): Re
   const head = quoteHeadOf(facts)
   const cells = statCellsOf(facts, selRow?.qty ?? null)
   const marks = picked === null ? [] : fillMarksOf(fills, picked)
-  const latestRun = (state?.state.runs ?? []).at(-1) ?? null
-  const ai = aiVerdictOf(latestRun as unknown as { verdict?: unknown; confidence?: unknown } | null)
+  // AI 研判：只认宿主 `desk.holdings[].thesis`（最新委托理由 / 提到该股的组合研判首句）；
+  // 没有就如实写「该股暂无研判」，不拿宏观研报或别的股票理由顶替。
+  const ai = thesisViewOf(selHold?.thesis ?? null)
 
   const chartNode = React.useMemo((): React.ReactElement | null => {
     if (picked === null) return null
@@ -654,8 +656,19 @@ export function PrismPage(props: { active?: boolean; redUp?: boolean } = {}): Re
                 React.createElement('button', { role: 'tab', 'aria-selected': chartTab === 'kline', className: chartTab === 'kline' ? 'on' : '', onClick: () => setChartTab('kline') }, '日K'))),
             React.createElement('div', { key: 'ai', className: 'tw-ad-verdict', 'data-role': 'ad-verdict' },
               React.createElement('span', { className: 'vb' }, 'AI 研判'),
-              React.createElement('div', { className: 'vt', title: ai.title ?? undefined }, ai.text),
-              React.createElement('div', { className: 'conf' }, '置信度', React.createElement('b', null, ai.confidence))),
+              // 正文：≤3 行折叠 + 展开（FlowTextView 只在真实溢出时出按钮）；title 永远是全文
+              React.createElement('div', { className: 'vt', 'data-role': 'ad-thesis' },
+                React.createElement(FlowTextView, { text: ai.text, label: '个股研判' })),
+              // 右下角：置信度（宿主无字段 ⇒ 恒 — + title）+ 来源标签 / 北京时间
+              React.createElement('div', { className: 'side' },
+                React.createElement('div', { className: 'conf', title: ai.confidenceTitle }, '置信度',
+                  React.createElement('b', { 'data-role': 'ad-confidence', title: ai.confidenceTitle }, ai.confidence)),
+                ai.has
+                  ? React.createElement('div', {
+                      className: 'src', 'data-role': 'ad-thesis-src',
+                      title: ai.at === null ? '宿主未给出该条研判的时刻' : `研判时刻（北京时间）${ai.at}`,
+                    }, `${ai.source ?? '来源未标注'} · ${ai.at ?? '—'}`)
+                  : null)),
           ])
 
   // ── 中栏 · 决策流（runs 派生；六 tab 计数真实；时间倒序）──

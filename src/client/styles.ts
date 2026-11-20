@@ -1233,8 +1233,14 @@ color-scheme:dark}
 .tw-ad-chart-tabs button:focus-visible{outline:2px solid var(--tw-accent);outline-offset:1px}
 .tw-ad-verdict{margin:8px 10px 10px;padding:8px 10px;border-radius:7px;display:flex;gap:9px;align-items:flex-start;background:linear-gradient(90deg,rgba(91,140,255,.09),rgba(91,140,255,.02));border-left:2px solid var(--tw-accent)}
 .tw-ad-verdict .vb{flex:0 0 auto;margin-top:1px;padding:2px 6px;border-radius:4px;font-size:12px;font-weight:700;letter-spacing:.6px;color:var(--tw-accent);background:rgba(91,140,255,.18);border:1px solid rgba(91,140,255,.3)}
-.tw-ad-verdict .vt{font-size:12px;color:var(--tw-dim);line-height:1.55;min-width:0}
-.tw-ad-verdict .conf{margin-left:auto;flex:0 0 auto;text-align:right;font-size:12px;color:var(--tw-muted)}
+.tw-ad-verdict .vt{font-size:12px;color:var(--tw-dim);line-height:1.55;min-width:0;flex:1 1 auto}
+/* AI 研判正文：视觉 ≤3 行，展开只切 is-clamp；DOM 与 title 保留全文 */
+.tw-ad-verdict .vt .v{display:block;color:var(--tw-dim)}
+.tw-ad-verdict .vt .v.is-clamp{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:3;overflow:hidden}
+/* 右下角：置信度 + 来源/时间（竖排，右对齐） */
+.tw-ad-verdict .side{margin-left:auto;flex:0 0 auto;display:flex;flex-direction:column;align-items:flex-end;gap:2px;text-align:right}
+.tw-ad-verdict .side .src{font-size:12px;color:var(--tw-muted);font-variant-numeric:tabular-nums;letter-spacing:.2px;white-space:nowrap}
+.tw-ad-verdict .conf{flex:0 0 auto;text-align:right;font-size:12px;color:var(--tw-muted)}
 .tw-ad-verdict .conf b{display:block;font-size:12px;color:var(--tw-accent);font-weight:600;font-variant-numeric:tabular-nums}
 
 /* ── 中栏 · 决策流（26px 轨道 + 圆点 + 三段 + chips）── */

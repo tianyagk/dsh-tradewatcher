@@ -8,9 +8,9 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import {
-  FLOW_MISSING, FLOW_RENDER_MAX, FLOW_TABS, aiVerdictOf, amountTextOf, amplitudeOf, digestOf,
+  FLOW_MISSING, FLOW_RENDER_MAX, FLOW_TABS, amountTextOf, amplitudeOf, digestOf,
   fillMarksOf, firstSentenceOf, flowChipsOf, flowCountsOf, flowEntriesOf, flowFilterOf, flowTimeOf, flowWindowOf,
-  pct2, plainOf, quoteHeadOf, quoteToneOf, signed2, statCellsOf, threeOf,
+  pct2, plainOf, quoteHeadOf, quoteToneOf, signed2, statCellsOf, thesisViewOf, threeOf,
   type FlowOrderInput, type FlowRunInput,
 } from './prismDeskMid.ts'
 
@@ -115,21 +115,24 @@ test('⑫ 成交标记：该标的无成交 ⇒ 空数组（整行不渲染，�
   assert.deepEqual(fillMarksOf(FILLS, '1.600938'), [])
 })
 
-test('⑬ AI 研判无源 ⇒ `—（无研判）` + 置信度 —（不从长文截一句冒充结论）', () => {
-  const v = aiVerdictOf(null)
-  assert.equal(v.text, '—（无研判）')
+test('⑬ AI 研判无源 ⇒ `—（该股暂无研判）` + 置信度 —（含宿主无字段原因）', () => {
+  const v = thesisViewOf(null)
+  assert.equal(v.text, '—（该股暂无研判）')
   assert.equal(v.confidence, '—')
+  assert.equal(v.confidenceTitle, '宿主无置信度字段')
   assert.equal(v.has, false)
+  assert.equal(v.title, null)
 })
 
-test('⑭ AI 研判有源 ⇒ 结论 + 0.68；反例：只有 confidence 没有结论 ⇒ 仍 —', () => {
-  const v = aiVerdictOf({ verdict: '维持低仓位，回避高 beta', confidence: 0.68 })
-  assert.equal(v.text, '维持低仓位，回避高 beta')
-  assert.equal(v.confidence, '0.68')
+test('⑭ AI 研判有源 ⇒ 原文 + 来源 + 时间；置信度恒 —（不编 0.68，反例注入必败）', () => {
+  const v = thesisViewOf({ text: '红利端补位第二批，银行板块暴露仍仅约1.4%', at: 1_795_156_226_684, kind: 'order' })
+  assert.equal(v.text, '红利端补位第二批，银行板块暴露仍仅约1.4%')
+  assert.equal(v.confidence, '—')
+  assert.equal(v.source, '委托理由')
+  assert.equal(v.at, '11-20 14:30')
   assert.equal(v.has, true)
-  const half = aiVerdictOf({ confidence: 0.91 })
-  assert.equal(half.text, '—（无研判）')
-  assert.equal(half.has, false)
+  assert.equal(v.title, v.text)
+  assert.throws(() => assert.equal(v.confidence, '0.68', '反例上：编造置信度'), /反例上/, '⚠ 反例注入必须失败')
 })
 
 /* ───────────── ④ 决策流派生 ───────────── */

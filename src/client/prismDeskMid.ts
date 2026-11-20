@@ -3,12 +3,13 @@
  * 个股详情（行情头 / 九项口径 / 成交标记 / AI 研判）+ 决策流（由 `state.runs` 与 `state.orders` 派生）。
  *
  * 三条红线（页面只做渲染，判断都在这里）：
- * 1. **有源才出数**：复审置信度 / token 用量宿主没有字段 ⇒ 字段为 `null`，界面不渲染该 chip（不写 `0`、不写 `—` 占位）。
+ * 1. **有源才出数**：决策流复审置信度 / token 用量宿主没有字段 ⇒ 字段为 `null`，界面不渲染该 chip（不写 `0`、不写 `—` 占位）。
+ *    例外：个股 AI 研判卡的置信度**固定显示 `—`**，并用 `title="宿主无置信度字段"` 说明这是宿主缺字段（不编数）。
  * 2. **六个 tab 的计数逐条来自同一份 entries**：被拦截的委托同属「挂单」与「风控」两个视图（事件本来就是两件事），
  *    「全部」= 去重后的条数，不做简单相加。
  * 3. **时间一律倒序**（同一时刻按 seq 稳定排序），最新的决策排在最上面。
  */
-import { shClockText } from './marketTime.ts'
+import { shClockText, shStampText } from './marketTime.ts'
 
 export type Tone = 'up' | 'down' | 'flat'
 
@@ -159,27 +160,57 @@ export function fillMarksOf(fills: readonly FillInput[], secid: string, limit = 
   }))
 }
 
-export interface AiVerdictView {
-  /** 结论一句；无源 ⇒ `—（无研判）` */
+/** 无源文案：说清「这只股票没有」，不是含糊的「无研判」 */
+export const THESIS_NONE = '—（该股暂无研判）'
+/** 置信度恒 `—` 的 title：宿主确实没有这个字段，不编数 */
+export const THESIS_CONF_TITLE = '宿主无置信度字段'
+
+export type ThesisSourceLabel = '委托理由' | '本轮组合研判'
+
+/** 宿主 `desk.holdings[].thesis` 的线上形状（只读；缺字段按 null 处理） */
+export interface ThesisWire {
+  text?: unknown
+  at?: unknown
+  kind?: unknown
+}
+
+export interface ThesisView {
+  /** 研判原文；无源 ⇒ `—（该股暂无研判）` */
   text: string
-  /** `0.68`；无源 ⇒ `—` */
-  confidence: string
   has: boolean
+  /** 右下角来源标签；无源 / 未知 kind ⇒ null */
+  source: ThesisSourceLabel | null
+  /** 北京时间 `MM-DD HH:MM`；无源或缺时刻 ⇒ null（界面写 `—` + title 原因） */
+  at: string | null
+  /** 完整原文（`title` 悬浮用）；无源 ⇒ null */
   title: string | null
+  /** 宿主无置信度字段 ⇒ 恒 `—` */
+  confidence: '—'
+  /** 置信度 `—` 的解释（`title`） */
+  confidenceTitle: string
 }
 
 /**
- * AI 研判：宿主当前**没有**研判结论与置信度字段（`run.summary` 是整篇长文，不是一句结论）。
- * 这里只认显式的 `verdict` / `confidence`；没有就如实显示 `—（无研判）`，不从长文里截一句冒充结论。
+ * AI 研判（个股）：只认宿主 `holdings[].thesis`。
+ * - `text` 原样展示（不截断、不摘要）；折叠是纯视觉（≤3 行 + 展开），`title` 给全文；
+ * - 来源 label 由 `kind` 决定：`order` ⇒ 委托理由，`run-note` ⇒ 本轮组合研判；
+ * - **置信度宿主没有字段 ⇒ 恒 `—`** + `title="宿主无置信度字段"`（不编 0.68）。
  */
-export function aiVerdictOf(src: { verdict?: unknown; confidence?: unknown } | null | undefined): AiVerdictView {
-  const text = typeof src?.verdict === 'string' && src.verdict.trim() !== '' ? src.verdict.trim() : null
-  const conf = finite(src?.confidence as number | undefined)
-  const confidence = conf !== null && conf >= 0 && conf <= 1 ? conf.toFixed(2) : '—'
-  if (text === null) {
-    return { text: '—（无研判）', confidence: '—', has: false, title: '宿主未提供研判结论与置信度字段' }
+export function thesisViewOf(src: ThesisWire | null | undefined): ThesisView {
+  const text = typeof src?.text === 'string' ? src.text.trim() : ''
+  if (text === '') {
+    return {
+      text: THESIS_NONE, has: false, source: null, at: null, title: null,
+      confidence: '—', confidenceTitle: THESIS_CONF_TITLE,
+    }
   }
-  return { text, confidence, has: true, title: null }
+  const kind = src?.kind
+  const source: ThesisSourceLabel | null = kind === 'order' ? '委托理由' : kind === 'run-note' ? '本轮组合研判' : null
+  const ts = finite(typeof src?.at === 'number' ? src.at : undefined)
+  return {
+    text, has: true, source, at: ts === null ? null : shStampText(ts), title: text,
+    confidence: '—', confidenceTitle: THESIS_CONF_TITLE,
+  }
 }
 
 /* ────────────────────────── 决策流 ────────────────────────── */

@@ -44,7 +44,12 @@ test('① 失败词清零：异常/错误/不可用/暂无数据/没有数据 = 
 })
 
 test('② 空态只剩 `未取到` 与 `—（…）` 两种形态', () => {
-  const bad = uiLines().filter((l) => /暂无|没有数据|无数据/.test(l.s)).map((l) => `${l.n}:${l.i}`)
+  // v0.211.0：个股研判的规格文案 `—（该股暂无研判）` 属于允许的 `—（…）` 形态，不算第三种空态；
+  // 其余裸写的「暂无…」仍然判失败。
+  const bad = uiLines()
+    .filter((l) => /暂无|没有数据|无数据/.test(l.s))
+    .filter((l) => !/—（[^）]*暂无[^）]*）/.test(l.s))
+    .map((l) => `${l.n}:${l.i}`)
   assert.deepEqual(bad, [], `仍有第三种空态：${bad.join(',')}`)
   const third = '暂无数据'
   assert.match(third, /暂无/, '注入第三种写法 ⇒ 判失败')
