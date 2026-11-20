@@ -125,7 +125,7 @@
 | `equity[]` | 净值曲线（day/equity/benchmarkClose/cash/positionsValue/unrealized/warnings…） | **页面不再展示**；仅供 §1.6 内部计算 |
 | `evaluation.*` | 评估卡（excess/drawdown/hitRate/n/curve/footnote） | **页面不再展示**；§1.6 取 `drawdown`/`hitRate` 两个标量 |
 | `state.model` / `modelCatalog` | 模型与可用模型目录 | **页面不再展示** |
-| `state.settings`（times/lastFired/participationRate） | 时点与参数 | **页面不再展示**（`capital`/`industryLimits` 仍用） |
+| `state.settings`（intervalSec/lastAutoAt/times/lastFired/participationRate） | 自动决策周期与参数（`times` 仅手动重放） | **页面不再展示整包**（`capital`/`industryLimits` 仍用；底条只用 `intervalSec`） |
 | `exposure.rows[]` | 行业暴露明细表 | **页面不再展示**（`status`/`classifiedPct` 仍用于 §1.1 状态） |
 | 构成条（`exposure.classifiedPct` 等比例条） | 分类覆盖条 | **页面不再展示** |
 | `state.skeleton` / `state.news` / `runs[].analyses/reports` | 骨架、新闻、研判全文 | **页面不再展示** |

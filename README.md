@@ -204,7 +204,7 @@ bash scripts/install.sh
 | `~/.dsh/dsh-tradewatcher/breadth.json` | 涨跌家数每日快照：**收盘后**（15:05 起，15:30 后定稿）记录当日涨/跌/平家数与两市成交额，保留 60 日窗口 + 30 天余量 |
 | `~/.dsh/dsh-tradewatcher/calendar.json` | 财经日历事件库（自动同步 + 手动维护，含改期留痕） |
 | `~/.dsh/dsh-tradewatcher/trading-calendar.json` | 交易日历缓存（`npm run calendar:check` 与跨市场休市判断用；按年缓存，缺失时按规则推算并标注） |
-| `~/.dsh/dsh-tradewatcher/prism-settings.json` | 棱镜（第 9 行）：研判时点（`HH:MM`，默认 09:35 / 11:20 / 13:10 / 14:40，可增删）+ 当日已触发水位；写入走 `updateJsonLocked`，读不到不覆写 |
+| `~/.dsh/dsh-tradewatcher/prism-settings.json` | 棱镜（第 9 行）：自动决策周期（`intervalSec`，300/600/1200/1800/3600 秒，默认 600）+ 上次自动决策时刻（`lastAutoAt`，毫秒；跑完写盘）+ 手动重放时点（`HH:MM`，默认 09:35 / 11:20 / 13:10 / 14:40；**不再自动触发**）+ 当日已触发水位；写入走 `updateJsonLocked`，读不到不覆写 |
 | `~/.dsh/dsh-tradewatcher/prism-skeleton.md` | 棱镜的研判骨架（页面可编辑的多行文本，≤20 000 字）；首次打开写默认值 |
 | `~/.dsh/dsh-tradewatcher/prism-news.json` | 金十快讯（24h）：`{status, items}`；首次回填 ≤10 页/批、页间 ≥3s，之后按 `lastSeenId` 增量；只保留 24 小时 |
 | `~/.dsh/dsh-tradewatcher/prism-runs.json` | 棱镜研判结果（4 路分析 + 1 次汇总，保留最近 20 次）；失败留痕、不自动重试 |

@@ -547,8 +547,8 @@ export const api = {
     }, 20_000)
   },
   /**
-   * 棱镜：保存决策周期（秒，300/600/900/1200）。
-   * 同一 `action:'settings'` 接口；宿主只落盘展示，**不改变**按 `times` 的触发时点。
+   * 棱镜：保存自动决策周期（秒，300 / 600 / 1200 / 1800 / 3600）。
+   * 同一 `action:'settings'` 接口；宿主按它在交易时段（09:30–11:30 / 13:00–15:00）内周期触发。
    */
   prismSetInterval(intervalSec: number, times?: string[]): Promise<{ ok: boolean; error?: string; settings: PrismSettings }> {
     // 同时带 times：宿主旧版（只认 times）也能接受，避免 'times 必须是 HH:MM 数组'；新版会一并保存 intervalSec

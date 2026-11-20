@@ -236,7 +236,7 @@ export function PrismPage(props: { active?: boolean; redUp?: boolean } = {}): Re
   const acctPositions = acct?.positions ?? []
   const fills = state?.state.fills ?? []
   const settings = state?.state.settings ?? null
-  // 决策周期：显示回包已保存值；未保存（旧宿主/旧文件）⇒ 600s。仅展示，触发仍按 times 时点。
+  // 决策周期：显示回包已保存值；未保存（旧宿主/旧文件）⇒ 600s。宿主按它在交易时段内周期触发。
   const intervalSaved = intervalSecOf(settings)
   const [intervalSec, setIntervalSec] = React.useState<number>(PRISM_DEFAULT_INTERVAL_SEC)
   React.useEffect(() => { setIntervalSec(intervalSaved) }, [intervalSaved])
@@ -817,7 +817,7 @@ export function PrismPage(props: { active?: boolean; redUp?: boolean } = {}): Re
     constraintVersion: null,
     blockedToday: blockedTodayOf(state?.state.orders ?? [], state?.state.runs ?? [], acct?.day ?? null),
   })
-  // 决策周期是唯一可写项：渲染成 300/600/900/1200 的 <select>（其余项只读）
+  // 决策周期是唯一可写项：渲染成 300/600/1200/1800/3600 的 <select>（其余项只读）
   const statusItem = (f: (typeof statusFacts)[number], withDot: boolean): React.ReactElement =>
     React.createElement('span', { key: f.key, className: 'tw-ad-sb-item', 'data-fact': f.key, title: f.title ?? undefined },
       ...(withDot ? [React.createElement('i', { key: 'dot', className: `tw-ad-sb-dot${f.value === '—' ? ' is-na' : ''}` })] : []),

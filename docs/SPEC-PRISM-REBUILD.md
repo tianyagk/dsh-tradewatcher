@@ -144,10 +144,23 @@
 ### 2.5 状态栏
 `行情源 SIM-FEED` / `决策引擎 deepseek-v4 · T=0.25` / `决策周期 90s` / `约束版本 v1` / 全局状态点（`pulse-dot`）
 
-> **v0.206.x 修订**：底条「决策周期」改为可调 `<select>`（300s / 600s / 900s / 1200s，默认 **600s**），
+> **v0.206.x 修订**：底条「决策周期」改为可调 `<select>`，
 > 通过 `POST /tradewatcher/prism {action:'settings', intervalSec}` 落盘到 `PrismSettings.intervalSec`。
-> **`intervalSec` 只用于展示与后续扩展**：调度器仍按 `times`（`HH:MM` 时点）触发，
-> 改它**不会**改变任何现有触发时点；要改触发时点只能改 `times`。两者可在同一次请求里一起保存。
+>
+> **v0.209.0 修订（自动决策改为周期轮询）**：
+> - 档位改为 **300s / 600s / 1200s / 1800s / 3600s**，默认 **600s**；缺失或非法值（含旧档 900）回落 600。
+> - 自动决策**只在 A 股交易时段内**按周期触发：**09:30–11:30** 与 **13:00–15:00**（左闭右开）。
+>   午休（11:30–13:00）、开盘前、收盘后、非交易日一律不触发。交易日判定复用 `tradingDayState()`
+>   （周末 → 外部日历 → 内置假日表），不另写一套。
+> - 触发规则（`intervalDue(settings, now, lastAutoAt)`）：时段内且 `now − lastAutoAt ≥ intervalSec×1000`
+>   ⇒ 触发；**每个时段开盘后的第一次立即触发**（09:30 / 13:00 各一次）。午休跨过后最多补这一次
+>   （午盘开盘首轮），不按累计时长连发。
+> - `PrismSettings.lastAutoAt`（毫秒）记录上次**自动**决策的触发时刻，跑完写盘、重启不丢；
+>   进程重启后不会立刻重复触发（除非已超周期）。
+> - **`times` 不再自动触发**：字段与手动「重放今日」/ `{action:'run', slot}` 保留，
+>   只用于手动补跑，不参与 `intervalDue` 的任何判定（避免一次跑两套）。
+> - 三个纯函数是唯一事实源：`intervalWindowOf(ts)` / `intervalDue(settings, now, lastAutoAt)` /
+>   `intervalSlotOf(now)`（run 的 slot 标签取当前 `HH:MM`）。
 
 ### 2.6 断点（设计稿实测）
 | 断点 | 行为 |

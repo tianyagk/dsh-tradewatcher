@@ -3,7 +3,7 @@
  *
  * GET  → 首屏状态（设置/骨架/新闻/最近运行/默认模型）
  * POST → `{action}`：
- *   · `settings` `{times}` 保存时点（可增删，≤50）
+ *   · `settings` `{times?, intervalSec?}` 保存手动重放时点（≤50）与自动决策周期（秒）
  *   · `skeleton` `{text}`  保存骨架（≤20 000 字）
  *   · `news`               立即同步金十（首次回填 24h / 之后增量）
  *   · `run` `{slot}`        手动补跑指定时点（只跑这一轮）
@@ -396,7 +396,7 @@ export function makePrismRoutes(deps: PrismRouteDeps): PluginWebRoute[] {
             const hasTimes = body !== null && body.times !== undefined
             const hasInterval = body !== null && body.intervalSec !== undefined
             if (!hasTimes && !hasInterval) {
-              send(res, 400, { ok: false, error: 'settings 需要 times（HH:MM 数组）和/或 intervalSec（300/600/900/1200 秒）' })
+              send(res, 400, { ok: false, error: `settings 需要 times（HH:MM 数组，手动重放用）和/或 intervalSec（${PRISM_INTERVAL_OPTIONS.join(' / ')} 秒）` })
               return
             }
             let times: string[] | undefined
@@ -426,7 +426,8 @@ export function makePrismRoutes(deps: PrismRouteDeps): PluginWebRoute[] {
               }
               intervalSec = v
             }
-            // ⚠ intervalSec 只落盘展示：调度器仍按 times 触发（见 PrismScheduler.dueSlots）
+            // intervalSec 是**自动决策周期**：`PrismScheduler.intervalDue` 在交易时段内按它触发；
+            // times 只留给手动重放（两者不再同时跑两套自动触发）
             const settings: PrismSettings = await store.saveSchedule({ ...(times === undefined ? {} : { times }), ...(intervalSec === undefined ? {} : { intervalSec }) })
             send(res, 200, { ok: true, settings })
             return
@@ -498,6 +499,8 @@ export function makePrismRoutes(deps: PrismRouteDeps): PluginWebRoute[] {
             return
           }
           if (action === 'run') {
+            // 手动补跑 / 重放今日：只写 `lastFired`（当天已补的时点），**不写** `lastAutoAt`
+            // —— 手动不占用自动节奏；自动触发只走 `PrismScheduler`（intervalSec 周期）。
             const slot = typeof body?.slot === 'string' && /^([01]\d|2[0-3]):[0-5]\d$/.test(body.slot) ? body.slot : 'manual'
             const run = await runPrismForSlot(deps, slot)
             await recordEquity(deps)

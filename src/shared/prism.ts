@@ -4,14 +4,25 @@
  */
 
 export interface PrismSettings {
-  /** `HH:MM`（Asia/Shanghai），默认 09:35 / 11:20 / 13:10 / 14:40；可增删、无上限 */
+  /**
+   * `HH:MM`（Asia/Shanghai）**手动补跑 / 重放**用的时点，默认 09:35 / 11:20 / 13:10 / 14:40。
+   *
+   * ⚠ 自动决策已改由 `intervalSec` 周期驱动（见 `PrismScheduler`）：本字段**不再自动触发**，
+   * 只在手动「重放今日」/ `{action:'run', slot}` 时使用。保留字段是为了不破坏旧文件与手动路径。
+   */
   times: string[]
   /**
-   * 决策周期（秒）：300 / 600 / 900 / 1200，缺省 600。
-   * ⚠ **仅用于展示与后续扩展**：`PrismScheduler.dueSlots` 仍只按 `times` 触发，
-   * 本字段**不改变**任何现有触发时点；想改触发时点请改 `times`。
+   * 自动决策周期（秒）：300 / 600 / 1200 / 1800 / 3600，缺省 600。
+   *
+   * 只在 A 股交易时段（09:30–11:30 / 13:00–15:00）内按此周期触发：落在时段内且
+   * `now − lastAutoAt ≥ 周期` ⇒ 触发；每个时段开盘后的第一次立即触发。
    */
   intervalSec?: number
+  /**
+   * 上次**自动**决策的触发时刻（epoch ms）：跑完写盘，进程重启不丢（重启后不立刻重复触发）。
+   * 手动补跑不写本字段（手动不占用自动节奏）；旧文件缺字段 ⇒ 视为从未自动跑过。
+   */
+  lastAutoAt?: number
   /** 模拟盘资金上限（持久化；入金 = 上限与现金同步 +delta） */
   capital?: number
   /** 成交参与率上限（默认 0.10；成交股数 ≤ volume × 该值） */
@@ -91,7 +102,7 @@ export interface PrismRun {
   placement?: PrismPlacement
   /** 构建注入的代码版本（禁止手写） */
   codeVersion?: string
-  /** 骨架 + settings 参数（剔除 lastFired）的全 sha256 */
+  /** 骨架 + settings 参数（剔除运行时水位 lastFired / lastAutoAt）的全 sha256 */
   mandateHash?: string
   /** P-20 回撤闸门（本轮计算 + 上一轮触发状态用于连续两次冻结） */
   drawdown?: PrismDrawdownGate
@@ -129,8 +140,8 @@ export interface PrismState {
 
 export const PRISM_DEFAULT_CAPITAL = 1_500_000
 export const PRISM_DEFAULT_TIMES = ['09:35', '11:20', '13:10', '14:40'] as const
-/** 决策周期可选值（秒）；与 `PrismSettings.intervalSec` 同一口径 */
-export const PRISM_INTERVAL_OPTIONS = [300, 600, 900, 1200] as const
+/** 决策周期可选值（秒）；与 `PrismSettings.intervalSec` 同一口径（v0.209.0 起改为 5 档） */
+export const PRISM_INTERVAL_OPTIONS = [300, 600, 1200, 1800, 3600] as const
 /** 决策周期默认值（秒）：未保存过 ⇒ 600s */
 export const PRISM_DEFAULT_INTERVAL_SEC = 600
 export const PRISM_MAX_TIMES = 50

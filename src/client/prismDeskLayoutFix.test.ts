@@ -2,7 +2,7 @@
  * v0.206.x 三个 UI/功能问题的回归断言：
  *   ① 左栏（人类列）可纵向滚动，持仓列表吃满剩余高度、footer 常驻；
  *   ② 右栏「持仓 / 挂单」两个 tab 有间距与点击区，374px 栏宽不换行；
- *   ③ 底条「决策周期」是 300/600/900/1200 的 <select>，默认 600s（仅展示，不改触发时点）。
+ *   ③ 底条「决策周期」是 300/600/1200/1800/3600 的 <select>，默认 600s（v0.209.0 起真正驱动自动调度）。
  *
  * 只做静态对拍（仓库无 React 运行时）：CSS 解析数字 + 页面源码字符串；
  * 不写任何"看起来像"的演示值。
@@ -62,30 +62,36 @@ test('② 右栏 tab：gap ≥6px、每 tab padding ≥4px 10px 且不换行，3
   assert.ok(minW * 2 + gap + 2 * 2 + 2 <= inner, `两个 tab + gap 必须 ≤ ${inner}px（tab ${minW}×2 + gap ${gap}）`)
 })
 
-test('③ intervalSec 默认 600：缺失 / 非法值一律回 600，合法值原样返回', () => {
+test('③ 决策周期下拉正好 5 个选项（300/600/1200/1800/3600）；缺失 / 非法值一律回 600', () => {
   assert.equal(PRISM_DEFAULT_INTERVAL_SEC, 600)
-  assert.deepEqual([...INTERVAL_OPTIONS], [300, 600, 900, 1200])
+  assert.deepEqual([...INTERVAL_OPTIONS], [300, 600, 1200, 1800, 3600], '旧档 900 必须被替换')
+  assert.equal(INTERVAL_OPTIONS.length, 5, '下拉选项正好 5 个')
+  for (const want of [300, 600, 1200, 1800, 3600]) assert.ok(INTERVAL_OPTIONS.includes(want), `必须含 ${want}`)
   assert.equal(intervalSecOf(null), 600, '未保存（无 settings）⇒ 600s')
   assert.equal(intervalSecOf({}), 600, '旧宿主无 intervalSec ⇒ 600s')
   assert.equal(intervalSecOf({ intervalSec: undefined }), 600)
   assert.equal(intervalSecOf({ intervalSec: 700 }), 600, '非法值不得透传')
+  assert.equal(intervalSecOf({ intervalSec: 900 }), 600, '旧档 900 已移除 ⇒ 回 600')
   assert.equal(intervalSecOf({ intervalSec: 600.5 }), 600)
   for (const s of INTERVAL_OPTIONS) assert.equal(intervalSecOf({ intervalSec: s }), s)
 })
 
-test('④ 底条 story：传 intervalSec 显示 600s；不传仍保持旧的 times 时点列表（兼容）', () => {
+test('④ 底条 story：传 intervalSec 显示 600s / 1800s；不传仍按 times 列表（兼容旧调用）', () => {
   const base = {
     feed: null, model: null, modelProvider: null, temperature: null,
     times: ['09:35', '11:20', '13:10', '14:40'], constraintVersion: null, blockedToday: null,
   }
-  assert.equal(statusFactsOf(base)[3].value, '09:35 · 11:20 · 13:10 · 14:40', '旧路径不变')
+  assert.equal(statusFactsOf(base)[3].value, '09:35 · 11:20 · 13:10 · 14:40', '未传 intervalSec 的旧路径不变')
   assert.equal(statusFactsOf({ ...base, intervalSec: 600 })[3].value, '600s')
   assert.equal(statusFactsOf({ ...base, intervalSec: 1200 })[3].value, '1200s')
+  assert.equal(statusFactsOf({ ...base, intervalSec: 1800 })[3].value, '1800s')
+  assert.equal(statusFactsOf({ ...base, intervalSec: 3600 })[3].value, '3600s')
   assert.equal(statusFactsOf({ ...base, intervalSec: 700 })[3].value, '600s', '非法回包值不得回显成 700s')
-  assert.match(statusFactsOf({ ...base, intervalSec: 600 })[3].title ?? '', /仅展示/)
+  assert.equal(statusFactsOf({ ...base, intervalSec: 900 })[3].value, '600s', '旧档 900 回 600')
+  assert.match(statusFactsOf({ ...base, intervalSec: 600 })[3].title ?? '', /交易时段/, 'title 必须说清只在交易时段触发')
 })
 
-test('⑤ 页面：底条渲染 <select>（300/600/900/1200），默认 600，修改后提交并刷新', () => {
+test('⑤ 页面：底条渲染 <select>（5 档，标签 600s 形式），默认 600，修改后提交并刷新', () => {
   assert.match(PAGE, /'data-role': 'ad-interval'/)
   assert.match(PAGE, /React\.createElement\('select'/)
   assert.match(PAGE, /INTERVAL_OPTIONS\.map/)

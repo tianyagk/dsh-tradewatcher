@@ -2,7 +2,7 @@
  * 棱镜的本地状态（批次 1+2）：调度设置 / 骨架 / 金十新闻 / 研判运行。
  *
  * 落盘（`DSH_HOME/dsh-tradewatcher/`）：
- *   · `prism-settings.json`  `{times, lastFired}`（`updateJsonLocked`；读失败走 `ReadGuard`，不覆写）
+ *   · `prism-settings.json`  `{times, intervalSec, lastAutoAt, lastFired}`（`updateJsonLocked`；读失败走 `ReadGuard`，不覆写）
  *   · `prism-skeleton.md`    纯文本（`writeFileAtomic`；首次打开写默认骨架）
  *   · `prism-news.json`      `{status, items}`（保留 24h）
  *   · `prism-runs.json`      `{runs}`（保留最近 20 次）
@@ -34,7 +34,7 @@ const DEFAULT_STATUS: PrismNewsStatus = { state: 'idle', pages: 0, lastSeenId: n
 
 const defaultSettings = (): PrismSettings => ({ times: [...PRISM_DEFAULT_TIMES], intervalSec: PRISM_DEFAULT_INTERVAL_SEC, lastFired: {}, model: null, capital: PRISM_DEFAULT_CAPITAL, participationRate: 0.1, industryLimits: {} })
 
-/** 合法决策周期：只认 300 / 600 / 900 / 1200；其余（含旧文件缺字段）⇒ 600 */
+/** 合法决策周期：只认 `PRISM_INTERVAL_OPTIONS`（300 / 600 / 1200 / 1800 / 3600）；其余（含旧文件缺字段、旧的 900）⇒ 600 */
 const intervalSecOf = (v: unknown): number => (
   typeof v === 'number' && (PRISM_INTERVAL_OPTIONS as readonly number[]).includes(v) ? v : PRISM_DEFAULT_INTERVAL_SEC
 )
@@ -94,7 +94,7 @@ export class PrismStore {
   }
 
   private async loadSettings(): Promise<void> {
-    const disk = await this.loadJson<{ times?: unknown; intervalSec?: unknown; lastFired?: unknown; model?: unknown; capital?: unknown; participationRate?: unknown; industryLimits?: unknown; perStockPct?: unknown; stopLossPct?: unknown; perOrderYuan?: unknown; maxPosPct?: unknown; maxDDPct?: unknown; minCashPct?: unknown }>('prism-settings.json')
+    const disk = await this.loadJson<{ times?: unknown; intervalSec?: unknown; lastAutoAt?: unknown; lastFired?: unknown; model?: unknown; capital?: unknown; participationRate?: unknown; industryLimits?: unknown; perStockPct?: unknown; stopLossPct?: unknown; perOrderYuan?: unknown; maxPosPct?: unknown; maxDDPct?: unknown; minCashPct?: unknown }>('prism-settings.json')
     if (disk === null) return
     const times = Array.isArray(disk.times) ? disk.times.filter((t): t is string => typeof t === 'string' && /^\d{2}:\d{2}$/.test(t)) : []
     const capital = typeof disk.capital === 'number' && Number.isFinite(disk.capital) && disk.capital > 0 ? disk.capital : PRISM_DEFAULT_CAPITAL
@@ -121,8 +121,10 @@ export class PrismStore {
     const numOrNull = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null)
     this.settingsValue = {
       times: times.length > 0 ? times : [...PRISM_DEFAULT_TIMES],
-      // 旧文件没有 intervalSec / 值非法 ⇒ 600（不是"未设置"，界面按 600s 显示）
+      // 旧文件没有 intervalSec / 值非法（含旧档位 900）⇒ 600（不是"未设置"，界面按 600s 显示）
       intervalSec: intervalSecOf(disk.intervalSec),
+      // 旧文件没有 lastAutoAt ⇒ 视为从未自动跑过（调度器按「本时段首次」立即触发一次）
+      lastAutoAt: typeof disk.lastAutoAt === 'number' && Number.isFinite(disk.lastAutoAt) && disk.lastAutoAt > 0 ? disk.lastAutoAt : undefined,
       lastFired, model, capital, participationRate, industryLimits,
       // v0.203.0：约束六字段（旧文件没有 ⇒ null，不猜）
       perStockPct: numOrNull(disk.perStockPct),
@@ -175,10 +177,10 @@ export class PrismStore {
   }
 
   /**
-   * 保存调度设置：`times`（触发时点）与 `intervalSec`（决策周期，秒）可单独或同时更新。
+   * 保存调度设置：`times`（手动重放时点）与 `intervalSec`（自动决策周期，秒）可单独或同时更新。
    *
-   * ⚠ `intervalSec` **只落盘、只展示**：`PrismScheduler.dueSlots` 读 `settings.times` 触发，
-   * 不读本字段 ⇒ 改决策周期不会改变任何既有触发时点（后续要按周期触发必须另写调度并加断言）。
+   * ⚠ `times` 自 v0.209.0 起**只服务手动「重放今日」**，不再参与自动调度；
+   * 自动决策由 `PrismScheduler.intervalDue` 按 `intervalSec` 在交易时段内周期触发。
    */
   async saveSchedule(patch: { times?: string[]; intervalSec?: number }): Promise<PrismSettings> {
     const next: PrismSettings = { ...this.settingsValue }
@@ -242,6 +244,21 @@ export class PrismStore {
     const keep: Record<string, string[]> = { [day]: this.settingsValue.lastFired[day] as string[] }
     this.settingsValue.lastFired = keep
     await updateJsonLocked(this.pathOf('prism-settings.json'), () => ({ v: 1, ...this.settingsValue })).catch(() => undefined)
+  }
+
+  /**
+   * 记录一次**自动**决策的触发时刻（epoch ms）并落盘。
+   *
+   * 由 `PrismScheduler` 在每轮 run **跑完**后调用（失败也写：避免 30 秒节拍重试风暴）；
+   * 进程重启后 `intervalDue` 读它来判周期 —— 不会立刻重复触发（除非已超周期）。
+   * 手动补跑不调用本方法。
+   */
+  async markAutoFired(at: number): Promise<void> {
+    if (!Number.isFinite(at) || at <= 0) return
+    this.settingsValue = { ...this.settingsValue, lastAutoAt: at }
+    await updateJsonLocked(this.pathOf('prism-settings.json'), () => ({ v: 1, ...this.settingsValue })).catch((error) => {
+      this.guard.markUnreadable(this.pathOf('prism-settings.json'), error)
+    })
   }
 
   skeleton(): string {

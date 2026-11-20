@@ -236,7 +236,7 @@ export interface StatusInput {
   times: ReadonlyArray<string>
   /**
    * 决策周期（秒）；页面传 `settings.intervalSec ?? 600`。
-   * 不传 ⇒ `cycle` 仍按 `times` 时点列表显示（兼容旧调用/旧断言）。
+   * 不传 ⇒ `cycle` 仍按 `times` 时点列表显示（兼容旧调用；`times` 只用于手动重放）。
    */
   intervalSec?: number | null
   /** 约束版本；宿主无字段 ⇒ null */
@@ -245,13 +245,13 @@ export interface StatusInput {
   blockedToday: number | null
 }
 
-/** `intervalSec` 只在 300/600/900/1200 内有效；缺失或非法 ⇒ 600（未保存 = 600s） */
+/** `intervalSec` 只认同源档位（300/600/1200/1800/3600）；缺失或非法（含旧档 900）⇒ 600 */
 export function intervalSecOf(settings: { intervalSec?: number | null } | null | undefined): number {
   const v = settings?.intervalSec
   return typeof v === 'number' && (PRISM_INTERVAL_OPTIONS as readonly number[]).includes(v) ? v : PRISM_DEFAULT_INTERVAL_SEC
 }
 
-/** 底条下拉选项（秒）：300 / 600 / 900 / 1200 */
+/** 底条下拉选项（秒）：300 / 600 / 1200 / 1800 / 3600 */
 export const INTERVAL_OPTIONS: ReadonlyArray<number> = PRISM_INTERVAL_OPTIONS
 
 /**
@@ -262,7 +262,7 @@ export const INTERVAL_OPTIONS: ReadonlyArray<number> = PRISM_INTERVAL_OPTIONS
 export function statusFactsOf(input: StatusInput): StatusFact[] {
   const times = input.times.filter((t) => typeof t === 'string' && t !== '')
   const t = finite(input.temperature)
-  // 只认 300/600/900/1200；非法回包值按未保存处理（600），不回显 700s 这类假值
+  // 只认同源档位；非法回包值按未保存处理（600），不回显 700s 这类假值
   const interval = input.intervalSec === undefined || input.intervalSec === null ? null : intervalSecOf({ intervalSec: input.intervalSec })
   return [
     { key: 'feed', label: '行情源', value: input.feed ?? '—', title: input.feed === null ? '宿主未提供行情源标识' : null },
@@ -270,7 +270,7 @@ export function statusFactsOf(input: StatusInput): StatusFact[] {
     { key: 'temp', label: 'T', value: t === null ? '—' : t.toFixed(2), title: t === null ? '宿主未提供温度参数' : '模型温度' },
     interval === null
       ? { key: 'cycle', label: '决策周期', value: times.length === 0 ? '—' : times.join(' · '), title: times.length === 0 ? '未配置决策时点' : `每交易日 ${times.length} 个决策时点` }
-      : { key: 'cycle', label: '决策周期', value: `${interval}s`, title: '决策周期（秒）：仅展示与后续扩展，触发仍按配置时点' },
+      : { key: 'cycle', label: '决策周期', value: `${interval}s`, title: '自动决策周期（秒）：仅在 A 股交易时段 09:30–11:30 / 13:00–15:00 内按此周期触发' },
     { key: 'ver', label: '约束版本', value: input.constraintVersion === null ? '—' : input.constraintVersion, title: input.constraintVersion === null ? '宿主未提供约束版本号' : null },
     { key: 'risk', label: '风控', value: input.blockedToday === null ? '—' : input.blockedToday === 0 ? '全部通过' : `拦截 ${input.blockedToday} 笔`, title: input.blockedToday === null ? '缺交易日或委托数据，今日拦截数不可算' : '今日被风控拦截的委托笔数' },
   ]

@@ -59,10 +59,11 @@ export function prismCodeVersion(): string {
   try { return typeof __TW_VERSION__ === 'string' ? __TW_VERSION__ : 'dev' } catch { return 'dev' }
 }
 
-/** 骨架 + settings 参数（剔除 lastFired）的全 sha256；改配置即变，跨日不变 */
+/** 骨架 + settings 参数（剔除运行时水位 lastFired / lastAutoAt）的全 sha256；改配置即变，跨日/跨轮不变 */
 export function mandateHashOf(skeleton: string, settings: Record<string, unknown>): string {
   const params: Record<string, unknown> = {}
-  for (const [k, v] of Object.entries(settings)) if (k !== 'lastFired') params[k] = v
+  // lastAutoAt 每跑完一轮都会变：它是运行水位，不是「授权参数」⇒ 不得掺进 mandateHash
+  for (const [k, v] of Object.entries(settings)) if (k !== 'lastFired' && k !== 'lastAutoAt') params[k] = v
   return createHash('sha256').update(canonical({ skeleton, params })).digest('hex')
 }
 

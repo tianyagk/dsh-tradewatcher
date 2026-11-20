@@ -11,6 +11,29 @@
 
 ---
 
+## v0.209.0 — 棱镜自动决策：固定时点 → 交易时段内周期轮询
+
+`npm run check` **1736 / 1736 × 2 时区** + build（73 项）+ `tsc` 0。
+
+| # | 变更 | 口径 |
+| --- | --- | --- |
+| 1 | 自动决策改由**周期**驱动 | 只在 A 股交易时段 **09:30–11:30 / 13:00–15:00**（左闭右开）内触发；午休、开盘前、收盘后、非交易日一律不触发；交易日判定复用 `tradingDayState()` |
+| 2 | 档位 | `PRISM_INTERVAL_OPTIONS` = **300 / 600 / 1200 / 1800 / 3600**（替换旧 300/600/900/1200），默认 **600**；客户端下拉同步 5 档，标签仍 `600s`，缺失/非法（含旧档 900）回落 600 |
+| 3 | 触发规则 | 时段内且 `now − lastAutoAt ≥ intervalSec×1000` ⇒ 触发；**每个时段开盘后的第一次立即触发**（09:30 / 13:00 各一次）；午休跨过最多补这一次，不按累计时长连发 |
+| 4 | 持久化 | 新增 `PrismSettings.lastAutoAt`（毫秒）：每轮 run **跑完写盘**（失败也写，避免 30s 节拍重试风暴）；重启后不立刻重复触发（除非已超周期） |
+| 5 | 与旧 `times` 的关系 | `times` **不再自动触发**（字段保留，只服务手动「重放今日」/ `{action:'run', slot}`）；代码注释与 `docs/SPEC-PRISM-REBUILD.md` §2.5 双处写清，避免一次跑两套 |
+
+### 新增纯函数（`src/host/prismScheduler.ts`）
+
+- `intervalWindowOf(ts) → { trading, inWindow, segment: 'am' | 'pm' | null }`
+- `intervalDue(settings, now, lastAutoAt) → { due, nextEligibleAt, reason }`
+- `intervalSlotOf(now) → 'HH:MM'`（run 的 slot 标签）
+
+### 验证
+
+- `npm run check` **1736 / 1736 × 2 时区** + build（73 项）+ `tsc --noEmit` 0。
+- 新增/重写 `prismScheduler.test.ts`（14 test）、`prismInterval.test.ts`（6 test）、`prismDeskLayoutFix.test.ts` ③④⑤：覆盖 09:29/09:30/11:29/11:30/12:59/13:00/14:59/15:00/15:01 边界、599/600/601s、300/1800/3600 档、午休只补一次、`lastAutoAt` 跨重启、`times` 不再触发、客户端 5 档与非法回落。
+
 ## v0.208.0 — 决策流三处修复（全文展示 / 观察·推理·结论 / 分类按钮）
 
 `npm run check` **1723 / 1723 × 2 时区**（1707 → 1723）+ build（73 项）+ `tsc` 0。

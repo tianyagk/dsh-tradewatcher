@@ -279,7 +279,7 @@ function applyCore(ctx: PluginContext, full = false): void {
       log('auction sampler started', 'window 09:15:00–09:25:30 / interval 10s')
       prismRunRef.fn = (slot) => runPrismForSlot({ store: k.prism, trading: k.prismTrading, data: k.store, get: (name) => { try { return ctx.get(name) } catch { return undefined } } }, slot)
       k.prismScheduler.start()
-      log('prism scheduler started', `times ${k.prism.settings().times.join(' / ')}`)
+      log('prism scheduler started', `interval ${k.prism.settings().intervalSec ?? 600}s / window 09:30–11:30, 13:00–15:00 / times 仅手动重放`)
     }).catch((error) => {
       log('store init failed:', String(error))
     })

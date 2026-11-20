@@ -40,13 +40,17 @@ test('P-01 当日盈亏 = 相邻净值点 (equity−capital) 差分，缺 capita
   assert.match(missing.reason ?? '', /缺 capital/)
 })
 
-test('P-04 mandateHash：剔除 lastFired、含 capital/阈值；改一处即变；全摘要 64 位', () => {
-  const base = { times: ['09:35', '14:40'], capital: 1_500_000, lastFired: { '2026-10-22': ['09:35'] }, thresholds: { a: 1 } }
+test('P-04 mandateHash：剔除运行时水位 lastFired/lastAutoAt、含 capital/阈值/周期；改一处即变；全摘要 64 位', () => {
+  const base = { times: ['09:35', '14:40'], intervalSec: 600, capital: 1_500_000, lastFired: { '2026-10-22': ['09:35'] }, lastAutoAt: 1_700_000_000_000, thresholds: { a: 1 } }
   const a = mandateHashOf('骨架', base)
   const b = mandateHashOf('骨架', { ...base, lastFired: { '2026-10-23': ['14:40'] } })
+  const b2 = mandateHashOf('骨架', { ...base, lastAutoAt: 1_700_000_600_000 })
   const c = mandateHashOf('骨架', { ...base, capital: 1_600_000 })
-  assert.equal(a, b)
-  assert.notEqual(a, c)
+  const d = mandateHashOf('骨架', { ...base, intervalSec: 1800 })
+  assert.equal(a, b, 'lastFired 是运行时水位 ⇒ 不参与摘要')
+  assert.equal(a, b2, 'lastAutoAt 每轮都变 ⇒ 不参与摘要（否则 mandateHash 每轮抖动）')
+  assert.notEqual(a, c, '资金上限变了 ⇒ 摘要必须变')
+  assert.notEqual(a, d, '决策周期变了 ⇒ 摘要必须变')
   assert.match(a, /^[0-9a-f]{64}$/)
 })
 
