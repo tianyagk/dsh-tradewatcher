@@ -1,15 +1,16 @@
 /**
  * 棱镜 · AGENT DESK（第二批：中栏）展示纯函数：
- * 个股详情（行情头 / 九项口径 / 成交标记 / AI 研判）+ 决策流（由 `state.runs` 与 `state.orders` 派生）。
+ * 个股详情（行情头 / 九项口径 / 成交标记 / AI 研判）+ 决策流（由 `state.runs`、`state.orders`
+ * 与 `desk.holdingAnalyses` 派生）。
  *
  * 三条红线（页面只做渲染，判断都在这里）：
  * 1. **有源才出数**：决策流复审置信度 / token 用量宿主没有字段 ⇒ 字段为 `null`，界面不渲染该 chip（不写 `0`、不写 `—` 占位）。
  *    例外：个股 AI 研判卡的置信度**固定显示 `—`**，并用 `title="宿主无置信度字段"` 说明这是宿主缺字段（不编数）。
- * 2. **六个 tab 的计数逐条来自同一份 entries**：被拦截的委托同属「挂单」与「风控」两个视图（事件本来就是两件事），
- *    「全部」= 去重后的条数，不做简单相加。
- * 3. **时间一律倒序**（同一时刻按 seq 稳定排序），最新的决策排在最上面。
+ * 2. **七个 tab 的计数逐条来自同一份 entries**：被拦截的委托同属「挂单」与「风控」两个视图（事件本来就是两件事），
+ *    「全部」= 去重后的条数，不做简单相加；「持仓」每条 = 一个持仓标的（HOLD，v0.212.0）。
+ * 3. **时间一律倒序**（同一时刻按 seq 稳定排序），最新的决策排在最上面；时间列统一 `MM-DD HH:MM`（北京时间）。
  */
-import { shClockText, shStampText } from './marketTime.ts'
+import { shClockText, shDateTimeText, shStampText } from './marketTime.ts'
 
 export type Tone = 'up' | 'down' | 'flat'
 
@@ -215,15 +216,16 @@ export function thesisViewOf(src: ThesisWire | null | undefined): ThesisView {
 
 /* ────────────────────────── 决策流 ────────────────────────── */
 
-export type DeskFlowKind = 'ORDER' | 'SCAN' | 'ANALYZE' | 'RISK'
-export type DeskFlowTab = 'scan' | 'analyze' | 'order' | 'risk' | 'cons'
+export type DeskFlowKind = 'ORDER' | 'SCAN' | 'ANALYZE' | 'RISK' | 'HOLD'
+export type DeskFlowTab = 'scan' | 'analyze' | 'holding' | 'order' | 'risk' | 'cons'
 export interface DeskFlowTabDef { id: 'all' | DeskFlowTab; label: string }
 
-/** 六个筛选 tab（顺序 = 设计稿） */
+/** 七个筛选 tab（顺序 = 设计稿；`持仓` 为 v0.212.0 新增，计数 = 持仓数） */
 export const FLOW_TABS: ReadonlyArray<DeskFlowTabDef> = [
   { id: 'all', label: '全部' },
   { id: 'scan', label: '选股' },
   { id: 'analyze', label: '分析' },
+  { id: 'holding', label: '持仓' },
   { id: 'order', label: '挂单' },
   { id: 'risk', label: '风控' },
   { id: 'cons', label: '约束' },
@@ -235,13 +237,15 @@ export interface DeskFlowEntry {
   /** 时间倒序的稳定次序（同一时刻按它排） */
   seq: number
   kind: DeskFlowKind
+  /** 事件来源域：run / order / holding（HOLD 恒为 `'holding'`，由 `desk.holdingAnalyses` 合并，不写 runs） */
+  scope?: 'run' | 'order' | 'holding'
   /** 所属筛选视图（可多属：被拦截的委托同属「挂单」「风控」） */
   cats: DeskFlowTab[]
   title: string
   action: string
   basis: string | null
   risk: string | null
-  /** ANALYZE 三要素（观察 / 推理 / 结论）；其它类型为 null */
+  /** ANALYZE / HOLD 三要素（观察 / 推理 / 结论）；其它类型为 null */
   three?: FlowThree | null
   /** 真实耗时（run 的 finishedAt − startedAt）；无源 ⇒ null */
   ms: number | null
@@ -250,6 +254,8 @@ export interface DeskFlowEntry {
   /** token 用量；宿主恒无 ⇒ null（不渲染该 chip） */
   tok: number | null
   verdict: 'pass' | 'block'
+  /** 底部结论 pill 文案：HOLD 写自身判定（超单票上限 / 触及止损线 / …），不冒充「风控拦截」 */
+  verdictLabel?: string | null
 }
 
 export interface FlowOrderInput {
@@ -287,6 +293,23 @@ export interface FlowRunInput {
     clampEvents?: ReadonlyArray<{ at: number; secid: string; dimension: string; before: number; after: number; basis: string }>
     parseError?: string | null
   }
+}
+
+/**
+ * 宿主 `desk.holdingAnalyses[]` 的线上形状（v0.212.0，只读）。
+ * 观察 / 推理 / 结论由宿主按真实数据算好；客户端只负责合并进决策流（`scope:'holding'`）。
+ */
+export interface FlowHoldingInput {
+  secid: string
+  name?: string | null
+  /** 分析时刻（epoch ms）；无源 ⇒ null（界面 `—`） */
+  at?: number | null
+  observation?: string | null
+  reasoning?: string | null
+  conclusion?: string | null
+  /** 'over' | 'stop' | 'ok' | 'no-constraint' | null */
+  verdict?: string | null
+  marketValue?: number | null
 }
 
 const ORDER_STATUS: Readonly<Record<string, string>> = {
@@ -419,18 +442,21 @@ export function threeOf(text: string | null | undefined, summary?: string | null
 
 const sideLabelOf = (s: 'buy' | 'sell'): string => (s === 'buy' ? '买入' : '卖出')
 
-/** 秒级时间：`HH:MM:SS` */
-const hmsOf = (at: number): string => shClockText(at)
-
 /**
- * 决策流：一条时间轴，四类徽标 `ORDER / SCAN / ANALYZE / RISK`。
+ * 决策流：一条时间轴，五类徽标 `ORDER / SCAN / ANALYZE / RISK / HOLD`。
  * - SCAN：每个 run 一条（含真实耗时 `finishedAt − startedAt`）；
  * - ANALYZE：每个 run 的每份报告一条（落盘时间取 run 结束时刻）；
  * - ORDER：每笔委托一条（被拒绝的同时进「风控」视图）；
- * - RISK：确定性裁剪（`clampEvents`）与引擎直接拒绝（`decision.rejects`）各一条。
+ * - RISK：确定性裁剪（`clampEvents`）与引擎直接拒绝（`decision.rejects`）各一条；
+ * - HOLD（v0.212.0）：每个持仓一条（`desk.holdingAnalyses`，只读派生，不写 runs、不走手动重放）。
  * 全部**时间倒序**；同一时刻按 `seq` 稳定排序（先 run 后其报告，再按写入顺序）。
  */
-export function flowEntriesOf(input: { runs?: readonly FlowRunInput[]; orders?: readonly FlowOrderInput[] }): DeskFlowEntry[] {
+export function flowEntriesOf(input: {
+  runs?: readonly FlowRunInput[]
+  orders?: readonly FlowOrderInput[]
+  /** v0.212.0：`desk.holdingAnalyses`（每个持仓一条 HOLD；不来自 runs，也不写 runs） */
+  holdings?: readonly FlowHoldingInput[]
+}): DeskFlowEntry[] {
   const out: DeskFlowEntry[] = []
   let seq = 0
   const push = (e: Omit<DeskFlowEntry, 'seq'>): void => { out.push({ ...e, seq: seq++ }) }
@@ -535,16 +561,48 @@ export function flowEntriesOf(input: { runs?: readonly FlowRunInput[]; orders?: 
     })
   }
 
+  // v0.212.0：每个持仓一条 HOLD（观察 / 推理 / 结论全部来自宿主回包；`at` 缺失 ⇒ 0 ⇒ 时间列 `—`）
+  for (const h of input.holdings ?? []) {
+    const at = finite(h.at) ?? 0
+    const v = h.verdict
+    const verdict: 'pass' | 'block' = v === 'over' || v === 'stop' ? 'block' : 'pass'
+    const observation = typeof h.observation === 'string' && h.observation !== '' ? h.observation : null
+    const reasoning = typeof h.reasoning === 'string' && h.reasoning !== '' ? h.reasoning : null
+    const conclusion = typeof h.conclusion === 'string' && h.conclusion !== '' ? h.conclusion : null
+    const label = v === 'over' ? '超单票上限' : v === 'stop' ? '触及止损线' : v === 'ok' ? '未触及上限/止损线' : v === 'no-constraint' ? '约束未设置' : '未判定'
+    push({
+      id: `hold-${h.secid}`,
+      at,
+      kind: 'HOLD',
+      scope: 'holding',
+      cats: ['holding'],
+      title: `持仓 · ${typeof h.name === 'string' && h.name !== '' ? h.name : h.secid}`,
+      action: observation ?? FLOW_MISSING,
+      basis: reasoning ?? null,
+      risk: reasoning ?? null,
+      three: {
+        observation: observation ?? FLOW_MISSING,
+        reasoning: reasoning ?? FLOW_MISSING,
+        conclusion: conclusion ?? FLOW_MISSING,
+      },
+      ms: null,
+      review: null,
+      tok: null,
+      verdict,
+      verdictLabel: label,
+    })
+  }
+
   out.sort((a, b) => (b.at - a.at) || (a.seq - b.seq))
   return out
 }
 
-export interface FlowCounts { all: number; scan: number; analyze: number; order: number; risk: number; cons: number }
+export interface FlowCounts { all: number; scan: number; analyze: number; holding: number; order: number; risk: number; cons: number }
 
-/** 六个 tab 的计数（同一份 entries 逐条数；被拦截委托在「挂单」「风控」各记一次，`all` 是去重条数） */
+/** 七个 tab 的计数（同一份 entries 逐条数；被拦截委托在「挂单」「风控」各记一次，`all` 是去重条数） */
 export function flowCountsOf(entries: readonly DeskFlowEntry[]): FlowCounts {
   const n = (tab: DeskFlowTab): number => entries.filter((e) => e.cats.includes(tab)).length
-  return { all: entries.length, scan: n('scan'), analyze: n('analyze'), order: n('order'), risk: n('risk'), cons: n('cons') }
+  return { all: entries.length, scan: n('scan'), analyze: n('analyze'), holding: n('holding'), order: n('order'), risk: n('risk'), cons: n('cons') }
 }
 
 /** 按 tab 过滤（`all` 原样返回） */
@@ -573,7 +631,15 @@ export function flowChipsOf(e: DeskFlowEntry): Array<{ kind: 'review' | 'ms' | '
   return chips
 }
 
-/** 时间列 `HH:MM:SS`；非法时间 ⇒ `—` */
+/**
+ * 时间列 `MM-DD HH:MM`（**北京时间**，由 `shStampText` 统一出口）。
+ * 一律带月日：跨日/隔日时 `HH:MM` 会被误读成同一天，所以今天也不省略。非法时间 ⇒ `—`。
+ */
 export function flowTimeOf(at: number): string {
-  return finite(at) === null || at <= 0 ? '—' : hmsOf(at)
+  return finite(at) === null || at <= 0 ? '—' : shStampText(at)
+}
+
+/** 时间列悬停 `title`：完整 `YYYY-MM-DD HH:MM:SS`（北京时间）；非法 ⇒ `—` */
+export function flowTimeTitleOf(at: number): string {
+  return finite(at) === null || at <= 0 ? '—' : shDateTimeText(at)
 }

@@ -355,6 +355,8 @@ export function makePrismRoutes(deps: PrismRouteDeps): PluginWebRoute[] {
             runs: store.runs(),
             equity: deps.trading.equity(),
             evaluation,
+            // 已保存约束（只读）：持仓分析的「超单票上限 / 触及止损线」只认它，缺 ⇒ null（不套默认 15/8）
+            constraints: { perStockPct: settings.perStockPct ?? null, stopLossPct: settings.stopLossPct ?? null },
           })
           // 顶层 `state` 也带模拟盘字段（旧消费者读 state.account；页面读 trading）
           send(res, 200, {

@@ -25,7 +25,7 @@ import {
 } from './prismDesk.ts'
 import {
   FLOW_MISSING, FLOW_TABS, fillMarksOf, flowChipsOf, flowCountsOf, flowEntriesOf,
-  flowTimeOf, flowWindowOf, quoteHeadOf, statCellsOf, thesisViewOf,
+  flowTimeOf, flowTimeTitleOf, flowWindowOf, quoteHeadOf, statCellsOf, thesisViewOf,
   type DeskFlowEntry, type DeskFlowTab, type QuoteFacts,
 } from './prismDeskMid.ts'
 import {
@@ -45,7 +45,18 @@ interface DeskPerformance { returnPct?: number | null; excessPct?: number | null
 interface DeskLimits { limit?: number | null; used?: number | null; available?: number | null; limitState?: string }
 interface DeskPosRow { secid: string; name: string; qty: number; cost: number; price?: number | null; marketValue?: number | null; pnl?: number | null; weight?: number | null }
 interface DeskPositions { rows?: DeskPosRow[]; totalAssets?: number | null }
-interface Desk { decisionFlow?: DeskFlowItem[]; holdings?: DeskHolding[]; overview?: DeskOverview; performance?: DeskPerformance; limits?: DeskLimits; positions?: DeskPositions }
+/** v0.212.0：每个持仓一条 HOLD（观察 / 推理 / 结论由宿主算好；`at` 缺失 ⇒ 时间列 `—`） */
+interface DeskHoldingAnalysis {
+  secid: string
+  name?: string | null
+  at?: number | null
+  observation?: string | null
+  reasoning?: string | null
+  conclusion?: string | null
+  verdict?: string | null
+  marketValue?: number | null
+}
+interface Desk { decisionFlow?: DeskFlowItem[]; holdings?: DeskHolding[]; holdingAnalyses?: DeskHoldingAnalysis[]; overview?: DeskOverview; performance?: DeskPerformance; limits?: DeskLimits; positions?: DeskPositions }
 
 
 /** 中栏图表的取数状态：`missing` 时界面只写 `—（图未取到）`，原因进 title */
@@ -123,7 +134,8 @@ function flowRowNode(key: string, label: string, text: string | null): React.Rea
 /** 决策流单条（时间轴卡）：徽标 / 标题 / 时间 + 三段落 + chips + 风控结论 */
 function flowEntryNode(e: DeskFlowEntry): React.ReactElement {
   const chips = flowChipsOf(e)
-  const rows = e.kind === 'ANALYZE'
+  // ANALYZE（报告三要素）与 HOLD（持仓分析三要素）都走「观察 / 推理 / 结论」；其余保持动作/依据/风控
+  const rows = e.kind === 'ANALYZE' || e.kind === 'HOLD'
     ? [
         flowRowNode('observation', '观察', e.three?.observation ?? null),
         flowRowNode('reasoning', '推理', e.three?.reasoning ?? null),
@@ -134,17 +146,18 @@ function flowEntryNode(e: DeskFlowEntry): React.ReactElement {
         flowRowNode('basis', '依据', e.basis),
         flowRowNode('risk', '风控', e.risk),
       ]
-  return React.createElement('article', { key: e.id, className: `tw-ad-ev is-${e.kind.toLowerCase()}`, 'data-role': 'ad-flow-item', 'data-kind': e.kind },
+  return React.createElement('article', { key: e.id, className: `tw-ad-ev is-${e.kind.toLowerCase()}`, 'data-role': 'ad-flow-item', 'data-kind': e.kind, 'data-scope': e.scope ?? null },
     React.createElement('div', { className: 'tw-ad-ev-rail' }, React.createElement('i', { className: 'tw-ad-ev-dot' })),
     React.createElement('div', { className: 'tw-ad-ev-body' },
       React.createElement('div', { className: 'tw-ad-ev-top' },
         React.createElement('span', { className: `tw-ad-tag is-${e.kind.toLowerCase()}` }, e.kind),
         React.createElement('span', { className: 'tw-ad-ev-title' }, e.title),
-        React.createElement('span', { className: 'tw-ad-ev-time' }, flowTimeOf(e.at))),
+        // 正文 `MM-DD HH:MM`（北京时间，一律带月日）；title 给完整 `YYYY-MM-DD HH:MM:SS`
+        React.createElement('span', { className: 'tw-ad-ev-time', title: flowTimeTitleOf(e.at), 'data-role': 'ad-flow-time' }, flowTimeOf(e.at))),
       React.createElement('div', { className: 'tw-ad-ev-rows' }, ...rows),
       React.createElement('div', { className: 'tw-ad-ev-foot' },
         ...chips.map((c) => React.createElement('span', { key: c.kind, className: 'tw-ad-pill' }, c.text)),
-        React.createElement('span', { className: `tw-ad-pill ${e.verdict === 'block' ? 'blk' : 'ok'}`, 'data-role': 'ad-flow-verdict' }, e.verdict === 'block' ? '风控拦截' : '风控通过'))))
+        React.createElement('span', { className: `tw-ad-pill ${e.verdict === 'block' ? 'blk' : 'ok'}`, 'data-role': 'ad-flow-verdict' }, e.verdictLabel ?? (e.verdict === 'block' ? '风控拦截' : '风控通过')))))
 }
 
 /** 量容器真实像素（挂载即量 + ResizeObserver 跟随）；图表按像素绘制，不靠 CSS 拉伸 */
@@ -671,10 +684,15 @@ export function PrismPage(props: { active?: boolean; redUp?: boolean } = {}): Re
                   : null)),
           ])
 
-  // ── 中栏 · 决策流（runs 派生；六 tab 计数真实；时间倒序）──
+  // ── 中栏 · 决策流（runs / orders / desk.holdingAnalyses 派生；七 tab 计数真实；时间倒序）──
   const flowEntries = React.useMemo(
-    () => flowEntriesOf({ runs: state?.state.runs ?? [], orders: state?.state.orders ?? [] }),
-    [state],
+    () => flowEntriesOf({
+      runs: state?.state.runs ?? [],
+      orders: state?.state.orders ?? [],
+      // v0.212.0：每个持仓一条 HOLD（`scope:'holding'`），只读派生，不写回 runs
+      holdings: desk?.holdingAnalyses ?? [],
+    }),
+    [state, desk?.holdingAnalyses],
   )
   const flowCounts = React.useMemo(() => flowCountsOf(flowEntries), [flowEntries])
   const flowView = React.useMemo(() => flowWindowOf(flowEntries, flowTab), [flowEntries, flowTab])

@@ -275,6 +275,148 @@ export function prismPerformanceOf(
   return { returnPct, benchmarkPct, excessPct, maxDrawdown, hitRate, runsCount: runs.length, latencyMs, tokenUsage: null, missing }
 }
 
+/* ────────────────────────── 持仓分析（v0.212.0） ────────────────────────── */
+
+/** 该股无研判：与客户端 `THESIS_NONE` 同一句话（宿主给结论，页面不再二次判空） */
+export const HOLD_THESIS_NONE = '—（该股暂无研判）'
+/** 约束未保存：**不得**用设计稿默认值（15 / 8）顶替 */
+export const HOLD_CONSTRAINT_NONE = '—（约束未设置，无法判定）'
+
+/**
+ * 一条「持仓分析」（HOLD）：每个持仓标的各一条，进决策流的 `持仓` 视图。
+ *
+ * 口径（全部由回包现算，不编造判断）：
+ * - 观察：`权重 x.x%（单票上限 y%）` / `浮盈 ±x.xx%` / `当日 ±x.xx%`（有 `prevClose` 才算）/
+ *   `持仓市值 xx.x万`；缺哪项 ⇒ `—` + 括号原因（不写 0）；
+ * - 推理：只与**已保存约束**比较（权重 > `perStockPct` ⇒ 超单票上限；浮亏 ≤ −`stopLossPct` ⇒ 触及止损线；
+ *   否则未触及上限/止损线）；约束未保存 ⇒ `—（约束未设置，无法判定）`；
+ * - 结论：只认该股 `thesis.text`；没有 ⇒ `—（该股暂无研判）`；
+ * - 时刻：`thesis.at` 优先，否则最近一轮 run 的 `at`；都没有 ⇒ `null`（界面 `—`）。
+ *
+ * 纯只读：不产生委托、不写 `runs`、不参与手动「重放今日」。
+ */
+export interface PrismHoldingAnalysis {
+  secid: string
+  name: string
+  /** 分析时刻（epoch ms）；无源 ⇒ null */
+  at: number | null
+  /** 观察（事实，可逐项复算） */
+  observation: string
+  /** 推理（规则判定 + 依据） */
+  reasoning: string
+  /** 结论（该股研判原文，或 `—（该股暂无研判）`） */
+  conclusion: string
+  /** 观察四项原始数值（缺失 ⇒ null，不写 0） */
+  weight: number | null
+  perStockPct: number | null
+  pnlPct: number | null
+  dayPct: number | null
+  marketValue: number | null
+  /** 推理判定结果：超上限 / 触及止损 / 未触及 / 约束未设置 / 数据不足 ⇒ null */
+  verdict: 'over' | 'stop' | 'ok' | 'no-constraint' | null
+  /** 结论是否来自真实研判（false ⇒ `HOLD_THESIS_NONE`） */
+  hasThesis: boolean
+}
+
+/** 带符号百分比：+0.81% / -1.20%；小于半个末位 ⇒ 0.00%（不输出 `-0.00%`） */
+function signedPctOf(v: number | null, digits: number): string | null {
+  if (v === null) return null
+  const eps = 0.5 * Math.pow(10, -digits)
+  const n = Math.abs(v) < eps ? 0 : v
+  return `${n > 0 ? '+' : ''}${n.toFixed(digits)}%`
+}
+
+/** 持仓分析：每个持仓一条（顺序同 `account.positions`） */
+export function holdingAnalysesOf(
+  account: Pick<PrismAccount, 'positions'>,
+  prices: Record<string, number | null>,
+  overview: { totalAssets: number | null },
+  constraints: { perStockPct?: number | null; stopLossPct?: number | null } | null | undefined,
+  holdings: ReadonlyArray<{ secid: string; prevClose?: number | null; thesis?: PrismThesis | null }>,
+  runs: readonly PrismRun[] = [],
+): PrismHoldingAnalysis[] {
+  const perStockPct = num(constraints?.perStockPct)
+  const stopLossPct = num(constraints?.stopLossPct)
+  const totalAssets = num(overview.totalAssets)
+  // 兜底时刻：最近一轮 run 的 at（解析不了 ⇒ startedAt；全都没有 ⇒ null）
+  let latestRunAt: number | null = null
+  for (const r of runs) {
+    const at = runTimeOf(r)
+    if (at !== null && (latestRunAt === null || at > latestRunAt)) latestRunAt = at
+  }
+  const prevOf = (secid: string): number | null => {
+    for (const h of holdings) if (sameStock(h.secid, secid)) return num(h.prevClose)
+    return null
+  }
+  const thesisOfSecid = (secid: string): PrismThesis | null => {
+    for (const h of holdings) if (sameStock(h.secid, secid)) return h.thesis ?? null
+    return null
+  }
+  return account.positions.map((p) => {
+    const price = num(prices[p.secid])
+    const marketValue = price === null ? null : p.qty * price
+    const weight = marketValue === null || totalAssets === null || totalAssets <= 0 ? null : marketValue / totalAssets
+    const perShare = num(p.cost) ?? (num(p.netCost) !== null && p.qty > 0 ? (num(p.netCost) as number) / p.qty : null)
+    const pnlPct = price === null || perShare === null || perShare <= 0 ? null : (price / perShare - 1) * 100
+    const prevClose = prevOf(p.secid)
+    const dayPct = price === null || prevClose === null || prevClose <= 0 ? null : (price / prevClose - 1) * 100
+    const weightPct = weight === null ? null : weight * 100
+
+    const limitText = perStockPct === null ? '—' : `${perStockPct}%`
+    const observation = [
+      weightPct === null ? '权重 —（缺总资产或现价）' : `权重 ${weightPct.toFixed(1)}%（单票上限 ${limitText}）`,
+      pnlPct === null ? '浮盈 —（缺成本价或现价）' : `浮盈 ${signedPctOf(pnlPct, 2)}`,
+      dayPct === null ? '当日 —（缺昨收）' : `当日 ${signedPctOf(dayPct, 2)}`,
+      marketValue === null ? '持仓市值 —（缺现价）' : `持仓市值 ${(marketValue / 1e4).toFixed(1)}万`,
+    ].join(' · ')
+
+    const over = weightPct !== null && perStockPct !== null && weightPct > perStockPct + 1e-9
+    const stop = pnlPct !== null && stopLossPct !== null && pnlPct <= -stopLossPct + 1e-9
+    let reasoning: string
+    let verdict: PrismHoldingAnalysis['verdict']
+    if (perStockPct === null || stopLossPct === null) {
+      reasoning = HOLD_CONSTRAINT_NONE
+      verdict = 'no-constraint'
+    } else if (over) {
+      reasoning = `超单票上限（权重 ${(weightPct as number).toFixed(1)}% > 单票上限 ${perStockPct}%）`
+      verdict = 'over'
+    } else if (stop) {
+      reasoning = `触及止损线（浮亏 ${signedPctOf(pnlPct, 2)} ≤ −${stopLossPct}%）`
+      verdict = 'stop'
+    } else if (weightPct === null && pnlPct === null) {
+      reasoning = '—（缺权重与浮盈，无法判定）'
+      verdict = null
+    } else if (weightPct === null) {
+      reasoning = `未触及止损线（浮亏 ${signedPctOf(pnlPct, 2)} > −${stopLossPct}%）；权重缺失，单票上限不可判定`
+      verdict = 'ok'
+    } else if (pnlPct === null) {
+      reasoning = `未触及单票上限（权重 ${weightPct.toFixed(1)}% ≤ ${perStockPct}%）；浮盈缺失，止损线不可判定`
+      verdict = 'ok'
+    } else {
+      reasoning = `未触及上限/止损线（权重 ${weightPct.toFixed(1)}% ≤ ${perStockPct}%，浮亏 ${signedPctOf(pnlPct, 2)} > −${stopLossPct}%）`
+      verdict = 'ok'
+    }
+
+    const thesis = thesisOfSecid(p.secid)
+    const text = typeof thesis?.text === 'string' ? thesis.text.trim() : ''
+    return {
+      secid: p.secid,
+      name: p.name,
+      at: num(thesis?.at) ?? latestRunAt,
+      observation,
+      reasoning,
+      conclusion: text === '' ? HOLD_THESIS_NONE : text,
+      weight,
+      perStockPct,
+      pnlPct,
+      dayPct,
+      marketValue,
+      verdict,
+      hasThesis: text !== '',
+    }
+  })
+}
+
 /** 汇总：一次算出六区块的新增字段（`missing` 去重后返回） */
 export function prismDeskOf(input: {
   account: PrismAccount
@@ -285,10 +427,14 @@ export function prismDeskOf(input: {
   runs: readonly PrismRun[]
   equity: readonly PrismEquityPoint[]
   evaluation: PrismEvaluation | null
+  /** 已保存约束（只读；缺字段 ⇒ null，绝不用设计稿默认值） */
+  constraints?: { perStockPct?: number | null; stopLossPct?: number | null } | null
 }): {
   limits: ReturnType<typeof prismLimitUsageOf>
   positions: ReturnType<typeof prismPositionViewOf>
   holdings: Array<{ secid: string; thesis: PrismThesis | null } & ReturnType<typeof prismHoldingDetailOf>>
+  /** v0.212.0：每个持仓一条 HOLD（只读派生，不写 runs） */
+  holdingAnalyses: PrismHoldingAnalysis[]
   decisionFlow: PrismFlowItem[]
   overview: ReturnType<typeof prismAccountOverviewOf>
   performance: ReturnType<typeof prismPerformanceOf>
@@ -302,6 +448,7 @@ export function prismDeskOf(input: {
     thesis: thesisOf(p.secid, p.name, input.orders, input.runs),
   }))
   const overview = prismAccountOverviewOf(input.account, input.prices)
+  const holdingAnalyses = holdingAnalysesOf(input.account, input.prices, overview, input.constraints ?? null, holdings, input.runs)
   const performance = prismPerformanceOf(input.equity, input.evaluation, input.runs)
   const seen = new Set<string>()
   const missing: PrismMissing[] = []
@@ -311,5 +458,5 @@ export function prismDeskOf(input: {
     seen.add(key)
     missing.push(m)
   }
-  return { limits, positions, holdings, decisionFlow: prismDecisionFlowOf({ runs: input.runs }, input.orders, input.fills, input.runs), overview, performance, missing }
+  return { limits, positions, holdings, holdingAnalyses, decisionFlow: prismDecisionFlowOf({ runs: input.runs }, input.orders, input.fills, input.runs), overview, performance, missing }
 }

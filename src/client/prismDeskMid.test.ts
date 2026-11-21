@@ -9,7 +9,7 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import {
   FLOW_MISSING, FLOW_RENDER_MAX, FLOW_TABS, amountTextOf, amplitudeOf, digestOf,
-  fillMarksOf, firstSentenceOf, flowChipsOf, flowCountsOf, flowEntriesOf, flowFilterOf, flowTimeOf, flowWindowOf,
+  fillMarksOf, firstSentenceOf, flowChipsOf, flowCountsOf, flowEntriesOf, flowFilterOf, flowTimeOf, flowTimeTitleOf, flowWindowOf,
   pct2, plainOf, quoteHeadOf, quoteToneOf, signed2, statCellsOf, thesisViewOf, threeOf,
   type FlowOrderInput, type FlowRunInput,
 } from './prismDeskMid.ts'
@@ -210,20 +210,21 @@ test('㉑ ORDER 动作行含来源（auto ⇒ 自动）与状态中文', () => {
   assert.equal(filled?.verdict, 'pass')
 })
 
-test('㉒ 六 tab 计数：全部=去重条数；挂单/风控/约束各按视图计（被拒绝委托计两次）', () => {
+test('㉒ 七 tab 计数：全部=去重条数；挂单/风控/约束各按视图计（被拒绝委托计两次）；持仓=持仓数', () => {
   const entries = flowEntriesOf({ runs: RUNS, orders: ORDERS })
   const c = flowCountsOf(entries)
   assert.equal(c.all, entries.length)
   assert.equal(c.all, 2 + 2 + 2 + 2, 'SCAN2 + ANALYZE2 + ORDER2 + RISK2')
   assert.equal(c.scan, 2)
   assert.equal(c.analyze, 2)
+  assert.equal(c.holding, 0, '没有持仓分析 ⇒ 0（不写假数）')
   assert.equal(c.order, 2)
   assert.equal(c.risk, 3, '被拒绝委托 1 + 引擎拒绝 1 + 裁剪 1')
   assert.equal(c.cons, 1)
 })
 
-test('㉓ 过滤：六个 tab 的 id 与设计稿一致', () => {
-  assert.deepEqual(FLOW_TABS.map((t) => t.label), ['全部', '选股', '分析', '挂单', '风控', '约束'])
+test('㉓ 过滤：七个 tab 的 id 与设计稿一致', () => {
+  assert.deepEqual(FLOW_TABS.map((t) => t.label), ['全部', '选股', '分析', '持仓', '挂单', '风控', '约束'])
   const entries = flowEntriesOf({ runs: RUNS, orders: ORDERS })
   assert.equal(flowFilterOf(entries, 'all').length, flowCountsOf(entries).all)
   assert.equal(flowFilterOf(entries, 'cons').length, 1)
@@ -252,9 +253,20 @@ test('㉖ 依据摘要：去 markdown 记号 + 截断 + 空串 ⇒ null', () => 
   assert.equal(digestOf('一'.repeat(100), 10)?.length, 11)
 })
 
-test('㉗ 时间列：HH:MM:SS；非法 ⇒ —（不输出 NaN）', () => {
-  assert.match(flowTimeOf(1_795_070_140_000), /^\d{2}:\d{2}:\d{2}$/)
+test('㉗ 时间列：MM-DD HH:MM（北京时间，一律带月日）；非法 ⇒ —（不输出 NaN）', () => {
+  // 2026-11-20 06:51:48Z = 北京时间 14:51:48
+  assert.equal(flowTimeOf(Date.parse('2026-11-20T06:51:48Z')), '11-20 14:51')
   assert.equal(flowTimeOf(0), '—')
+  assert.equal(flowTimeOf(Number.NaN), '—')
+  assert.throws(() => assert.equal(flowTimeOf(Date.parse('2026-11-20T06:51:48Z')), '14:51', '反例上：省略月日'), /反例上/, '⚠ 反例注入必须失败')
+})
+
+test('㉗b 跨日：UTC 11-20 17:30 = 北京 11-21 01:30 ⇒ 必须写 `11-21 01:30`（机器时区为 UTC 也正确）', () => {
+  const ts = Date.parse('2026-11-20T17:30:05Z')
+  assert.equal(flowTimeOf(ts), '11-21 01:30', '不得按本机时区渲染，也不得省掉月日')
+  assert.equal(flowTimeTitleOf(ts), '2026-11-21 01:30:05')
+  assert.equal(flowTimeTitleOf(0), '—')
+  assert.throws(() => assert.equal(flowTimeOf(ts), '01:30', '反例上：跨日省略月日'), /反例上/, '⚠ 反例注入必须失败')
 })
 
 test('㉘ 空输入：无 runs / 无 orders ⇒ 零条（页面走「决策记录未取到」空态）', () => {
@@ -264,7 +276,7 @@ test('㉘ 空输入：无 runs / 无 orders ⇒ 零条（页面走「决策记�
 
 /* ───────────── ⑤ DOM / CSS 对拍 ───────────── */
 
-test('㉙ 页面：六个 tab 由 FLOW_TABS 渲染 + 真实计数 + 「只读 · N 条留痕」', () => {
+test('㉙ 页面：七个 tab 由 FLOW_TABS 渲染 + 真实计数 + 「只读 · N 条留痕」', () => {
   assert.match(PAGE, /FLOW_TABS\.map/)
   assert.match(PAGE, /只读 · \$\{flowCounts\.all\} 条留痕/)
   assert.match(PAGE, /flowCounts\[t\.id\]/)
@@ -466,4 +478,75 @@ test('52 threeOf 兼容真实报告的“标签独占一行”写法（冒号可
   assert.equal(t.observation, '第一条依据。')
   assert.equal(t.reasoning, '推理正文。')
   assert.equal(t.conclusion, '结论正文。')
+})
+
+/* ───────────── ⑥ v0.212.0 持仓分析 HOLD + 时间戳（含反例注入） ───────────── */
+
+const HOLDS = [
+  {
+    secid: '1.518880', name: '黄金ETF华安', at: Date.parse('2026-11-20T06:30:00Z'),
+    observation: '权重 50.0%（单票上限 15%） · 浮盈 +25.00% · 当日 +2.04% · 持仓市值 50.0万',
+    reasoning: '超单票上限（权重 50.0% > 单票上限 15%）', conclusion: '继续持有。', verdict: 'over',
+  },
+  {
+    secid: '1.510300', name: '沪深300ETF', at: null,
+    observation: '权重 10.0%（单票上限 —） · 浮盈 +5.00% · 当日 —（缺昨收） · 持仓市值 10.0万',
+    reasoning: '—（约束未设置，无法判定）', conclusion: '—（该股暂无研判）', verdict: 'no-constraint',
+  },
+]
+
+test('53 HOLD：每个持仓一条，kind=HOLD / scope=holding / 只进「持仓」视图（少一条 ⇒ 败）', () => {
+  const list = flowEntriesOf({ runs: [], orders: [], holdings: HOLDS })
+  assert.equal(list.length, HOLDS.length, '每个持仓一条')
+  assert.deepEqual(list.map((e) => e.kind), ['HOLD', 'HOLD'])
+  assert.deepEqual(list.map((e) => e.scope), ['holding', 'holding'])
+  assert.deepEqual(list.map((e) => e.cats), [['holding'], ['holding']])
+  assert.ok(!list.some((e) => e.scope === 'run'), 'HOLD 不得挂在 runs 上')
+  assert.throws(() => assert.equal(list.length, 1, '反例上：漏一条'), /反例上/, '⚠ 反例注入必须失败')
+})
+
+test('54 持仓 tab 计数 = 持仓数；「全部」包含这些条目（只数不并 ⇒ 败）', () => {
+  const entries = flowEntriesOf({ runs: RUNS, orders: ORDERS, holdings: HOLDS })
+  const c = flowCountsOf(entries)
+  assert.equal(c.holding, HOLDS.length, '持仓 tab 计数 = 持仓数')
+  assert.equal(c.all, 2 + 2 + 2 + 2 + HOLDS.length, '全部 = 原有 8 条 + 2 条 HOLD')
+  assert.equal(flowFilterOf(entries, 'holding').length, HOLDS.length)
+  assert.ok(flowFilterOf(entries, 'all').some((e) => e.kind === 'HOLD'), '「全部」必须含 HOLD')
+  assert.throws(() => assert.equal(c.all, 8, '反例上：全部漏掉 HOLD'), /反例上/, '⚠ 反例注入必须失败')
+})
+
+test('55 HOLD 三要素与时间：观察/推理/结论原样进 flow；at 缺失 ⇒ 时间列 —', () => {
+  const list = flowEntriesOf({ runs: [], orders: [], holdings: HOLDS })
+  const gold = list.find((e) => e.id === 'hold-1.518880')!
+  assert.equal(gold.three?.observation, HOLDS[0].observation)
+  assert.equal(gold.three?.reasoning, HOLDS[0].reasoning)
+  assert.equal(gold.three?.conclusion, HOLDS[0].conclusion)
+  assert.equal(gold.verdict, 'block', '超单票上限 ⇒ 风险态')
+  assert.equal(gold.verdictLabel, '超单票上限')
+  assert.equal(flowTimeOf(gold.at), '11-20 14:30')
+  const noAt = list.find((e) => e.id === 'hold-1.510300')!
+  assert.equal(noAt.at, 0, '无时刻 ⇒ 0 哨兵')
+  assert.equal(flowTimeOf(noAt.at), '—', '显示 —，不编时间')
+  assert.equal(noAt.verdict, 'pass')
+  assert.equal(noAt.verdictLabel, '约束未设置')
+  assert.throws(() => assert.equal(flowTimeOf(noAt.at), '00:00', '反例上：编一个时间'), /反例上/, '⚠ 反例注入必须失败')
+})
+
+test('56 页面：HOLD 走「观察/推理/结论」三行；时间带完整 title；holdings 已接线', () => {
+  assert.match(PAGE, /e\.kind === 'ANALYZE' \|\| e\.kind === 'HOLD'/)
+  assert.match(PAGE, /title: flowTimeTitleOf\(e\.at\)/)
+  assert.match(PAGE, /'data-role': 'ad-flow-time'/)
+  assert.match(PAGE, /holdings: desk\?\.holdingAnalyses \?\? \[\]/)
+  assert.match(CSS, /\.tw-ad-tag\.is-hold\{[^}]*var\(--tw-human\)/)
+  assert.throws(() => assert.match(PAGE.replace(/title: flowTimeTitleOf\(e\.at\), /, ''), /title: flowTimeTitleOf\(e\.at\)/, '反例上：时间不带 title'), /反例上/, '⚠ 反例注入必须失败')
+})
+
+test('57 页面：只读派生 —— 持仓分析不写 runs、不参与「重放今日」', () => {
+  const before = JSON.stringify(RUNS)
+  const fn = flowEntriesOf({ runs: RUNS, orders: [], holdings: HOLDS })
+  assert.equal(JSON.stringify(RUNS), before, 'flowEntriesOf 不得改写 runs 入参')
+  const runCount = fn.filter((e) => e.kind === 'SCAN').length
+  assert.equal(runCount, RUNS.length, 'HOLD 不改写 runs 派生条数')
+  assert.match(PAGE, /disabled: true, title: '宿主未提供重放接口'[\s\S]{0,40}'↺ 重放今日'/)
+  assert.throws(() => assert.equal(runCount, RUNS.length + HOLDS.length, '反例上：把 HOLD 混进 runs'), /反例上/, '⚠ 反例注入必须失败')
 })

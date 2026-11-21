@@ -1264,6 +1264,7 @@ color-scheme:dark}
 .tw-ad-ev.is-scan .tw-ad-ev-dot{border-color:rgba(91,140,255,.8);background:rgba(91,140,255,.35)}
 .tw-ad-ev.is-analyze .tw-ad-ev-dot{border-color:rgba(70,200,220,.8);background:rgba(70,200,220,.35)}
 .tw-ad-ev.is-order .tw-ad-ev-dot{border-color:rgba(154,124,255,.8);background:rgba(154,124,255,.35)}
+.tw-ad-ev.is-hold .tw-ad-ev-dot{border-color:rgba(240,169,59,.8);background:rgba(240,169,59,.35)}
 .tw-ad-ev.is-risk .tw-ad-ev-dot{border-color:rgba(255,92,92,.9);background:rgba(255,92,92,.45)}
 .tw-ad-ev-body{padding:10px 0 12px;min-width:0}
 .tw-ad-ev-top{display:flex;align-items:center;gap:7px;flex-wrap:wrap}
@@ -1271,6 +1272,7 @@ color-scheme:dark}
 .tw-ad-tag.is-scan{color:var(--tw-accent);background:rgba(91,140,255,.15);border:1px solid rgba(91,140,255,.3)}
 .tw-ad-tag.is-analyze{color:#63d9e8;background:rgba(70,200,220,.12);border:1px solid rgba(70,200,220,.28)}
 .tw-ad-tag.is-order{color:#c9a3ff;background:rgba(180,130,255,.14);border:1px solid rgba(180,130,255,.3)}
+.tw-ad-tag.is-hold{color:var(--tw-human);background:rgba(240,169,59,.12);border:1px solid rgba(240,169,59,.32)}
 .tw-ad-tag.is-risk{color:var(--tw-danger);background:rgba(255,92,92,.13);border:1px solid rgba(255,92,92,.3)}
 .tw-ad-ev-title{font-size:12px;color:var(--tw-text);font-weight:500;letter-spacing:.15px;min-width:0}
 .tw-ad-ev-time{margin-left:auto;font-size:12px;color:var(--tw-muted);font-variant-numeric:tabular-nums;letter-spacing:.3px}

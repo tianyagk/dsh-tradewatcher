@@ -3,7 +3,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import type { PrismOrder, PrismRun } from '../shared/prism.ts'
-import { prismAccountOverviewOf, prismDecisionFlowOf, prismDeskOf, prismHoldingDetailOf, prismLimitUsageOf, prismPerformanceOf, prismPositionViewOf, thesisOf } from './prismData.ts'
+import { HOLD_CONSTRAINT_NONE, HOLD_THESIS_NONE, holdingAnalysesOf, prismAccountOverviewOf, prismDecisionFlowOf, prismDeskOf, prismHoldingDetailOf, prismLimitUsageOf, prismPerformanceOf, prismPositionViewOf, thesisOf } from './prismData.ts'
 
 const account = {
   day: '2026-11-18', capital: 1_000_000, capitalLimit: 1_000_000, cash: 200_000, realized: 0, dayStartEquity: null,
@@ -209,4 +209,113 @@ test('⑰ run.at 解析失败 ⇒ 回退 startedAt（仍是 number，不编日�
   const run = runWithNote('工商银行继续持有。', 'not-a-date')
   const t = thesisOf('1.601398', '工商银行', [], [run])
   assert.equal(t?.at, 1_795_157_426_706)
+})
+
+/* ───────────── ⑱ 持仓分析 HOLD（v0.212.0，含反例注入） ───────────── */
+
+const GOLD_ACCOUNT = {
+  day: '2026-11-21', capital: 1_000_000, capitalLimit: 1_000_000, cash: 500_000, realized: 0, dayStartEquity: null,
+  positions: [{ secid: '1.518880', name: '黄金ETF华安', qty: 100_000, available: 100_000, cost: 4.0 }],
+  copiedAt: null, copyLogs: [],
+}
+const GOLD_PRICES = { '1.518880': 5.0 }
+const GOLD_HOLDING = [{ secid: '1.518880', prevClose: 4.9, thesis: null }]
+const goldOverview = (): ReturnType<typeof prismAccountOverviewOf> => prismAccountOverviewOf(GOLD_ACCOUNT, GOLD_PRICES)
+const goldOf = (constraints: { perStockPct?: number | null; stopLossPct?: number | null } | null, holdings = GOLD_HOLDING, runs: PrismRun[] = []) =>
+  holdingAnalysesOf(GOLD_ACCOUNT, GOLD_PRICES, goldOverview(), constraints, holdings, runs)[0]!
+
+test('⑱ 每个持仓一条 HOLD；数量 = 持仓数（少一条 ⇒ 败）', () => {
+  const three = {
+    ...GOLD_ACCOUNT,
+    positions: [
+      ...GOLD_ACCOUNT.positions,
+      { secid: '1.510300', name: '沪深300ETF', qty: 10_000, available: 10_000, cost: 4.0 },
+      { secid: '1.600519', name: '贵州茅台', qty: 100, available: 100, cost: 1500 },
+    ],
+  }
+  const list = holdingAnalysesOf(three, { '1.518880': 5.0, '1.510300': 4.2, '1.600519': 1600 }, prismAccountOverviewOf(three, { '1.518880': 5.0, '1.510300': 4.2, '1.600519': 1600 }), { perStockPct: 15, stopLossPct: 8 }, [])
+  assert.equal(list.length, three.positions.length, '每个持仓一条')
+  assert.deepEqual(list.map((x) => x.secid), three.positions.map((p) => p.secid), '顺序 = 持仓顺序')
+  assert.throws(() => assert.equal(list.length, 2, '反例上：漏掉一条'), /反例上/, '⚠ 反例注入必须失败')
+})
+
+test('⑲ 观察四项：权重 / 浮盈 / 当日 / 持仓市值（固定 payload，逐项可复算）', () => {
+  const a = goldOf({ perStockPct: 60, stopLossPct: 8 })
+  assert.equal(a.observation, '权重 50.0%（单票上限 60%） · 浮盈 +25.00% · 当日 +2.04% · 持仓市值 50.0万')
+  assert.equal(a.weight, 0.5)
+  assert.equal(a.marketValue, 500_000)
+  assert.ok(Math.abs((a.pnlPct as number) - 25) < 1e-9, '浮盈 = 现价 / 成本 − 1')
+  assert.ok(Math.abs((a.dayPct as number) - (5.0 / 4.9 - 1) * 100) < 1e-9, '当日 = 现价 / 昨收 − 1')
+  // 反例：缺成本价时写 0.00% 顶替 ⇒ 必败
+  const noCost = { ...GOLD_ACCOUNT, positions: [{ ...GOLD_ACCOUNT.positions[0]!, cost: null as unknown as number }] }
+  const miss = holdingAnalysesOf(noCost, GOLD_PRICES, prismAccountOverviewOf(noCost, GOLD_PRICES), { perStockPct: 60, stopLossPct: 8 }, GOLD_HOLDING)[0]!
+  assert.match(miss.observation, /浮盈 —（缺成本价或现价）/, '缺数据必须 `—` + 原因')
+  assert.throws(() => assert.equal(miss.observation, '浮盈 +0.00%', '反例上：缺成本写 0'), /反例上/, '⚠ 反例注入必须失败')
+})
+
+test('⑳ 推理·超单票上限：权重 50.0% > 15% ⇒ 写判定 + 依据', () => {
+  const a = goldOf({ perStockPct: 15, stopLossPct: 8 })
+  assert.equal(a.verdict, 'over')
+  assert.equal(a.reasoning, '超单票上限（权重 50.0% > 单票上限 15%）')
+})
+
+test('㉑ 推理·触及止损线：浮亏 -10.00% ≤ −8% ⇒ 写判定 + 依据', () => {
+  const acc = { ...GOLD_ACCOUNT, positions: [{ ...GOLD_ACCOUNT.positions[0]!, cost: 4.0 }] }
+  const prices = { '1.518880': 3.6 }
+  const a = holdingAnalysesOf(acc, prices, prismAccountOverviewOf(acc, prices), { perStockPct: 60, stopLossPct: 8 }, [{ secid: '1.518880', prevClose: 3.7, thesis: null }])[0]!
+  assert.equal(a.verdict, 'stop')
+  assert.equal(a.reasoning, '触及止损线（浮亏 -10.00% ≤ −8%）')
+})
+
+test('㉒ 推理·未触及：50.0% ≤ 60%（未超上限）且 +25.00% > −8%（未触止损）', () => {
+  const a = goldOf({ perStockPct: 60, stopLossPct: 8 })
+  assert.equal(a.verdict, 'ok')
+  assert.equal(a.reasoning, '未触及上限/止损线（权重 50.0% ≤ 60%，浮亏 +25.00% > −8%）')
+})
+
+test('㉓ 推理·约束未设置 ⇒ —（约束未设置，无法判定）；默认 15/8 顶替 ⇒ 必败', () => {
+  const cases: Array<{ perStockPct?: number | null; stopLossPct?: number | null } | null | undefined> = [null, undefined, {}, { perStockPct: null, stopLossPct: null }, { perStockPct: 15 }]
+  for (const c of cases) {
+    const a = goldOf(c)
+    assert.equal(a.reasoning, HOLD_CONSTRAINT_NONE, `约束 ${JSON.stringify(c)} 未完整保存`)
+    assert.equal(a.verdict, 'no-constraint')
+    assert.equal(a.perStockPct, c !== null && c !== undefined && typeof c.perStockPct === 'number' ? 15 : null)
+  }
+  assert.throws(
+    () => assert.equal(goldOf(null).reasoning, '超单票上限（权重 50.0% > 单票上限 15%）', '反例上：用默认 15/8'),
+    /反例上/, '⚠ 反例注入必须失败',
+  )
+})
+
+test('㉔ 结论：有 thesis 用原文；没有 ⇒ —（该股暂无研判）（拿别股/宏观顶替 ⇒ 败）', () => {
+  const thesis = { text: '黄金端对冲价值仍在，继续持有。', at: 1_795_156_226_684, kind: 'order' as const }
+  assert.equal(goldOf({ perStockPct: 60, stopLossPct: 8 }, [{ secid: '1.518880', prevClose: 4.9, thesis }]).conclusion, thesis.text)
+  assert.equal(goldOf({ perStockPct: 60, stopLossPct: 8 }, [{ secid: '1.518880', prevClose: 4.9, thesis: null }]).conclusion, HOLD_THESIS_NONE)
+  assert.equal(HOLD_THESIS_NONE, '—（该股暂无研判）')
+  assert.throws(() => assert.equal(goldOf({ perStockPct: 60, stopLossPct: 8 }).conclusion, '别的股票的研判', '反例上：编研判'), /反例上/, '⚠ 反例注入必须失败')
+})
+
+test('㉕ 时间戳：thesis.at 优先；无则最近一轮 run 的 at；都没有 ⇒ null（不编）', () => {
+  const thesis = { text: '继续持有。', at: 1_795_156_226_684, kind: 'order' as const }
+  assert.equal(goldOf({ perStockPct: 60, stopLossPct: 8 }, [{ secid: '1.518880', prevClose: 4.9, thesis }]).at, thesis.at)
+  const runLater = runWithNote('黄金ETF华安继续持有。', '2026-11-20T15:01:00+08:00')
+  const runEarlier = runWithNote('观察为主。', '2026-11-20T09:35:00+08:00')
+  const noThesis = goldOf({ perStockPct: 60, stopLossPct: 8 }, GOLD_HOLDING, [runEarlier, runLater])
+  assert.equal(noThesis.at, Date.parse('2026-11-20T15:01:00+08:00'), '取最近一轮 run 的 at')
+  assert.equal(goldOf({ perStockPct: 60, stopLossPct: 8 }, GOLD_HOLDING, []).at, null, '无 run ⇒ null（界面 —）')
+  assert.throws(() => assert.equal(goldOf({ perStockPct: 60, stopLossPct: 8 }, GOLD_HOLDING, []).at, 0, '反例上：写 0'), /反例上/, '⚠ 反例注入必须失败')
+})
+
+test('㉖ prismDeskOf：holdingAnalyses 挂在 desk 上、不写 runs、不混进宿主 decisionFlow', () => {
+  const runs = [runWithNote('黄金ETF华安继续持有。', RUN_AT)]
+  const before = JSON.stringify(runs)
+  const d = prismDeskOf({ account: GOLD_ACCOUNT, prices: GOLD_PRICES, quotes: { '1.518880': { price: 5.0, prev: 4.9 } }, orders: [], fills: [], runs, equity: [], evaluation: null, constraints: { perStockPct: 60, stopLossPct: 8 } })
+  assert.equal(d.holdingAnalyses.length, GOLD_ACCOUNT.positions.length)
+  assert.equal(d.holdingAnalyses[0]!.conclusion, '黄金ETF华安继续持有。')
+  assert.equal(JSON.stringify(runs), before, '不得改写 runs')
+  assert.ok(!d.decisionFlow.some((f) => f.action === 'hold' && f.secid === '1.518880'), 'HOLD 由客户端合并，不写进宿主 decisionFlow')
+  // 源码层：宿主不产生任何写路径
+  const src = readFileSync(new URL('./prismData.ts', import.meta.url), 'utf8')
+  for (const bad of ['replaceRun', 'saveAccount', 'placeDecision', 'appendPrismLedger']) assert.ok(!src.includes(bad), `prismData.ts 不得出现写路径 ${bad}`)
+  assert.throws(() => assert.ok(src.includes('placeDecision'), '反例上：宿主写 runs'), /反例上/, '⚠ 反例注入必须失败')
 })
