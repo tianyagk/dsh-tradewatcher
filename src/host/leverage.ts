@@ -39,6 +39,7 @@
  * （差 50% 是口径，不是错误）。这里只校验一条量级关系：深市余额 > 0、小于合计、且占合计
  * 落在 30–70%。结果落盘到 `cross`，用于离线排查；**回包不含它**（契约冻结）。
  */
+import { mapLimit } from './concurrency.ts'
 import { mkdir, readFile, stat } from 'node:fs/promises'
 import { join } from 'node:path'
 import { withHostBreaker } from './breakerFetch.ts'
@@ -984,12 +985,21 @@ export class LeverageService {
   private async runBackfill(): Promise<void> {
     try {
       const first = await this.page({ page: 1, pageSize: LEVERAGE_PAGE_SIZE, order: 'asc' })
-      await this.store.save(first.rows)
       const pages = Math.max(1, Math.min(LEVERAGE_BACKFILL_PAGES, first.pages))
-      for (let p = 2; p <= pages; p += 1) {
-        const page = await this.page({ page: p, pageSize: LEVERAGE_PAGE_SIZE, order: 'asc' })
-        await this.store.save(page.rows)
-      }
+      // 其余页并发取（限 3），最后只 save 一次：原实现是「串行 6 页 + 每页整份 JSON 重写 6 次」
+      const rest = await mapLimit(
+        Array.from({ length: Math.max(0, pages - 1) }, (_, i) => i + 2),
+        3,
+        async (p) => {
+          try {
+            return (await this.page({ page: p, pageSize: LEVERAGE_PAGE_SIZE, order: 'asc' })).rows
+          } catch (error) {
+            log(`leverage backfill page ${p} failed: ${error instanceof Error ? error.message : String(error)}`)
+            return []
+          }
+        },
+      )
+      await this.store.save([...first.rows, ...rest.flat()])
       log(`leverage backfilled ${this.store.rows.length} rows (pages=${pages})`)
     } catch (error) {
       log(`leverage backfill failed: ${error instanceof Error ? error.message : String(error)}`)

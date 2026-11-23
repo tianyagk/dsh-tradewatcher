@@ -11,7 +11,7 @@
  * 两个保护：折算检测（份额跳 >20% 且价格无 >5% 跳空 ⇒ 该日顺延并记账）、未日更自检（≥70% 同值 ⇒ stale）。
  */
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
-import { mkdir, readFile, readdir, unlink, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, readdir, stat, unlink, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { dataHome } from './store.ts'
 import { fetchTextHost } from './hostFetch.ts'
@@ -514,10 +514,21 @@ export interface DogwatchPayload {
 
 /** 20 日均额档案（每日落盘，供次日算放大倍数；历史不变 ⇒ 永久缓存） */
 function amountArchivePath(day: string): string { return join(dataHome(), 'dogwatch', `amount-${day}.json`) }
+/**
+ * 金额档案缓存：第一次请求要 readdir + 逐文件读，之后档案没变就不该再碰盘。
+ * 失效条件：目录 mtime 变化（写入新档案会变）或超过 5 分钟。
+ */
+let amountCache: { at: number; dirMtimeMs: number; map: Map<string, number> } | null = null
+const AMOUNT_CACHE_TTL_MS = 5 * 60_000
+
 async function readAmountArchive(): Promise<Map<string, number>> {
+  const dir = join(dataHome(), 'dogwatch')
+  const dirStat = await stat(dir).catch(() => null)
+  if (amountCache !== null && dirStat !== null && Date.now() - amountCache.at < AMOUNT_CACHE_TTL_MS && dirStat.mtimeMs === amountCache.dirMtimeMs) {
+    return new Map(amountCache.map)
+  }
   const out = new Map<string, number>()
   try {
-    const dir = join(dataHome(), 'dogwatch')
     const files = await readdir(dir)
     await Promise.all(files.map(async (f) => {
       const m = /^amount-(\d{4}-\d{2}-\d{2})\.json$/.exec(f)
@@ -528,6 +539,7 @@ async function readAmountArchive(): Promise<Map<string, number>> {
       } catch { /* 单文件坏 ⇒ 跳过（不整份失败） */ }
     }))
   } catch { /* 无档案 */ }
+  amountCache = { at: Date.now(), dirMtimeMs: dirStat?.mtimeMs ?? 0, map: new Map(out) }
   return out
 }
 function writeAmountArchive(day: string, total: number): void {

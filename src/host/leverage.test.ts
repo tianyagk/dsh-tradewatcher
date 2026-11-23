@@ -621,3 +621,26 @@ test('分位/合并/切片三个纯函数的边界', () => {
   assert.equal(merged.rows[0].rzyezb, 7, '同一天以新数据为准')
   assert.deepEqual(sliceLeverageWindow(rampRows(10), 3).map((r) => r.d), daysEndingAt(10).slice(-3), '窗口取最近 N 天')
 })
+
+test('首次回填：多页并发取（限 3）且只 save 一次（原实现串行 6 页 + 每次整份重写）', async () => {
+  const dir = tempDir()
+  const rows = rampRows(800, 1.6, 2.6, '2024-12-31')
+  const delay = 60
+  const base = fakeUpstream({ rows, pages: 4, perPage: 200 })
+  let saveCalls = 0
+  const store = new LeverageStore(dir)
+  const origSave = store.save.bind(store)
+  store.save = async (r: Parameters<typeof origSave>[0]) => { saveCalls += 1; return origSave(r) }
+  const service = new LeverageService(store, {
+    now: () => NOW_MS,
+    fetchPage: async (q) => { await new Promise((r) => setTimeout(r, delay)); return base.fetchPage(q) },
+    fetchSzse: async () => null,
+  })
+  const t0 = Date.now()
+  await service.startBackfill()
+  const wall = Date.now() - t0
+  // 串行 4 页 ≈ 240ms；并发 3 限速下 ≈ 120ms（含首页）
+  assert.ok(wall < delay * 3.2, `回填应并发（实测 ${wall}ms，串行约 ${delay * 4}ms）`)
+  assert.equal(saveCalls, 1, `回填只应 save 一次，实际 ${saveCalls}`)
+  rmSync(dir, { recursive: true, force: true })
+})
