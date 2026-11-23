@@ -28,6 +28,11 @@ export interface PrismInputs {
   skeleton: string
   /** 行业暴露 + 单票权重（P-10；无数据时说明，不猜行业） */
   exposure?: string
+  /**
+   * v0.214.0：【ETF 按产品合并】段落（同键 ETF = 同一条腿，名称列表 + 合计权重 + 合计市值）。
+   * 自带标题，缺省 ⇒ 提示词里不出这一段（旧调用方行为不变）。
+   */
+  products?: string
 }
 
 export interface PrismPipelineDeps {
@@ -76,6 +81,8 @@ const compileInput = (inputs: PrismInputs): string => {
     inputs.account || '—（未取到账户快照）',
     '【真实持仓（只读）】',
     inputs.positions || '—',
+    // 同键 ETF 合并成一行：让模型看见「这两只是同一条腿」，不重复建仓
+    ...(inputs.products !== undefined && inputs.products.trim() !== '' ? [inputs.products] : []),
     '【行业暴露（市值 ÷ 总资产；未穿透单列）】',
     inputs.exposure || '—（未取到行业归属）',
     '【行情摘要】',

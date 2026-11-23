@@ -292,6 +292,15 @@ export interface PrismClampEvent {
   basis: string
 }
 
+/** 缺数据而**未做**的校验（不是失败，也不许把「没查」说成「查过没问题」）：只留痕，不拦单 */
+export interface PrismClampSkip {
+  secid: string
+  /** product = 同产品重复闸；deviation = 委托价偏离闸 */
+  gate: 'product' | 'deviation'
+  /** 为什么没查（缺现价 / 缺名称），不得编数 */
+  reason: string
+}
+
 export interface PrismDecision {
   limits: { singlePct: number | null; totalPct: number | null; note: string | null; byIndustry?: PrismIndustryLimits }
   /** 本轮决策理由（一句话；orders 为空也必须给） */
@@ -304,6 +313,8 @@ export interface PrismDecision {
   parseError: string | null
   /** 确定性裁剪留痕（只裁模型已给的单，不新建） */
   clampEvents?: PrismClampEvent[]
+  /** v0.214.0：缺数据未做的校验（不拦；落 run 以便事后核对「闸到底跑没跑」） */
+  clampSkipped?: PrismClampSkip[]
 }
 
 export interface PrismExposureRow {

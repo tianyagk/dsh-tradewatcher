@@ -16,6 +16,7 @@ import { join } from 'node:path'
 import type {
   PrismAccount,
   PrismClampEvent,
+  PrismClampSkip,
   PrismFeeCorrection,
   PrismIndustryLimits,
   PrismCopyLog,
@@ -664,9 +665,27 @@ export interface TradingDeps {
 const idOf = (order: { secid: string; side: string; price: number; shares: number; decidedAt: number }): string =>
   `o-${order.decidedAt}-${order.secid}-${order.side}-${order.price}-${order.shares}`
 
+/**
+ * 纯函数：**同产品键**（v0.214.0）。取名称中 `ETF` 及之前的部分——
+ * `30年国债ETF博时` / `30年国债ETF鹏扬` ⇒ 都是 `30年国债ETF`：同一跟踪标的，
+ * 只是不同基金公司发的壳，对组合而言是**同一条腿**。
+ *
+ * 名称里没有 `ETF` ⇒ 原样返回（不知道就不猜；调用方据此判定「不是 ETF，不适用」）。
+ */
+export function productKeyOf(name: string): string {
+  const text = (name ?? '').trim()
+  const at = text.toUpperCase().indexOf('ETF')
+  // 大写化只为键比较稳定（大小写不同不该拆成两条腿）；中文不受影响
+  return (at < 0 ? text : text.slice(0, at + 3)).toUpperCase()
+}
+
+/** 名称是否是 ETF（同产品判据只对 ETF 生效；LOF/普通股不按产品合并） */
+export const isEtfName = (name: string): boolean => /ETF/i.test(name ?? '')
+
 export interface ClampContext {
   cash: number
-  positions: ReadonlyArray<{ secid: string; qty: number; price: number | null; industry?: string | null }>
+  /** `name` 用于同产品闸（缺 ⇒ 该持仓不参与判据，并记 skipped） */
+  positions: ReadonlyArray<{ secid: string; qty: number; price: number | null; name?: string | null; industry?: string | null }>
   limits: { singlePct?: number | null; totalPct?: number | null; byIndustry?: PrismIndustryLimits }
   industries?: Record<string, string | null>
   at: number
@@ -688,12 +707,21 @@ export interface ClampContext {
    * 不进入后续裁剪/撮合/挂单。缺省 ⇒ 不去重（旧调用方行为不变）。
    */
   rejectedToday?: readonly RejectedOrderLike[]
+  /**
+   * v0.214.0：本轮行情（按 secid）——同产品闸取名称、偏离闸取现价。
+   * 缺项一律按「缺数据」处理（记 `skipped`），不拿持仓成本或 0 冒充现价。
+   */
+  quotes?: Record<string, { name?: string | null; price?: number | null } | undefined>
+  /** v0.214.0：今日已挂的买单（同键已有挂单 ⇒ 不重复建仓；加仓同一只不在此列） */
+  pendingBuys?: ReadonlyArray<{ secid: string; name: string }>
 }
 
 export interface ClampResult {
   decision: PrismDecision
   events: PrismClampEvent[]
   rejected: PrismDecision['rejects']
+  /** 因缺数据**未做**的校验（不拦单，但必须能被看见） */
+  skipped: PrismClampSkip[]
 }
 
 const lot = (shares: number): number => Math.max(0, Math.floor(shares / 100) * 100)
@@ -709,12 +737,40 @@ export function clampDecision(decision: PrismDecision, ctx: ClampContext): Clamp
     : ctx.limits.byIndustry?.[name]
   const events: PrismClampEvent[] = []
   const rejected: PrismDecision['rejects'] = []
+  const skipped: PrismClampSkip[] = []
   let cashLeft = ctx.cash
-  const accepted: Array<{ secid: string; industry: string | null; value: number }> = []
+  const accepted: Array<{ secid: string; name: string | null; industry: string | null; value: number }> = []
   const buyValue = (secid: string): number => positions.filter((p) => p.secid === secid).reduce((sum, p) => sum + p.value, 0) + accepted.filter((x) => x.secid === secid).reduce((sum, x) => sum + x.value, 0)
   const orders: PrismDecision['orders'] = []
   // 同一轮内多个重复只留一条 reject（按「标的+方向+前次原因」归并，避免刷屏）
   const duplicateKeys = new Set<string>()
+  /** 标的名（行情优先；其次持仓；再次今日挂单）；三级都缺 ⇒ null（缺数据，不猜） */
+  const nameOf = (secid: string): string | null => {
+    const q = ctx.quotes?.[secid]?.name
+    if (typeof q === 'string' && q.trim() !== '') return q
+    const held = positions.find((p) => p.secid === secid)?.name
+    if (typeof held === 'string' && held.trim() !== '') return held
+    const pending = ctx.pendingBuys?.find((p) => p.secid === secid)?.name
+    return typeof pending === 'string' && pending.trim() !== '' ? pending : null
+  }
+  /** 同产品已持有/已挂单的那只（不含本次委托标的自身：对已持有那只继续加仓不拦） */
+  const productLegOf = (secid: string, key: string): { secid: string; name: string } | null => {
+    for (const p of positions) {
+      if (p.secid === secid || !(p.qty > 0)) continue
+      const name = nameOf(p.secid)
+      if (name !== null && isEtfName(name) && productKeyOf(name) === key) return { secid: p.secid, name }
+    }
+    for (const p of ctx.pendingBuys ?? []) {
+      if (p.secid === secid) continue
+      if (isEtfName(p.name) && productKeyOf(p.name) === key) return { secid: p.secid, name: p.name }
+    }
+    for (const a of accepted) {
+      if (a.secid === secid || a.name === null) continue
+      if (isEtfName(a.name) && productKeyOf(a.name) === key) return { secid: a.secid, name: a.name }
+    }
+    return null
+  }
+  const productRejectKeys = new Set<string>()
   for (const order of decision.orders) {
     const prior = isDuplicateRejected(order, ctx.rejectedToday ?? [])
     if (prior !== null) {
@@ -731,7 +787,49 @@ export function clampDecision(decision: PrismDecision, ctx: ClampContext): Clamp
       }
       continue
     }
+    // ── B. 委托价偏离闸（v0.214.0）：错价引用 = 直接按错价成交（买卖两侧都会亏），
+    //    因此买卖同口径；无现价 ⇒ 不拦（不拿成本/0 顶现价），但记 skipped。
+    const marketRaw = ctx.quotes?.[order.secid]?.price
+    const market = typeof marketRaw === 'number' && Number.isFinite(marketRaw) && marketRaw > 0 ? marketRaw : null
+    if (market === null) {
+      skipped.push({ secid: order.secid, gate: 'deviation', reason: '缺现价，未做偏离校验' })
+    } else {
+      const deviationPct = Math.abs(order.price / market - 1) * 100
+      // 3% 是开区间；加 1e-9 只吸收浮点误差（111.2×1.03 会算成 3.0000000000000018），不放宽口径
+      if (Number.isFinite(deviationPct) && deviationPct > 3 + 1e-9) {
+        rejected.push({
+          secid: order.secid,
+          side: order.side,
+          price: order.price,
+          shares: order.shares,
+          reason: `委托价偏离现价 ${deviationPct.toFixed(1)}%，疑似引用错标的，需按现价重报`,
+        })
+        continue
+      }
+    }
     if (order.side === 'sell') { orders.push(order); continue }
+    // ── A. 同产品重复闸（v0.214.0）：只拦买单；已持有「另一只」同键 ETF、
+    //    或今日已有同键挂单 ⇒ 拒绝（对已持有的那只继续加仓不拦）。
+    const targetName = nameOf(order.secid)
+    if (targetName === null) {
+      skipped.push({ secid: order.secid, gate: 'product', reason: '缺名称，未做同产品校验' })
+    } else if (isEtfName(targetName)) {
+      const other = productLegOf(order.secid, productKeyOf(targetName))
+      if (other !== null) {
+        const key = `${order.secid}|${other.secid}`
+        if (!productRejectKeys.has(key)) {
+          productRejectKeys.add(key)
+          rejected.push({
+            secid: order.secid,
+            side: 'buy',
+            price: order.price,
+            shares: order.shares,
+            reason: `同产品已持有 ${other.name}（${other.secid}），不重复建仓；如需加仓请直接加该标的`,
+          })
+        }
+        continue
+      }
+    }
     const before = order.shares
     let shares = lot(order.shares)
     const px = order.price
@@ -810,10 +908,10 @@ export function clampDecision(decision: PrismDecision, ctx: ClampContext): Clamp
       continue
     }
     orders.push({ ...order, shares })
-    accepted.push({ secid: order.secid, industry, value: shares * px })
+    accepted.push({ secid: order.secid, name: targetName, industry, value: shares * px })
     cashLeft = Math.max(0, cashLeft - shares * px)
   }
-  return { decision: { ...decision, orders, rejects: [...decision.rejects, ...rejected], clampEvents: events }, events, rejected }
+  return { decision: { ...decision, orders, rejects: [...decision.rejects, ...rejected], clampEvents: events, clampSkipped: skipped }, events, rejected, skipped }
 }
 
 /** 按当日决策落挂单：先撤销指定单，再逐笔做静态约束（拒绝也留痕） */

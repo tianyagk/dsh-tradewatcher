@@ -13,7 +13,7 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { PluginWebRoute } from './context.ts'
 import type { PrismStore } from './prismStore.ts'
-import { PrismTradingStore, applyFeeCorrection, clampDecision, copyAtCost, dayStartMismatchOf, equityPointOf, matchTick, placeDecision, rebuildFromOrders, upsertEquity, type QuoteLite } from './prismAccount.ts'
+import { PrismTradingStore, applyFeeCorrection, clampDecision, copyAtCost, dayStartMismatchOf, equityPointOf, isEtfName, matchTick, placeDecision, productKeyOf, rebuildFromOrders, upsertEquity, type QuoteLite } from './prismAccount.ts'
 import type { DataStore } from './store.ts'
 import type { PrismAccount, PrismFill, PrismOrder, PrismRun, PrismSettings, PrismState } from '../shared/prism.ts'
 import { PRISM_INTERVAL_OPTIONS, PRISM_MAX_TIMES, PRISM_SKELETON_MAX } from '../shared/prism.ts'
@@ -156,6 +156,40 @@ export function rejectedTodayTextOf(items: readonly RejectedTodayOrder[]): strin
     .join('\n')
 }
 
+/**
+ * 【ETF 按产品合并】段落（v0.214.0，C 层）。
+ *
+ * 同一跟踪标的、不同基金公司的 ETF（如 `511130 博时` / `511090 鹏扬` 都是 30 年国债 ETF）
+ * 对组合而言是**同一条腿**；分成两行会让模型以为「还没配这条腿」而重复建仓。
+ * 只列同键 ≥2 只的组；权重 = 合计市值 ÷ 可计价总市值（与组合总览同一分母）。
+ * 缺价 ⇒ `—` + 原因，不拿 0 或成本冒充。
+ */
+export function etfProductsTextOf(
+  positions: ReadonlyArray<{ secid: string; name: string; qty: number; mv: number | null }>,
+  totalMv: number,
+): string {
+  const groups = new Map<string, Array<{ secid: string; name: string; qty: number; mv: number | null }>>()
+  for (const p of positions) {
+    if (!(p.qty > 0) || !isEtfName(p.name)) continue
+    const key = productKeyOf(p.name)
+    const list = groups.get(key)
+    if (list === undefined) groups.set(key, [p])
+    else list.push(p)
+  }
+  const rows: string[] = []
+  for (const [key, members] of groups) {
+    if (members.length < 2) continue
+    const missing = members.filter((m) => typeof m.mv !== 'number')
+    const sumMv = members.reduce((sum, m) => sum + (typeof m.mv === 'number' ? m.mv : 0), 0)
+    const mvText = missing.length > 0 ? `—（缺价：${missing.map((m) => m.name).join('、')}）` : `${sumMv.toFixed(2)} 元`
+    const weightText = missing.length > 0
+      ? '—（合计市值不可算）'
+      : !(totalMv > 0) ? '—（可计价总市值 0）' : `${((sumMv / totalMv) * 100).toFixed(2)}%`
+    rows.push(`${key}：${members.map((m) => `${m.name}（${m.secid}）${m.qty} 股`).join(' + ')} — 合计权重 ${weightText}，合计市值 ${mvText}`)
+  }
+  return ['【ETF 按产品合并】', '（同键 = 同一跟踪标的、不同基金公司，属同一条腿；加仓请直接加已持有的那只）', ...(rows.length === 0 ? ['—（无同产品多标的持仓）'] : rows)].join('\n')
+}
+
 export const prismInputsOf = async (deps: PrismRouteDeps): Promise<PrismInputs> => {
   const watch = deps.data.watchData().items
   const port = deps.data.portData()
@@ -166,6 +200,10 @@ export const prismInputsOf = async (deps: PrismRouteDeps): Promise<PrismInputs> 
     .filter((p) => p.qty > 0)
     .map((p) => `${p.name}（${p.secid}）：${p.qty} 股，成本 ${p.avgCost.toFixed(3)}`)
     .join('\n')
+  const products = etfProductsTextOf(
+    assembly.view.positions.map((p) => ({ secid: p.secid, name: p.name, qty: p.qty, mv: typeof p.mv === 'number' ? p.mv : null })),
+    assembly.view.grand.totalMv,
+  )
   const quoteText = secids
     .map((secid) => {
       const q = quotes[secid]
@@ -195,6 +233,7 @@ export const prismInputsOf = async (deps: PrismRouteDeps): Promise<PrismInputs> 
   const rejectedText = rejectedTodayTextOf(rejectedTodayOf(allOrders, dayOf((deps.now ?? Date.now)()), deps.store.runs()))
   return {
     positions,
+    products,
     account: accountSnapshot,
     quotes: `${quoteText}\n【待成交挂单】\n${pendingText}\n【今日已被风控拒绝的委托】\n${rejectedText}`,
     news,
@@ -357,9 +396,14 @@ export async function runPrismForSlot(deps: PrismRouteDeps, slot: string): Promi
   // 服务端去重闸（最后防线）：今日已因同一原因被拒、且标的/方向/股数/价格几乎相同的单
   // 不再进入撮合、不写 pending；上下文（A 层）是第一道，这里防模型无视上下文。
   const rejectedToday = rejectedTodayOf(deps.trading.orders(), dayOf(run.startedAt), deps.store.runs(), Number.POSITIVE_INFINITY)
+  // v0.214.0：同产品闸要名称、偏离闸要现价——两者都只认本轮 `quotes`（同一次取数，不新开源）；
+  // 取不到就记 skipped，绝不拿成本或 0 冒充现价。
+  const pendingBuys = deps.trading.orders()
+    .filter((o) => o.status === 'pending' && o.side === 'buy')
+    .map((o) => ({ secid: o.secid, name: o.name }))
   const clamped = clampDecision(run.decision, {
     cash: account.cash,
-    positions: account.positions.map((p) => ({ secid: p.secid, qty: p.qty, price: quotes[p.secid]?.price ?? p.cost })),
+    positions: account.positions.map((p) => ({ secid: p.secid, qty: p.qty, price: quotes[p.secid]?.price ?? p.cost, name: p.name })),
     limits,
     constraints: {
       perStockPct: settings.perStockPct ?? null,
@@ -374,6 +418,8 @@ export async function runPrismForSlot(deps: PrismRouteDeps, slot: string): Promi
     industries: Object.fromEntries(Object.entries(industries).map(([k, v]) => [k, v?.name ?? null])),
     at: run.startedAt,
     rejectedToday,
+    quotes,
+    pendingBuys,
   })
   const previous = deps.store.runs().filter((r) => r.startedAt < run.startedAt).at(-1)?.drawdown ?? null
   const drawdown = drawdownGateOf(deps.trading.equity(), previous, run.startedAt)
