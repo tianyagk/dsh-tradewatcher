@@ -148,11 +148,21 @@ export interface FillMark { id: string; side: 'buy' | 'sell'; text: string; at: 
 /**
  * 成交标记：`B 11:14 买入 2,000 @29.86`（设计稿原文格式）。
  * 取该标的**最近** `limit` 笔（按时间正序展示）；一笔都没有 ⇒ 返回空数组，界面整行不渲染。
+ *
+ * AUDIT-CLIENT-PERF P2-3：旧实现 `filter` 全量 + `sort` 全量，只为拿末尾 2 条 —— 每次 tick
+ * O(n log n)。宿主 `fills` 落盘/回包都按 `at` 升序（`prismAccount.ts` 的 `mergeFills` 排序），
+ * 因此这里**从末尾倒着扫**，凑够 `limit` 条立刻停：耗时只与"末尾连续不匹配的条数"有关，
+ * 与 fills 总长度无关。返回仍按时间正序（最近的排最后），展示顺序不变。
  */
 export function fillMarksOf(fills: readonly FillInput[], secid: string, limit = 2): FillMark[] {
-  const own = fills.filter((f) => f.secid === secid && finite(f.at) !== null && finite(f.price) !== null)
-  own.sort((a, b) => a.at - b.at)
-  const tail = limit > 0 ? own.slice(-limit) : []
+  if (!(limit > 0)) return []
+  const tail: FillInput[] = []
+  for (let i = fills.length - 1; i >= 0 && tail.length < limit; i -= 1) {
+    const f = fills[i]
+    if (f.secid !== secid || finite(f.at) === null || finite(f.price) === null) continue
+    tail.push(f)
+  }
+  tail.reverse()
   return tail.map((f) => ({
     id: `${f.at}-${f.side}-${f.shares}-${f.price}`,
     side: f.side,

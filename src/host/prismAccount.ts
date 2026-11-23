@@ -571,6 +571,15 @@ export class PrismTradingStore {
   private ordersValue: PrismOrder[] = []
   private fillsValue: PrismFill[] = []
   private equityValue: PrismEquityPoint[] = []
+  /**
+   * `prism-orders.json` 的 **mtime + size** 快照（P2-7）：文件没变就不重读。
+   * 页面开着时每 30 s 一次 GET，旧实现每次都读 195 KB；现在只有真的变了才读。
+   * `null` = 缓存不可用（写入后主动失效 / 上次读失败 ⇒ 下一次必读）。
+   */
+  private ordersStamp: { present: boolean; mtimeMs: number; size: number } | null = null
+  private ordersCache: { orders: PrismOrder[]; fills: PrismFill[] } | null = null
+  /** `reloadOrders` 的读盘/命中计数（只增；运维与测试可观测，不参与业务判断） */
+  readonly ordersIo = { read: 0, cached: 0 }
 
   constructor(dir = dataHome()) {
     this.dir = dir
@@ -704,11 +713,35 @@ export class PrismTradingStore {
   fills(): PrismFill[] { return this.fillsValue.slice() }
   equity(): PrismEquityPoint[] { return this.equityValue.slice() }
 
+  private async fileStampOf(file: string): Promise<{ present: boolean; mtimeMs: number; size: number }> {
+    try {
+      const st = await stat(file)
+      return { present: true, mtimeMs: st.mtimeMs, size: st.size }
+    } catch {
+      return { present: false, mtimeMs: 0, size: 0 }
+    }
+  }
+
   /**
    * 订单/成交流水的唯一读取源是 `prism-orders.json`；账户内嵌 orders/fills 只作兼容兜底。
    * GET 会重新调用：外部/上一进程写入的订单不需要重启才能看见。
+   *
+   * P2-7：GET 路径（`accountRoot === null`）先比 **mtime + size**，文件没变就直接用内存值，
+   * 不读盘。写路径（`reloadForWrite` 传 accountRoot）必须重读 —— 内嵌兜底依赖账户内容。
+   * 读失败（degraded）时不写缓存：修好之后必须重新读，绝不能用"坏文件那次读到的空值"。
    */
   async reloadOrders(accountRoot: unknown = null): Promise<void> {
+    const file = this.pathOf('prism-orders.json')
+    const cacheable = accountRoot === null
+    if (cacheable && this.ordersCache !== null && this.ordersStamp !== null) {
+      const now = await this.fileStampOf(file)
+      if (now.present === this.ordersStamp.present && now.mtimeMs === this.ordersStamp.mtimeMs && now.size === this.ordersStamp.size) {
+        this.ordersIo.cached += 1
+        return
+      }
+    }
+    const stamp = await this.fileStampOf(file)
+    this.ordersIo.read += 1
     const ord = await this.readLedger('prism-orders.json')
     const ordRoot = ord as { orders?: unknown; fills?: unknown } | null
     const accRoot = accountRoot as { fills?: unknown; orders?: unknown; account?: { fills?: unknown; orders?: unknown } } | null
@@ -722,6 +755,19 @@ export class PrismTradingStore {
       : Array.isArray(accRoot?.account?.fills) ? (accRoot.account.fills as PrismFill[]) : []
     this.ordersValue = fileOrders.length > 0 ? fileOrders : embeddedOrders
     this.fillsValue = fileFills.length > 0 ? fileFills : embeddedFills
+    if (cacheable && !this.guard.isBlocked(file)) {
+      this.ordersStamp = stamp
+      this.ordersCache = { orders: this.ordersValue, fills: this.fillsValue }
+    } else {
+      this.ordersStamp = null
+      this.ordersCache = null
+    }
+  }
+
+  /** 本进程刚写过 orders ⇒ mtime 缓存失效（下一次 GET 必读一次，之后继续命中） */
+  private invalidateOrdersCache(): void {
+    this.ordersStamp = null
+    this.ordersCache = null
   }
 
   /** 写失败若是"读不到/坏文件"（不是锁超时），标记 degraded，避免下一次拿空库覆盖。 */
@@ -794,6 +840,7 @@ export class PrismTradingStore {
     }
     this.ordersValue = mergedOrders
     this.fillsValue = mergedFills
+    this.invalidateOrdersCache()
   }
 
   async saveEquity(points: PrismEquityPoint[]): Promise<void> {
@@ -853,6 +900,7 @@ export class PrismTradingStore {
     this.ordersValue = next.orders
     this.fillsValue = next.fills
     this.equityValue = equity
+    this.invalidateOrdersCache()
   }
 
   private async exists(path: string): Promise<boolean> {

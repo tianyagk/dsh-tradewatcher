@@ -103,9 +103,13 @@ function pctColor(v: number | null | undefined, redUp: boolean): string {
 function ThresholdBar(props: { value: number | null; width?: number }): React.ReactElement {
   const max = RESCUE_F1_EXTREME * 2
   const pct = props.value === null || !Number.isFinite(props.value) ? 0 : Math.max(0, Math.min(100, (props.value / max) * 100))
+  // P2-16：NaN/Infinity 也按"没有值"处理（旧写法只判 null，会把 `NaNx` 写进 title）
+  const volText = typeof props.value === 'number' && Number.isFinite(props.value)
+    ? `${props.value.toFixed(2)}x`
+    : props.value === null ? '未取到' : '—'
   return React.createElement('div', {
     className: 'tw-rescue-bar', style: { width: props.width ?? 72, position: 'relative' },
-    title: `同时点量能 ${props.value === null ? '未取到' : `${props.value.toFixed(2)}x`}；阈值线 = f1.extreme（P95 = ${RESCUE_F1_EXTREME}x），条长按 ${max.toFixed(2)}x 归一`,
+    title: `同时点量能 ${volText}；阈值线 = f1.extreme（P95 = ${RESCUE_F1_EXTREME}x），条长按 ${max.toFixed(2)}x 归一`,
     'data-role': 'volume-threshold-bar',
   },
     // P2-11：条长用 transform:scaleX（CSS 里 transition 只动 transform）——旧的 width% 会触发布局

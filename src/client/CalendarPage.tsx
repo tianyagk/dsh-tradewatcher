@@ -15,6 +15,7 @@ import { Btn, EmptyHint, ErrorNote, Field, Modal, Skeleton } from './ui.tsx'
 import { MISSING_TIER_LABEL } from '../shared/model'
 import { fmtStamp } from './format.ts'
 import { shToday } from './marketTime.ts'
+import { useNow } from './useNow.ts'
 
 const WEEKDAYS = ['一', '二', '三', '四', '五', '六', '日']
 
@@ -50,8 +51,13 @@ function addDays(d: Date, n: number): Date {
 }
 
 export function CalendarPage(_props: { prefs: PortPrefs }): React.ReactElement {
-  // R5：日历的"今天"是**北京自然日**，不是浏览器本地日（UTC 浏览器在北京 11-01 00:30 会落在 10-31）
-  const today = shToday()
+  /**
+   * R5：日历的"今天"是**北京自然日**，不是浏览器本地日（UTC 浏览器在北京 11-01 00:30 会落在 10-31）。
+   * AUDIT-CLIENT-PERF P2-12：本页是保活页，旧实现只在首次渲染时算一次 ⇒ 跨零点后 `is-today`
+   * 与「即将到来」仍停在昨天。现在 60s 时钟驱动派生（每分钟重算一次；跨日最多晚 1 分钟）。
+   */
+  const now = useNow(60_000)
+  const today = shToday(now)
   const [year, setYear] = useState(() => Number(today.slice(0, 4)))
   const [month0, setMonth0] = useState(() => Number(today.slice(5, 7)) - 1)
   const [events, setEvents] = useState<CalEvent[]>([])

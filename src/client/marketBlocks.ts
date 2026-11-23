@@ -121,3 +121,24 @@ export function minuteDeltaBarsOf(
   }
   return { bars, reason: null }
 }
+/** 净占比（%）= 主力净额 ÷ 成交额；任一项缺失/非有限/成交额为 0 ⇒ null（不拿 0 顶替，也不让 NaN 参与排序） */
+export function sharePctOf(r: { money: number | null; amount: number | null }): number | null {
+  if (r.money === null || r.amount === null || r.amount === 0) return null
+  if (!Number.isFinite(r.money) || !Number.isFinite(r.amount)) return null
+  return (r.money / r.amount) * 100
+}
+
+/**
+ * 按净占比降序（AUDIT-CLIENT-PERF P2-14）：**只排传入的这一页**，缺失占比的行沉底。
+ * 用稳定比较器（相等返回 0）；返回新数组，不原地改 `rows`。
+ */
+export function sortRowsByShare<T extends { money: number | null; amount: number | null }>(rows: readonly T[]): T[] {
+  return [...rows].sort((a, b) => {
+    const sa = sharePctOf(a)
+    const sb = sharePctOf(b)
+    if (sa === null && sb === null) return 0
+    if (sa === null) return 1
+    if (sb === null) return -1
+    return sb - sa
+  })
+}

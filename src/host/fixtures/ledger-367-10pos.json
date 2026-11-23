@@ -1,0 +1,5456 @@
+{
+ "v": 1,
+ "note": "P2-1 夹具：367 条流水（形状取自真实 ledger.json；posId/secid/name/id 已脱敏），items = 当前 10 个持仓",
+ "entries": [
+  {
+   "id": "E0001",
+   "ts": 1788917366654,
+   "actor": "web",
+   "verb": "gcreate",
+   "groupId": "G1"
+  },
+  {
+   "id": "E0002",
+   "ts": 1788917458591,
+   "actor": "web",
+   "verb": "add",
+   "groupId": "G1",
+   "posId": "P01",
+   "secid": "1.600001",
+   "name": "标的1"
+  },
+  {
+   "id": "E0003",
+   "ts": 1788917546936,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P01",
+   "secid": "1.600001",
+   "name": "标的1",
+   "qty": 300000,
+   "price": 0.948,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 0
+   }
+  },
+  {
+   "id": "E0004",
+   "ts": 1788918146213,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P01",
+   "secid": "1.600001",
+   "name": "标的1",
+   "qty": 300000,
+   "price": 0.948,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 300000
+   }
+  },
+  {
+   "id": "E0005",
+   "ts": 1788918153506,
+   "actor": "web",
+   "verb": "gmove",
+   "groupId": "G1",
+   "posId": "P01",
+   "secid": "1.600001",
+   "name": "标的1",
+   "meta": {
+    "oldName": "科创半导体ETF华夏"
+   }
+  },
+  {
+   "id": "E0006",
+   "ts": 1788918185575,
+   "actor": "web",
+   "verb": "sell",
+   "groupId": "G1",
+   "posId": "P01",
+   "secid": "1.600001",
+   "name": "标的1",
+   "qty": 300000,
+   "price": 0.948,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 600000
+   }
+  },
+  {
+   "id": "E0007",
+   "ts": 1788920658389,
+   "actor": "web",
+   "verb": "add",
+   "groupId": "G1",
+   "posId": "P02",
+   "secid": "1.600002",
+   "name": "标的2"
+  },
+  {
+   "id": "E0008",
+   "ts": 1788920667566,
+   "actor": "web",
+   "verb": "add",
+   "groupId": "G1",
+   "posId": "P03",
+   "secid": "1.600003",
+   "name": "标的3"
+  },
+  {
+   "id": "E0009",
+   "ts": 1788920679518,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P02",
+   "secid": "1.600002",
+   "name": "标的2",
+   "qty": 40,
+   "price": 344,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 0
+   }
+  },
+  {
+   "id": "E0010",
+   "ts": 1788920691629,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P03",
+   "secid": "1.600003",
+   "name": "标的3",
+   "qty": 4000,
+   "price": 7.227,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 0
+   }
+  },
+  {
+   "id": "E0011",
+   "ts": 1788920708849,
+   "actor": "web",
+   "verb": "add",
+   "groupId": "G1",
+   "posId": "P04",
+   "secid": "1.600004",
+   "name": "标的4"
+  },
+  {
+   "id": "E0012",
+   "ts": 1788920728662,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P04",
+   "secid": "1.600004",
+   "name": "标的4",
+   "qty": 500,
+   "price": 8.8,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 0
+   }
+  },
+  {
+   "id": "E0013",
+   "ts": 1788920745410,
+   "actor": "web",
+   "verb": "sell",
+   "groupId": "G1",
+   "posId": "P04",
+   "secid": "1.600004",
+   "name": "标的4",
+   "qty": 400,
+   "price": 57.96,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 500
+   }
+  },
+  {
+   "id": "E0014",
+   "ts": 1788922890362,
+   "actor": "web",
+   "verb": "sell",
+   "groupId": "G1",
+   "posId": "P04",
+   "secid": "1.600004",
+   "name": "标的4",
+   "qty": 100,
+   "price": 57.58,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 100
+   }
+  },
+  {
+   "id": "E0015",
+   "ts": 1788922893413,
+   "actor": "web",
+   "verb": "remove",
+   "groupId": "G1",
+   "posId": "P04",
+   "secid": "1.600004",
+   "name": "标的4"
+  },
+  {
+   "id": "E0016",
+   "ts": 1788922901225,
+   "actor": "web",
+   "verb": "add",
+   "groupId": "G1",
+   "posId": "P05",
+   "secid": "1.600004",
+   "name": "标的4"
+  },
+  {
+   "id": "E0017",
+   "ts": 1788922919385,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P05",
+   "secid": "1.600004",
+   "name": "标的4",
+   "qty": 500,
+   "price": 8.66,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 0
+   }
+  },
+  {
+   "id": "E0018",
+   "ts": 1788923431190,
+   "actor": "web",
+   "verb": "sell",
+   "groupId": "G1",
+   "posId": "P05",
+   "secid": "1.600004",
+   "name": "标的4",
+   "qty": 400,
+   "price": 59.9,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 500
+   }
+  },
+  {
+   "id": "E0019",
+   "ts": 1788930835795,
+   "actor": "web",
+   "verb": "gcreate",
+   "groupId": "G2"
+  },
+  {
+   "id": "E0020",
+   "ts": 1788930848271,
+   "actor": "web",
+   "verb": "add",
+   "groupId": "G2",
+   "posId": "P06",
+   "secid": "1.600005",
+   "name": "标的5"
+  },
+  {
+   "id": "E0021",
+   "ts": 1789006904545,
+   "actor": "web",
+   "verb": "sell",
+   "groupId": "G1",
+   "posId": "P02",
+   "secid": "1.600002",
+   "name": "标的2",
+   "qty": 40,
+   "price": 302,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 40
+   }
+  },
+  {
+   "id": "E0022",
+   "ts": 1789006969715,
+   "actor": "web",
+   "verb": "sell",
+   "groupId": "G1",
+   "posId": "P03",
+   "secid": "1.600003",
+   "name": "标的3",
+   "qty": 4000,
+   "price": 6.955,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 4000
+   }
+  },
+  {
+   "id": "E0023",
+   "ts": 1789007828903,
+   "actor": "web",
+   "verb": "sell",
+   "groupId": "G1",
+   "posId": "P05",
+   "secid": "1.600004",
+   "name": "标的4",
+   "qty": 100,
+   "price": 57.98,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 100
+   }
+  },
+  {
+   "id": "E0024",
+   "ts": 1789007851103,
+   "actor": "web",
+   "verb": "remove",
+   "groupId": "G1",
+   "posId": "P03",
+   "secid": "1.600003",
+   "name": "标的3"
+  },
+  {
+   "id": "E0025",
+   "ts": 1789007856066,
+   "actor": "web",
+   "verb": "remove",
+   "groupId": "G1",
+   "posId": "P02",
+   "secid": "1.600002",
+   "name": "标的2"
+  },
+  {
+   "id": "E0026",
+   "ts": 1789007953622,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G2",
+   "posId": "P06",
+   "secid": "1.600005",
+   "name": "标的5",
+   "qty": 5000,
+   "price": 8.888,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 0
+   }
+  },
+  {
+   "id": "E0027",
+   "ts": 1789011218963,
+   "actor": "web",
+   "verb": "remove",
+   "groupId": "G1",
+   "posId": "P05",
+   "secid": "1.600004",
+   "name": "标的4"
+  },
+  {
+   "id": "E0028",
+   "ts": 1789011320671,
+   "actor": "web",
+   "verb": "add",
+   "groupId": "G1",
+   "posId": "P07",
+   "secid": "1.600006",
+   "name": "标的6"
+  },
+  {
+   "id": "E0029",
+   "ts": 1789011338385,
+   "actor": "web",
+   "verb": "remove",
+   "groupId": "G1",
+   "posId": "P07",
+   "secid": "1.600006",
+   "name": "标的6"
+  },
+  {
+   "id": "E0030",
+   "ts": 1789090309802,
+   "actor": "web",
+   "verb": "sell",
+   "groupId": "G1",
+   "posId": "P01",
+   "secid": "1.600001",
+   "name": "标的1",
+   "qty": 100000,
+   "price": 0.899,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 300000
+   }
+  },
+  {
+   "id": "E0031",
+   "ts": 1789091010567,
+   "actor": "web",
+   "verb": "sell",
+   "groupId": "G1",
+   "posId": "P01",
+   "secid": "1.600001",
+   "name": "标的1",
+   "qty": 50000,
+   "price": 0.893,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 200000
+   }
+  },
+  {
+   "id": "E0032",
+   "ts": 1789091018641,
+   "actor": "web",
+   "verb": "add",
+   "groupId": "G1",
+   "posId": "P08",
+   "secid": "1.600007",
+   "name": "标的7"
+  },
+  {
+   "id": "E0033",
+   "ts": 1789091034788,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P08",
+   "secid": "1.600007",
+   "name": "标的7",
+   "qty": 5000,
+   "price": 4.73,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 0
+   }
+  },
+  {
+   "id": "E0034",
+   "ts": 1789091318065,
+   "actor": "web",
+   "verb": "sell",
+   "groupId": "G1",
+   "posId": "P01",
+   "secid": "1.600001",
+   "name": "标的1",
+   "qty": 50000,
+   "price": 0.891,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 150000
+   }
+  },
+  {
+   "id": "E0035",
+   "ts": 1789091562583,
+   "actor": "web",
+   "verb": "sell",
+   "groupId": "G1",
+   "posId": "P01",
+   "secid": "1.600001",
+   "name": "标的1",
+   "qty": 50000,
+   "price": 0.894,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 100000
+   }
+  },
+  {
+   "id": "E0036",
+   "ts": 1789097331669,
+   "actor": "web",
+   "verb": "add",
+   "groupId": "G1",
+   "posId": "P09",
+   "secid": "1.600008",
+   "name": "标的8"
+  },
+  {
+   "id": "E0037",
+   "ts": 1789097341429,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P09",
+   "secid": "1.600008",
+   "name": "标的8",
+   "qty": 5000,
+   "price": 4.547,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 0
+   }
+  },
+  {
+   "id": "E0038",
+   "ts": 1789350269602,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P08",
+   "secid": "1.600007",
+   "name": "标的7",
+   "qty": 5000,
+   "price": 4.74,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 5000
+   }
+  },
+  {
+   "id": "E0039",
+   "ts": 1789350283068,
+   "actor": "web",
+   "verb": "sell",
+   "groupId": "G1",
+   "posId": "P09",
+   "secid": "1.600008",
+   "name": "标的8",
+   "qty": 5000,
+   "price": 4.552,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 5000
+   }
+  },
+  {
+   "id": "E0040",
+   "ts": 1789350982865,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P08",
+   "secid": "1.600007",
+   "name": "标的7",
+   "qty": 5000,
+   "price": 4.69,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 10000
+   }
+  },
+  {
+   "id": "E0041",
+   "ts": 1789352563425,
+   "actor": "web",
+   "verb": "sell",
+   "groupId": "G1",
+   "posId": "P01",
+   "secid": "1.600001",
+   "name": "标的1",
+   "qty": 25000,
+   "price": 0.895,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 50000
+   }
+  },
+  {
+   "id": "E0042",
+   "ts": 1789368918096,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P08",
+   "secid": "1.600007",
+   "name": "标的7",
+   "qty": 5000,
+   "price": 4.57,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 15000
+   }
+  },
+  {
+   "id": "E0043",
+   "ts": 1789368923381,
+   "actor": "web",
+   "verb": "add",
+   "groupId": "G1",
+   "posId": "P10",
+   "secid": "1.600009",
+   "name": "标的9"
+  },
+  {
+   "id": "E0044",
+   "ts": 1789368932210,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P10",
+   "secid": "1.600009",
+   "name": "标的9",
+   "qty": 2000,
+   "price": 19.99,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 0
+   }
+  },
+  {
+   "id": "E0045",
+   "ts": 1789435887148,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P10",
+   "secid": "1.600009",
+   "name": "标的9",
+   "qty": 2000,
+   "price": 20.11,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 2000
+   }
+  },
+  {
+   "id": "E0046",
+   "ts": 1789527737961,
+   "actor": "web",
+   "verb": "remove",
+   "groupId": "G1",
+   "posId": "P09",
+   "secid": "1.600008",
+   "name": "标的8"
+  },
+  {
+   "id": "E0047",
+   "ts": 1789527871283,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P10",
+   "secid": "1.600009",
+   "name": "标的9",
+   "qty": 2000,
+   "price": 19.65,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 4000
+   }
+  },
+  {
+   "id": "E0048",
+   "ts": 1789537798367,
+   "actor": "web",
+   "verb": "gmove",
+   "groupId": "G2",
+   "posId": "P01",
+   "secid": "1.600001",
+   "name": "标的1",
+   "meta": {
+    "oldGroup": "pgmttf7m9q18a7w",
+    "oldName": "科创半导体ETF华夏"
+   }
+  },
+  {
+   "id": "E0049",
+   "ts": 1789537830467,
+   "actor": "web",
+   "verb": "gmove",
+   "groupId": "G1",
+   "posId": "P01",
+   "secid": "1.600001",
+   "name": "标的1",
+   "meta": {
+    "oldGroup": "pgmttn8b4j39k93",
+    "oldName": "科创半导体ETF华夏"
+   }
+  },
+  {
+   "id": "E0050",
+   "ts": 1789538147947,
+   "actor": "web",
+   "verb": "sell",
+   "groupId": "G1",
+   "posId": "P10",
+   "secid": "1.600009",
+   "name": "标的9",
+   "qty": 2000,
+   "price": 19.99,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 6000
+   }
+  },
+  {
+   "id": "E0051",
+   "ts": 1789610567658,
+   "actor": "web",
+   "verb": "sell",
+   "groupId": "G1",
+   "posId": "P10",
+   "secid": "1.600009",
+   "name": "标的9",
+   "qty": 2000,
+   "price": 20.11,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 4000
+   }
+  },
+  {
+   "id": "E0052",
+   "ts": 1789610952763,
+   "actor": "web",
+   "verb": "sell",
+   "groupId": "G1",
+   "posId": "P10",
+   "secid": "1.600009",
+   "name": "标的9",
+   "qty": 1000,
+   "price": 20.13,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 2000
+   }
+  },
+  {
+   "id": "E0053",
+   "ts": 1789611552850,
+   "actor": "web",
+   "verb": "sell",
+   "groupId": "G1",
+   "posId": "P08",
+   "secid": "1.600007",
+   "name": "标的7",
+   "qty": 10000,
+   "price": 4.46,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 20000
+   }
+  },
+  {
+   "id": "E0054",
+   "ts": 1789613356056,
+   "actor": "web",
+   "verb": "add",
+   "groupId": "G1",
+   "posId": "P11",
+   "secid": "0.300010",
+   "name": "标的10"
+  },
+  {
+   "id": "E0055",
+   "ts": 1789613376894,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P11",
+   "secid": "0.300010",
+   "name": "标的10",
+   "qty": 200,
+   "price": 98.98,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 0
+   }
+  },
+  {
+   "id": "E0056",
+   "ts": 1789621253333,
+   "actor": "web",
+   "verb": "add",
+   "groupId": "G1",
+   "posId": "P12",
+   "secid": "1.600011",
+   "name": "标的11"
+  },
+  {
+   "id": "E0057",
+   "ts": 1789621263335,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P12",
+   "secid": "1.600011",
+   "name": "标的11",
+   "qty": 3600,
+   "price": 8.17,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 0
+   }
+  },
+  {
+   "id": "E0058",
+   "ts": 1789695200464,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P01",
+   "secid": "1.600001",
+   "name": "标的1",
+   "qty": 25000,
+   "price": 1,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 25000
+   }
+  },
+  {
+   "id": "E0059",
+   "ts": 1789697609205,
+   "actor": "web",
+   "verb": "sell",
+   "groupId": "G1",
+   "posId": "P10",
+   "secid": "1.600009",
+   "name": "标的9",
+   "qty": 1000,
+   "price": 22.29,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 1000
+   }
+  },
+  {
+   "id": "E0060",
+   "ts": 1789697617289,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P10",
+   "secid": "1.600009",
+   "name": "标的9",
+   "qty": 1000,
+   "price": 22.54,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 0
+   }
+  },
+  {
+   "id": "E0061",
+   "ts": 1789698205892,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P10",
+   "secid": "1.600009",
+   "name": "标的9",
+   "qty": 1000,
+   "price": 22.51,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 1000
+   }
+  },
+  {
+   "id": "E0062",
+   "ts": 1789707800644,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P12",
+   "secid": "1.600011",
+   "name": "标的11",
+   "qty": 2400,
+   "price": 8.07,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 3600
+   }
+  },
+  {
+   "id": "E0063",
+   "ts": 1789709220097,
+   "actor": "web",
+   "verb": "sell",
+   "groupId": "G1",
+   "posId": "P01",
+   "secid": "1.600001",
+   "name": "标的1",
+   "qty": 25000,
+   "price": 1.019,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 50000
+   }
+  },
+  {
+   "id": "E0064",
+   "ts": 1789954840813,
+   "actor": "web",
+   "verb": "sell",
+   "groupId": "G1",
+   "posId": "P11",
+   "secid": "0.300010",
+   "name": "标的10",
+   "qty": 200,
+   "price": 100.09,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 200
+   }
+  },
+  {
+   "id": "E0065",
+   "ts": 1789954848015,
+   "actor": "web",
+   "verb": "remove",
+   "groupId": "G1",
+   "posId": "P11",
+   "secid": "0.300010",
+   "name": "标的10"
+  },
+  {
+   "id": "E0066",
+   "ts": 1789955451436,
+   "actor": "web",
+   "verb": "add",
+   "groupId": "G1",
+   "posId": "P13",
+   "secid": "0.300012",
+   "name": "标的12"
+  },
+  {
+   "id": "E0067",
+   "ts": 1789955459749,
+   "actor": "web",
+   "verb": "remove",
+   "groupId": "G1",
+   "posId": "P13",
+   "secid": "0.300012",
+   "name": "标的12"
+  },
+  {
+   "id": "E0068",
+   "ts": 1789955472454,
+   "actor": "web",
+   "verb": "add",
+   "groupId": "G1",
+   "posId": "P14",
+   "secid": "1.600013",
+   "name": "标的13"
+  },
+  {
+   "id": "E0069",
+   "ts": 1789955484725,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P14",
+   "secid": "1.600013",
+   "name": "标的13",
+   "qty": 30000,
+   "price": 1.039,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 0
+   }
+  },
+  {
+   "id": "E0070",
+   "ts": 1789955868160,
+   "actor": "web",
+   "verb": "add",
+   "groupId": "G1",
+   "posId": "P15",
+   "secid": "1.600014",
+   "name": "标的14"
+  },
+  {
+   "id": "E0071",
+   "ts": 1789955877681,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P15",
+   "secid": "1.600014",
+   "name": "标的14",
+   "qty": 400,
+   "price": 51.66,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 0
+   }
+  },
+  {
+   "id": "E0072",
+   "ts": 1789958622228,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P10",
+   "secid": "1.600009",
+   "name": "标的9",
+   "qty": 1000,
+   "price": 22.28,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 2000
+   }
+  },
+  {
+   "id": "E0073",
+   "ts": 1789967260417,
+   "actor": "web",
+   "verb": "sell",
+   "groupId": "G1",
+   "posId": "P10",
+   "secid": "1.600009",
+   "name": "标的9",
+   "qty": 1000,
+   "price": 22.63,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 3000
+   }
+  },
+  {
+   "id": "E0074",
+   "ts": 1789967307676,
+   "actor": "web",
+   "verb": "add",
+   "groupId": "G1",
+   "posId": "P16",
+   "secid": "1.600015",
+   "name": "标的15"
+  },
+  {
+   "id": "E0075",
+   "ts": 1789967341316,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P16",
+   "secid": "1.600015",
+   "name": "标的15",
+   "qty": 35000,
+   "price": 0.815,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 0
+   }
+  },
+  {
+   "id": "E0076",
+   "ts": 1790041303400,
+   "actor": "web",
+   "verb": "sell",
+   "groupId": "G1",
+   "posId": "P16",
+   "secid": "1.600015",
+   "name": "标的15",
+   "qty": 35000,
+   "price": 0.825,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 35000
+   }
+  },
+  {
+   "id": "E0077",
+   "ts": 1790041306713,
+   "actor": "web",
+   "verb": "remove",
+   "groupId": "G1",
+   "posId": "P16",
+   "secid": "1.600015",
+   "name": "标的15"
+  },
+  {
+   "id": "E0078",
+   "ts": 1790042428676,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P10",
+   "secid": "1.600009",
+   "name": "标的9",
+   "qty": 1000,
+   "price": 21.18,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 2000
+   }
+  },
+  {
+   "id": "E0079",
+   "ts": 1790043221828,
+   "actor": "web",
+   "verb": "add",
+   "groupId": "G1",
+   "posId": "P17",
+   "secid": "1.600016",
+   "name": "标的16"
+  },
+  {
+   "id": "E0080",
+   "ts": 1790043229831,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P17",
+   "secid": "1.600016",
+   "name": "标的16",
+   "qty": 25000,
+   "price": 1.173,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 0
+   }
+  },
+  {
+   "id": "E0081",
+   "ts": 1790059904086,
+   "actor": "web",
+   "verb": "sell",
+   "groupId": "G1",
+   "posId": "P15",
+   "secid": "1.600014",
+   "name": "标的14",
+   "qty": 400,
+   "price": 49.5,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 400
+   }
+  },
+  {
+   "id": "E0082",
+   "ts": 1790059906892,
+   "actor": "web",
+   "verb": "remove",
+   "groupId": "G1",
+   "posId": "P15",
+   "secid": "1.600014",
+   "name": "标的14"
+  },
+  {
+   "id": "E0083",
+   "ts": 1790128706952,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P08",
+   "secid": "1.600007",
+   "name": "标的7",
+   "qty": 5000,
+   "price": 4.45,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 10000
+   }
+  },
+  {
+   "id": "E0084",
+   "ts": 1790130024360,
+   "actor": "web",
+   "verb": "add",
+   "groupId": "G1",
+   "posId": "P18",
+   "secid": "1.600017",
+   "name": "标的17"
+  },
+  {
+   "id": "E0085",
+   "ts": 1790130040227,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P18",
+   "secid": "1.600017",
+   "name": "标的17",
+   "qty": 2000,
+   "price": 10.28,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 0
+   }
+  },
+  {
+   "id": "E0086",
+   "ts": 1790130740992,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P10",
+   "secid": "1.600009",
+   "name": "标的9",
+   "qty": 1000,
+   "price": 20.6,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 3000
+   }
+  },
+  {
+   "id": "E0087",
+   "ts": 1790145353980,
+   "actor": "web",
+   "verb": "add",
+   "groupId": "G1",
+   "posId": "P19",
+   "secid": "1.600018",
+   "name": "标的18"
+  },
+  {
+   "id": "E0088",
+   "ts": 1790145420961,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P19",
+   "secid": "1.600018",
+   "name": "标的18",
+   "qty": 400,
+   "price": 84.39,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 0
+   }
+  },
+  {
+   "id": "E0089",
+   "ts": 1790214829421,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P19",
+   "secid": "1.600018",
+   "name": "标的18",
+   "qty": 400,
+   "price": 82,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 400
+   }
+  },
+  {
+   "id": "E0090",
+   "ts": 1790216261406,
+   "actor": "web",
+   "verb": "sell",
+   "groupId": "G1",
+   "posId": "P12",
+   "secid": "1.600011",
+   "name": "标的11",
+   "qty": 3000,
+   "price": 8.18,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 6000
+   }
+  },
+  {
+   "id": "E0091",
+   "ts": 1790228806919,
+   "actor": "web",
+   "verb": "add",
+   "groupId": "G2",
+   "posId": "P20",
+   "secid": "1.600019",
+   "name": "标的19"
+  },
+  {
+   "id": "E0092",
+   "ts": 1790228814315,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G2",
+   "posId": "P20",
+   "secid": "1.600019",
+   "name": "标的19",
+   "qty": 500,
+   "price": 30.16,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 0
+   }
+  },
+  {
+   "id": "E0093",
+   "ts": 1790229808297,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P18",
+   "secid": "1.600017",
+   "name": "标的17",
+   "qty": 1000,
+   "price": 9.83,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 2000
+   }
+  },
+  {
+   "id": "E0094",
+   "ts": 1790232255001,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P19",
+   "secid": "1.600018",
+   "name": "标的18",
+   "qty": 200,
+   "price": 78.71,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 800
+   }
+  },
+  {
+   "id": "E0095",
+   "ts": 1790233002329,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P01",
+   "secid": "1.600001",
+   "name": "标的1",
+   "qty": 25000,
+   "price": 0.982,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 25000
+   }
+  },
+  {
+   "id": "E0096",
+   "ts": 1790233008061,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P19",
+   "secid": "1.600018",
+   "name": "标的18",
+   "qty": 200,
+   "price": 78.6,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 1000
+   }
+  },
+  {
+   "id": "E0097",
+   "ts": 1790559796728,
+   "actor": "web",
+   "verb": "sell",
+   "groupId": "G1",
+   "posId": "P18",
+   "secid": "1.600017",
+   "name": "标的17",
+   "qty": 3000,
+   "price": 10.56,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 3000
+   }
+  },
+  {
+   "id": "E0098",
+   "ts": 1790559814405,
+   "actor": "web",
+   "verb": "remove",
+   "groupId": "G1",
+   "posId": "P18",
+   "secid": "1.600017",
+   "name": "标的17"
+  },
+  {
+   "id": "E0099",
+   "ts": 1790562948682,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P19",
+   "secid": "1.600018",
+   "name": "标的18",
+   "qty": 400,
+   "price": 73.52,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 1200
+   }
+  },
+  {
+   "id": "E0100",
+   "ts": 1790564382630,
+   "actor": "web",
+   "verb": "add",
+   "groupId": "G1",
+   "posId": "P21",
+   "secid": "1.600008",
+   "name": "标的8"
+  },
+  {
+   "id": "E0101",
+   "ts": 1790564402794,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P21",
+   "secid": "1.600008",
+   "name": "标的8",
+   "qty": 7000,
+   "price": 4.432,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 0
+   }
+  },
+  {
+   "id": "E0102",
+   "ts": 1790573622433,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P21",
+   "secid": "1.600008",
+   "name": "标的8",
+   "qty": 8000,
+   "price": 4.404,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 7000
+   }
+  },
+  {
+   "id": "E0103",
+   "ts": 1790573791540,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P10",
+   "secid": "1.600009",
+   "name": "标的9",
+   "qty": 1000,
+   "price": 20.56,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 4000
+   }
+  },
+  {
+   "id": "E0104",
+   "ts": 1790646175891,
+   "actor": "web",
+   "verb": "sell",
+   "groupId": "G1",
+   "posId": "P14",
+   "secid": "1.600013",
+   "name": "标的13",
+   "qty": 30000,
+   "price": 1.042,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 30000
+   }
+  },
+  {
+   "id": "E0105",
+   "ts": 1790646181060,
+   "actor": "web",
+   "verb": "remove",
+   "groupId": "G1",
+   "posId": "P14",
+   "secid": "1.600013",
+   "name": "标的13"
+  },
+  {
+   "id": "E0106",
+   "ts": 1790664672381,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P10",
+   "secid": "1.600009",
+   "name": "标的9",
+   "qty": 1000,
+   "price": 19.87,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 5000
+   }
+  },
+  {
+   "id": "E0107",
+   "ts": 1790732453098,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P10",
+   "secid": "1.600009",
+   "name": "标的9",
+   "qty": 1000,
+   "price": 20.13,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 6000
+   }
+  },
+  {
+   "id": "E0108",
+   "ts": 1790735278836,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P01",
+   "secid": "1.600001",
+   "name": "标的1",
+   "qty": 25000,
+   "price": 0.919,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 50000
+   }
+  },
+  {
+   "id": "E0109",
+   "ts": 1790735764761,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P19",
+   "secid": "1.600018",
+   "name": "标的18",
+   "qty": 400,
+   "price": 72.87,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 1600
+   }
+  },
+  {
+   "id": "E0110",
+   "ts": 1790745228227,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P19",
+   "secid": "1.600018",
+   "name": "标的18",
+   "qty": 500,
+   "price": 71.52,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 2000
+   }
+  },
+  {
+   "id": "E0111",
+   "ts": 1791423176321,
+   "actor": "web",
+   "verb": "sell",
+   "groupId": "G1",
+   "posId": "P10",
+   "secid": "1.600009",
+   "name": "标的9",
+   "qty": 1000,
+   "price": 21.99,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 7000
+   }
+  },
+  {
+   "id": "E0112",
+   "ts": 1791423244460,
+   "actor": "web",
+   "verb": "sell",
+   "groupId": "G1",
+   "posId": "P08",
+   "secid": "1.600007",
+   "name": "标的7",
+   "qty": 10000,
+   "price": 4.9,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 15000
+   }
+  },
+  {
+   "id": "E0113",
+   "ts": 1791423502001,
+   "actor": "web",
+   "verb": "sell",
+   "groupId": "G1",
+   "posId": "P10",
+   "secid": "1.600009",
+   "name": "标的9",
+   "qty": 1000,
+   "price": 22.1,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 6000
+   }
+  },
+  {
+   "id": "E0114",
+   "ts": 1791423506933,
+   "actor": "web",
+   "verb": "sell",
+   "groupId": "G1",
+   "posId": "P10",
+   "secid": "1.600009",
+   "name": "标的9",
+   "qty": 1000,
+   "price": 22.17,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 5000
+   }
+  },
+  {
+   "id": "E0115",
+   "ts": 1791423549578,
+   "actor": "web",
+   "verb": "sell",
+   "groupId": "G1",
+   "posId": "P10",
+   "secid": "1.600009",
+   "name": "标的9",
+   "qty": 1000,
+   "price": 22.17,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 4000
+   }
+  },
+  {
+   "id": "E0116",
+   "ts": 1791424727208,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P19",
+   "secid": "1.600018",
+   "name": "标的18",
+   "qty": 500,
+   "price": 68.5,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 2500
+   }
+  },
+  {
+   "id": "E0117",
+   "ts": 1791427892905,
+   "actor": "web",
+   "verb": "sell",
+   "groupId": "G1",
+   "posId": "P10",
+   "secid": "1.600009",
+   "name": "标的9",
+   "qty": 1000,
+   "price": 22.17,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 3000
+   }
+  },
+  {
+   "id": "E0118",
+   "ts": 1791428940683,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P01",
+   "secid": "1.600001",
+   "name": "标的1",
+   "qty": 25000,
+   "price": 0.889,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 75000
+   }
+  },
+  {
+   "id": "E0119",
+   "ts": 1791436602175,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P01",
+   "secid": "1.600001",
+   "name": "标的1",
+   "qty": 50000,
+   "price": 0.88,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 100000
+   }
+  },
+  {
+   "id": "E0120",
+   "ts": 1791436645076,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P21",
+   "secid": "1.600008",
+   "name": "标的8",
+   "qty": 5000,
+   "price": 4.397,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 15000
+   }
+  },
+  {
+   "id": "E0121",
+   "ts": 1791436645274,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P21",
+   "secid": "1.600008",
+   "name": "标的8",
+   "qty": 5000,
+   "price": 4.397,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 20000
+   }
+  },
+  {
+   "id": "E0122",
+   "ts": 1791436828353,
+   "actor": "web",
+   "verb": "sell",
+   "groupId": "G1",
+   "posId": "P21",
+   "secid": "1.600008",
+   "name": "标的8",
+   "qty": 5000,
+   "price": 4.397,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 25000
+   }
+  },
+  {
+   "id": "E0123",
+   "ts": 1791442593275,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P21",
+   "secid": "1.600008",
+   "name": "标的8",
+   "qty": 5000,
+   "price": 4.397,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 20000
+   }
+  },
+  {
+   "id": "E0124",
+   "ts": 1791442615450,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P01",
+   "secid": "1.600001",
+   "name": "标的1",
+   "qty": 50000,
+   "price": 0.88,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 150000
+   }
+  },
+  {
+   "id": "E0125",
+   "ts": 1791442632112,
+   "actor": "web",
+   "verb": "sell",
+   "groupId": "G1",
+   "posId": "P01",
+   "secid": "1.600001",
+   "name": "标的1",
+   "qty": 50000,
+   "price": 0.88,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 200000
+   }
+  },
+  {
+   "id": "E0126",
+   "ts": 1791442639202,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P01",
+   "secid": "1.600001",
+   "name": "标的1",
+   "qty": 50000,
+   "price": 0.87,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 150000
+   }
+  },
+  {
+   "id": "E0127",
+   "ts": 1791442659518,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P10",
+   "secid": "1.600009",
+   "name": "标的9",
+   "qty": 1000,
+   "price": 21.94,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 2000
+   }
+  },
+  {
+   "id": "E0128",
+   "ts": 1791442675118,
+   "actor": "web",
+   "verb": "add",
+   "groupId": "G1",
+   "posId": "P22",
+   "secid": "1.600020",
+   "name": "标的20"
+  },
+  {
+   "id": "E0129",
+   "ts": 1791442689380,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P22",
+   "secid": "1.600020",
+   "name": "标的20",
+   "qty": 20000,
+   "price": 2.972,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 0
+   }
+  },
+  {
+   "id": "E0130",
+   "ts": 1791510068243,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P10",
+   "secid": "1.600009",
+   "name": "标的9",
+   "qty": 1000,
+   "price": 21.78,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 3000
+   }
+  },
+  {
+   "id": "E0131",
+   "ts": 1791510578486,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P01",
+   "secid": "1.600001",
+   "name": "标的1",
+   "qty": 20000,
+   "price": 0.855,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 200000
+   }
+  },
+  {
+   "id": "E0132",
+   "ts": 1791510624834,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P22",
+   "secid": "1.600020",
+   "name": "标的20",
+   "qty": 10000,
+   "price": 2.962,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 20000
+   }
+  },
+  {
+   "id": "E0133",
+   "ts": 1791510671820,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P10",
+   "secid": "1.600009",
+   "name": "标的9",
+   "qty": 1000,
+   "price": 21.31,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 4000
+   }
+  },
+  {
+   "id": "E0134",
+   "ts": 1791510863862,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P01",
+   "secid": "1.600001",
+   "name": "标的1",
+   "qty": 30000,
+   "price": 0.849,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 220000
+   }
+  },
+  {
+   "id": "E0135",
+   "ts": 1791510976101,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P10",
+   "secid": "1.600009",
+   "name": "标的9",
+   "qty": 1000,
+   "price": 21.14,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 5000
+   }
+  },
+  {
+   "id": "E0136",
+   "ts": 1791511040790,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P22",
+   "secid": "1.600020",
+   "name": "标的20",
+   "qty": 20000,
+   "price": 2.94,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 30000
+   }
+  },
+  {
+   "id": "E0137",
+   "ts": 1791511136811,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P21",
+   "secid": "1.600008",
+   "name": "标的8",
+   "qty": 5000,
+   "price": 4.348,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 25000
+   }
+  },
+  {
+   "id": "E0138",
+   "ts": 1791511278303,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P08",
+   "secid": "1.600007",
+   "name": "标的7",
+   "qty": 5000,
+   "price": 4.7,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 5000
+   }
+  },
+  {
+   "id": "E0139",
+   "ts": 1791512305630,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P10",
+   "secid": "1.600009",
+   "name": "标的9",
+   "qty": 1000,
+   "price": 21.26,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 6000
+   }
+  },
+  {
+   "id": "E0140",
+   "ts": 1791513525837,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P10",
+   "secid": "1.600009",
+   "name": "标的9",
+   "qty": 2000,
+   "price": 20.98,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 7000
+   }
+  },
+  {
+   "id": "E0141",
+   "ts": 1791513534622,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P22",
+   "secid": "1.600020",
+   "name": "标的20",
+   "qty": 20000,
+   "price": 2.896,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 50000
+   }
+  },
+  {
+   "id": "E0142",
+   "ts": 1791516207891,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P01",
+   "secid": "1.600001",
+   "name": "标的1",
+   "qty": 20000,
+   "price": 0.826,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 250000
+   }
+  },
+  {
+   "id": "E0143",
+   "ts": 1791516212674,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P01",
+   "secid": "1.600001",
+   "name": "标的1",
+   "qty": 30000,
+   "price": 0.824,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 270000
+   }
+  },
+  {
+   "id": "E0144",
+   "ts": 1791516273399,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P22",
+   "secid": "1.600020",
+   "name": "标的20",
+   "qty": 10000,
+   "price": 2.889,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 70000
+   }
+  },
+  {
+   "id": "E0145",
+   "ts": 1791523471765,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P19",
+   "secid": "1.600018",
+   "name": "标的18",
+   "qty": 500,
+   "price": 61.97,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 3000
+   }
+  },
+  {
+   "id": "E0146",
+   "ts": 1791524907180,
+   "actor": "web",
+   "verb": "sell",
+   "groupId": "G1",
+   "posId": "P22",
+   "secid": "1.600020",
+   "name": "标的20",
+   "qty": 20000,
+   "price": 2.946,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 80000
+   }
+  },
+  {
+   "id": "E0147",
+   "ts": 1791525066631,
+   "actor": "web",
+   "verb": "sell",
+   "groupId": "G1",
+   "posId": "P10",
+   "secid": "1.600009",
+   "name": "标的9",
+   "qty": 1000,
+   "price": 21.86,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 9000
+   }
+  },
+  {
+   "id": "E0148",
+   "ts": 1791525692971,
+   "actor": "web",
+   "verb": "sell",
+   "groupId": "G2",
+   "posId": "P20",
+   "secid": "1.600019",
+   "name": "标的19",
+   "qty": 500,
+   "price": 30.87,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 500
+   }
+  },
+  {
+   "id": "E0149",
+   "ts": 1791525696771,
+   "actor": "web",
+   "verb": "remove",
+   "groupId": "G2",
+   "posId": "P20",
+   "secid": "1.600019",
+   "name": "标的19"
+  },
+  {
+   "id": "E0150",
+   "ts": 1791770372402,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P08",
+   "secid": "1.600007",
+   "name": "标的7",
+   "qty": 5000,
+   "price": 4.47,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 10000
+   }
+  },
+  {
+   "id": "E0151",
+   "ts": 1791770848387,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P10",
+   "secid": "1.600009",
+   "name": "标的9",
+   "qty": 1000,
+   "price": 20.3,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 8000
+   }
+  },
+  {
+   "id": "E0152",
+   "ts": 1791772369590,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P10",
+   "secid": "1.600009",
+   "name": "标的9",
+   "qty": 1000,
+   "price": 20.09,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 9000
+   }
+  },
+  {
+   "id": "E0153",
+   "ts": 1791775426405,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P10",
+   "secid": "1.600009",
+   "name": "标的9",
+   "qty": 1000,
+   "price": 19.9,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 10000
+   }
+  },
+  {
+   "id": "E0154",
+   "ts": 1791781314019,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P21",
+   "secid": "1.600008",
+   "name": "标的8",
+   "qty": 5000,
+   "price": 4.374,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 30000
+   }
+  },
+  {
+   "id": "E0155",
+   "ts": 1791787171688,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P19",
+   "secid": "1.600018",
+   "name": "标的18",
+   "qty": 500,
+   "price": 60.55,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 3500
+   }
+  },
+  {
+   "id": "E0156",
+   "ts": 1791787796148,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P01",
+   "secid": "1.600001",
+   "name": "标的1",
+   "qty": 50000,
+   "price": 0.867,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 300000
+   }
+  },
+  {
+   "id": "E0157",
+   "ts": 1791855724687,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P22",
+   "secid": "1.600020",
+   "name": "标的20",
+   "qty": 5000,
+   "price": 2.858,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 60000
+   }
+  },
+  {
+   "id": "E0158",
+   "ts": 1791857539944,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P21",
+   "secid": "1.600008",
+   "name": "标的8",
+   "qty": 5000,
+   "price": 4.316,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 35000
+   }
+  },
+  {
+   "id": "E0159",
+   "ts": 1791859772539,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P22",
+   "secid": "1.600020",
+   "name": "标的20",
+   "qty": 5000,
+   "price": 2.853,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 65000
+   }
+  },
+  {
+   "id": "E0160",
+   "ts": 1791868217238,
+   "actor": "web",
+   "verb": "sell",
+   "groupId": "G1",
+   "posId": "P10",
+   "secid": "1.600009",
+   "name": "标的9",
+   "qty": 1000,
+   "price": 21.36,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 11000
+   }
+  },
+  {
+   "id": "E0161",
+   "ts": 1791869203226,
+   "actor": "web",
+   "verb": "sell",
+   "groupId": "G1",
+   "posId": "P10",
+   "secid": "1.600009",
+   "name": "标的9",
+   "qty": 1000,
+   "price": 21.84,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 10000
+   }
+  },
+  {
+   "id": "E0162",
+   "ts": 1791870705928,
+   "actor": "web",
+   "verb": "sell",
+   "groupId": "G1",
+   "posId": "P22",
+   "secid": "1.600020",
+   "name": "标的20",
+   "qty": 10000,
+   "price": 2.941,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 70000
+   }
+  },
+  {
+   "id": "E0163",
+   "ts": 1791872414449,
+   "actor": "web",
+   "verb": "sell",
+   "groupId": "G1",
+   "posId": "P22",
+   "secid": "1.600020",
+   "name": "标的20",
+   "qty": 10000,
+   "price": 2.931,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 60000
+   }
+  },
+  {
+   "id": "E0164",
+   "ts": 1791874622900,
+   "actor": "web",
+   "verb": "sell",
+   "groupId": "G1",
+   "posId": "P22",
+   "secid": "1.600020",
+   "name": "标的20",
+   "qty": 6200,
+   "price": 2.927,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 50000
+   }
+  },
+  {
+   "id": "E0165",
+   "ts": 1791945554768,
+   "actor": "web",
+   "verb": "add",
+   "groupId": "G1",
+   "posId": "P23",
+   "secid": "1.600021",
+   "name": "标的21"
+  },
+  {
+   "id": "E0166",
+   "ts": 1791945562397,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P23",
+   "secid": "1.600021",
+   "name": "标的21",
+   "qty": 1000,
+   "price": 16.69,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 0
+   }
+  },
+  {
+   "id": "E0167",
+   "ts": 1791957984836,
+   "actor": "web",
+   "verb": "add",
+   "groupId": "G1",
+   "posId": "P24",
+   "secid": "1.600017",
+   "name": "标的17"
+  },
+  {
+   "id": "E0168",
+   "ts": 1791958310664,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P24",
+   "secid": "1.600017",
+   "name": "标的17",
+   "qty": 2000,
+   "price": 13.47,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 0
+   }
+  },
+  {
+   "id": "E0169",
+   "ts": 1791958507573,
+   "actor": "web",
+   "verb": "sell",
+   "groupId": "G1",
+   "posId": "P10",
+   "secid": "1.600009",
+   "name": "标的9",
+   "qty": 1000,
+   "price": 21.65,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 9000
+   }
+  },
+  {
+   "id": "E0170",
+   "ts": 1791959398959,
+   "actor": "web",
+   "verb": "add",
+   "groupId": "G1",
+   "posId": "P25",
+   "secid": "1.600004",
+   "name": "标的4"
+  },
+  {
+   "id": "E0171",
+   "ts": 1791959406288,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P25",
+   "secid": "1.600004",
+   "name": "标的4",
+   "qty": 400,
+   "price": 46.16,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 0
+   }
+  },
+  {
+   "id": "E0172",
+   "ts": 1791960283095,
+   "actor": "web",
+   "verb": "sell",
+   "groupId": "G1",
+   "posId": "P10",
+   "secid": "1.600009",
+   "name": "标的9",
+   "qty": 2000,
+   "price": 21.52,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 8000
+   }
+  },
+  {
+   "id": "E0173",
+   "ts": 1791960511401,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P22",
+   "secid": "1.600020",
+   "name": "标的20",
+   "qty": 6200,
+   "price": 2.879,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 43800
+   }
+  },
+  {
+   "id": "E0174",
+   "ts": 1791960683375,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P21",
+   "secid": "1.600008",
+   "name": "标的8",
+   "qty": 10000,
+   "price": 4.29,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 40000
+   }
+  },
+  {
+   "id": "E0175",
+   "ts": 1791960777653,
+   "actor": "web",
+   "verb": "sell",
+   "groupId": "G1",
+   "posId": "P21",
+   "secid": "1.600008",
+   "name": "标的8",
+   "qty": 10000,
+   "price": 4.29,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 50000
+   }
+  },
+  {
+   "id": "E0176",
+   "ts": 1791960853431,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P21",
+   "secid": "1.600008",
+   "name": "标的8",
+   "qty": 10000,
+   "price": 4.294,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 40000
+   }
+  },
+  {
+   "id": "E0177",
+   "ts": 1791960919644,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P22",
+   "secid": "1.600020",
+   "name": "标的20",
+   "qty": 20000,
+   "price": 2.878,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 50000
+   }
+  },
+  {
+   "id": "E0178",
+   "ts": 1792028799918,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P10",
+   "secid": "1.600009",
+   "name": "标的9",
+   "qty": 1000,
+   "price": 19.524,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 6000
+   }
+  },
+  {
+   "id": "E0179",
+   "ts": 1792028825049,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P10",
+   "secid": "1.600009",
+   "name": "标的9",
+   "qty": 1000,
+   "price": 19.49,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 7000
+   }
+  },
+  {
+   "id": "E0180",
+   "ts": 1792028845598,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P10",
+   "secid": "1.600009",
+   "name": "标的9",
+   "qty": 1000,
+   "price": 19.44,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 8000
+   }
+  },
+  {
+   "id": "E0181",
+   "ts": 1792029677086,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P10",
+   "secid": "1.600009",
+   "name": "标的9",
+   "qty": 6000,
+   "price": 19.34,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 9000
+   }
+  },
+  {
+   "id": "E0182",
+   "ts": 1792031212960,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P08",
+   "secid": "1.600007",
+   "name": "标的7",
+   "qty": 5000,
+   "price": 4.06,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 15000
+   }
+  },
+  {
+   "id": "E0183",
+   "ts": 1792031488550,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P23",
+   "secid": "1.600021",
+   "name": "标的21",
+   "qty": 1000,
+   "price": 16.58,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 1000
+   }
+  },
+  {
+   "id": "E0184",
+   "ts": 1792046477750,
+   "actor": "web",
+   "verb": "sell",
+   "groupId": "G1",
+   "posId": "P12",
+   "secid": "1.600011",
+   "name": "标的11",
+   "qty": 3000,
+   "price": 8.5,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 3000
+   }
+  },
+  {
+   "id": "E0185",
+   "ts": 1792046626869,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P01",
+   "secid": "1.600001",
+   "name": "标的1",
+   "qty": 25000,
+   "price": 0.838,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 350000
+   }
+  },
+  {
+   "id": "E0186",
+   "ts": 1792047375540,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P01",
+   "secid": "1.600001",
+   "name": "标的1",
+   "qty": 25000,
+   "price": 0.838,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 375000
+   }
+  },
+  {
+   "id": "E0187",
+   "ts": 1792116028729,
+   "actor": "web",
+   "verb": "remove",
+   "groupId": "G1",
+   "posId": "P12",
+   "secid": "1.600011",
+   "name": "标的11"
+  },
+  {
+   "id": "E0188",
+   "ts": 1792116293356,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P22",
+   "secid": "1.600020",
+   "name": "标的20",
+   "qty": 10000,
+   "price": 2.802,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 70000
+   }
+  },
+  {
+   "id": "E0189",
+   "ts": 1792120456195,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P22",
+   "secid": "1.600020",
+   "name": "标的20",
+   "qty": 5000,
+   "price": 2.842,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 80000
+   }
+  },
+  {
+   "id": "E0190",
+   "ts": 1792131713421,
+   "actor": "web",
+   "verb": "sell",
+   "groupId": "G1",
+   "posId": "P23",
+   "secid": "1.600021",
+   "name": "标的21",
+   "qty": 2000,
+   "price": 17.52,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 2000
+   }
+  },
+  {
+   "id": "E0191",
+   "ts": 1792131905838,
+   "actor": "web",
+   "verb": "remove",
+   "groupId": "G1",
+   "posId": "P23",
+   "secid": "1.600021",
+   "name": "标的21"
+  },
+  {
+   "id": "E0192",
+   "ts": 1792133720685,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P21",
+   "secid": "1.600008",
+   "name": "标的8",
+   "qty": 10000,
+   "price": 4.244,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 50000
+   }
+  },
+  {
+   "id": "E0193",
+   "ts": 1792376496379,
+   "actor": "web",
+   "verb": "sell",
+   "groupId": "G1",
+   "posId": "P17",
+   "secid": "1.600016",
+   "name": "标的16",
+   "qty": 25000,
+   "price": 1.055,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 25000
+   }
+  },
+  {
+   "id": "E0194",
+   "ts": 1792376504881,
+   "actor": "web",
+   "verb": "remove",
+   "groupId": "G1",
+   "posId": "P17",
+   "secid": "1.600016",
+   "name": "标的16"
+  },
+  {
+   "id": "E0195",
+   "ts": 1792377229810,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P25",
+   "secid": "1.600004",
+   "name": "标的4",
+   "qty": 500,
+   "price": 42.18,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 400
+   }
+  },
+  {
+   "id": "E0196",
+   "ts": 1792378015736,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P01",
+   "secid": "1.600001",
+   "name": "标的1",
+   "qty": 100000,
+   "price": 0.812,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 400000
+   }
+  },
+  {
+   "id": "E0197",
+   "ts": 1792459944203,
+   "actor": "web",
+   "verb": "sell",
+   "groupId": "G1",
+   "posId": "P10",
+   "secid": "1.600009",
+   "name": "标的9",
+   "qty": 5000,
+   "price": 17.1,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 15000
+   }
+  },
+  {
+   "id": "E0198",
+   "ts": 1792460113233,
+   "actor": "web",
+   "verb": "sell",
+   "groupId": "G1",
+   "posId": "P10",
+   "secid": "1.600009",
+   "name": "标的9",
+   "qty": 5000,
+   "price": 17.3,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 10000
+   }
+  },
+  {
+   "id": "E0199",
+   "ts": 1792460133775,
+   "actor": "web",
+   "verb": "sell",
+   "groupId": "G1",
+   "posId": "P08",
+   "secid": "1.600007",
+   "name": "标的7",
+   "qty": 10000,
+   "price": 3.92,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 20000
+   }
+  },
+  {
+   "id": "E0200",
+   "ts": 1792460486405,
+   "actor": "web",
+   "verb": "sell",
+   "groupId": "G1",
+   "posId": "P08",
+   "secid": "1.600007",
+   "name": "标的7",
+   "qty": 10000,
+   "price": 3.91,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 10000
+   }
+  },
+  {
+   "id": "E0201",
+   "ts": 1792460603975,
+   "actor": "web",
+   "verb": "sell",
+   "groupId": "G1",
+   "posId": "P10",
+   "secid": "1.600009",
+   "name": "标的9",
+   "qty": 5000,
+   "price": 17.36,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 5000
+   }
+  },
+  {
+   "id": "E0202",
+   "ts": 1792478552621,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P10",
+   "secid": "1.600009",
+   "name": "标的9",
+   "qty": 1000,
+   "price": 17.55,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 0
+   }
+  },
+  {
+   "id": "E0203",
+   "ts": 1792546819780,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P10",
+   "secid": "1.600009",
+   "name": "标的9",
+   "qty": 9000,
+   "price": 17.96,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 1000
+   }
+  },
+  {
+   "id": "E0204",
+   "ts": 1792633887682,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P10",
+   "secid": "1.600009",
+   "name": "标的9",
+   "qty": 2000,
+   "price": 16.9,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 10000
+   }
+  },
+  {
+   "id": "E0205",
+   "ts": 1792646337673,
+   "actor": "web",
+   "verb": "sell",
+   "groupId": "G1",
+   "posId": "P01",
+   "secid": "1.600001",
+   "name": "标的1",
+   "qty": 90000,
+   "price": 0.738,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 500000
+   }
+  },
+  {
+   "id": "E0206",
+   "ts": 1792651391015,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P01",
+   "secid": "1.600001",
+   "name": "标的1",
+   "qty": 90000,
+   "price": 0.737,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 410000
+   }
+  },
+  {
+   "id": "E0207",
+   "ts": 1792652098729,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P10",
+   "secid": "1.600009",
+   "name": "标的9",
+   "qty": 3000,
+   "price": 16.33,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 12000
+   }
+  },
+  {
+   "id": "E0208",
+   "ts": 1792722305264,
+   "actor": "web",
+   "verb": "remove",
+   "groupId": "G1",
+   "posId": "P08",
+   "secid": "1.600007",
+   "name": "标的7"
+  },
+  {
+   "id": "E0209",
+   "ts": 1792722697145,
+   "actor": "web",
+   "verb": "sell",
+   "groupId": "G1",
+   "posId": "P19",
+   "secid": "1.600018",
+   "name": "标的18",
+   "qty": 500,
+   "price": 51.16,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 4000
+   }
+  },
+  {
+   "id": "E0210",
+   "ts": 1792731782498,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P19",
+   "secid": "1.600018",
+   "name": "标的18",
+   "qty": 500,
+   "price": 54.39,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 3500
+   }
+  },
+  {
+   "id": "E0211",
+   "ts": 1792731842413,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P25",
+   "secid": "1.600004",
+   "name": "标的4",
+   "qty": 1000,
+   "price": 41.45,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 900
+   }
+  },
+  {
+   "id": "E0212",
+   "ts": 1792731981731,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P25",
+   "secid": "1.600004",
+   "name": "标的4",
+   "qty": 100,
+   "price": 41.45,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 1900
+   }
+  },
+  {
+   "id": "E0213",
+   "ts": 1792732037873,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P01",
+   "secid": "1.600001",
+   "name": "标的1",
+   "qty": 47500,
+   "price": 0.712,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 500000
+   }
+  },
+  {
+   "id": "E0214",
+   "ts": 1792732229361,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P01",
+   "secid": "1.600001",
+   "name": "标的1",
+   "qty": 52500,
+   "price": 0.713,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 547500
+   }
+  },
+  {
+   "id": "E0215",
+   "ts": 1792733100863,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P21",
+   "secid": "1.600008",
+   "name": "标的8",
+   "qty": 5000,
+   "price": 4.156,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 60000
+   }
+  },
+  {
+   "id": "E0216",
+   "ts": 1792734429708,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P25",
+   "secid": "1.600004",
+   "name": "标的4",
+   "qty": 1000,
+   "price": 42.17,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 2000
+   }
+  },
+  {
+   "id": "E0217",
+   "ts": 1792736054518,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P25",
+   "secid": "1.600004",
+   "name": "标的4",
+   "qty": 500,
+   "price": 42.55,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 3000
+   }
+  },
+  {
+   "id": "E0218",
+   "ts": 1792736172404,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P25",
+   "secid": "1.600004",
+   "name": "标的4",
+   "qty": 500,
+   "price": 42.81,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 3500
+   }
+  },
+  {
+   "id": "E0219",
+   "ts": 1792736313361,
+   "actor": "web",
+   "verb": "sell",
+   "groupId": "G1",
+   "posId": "P25",
+   "secid": "1.600004",
+   "name": "标的4",
+   "qty": 900,
+   "price": 42.97,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 4000
+   }
+  },
+  {
+   "id": "E0220",
+   "ts": 1792736323064,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P25",
+   "secid": "1.600004",
+   "name": "标的4",
+   "qty": 1100,
+   "price": 42.9,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 3100
+   }
+  },
+  {
+   "id": "E0221",
+   "ts": 1792736348063,
+   "actor": "web",
+   "verb": "adjust",
+   "groupId": "G1",
+   "posId": "P25",
+   "secid": "1.600004",
+   "name": "标的4",
+   "qty": 4000,
+   "price": 42.604577380952385,
+   "fee": 0,
+   "meta": {
+    "oldQty": 4200,
+    "oldAvg": 42.6046
+   }
+  },
+  {
+   "id": "E0222",
+   "ts": 1792736639345,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P25",
+   "secid": "1.600004",
+   "name": "标的4",
+   "qty": 1000,
+   "price": 42.8,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 4000
+   }
+  },
+  {
+   "id": "E0223",
+   "ts": 1792978264327,
+   "actor": "web",
+   "verb": "sell",
+   "groupId": "G1",
+   "posId": "P01",
+   "secid": "1.600001",
+   "name": "标的1",
+   "qty": 100000,
+   "price": 0.726,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 600000
+   }
+  },
+  {
+   "id": "E0224",
+   "ts": 1792985040940,
+   "actor": "web",
+   "verb": "sell",
+   "groupId": "G1",
+   "posId": "P01",
+   "secid": "1.600001",
+   "name": "标的1",
+   "qty": 100000,
+   "price": 0.707,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 500000
+   }
+  },
+  {
+   "id": "E0225",
+   "ts": 1792991399553,
+   "actor": "web",
+   "verb": "sell",
+   "groupId": "G1",
+   "posId": "P25",
+   "secid": "1.600004",
+   "name": "标的4",
+   "qty": 1000,
+   "price": 43.15,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 5000
+   }
+  },
+  {
+   "id": "E0226",
+   "ts": 1792991960635,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P01",
+   "secid": "1.600001",
+   "name": "标的1",
+   "qty": 100000,
+   "price": 0.711,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 400000
+   }
+  },
+  {
+   "id": "E0227",
+   "ts": 1793066049938,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P25",
+   "secid": "1.600004",
+   "name": "标的4",
+   "qty": 1000,
+   "price": 44.24,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 4000
+   }
+  },
+  {
+   "id": "E0228",
+   "ts": 1793071579078,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P10",
+   "secid": "1.600009",
+   "name": "标的9",
+   "qty": 4000,
+   "price": 17.74,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 15000
+   }
+  },
+  {
+   "id": "E0229",
+   "ts": 1793151045656,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P25",
+   "secid": "1.600004",
+   "name": "标的4",
+   "qty": 1000,
+   "price": 44.41,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 5000
+   }
+  },
+  {
+   "id": "E0230",
+   "ts": 1793151167282,
+   "actor": "web",
+   "verb": "sell",
+   "groupId": "G1",
+   "posId": "P19",
+   "secid": "1.600018",
+   "name": "标的18",
+   "qty": 1000,
+   "price": 55,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 4000
+   }
+  },
+  {
+   "id": "E0231",
+   "ts": 1793151175957,
+   "actor": "web",
+   "verb": "sell",
+   "groupId": "G1",
+   "posId": "P01",
+   "secid": "1.600001",
+   "name": "标的1",
+   "qty": 100000,
+   "price": 0.657,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 500000
+   }
+  },
+  {
+   "id": "E0232",
+   "ts": 1793151192039,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P25",
+   "secid": "1.600004",
+   "name": "标的4",
+   "qty": 1000,
+   "price": 44.16,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 6000
+   }
+  },
+  {
+   "id": "E0233",
+   "ts": 1793151398976,
+   "actor": "web",
+   "verb": "sell",
+   "groupId": "G1",
+   "posId": "P01",
+   "secid": "1.600001",
+   "name": "标的1",
+   "qty": 100000,
+   "price": 0.663,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 400000
+   }
+  },
+  {
+   "id": "E0234",
+   "ts": 1793151980693,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P25",
+   "secid": "1.600004",
+   "name": "标的4",
+   "qty": 500,
+   "price": 43.98,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 7000
+   }
+  },
+  {
+   "id": "E0235",
+   "ts": 1793152019886,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P25",
+   "secid": "1.600004",
+   "name": "标的4",
+   "qty": 500,
+   "price": 43.83,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 7500
+   }
+  },
+  {
+   "id": "E0236",
+   "ts": 1793152225997,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P25",
+   "secid": "1.600004",
+   "name": "标的4",
+   "qty": 500,
+   "price": 43.67,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 8000
+   }
+  },
+  {
+   "id": "E0237",
+   "ts": 1793152292358,
+   "actor": "web",
+   "verb": "sell",
+   "groupId": "G1",
+   "posId": "P01",
+   "secid": "1.600001",
+   "name": "标的1",
+   "qty": 100000,
+   "price": 0.671,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 300000
+   }
+  },
+  {
+   "id": "E0238",
+   "ts": 1793153342917,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P10",
+   "secid": "1.600009",
+   "name": "标的9",
+   "qty": 1000,
+   "price": 16.84,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 19000
+   }
+  },
+  {
+   "id": "E0239",
+   "ts": 1793154103013,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P25",
+   "secid": "1.600004",
+   "name": "标的4",
+   "qty": 500,
+   "price": 42.79,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 8500
+   }
+  },
+  {
+   "id": "E0240",
+   "ts": 1793165533394,
+   "actor": "web",
+   "verb": "sell",
+   "groupId": "G1",
+   "posId": "P25",
+   "secid": "1.600004",
+   "name": "标的4",
+   "qty": 1000,
+   "price": 44.23,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 9000
+   }
+  },
+  {
+   "id": "E0241",
+   "ts": 1793165992488,
+   "actor": "web",
+   "verb": "sell",
+   "groupId": "G1",
+   "posId": "P01",
+   "secid": "1.600001",
+   "name": "标的1",
+   "qty": 100000,
+   "price": 0.666,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 200000
+   }
+  },
+  {
+   "id": "E0242",
+   "ts": 1793237402000,
+   "actor": "web",
+   "verb": "sell",
+   "groupId": "G1",
+   "posId": "P10",
+   "secid": "1.600009",
+   "name": "标的9",
+   "qty": 1000,
+   "price": 17.57,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 20000
+   }
+  },
+  {
+   "id": "E0243",
+   "ts": 1793242982000,
+   "actor": "web",
+   "verb": "sell",
+   "groupId": "G1",
+   "posId": "P01",
+   "secid": "1.600001",
+   "name": "标的1",
+   "qty": 50000,
+   "price": 0.638,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 100000
+   }
+  },
+  {
+   "id": "E0244",
+   "ts": 1793253901000,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P25",
+   "secid": "1.600004",
+   "name": "标的4",
+   "qty": 500,
+   "price": 43.22,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 8000
+   }
+  },
+  {
+   "id": "E0245",
+   "ts": 1793253938000,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P22",
+   "secid": "1.600020",
+   "name": "标的20",
+   "qty": 5000,
+   "price": 2.667,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 85000
+   }
+  },
+  {
+   "id": "E0246",
+   "ts": 1793254262000,
+   "actor": "web",
+   "verb": "sell",
+   "groupId": "G1",
+   "posId": "P01",
+   "secid": "1.600001",
+   "name": "标的1",
+   "qty": 40000,
+   "price": 0.637,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 50000
+   }
+  },
+  {
+   "id": "E0247",
+   "ts": 1793254532000,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P25",
+   "secid": "1.600004",
+   "name": "标的4",
+   "qty": 500,
+   "price": 42.99,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 8500
+   }
+  },
+  {
+   "id": "E0248",
+   "ts": 1793337089000,
+   "actor": "web",
+   "verb": "sell",
+   "groupId": "G1",
+   "posId": "P10",
+   "secid": "1.600009",
+   "name": "标的9",
+   "qty": 2000,
+   "price": 17.82,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 19000
+   }
+  },
+  {
+   "id": "E0249",
+   "ts": 1793599312000,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P25",
+   "secid": "1.600004",
+   "name": "标的4",
+   "qty": 1000,
+   "price": 42.317,
+   "fee": 0,
+   "meta": {}
+  },
+  {
+   "id": "E0250",
+   "ts": 1793669470000,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P10",
+   "secid": "1.600009",
+   "name": "标的9",
+   "qty": 1000,
+   "price": 16.68,
+   "fee": 0,
+   "meta": {}
+  },
+  {
+   "id": "E0251",
+   "ts": 1793684115000,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P25",
+   "secid": "1.600004",
+   "name": "标的4",
+   "qty": 1000,
+   "price": 39.1,
+   "fee": 0,
+   "meta": {}
+  },
+  {
+   "id": "E0252",
+   "ts": 1793768571000,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P01",
+   "secid": "1.600001",
+   "name": "标的1",
+   "qty": 40000,
+   "price": 0.61,
+   "fee": 0,
+   "meta": {}
+  },
+  {
+   "id": "E0253",
+   "ts": 1793770352000,
+   "actor": "web",
+   "verb": "sell",
+   "groupId": "G1",
+   "posId": "P25",
+   "secid": "1.600004",
+   "name": "标的4",
+   "qty": 1000,
+   "price": 40.1,
+   "fee": 0,
+   "meta": {}
+  },
+  {
+   "id": "E0254",
+   "ts": 1793771902000,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P01",
+   "secid": "1.600001",
+   "name": "标的1",
+   "qty": 50000,
+   "price": 0.67,
+   "fee": 0,
+   "meta": {}
+  },
+  {
+   "id": "E0255",
+   "ts": 1793772400000,
+   "actor": "web",
+   "verb": "sell",
+   "groupId": "G1",
+   "posId": "P25",
+   "secid": "1.600004",
+   "name": "标的4",
+   "qty": 2000,
+   "price": 43.71,
+   "fee": 0,
+   "meta": {}
+  },
+  {
+   "id": "E0256",
+   "ts": 1793772547000,
+   "actor": "web",
+   "verb": "sell",
+   "groupId": "G1",
+   "posId": "P01",
+   "secid": "1.600001",
+   "name": "标的1",
+   "qty": 10000,
+   "price": 0.678,
+   "fee": 0,
+   "meta": {}
+  },
+  {
+   "id": "E0257",
+   "ts": 1793773343000,
+   "actor": "web",
+   "verb": "sell",
+   "groupId": "G1",
+   "posId": "P22",
+   "secid": "1.600020",
+   "name": "标的20",
+   "qty": 5000,
+   "price": 2.727,
+   "fee": 0,
+   "meta": {}
+  },
+  {
+   "id": "E0258",
+   "ts": 1793842203000,
+   "actor": "web",
+   "verb": "sell",
+   "groupId": "G1",
+   "posId": "P25",
+   "secid": "1.600004",
+   "name": "标的4",
+   "qty": 1000,
+   "price": 42.3,
+   "fee": 0,
+   "meta": {}
+  },
+  {
+   "id": "E0259",
+   "ts": 1793842203000,
+   "actor": "web",
+   "verb": "sell",
+   "groupId": "G1",
+   "posId": "P01",
+   "secid": "1.600001",
+   "name": "标的1",
+   "qty": 40000,
+   "price": 0.668,
+   "fee": 0,
+   "meta": {}
+  },
+  {
+   "id": "E0260",
+   "ts": 1793842426000,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P10",
+   "secid": "1.600009",
+   "name": "标的9",
+   "qty": 1000,
+   "price": 16.42,
+   "fee": 0,
+   "meta": {}
+  },
+  {
+   "id": "E0261",
+   "ts": 1793845486000,
+   "actor": "web",
+   "verb": "sell",
+   "groupId": "G1",
+   "posId": "P01",
+   "secid": "1.600001",
+   "name": "标的1",
+   "qty": 40000,
+   "price": 0.744,
+   "fee": 0,
+   "meta": {}
+  },
+  {
+   "id": "E0262",
+   "ts": 1793845896000,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P26",
+   "secid": "1.600022",
+   "name": "标的22",
+   "qty": 3000,
+   "price": 6.69,
+   "fee": 0,
+   "meta": {}
+  },
+  {
+   "id": "E0263",
+   "ts": 1793846964000,
+   "actor": "web",
+   "verb": "sell",
+   "groupId": "G1",
+   "posId": "P25",
+   "secid": "1.600004",
+   "name": "标的4",
+   "qty": 1000,
+   "price": 43.01,
+   "fee": 0,
+   "meta": {}
+  },
+  {
+   "id": "E0264",
+   "ts": 1793857570000,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P26",
+   "secid": "1.600022",
+   "name": "标的22",
+   "qty": 3000,
+   "price": 6.8,
+   "fee": 0,
+   "meta": {}
+  },
+  {
+   "id": "E0265",
+   "ts": 1793857602000,
+   "actor": "web",
+   "verb": "sell",
+   "groupId": "G1",
+   "posId": "P25",
+   "secid": "1.600004",
+   "name": "标的4",
+   "qty": 1000,
+   "price": 42.07,
+   "fee": 0,
+   "meta": {}
+  },
+  {
+   "id": "E0266",
+   "ts": 1793861530000,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P01",
+   "secid": "1.600001",
+   "name": "标的1",
+   "qty": 40000,
+   "price": 0.737,
+   "fee": 0,
+   "meta": {}
+  },
+  {
+   "id": "E0267",
+   "ts": 1793929786000,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P06",
+   "secid": "1.600005",
+   "name": "标的5",
+   "qty": 2500,
+   "price": 8.285,
+   "fee": 0,
+   "meta": {}
+  },
+  {
+   "id": "E0268",
+   "ts": 1793929886000,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P10",
+   "secid": "1.600009",
+   "name": "标的9",
+   "qty": 1000,
+   "price": 16.24,
+   "fee": 0,
+   "meta": {}
+  },
+  {
+   "id": "E0269",
+   "ts": 1793930044000,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P25",
+   "secid": "1.600004",
+   "name": "标的4",
+   "qty": 1000,
+   "price": 40.42,
+   "fee": 0,
+   "meta": {}
+  },
+  {
+   "id": "E0270",
+   "ts": 1793930044000,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P25",
+   "secid": "1.600004",
+   "name": "标的4",
+   "qty": 1000,
+   "price": 40.42,
+   "fee": 0,
+   "meta": {}
+  },
+  {
+   "id": "E0271",
+   "ts": 1793931960000,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P25",
+   "secid": "1.600004",
+   "name": "标的4",
+   "qty": 1000,
+   "price": 40.88,
+   "fee": 0,
+   "meta": {}
+  },
+  {
+   "id": "E0272",
+   "ts": 1793941200000,
+   "actor": "web",
+   "verb": "sell",
+   "groupId": "G1",
+   "posId": "P26",
+   "secid": "1.600022",
+   "name": "标的22",
+   "qty": 3000,
+   "price": 6.8,
+   "fee": 0,
+   "meta": {}
+  },
+  {
+   "id": "E0273",
+   "ts": 1793941378000,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P21",
+   "secid": "1.600008",
+   "name": "标的8",
+   "qty": 5000,
+   "price": 4.141,
+   "fee": 0,
+   "meta": {}
+  },
+  {
+   "id": "E0274",
+   "ts": 1793941469000,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P22",
+   "secid": "1.600020",
+   "name": "标的20",
+   "qty": 5000,
+   "price": 2.74,
+   "fee": 0,
+   "meta": {}
+  },
+  {
+   "id": "E0275",
+   "ts": 1793941479000,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P22",
+   "secid": "1.600020",
+   "name": "标的20",
+   "qty": 10000,
+   "price": 2.739,
+   "fee": 0,
+   "meta": {}
+  },
+  {
+   "id": "E0276",
+   "ts": 1793941584000,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P21",
+   "secid": "1.600008",
+   "name": "标的8",
+   "qty": 10000,
+   "price": 4.141,
+   "fee": 0,
+   "meta": {}
+  },
+  {
+   "id": "E0277",
+   "ts": 1793941676000,
+   "actor": "web",
+   "verb": "sell",
+   "groupId": "G1",
+   "posId": "P26",
+   "secid": "1.600022",
+   "name": "标的22",
+   "qty": 3000,
+   "price": 6.77,
+   "fee": 0,
+   "meta": {}
+  },
+  {
+   "id": "E0278",
+   "ts": 1793941758000,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P22",
+   "secid": "1.600020",
+   "name": "标的20",
+   "qty": 14800,
+   "price": 2.739,
+   "fee": 0,
+   "meta": {}
+  },
+  {
+   "id": "E0279",
+   "ts": 1793941772000,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P21",
+   "secid": "1.600008",
+   "name": "标的8",
+   "qty": 15000,
+   "price": 4.143,
+   "fee": 0,
+   "meta": {}
+  },
+  {
+   "id": "E0280",
+   "ts": 1793941872000,
+   "actor": "web",
+   "verb": "sell",
+   "groupId": "G1",
+   "posId": "P24",
+   "secid": "1.600017",
+   "name": "标的17",
+   "qty": 2000,
+   "price": 12.83,
+   "fee": 0,
+   "meta": {}
+  },
+  {
+   "id": "E0281",
+   "ts": 1793941913000,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P22",
+   "secid": "1.600020",
+   "name": "标的20",
+   "qty": 9300,
+   "price": 2.735,
+   "fee": 0,
+   "meta": {}
+  },
+  {
+   "id": "E0282",
+   "ts": 1793945014000,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P10",
+   "secid": "1.600009",
+   "name": "标的9",
+   "qty": 2000,
+   "price": 16.13,
+   "fee": 0,
+   "meta": {}
+  },
+  {
+   "id": "E0283",
+   "ts": 1794187802000,
+   "actor": "web",
+   "verb": "sell",
+   "groupId": "G1",
+   "posId": "P25",
+   "secid": "1.600004",
+   "name": "标的4",
+   "qty": 1000,
+   "price": 40.99,
+   "fee": 0,
+   "meta": {}
+  },
+  {
+   "id": "E0284",
+   "ts": 1794274201000,
+   "actor": "web",
+   "verb": "sell",
+   "groupId": "G1",
+   "posId": "P21",
+   "secid": "1.600008",
+   "name": "标的8",
+   "qty": 10000,
+   "price": 4.16,
+   "fee": 0,
+   "meta": {}
+  },
+  {
+   "id": "E0285",
+   "ts": 1794274201000,
+   "actor": "web",
+   "verb": "sell",
+   "groupId": "G1",
+   "posId": "P22",
+   "secid": "1.600020",
+   "name": "标的20",
+   "qty": 39100,
+   "price": 2.749,
+   "fee": 0,
+   "meta": {}
+  },
+  {
+   "id": "E0286",
+   "ts": 1794274202000,
+   "actor": "web",
+   "verb": "sell",
+   "groupId": "G1",
+   "posId": "P25",
+   "secid": "1.600004",
+   "name": "标的4",
+   "qty": 1000,
+   "price": 41.33,
+   "fee": 0,
+   "meta": {}
+  },
+  {
+   "id": "E0287",
+   "ts": 1794274622000,
+   "actor": "web",
+   "verb": "sell",
+   "groupId": "G1",
+   "posId": "P21",
+   "secid": "1.600008",
+   "name": "标的8",
+   "qty": 20000,
+   "price": 4.151,
+   "fee": 0,
+   "meta": {}
+  },
+  {
+   "id": "E0288",
+   "ts": 1794274923000,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P10",
+   "secid": "1.600009",
+   "name": "标的9",
+   "qty": 1000,
+   "price": 15.94,
+   "fee": 0,
+   "meta": {}
+  },
+  {
+   "id": "E0289",
+   "ts": 1794275292000,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P27",
+   "secid": "1.600023",
+   "name": "标的23",
+   "qty": 500,
+   "price": 30.24,
+   "fee": 0,
+   "meta": {}
+  },
+  {
+   "id": "E0290",
+   "ts": 1794281270000,
+   "actor": "web",
+   "verb": "sell",
+   "groupId": "G1",
+   "posId": "P06",
+   "secid": "1.600005",
+   "name": "标的5",
+   "qty": 2500,
+   "price": 8.389,
+   "fee": 0,
+   "meta": {}
+  },
+  {
+   "id": "E0291",
+   "ts": 1794287727000,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P10",
+   "secid": "1.600009",
+   "name": "标的9",
+   "qty": 1000,
+   "price": 15.86,
+   "fee": 0,
+   "meta": {}
+  },
+  {
+   "id": "E0292",
+   "ts": 1794288605000,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P21",
+   "secid": "1.600008",
+   "name": "标的8",
+   "qty": 5000,
+   "price": 4.147,
+   "fee": 0,
+   "meta": {}
+  },
+  {
+   "id": "E0293",
+   "ts": 1794293220000,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P21",
+   "secid": "1.600008",
+   "name": "标的8",
+   "qty": 10000,
+   "price": 4.131,
+   "fee": 0,
+   "meta": {}
+  },
+  {
+   "id": "E0294",
+   "ts": 1794374094000,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P21",
+   "secid": "1.600008",
+   "name": "标的8",
+   "qty": 10000,
+   "price": 4.148,
+   "fee": 0,
+   "meta": {}
+  },
+  {
+   "id": "E0295",
+   "ts": 1794374229000,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P28",
+   "secid": "1.600024",
+   "name": "标的24",
+   "qty": 50000,
+   "price": 0.451,
+   "fee": 0,
+   "meta": {}
+  },
+  {
+   "id": "E0296",
+   "ts": 1794375896000,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P22",
+   "secid": "1.600020",
+   "name": "标的20",
+   "qty": 5000,
+   "price": 2.785,
+   "fee": 0,
+   "meta": {}
+  },
+  {
+   "id": "E0297",
+   "ts": 1794377029000,
+   "actor": "web",
+   "verb": "sell",
+   "groupId": "G1",
+   "posId": "P10",
+   "secid": "1.600009",
+   "name": "标的9",
+   "qty": 2000,
+   "price": 16.2,
+   "fee": 0,
+   "meta": {}
+  },
+  {
+   "id": "E0298",
+   "ts": 1794377379000,
+   "actor": "web",
+   "verb": "sell",
+   "groupId": "G1",
+   "posId": "P25",
+   "secid": "1.600004",
+   "name": "标的4",
+   "qty": 1000,
+   "price": 42.35,
+   "fee": 0,
+   "meta": {}
+  },
+  {
+   "id": "E0299",
+   "ts": 1794447394000,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P01",
+   "secid": "1.600001",
+   "name": "标的1",
+   "qty": 50000,
+   "price": 0.742,
+   "fee": 0,
+   "meta": {}
+  },
+  {
+   "id": "E0300",
+   "ts": 1794448291000,
+   "actor": "web",
+   "verb": "sell",
+   "groupId": "G1",
+   "posId": "P25",
+   "secid": "1.600004",
+   "name": "标的4",
+   "qty": 1000,
+   "price": 42.68,
+   "fee": 0,
+   "meta": {}
+  },
+  {
+   "id": "E0301",
+   "ts": 1794449433000,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P01",
+   "secid": "1.600001",
+   "name": "标的1",
+   "qty": 50000,
+   "price": 0.758,
+   "fee": 0,
+   "meta": {}
+  },
+  {
+   "id": "E0302",
+   "ts": 1794450476000,
+   "actor": "web",
+   "verb": "sell",
+   "groupId": "G1",
+   "posId": "P28",
+   "secid": "1.600024",
+   "name": "标的24",
+   "qty": 50000,
+   "price": 0.466,
+   "fee": 0,
+   "meta": {}
+  },
+  {
+   "id": "E0303",
+   "ts": 1794452900000,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P28",
+   "secid": "1.600024",
+   "name": "标的24",
+   "qty": 50000,
+   "price": 0.462,
+   "fee": 0,
+   "meta": {}
+  },
+  {
+   "id": "E0304",
+   "ts": 1794452929000,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P01",
+   "secid": "1.600001",
+   "name": "标的1",
+   "qty": 50000,
+   "price": 0.752,
+   "fee": 0,
+   "meta": {}
+  },
+  {
+   "id": "E0305",
+   "ts": 1794454092000,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P25",
+   "secid": "1.600004",
+   "name": "标的4",
+   "qty": 1000,
+   "price": 42.03,
+   "fee": 0,
+   "meta": {}
+  },
+  {
+   "id": "E0306",
+   "ts": 1794460365000,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P10",
+   "secid": "1.600009",
+   "name": "标的9",
+   "qty": 1000,
+   "price": 15.91,
+   "fee": 0,
+   "meta": {}
+  },
+  {
+   "id": "E0307",
+   "ts": 1794460520000,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P10",
+   "secid": "1.600009",
+   "name": "标的9",
+   "qty": 1000,
+   "price": 15.85,
+   "fee": 0,
+   "meta": {}
+  },
+  {
+   "id": "E0308",
+   "ts": 1794462659000,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P22",
+   "secid": "1.600020",
+   "name": "标的20",
+   "qty": 10000,
+   "price": 2.737,
+   "fee": 0,
+   "meta": {}
+  },
+  {
+   "id": "E0309",
+   "ts": 1794463225000,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P10",
+   "secid": "1.600009",
+   "name": "标的9",
+   "qty": 1000,
+   "price": 15.66,
+   "fee": 0,
+   "meta": {}
+  },
+  {
+   "id": "E0310",
+   "ts": 1794463386000,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P21",
+   "secid": "1.600008",
+   "name": "标的8",
+   "qty": 5000,
+   "price": 4.109,
+   "fee": 0,
+   "meta": {}
+  },
+  {
+   "id": "E0311",
+   "ts": 1794466470000,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P10",
+   "secid": "1.600009",
+   "name": "标的9",
+   "qty": 1000,
+   "price": 15.64,
+   "fee": 0,
+   "meta": {}
+  },
+  {
+   "id": "E0312",
+   "ts": 1794533400000,
+   "actor": "web",
+   "verb": "sell",
+   "groupId": "G1",
+   "posId": "P19",
+   "secid": "1.600018",
+   "name": "标的18",
+   "qty": 1000,
+   "price": 62.88,
+   "fee": 0,
+   "meta": {}
+  },
+  {
+   "id": "E0313",
+   "ts": 1794534120000,
+   "actor": "web",
+   "verb": "sell",
+   "groupId": "G1",
+   "posId": "P19",
+   "secid": "1.600018",
+   "name": "标的18",
+   "qty": 1000,
+   "price": 61.278,
+   "fee": 0,
+   "meta": {}
+  },
+  {
+   "id": "E0314",
+   "ts": 1794535598000,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P27",
+   "secid": "1.600023",
+   "name": "标的23",
+   "qty": 500,
+   "price": 30.82,
+   "fee": 0,
+   "meta": {}
+  },
+  {
+   "id": "E0315",
+   "ts": 1794536143000,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P29",
+   "secid": "0.300025",
+   "name": "标的25",
+   "qty": 2000,
+   "price": 9.88,
+   "fee": 0,
+   "meta": {}
+  },
+  {
+   "id": "E0316",
+   "ts": 1794538190000,
+   "actor": "web",
+   "verb": "sell",
+   "groupId": "G1",
+   "posId": "P21",
+   "secid": "1.600008",
+   "name": "标的8",
+   "qty": 5000,
+   "price": 4.117,
+   "fee": 0,
+   "meta": {}
+  },
+  {
+   "id": "E0317",
+   "ts": 1794550047000,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P22",
+   "secid": "1.600020",
+   "name": "标的20",
+   "qty": 10000,
+   "price": 2.656,
+   "fee": 0,
+   "meta": {}
+  },
+  {
+   "id": "E0318",
+   "ts": 1794550119000,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P21",
+   "secid": "1.600008",
+   "name": "标的8",
+   "qty": 5000,
+   "price": 4.093,
+   "fee": 0,
+   "meta": {}
+  },
+  {
+   "id": "E0319",
+   "ts": 1794550284000,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P19",
+   "secid": "1.600018",
+   "name": "标的18",
+   "qty": 1000,
+   "price": 61.808,
+   "fee": 0,
+   "meta": {}
+  },
+  {
+   "id": "E0320",
+   "ts": 1794792845000,
+   "actor": "web",
+   "verb": "sell",
+   "groupId": "G1",
+   "posId": "P28",
+   "secid": "1.600024",
+   "name": "标的24",
+   "qty": 50000,
+   "price": 0.408,
+   "fee": 0,
+   "meta": {}
+  },
+  {
+   "id": "E0321",
+   "ts": 1794793212000,
+   "actor": "web",
+   "verb": "sell",
+   "groupId": "G1",
+   "posId": "P29",
+   "secid": "0.300025",
+   "name": "标的25",
+   "qty": 2000,
+   "price": 10.07,
+   "fee": 0,
+   "meta": {}
+  },
+  {
+   "id": "E0322",
+   "ts": 1794793414000,
+   "actor": "web",
+   "verb": "sell",
+   "groupId": "G1",
+   "posId": "P27",
+   "secid": "1.600023",
+   "name": "标的23",
+   "qty": 500,
+   "price": 30.61,
+   "fee": 0,
+   "meta": {}
+  },
+  {
+   "id": "E0323",
+   "ts": 1794793467000,
+   "actor": "web",
+   "verb": "sell",
+   "groupId": "G1",
+   "posId": "P01",
+   "secid": "1.600001",
+   "name": "标的1",
+   "qty": 50000,
+   "price": 0.68,
+   "fee": 0,
+   "meta": {}
+  },
+  {
+   "id": "E0324",
+   "ts": 1794793718000,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P29",
+   "secid": "0.300025",
+   "name": "标的25",
+   "qty": 2000,
+   "price": 10.33,
+   "fee": 0,
+   "meta": {}
+  },
+  {
+   "id": "E0325",
+   "ts": 1794794261000,
+   "actor": "web",
+   "verb": "sell",
+   "groupId": "G1",
+   "posId": "P01",
+   "secid": "1.600001",
+   "name": "标的1",
+   "qty": 100000,
+   "price": 0.675,
+   "fee": 0,
+   "meta": {}
+  },
+  {
+   "id": "E0326",
+   "ts": 1794795313000,
+   "actor": "web",
+   "verb": "sell",
+   "groupId": "G1",
+   "posId": "P01",
+   "secid": "1.600001",
+   "name": "标的1",
+   "qty": 40000,
+   "price": 0.673,
+   "fee": 0,
+   "meta": {}
+  },
+  {
+   "id": "E0327",
+   "ts": 1794795400000,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P29",
+   "secid": "0.300025",
+   "name": "标的25",
+   "qty": 3000,
+   "price": 10.32,
+   "fee": 0,
+   "meta": {}
+  },
+  {
+   "id": "E0328",
+   "ts": 1794809141000,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P25",
+   "secid": "1.600004",
+   "name": "标的4",
+   "qty": 1000,
+   "price": 38.51,
+   "fee": 0,
+   "meta": {}
+  },
+  {
+   "id": "E0329",
+   "ts": 1794811890000,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P29",
+   "secid": "0.300025",
+   "name": "标的25",
+   "qty": 2000,
+   "price": 10.19,
+   "fee": 0,
+   "meta": {}
+  },
+  {
+   "id": "E0330",
+   "ts": 1794879890000,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P29",
+   "secid": "0.300025",
+   "name": "标的25",
+   "qty": 2000,
+   "price": 9.95,
+   "fee": 0,
+   "meta": {}
+  },
+  {
+   "id": "E0331",
+   "ts": 1794884412000,
+   "actor": "web",
+   "verb": "sell",
+   "groupId": "G1",
+   "posId": "P22",
+   "secid": "1.600020",
+   "name": "标的20",
+   "qty": 10000,
+   "price": 2.575,
+   "fee": 0,
+   "meta": {}
+  },
+  {
+   "id": "E0332",
+   "ts": 1794884520000,
+   "actor": "web",
+   "verb": "sell",
+   "groupId": "G1",
+   "posId": "P25",
+   "secid": "1.600004",
+   "name": "标的4",
+   "qty": 2000,
+   "price": 37.6,
+   "fee": 0,
+   "meta": {}
+  },
+  {
+   "id": "E0333",
+   "ts": 1794896534000,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P25",
+   "secid": "1.600004",
+   "name": "标的4",
+   "qty": 1000,
+   "price": 36.51,
+   "fee": 0,
+   "meta": {}
+  },
+  {
+   "id": "E0334",
+   "ts": 1794965774000,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P27",
+   "secid": "1.600023",
+   "name": "标的23",
+   "qty": 500,
+   "price": 30.54,
+   "fee": 0,
+   "meta": {}
+  },
+  {
+   "id": "E0335",
+   "ts": 1794978000000,
+   "actor": "web",
+   "verb": "sell",
+   "groupId": "G1",
+   "posId": "P01",
+   "secid": "1.600001",
+   "name": "标的1",
+   "qty": 10000,
+   "price": 0.689,
+   "fee": 0,
+   "meta": {}
+  },
+  {
+   "id": "E0336",
+   "ts": 1794979022000,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P25",
+   "secid": "1.600004",
+   "name": "标的4",
+   "qty": 1000,
+   "price": 37.17,
+   "fee": 0,
+   "meta": {}
+  },
+  {
+   "id": "E0337",
+   "ts": 1794979259000,
+   "actor": "web",
+   "verb": "sell",
+   "groupId": "G1",
+   "posId": "P25",
+   "secid": "1.600004",
+   "name": "标的4",
+   "qty": 1000,
+   "price": 37.44,
+   "fee": 0,
+   "meta": {}
+  },
+  {
+   "id": "E0338",
+   "ts": 1794980400000,
+   "actor": "web",
+   "verb": "sell",
+   "groupId": "G1",
+   "posId": "P10",
+   "secid": "1.600009",
+   "name": "标的9",
+   "qty": 2000,
+   "price": 15.97,
+   "fee": 0,
+   "meta": {}
+  },
+  {
+   "id": "E0339",
+   "ts": 1794982756000,
+   "actor": "web",
+   "verb": "sell",
+   "groupId": "G1",
+   "posId": "P19",
+   "secid": "1.600018",
+   "name": "标的18",
+   "qty": 1000,
+   "price": 57.41,
+   "fee": 0,
+   "meta": {}
+  },
+  {
+   "id": "E0340",
+   "ts": 1794984835000,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P06",
+   "secid": "1.600005",
+   "name": "标的5",
+   "qty": 2500,
+   "price": 7.71,
+   "fee": 0,
+   "meta": {}
+  },
+  {
+   "id": "E0341",
+   "ts": 1795011162429,
+   "actor": "web",
+   "verb": "remove",
+   "groupId": "G1",
+   "posId": "P26",
+   "secid": "1.600022",
+   "name": "标的22"
+  },
+  {
+   "id": "E0342",
+   "ts": 1795011173055,
+   "actor": "web",
+   "verb": "remove",
+   "groupId": "G1",
+   "posId": "P24",
+   "secid": "1.600017",
+   "name": "标的17"
+  },
+  {
+   "id": "E0343",
+   "ts": 1795011177702,
+   "actor": "web",
+   "verb": "remove",
+   "groupId": "G1",
+   "posId": "P01",
+   "secid": "1.600001",
+   "name": "标的1"
+  },
+  {
+   "id": "E0344",
+   "ts": 1795011184850,
+   "actor": "web",
+   "verb": "remove",
+   "groupId": "G1",
+   "posId": "P28",
+   "secid": "1.600024",
+   "name": "标的24"
+  },
+  {
+   "id": "E0345",
+   "ts": 1795053338683,
+   "actor": "web",
+   "verb": "sell",
+   "groupId": "G1",
+   "posId": "P19",
+   "secid": "1.600018",
+   "name": "标的18",
+   "qty": 1000,
+   "price": 60.19,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 1000
+   }
+  },
+  {
+   "id": "E0346",
+   "ts": 1795053344542,
+   "actor": "web",
+   "verb": "remove",
+   "groupId": "G1",
+   "posId": "P19",
+   "secid": "1.600018",
+   "name": "标的18"
+  },
+  {
+   "id": "E0347",
+   "ts": 1795058788101,
+   "actor": "web",
+   "verb": "sell",
+   "groupId": "G1",
+   "posId": "P25",
+   "secid": "1.600004",
+   "name": "标的4",
+   "qty": 2000,
+   "price": 37.55,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 5000
+   }
+  },
+  {
+   "id": "E0348",
+   "ts": 1795058849540,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G2",
+   "posId": "P06",
+   "secid": "1.600005",
+   "name": "标的5",
+   "qty": 2500,
+   "price": 7.71,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 7500
+   }
+  },
+  {
+   "id": "E0349",
+   "ts": 1795058899259,
+   "actor": "web",
+   "verb": "sell",
+   "groupId": "G2",
+   "posId": "P06",
+   "secid": "1.600005",
+   "name": "标的5",
+   "qty": 2500,
+   "price": 7.71,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 10000
+   }
+  },
+  {
+   "id": "E0350",
+   "ts": 1795058938099,
+   "actor": "web",
+   "verb": "adjust",
+   "groupId": "G1",
+   "posId": "P22",
+   "secid": "1.600020",
+   "name": "标的20",
+   "qty": 110000,
+   "price": 2.839,
+   "fee": 0,
+   "meta": {
+    "oldQty": 100000,
+    "oldAvg": 2.8064
+   }
+  },
+  {
+   "id": "E0351",
+   "ts": 1795138665818,
+   "actor": "web",
+   "verb": "sell",
+   "groupId": "G1",
+   "posId": "P22",
+   "secid": "1.600020",
+   "name": "标的20",
+   "qty": 10000,
+   "price": 2.412,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 110000
+   }
+  },
+  {
+   "id": "E0352",
+   "ts": 1795138770776,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G2",
+   "posId": "P06",
+   "secid": "1.600005",
+   "name": "标的5",
+   "qty": 2500,
+   "price": 7.31,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 7500
+   }
+  },
+  {
+   "id": "E0353",
+   "ts": 1795139213780,
+   "actor": "web",
+   "verb": "sell",
+   "groupId": "G1",
+   "posId": "P29",
+   "secid": "0.300025",
+   "name": "标的25",
+   "qty": 4000,
+   "price": 9.27,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 9000
+   }
+  },
+  {
+   "id": "E0354",
+   "ts": 1795139354070,
+   "actor": "web",
+   "verb": "add",
+   "groupId": "G1",
+   "posId": "P30",
+   "secid": "1.600026",
+   "name": "标的26"
+  },
+  {
+   "id": "E0355",
+   "ts": 1795139362461,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P30",
+   "secid": "1.600026",
+   "name": "标的26",
+   "qty": 200,
+   "price": 121.891,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 0
+   }
+  },
+  {
+   "id": "E0356",
+   "ts": 1795139662222,
+   "actor": "web",
+   "verb": "sell",
+   "groupId": "G1",
+   "posId": "P29",
+   "secid": "0.300025",
+   "name": "标的25",
+   "qty": 4000,
+   "price": 9.21,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 5000
+   }
+  },
+  {
+   "id": "E0357",
+   "ts": 1795139952083,
+   "actor": "web",
+   "verb": "sell",
+   "groupId": "G1",
+   "posId": "P22",
+   "secid": "1.600020",
+   "name": "标的20",
+   "qty": 50000,
+   "price": 2.383,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 100000
+   }
+  },
+  {
+   "id": "E0358",
+   "ts": 1795141746775,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P30",
+   "secid": "1.600026",
+   "name": "标的26",
+   "qty": 200,
+   "price": 121.923,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 200
+   }
+  },
+  {
+   "id": "E0359",
+   "ts": 1795144652465,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P25",
+   "secid": "1.600004",
+   "name": "标的4",
+   "qty": 1000,
+   "price": 36.07,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 3000
+   }
+  },
+  {
+   "id": "E0360",
+   "ts": 1795151313644,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P29",
+   "secid": "0.300025",
+   "name": "标的25",
+   "qty": 2000,
+   "price": 9.88,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 1000
+   }
+  },
+  {
+   "id": "E0361",
+   "ts": 1795152522136,
+   "actor": "web",
+   "verb": "add",
+   "groupId": "G1",
+   "posId": "P31",
+   "secid": "1.600011",
+   "name": "标的11"
+  },
+  {
+   "id": "E0362",
+   "ts": 1795152547950,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P31",
+   "secid": "1.600011",
+   "name": "标的11",
+   "qty": 2000,
+   "price": 9.16,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 0
+   }
+  },
+  {
+   "id": "E0363",
+   "ts": 1795156828924,
+   "actor": "web",
+   "verb": "add",
+   "groupId": "G1",
+   "posId": "P32",
+   "secid": "1.600027",
+   "name": "标的27"
+  },
+  {
+   "id": "E0364",
+   "ts": 1795157412470,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P21",
+   "secid": "1.600008",
+   "name": "标的8",
+   "qty": 10000,
+   "price": 4.022,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 95000
+   }
+  },
+  {
+   "id": "E0365",
+   "ts": 1795157443127,
+   "actor": "web",
+   "verb": "adjust",
+   "groupId": "G1",
+   "posId": "P21",
+   "secid": "1.600008",
+   "name": "标的8",
+   "qty": 110000,
+   "price": 4.232,
+   "fee": 0,
+   "meta": {
+    "oldQty": 105000,
+    "oldAvg": 4.1977
+   }
+  },
+  {
+   "id": "E0366",
+   "ts": 1795157633220,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P31",
+   "secid": "1.600011",
+   "name": "标的11",
+   "qty": 1500,
+   "price": 9.38,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 2000
+   }
+  },
+  {
+   "id": "E0367",
+   "ts": 1795400276315,
+   "actor": "web",
+   "verb": "buy",
+   "groupId": "G1",
+   "posId": "P30",
+   "secid": "1.600026",
+   "name": "标的26",
+   "qty": 200,
+   "price": 121.729,
+   "fee": 0,
+   "meta": {
+    "balanceBefore": 400
+   }
+  }
+ ],
+ "groups": [
+  {
+   "id": "G1",
+   "name": "分组1",
+   "order": 0
+  },
+  {
+   "id": "G2",
+   "name": "分组2",
+   "order": 1
+  }
+ ],
+ "items": [
+  {
+   "id": "P10",
+   "groupId": "G1",
+   "secid": "1.600009",
+   "name": "标的9",
+   "createdAt": 1
+  },
+  {
+   "id": "P01",
+   "groupId": "G1",
+   "secid": "1.600001",
+   "name": "标的1",
+   "createdAt": 2
+  },
+  {
+   "id": "P25",
+   "groupId": "G1",
+   "secid": "1.600004",
+   "name": "标的4",
+   "createdAt": 3
+  },
+  {
+   "id": "P22",
+   "groupId": "G1",
+   "secid": "1.600020",
+   "name": "标的20",
+   "createdAt": 4
+  },
+  {
+   "id": "P21",
+   "groupId": "G1",
+   "secid": "1.600008",
+   "name": "标的8",
+   "createdAt": 5
+  },
+  {
+   "id": "P19",
+   "groupId": "G1",
+   "secid": "1.600018",
+   "name": "标的18",
+   "createdAt": 6
+  },
+  {
+   "id": "P08",
+   "groupId": "G1",
+   "secid": "1.600007",
+   "name": "标的7",
+   "createdAt": 7
+  },
+  {
+   "id": "P29",
+   "groupId": "G1",
+   "secid": "0.300025",
+   "name": "标的25",
+   "createdAt": 8
+  },
+  {
+   "id": "P06",
+   "groupId": "G2",
+   "secid": "1.600005",
+   "name": "标的5",
+   "createdAt": 9
+  },
+  {
+   "id": "P12",
+   "groupId": "G1",
+   "secid": "1.600011",
+   "name": "标的11",
+   "createdAt": 10
+  }
+ ]
+}

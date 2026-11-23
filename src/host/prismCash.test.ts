@@ -115,7 +115,9 @@ test('⑤ 源码：GET 分支不得 saveAccount / 重算 cash / 自动复制（�
   const end = src.indexOf("if (req.method !== 'POST')", start)
   const get = src.slice(start, end)
   assert.equal(/saveAccount|ensureAccount|copyAtCost/.test(get), false)
-  const injected = get.replace('await recordEquity(deps)', "await deps.trading.saveAccount({ ...deps.trading.account(), cash: 1 })")
+  // 注入锚点跟随实现（P2-7：recordEquity 现在复用 GET 已取的行情并接收 now）
+  const anchor = 'await recordEquity(deps, Date.now(), quotes)'
+  const injected = get.replace(anchor, "await deps.trading.saveAccount({ ...deps.trading.account(), cash: 1 })")
   assert.notEqual(injected, get)
   assert.throws(() => assert.equal(/saveAccount|ensureAccount|copyAtCost/.test(injected), false, '注入：GET 写 account'), /注入/)
 })

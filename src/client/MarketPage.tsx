@@ -1,13 +1,13 @@
 /** A股大盘行情: index overview + breadth/amount stats, sector & ETF boards,
  *  money-flow ranking (boards sorted by main-capital inflow), stock search
  *  with detail card + intraday chart. */
-import React, { useCallback, useEffect, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import type { BoardRow, QuoteRow, StockDetail, TrendData } from '../shared/model.ts'
 import { api } from './api.ts'
 import { DW_FOOTNOTE, dwKpis, dwReview, dwSeries, dwTable } from './dogwatchView.ts'
-import { MINUTE_BARS, missingCellText } from './marketBlocks.ts'
+import { MINUTE_BARS, missingCellText, sharePctOf, sortRowsByShare } from './marketBlocks.ts'
 import { UPDOWN_MISSING_NOTE, upDownPair } from './breadthView.ts'
-import { dirClass, fmtAmt, fmtBig, fmtPct, fmtPrice, fmtSigned } from './format.ts'
+import { dirClass, fmtAmt, fmtBig, fmtFixedPct, fmtPct, fmtPrice, fmtSigned } from './format.ts'
 import { CN_PHASE_LABEL, cnSessionState, shClockText } from './marketTime.ts'
 import { useNow } from './useNow.ts'
 import { Btn, EmptyHint, ErrorNote, Modal } from './ui.tsx'
@@ -180,23 +180,17 @@ export function MarketPage(props: {
   // 交易时段状态（P1-7）：「定稿」标记必须随墙上时钟更新，否则收盘后要等下一次交互才变
   const now = useNow(60_000)
   const cnSession = cnSessionState(now)
-  /** 净占比（%）= 主力净额 ÷ 成交额；任一项缺失即 null（不拿 0 顶替） */
-  const shareOf = (r: BoardRow): number | null =>
-    r.money === null || r.amount === null || r.amount === 0 ? null : (r.money / r.amount) * 100
   /**
    * 展示顺序（P1-7）：`share` 时**只在本页内重排**，且缺失占比的行沉底。
    * 绝不动上游分页 —— 否则会把"本页重排"和"全市场排行"混为一谈。
+   *
+   * AUDIT-CLIENT-PERF P2-14：排序放进 `useMemo`，同一份 rows / 同一口径不重复排；
+   * 旧写法在 render 体里 `[...rows].sort(...)`，页面每分钟（以及任何父级重渲）都白排 40 行。
    */
-  const viewRows = moneySort === 'share' && sort === 'money' && scope !== 'etf'
-    ? [...rows].sort((a, b) => {
-        const sa = shareOf(a)
-        const sb = shareOf(b)
-        if (sa === null && sb === null) return 0
-        if (sa === null) return 1
-        if (sb === null) return -1
-        return sb - sa
-      })
-    : rows
+  const viewRows = useMemo(
+    () => (moneySort === 'share' && sort === 'money' && scope !== 'etf' ? sortRowsByShare(rows) : rows),
+    [rows, moneySort, sort, scope],
+  )
   const [pick, setPick] = useState<{ secid: string } | null>(null)
   const [detail, setDetail] = useState<StockDetail | null>(null)
   const [trend, setTrend] = useState<TrendData | null>(null)
@@ -594,7 +588,7 @@ export function MarketPage(props: {
                 React.createElement('td', { className: cls }, scope === 'etf' ? `${fmtPrice(r.price)} ${fmtSigned(r.chg)}` : fmtSigned(r.chg)),
                 React.createElement('td', null, React.createElement('span', { className: `tw-chg-chip ${r.pct === null ? 'tw-chip-flat' : (r.pct >= 0) === redUp ? 'tw-chip-up' : 'tw-chip-down'}` }, fmtPct(r.pct ?? null))),
                 scope === 'etf'
-                  ? [React.createElement('td', { key: 'a' }, fmtAmt(r.amount ?? null)), React.createElement('td', { key: 't' }, r.turnover !== null && r.turnover !== undefined ? `${r.turnover.toFixed(2)}%` : '—')]
+                  ? [React.createElement('td', { key: 'a' }, fmtAmt(r.amount ?? null)), React.createElement('td', { key: 't' }, fmtFixedPct(r.turnover))]
                   : [
                       React.createElement('td', { key: 'u', className: 'tw-dim' },
                         upDownPair(r.up, r.down).ok
@@ -610,9 +604,9 @@ export function MarketPage(props: {
                       moneySort === 'share'
                         ? React.createElement('td', {
                             key: 's',
-                            className: dirClass(shareOf(r), redUp),
-                            title: shareOf(r) === null ? '净占比不可算：缺主力净额或成交额' : `${fmtAmt(r.money ?? null)} ÷ ${fmtAmt(r.amount ?? null)}`,
-                          }, shareOf(r) === null ? '—' : `${shareOf(r)!.toFixed(2)}%`)
+                            className: dirClass(sharePctOf(r), redUp),
+                            title: sharePctOf(r) === null ? '净占比不可算：缺主力净额或成交额' : `${fmtAmt(r.money ?? null)} ÷ ${fmtAmt(r.amount ?? null)}`,
+                          }, fmtFixedPct(sharePctOf(r)))
                         : null,
                     ],
               )

@@ -59,6 +59,21 @@ export function fmtAmt(n: number | null | undefined): string {
   return n.toFixed(2)
 }
 
+/**
+ * 纯小数（不缩写、不带符号、不带单位）：`12.34`；缺失或非有限值 ⇒ `—`（AUDIT-CLIENT-PERF P2-16）。
+ * 用于散落的 `toFixed` 脱出口：先 `Number.isFinite` 判空，绝不让 `NaN` / `Infinity` 落屏。
+ */
+export function fmtFixed(n: number | null | undefined, digits = 2): string {
+  if (n === null || n === undefined || !Number.isFinite(n)) return '—'
+  return n.toFixed(digits)
+}
+
+/** 纯百分比（不带方向箭头）：`12.34%`；缺失或非有限值 ⇒ `—`（P2-16） */
+export function fmtFixedPct(n: number | null | undefined, digits = 2): string {
+  if (n === null || n === undefined || !Number.isFinite(n)) return '—'
+  return `${n.toFixed(digits)}%`
+}
+
 /** 精确到分的金额（不做亿/万缩写）：同样受隐身模式影响 */
 export function fmtRaw(n: number | null | undefined, digits = 2): string {
   if (n === null || n === undefined || !Number.isFinite(n)) return '—'

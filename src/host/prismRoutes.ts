@@ -37,6 +37,10 @@ export interface PrismRouteDeps {
   quotes?: typeof fetchQuotes
   /** 测试注入时钟（run 触发/下单边界用） */
   now?: () => number
+  /** 测试注入行业归属取数；缺省走既有 `fetchIndustryOverview`（不新增源） */
+  industry?: typeof fetchIndustryOverview
+  /** 测试注入基准 K 线（净值点的 benchmarkClose）；缺省走既有 `fetchKline`（不新增源） */
+  kline?: typeof fetchKline
 }
 
 const send = (res: ServerResponse, status: number, body: unknown): void => {
@@ -84,9 +88,32 @@ export function accountSnapshotOf(
   ].join('\n')
 }
 
-const industryDataOf = async (secids: string[]): Promise<{ map: Record<string, { name: string; pct: number | null }>; reason?: string }> => {
+export interface IndustryData {
+  map: Record<string, { name: string; pct: number | null }>
+  reason?: string
+}
+
+/** 行业归属缓存 TTL：10 分钟（与上游 `industry-name` 的 600 s 同名口径） */
+const INDUSTRY_TTL_MS = 10 * 60_000
+/**
+ * 取失败（`reason` 非空）只缓存 60 s：上游恢复后能尽快自愈，又不会因为每 30 s 一次 GET
+ * 把 N+1 行业请求打成"持续连发"。
+ */
+const INDUSTRY_FAIL_TTL_MS = 60_000
+
+/**
+ * 按「持仓 secid 集合」缓存行业归属（P2-7）：同一集合在 TTL 内直接用上次结果。
+ *
+ * 用 `WeakMap` 挂在 `deps` 上（每个路由实例一份）—— 不放模块级：那样测试与
+ * 多个插件实例会互相污染。集合变了（加/减仓）⇒ 键变了 ⇒ 必重新取。
+ */
+const industryCacheOf = new WeakMap<PrismRouteDeps, { key: string; exp: number; value: IndustryData }>()
+
+const industryKeyOf = (secids: readonly string[]): string => [...new Set(secids)].sort().join(',')
+
+const fetchIndustryData = async (deps: PrismRouteDeps, secids: string[]): Promise<IndustryData> => {
   try {
-    const map = await fetchIndustryOverview(secids)
+    const map = await (deps.industry ?? fetchIndustryOverview)(secids)
     if (needsIndustryOf(secids.map((secid) => ({ secid }))) && Object.keys(map).length === 0) {
       return { map, reason: '行业归属接口未返回 f127（东财可能限流/熔断；本次记未穿透）' }
     }
@@ -94,6 +121,17 @@ const industryDataOf = async (secids: string[]): Promise<{ map: Record<string, {
   } catch (error) {
     return { map: {}, reason: `行业归属 f127 取数失败（东财限流/熔断或网络不可达）：${String(error).slice(0, 80)}` }
   }
+}
+
+const industryDataOf = async (deps: PrismRouteDeps, secids: string[]): Promise<IndustryData> => {
+  const key = industryKeyOf(secids)
+  const hit = industryCacheOf.get(deps)
+  const now = Date.now()
+  if (hit !== undefined && hit.key === key && now < hit.exp) return hit.value
+  const value = await fetchIndustryData(deps, secids)
+  const ttl = value.reason === undefined ? INDUSTRY_TTL_MS : INDUSTRY_FAIL_TTL_MS
+  industryCacheOf.set(deps, { key, exp: now + ttl, value })
+  return value
 }
 
 /** 一条「今日已被风控拒绝」的委托（提示词与去重闸共用） */
@@ -221,7 +259,7 @@ export const prismInputsOf = async (deps: PrismRouteDeps): Promise<PrismInputs> 
     ? '—'
     : pending.map((o) => `${o.id} ${o.side === 'buy' ? '买' : '卖'} ${o.name} ${o.shares}@${o.price}`).join('\n')
   const news = deps.store.news().items.slice().sort((a, b) => (a.time < b.time ? 1 : -1))
-  const industryData = await industryDataOf(account.positions.map((p) => p.secid))
+  const industryData = await industryDataOf(deps, account.positions.map((p) => p.secid))
   const exposure = industryExposureOf(account, accountPrices, industryData.map, deps.store.settings().industryLimits ?? {}, industryData.reason)
   const exposureText = exposure.state === 'unavailable'
     ? `—（${exposure.reason ?? '行业归属不可用'}）`
@@ -271,22 +309,36 @@ const copyRowsOf = async (deps: PrismRouteDeps): Promise<Array<{ secid: string; 
   return view.positions.filter((p) => p.qty > 0).map((p) => ({ secid: p.secid, name: p.name, qty: p.qty, cost: p.dilutedCost ?? p.avgCost }))
 }
 
-/** 每天一个净值点（缺价按成本）；GET/研判/复制后都写，同日覆盖 */
-const recordEquity = async (deps: PrismRouteDeps, now = Date.now()): Promise<void> => {
+/**
+ * 每天一个净值点（缺价按成本）；同日覆盖。
+ *
+ * P2-7：**只有净值点真的变了才写盘** —— 同日最新点的 `cash`/`equity` 与本次相同就跳过
+ * （页面每 30 s 一次 GET，旧实现每次都是一次 2.8 KB 原子写 + 一次基准 K 线取数）。
+ * 跨日（或还没有任何点）必写。返回 `true` = 真的落盘。
+ *
+ * `quotes` 可由调用方传入（GET 本来就要取同一份行情，别取两次）；缺省自己取。
+ */
+const recordEquity = async (deps: PrismRouteDeps, now = Date.now(), quotesGiven?: Record<string, QuoteLite>): Promise<boolean> => {
   const account = deps.trading.account()
-  const quotes = await quoteLiteOf(deps, account.positions.map((p) => p.secid)).catch(() => ({}))
+  const before = deps.trading.equity()
+  const last = before.at(-1) ?? null
+  const quotes = quotesGiven ?? (await quoteLiteOf(deps, account.positions.map((p) => p.secid)).catch(() => ({})))
+  const priceOf = (secid: string): number | null => quotes[secid]?.price ?? null
+  // 先用**不含基准**的净值判断要不要写：跳过时连基准 K 线都不用取
+  const probe = equityPointOf(account, priceOf, now, null)
+  if (last !== null && last.day === probe.day && last.cash === probe.cash && last.equity === probe.equity) return false
   let benchmarkClose: number | null = null
   try {
-    const k = await fetchKline('1.000300', 101, 1)
-    const last = k?.days.at(-1)?.close
-    benchmarkClose = typeof last === 'number' && Number.isFinite(last) ? last : null
+    const k = await (deps.kline ?? fetchKline)('1.000300', 101, 1)
+    const close = k?.days.at(-1)?.close
+    benchmarkClose = typeof close === 'number' && Number.isFinite(close) ? close : null
   } catch { benchmarkClose = null }
-  const before = deps.trading.equity()
+  const point = equityPointOf(account, priceOf, now, benchmarkClose)
   const warning = dayStartMismatchOf(account, before)
   if (warning !== null) console.warn(`[tradewatcher] 棱镜净值口径告警：${warning}`)
-  const point = equityPointOf(account, (secid) => quotes[secid]?.price ?? null, now, benchmarkClose)
   if (warning !== null) point.warnings = [warning]
   await deps.trading.saveEquity(upsertEquity(before, point))
+  return true
 }
 
 interface ModelCatalog {
@@ -465,14 +517,15 @@ export function makePrismRoutes(deps: PrismRouteDeps): PluginWebRoute[] {
             return
           }
           kickNews(store)
-          await recordEquity(deps)
           const account = deps.trading.account()
           const settings = store.settings()
           const accountView = { ...account, capital: settings.capital ?? account.capital ?? account.capitalLimit }
           const quotes = await quoteLiteOf(deps, accountView.positions.map((p) => p.secid)).catch(() => ({}))
+          // P2-7：复用同一份行情判断净值点是否变化 —— 没变就 0 次写盘、0 次基准 K 线取数
+          await recordEquity(deps, Date.now(), quotes)
           const prices: Record<string, number | null> = {}
           for (const p of accountView.positions) prices[p.secid] = quotes[p.secid]?.price ?? null
-          const industryData = await industryDataOf(accountView.positions.map((p) => p.secid))
+          const industryData = await industryDataOf(deps, accountView.positions.map((p) => p.secid))
           let exposure
           try {
             const latestIndustry = store.runs().at(-1)?.decision?.limits.byIndustry

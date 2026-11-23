@@ -18,7 +18,7 @@ import { LEDGER_VERB_LABEL, DEFAULT_PREFS, realizedUnknownNote, realizedUnknownQ
 import { availableLockNote, feeShareNote, ytdBaseNote } from './portfolioMeta.ts'
 import { api } from './api.ts'
 import type { DayTradeView } from './api.ts'
-import { fmtStamp, dirClass, fmtAmt, fmtMoneySigned, fmtPct, fmtPrice, fmtRaw } from './format.ts'
+import { fmtStamp, dirClass, fmtAmt, fmtFixedPct, fmtMoneySigned, fmtPct, fmtPrice, fmtRaw } from './format.ts'
 import { Btn, EmptyHint, ErrorNote, Field, Modal, MoreMenu, Skeleton, SuggestInput } from './ui.tsx'
 import { BulkPaste } from './BulkPaste.tsx'
 import { MiniTrend } from './charts.tsx'
@@ -1187,7 +1187,7 @@ function PosRow(props: {
     ),
     React.createElement('div', { className: 'tw-pos-grid' },
       pps('市值', React.createElement('span', null, fmtAmt(row.mv)),
-        `占比 ${props.weight === null ? '—' : (props.weight * 100).toFixed(2) + '%'} · 成本 ${
+        `占比 ${props.weight === null ? '—' : fmtFixedPct(props.weight * 100)} · 成本 ${
           row.costUnknown === true ? '—（未录入）' : fmtPrice(showCost)
         }`),
       pps(diluted ? '持仓盈亏' : '浮动盈亏',

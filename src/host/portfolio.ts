@@ -28,7 +28,7 @@ const MARKET_LABEL: Record<Market, string> = {
   futures: '期货/商品',
   unknown: '未知市场',
 }
-import { replayPosition, replayPositionWithSkips, type TradeState, sortLedger } from './store.ts'
+import { applyLedgerEntry, sortLedger, type SkippedLedgerEntry, type TradeState } from './store.ts'
 import { shanghaiDayStart as shDayStart } from './time.ts'
 import { compositionOf } from './composition.ts'
 
@@ -59,32 +59,26 @@ interface LedgerSlice {
   start: TradeState
 }
 
+const zeroState = (): TradeState => ({ qty: 0, avgCost: 0, netCost: 0, realized: 0, fees: 0, turnover: 0, realizedUnknownQty: 0 })
+const cloneState = (s: TradeState): TradeState => ({
+  qty: s.qty, avgCost: s.avgCost, netCost: s.netCost, realized: s.realized, fees: s.fees, turnover: s.turnover, realizedUnknownQty: s.realizedUnknownQty,
+})
+
 /**
- * 当日切片。
+ * 请求内**一次遍历**按 posId 分桶（P2-1）。
  *
- * ⚠ H3：`dayTrades`/`dayFees` 只统计**实际被 replay 应用**的流水（`appliedIds`）——
- * 旧实现拿原始流水算，于是被跳过的卖出照样进 `dayPnl`（`qty=0` + `dayPnl=-50` 自相矛盾）。
+ * 旧实现对每个持仓把全表扫三遍（replay + slice + replay(pre)），O(P×E)；
+ * 分组后每仓只碰自己的 entries，O(E + ΣE_p)。
  */
-function slicePosition(entries: readonly LedgerEntry[], posId: string, dayStart: number, appliedIds: ReadonlySet<string>): LedgerSlice {
-  const slice: LedgerSlice = { entries: [], dayTrades: [], dayFees: 0, start: { qty: 0, avgCost: 0, netCost: 0, realized: 0, fees: 0, turnover: 0, realizedUnknownQty: 0 } }
-  const pre: LedgerEntry[] = []
+export function groupLedgerByPos(entries: readonly LedgerEntry[]): Map<string, LedgerEntry[]> {
+  const byPos = new Map<string, LedgerEntry[]>()
   for (const e of entries) {
-    if (e.posId !== posId) continue
-    if (e.verb !== 'buy' && e.verb !== 'sell' && e.verb !== 'adjust') continue
-    slice.entries.push(e)
-    if (e.ts < dayStart) {
-      pre.push(e)
-    } else if (e.verb === 'buy' || e.verb === 'sell') {
-      // 被跳过的流水既不算进 qty/realized，也不许算进当日盈亏/当日费用（同一行口径必须自洽）
-      if (!appliedIds.has(e.id)) continue
-      if (typeof e.qty === 'number' && typeof e.price === 'number') {
-        slice.dayTrades.push({ verb: e.verb, qty: e.qty, price: e.price, fee: typeof e.fee === 'number' ? e.fee : 0 })
-        slice.dayFees += typeof e.fee === 'number' ? e.fee : 0
-      }
-    }
+    if (e.posId === undefined) continue
+    const list = byPos.get(e.posId)
+    if (list === undefined) byPos.set(e.posId, [e])
+    else list.push(e)
   }
-  slice.start = replayPosition(pre, posId)
-  return slice
+  return byPos
 }
 
 /** Exact per-trade day P&L: (now−prevClose)·startQty + Σ buy (now−price) − fees… */
@@ -103,23 +97,71 @@ function dayPnlOf(slice: LedgerSlice, now: number | null, prev: number | null): 
   return round2(total)
 }
 
-/** One position row with live quote fields merged. */
+/**
+ * One position row with live quote fields merged（全表入口，保留给直接调用方）。
+ *
+ * 请求内的批量路径走 `derivePositionOf`（调用方已按 posId 分桶，见 `groupLedgerByPos`）。
+ */
 export function derivePosition(
   entries: readonly LedgerEntry[],
   pos: PortItem,
   quote: QuoteRow | undefined,
   dayStart: number,
 ): PositionRow {
-  const { state: total, skipped, appliedIds } = replayPositionWithSkips(entries, pos.id)
-  const slice = slicePosition(entries, pos.id, dayStart, appliedIds)
+  const own: LedgerEntry[] = []
+  for (const e of entries) if (e.posId === pos.id) own.push(e)
+  return derivePositionOf(own, pos, quote, dayStart)
+}
+
+/**
+ * **单遍**重放 + 当日切片（P2-1 核心）。
+ *
+ * 前提：`own` 只含该仓流水，且按 `(ts, id)` 升序（`sortLedger` 的规范口径）。
+ * `slice.start` 在跨过当日 00:00（Asia/Shanghai）那条流水时快照 —— 与旧实现
+ * `replayPosition(pre)` 逐字段等价，但不再对同一仓重放第二、三遍。
+ *
+ * ⚠ H3：`dayTrades`/`dayFees` 只统计**实际被 replay 应用**的流水 ——
+ * 旧实现拿原始流水算，于是被跳过的卖出照样进 `dayPnl`（`qty=0` + `dayPnl=-50` 自相矛盾）。
+ */
+function derivePositionOf(
+  own: readonly LedgerEntry[],
+  pos: PortItem,
+  quote: QuoteRow | undefined,
+  dayStart: number,
+): PositionRow {
+  const total = zeroState()
+  const skipped: SkippedLedgerEntry[] = []
+  const slice: LedgerSlice = { entries: [], dayTrades: [], dayFees: 0, start: zeroState() }
+  let startCaptured = false
+  /**
+   * 成本是否录入过（D1）：
+   *   - 不能用 `turnover<=0` 表达"从未真的买卖过"：**卖出同样产生成交额**。
+   *   - 也不能只看 `avgCost<=0`：手工改过的流水里可能出现 price=0 的买入。
+   * 与 `hasPricedCostEntry()` 同一判据（买入 / price>0 的调整），顺手在同一次遍历里算掉。
+   */
+  let costAmountRecorded = false
+  for (const e of own) {
+    if (!startCaptured && e.ts >= dayStart) {
+      slice.start = cloneState(total)
+      startCaptured = true
+    }
+    if (e.verb !== 'buy' && e.verb !== 'sell' && e.verb !== 'adjust') continue
+    slice.entries.push(e)
+    if ((e.verb === 'buy' || e.verb === 'adjust') && isFiniteNumber(e.price) && e.price > 0) costAmountRecorded = true
+    const problem = applyLedgerEntry(total, e)
+    if (problem !== null) {
+      skipped.push(problem)
+      continue
+    }
+    if (e.ts >= dayStart && (e.verb === 'buy' || e.verb === 'sell') && typeof e.qty === 'number' && typeof e.price === 'number') {
+      slice.dayTrades.push({ verb: e.verb, qty: e.qty, price: e.price, fee: typeof e.fee === 'number' ? e.fee : 0 })
+      slice.dayFees += typeof e.fee === 'number' ? e.fee : 0
+    }
+  }
+  if (!startCaptured) slice.start = cloneState(total)
   const price = quote?.price ?? null
   const prev = quote?.prev ?? null
   const mv = price !== null ? round2(price * total.qty) : total.qty > 0 ? null : 0
-  /**
-   *   - 不能用 `turnover<=0` 表达"从未真的买卖过"：**卖出同样产生成交额**。
-   *   - 也不能只看 `avgCost<=0`：手工改过的流水里可能出现 price=0 的买入。
-   */
-  const costAmountRecorded = hasPricedCostEntry(entries, pos.id)
   const costUnknown = !costAmountRecorded && total.avgCost <= 0 && (total.qty > 1e-9 || total.realizedUnknownQty > 1e-9)
   const floatPnl = costUnknown || price === null ? (total.qty > 0 ? null : 0) : round2((price - total.avgCost) * total.qty)
   const dayPnl = dayPnlOf(slice, price, prev)
@@ -274,9 +316,11 @@ export function assemblePortfolio(
     if (e.verb !== 'buy' || typeof e.fee !== 'number') continue
     buyFeeByPos.set(e.posId, (buyFeeByPos.get(e.posId) ?? 0) + e.fee)
   }
+  // P2-1：一次分组，每仓只重放自己的流水（旧实现是每仓扫全表三遍 ⇒ O(P×E)）
+  const byPos = groupLedgerByPos(sorted)
   const positions: PositionRow[] = []
   for (const p of items) {
-    const row = derivePosition(sorted, p, quotes[p.secid], dayStart)
+    const row = derivePositionOf(byPos.get(p.id) ?? [], p, quotes[p.secid], dayStart)
     const fee = buyFeeByPos.get(p.id)
     if (fee !== undefined && fee > 0) {
       // 数量 0 ⇒ 不给数（`null`），界面显示 —：除以 0 会得到 Infinity，那是**错的数**

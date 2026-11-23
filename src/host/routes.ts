@@ -336,20 +336,42 @@ async function portfolioWithQuotes(store: DataStore): Promise<{ view: unknown; s
   return { view, stale }
 }
 
+/** 6 位 A股代码（仅 0/1 市场；财报/分红数据源只认 6 位） */
+function code6Of(secid: string): string | null {
+  const m = /^(\d{1,3})\.([A-Za-z0-9]+)$/.exec(secid)
+  if (m === null) return null
+  return m[1] === '0' || m[1] === '1' ? m[2] : null
+}
+
+export interface FocusSets {
+  /** 自选 + 持仓的 6 位代码（插入序：先自选后持仓，与旧 `focusCodes` 一致） */
+  codes: string[]
+  /** 有持仓的代码（P1-10 的勾稽要区分"有持仓"与"仅自选"） */
+  held: Set<string>
+  /** 自选或持仓的代码 */
+  watched: Set<string>
+}
+
 /**
- * 自选 + 持仓标的 → 6 位代码（仅 A股，供财报/分红数据源过滤）。
- * `heldOnly` 为真时只取持仓（P1-10 的勾稽要区分"有持仓"与"仅自选"）。
+ * 自选 + 持仓 → 6 位代码的三个视图，**一次遍历算完**（P2-2）。
+ *
+ * 旧实现在 `/calendar` 里把 `focusCodes` 调 3 次，每次都走 `watchData()`/`portData()`，
+ * 于是单次 GET 要克隆 6 份全量数据。现在每组数据各读一次。
  */
-function focusCodes(store: DataStore, heldOnly = false): string[] {
-  const codes = new Set<string>()
-  const push = (secid: string): void => {
-    const m = /^(\d{1,3})\.([A-Za-z0-9]+)$/.exec(secid)
-    if (m === null) return
-    if (m[1] === '0' || m[1] === '1') codes.add(m[2])
+export function focusSets(store: DataStore): FocusSets {
+  const watched = new Set<string>()
+  for (const it of store.watchData().items) {
+    const c = code6Of(it.secid)
+    if (c !== null) watched.add(c)
   }
-  if (!heldOnly) for (const it of store.watchData().items) push(it.secid)
-  for (const it of store.portData().items) push(it.secid)
-  return [...codes]
+  const held = new Set<string>()
+  for (const it of store.portData().items) {
+    const c = code6Of(it.secid)
+    if (c === null) continue
+    held.add(c)
+    watched.add(c)
+  }
+  return { codes: [...watched], held, watched }
 }
 
 /**
@@ -1619,7 +1641,8 @@ export function makeTradeRoutes(
             const from = String(p.get('from') ?? calToday(-45))
             const to = String(p.get('to') ?? calToday(400))
             if (!/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to)) throw new HttpError('from/to 应为 YYYY-MM-DD', 400)
-            const codes = focusCodes(store)
+            const focus = focusSets(store)
+            const codes = focus.codes
             if (p.get('sync') !== '0') {
               try {
                 await calendar.sync(codes, p.get('force') === '1')
@@ -1631,8 +1654,8 @@ export function makeTradeRoutes(
             }
  // 勾稽：持仓（实心）/ 仅自选（空心）/ 无关，三种由宿主判定
             // 避免客户端自己拿两份数据拼（那样两处会不一致）
-            const heldSet = new Set(focusCodes(store, true))
-            const watchSet = new Set(focusCodes(store, false))
+            const heldSet = focus.held
+            const watchSet = focus.watched
             const events = calendar.list(from, to).map((e) => {
               const code = symbolCode(e.symbol)
               if (code === null) return e

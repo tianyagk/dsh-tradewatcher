@@ -11,6 +11,31 @@
 
 ---
 
+## v0.217.0 — P2 收尾第二批：/prism GET 重活 + portfolio O(P×E) + 客户端 4 条
+
+`npm run check` **1890 / 1890 × 2 时区**（1870 → 1890）+ build（73 项）+ `tsc` 0。
+
+### 宿主
+
+| # | 问题 | 修法 | 量化 |
+| --- | --- | --- | --- |
+| P2-7 | `/prism` GET 每 30s 做重活：equity 原子写（2 880 次/日）+ 读 195KB orders + 行业 N+1 | equity 只在净值点变化/跨日写；orders 用 mtime+size 缓存；行业数据按持仓集合 + 10 分钟 TTL | 同数据连 5 次 GET：**写 0、读盘 0、行业请求 0**；数据变化各触发 1 次 |
+| P2-1 | `assemblePortfolio` 每仓全表扫三遍，O(P×E) | 请求内一次遍历按 `posId` 分组，每仓只重放自己的流水 | 100 持仓 × 5 000 条：**47.66ms → 7.29ms**；与旧实现逐字段 deepEqual |
+| P2-2 | `watchData/portData` 深拷贝 + `focusCodes` 一次请求调 3 次 | 浅拷贝视图 + `focusSets` 一次算完两个集合 | `/calendar` 的 watch 2→1、port 3→1 次 |
+
+### 客户端
+
+| # | 问题 | 修法 | 量化 |
+| --- | --- | --- | --- |
+| P2-3 | 1s 路径未 memo 的派生；`fillMarksOf` 全量 filter+sort 只为末 2 条 | 四处 `useMemo` + 倒序扫描取末 2 条 | 20 万条成交读取元素 **20 000 → 3** |
+| P2-12 | 日历「今天」只在渲染时算一次，跨零点不更新 | `useNow(60_000)` 派生 `shToday(now)` | 23:59→00:01：`today` 翻转、`is-today` 翻转、`upcoming` 3→2 条 |
+| P2-14 | `viewRows` 每次渲染 `[...rows].sort()` | `useMemo([rows,moneySort,sort,scope])`，key 用 `r.code` | 同输入再渲染比较器 **160 → 0 次** |
+| P2-16 | 四处裸 `toFixed` 对 NaN/Infinity 输出 `NaN`/`Infinity` | 新增 `fmtFixed/fmtFixedPct`（`Number.isFinite` → `—`） | 四处 `NaN/±Infinity` 全部 `—` |
+
+### 验证
+
+`npm run check` **1890 / 1890 × 2 时区** + build（73 项）+ `tsc` 0；新增 `portfolioPerf`（4）、`prismGetPerf`（2）、`storePerf`（3）、`clientPerfP3`（11）测试。
+
 ## v0.216.0 — 低效专项第二批：rescue-log 分片 + 客户端 8 条 P2
 
 `npm run check` **1870 / 1870 × 2 时区**（1848 → 1870）+ build（73 项）+ `tsc` 0。

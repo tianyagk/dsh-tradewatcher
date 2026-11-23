@@ -291,29 +291,55 @@ export interface ReplayResult {
  * 但这一次会被记进 `skipped`，由工具与界面如实报出。
  */
 export function replayPositionWithSkips(entries: readonly LedgerEntry[], posId: string): ReplayResult {
+  const own: LedgerEntry[] = []
+  for (const e of entries) if (e.posId === posId) own.push(e)
+  return replayEntriesWithSkips(own)
+}
+
+/**
+ * 重放**某一仓自己的**流水（调用方已完成按 posId 分桶）。
+ *
+ * 与 `replayPositionWithSkips(entries, posId)` 逐字段等价，只是不再按 posId 过滤 ⇒
+ * 展示层可以在请求内一次分组、每仓只走自己的 entries（P2-1）。
+ */
+export function replayEntriesWithSkips(entries: readonly LedgerEntry[]): ReplayResult {
   const state: TradeState = { qty: 0, avgCost: 0, netCost: 0, realized: 0, fees: 0, turnover: 0, realizedUnknownQty: 0 }
   const skipped: SkippedLedgerEntry[] = []
   const appliedIds = new Set<string>()
   for (const e of entries) {
-    if (e.posId !== posId) continue
     if (e.verb !== 'buy' && e.verb !== 'sell' && e.verb !== 'adjust') continue
-    const qty = e.qty
-    const price = e.price
-    if (!isFiniteNumber(qty) || !isFiniteNumber(price)) {
-      skipped.push({ id: e.id, verb: e.verb, reason: '流水缺少数量或价格（必须是有限数值）' })
-      continue
-    }
-    const fee = isFiniteNumber(e.fee) ? e.fee : 0
-    try {
-      applyTrade(state, e.verb, qty, price, fee)
-      appliedIds.add(e.id)
-    } catch (error) {
-      // Malformed/out-of-order history must never break the snapshot: keep
-      // prior state (the entry remains visible in the ledger for audit).
-      skipped.push({ id: e.id, verb: e.verb, reason: error instanceof Error ? error.message : String(error) })
-    }
+    const problem = applyLedgerEntry(state, e)
+    if (problem === null) appliedIds.add(e.id)
+    else skipped.push(problem)
   }
   return { state, skipped, appliedIds }
+}
+
+/**
+ * 试应用一条流水：坏流水**不抛**，返回未应用的原因（null = 已应用）。
+ *
+ * 单一实现：`replayEntriesWithSkips` 与 `portfolio.ts` 的单遍切片共用它，
+ * 避免"重放一套、切片另一套"把跳过口径分叉。
+ * 非交易类流水（add/remove/分组操作）返回未应用原因，调用方应先行过滤。
+ */
+export function applyLedgerEntry(state: TradeState, e: LedgerEntry): SkippedLedgerEntry | null {
+  if (e.verb !== 'buy' && e.verb !== 'sell' && e.verb !== 'adjust') {
+    return { id: e.id, verb: e.verb, reason: '非交易类流水（不参与持仓重放）' }
+  }
+  const qty = e.qty
+  const price = e.price
+  if (!isFiniteNumber(qty) || !isFiniteNumber(price)) {
+    return { id: e.id, verb: e.verb, reason: '流水缺少数量或价格（必须是有限数值）' }
+  }
+  const fee = isFiniteNumber(e.fee) ? e.fee : 0
+  try {
+    applyTrade(state, e.verb, qty, price, fee)
+    return null
+  } catch (error) {
+    // Malformed/out-of-order history must never break the snapshot: keep
+    // prior state (the entry remains visible in the ledger for audit).
+    return { id: e.id, verb: e.verb, reason: error instanceof Error ? error.message : String(error) }
+  }
 }
 
 /** Replay one position's whole ledger into accounting state（只要状态，忽略跳过明细） */
@@ -744,12 +770,22 @@ export class DataStore {
     }
   }
 
+  /**
+   * 自选数据视图（P2-2）。
+   *
+   * **浅拷贝契约**：groups 数组与 items 逐项都是新对象（一层隔离），但契约要求调用方
+   * 只读 —— 修改返回值的**字段**不会影响内部状态，给返回值挂新的嵌套对象也不会。
+   * 旧实现是 `JSON.parse(JSON.stringify(...))` 深拷贝：每次 `/calendar` 之类要克隆
+   * 6 份全量数据，纯浪费；条目本身是扁平结构（无嵌套对象/数组），浅拷贝的隔离边界
+   * 与深拷贝相同。
+   */
   watchData(): WatchData {
-    return JSON.parse(JSON.stringify({ groups: this.watch.groups, items: this.watch.items }))
+    return { groups: this.watch.groups.map((g) => ({ ...g })), items: this.watch.items.map((it) => ({ ...it })) }
   }
 
+  /** 持仓数据视图（P2-2）：浅拷贝契约同 `watchData()` */
   portData(): { groups: PortGroup[]; items: PortItem[] } {
-    return JSON.parse(JSON.stringify(this.port))
+    return { groups: this.port.groups.map((g) => ({ ...g })), items: this.port.items.map((it) => ({ ...it })) }
   }
 
   ledgerEntries(): LedgerEntry[] {

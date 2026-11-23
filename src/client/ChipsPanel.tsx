@@ -12,6 +12,7 @@
 import React, { useEffect, useState } from 'react'
 import { clampIndex } from './chipsView.ts'
 import { countMount } from './mounts.ts'
+import { fmtFixed, fmtFixedPct } from './format.ts'
 import { CHIPS_LINE_TOKENS } from './theme.ts'
 import {
   bucketCaliberOf, bucketCenterTicks, chipAxisOf, chipsLinesOf, chipsPlotHeightOf, chipsProfileOf,
@@ -123,9 +124,10 @@ export function ChipsPanel(props: ChipsPanelProps): React.ReactElement | null {
     `横轴自适应：轴顶 ${(axis.top * 100).toFixed(2)}%（当前展示日单桶峰值 ${(axis.peak * 100).toFixed(2)}%）\n${d.disclaimer}`
   const colorOf = (k: 'avg' | 'resistance' | 'support'): string =>
     k === 'avg' ? CHIPS_LINE_TOKENS.avg : k === 'resistance' ? CHIPS_LINE_TOKENS.resistance : CHIPS_LINE_TOKENS.support
-  const money = (v: number | null): string => (v === null ? '—' : v.toFixed(2))
-  // 现价不可得 ⇒ 「未取到」（不是 0，也不是 —）
-  const pct = (v: number | null): string => (v === null ? '未取到' : `${v.toFixed(2)}%`)
+  // P2-16：缺失/非有限值一律 `—`（旧写法只判 null，NaN/Infinity 会渲染成 `NaN%` / `Infinity`）
+  const money = (v: number | null): string => fmtFixed(v)
+  // 现价不可得 ⇒ 「未取到」（不是 0，也不是 —）；NaN/Infinity ⇒ `—`
+  const pct = (v: number | null): string => (v === null ? '未取到' : fmtFixedPct(v))
 
   // 折叠态不伸缩（剩余高度交给上窗）；展开态铺满剩余高度
   return React.createElement('div', { className: open ? 'tw-chips' : 'tw-chips tw-chips-collapsed' },

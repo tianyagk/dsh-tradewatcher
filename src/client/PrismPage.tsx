@@ -644,7 +644,11 @@ export function PrismPage(props: { active?: boolean; redUp?: boolean } = {}): Re
   }
   const head = quoteHeadOf(facts)
   const cells = statCellsOf(facts, selRow?.qty ?? null)
-  const marks = picked === null ? [] : fillMarksOf(fills, picked)
+  // AUDIT-CLIENT-PERF P2-3：成交标记只随 fills/picked 变化重算；fillMarksOf 内部已改成倒序取末 2 条
+  const marks = React.useMemo(
+    () => (picked === null ? [] : fillMarksOf(fills, picked)),
+    [fills, picked],
+  )
   // AI 研判：只认宿主 `desk.holdings[].thesis`（最新委托理由 / 提到该股的组合研判首句）；
   // 没有就如实写「该股暂无研判」，不拿宏观研报或别的股票理由顶替。
   const ai = thesisViewOf(selHold?.thesis ?? null)
@@ -770,7 +774,8 @@ export function PrismPage(props: { active?: boolean; redUp?: boolean } = {}): Re
 
   // ── 右栏 · 账户总览（大数 + 今日/累计 + 四格 + 仓位条）──
   const ov = desk?.overview
-  const acctView = accountViewOf({
+  // AUDIT-CLIENT-PERF P2-3：账户总览派生同时遍历 rows + equity，只随回包/上限变化重算
+  const acctView = React.useMemo(() => accountViewOf({
     totalAssets: ov?.totalAssets ?? null,
     capitalLimit: capital,
     dayStartEquity: acct?.dayStartEquity ?? null,
@@ -779,7 +784,7 @@ export function PrismPage(props: { active?: boolean; redUp?: boolean } = {}): Re
     rows: desk?.positions?.rows ?? [],
     equity: state?.state.equity ?? [],
     day: acct?.day ?? null,
-  })
+  }), [state, capital])
   const acctCard = React.createElement('section', { className: 'tw-ad-card tw-ad-acct', 'data-role': 'ad-overview' },
     React.createElement('div', { className: 'tw-ad-card-head' },
       React.createElement('h2', null, '账户总览'),
@@ -883,7 +888,8 @@ export function PrismPage(props: { active?: boolean; redUp?: boolean } = {}): Re
     maxDrawdown: pf?.maxDrawdown ?? null,
     excessPct: pf?.excessPct ?? null,
   })
-  const spark = sparkOf(state?.state.equity ?? [])
+  // AUDIT-CLIENT-PERF P2-3：净值 sparkline 只随 equity 数组引用变化重算
+  const spark = React.useMemo(() => sparkOf(state?.state.equity ?? []), [state?.state.equity])
   const [sparkRef, sparkW] = useBoxWidth(320, 120)
   const perfCard = React.createElement('section', { className: 'tw-ad-card tw-ad-perf', 'data-role': 'ad-perf' },
     React.createElement('div', { className: 'tw-ad-card-head' },
@@ -907,7 +913,8 @@ export function PrismPage(props: { active?: boolean; redUp?: boolean } = {}): Re
         ])
 
   // ── 底部状态条（28px）：行情源 / 决策引擎 / T / 决策周期 / 约束版本 / 风控 ──
-  const statusFacts = statusFactsOf({
+  // AUDIT-CLIENT-PERF P2-3：状态条里的 blockedTodayOf 要扫全部 runs/orders，整块只随回包/设置/周期重算
+  const statusFacts = React.useMemo(() => statusFactsOf({
     feed: null,
     model: state?.state.model?.model ?? settings?.model?.model ?? null,
     modelProvider: state?.state.model?.provider ?? null,
@@ -916,7 +923,7 @@ export function PrismPage(props: { active?: boolean; redUp?: boolean } = {}): Re
     intervalSec: intervalSec,
     constraintVersion: null,
     blockedToday: blockedTodayOf(state?.state.orders ?? [], state?.state.runs ?? [], acct?.day ?? null),
-  })
+  }), [state, settings, intervalSec, acct?.day])
   // 决策周期是唯一可写项：渲染成 300/600/1200/1800/3600 的 <select>（其余项只读）
   const statusItem = (f: (typeof statusFacts)[number], withDot: boolean): React.ReactElement =>
     React.createElement('span', { key: f.key, className: 'tw-ad-sb-item', 'data-fact': f.key, title: f.title ?? undefined },
