@@ -143,6 +143,8 @@ export function thesisOf(
 export interface PrismPositionView {
   secid: string; name: string; qty: number; available: number; cost: number
   price: number | null; marketValue: number | null; pnl: number | null; weight: number | null
+  /** `cash` = 现金行（口径要求：现金单独作为一种持仓参与权重，占比之和 = 100%） */
+  kind?: 'cash'
 }
 
 /** 2) 持仓明细：marketValue / pnl / weight（分母 = 总资产） */
@@ -166,7 +168,12 @@ export function prismPositionViewOf(
   const mvSum = rows.some((r) => r.marketValue !== null) ? rows.reduce((a, r) => a + (r.marketValue ?? 0), 0) : null
   const totalAssets = cash === null || mvSum === null ? null : cash + mvSum
   for (const r of rows) r.weight = totalAssets === null || totalAssets <= 0 || r.marketValue === null ? null : r.marketValue / totalAssets
-  if (rows.some((r) => r.marketValue === null)) missing.push({ what: '持仓市值', why: 'no-source', note: '部分持仓缺现价，市值/占比按 null 处理' })
+  // 现金单独作为一行持仓：权重 = 现金 ÷ 总资产 ⇒ 全部行（含现金）占比之和 = 100%。
+  // 成本/盈亏对现金无意义，按 null 输出（界面显示 —），不写 0 冒充。
+  if (cash !== null && totalAssets !== null && totalAssets > 0) {
+    rows.push({ secid: 'CASH', name: '现金', qty: cash, available: cash, cost: 0, price: null, marketValue: cash, pnl: null, weight: cash / totalAssets, kind: 'cash' })
+  }
+  if (rows.some((r) => r.marketValue === null && r.kind !== 'cash')) missing.push({ what: '持仓市值', why: 'no-source', note: '部分持仓缺现价，市值/占比按 null 处理' })
   return { rows, totalAssets, missing }
 }
 

@@ -466,7 +466,7 @@ export function PrismPage(props: { active?: boolean; redUp?: boolean } = {}): Re
 
   // ── 持仓行：desk.positions.rows（权重分母 = desk.overview.totalAssets）──
   const totalAssets = desk?.overview?.totalAssets ?? null
-  const posRows: Array<{ secid: string; name: string; qty: number; cost: number; price?: number | null; pnl: number | null; weight: number | null }> = desk?.positions?.rows !== undefined
+  const posRows: Array<{ secid: string; name: string; qty: number; cost: number; price?: number | null; pnl: number | null; weight: number | null; kind?: 'cash' }> = desk?.positions?.rows !== undefined
     ? desk.positions.rows.map((r) => ({ ...r, pnl: r.pnl ?? null, weight: weightOf(r.marketValue ?? null, totalAssets) ?? r.weight ?? null }))
     : acctPositions.map((p) => ({ secid: p.secid, name: p.name, qty: p.qty, cost: p.cost, pnl: null as number | null, weight: null as number | null }))
   const floatSum = pnlSumOf(posRows)
@@ -588,8 +588,8 @@ export function PrismPage(props: { active?: boolean; redUp?: boolean } = {}): Re
           const row = React.createElement('div', {
             key: `${p.secid}-row`, className: `tw-ad-pos-row${picked === p.secid ? ' is-on' : ''}${editing ? ' is-edit' : ''}`,
             role: 'button', tabIndex: 0, 'data-role': 'ad-pos-row',
-            onClick: () => setPicked(p.secid),
-            onKeyDown: (e: React.KeyboardEvent<HTMLDivElement>) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setPicked(p.secid) } },
+            onClick: () => { if (p.kind !== 'cash') setPicked(p.secid) },
+            onKeyDown: (e: React.KeyboardEvent<HTMLDivElement>) => { if (p.kind !== 'cash' && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); setPicked(p.secid) } },
           },
           React.createElement('div', { className: 'tw-ad-pos-name' },
             React.createElement('span', { className: 'n', title: p.name }, p.name),
@@ -597,13 +597,15 @@ export function PrismPage(props: { active?: boolean; redUp?: boolean } = {}): Re
               React.createElement('em', { className: 'tw-ad-ind', title: '行业：宿主无单票行业字段' }, '—'))),
           React.createElement('div', { className: 'tw-ad-pos-cell' }, editing
             ? React.createElement('input', { className: 'tw-ad-inline', type: 'number', 'aria-label': `股数 ${p.name}`, value: editDraft.shares, onChange: (e: React.ChangeEvent<HTMLInputElement>) => setEditDraft({ ...editDraft, shares: e.target.value }) })
-            : numText(p.qty, 0)),
-          React.createElement('div', { className: 'tw-ad-pos-cell' }, editing
-            ? React.createElement('input', { className: 'tw-ad-inline', type: 'number', 'aria-label': `成本 ${p.name}`, value: editDraft.cost, onChange: (e: React.ChangeEvent<HTMLInputElement>) => setEditDraft({ ...editDraft, cost: e.target.value }) })
-            : numText(p.cost, 3)),
+            : numText(p.qty, p.kind === 'cash' ? 2 : 0)),
+          React.createElement('div', { className: 'tw-ad-pos-cell' }, p.kind === 'cash'
+            ? '—'
+            : editing
+              ? React.createElement('input', { className: 'tw-ad-inline', type: 'number', 'aria-label': `成本 ${p.name}`, value: editDraft.cost, onChange: (e: React.ChangeEvent<HTMLInputElement>) => setEditDraft({ ...editDraft, cost: e.target.value }) })
+              : numText(p.cost, 3)),
           React.createElement('div', { className: 'tw-ad-pos-cell', title: p.weight === null ? '缺现价或总资产，权重不可算' : `权重分母 = 总资产 ${wanOf(totalAssets)}` }, weightTextOf(p.weight)),
           React.createElement('div', { className: `tw-ad-pos-cell tw-ad-pnl is-${tone}`, title: pctTitle === null ? '缺现价或成本，盈亏比例不可算' : `成本 ${numText(p.cost, 3)} · ${pctTitle}` }, pnlTextOf(p.pnl)),
-          React.createElement('div', { className: 'tw-ad-pos-more' }, editing ? null : React.createElement('button', {
+          React.createElement('div', { className: 'tw-ad-pos-more' }, editing || p.kind === 'cash' ? null : React.createElement('button', {
             className: 'tw-ad-more', 'aria-label': `更多操作 ${p.name}`, 'aria-haspopup': 'menu',
             onClick: (e: React.MouseEvent) => { e.stopPropagation(); setMenuFor(menuFor === p.secid ? null : p.secid) },
           }, '⋯')))
