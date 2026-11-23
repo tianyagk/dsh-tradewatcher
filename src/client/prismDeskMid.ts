@@ -233,7 +233,7 @@ export interface DeskFlowTabDef { id: 'all' | DeskFlowTab; label: string }
 /** 七个筛选 tab（顺序 = 设计稿；`持仓` 为 v0.212.0 新增，计数 = 持仓数） */
 export const FLOW_TABS: ReadonlyArray<DeskFlowTabDef> = [
   { id: 'all', label: '全部' },
-  { id: 'scan', label: '选股' },
+  { id: 'scan', label: '决策' },
   { id: 'analyze', label: '分析' },
   { id: 'holding', label: '持仓' },
   { id: 'order', label: '挂单' },
@@ -489,20 +489,6 @@ export function flowEntriesOf(input: {
     const ended = finite(r.finishedAt)
     const ms = ended === null ? null : Math.max(0, ended - r.startedAt)
     const parseErr = typeof d?.parseError === 'string' && d.parseError !== '' ? d.parseError : null
-    push({
-      id: `scan-${r.startedAt}-${r.slot ?? ''}`,
-      at: r.startedAt,
-      kind: 'SCAN',
-      cats: ['scan'],
-      title: `扫描 · 挂单 ${o} / 撤单 ${c} / 拦截 ${k}`,
-      action: `本轮决策产出挂单 ${o} 笔、撤单 ${c} 笔、拦截 ${k} 笔`,
-      basis: plainOf(d?.note) ?? null,
-      risk: parseErr !== null ? `解析失败：${digestOf(parseErr, 40)}` : (r.error === null || r.error === undefined ? '风控通过' : `执行失败：${digestOf(r.error, 40)}`),
-      ms,
-      review: null,
-      tok: null,
-      verdict: parseErr !== null || (typeof r.error === 'string' && r.error !== '') ? 'block' : 'pass',
-    })
     if (r.decision !== null && r.decision !== undefined) {
       for (const rej of d?.rejects ?? []) {
         push({
@@ -557,6 +543,20 @@ export function flowEntriesOf(input: {
         verdict: 'pass',
       })
     }
+    push({
+      id: `scan-${r.startedAt}-${r.slot ?? ''}`,
+      at: ended ?? r.startedAt,
+      kind: 'SCAN',
+      cats: ['scan'],
+      title: `本轮决策 · 挂单 ${o} / 撤单 ${c} / 拦截 ${k}`,
+      action: `本轮决策产出挂单 ${o} 笔、撤单 ${c} 笔、拦截 ${k} 笔`,
+      basis: plainOf(d?.note) ?? null,
+      risk: parseErr !== null ? `解析失败：${digestOf(parseErr, 40)}` : (r.error === null || r.error === undefined ? '风控通过' : `执行失败：${digestOf(r.error, 40)}`),
+      ms,
+      review: null,
+      tok: null,
+      verdict: parseErr !== null || (typeof r.error === 'string' && r.error !== '') ? 'block' : 'pass',
+    })
   }
 
   for (const o of input.orders ?? []) {

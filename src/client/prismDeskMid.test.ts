@@ -173,9 +173,10 @@ test('⑯ 时间倒序：最新一条在最上；同一时刻按 seq 稳定', ()
   assert.equal(list.at(-1)?.kind, 'ORDER', '最旧的是 13:05 之前那笔被拒委托')
 })
 
-test('⑰ SCAN 用真实耗时（finishedAt − startedAt = 67283ms ⇒ 67.3 s）', () => {
-  const scan = flowEntriesOf({ runs: RUNS, orders: [] }).find((e) => e.kind === 'SCAN' && e.at === RUNS[0].startedAt)
+test('⑰ SCAN 用真实耗时（finishedAt − startedAt = 67283ms ⇒ 67.3 s），且时间戳取结束时刻', () => {
+  const scan = flowEntriesOf({ runs: RUNS, orders: [] }).find((e) => e.kind === 'SCAN')
   assert.equal(scan?.ms, 67_283)
+  assert.equal(scan?.at, RUNS[0].finishedAt, 'SCAN 是「分析完成后的决策」，时间戳必须是 finishedAt（否则看起来比分析还早）')
   assert.deepEqual(flowChipsOf(scan!).map((c) => c.text), ['67.3 s'])
 })
 
@@ -224,7 +225,7 @@ test('㉒ 七 tab 计数：全部=去重条数；挂单/风控/约束各按视�
 })
 
 test('㉓ 过滤：七个 tab 的 id 与设计稿一致', () => {
-  assert.deepEqual(FLOW_TABS.map((t) => t.label), ['全部', '选股', '分析', '持仓', '挂单', '风控', '约束'])
+  assert.deepEqual(FLOW_TABS.map((t) => t.label), ['全部', '决策', '分析', '持仓', '挂单', '风控', '约束'])
   const entries = flowEntriesOf({ runs: RUNS, orders: ORDERS })
   assert.equal(flowFilterOf(entries, 'all').length, flowCountsOf(entries).all)
   assert.equal(flowFilterOf(entries, 'cons').length, 1)
