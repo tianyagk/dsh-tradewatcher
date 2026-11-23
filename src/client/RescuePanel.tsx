@@ -25,6 +25,7 @@ import { isUsableBaseline } from './trendView.ts'
 import { shClockText, shDayText } from './marketTime.ts'
 import { coverageBadgeOf, latestCoverageOf } from './rescueCoverage.ts'
 import type { RescueCoverageLike } from './rescueCoverage.ts'
+import { sameRescuePanelProps } from './memoProps.ts'
 
 /** 「同时点量能」的极端档阈值（= 标定 f1.extreme = P95 = 1.92x；见上方注释的同步断言） */
 const RESCUE_F1_EXTREME = 1.92
@@ -402,7 +403,12 @@ function CoverageMark(props: {
   }, badge.marker)
 }
 
-export function RescuePanel(props: {
+/**
+ * 护盘面板（1049 行）。AUDIT-CLIENT-PERF P2-6：挂 `React.memo` —— 大盘页每 60s 的时钟 tick、
+ * 板块加载态/错误态、汪汪队窗口切换都会让父级重渲染，而本组件的输入只有 `prefs` / `redUp` /
+ * `onPrefs`。比较器按**值**比（`memoProps.ts`），父级给的新数组/新对象不会让它白白整块重建。
+ */
+export const RescuePanel = React.memo(function RescuePanel(props: {
   prefs: PortPrefs
   redUp: boolean
   onPrefs?: (p: PortPrefs) => void
@@ -867,7 +873,7 @@ export function RescuePanel(props: {
         })
       : null,
   )
-}
+}, sameRescuePanelProps)
 
 function SettingsModal(props: {
   config: RescueConfig

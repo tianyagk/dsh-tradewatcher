@@ -15,7 +15,7 @@
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
+import { readFileSync, readdirSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 
@@ -56,13 +56,28 @@ test('① 权重表：剔 F2 后四项合计恰好 = 0.717，且每项 > 0.05（
 })
 
 test('② 恒 0 / 恒满因子不得存在（本机日志；无日志则跳过并说明）', async () => {
-  const path = join(homedir(), '.dsh', 'dsh-tradewatcher', 'rescue-log.json')
-  let log: { days?: Record<string, { scoreLog?: Array<{ factors?: Array<{ id: string; score: number }> }> }> }
+  const base = join(homedir(), '.dsh', 'dsh-tradewatcher')
+  type DayRow = { scoreLog?: Array<{ factors?: Array<{ id: string; score: number }> }> }
+  let log: { days?: Record<string, DayRow> }
   try {
-    log = JSON.parse(readFileSync(path, 'utf8')) as typeof log
+    log = JSON.parse(readFileSync(join(base, 'rescue-log.json'), 'utf8')) as typeof log
   } catch {
-    console.log('[skip] 本机没有 rescue-log.json（CI/隔离环境）⇒ 该项只在有真实样本的机器上验证')
-    return
+    // P1-5：旧单文件已按日拆分 ⇒ 汇总分片（读不出来就跳过，不把坏分片当样本）
+    const days: Record<string, DayRow> = {}
+    try {
+      for (const f of readdirSync(join(base, 'rescue-log'))) {
+        if (!/^\d{4}-\d{2}-\d{2}\.json$/.test(f)) continue
+        try {
+          const shard = JSON.parse(readFileSync(join(base, 'rescue-log', f), 'utf8')) as { day?: string; log?: DayRow }
+          if (typeof shard.day === 'string' && shard.log !== undefined) days[shard.day] = shard.log
+        } catch { /* 单个坏分片不影响其余样本 */ }
+      }
+    } catch { /* 目录不存在 */ }
+    if (Object.keys(days).length === 0) {
+      console.log('[skip] 本机没有 rescue-log.json / rescue-log（CI/隔离环境）⇒ 该项只在有真实样本的机器上验证')
+      return
+    }
+    log = { days }
   }
   const seen = new Map<string, number>()
   const nonzero = new Map<string, number>()

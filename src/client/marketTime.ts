@@ -82,6 +82,21 @@ function shParts(ts: number): (type: string) => string {
 }
 
 /**
+ * 时刻是否可用（AUDIT-CLIENT-PERF P2-10）：「没有时刻」的三种形态都算无效 ——
+ * `undefined` / `NaN`（`new Date(x)` 非法，`formatToParts` 会抛 `RangeError`，整页白屏）、
+ * 以及 `<= 0`（会被格式化成 1970-01-01 08:00 北京时间 —— "看着像数的错数"）。
+ *
+ * 判据放在**唯一出口**：所有 `shDateTimeText/shClockText/shStampText/shDayText` 共用，
+ * 调用点不需要各自记得防 0/undefined（`RescuePanel` 的 `p?.t ?? 0` 这类写法也就自然安全了）。
+ */
+export function isUsableTimestamp(ts: number): boolean {
+  return typeof ts === 'number' && Number.isFinite(ts) && ts > 0
+}
+
+/** 无效时刻的统一占位（与界面其它缺失值同字符） */
+export const INVALID_TIME_TEXT = '—'
+
+/**
  * 北京时间的 `YYYY-MM-DD HH:mm:ss`。
  *
  * ⚠ 这是**市场数据时刻**的唯一出口：所有"数据时刻"族展示都必须走这里。
@@ -89,6 +104,7 @@ function shParts(ts: number): (type: string) => string {
  * 复核里同一 epoch 在 UTC 下显示 01:42、纽约 21:42、悉尼 12:42（用户看到的"数据时刻"与市场无关）。
  */
 export function shDateTimeText(ts: number): string {
+  if (!isUsableTimestamp(ts)) return INVALID_TIME_TEXT
   const g = shParts(ts)
   const hh = g('hour') === '24' ? '00' : g('hour')
   return `${g('year')}-${g('month')}-${g('day')} ${hh}:${g('minute')}:${g('second')}`
@@ -96,16 +112,19 @@ export function shDateTimeText(ts: number): string {
 
 /** 北京时间的 `HH:mm:ss` */
 export function shClockText(ts: number): string {
+  if (!isUsableTimestamp(ts)) return INVALID_TIME_TEXT
   return shDateTimeText(ts).slice(11)
 }
 
 /** 北京时间的 `MM-DD HH:mm` */
 export function shStampText(ts: number): string {
+  if (!isUsableTimestamp(ts)) return INVALID_TIME_TEXT
   return shDateTimeText(ts).slice(5, 16)
 }
 
 /** 北京时间某时刻所在的自然日 `YYYY-MM-DD` */
 export function shDayText(ts: number): string {
+  if (!isUsableTimestamp(ts)) return INVALID_TIME_TEXT
   return shDateTimeText(ts).slice(0, 10)
 }
 

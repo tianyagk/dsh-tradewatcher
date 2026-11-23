@@ -43,7 +43,8 @@ import { trendCaliberOf } from '../shared/trendCaliber.ts'
 import { ChipsPanel } from './ChipsPanel.tsx'
 import { countMount } from './mounts.ts'
 import { chartFrameOf } from './chartFrame.ts'
-import { SPLIT_DEFAULT, klineHeightsOf, normalizeSplitRatio, splitDragRatio, splitHeights, splitKeyStep } from './splitDrag.ts'
+import { SPLIT_DEFAULT, klineHeightsOf, normalizeSplitRatio, splitHeights, splitKeyStep } from './splitDrag.ts'
+import { createSplitDragSession } from './splitDragSession.ts'
 // 分割线命中区高（styles.ts 的 .tw-split{height:9px}）与筹码块上距（.tw-chips{margin-top:6px}）——同一份数字来源
 import { SPLIT_HIT_PX, CHIPS_MARGIN_TOP_PX } from './chipsView.ts'
 import { NoteIcon } from './NoteIcon.tsx'
@@ -145,7 +146,13 @@ export function QuoteDrawer(props: {
   const ratio = normalizeSplitRatio(props.splitRatio ?? SPLIT_DEFAULT).ratio
   const [dragRatio, setDragRatio] = useState<number | null>(null)
   const [avail, setAvail] = useState(0)
-  const dragStart = useRef<{ ratio: number; y: number } | null>(null)
+  /**
+   * 拖拽会话的清理函数（AUDIT-CLIENT-PERF P2-9）：旧实现只在 `mouseup` 里移除 `window` 监听，
+   * 拖拽中卸载抽屉会把 move/up 闭包留在 window 上（一次性泄漏，且会向已卸载组件 setState）。
+   * 现在把"移除监听 + 取消未落地的 rAF 预览"收进一个 teardown，卸载 effect 兜底调用。
+   */
+  const dragTeardown = useRef<(() => void) | null>(null)
+  useEffect(() => () => { dragTeardown.current?.() }, [])
   const [chipsOpen, setChipsOpen] = useState(true)
   /**
    * 两窗格（上窗 + 分割线 + 筹码块）的容器。
@@ -875,20 +882,29 @@ export function QuoteDrawer(props: {
               },
               onMouseDown: (e: React.MouseEvent) => {
                 e.preventDefault()
-                dragStart.current = { ratio: shownRatio, y: e.clientY }
-                const move = (ev: MouseEvent): void => {
-                  const st = dragStart.current
-                  if (st === null) return
-                  // 拖拽中只挪线（不重绘图表）；松手才提交
-                  setDragRatio(splitDragRatio(st.ratio, st.y, ev.clientY, avail > 0 ? avail : 520))
-                }
-                const up = (ev: MouseEvent): void => {
+                // 上一场没收尾（mouseup 丢在窗口外）先清掉，避免两套监听叠加
+                dragTeardown.current?.()
+                const session = createSplitDragSession({
+                  startRatio: shownRatio,
+                  startY: e.clientY,
+                  available: avail > 0 ? avail : 520,
+                  // 拖拽中只挪线（不重绘图表）；同一帧多次移动只提交最后一次 ⇒ 每帧 ≤1 次重渲染
+                  preview: setDragRatio,
+                  // 松手才提交并重绘图表一次
+                  commit: commitRatio,
+                })
+                const move = (ev: MouseEvent): void => { session.move(ev.clientY) }
+                const teardown = (): void => {
                   window.removeEventListener('mousemove', move)
                   window.removeEventListener('mouseup', up)
-                  const st = dragStart.current
-                  dragStart.current = null
-                  if (st !== null) commitRatio(splitDragRatio(st.ratio, st.y, ev.clientY, avail > 0 ? avail : 520))
+                  session.cancel()
+                  if (dragTeardown.current === teardown) dragTeardown.current = null
                 }
+                const up = (ev: MouseEvent): void => {
+                  teardown()
+                  session.up(ev.clientY)
+                }
+                dragTeardown.current = teardown
                 window.addEventListener('mousemove', move)
                 window.addEventListener('mouseup', up)
               },

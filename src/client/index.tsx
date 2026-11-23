@@ -319,6 +319,11 @@ function Dashboard(): React.ReactElement {
     })
   }, [prefs, toast])
   const setPrefs = (patch: Partial<PortPrefs>): void => { void applyPrefs(patch) }
+  /**
+   * 大盘页写偏好的回调（AUDIT-CLIENT-PERF P2-6）：必须是**稳定引用**，否则 `RescuePanel`
+   * 的 `React.memo` 每次父级渲染都因新函数而失效（它 1049 行，是整个大盘页最重的一块）。
+   */
+  const onMarketPrefs = useCallback((p: PortPrefs): void => { setPrefsState(p) }, [])
 
   const viewMode: ViewMode = prefs?.viewMode ?? 'full'
  // 金额遮罩做在格式化出口里，因此这一行就够全局生效（取数/告警/工具返回不受影响）
@@ -449,7 +454,7 @@ function Dashboard(): React.ReactElement {
     }
     if (page === 'market') {
       // quoteTs：大盘页的 breadth/extras 用它当节拍信号（不再挂 quotes 的对象身份，见 pacing.ts）
-      return React.createElement(MarketPage, { quotes, quoteTs: engine.ts, prefs: prefs ?? DEFAULT_PREFS, onPrefs: (p) => setPrefsState(p) })
+      return React.createElement(MarketPage, { quotes, quoteTs: engine.ts, prefs: prefs ?? DEFAULT_PREFS, onPrefs: onMarketPrefs })
     }
     if (KEEP_ALIVE.includes(page)) return null // 由保活容器渲染（见 keepAliveEl）
     // 云图页仍要 redUp：只用来判断第三方站点的色义是否与本插件**相反**（相反才出那个徽标）

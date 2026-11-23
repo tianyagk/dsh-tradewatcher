@@ -2,7 +2,7 @@
  * Host-half self-test: pure accounting + store round-trip + live Eastmoney
  * probes. Run:  npm run selftest   (node type-stripping; no build needed)
  */
-import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { DataStore, normalizeRescuePrefs, replayPosition, secidKey, sortLedger, dataHome } from './store.ts'
@@ -433,16 +433,20 @@ async function main(): Promise<void> {
     }
 
     // T-03 并发落盘：文件仍可解析且无 .tmp 残留（rescue 从 1 处写者变成 4 处）
+    // P1-5 后落盘目标是**当天分片** `rescue-log/<今天>.json`（旧单文件不再被重建）
     {
       const dir = mkdtempSync(join(tmpdir(), 'tw-atomic-'))
       const mon = new RescueMonitor(dir, { enabled: false, intervalSec: 60, tailIntervalSec: 15, tailFrom: '14:30', universe: [] })
       await mon.init()
       await Promise.all([mon.flush(), mon.flush(), mon.flush()])
-      const raw = readFileSync(join(dir, 'rescue-log.json'), 'utf8')
+      const shardDir = join(dir, 'rescue-log')
+      const today = dayOf(Date.now())
+      const raw = readFileSync(join(shardDir, `${today}.json`), 'utf8')
       let parsed = false
       try { JSON.parse(raw); parsed = true } catch { /* 失败 */ }
-      ok(parsed, '并发落盘后文件仍可 JSON.parse')
-      ok(!readdirSync(dir).some((f) => f.endsWith('.tmp')), '无 .tmp 残留（tmp+rename 生效）')
+      ok(parsed, '并发落盘后当日分片仍可 JSON.parse')
+      ok(!existsSync(join(dir, 'rescue-log.json')), '旧单文件不再被重建（写入只落分片）')
+      ok(!readdirSync(shardDir).some((f) => f.includes('.tmp')), '无 .tmp 残留（tmp+rename 生效）')
       rmSync(dir, { recursive: true, force: true })
     }
 

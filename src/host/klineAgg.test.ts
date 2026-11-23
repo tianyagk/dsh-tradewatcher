@@ -19,6 +19,8 @@ import assert from 'node:assert/strict'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+// 上游全被 stub 死，重试退避没有真实网络可等：设 0 免 500ms 空转
+process.env.TW_KLINE_RETRY_MS = '0'
 import type { DayBar } from '../shared/model.ts'
 import { AGG_NOTE, aggBucketOf, aggCaliberOf, aggregateDaily, aggPeriodOfKlt, shouldAggregate } from './klineAggregate.ts'
 

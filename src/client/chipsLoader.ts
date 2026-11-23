@@ -21,6 +21,32 @@ interface Entry {
 
 const cache = new Map<string, Entry>()
 
+/**
+ * 缓存条目上限（AUDIT-CLIENT-PERF P2-7）。
+ *
+ * 旧实现无上限、无淘汰：看过 N 只标的就常驻 N × 84 KB（`api.ts:7` 注明单包 84 KB），
+ * 50 只 ≈ 4 MB，SPA 会话内不释放。24 条 ≈ 2 MB 封顶，按最后成功时刻淘汰最旧的**已完成**条目
+ * （在途请求不淘汰：删了会让同一 secid 的并发调用合并失效）。
+ */
+export const CHIPS_CACHE_MAX = 24
+
+/** 超过上限时按 `at` 淘汰最旧的已完成条目（在途条目保留） */
+function evictOverflow(): void {
+  if (cache.size <= CHIPS_CACHE_MAX) return
+  const done = [...cache.entries()]
+    .filter(([, e]) => e.inflight === null)
+    .sort((a, b) => a[1].at - b[1].at)
+  for (const [key] of done) {
+    if (cache.size <= CHIPS_CACHE_MAX) break
+    cache.delete(key)
+  }
+}
+
+/** 测试/排障用：当前缓存规模 */
+export function chipsCacheStats(): { size: number; max: number } {
+  return { size: cache.size, max: CHIPS_CACHE_MAX }
+}
+
 /** 测试/换标的时清空（模块级缓存，进程内单例） */
 export function resetChipsCache(): void {
   cache.clear()
@@ -46,14 +72,17 @@ export async function loadChips<T = unknown>(secid: string, deps: ChipsLoadDeps)
       entry.at = now()
       entry.value = value
       cache.set(secid, entry)
+      evictOverflow()
       return value
     })
     .catch((e: unknown) => {
       entry.inflight = null
       cache.set(secid, entry)
+      evictOverflow()
       throw e
     })
   entry.inflight = p
   cache.set(secid, entry)
+  evictOverflow()
   return p as Promise<T>
 }

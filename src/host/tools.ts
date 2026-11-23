@@ -1321,6 +1321,9 @@ export function makeAgentTools(
       try {
         const day = typeof args.day === 'string' ? args.day : null
         const snapshot = args.force === true ? await rescue.sampleNow() : rescue.snapshot()
+        // 30 日前瞻需要更长的历史：按需加载分片（P1-5 后默认窗口只有当天 + 5 天）
+        if (day === null) await rescue.ensureDays(30)
+        const detail = day === null || !/^\d{4}-\d{2}-\d{2}$/.test(day) ? null : await rescue.dayView(day)
         const brief = {
           ts: snapshot.ts,
           trading: snapshot.trading,
@@ -1406,10 +1409,18 @@ export function makeAgentTools(
           timeCoef: snapshot.timeCoef,
           factorContrib: snapshot.factorContrib,
  // 出分日志（5 分钟刻度 + 等级变化），阈值漂移回溯用
-          scoreLog: rescue.scoreLogOf(day ?? undefined).slice(-24),
+          // 出分日志：指定日期时读该日分片（P1-5），否则取当天
+          scoreLog: (detail === null ? rescue.scoreLogOf(day ?? undefined) : detail.scoreLog).slice(-24),
         }
         if (day !== null && /^\d{4}-\d{2}-\d{2}$/.test(day)) {
-          return { ...brief, day, dayEvents: rescue.eventsOf(day), dayIntraday: rescue.intradayOf(day) }
+          return {
+            ...brief,
+            day,
+            dayEvents: detail?.events ?? [],
+            dayIntraday: detail?.intraday ?? [],
+            // 分片读不出来时如实给原因（界面/模型侧显示「—」），不假装"这一天没有事件"
+            dayWhy: detail?.why ?? null,
+          }
         }
         return brief
       } catch (error) {

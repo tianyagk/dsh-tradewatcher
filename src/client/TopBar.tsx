@@ -16,6 +16,7 @@ import type { PortPrefs } from '../shared/model.ts'
 import { MAX_QUOTE_IDS } from '../shared/quoteLimit.ts'
 import { isUsableBaseline } from './trendView.ts'
 import { api } from './api.ts'
+import { createHoverAnchor, intersectClip, type HoverAnchor, type Rect } from './hoverPlacement.ts'
 
 interface HoverState {
   secid: string
@@ -228,58 +229,69 @@ export function TopBar(props: {
   const cursor = useRef({ x: 0, y: 0 })
 
   /**
-   * 定位悬浮卡：以 TopBar 为定位上下文（absolute），跟随鼠标，必要时左右/
-   * 上下翻转，并夹紧到"真实裁剪区"——视口与所有 overflow 祖先矩形的交集。
-   * 这样无论面板是否带 transform（会把 position:fixed 的包含块改成面板，
-   * 导致视口坐标失效）都能正确显示，不会被右缘裁掉。
+   * 裁剪区 = 视口 ∩ 所有 overflow 祖先矩形（AUDIT-CLIENT-PERF P2-15）。
+   *
+   * 这个循环里每个祖先一次 `getComputedStyle` + `getBoundingClientRect`，旧实现是
+   * **每次 mousemove 都跑一遍**。现在它只在悬浮卡打开 / 内容尺寸变化时跑一次：
+   * 移动路径只做加减法与夹紧（`hoverPlacement.ts` 的 `placeHoverCard`），零 DOM 读取。
+   *
+   * 为什么仍要遍历祖先：面板可能带 transform，`position:fixed` 的包含块会变成面板，
+   * 视口坐标不可靠；必须取"真实裁剪区"才能不被右缘裁掉。
    */
-  const applyPos = useCallback((): void => {
-    const el = popRef.current
+  const readClip = useCallback((): Rect => {
     const host = hostRef.current
-    if (el === null || host === null) return
-    const hr = host.getBoundingClientRect()
-    const W = 330
-    const H = Math.max(el.offsetHeight, 240)
-    // 裁剪区 = 视口 ∩ 所有 overflow 祖先
-    let cl = 0
-    let ct = 0
-    let cr = window.innerWidth
-    let cb = window.innerHeight
+    const base: Rect = { left: 0, top: 0, right: window.innerWidth, bottom: window.innerHeight }
+    if (host === null) return base
+    const rects: Rect[] = []
     for (let n: HTMLElement | null = host.parentElement; n !== null; n = n.parentElement) {
       const st = window.getComputedStyle(n)
       const ov = `${st.overflow}${st.overflowX}${st.overflowY}`
       if (/(auto|scroll|hidden|clip)/.test(ov)) {
         const r = n.getBoundingClientRect()
-        if (r.width > 0 && r.height > 0) {
-          cl = Math.max(cl, r.left)
-          ct = Math.max(ct, r.top)
-          cr = Math.min(cr, r.right)
-          cb = Math.min(cb, r.bottom)
-        }
+        rects.push({ left: r.left, top: r.top, right: r.right, bottom: r.bottom })
       }
     }
-    const x = cursor.current.x
-    const y = cursor.current.y
-    let left = x + 14
-    if (left + W + 8 > cr) left = x - W - 12
-    left = Math.min(Math.max(cl + 8, left), Math.max(cl + 8, cr - W - 8))
-    let top = y + 18
-    if (top + H + 8 > cb) top = y - H - 12
-    top = Math.min(Math.max(ct + 8, top), Math.max(ct + 8, cb - H - 8))
-    el.style.left = `${left - hr.left}px`
-    el.style.top = `${top - hr.top}px`
+    return intersectClip(base, rects)
+  }, [])
+
+  const hoverAnchor = useRef<HoverAnchor | null>(null)
+  if (hoverAnchor.current === null) {
+    hoverAnchor.current = createHoverAnchor({
+      readHost: (): Rect => {
+        const r = hostRef.current?.getBoundingClientRect()
+        return r === undefined ? { left: 0, top: 0, right: 0, bottom: 0 } : { left: r.left, top: r.top, right: r.right, bottom: r.bottom }
+      },
+      readClip,
+      readHeight: () => popRef.current?.offsetHeight ?? 0,
+    })
+  }
+
+  /** 用缓存值写位置（移动路径：2 次 style 写入，0 次 DOM 读取） */
+  const applyPos = useCallback((): void => {
+    const el = popRef.current
+    const anchor = hoverAnchor.current
+    if (el === null || hostRef.current === null || anchor === null) return
+    const p = anchor.place(cursor.current.x, cursor.current.y, 330)
+    el.style.left = `${p.left}px`
+    el.style.top = `${p.top}px`
     el.style.visibility = 'visible'
   }, [])
+
+  /** 重新采样宿主矩形 / 裁剪区 / 卡片高度，再定位（打开、内容尺寸变化时用） */
+  const refreshPos = useCallback((): void => {
+    hoverAnchor.current?.refresh()
+    applyPos()
+  }, [applyPos])
 
   // 内容尺寸变化（加载→图表）后重新夹紧
   useEffect(() => {
     if (hover === null) return
     const el = popRef.current
     if (el === null || typeof ResizeObserver === 'undefined') return
-    const ro = new ResizeObserver(() => applyPos())
+    const ro = new ResizeObserver(() => refreshPos())
     ro.observe(el)
     return () => ro.disconnect()
-  }, [hover, applyPos])
+  }, [hover, refreshPos])
 
   // 打开延迟 120ms / 关闭宽限 100ms：鼠标扫过时不闪烁
   const openTimer = useRef<number | null>(null)
@@ -379,9 +391,9 @@ export function TopBar(props: {
   // 打开后等 DOM 就绪再定位
   useEffect(() => {
     if (hover === null) return
-    const raf = requestAnimationFrame(applyPos)
+    const raf = requestAnimationFrame(refreshPos)
     return () => cancelAnimationFrame(raf)
-  }, [hover, applyPos])
+  }, [hover, refreshPos])
 
   // 逐卡五态（一次算好，供列表头汇总与卡片色点共用同一结果）
   const stateOf = (secid: string): QuoteState => quoteStateOf({
@@ -695,7 +707,7 @@ export function TopBar(props: {
           quote: quotes[hover.secid],
           prefs,
           popRef,
-          onSized: applyPos,
+          onSized: refreshPos,
           onOpen: () => openDetail(hover.secid, hover.name),
           onEnter: clearClose,
           onLeave: scheduleClose,

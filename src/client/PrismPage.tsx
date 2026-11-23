@@ -13,6 +13,8 @@ import { shClockText } from './marketTime.ts'
 import { useNow } from './useNow.ts'
 import { usePanelVisible } from './usePageIdle.ts'
 import { createPrismRefresher } from './prismRefresh.ts'
+import { createStateGate } from './prismStateGate.ts'
+import { clampBatcher } from './clampBatch.ts'
 import { positionErrorOf } from './prismForm.ts'
 import { KlineChart, TrendChart } from './kline.tsx'
 import { Sparkline } from './charts.tsx'
@@ -92,22 +94,15 @@ function FlowTextView(props: { text: string | null; label: string }): React.Reac
   const ref = React.useRef<HTMLSpanElement | null>(null)
   const text = props.text
   // 只有**真实溢出 3 行**才出「展开」：在 890px 宽能放下的短句不制造无效按钮；
-  // 374px 窄栏由 ResizeObserver 重新测量，同一段会自动变成可展开。
+  // 374px 窄栏由共用 ResizeObserver 重新测量，同一段会自动变成可展开。
+  //
+  // AUDIT-CLIENT-PERF P2-5：测量不再"每块一个观察者 + 同步读高度"，而是登记到
+  // `clampBatch` 的单例批处理器 —— 一个 ResizeObserver 观察全部文本块，一批里
+  // 先写 class、再统一读、最后还原 ⇒ 180 个文本块只强制布局一次。
   React.useLayoutEffect(() => {
     const el = ref.current
-    if (el === null || text === null) return
-    const check = (): void => {
-      const had = el.classList.contains('is-clamp')
-      if (!had) el.classList.add('is-clamp')
-      const clipped = el.scrollHeight > el.clientHeight + 1
-      if (!had) el.classList.remove('is-clamp')
-      setOverflow(clipped)
-    }
-    check()
-    if (typeof ResizeObserver === 'undefined') return
-    const ro = new ResizeObserver(check)
-    ro.observe(el)
-    return () => ro.disconnect()
+    if (el === null || text === null) return undefined
+    return clampBatcher.watch(el, setOverflow)
   }, [text])
   if (text === null) {
     return React.createElement('span', { className: 'v', title: `本条未给出「${props.label}」段（宿主报告里没有对应段落）` }, FLOW_MISSING)
@@ -233,10 +228,19 @@ export function PrismPage(props: { active?: boolean; redUp?: boolean } = {}): Re
    */
   const isActive = props.active === false ? false : containerVisible
 
+  /**
+   * 回包内容指纹闸（AUDIT-CLIENT-PERF P2-4）：宿主每 30s 都给一个**新对象**，
+   * 内容没变时也 setState ⇒ 决策流 300+ runs 全量展开 + 60 张卡片重算（约 600–1000 节点）。
+   * 这里落地前比一次整包指纹（`prismStateGate.ts`），相同就整条刷新路径都不进渲染。
+   */
+  type PrismPayload = Awaited<ReturnType<typeof api.prismState>>
+  const stateGateRef = React.useRef<{ push: (r: PrismPayload) => boolean } | null>(null)
+  if (stateGateRef.current === null) stateGateRef.current = createStateGate<PrismPayload>((r) => setState(r))
+
   /** 只拉行情状态：写操作后刷新用这个（自检是真实 LLM 调用，不能每次保存都跑） */
   const load = React.useCallback((): void => {
     setErr(null)
-    api.prismState().then((r) => setState(r)).catch((e: Error) => setErr(e.message))
+    api.prismState().then((r) => stateGateRef.current?.push(r)).catch((e: Error) => setErr(e.message))
   }, [])
   /** 自检：只在挂载时跑一次；宿主侧会真发 llm.stream（最长 20s），不得挂在保存路径上 */
   const loadSelf = React.useCallback((): void => {
@@ -249,7 +253,7 @@ export function PrismPage(props: { active?: boolean; redUp?: boolean } = {}): Re
    * 自动决策由宿主在交易时段按周期写入，页面必须能自己看到新记录，否则要手动刷新。
    */
   const refresh = React.useCallback((): void => {
-    api.prismState().then((r) => setState(r)).catch(() => undefined)
+    api.prismState().then((r) => stateGateRef.current?.push(r)).catch(() => undefined)
   }, [])
   /**
    * 30s 静默刷新（AUDIT-CLIENT-PERF P1-1）：**只有"本页是当前页"时才建定时器**。

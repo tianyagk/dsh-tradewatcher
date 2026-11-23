@@ -5,6 +5,7 @@
  */
 import React from 'react'
 import { chartDomain } from './trendView.ts'
+import { sameMiniTrendProps, sameSparklineProps } from './memoProps.ts'
 
 export interface SparkPoint {
   t: number
@@ -40,7 +41,7 @@ export interface SparklineProps {
   timeLabels?: boolean
 }
 
-export function Sparkline(props: SparklineProps): React.ReactElement {
+export const Sparkline = React.memo(function Sparkline(props: SparklineProps): React.ReactElement {
   const { points, width, height, up, upColor, downColor, timeLabels } = props
   const padX = 2
   const padTop = 6
@@ -153,11 +154,11 @@ export function Sparkline(props: SparklineProps): React.ReactElement {
         )
       : null,
   )
-}
+}, sameSparklineProps)
 
 /** ─── row-level mini sparkline (tiny polyline only) ─────────────────────── */
 
-export function MiniTrend(props: {
+export const MiniTrend = React.memo(function MiniTrend(props: {
   values: number[]
   width?: number
   height?: number
@@ -226,7 +227,7 @@ export function MiniTrend(props: {
       opacity: dir === null ? 0.85 : 1,
     }),
   )
-}
+}, sameMiniTrendProps)
 
 /** ─── five-day intraday overlay (one polyline per session) ──────────────── */
 

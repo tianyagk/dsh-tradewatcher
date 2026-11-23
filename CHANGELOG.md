@@ -11,6 +11,38 @@
 
 ---
 
+## v0.216.0 — 低效专项第二批：rescue-log 分片 + 客户端 8 条 P2
+
+`npm run check` **1870 / 1870 × 2 时区**（1848 → 1870）+ build（73 项）+ `tsc` 0。
+
+### 宿主：`rescue-log` 按日分片
+
+| 项 | 前 | 后 |
+| --- | --- | --- |
+| 落盘 | 单文件 7.7 MB，每次整份 parse 73ms + stringify 53ms | 只写当天分片 185 KB + meta 95 KB，**9.6–10.2 ms** |
+| 写量 | 交易时段 ≈2.0–2.3 GB/日 | **≈84 MB/日** |
+| 启动 | 整份加载 | 迁移 → 裁剪 → 只读当天 + 近 5 天（6 个文件） |
+
+- 旧 `rescue-log.json` 自动迁移：53 天 / 5 653 条 → 53 个日分片 + `meta.json`，原文件改名保留（逐字节一致），条目守恒；首次迁移 ≈0.69s。
+- 保留 30 天，超出删除并留痕；`?day=` 按日读分片；未新增路由。
+
+### 客户端 8 条 P2（110 条断言）
+
+| # | 问题 | 改法 | 量化 |
+| --- | --- | --- | --- |
+| P2-5 | 决策流 180 个 ResizeObserver + 180 次强制布局 | `clampBatch` 单例批处理（写/读分离） | 观察者 **180→1**、强制布局 **180→1** |
+| P2-4 | 30s 刷新无条件重建 600–1000 节点 | `prismStateGate` 双 FNV-1a 指纹闸 | 内容未变：**20 次渲染→0** |
+| P2-8 | 缩略图 ≈40 次 `/trend`/分钟 + ≤80 次逐行 setState | `commitBatch` 按帧合并 + TTL 90s→5min | 请求 **40→16/分钟**、提交 **≤80→≤1/帧** |
+| P2-6 | 全仓无 memo 边界（RescuePanel 1049 行） | `React.memo` + 按值比较器 | 输入不变即跳过整块渲染 |
+| P2-9 | 拖拽每次 mousemove 重渲整个抽屉 + 监听残留 | `splitDragSession`（rAF 合并） | 同帧 5 次→**1 次**；监听残留 2→0 |
+| P2-15 | 悬浮卡每次移动遍历 overflow 祖先 + 2N+1 次 DOM 读 | `hoverPlacement` 缓存几何 | 移动 20 次只采样 **1 次** |
+| P2-7 | 筹码缓存无上限（50 只 ≈4.2 MB） | `CHIPS_CACHE_MAX=24` 按 `at` 淘汰 | **4.2 MB→2.0 MB** |
+| P2-10 | `shClockText(0)` 显示 08:00、`undefined` 抛 RangeError | `marketTime` 入口统一守卫 | 28 组非法值全部 `—`、0 抛错 |
+
+### 验证
+
+`npm run check` **1870 / 1870 × 2 时区** + build（73 项）+ `tsc` 0；新增 `rescueLogShard`（13 用例 / 84 断言）、`clientPerfP2`（9 用例 / 110 断言）。
+
 ## v0.215.0 — 全仓异常与低效专项：3 条 P0 + 8 条 P1
 
 三份审计：`docs/AUDIT-HOST-PERF.md`（P0 3 / P1 9 / P2 8）、`docs/AUDIT-CLIENT-PERF.md`（P0 0 / P1 8 / P2 17）、`docs/AUDIT-TESTS-PERF.md`（P1 5）。

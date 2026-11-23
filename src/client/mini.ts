@@ -1,10 +1,11 @@
 /**
  */
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { subscribeTicker } from './ticker.ts'
 import { shouldPollQuotes } from '../shared/pollGate.ts'
 import { api } from './api.ts'
 import { isUsableAvg } from './trendView.ts'
+import { createFrameBatch, type FrameBatch } from './commitBatch.ts'
 
 export interface MiniData {
   values: number[]
@@ -27,7 +28,15 @@ export interface MiniData {
 }
 
 const miniCache = new Map<string, { exp: number; data: MiniData | null }>()
-const MINI_TTL = 90_000
+/**
+ * 缩略图 TTL（AUDIT-CLIENT-PERF P2-8）。
+ *
+ * 旧值 90s：ticker 60s 一拍 ⇒ 每个标的**每两拍**回源一次，80 行 ≈ 40 次 `/trend`/分钟，
+ * 且每回一行就 `setData` 一次（最多 80 次整页重渲染）。
+ * 缩略图是 56×20 的趋势提示，不是报价本身：5 分钟粒度足够，回源降到 ≈16 次/分钟（-60%）。
+ * 逐行提交已改为**每帧合并一次**（见 `commitBatch.ts`），重渲染从 ≤80 次/拍到 ≤1 次/帧。
+ */
+export const MINI_TTL = 5 * 60_000
 /** 失败结果的短缓存：只挡住同一轮里的重复请求，不长时间污染显示 */
 const MINI_FAIL_TTL = 15_000
 const MAX_ROWS = 80
@@ -88,22 +97,38 @@ export function useMiniTrends(secids: string[], enabled: boolean): Record<string
   const key = useMemo(() => [...new Set(secids)].sort().join(','), [secids])
   const ids = useMemo(() => (key === '' ? [] : key.split(',')).slice(0, MAX_ROWS), [key])
   const [data, setData] = useState<Record<string, MiniData>>({})
+  /**
+   * 行结果按帧合并（P2-8）：4 并发池逐行回包时，同一帧内最多提交一次；
+   * 合并时保持"null 删除条目 / 新值覆盖"的旧语义，`setData` 的引用不变性也照旧。
+   */
+  const batchRef = useRef<FrameBatch<MiniData | null> | null>(null)
+  if (batchRef.current === null) {
+    batchRef.current = createFrameBatch<MiniData | null>((merged) => {
+      setData((prev) => {
+        let next = prev
+        for (const [secid, value] of merged) {
+          if (value === null) {
+            if (next[secid] === undefined) continue
+            if (next === prev) next = { ...prev }
+            delete next[secid]
+            continue
+          }
+          if (next[secid] === value) continue
+          if (next === prev) next = { ...prev }
+          next[secid] = value
+        }
+        return next
+      })
+    })
+  }
+  useEffect(() => () => { batchRef.current?.dispose() }, [])
 
   useEffect(() => {
     if (!enabled || ids.length === 0) return
     let alive = true
     const sink = (secid: string, value: MiniData | null): void => {
       if (!alive) return
-      setData((prev) => {
-        if (value === null) {
-          if (prev[secid] === undefined) return prev
-          const next = { ...prev }
-          delete next[secid]
-          return next
-        }
-        if (prev[secid] === value) return prev
-        return { ...prev, [secid]: value }
-      })
+      batchRef.current?.push(secid, value)
     }
     // Seed from the module cache instantly, then refresh whatever is stale.
     const seed = (): void => {

@@ -37,6 +37,12 @@ import { UpstreamCoolingError, withHostBreaker } from './breakerFetch.ts'
 import { noteDegraded, noteHostFailure, noteHostSkipped, noteHostSuccess, shortError } from './degrade.ts'
 import { normalizeVolUnits, tencentVolToHands } from './klineUnits.ts'
 
+/** K 线重试退避（毫秒）：默认 500；测试用 `TW_KLINE_RETRY_MS=0` 免等（上游全 stub 时没有真实网络可等） */
+const klineRetryBackoffMs = (): number => {
+  const raw = Number(process.env.TW_KLINE_RETRY_MS)
+  return Number.isFinite(raw) && raw >= 0 ? raw : 500
+}
+
 export { UpstreamCoolingError }
 
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
@@ -3320,7 +3326,7 @@ async function requestKlineRaw(secid: string, klt: number, lmt: number, fqt: FqM
       }
     }
     if (!triedThisRound) throw new UpstreamCoolingError('东财历史行情主机全部处于熔断冷却中')
-    if (attempt === 0) await new Promise((r) => setTimeout(r, 500))
+    if (attempt === 0 && klineRetryBackoffMs() > 0) await new Promise((r) => setTimeout(r, klineRetryBackoffMs()))
   }
   // 全程一个成功回包都没有 ⇒ 上游故障（transient）；有回包但没数据 ⇒ 结构性缺失（no-source）
   if (!replied) noteUpstreamFailure('kline')

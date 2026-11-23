@@ -1570,14 +1570,20 @@ export function makeTradeRoutes(
             // 客户端 `rescueCardPointsOf()` 对新旧两种编码都能还原。落盘快照仍是 dense。
             const wireSnapshot = wireRescueSnapshot(snapshot)
             if (day !== null && /^\d{4}-\d{2}-\d{2}$/.test(day)) {
+              // 历史回看：**按日期读那一份分片**（P1-5）。读不出来就 events/intraday 为空 + dayWhy，
+              // 界面显示「—」+ 原因，而不是把整块历史拖垮。
+              const detail = await rescue.dayView(day)
               send(res, 200, {
                 snapshot: wireSnapshot,
                 history: rescue.history(30),
                 // 口径字符串随结果返回（与算法同源）
                 methodology: RESCUE_METHODOLOGY,
                 day,
-                dayEvents: rescue.eventsOf(day),
-                dayIntraday: rescue.intradayOf(day),
+                dayEvents: detail.events,
+                dayIntraday: detail.intraday,
+                dayWhy: detail.why,
+                daySource: detail.source,
+                log: rescue.logStatus(),
                 calibrated: rescue.calibratedInfo,
                 calibration: rescue.calibrationInfo,
               })
@@ -1587,6 +1593,8 @@ export function makeTradeRoutes(
             send(res, 200, {
               snapshot: wireSnapshot, history: rescue.history(30), calibrated: rescue.calibratedInfo,
               calibration: rescue.calibrationInfo,
+              // 落盘布局（分片/读窗口/保留上限/最近清理）—— 只在回包里，不新增路由
+              log: rescue.logStatus(),
               // 聚合：此前只反映单台 push2delay 的状态（其它主机被限流时横幅显示"正常"，
               // 而 push2delay 单独熔断时又让界面以为整组不可用）
               breaker: b,

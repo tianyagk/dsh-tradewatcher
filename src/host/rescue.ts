@@ -1,8 +1,8 @@
 /**
  */
 import { fetchSinaSuperNet, superShareOf } from './etfFlow.ts'
-import { mkdir, readFile } from 'node:fs/promises'
-import { join } from 'node:path'
+import { mkdir } from 'node:fs/promises'
+import { existsSync } from 'node:fs'
 import type {
   DailyBarLite, RescueActiveWindow, RescueBottomLane, RescueConfig, RescueCoverage, RescueCoverageConfirm1,
   RescueCoverageFamily, RescueDaySummary, RescueEtfMeta, RescueEtfView,
@@ -22,7 +22,13 @@ import { externalCalendarStatus, externalClosureOf, loadTradingCalendar, monthCo
 import { buildBottomLane, calibrateAcross } from './bottom.ts'
 import { SingleFlight } from './singleflight.ts'
 import { dataHome } from './store.ts'
-import { mergeByKey, updateJsonLocked } from './lock.ts'
+import { mergeByKey, withFileLocks } from './lock.ts'
+import { writeFileSetAtomic } from './atomic.ts'
+import {
+  RESCUE_LOG_DEFAULT_KEEP_DAYS, RESCUE_LOG_DEFAULT_READ_DAYS, RescueLogStore, nodeRescueLogIo,
+  rescueLogKeepDays, rescueLogReadDays, shiftDay,
+  type DayShard, type MigrationReport, type PruneReport, type RescueLogIo,
+} from './rescueLog.ts'
 import { withHostBreaker } from './breakerFetch.ts'
 
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
@@ -125,7 +131,6 @@ export function pulseBandLabel(elapsedMin: number): string {
 }
 /**自建样本满该天数后，F2 改用自建分位数 */
 export const SELF_SAMPLE_MIN_DAYS = 20
-const KEEP_DAYS = 60
 const SAMPLE_RING = 40
 /**写入事件记录的引擎版本（用于在面板上识别旧口径历史事件） */
 /**
@@ -200,45 +205,50 @@ export function stripSnapshot(s: RescueSnapshot): PersistedSnapshot {
 }
 
 /**
- * 锁内合并（rescue-log 专用）：把"磁盘上那份"与"本进程这份"并成一份。
- * 每条规则都对应一种会丢的数据；改动前先看 docs/AUDIT-IMPL42.md §5.1。
+ * 锁内合并（**当日分片**专用）：把"这一天在磁盘上的那份"与"本进程这份"并成一份。
+ *
+ * 每条规则都对应一种会丢的数据；改动前先看 docs/AUDIT-IMPL42.md §5.1：
+ *  ① 计数取"磁盘现值 + 我自上次成功写盘以来的拍数"⇒ 两个进程各 +1 都留下（不是谁后写谁赢）；
+ *  ② 当日峰值不能被另一次较小的观测抹小；
+ *  ③ 事件/抽样/出分日志按 key 取并集，抽样只留最近 120 点（与旧口径一致）。
+ *
+ * 与旧实现的区别只有一处：**不再有"整份 days 裁剪"** —— 历史日的存活由分片文件与
+ * `RescueLogStore.prune`（默认 30 天）负责，所以这里只碰今天这一份。
  */
-function mergeRescueLog(disk: unknown, mem: LogFile, base: Map<string, number>): LogFile {
-  const onDisk = (disk !== null && typeof disk === 'object' ? disk : {}) as Partial<LogFile>
-  const days: Record<string, DayLog> = { ...(onDisk.days ?? {}) }
-  for (const [day, baseSamples] of base) {
-    const mine = mem.days[day]
-    if (mine === undefined) continue
-    const theirs = days[day]
-    // ① 计数：磁盘现值 + 我自上次成功写盘以来的拍数 ⇒ 两个进程各 +1 都留下
-    const delta = Math.max(0, mine.samples - baseSamples)
-    // ② 当日峰值不能被另一次较小的观测抹小
-    const peak: Record<string, number> = { ...(theirs?.etfPeak ?? {}) }
-    for (const [secid, v] of Object.entries(mine.etfPeak ?? {})) {
-      const prev = peak[secid]
-      if (typeof prev !== 'number' || v > prev) peak[secid] = v
-    }
-    const scoreLog = theirs?.scoreLog === undefined && mine.scoreLog === undefined
-      ? undefined
-      : mergeByKey(theirs?.scoreLog ?? [], mine.scoreLog ?? [], (s) => s.ts)
-    days[day] = {
-      ...theirs,                                     // 别的进程写进同一日的其它字段先留着
-      ...mine,                                       // 本进程的视图（gap / etfLast / …）
-      samples: (typeof theirs?.samples === 'number' ? theirs.samples : 0) + delta,
-      events: mergeByKey(theirs?.events ?? [], mine.events ?? [], (e) => e.ts),
-      intraday: mergeByKey(theirs?.intraday ?? [], mine.intraday ?? [], (p) => p.hhmm).slice(-120),
-      etfPeak: peak,
-      etfLast: { ...(theirs?.etfLast ?? {}), ...(mine.etfLast ?? {}) },
-      ...(scoreLog === undefined ? {} : { scoreLog }),
-    }
+function mergeDayLog(disk: unknown, mine: DayLog, baseSamples: number): DayLog {
+  const theirs = (disk !== null && typeof disk === 'object' ? disk : {}) as Partial<DayLog>
+  // ① 计数：磁盘现值 + 我自上次成功写盘以来的拍数
+  const delta = Math.max(0, mine.samples - baseSamples)
+  // ② 当日峰值不能被另一次较小的观测抹小
+  const peak: Record<string, number> = { ...(theirs.etfPeak ?? {}) }
+  for (const [secid, v] of Object.entries(mine.etfPeak ?? {})) {
+    const prev = peak[secid]
+    if (typeof prev !== 'number' || v > prev) peak[secid] = v
   }
-  // ③ 裁剪放在**合并结果**上：只裁内存那份的话，被裁掉的旧日期会从磁盘"复活"
-  const keys = Object.keys(days).sort()
-  while (keys.length > KEEP_DAYS) {
-    const drop = keys.shift()
-    if (drop !== undefined) delete days[drop]
+  const scoreLog = theirs.scoreLog === undefined && mine.scoreLog === undefined
+    ? undefined
+    : mergeByKey(theirs.scoreLog ?? [], mine.scoreLog ?? [], (s) => s.ts)
+  return {
+    ...theirs,                                       // 别的进程写进同一日的其它字段先留着
+    ...mine,                                         // 本进程的视图（gap / etfLast / …）
+    samples: (typeof theirs.samples === 'number' ? theirs.samples : 0) + delta,
+    events: mergeByKey(theirs.events ?? [], mine.events ?? [], (e) => e.ts),
+    intraday: mergeByKey(theirs.intraday ?? [], mine.intraday ?? [], (p) => p.hhmm).slice(-120),
+    etfPeak: peak,
+    etfLast: { ...(theirs.etfLast ?? {}), ...(mine.etfLast ?? {}) },
+    ...(scoreLog === undefined ? {} : { scoreLog }),
   }
-  // ④ 本进程没动过的日（base 里没有的 key）一律用磁盘那份 —— 别的进程写的整天记录不许被我覆盖
+}
+
+/** 跨日小题（baselines / lastSnapshot / selfSamples / 进度曲线）：小、天天写、独立文件 */
+type RescueLogMeta = Omit<LogFile, 'days'>
+
+/**
+ * 锁内合并（`meta.json` 专用）：规则与旧 `mergeRescueLog` 的 ④ 段一致 ——
+ * 别的进程写的整天记录不被我覆盖，自建样本按 day 取并集，快照取更新的那份。
+ */
+function mergeRescueMeta(disk: unknown, mem: LogFile): RescueLogMeta {
+  const onDisk = (disk !== null && typeof disk === 'object' ? disk : {}) as Partial<RescueLogMeta>
   const selfSamples: LogFile['selfSamples'] = { ...(onDisk.selfSamples ?? {}) }
   for (const [secid, list] of Object.entries(mem.selfSamples ?? {})) {
     selfSamples[secid] = mergeByKey(selfSamples[secid] ?? [], list, (s) => s.day)
@@ -250,7 +260,6 @@ function mergeRescueLog(disk: unknown, mem: LogFile, base: Map<string, number>):
   }
   return {
     v: mem.v,
-    days,
     lastSnapshot: pickSnapshot(onDisk.lastSnapshot, mem.lastSnapshot),
     baselines: { ...(onDisk.baselines ?? {}), ...mem.baselines },
     selfSamples,
@@ -1846,11 +1855,42 @@ export async function fetchQuoteSource(
 
 /**── 采样器 ────────────────────────────────────────────────────────────── */
 
+/**
+ * 构造注入（只在测试里用；生产不传）：
+ *  · `logIo`：读路径的 fs 替身 —— 断言「读某一天只打开 1 个文件」需要数 open；
+ *  · `keepDays`/`readDays`：覆盖 `RESCUE_LOG_KEEP_DAYS` / `RESCUE_LOG_READ_DAYS`（避免测试改全局 env）。
+ */
+export interface RescueMonitorDeps {
+  logIo?: RescueLogIo
+  keepDays?: number
+  readDays?: number
+}
+
 export class RescueMonitor {
   private dir: string
   private file: LogFile = { v: 1, days: {}, lastSnapshot: null, baselines: {}, selfSamples: {}, progressCurve: null, progressSd: null, progressDays: 0, updatedAt: 0 }
   private loaded: Promise<void> | null = null
   private config: RescueConfig
+  /**
+   * 按日分片仓（AUDIT-HOST-PERF P1-5）：`<dir>/rescue-log/<YYYY-MM-DD>.json` + `meta.json`。
+   * 旧单文件 `rescue-log.json` 只在首次启动时被读一次（拆分后改名保留）。
+   */
+  private store: RescueLogStore
+  private deps: RescueMonitorDeps
+  /** 分片保留天数（`RESCUE_LOG_KEEP_DAYS`，默认 30） */
+  private keepDays = RESCUE_LOG_DEFAULT_KEEP_DAYS
+  /** 读取窗口：当天 + 最近 N 天（`RESCUE_LOG_READ_DAYS`，默认 5） */
+  private readDays = RESCUE_LOG_DEFAULT_READ_DAYS
+  /** 最近一次按保留上限的清理结果（状态里要能看到「已清理 N 天」） */
+  private lastPrune: PruneReport | null = null
+  /** 最近一次旧单文件迁移的结果（首次启动为 null = 本来就没有旧文件） */
+  private lastMigration: MigrationReport | null = null
+  /** 最近一次成功写盘（当天分片 + meta 的字节数与耗时；状态与排障用） */
+  private lastWrite: { at: number; day: string; shardBytes: number; metaBytes: number; ms: number } | null = null
+  /** 读不出来的分片：day ⇒ 原因（界面显示「—」+ 原因；**不影响其它天**） */
+  private dayIssues = new Map<string, string>()
+  /** `meta.json` 读不出来的原因（跨日小题：基准/自建样本/上次快照） */
+  private metaWhy: string | null = null
   private ring: Record<string, Sample[]> = {}
   private today: DayLog = { events: [], intraday: [], samples: 0, gap: false }
   /**
@@ -1921,15 +1961,13 @@ export class RescueMonitor {
   /**最近一次成功采样的数据来源（未采过样时为 null，避免把"还没采"说成"来自东财"） */
   private quoteSource: QuoteSource | null = null
 
-  constructor(dir: string = dataHome(), config?: RescueConfig) {
+  constructor(dir: string = dataHome(), config?: RescueConfig, deps: RescueMonitorDeps = {}) {
     this.dir = dir
+    this.deps = deps
+    this.store = new RescueLogStore(dir, deps.logIo ?? nodeRescueLogIo)
     // 覆盖广度附加分**默认关闭**（阶段一：只记录 + 展示）：显式写 false，不靠 undefined 兜底 ——
     // 配置缺键时 `rescueCoverageBonusOf` 也是恒 0，但快照里的 `coverageEnabled` 必须是明确的 true/false
     this.config = config ?? { enabled: true, intervalSec: 30, tailIntervalSec: 15, tailFrom: '14:30', universe: [], rescueCoverageEnabled: false }
-  }
-
-  private path(): string {
-    return join(this.dir, 'rescue-log.json')
   }
 
   async init(): Promise<void> {
@@ -1938,30 +1976,54 @@ export class RescueMonitor {
     if (this.loaded !== null) return this.loaded
     this.loaded = (async () => {
       await mkdir(this.dir, { recursive: true }).catch(() => undefined)
+      this.keepDays = this.deps.keepDays ?? rescueLogKeepDays()
+      this.readDays = this.deps.readDays ?? rescueLogReadDays()
+
+      // ① 旧单文件 ⇒ 日分片（一次性）。旧文件**改名保留**，永不删除。
       try {
-        const raw = await readFile(this.path(), 'utf8')
-        const parsed = JSON.parse(raw) as Partial<LogFile>
-        this.file = {
-          v: 1,
-          days: parsed.days ?? {},
-          lastSnapshot: parsed.lastSnapshot ?? null,
-          baselines: parsed.baselines ?? {},
-          selfSamples: parsed.selfSamples ?? {},
-          progressCurve: Array.isArray(parsed.progressCurve) && parsed.progressCurve.length === 49 ? parsed.progressCurve : null,
-          // 长度必须正好 49 且全为有限非负数（否则当作没有 ⇒ 回落时点系数，不静默用一个坏基线）
-          progressSd: Array.isArray(parsed.progressSd) && parsed.progressSd.length === 49 && parsed.progressSd.every((x: unknown) => typeof x === 'number' && Number.isFinite(x) && x >= 0) ? parsed.progressSd : null,
-          progressDays: typeof parsed.progressDays === 'number' ? parsed.progressDays : 0,
-          updatedAt: typeof parsed.updatedAt === 'number' ? parsed.updatedAt : 0,
+        const migrated = await this.store.migrateLegacy()
+        if (migrated !== null) {
+          this.lastMigration = migrated
+          if (migrated.why !== null) console.warn(`[tradewatcher] rescue-log 迁移：${migrated.why}`)
+          else console.log(`[tradewatcher] rescue-log 迁移完成：${migrated.days} 天分片 / ${migrated.entries} 条 / ${migrated.ms}ms`)
         }
-      } catch {
-        /* 首次：空库 */
+      } catch (error) {
+        this.lastMigration = {
+          at: Date.now(), ms: 0, bytes: 0, days: 0, entries: 0, renamedTo: null, skipped: [],
+          why: `迁移失败（旧文件保留原处，下次启动重试）：${error instanceof Error ? error.message : String(error)}`,
+        }
+        console.warn('[tradewatcher] rescue-log 迁移失败（旧文件保留原处）:', String(error))
       }
+
+      // ② 跨日小题（基准 / 自建样本 / 上次快照 / 进度曲线）—— 小文件，不再随日增长
+      const meta = await this.store.readMeta()
+      this.metaWhy = meta.why
+      if (meta.why !== null) console.warn(`[tradewatcher] rescue-log ${meta.why}`)
+      const m = meta.meta ?? {}
+      this.file = {
+        v: 1,
+        days: {},
+        lastSnapshot: (m.lastSnapshot ?? null) as LogFile['lastSnapshot'],
+        baselines: (m.baselines !== null && typeof m.baselines === 'object' ? m.baselines : {}) as LogFile['baselines'],
+        selfSamples: (m.selfSamples !== null && typeof m.selfSamples === 'object' ? m.selfSamples : {}) as LogFile['selfSamples'],
+        progressCurve: Array.isArray(m.progressCurve) && m.progressCurve.length === 49 ? (m.progressCurve as number[]) : null,
+        // 长度必须正好 49 且全为有限非负数（否则当作没有 ⇒ 回落时点系数，不静默用一个坏基线）
+        progressSd: Array.isArray(m.progressSd) && m.progressSd.length === 49 && m.progressSd.every((x: unknown) => typeof x === 'number' && Number.isFinite(x) && x >= 0) ? (m.progressSd as number[]) : null,
+        progressDays: typeof m.progressDays === 'number' ? m.progressDays : 0,
+        updatedAt: typeof m.updatedAt === 'number' ? m.updatedAt : 0,
+      }
+
+      // ③ 保留上限：删掉窗口外的日分片（状态里留一条「已清理 N 天」）
+      await this.pruneShards(dayOf(Date.now()))
+
+      // ④ 读窗口：当天 + 最近 N 天（默认 5）—— 其余历史按日期读单份分片，不再整份加载
+      await this.loadWindow()
       this.rollDay()
-      for (const meta of rescueUniverseMeta(this.config.universe)) {
-        if (this.file.baselines[meta.secid] === undefined) {
-          const cal = RESCUE_CALIBRATION.universe.find((u) => u.secid === meta.secid)
+      for (const meta2 of rescueUniverseMeta(this.config.universe)) {
+        if (this.file.baselines[meta2.secid] === undefined) {
+          const cal = RESCUE_CALIBRATION.universe.find((u) => u.secid === meta2.secid)
           if (cal !== undefined && cal.avgAmt20 > 0) {
-            this.file.baselines[meta.secid] = { avgAmt20: cal.avgAmt20, day: RESCUE_CALIBRATION.generatedAt, source: 'calibrated' }
+            this.file.baselines[meta2.secid] = { avgAmt20: cal.avgAmt20, day: RESCUE_CALIBRATION.generatedAt, source: 'calibrated' }
           }
         }
       }
@@ -1969,9 +2031,42 @@ export class RescueMonitor {
     return this.loaded
   }
 
+  /** 把读窗口内的分片装进内存（`day < 今天 − readDays` 的不读） */
+  private async loadWindow(): Promise<void> {
+    const today = dayOf(Date.now())
+    const from = shiftDay(today, -this.readDays)
+    for (const day of await this.store.listDays()) {
+      if (day < from || day > today) continue
+      await this.readDayInto(day)
+    }
+  }
+
+  /** 读一份日分片进内存；读不出来只记「这一天」的原因，不抛错、不带累其它天 */
+  private async readDayInto(day: string): Promise<void> {
+    const got = await this.store.readDay<DayLog>(day)
+    if (got.log !== null) {
+      this.file.days[day] = got.log
+      this.dayIssues.delete(day)
+      return
+    }
+    if (!got.missing) this.dayIssues.set(day, got.why ?? '分片不可读（原因未知）')
+  }
+
+  /** 按保留上限裁剪分片（`meta.json` 与当天分片永不在删除集里） */
+  private async pruneShards(today: string): Promise<void> {
+    try {
+      const report = await this.store.prune(this.keepDays, today)
+      this.lastPrune = report
+      if (report.removed.length > 0) console.log(`[tradewatcher] rescue-log ${report.note}（保留最近 ${report.keepDays} 天）`)
+    } catch (error) {
+      console.warn('[tradewatcher] rescue-log 分片清理失败:', String(error))
+    }
+  }
+
   private rollDay(): void {
     const key = dayOf(Date.now())
     if (this.todayKey === key) return
+    const prev = this.todayKey
     this.bootstrapped.clear()
     this.bootstrapAttempts.clear()
     this.bootstrapFilled = 0
@@ -1980,40 +2075,80 @@ export class RescueMonitor {
     this.file.days[key] = this.today
     // 首次见到该日时记下基准（之后每次**成功写盘**后再重基准，见 persist）
     if (!this.samplesBase.has(key)) this.samplesBase.set(key, this.today.samples)
+    // 内存里只留读窗口内的日（历史按需从分片读，别把 60 天常驻堆里）
+    const from = shiftDay(key, -this.readDays)
+    for (const day of Object.keys(this.file.days)) {
+      if (day < from) delete this.file.days[day]
+    }
     this.ring = {}
     this.lastIntradayMin = -1
     this.lastLevel = this.today.events.length > 0 ? this.today.events[this.today.events.length - 1].level : 0
+    // 换日 ⇒ 重新按保留上限裁剪（只在"真的换了一天"时做；首次 init 已单独裁过一次）
+    if (prev !== '') void this.pruneShards(key)
   }
 
   /**
-   * 落盘：tmp + rename 原子替换，并用 writeChain 串行化。
+   * 落盘：**只写当天分片 + meta.json**，用 `writeChain` 串行化。
    *
-   * 此前是裸 writeFile，且本文件已有 4 处 persist 调用点（基准补算 / tick / 周期 / calibrate），
-   * 并发写同一文件一旦交错或被中断，init() 解析失败即静默空库，随后一次 persist 覆盖
-   * → 60 天历史 + 自建样本 + 进度曲线 + 基准全部永久丢失。
+   * 旧实现把 60 天全量（实测 7.67 MB）交给 `updateJsonLocked` 整份 parse(73ms)+stringify(53ms)
+   * 再写回，交易时段 ~300 次/日 ⇒ ≈2 GB 写盘；现在每次只写 `<今天>.json`（~200 KB）与
+   * 跨日 meta（~50 KB），历史分片一个字节都不动（断言：其它分片 mtime 不变）。
+   *
+   * 仍然保留旧实现的两个安全性质：
+   *  · 锁内「读磁盘最新 → 合并 → 写回」⇒ 两个进程各 +1 都留下（docs/AUDIT-IMPL42.md §5.1）；
+   *  · 失败不清基准 ⇒ 这次的增量下次继续算（不会丢）。
    */
   private persist(force = false): Promise<void> {
     const run = this.writeChain.then(async () => {
       const now = Date.now()
       if (!force && now - this.lastPersist < 60_000) return
+      // 跨过北京零点后第一次落盘必须写到**新的一天**的分片（tick 也会换日；flush 单独调用时靠这里）
+      this.rollDay()
       this.lastPersist = now
       this.file.updatedAt = now
       try {
-        // 跨进程：整份覆写 → **锁内「读磁盘最新 → 合并 → 写回」**（KEEP_DAYS 裁剪在合并函数里做）
-        await updateJsonLocked(this.path(), (disk) => mergeRescueLog(disk, this.file, this.samplesBase), {
-          note: 'rescue-log',
-        })
-        // **成功之后**才重基准：失败就不动基准，这次的增量下次继续算（不会丢）
-        for (const day of this.samplesBase.keys()) {
-          const cur = this.file.days[day]?.samples
-          if (typeof cur === 'number') this.samplesBase.set(day, cur)
-        }
+        await this.persistShard(now)
       } catch (error) {
         console.warn('[tradewatcher] rescue persist failed:', String(error))
       }
     })
     this.writeChain = run.catch(() => undefined)
     return run
+  }
+
+  /**
+   * 写「当天分片 + meta」：两把锁一起拿（按路径排序，无死锁），读-合并后用
+   * `writeFileSetAtomic` **一次提交**两个文件 —— 半文件与"分片写了 meta 没写"都不会发生。
+   */
+  private async persistShard(now: number): Promise<void> {
+    const day = this.todayKey
+    const shardPath = this.store.shardPath(day)
+    const metaPath = this.store.metaPath
+    const base = this.samplesBase.get(day) ?? this.today.samples
+    const startedAt = performance.now()
+    await withFileLocks([shardPath, metaPath], async () => {
+      const shardDisk = await this.store.readShardForMerge<DayLog>(day, now)
+      const metaDisk = await this.store.readMetaForMerge(now)
+      // 坏分片已在 readShardForMerge 里隔离改名；这里只留痕（绝不静默覆盖用户数据）
+      if (shardDisk.why !== null) {
+        this.dayIssues.set(day, shardDisk.why)
+        console.warn(`[tradewatcher] rescue-log 当日分片损坏：${shardDisk.why}`)
+      }
+      if (metaDisk.why !== null) {
+        this.metaWhy = metaDisk.why
+        console.warn(`[tradewatcher] rescue-log ${metaDisk.why}`)
+      }
+      const nextShard: DayShard<DayLog> = { v: 1, day, log: mergeDayLog(shardDisk.log, this.today, base), updatedAt: now }
+      const shardText = JSON.stringify(nextShard, null, 1)
+      const metaText = JSON.stringify(mergeRescueMeta(metaDisk.meta, this.file), null, 1)
+      await writeFileSetAtomic([
+        { target: shardPath, text: shardText },
+        { target: metaPath, text: metaText },
+      ])
+      this.samplesBase.set(day, this.today.samples)
+      this.dayIssues.delete(day)
+      this.lastWrite = { at: now, day, shardBytes: Buffer.byteLength(shardText, 'utf8'), metaBytes: Buffer.byteLength(metaText, 'utf8'), ms: Math.round((performance.now() - startedAt) * 10) / 10 }
+    })
   }
 
   getConfig(): RescueConfig {
@@ -2990,7 +3125,13 @@ export class RescueMonitor {
     return { ...this.bottomLast.view, stale: true, computedAt: this.bottomLast.at }
   }
 
-  /**近 60 天每日摘要（历史回看） */
+  /**
+   * 每日摘要（历史回看）。
+   *
+   * ⚠ P1-5 后它的口径变成「**已加载窗口内**的日」：默认当天 + 最近 5 天（`RESCUE_LOG_READ_DAYS`）。
+   * 需要更长的历史请用 `ensureDays(n)` 先按需把分片装进内存（工具侧 30 日前瞻就用这个），
+   * 或 `dayView(day)` 按日期读单份分片 —— 不再为了一次列表把 60 天全量 parse 一遍。
+   */
   history(limit = 30): RescueDaySummary[] {
     const out: RescueDaySummary[] = []
     for (const day of Object.keys(this.file.days).sort().reverse().slice(0, limit)) {
@@ -3007,6 +3148,96 @@ export class RescueMonitor {
 
   intradayOf(day: string): RescueIntradayPoint[] {
     return this.file.days[day]?.intraday ?? []
+  }
+
+  /**
+   * **按需加载**最近 `count` 个分片（工具侧 30 日前瞻用）。
+   * 只读这一批文件；已加载的不重复读。返回已加载的日期（升序）。
+   */
+  async ensureDays(count: number): Promise<string[]> {
+    await this.init()
+    const want = (await this.store.listDays()).slice(-Math.max(1, Math.floor(count)))
+    for (const day of want) {
+      if (this.file.days[day] === undefined) await this.readDayInto(day)
+    }
+    return Object.keys(this.file.days).sort()
+  }
+
+  /**
+   * 历史回看：按日期读**对应的那一份分片**（P1-5 读路径）。
+   *
+   * · 当天 ⇒ 直接用内存（比磁盘新；**零 open**）；
+   * · 其它日 ⇒ 打开 `<day>.json` 一份（**一次 open**，不扫其它分片、不碰旧单文件）；
+   * · 空/损坏/日期不符 ⇒ `events/intraday` 为空 + `why`（界面显示「—」+ 原因），**不影响其它天**。
+   */
+  async dayView(day: string): Promise<{
+    day: string
+    events: RescueSignalEvent[]
+    intraday: RescueIntradayPoint[]
+    scoreLog: Array<Record<string, unknown>>
+    why: string | null
+    source: 'memory' | 'shard'
+  }> {
+    this.rollDay()
+    if (day === this.todayKey && this.file.days[day] !== undefined) {
+      return {
+        day,
+        events: [...this.today.events],
+        intraday: [...this.today.intraday],
+        scoreLog: this.scoreLogOf(day),
+        why: null,
+        source: 'memory',
+      }
+    }
+    const got = await this.store.readDay<DayLog>(day)
+    if (got.log === null) {
+      // 读失败的原因要能被界面看见；"没有这一天"与"这一天坏了"是两件事
+      if (!got.missing) this.dayIssues.set(day, got.why ?? '分片不可读（原因未知）')
+      return { day, events: [], intraday: [], scoreLog: [], why: got.why, source: 'shard' }
+    }
+    this.dayIssues.delete(day)
+    return {
+      day,
+      events: got.log.events ?? [],
+      intraday: got.log.intraday ?? [],
+      scoreLog: (got.log.scoreLog ?? []).map((e) => ({ ...e, factors: e.factors.map((f) => ({ ...f })) })),
+      why: null,
+      source: 'shard',
+    }
+  }
+
+  /**
+   * 落盘布局状态（`/tradewatcher/rescue` 回包里带出）：
+   * 分片目录 / 读窗口 / 保留上限 / 最近一次清理（「已清理 N 天」）/ 首次迁移 / 读不出来的分片。
+   */
+  logStatus(): {
+    layout: 'sharded'
+    dir: string
+    legacyPath: string
+    legacyPresent: boolean
+    readDays: number
+    keepDays: number
+    loadedDays: string[]
+    lastPrune: PruneReport | null
+    lastMigration: MigrationReport | null
+    lastWrite: { at: number; day: string; shardBytes: number; metaBytes: number; ms: number } | null
+    unreadable: Array<{ day: string; why: string }>
+    metaWhy: string | null
+  } {
+    return {
+      layout: 'sharded',
+      dir: this.store.dir,
+      legacyPath: this.store.legacyPath,
+      legacyPresent: existsSync(this.store.legacyPath),
+      readDays: this.readDays,
+      keepDays: this.keepDays,
+      loadedDays: Object.keys(this.file.days).sort(),
+      lastPrune: this.lastPrune,
+      lastMigration: this.lastMigration,
+      lastWrite: this.lastWrite,
+      unreadable: [...this.dayIssues.entries()].map(([day, why]) => ({ day, why })).sort((a, b) => a.day.localeCompare(b.day)),
+      metaWhy: this.metaWhy,
+    }
   }
 
   /**

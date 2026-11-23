@@ -1,5 +1,5 @@
 /**
- * 跨进程计数合并的端到端断言（`rescue-log.json`）。
+ * 跨进程计数合并的端到端断言（`rescue-log/<今天>.json`）。
  *
  * 背景：`RescueMonitor.persist()` 是**整份覆写**，而 `today.samples += 1` 加在本进程内存里
  * ⇒ 两个进程（用户的 `dsh web` + 临时实例；或两条审计链）各自 +1 时，谁后写谁赢，
@@ -12,7 +12,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { execFile } from 'node:child_process'
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -22,7 +22,8 @@ const here = fileURLToPath(new URL('.', import.meta.url))
 const childPath = join(here, 'rescuePersist.child.ts')
 
 interface LogShape {
-  days?: Record<string, { samples?: number; events?: unknown[] }>
+  day?: string
+  log?: { samples?: number; events?: unknown[] }
 }
 
 /** 钉住"现在"：跨北京自然日边界跑测试时，父子进程可能落在不同的 day key 上 */
@@ -52,6 +53,12 @@ test('rescue-log 跨进程：两个真进程各 samples += 1 ⇒ 计数是 +2（
   // 同时起两个进程（第二个稍晚一点点，制造"读同一份旧值"的窗口）
   const [a, b] = await Promise.all([spawnChild(dir, 0), spawnChild(dir, 150)])
   assert.ok(a.includes('child done') && b.includes('child done'), `两个子进程都要正常结束：${a} / ${b}`)
-  const after = JSON.parse(readFileSync(file, 'utf8')) as LogShape
-  assert.equal(after.days?.[today]?.samples, 9, `两次采样都必须留下（初值 7 + 2 = 9）；实际 ${after.days?.[today]?.samples} —— 若为 8 说明后写者覆盖了先写者`)
+  // P1-5：落盘目标是**当天分片**（旧单文件已迁移改名保留，不再被写）
+  const shard = JSON.parse(readFileSync(join(dir, 'rescue-log', `${today}.json`), 'utf8')) as LogShape
+  assert.equal(shard.day, today, '分片自述日期必须等于今天（文件名与内容同源）')
+  assert.equal(shard.log?.samples, 9, `两次采样都必须留下（初值 7 + 2 = 9）；实际 ${shard.log?.samples} —— 若为 8 说明后写者覆盖了先写者`)
+  const migrated = readdirSync(dir).find((f) => f.startsWith('rescue-log.json.migrated-'))
+  assert.ok(migrated !== undefined, '旧单文件必须改名保留（.migrated-<ts>），不能被删')
+  const kept = JSON.parse(readFileSync(join(dir, migrated), 'utf8')) as { days?: Record<string, { samples?: number }> }
+  assert.equal(kept.days?.[today]?.samples, 7, '旧文件按原字节保留（迁移前的 samples=7 还在）')
 })
