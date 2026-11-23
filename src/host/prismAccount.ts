@@ -155,6 +155,37 @@ export function rejectReasonOf(order: PrismOrder, ctx: OrderCheckContext): strin
   return null
 }
 
+/** 已拒绝委托的最小形状（去重闸只认这五项 + 原因） */
+export interface RejectedOrderLike {
+  secid: string
+  side: 'buy' | 'sell'
+  price: number
+  shares: number
+  reason: string
+}
+
+/**
+ * 纯函数：是否与「今日已拒绝」的委托重复。
+ *
+ * 判据（用户裁决）：同 `secid`、同 `side`、`|shares 差| ≤ 100`、`|price 差| / price ≤ 0.5%`。
+ * 价格分母取**前次被拒委托**的价格；前次价格非正 ⇒ 无法比较，按不重复处理。
+ * 返回命中的前次委托（供 reject 文案取原因），未命中返回 null。
+ */
+export function isDuplicateRejected(
+  order: { secid: string; side: 'buy' | 'sell'; price: number; shares: number },
+  rejectedToday: readonly RejectedOrderLike[],
+): RejectedOrderLike | null {
+  for (const prior of rejectedToday) {
+    if (prior.secid !== order.secid || prior.side !== order.side) continue
+    if (Math.abs(prior.shares - order.shares) > 100) continue
+    if (!(prior.price > 0) || !Number.isFinite(order.price)) continue
+    // 0.5% 是闭区间；加 1e-9 只吸收浮点误差，不放宽口径
+    if (Math.abs(prior.price - order.price) > prior.price * 0.005 + 1e-9) continue
+    return prior
+  }
+  return null
+}
+
 /**
  * 成交前的资金/可卖校验（与撮合同一条路径）：
  *   · 买入：成交金额 + 费用 ≤ 可用现金，否则 `现金不足（需 X，可用 Y）`；
@@ -652,6 +683,11 @@ export interface ClampContext {
   costs?: Record<string, number>
   /** 当日回撤（%，负数）；null/缺省 ⇒ 不判熔断 */
   dayDrawdownPct?: number | null
+  /**
+   * 今日（北京时间自然日）已被风控拒绝的委托：命中重复判据的单直接进 rejects，
+   * 不进入后续裁剪/撮合/挂单。缺省 ⇒ 不去重（旧调用方行为不变）。
+   */
+  rejectedToday?: readonly RejectedOrderLike[]
 }
 
 export interface ClampResult {
@@ -662,7 +698,7 @@ export interface ClampResult {
 
 const lot = (shares: number): number => Math.max(0, Math.floor(shares / 100) * 100)
 
-/** 确定性裁剪链：单票 → 行业 → 总仓 → 现金；只裁模型已给的买单，不新建、不重分配；卖出不动。 */
+/** 确定性裁剪链：单票 → 行业 → 总仓 → 现金；只裁模型已给的买单，不新建、不重分配；卖出不动（重复被拒的除外）。 */
 export function clampDecision(decision: PrismDecision, ctx: ClampContext): ClampResult {
   const positions = ctx.positions.map((p) => ({ ...p, value: p.qty * (p.price ?? 0) }))
   const missingPrice = positions.some((p) => p.price === null)
@@ -677,7 +713,24 @@ export function clampDecision(decision: PrismDecision, ctx: ClampContext): Clamp
   const accepted: Array<{ secid: string; industry: string | null; value: number }> = []
   const buyValue = (secid: string): number => positions.filter((p) => p.secid === secid).reduce((sum, p) => sum + p.value, 0) + accepted.filter((x) => x.secid === secid).reduce((sum, x) => sum + x.value, 0)
   const orders: PrismDecision['orders'] = []
+  // 同一轮内多个重复只留一条 reject（按「标的+方向+前次原因」归并，避免刷屏）
+  const duplicateKeys = new Set<string>()
   for (const order of decision.orders) {
+    const prior = isDuplicateRejected(order, ctx.rejectedToday ?? [])
+    if (prior !== null) {
+      const key = `${order.secid}|${order.side}|${prior.reason}`
+      if (!duplicateKeys.has(key)) {
+        duplicateKeys.add(key)
+        rejected.push({
+          secid: order.secid,
+          side: order.side,
+          price: order.price,
+          shares: order.shares,
+          reason: `重复委托（前次拒绝：${prior.reason}）`,
+        })
+      }
+      continue
+    }
     if (order.side === 'sell') { orders.push(order); continue }
     const before = order.shares
     let shares = lot(order.shares)

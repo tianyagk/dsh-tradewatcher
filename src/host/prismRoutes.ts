@@ -15,7 +15,7 @@ import type { PluginWebRoute } from './context.ts'
 import type { PrismStore } from './prismStore.ts'
 import { PrismTradingStore, applyFeeCorrection, clampDecision, copyAtCost, dayStartMismatchOf, equityPointOf, matchTick, placeDecision, rebuildFromOrders, upsertEquity, type QuoteLite } from './prismAccount.ts'
 import type { DataStore } from './store.ts'
-import type { PrismAccount, PrismFill, PrismSettings, PrismState } from '../shared/prism.ts'
+import type { PrismAccount, PrismFill, PrismOrder, PrismRun, PrismSettings, PrismState } from '../shared/prism.ts'
 import { PRISM_INTERVAL_OPTIONS, PRISM_MAX_TIMES, PRISM_SKELETON_MAX } from '../shared/prism.ts'
 import { backfillNews, incrementalNews } from './prismNews.ts'
 import { runPrismAnalysis, type PrismInputs } from './prismPipeline.ts'
@@ -25,7 +25,7 @@ import { industryExposureOf, needsIndustryOf, unavailableExposure } from './pris
 import { applyDrawdownGate, drawdownGateOf, evaluationOf, EVAL_MIN_SAMPLE } from './prismEval.ts'
 import { prismDeskOf } from './prismData.ts'
 import { appendPrismLedger, applyPositionOp, validateConstraints } from './prismDeskWrite.ts'
-import { dayOf } from './time.ts'
+import { dayOf, hhmmOf } from './time.ts'
 
 export interface PrismRouteDeps {
   store: PrismStore
@@ -95,6 +95,66 @@ const industryDataOf = async (secids: string[]): Promise<{ map: Record<string, {
   }
 }
 
+/** 一条「今日已被风控拒绝」的委托（提示词与去重闸共用） */
+export interface RejectedTodayOrder {
+  id: string
+  secid: string
+  name: string
+  side: 'buy' | 'sell'
+  price: number
+  shares: number
+  decidedAt: number
+  reason: string
+}
+
+/**
+ * 被拒原因：`skipReason` → `rejectReason` → 当日各轮 `decision.rejects` 对应条目的 `reason` → `—`。
+ * 不猜：三级都缺就写 `—`（提示词里不得编原因）。
+ */
+export function rejectedReasonOf(order: PrismOrder, runs: readonly PrismRun[] = []): string {
+  const skip = order.skipReason?.trim() ?? ''
+  if (skip !== '') return skip
+  const direct = order.rejectReason?.trim() ?? ''
+  if (direct !== '') return direct
+  for (const run of runs) {
+    if (run.day !== order.day) continue
+    const hit = run.decision?.rejects.find((r) => r.secid === order.secid && r.side === order.side && r.shares === order.shares && r.price === order.price)
+    if (hit !== undefined && hit.reason.trim() !== '') return hit.reason
+  }
+  return '—'
+}
+
+/** 今日（`day` = 北京自然日）被风控拒绝的委托：按 `decidedAt` 倒序，最多 `limit` 条（默认 10） */
+export function rejectedTodayOf(
+  orders: readonly PrismOrder[],
+  day: string,
+  runs: readonly PrismRun[] = [],
+  limit = 10,
+): RejectedTodayOrder[] {
+  return orders
+    .filter((o) => o.status === 'rejected' && o.day === day)
+    .sort((a, b) => b.decidedAt - a.decidedAt)
+    .slice(0, limit)
+    .map((o) => ({
+      id: o.id,
+      secid: o.secid,
+      name: o.name,
+      side: o.side,
+      price: o.price,
+      shares: o.shares,
+      decidedAt: o.decidedAt,
+      reason: rejectedReasonOf(o, runs),
+    }))
+}
+
+/** 提示词里的「今日已被风控拒绝的委托」段落正文；无 ⇒ `—（今日无被拒委托）` */
+export function rejectedTodayTextOf(items: readonly RejectedTodayOrder[]): string {
+  if (items.length === 0) return '—（今日无被拒委托）'
+  return items
+    .map((o) => `${hhmmOf(o.decidedAt)} ${o.side === 'buy' ? '买入' : '卖出'} ${o.name} ${o.shares.toLocaleString('en-US')} 股 @${o.price} — 原因：${o.reason}`)
+    .join('\n')
+}
+
 export const prismInputsOf = async (deps: PrismRouteDeps): Promise<PrismInputs> => {
   const watch = deps.data.watchData().items
   const port = deps.data.portData()
@@ -112,7 +172,8 @@ export const prismInputsOf = async (deps: PrismRouteDeps): Promise<PrismInputs> 
       return `${q.name ?? secid}：${q.price}（${q.pct === null ? '—' : `${q.pct.toFixed(2)}%`}）`
     })
     .join('\n')
-  const pending = deps.trading.orders().filter((o) => o.status === 'pending')
+  const allOrders = deps.trading.orders()
+  const pending = allOrders.filter((o) => o.status === 'pending')
   const account = deps.trading.account()
   const accountPrices: Record<string, number | null> = {}
   for (const p of account.positions) accountPrices[p.secid] = quotes[p.secid]?.price ?? null
@@ -129,7 +190,16 @@ export const prismInputsOf = async (deps: PrismRouteDeps): Promise<PrismInputs> 
       ? '—（无持仓与现金）'
       : exposure.rows.map((r) => `${r.name}：${r.weight.toFixed(2)}%（市值 ${r.value.toFixed(2)}${r.limitPct === null ? '' : `，上限 ${r.limitPct}%`}）`).join('\n') +
         `\n已归类 ${exposure.classifiedPct.toFixed(2)}% + 未归类 ${exposure.unclassifiedPct.toFixed(2)}% = 100.00%`
-  return { positions, account: accountSnapshot, quotes: `${quoteText}\n【待成交挂单】\n${pendingText}`, news, skeleton: deps.store.skeleton(), exposure: exposureText }
+  // 今日（北京时间）已被风控拒绝的委托：模型必须看见上一轮为何被拒，避免按周期重复提交
+  const rejectedText = rejectedTodayTextOf(rejectedTodayOf(allOrders, dayOf((deps.now ?? Date.now)()), deps.store.runs()))
+  return {
+    positions,
+    account: accountSnapshot,
+    quotes: `${quoteText}\n【待成交挂单】\n${pendingText}\n【今日已被风控拒绝的委托】\n${rejectedText}`,
+    news,
+    skeleton: deps.store.skeleton(),
+    exposure: exposureText,
+  }
 }
 
 const kickNews = (store: PrismStore): void => {
@@ -283,6 +353,9 @@ export async function runPrismForSlot(deps: PrismRouteDeps, slot: string): Promi
   const dayDrawdownPct = lastEq !== undefined && lastEq.equity > 0 && account.dayStartEquity !== null
     ? ((lastEq.equity - account.dayStartEquity) / account.dayStartEquity) * 100
     : null
+  // 服务端去重闸（最后防线）：今日已因同一原因被拒、且标的/方向/股数/价格几乎相同的单
+  // 不再进入撮合、不写 pending；上下文（A 层）是第一道，这里防模型无视上下文。
+  const rejectedToday = rejectedTodayOf(deps.trading.orders(), dayOf(run.startedAt), deps.store.runs(), Number.POSITIVE_INFINITY)
   const clamped = clampDecision(run.decision, {
     cash: account.cash,
     positions: account.positions.map((p) => ({ secid: p.secid, qty: p.qty, price: quotes[p.secid]?.price ?? p.cost })),
@@ -299,6 +372,7 @@ export async function runPrismForSlot(deps: PrismRouteDeps, slot: string): Promi
     dayDrawdownPct,
     industries: Object.fromEntries(Object.entries(industries).map(([k, v]) => [k, v?.name ?? null])),
     at: run.startedAt,
+    rejectedToday,
   })
   const previous = deps.store.runs().filter((r) => r.startedAt < run.startedAt).at(-1)?.drawdown ?? null
   const drawdown = drawdownGateOf(deps.trading.equity(), previous, run.startedAt)
@@ -306,7 +380,8 @@ export async function runPrismForSlot(deps: PrismRouteDeps, slot: string): Promi
   run.drawdown = drawdown
   // 边界口径：用 run 触发时刻（startedAt），不是分析结束后的墙钟；14:59:09 ⇒ 14:59 可下单
   const result = await placeDecision(deps.trading, run.decision, run.startedAt, quotes)
-  run.decision = { ...run.decision, rejects: result.rejects }
+  // 保留裁剪/去重阶段的 rejects（此前被 placeDecision 的 rejects 覆盖 ⇒ 去重闸留痕会消失）
+  run.decision = { ...run.decision, rejects: [...run.decision.rejects, ...result.rejects] }
   run.placement = result.placement
   await deps.store.replaceRun(run)
   return run
