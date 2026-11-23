@@ -4,6 +4,7 @@
  "src/client/marketTimeDisplay.test.ts",
  "src/client/rescueNullGuard.test.ts",
  "src/host/auction.test.ts",
+ "src/host/auctionBatch.test.ts",
  "src/host/auctionDecouple.test.ts",
  "src/host/auctionSeries.test.ts",
  "src/host/fupan.test.ts",

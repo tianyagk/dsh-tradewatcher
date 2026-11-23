@@ -867,7 +867,18 @@ function rowsToRecord(rows: Map<string, QuoteRow>): Record<string, QuoteRow> {
 const boardLkg = new Map<string, { ts: number; total: number; rows: BoardRow[] }>()
 let boardLkgLoaded: Promise<void> | null = null
 let boardLkgDirty = false
+/** 标脏代数：写成功时只有"代数没变"才清 dirty（写期间又来了新结果 ⇒ 保留，下一次再写） */
+let boardLkgGen = 0
 let boardLkgLastWrite = 0
+let boardLkgWrites = 0
+let boardLkgLastError: { at: number; reason: string } | null = null
+let boardLkgInflight: Promise<BoardLkgPersistResult> | null = null
+
+export interface BoardLkgPersistResult {
+  written: boolean
+  /** 失败原因（`written=false` 且 dirty 仍为 true 时非 null） */
+  reason: string | null
+}
 
 async function loadBoardLkg(): Promise<void> {
   if (boardLkgLoaded !== null) return boardLkgLoaded
@@ -886,21 +897,98 @@ async function loadBoardLkg(): Promise<void> {
   return boardLkgLoaded
 }
 
+/** 有新的板块结果 ⇒ 标脏（**只标脏，不落盘**；落盘由节流入口决定） */
+function markBoardLkgDirty(): void {
+  boardLkgDirty = true
+  boardLkgGen += 1
+}
+
+/**
+ * 落盘一次（P2-6 的唯一写入口）。
+ *
+ * 旧实现是 `dirty=false` 先清、再 `void (async () => …)` 异步写，写失败只 `console.warn`：
+ * 一次磁盘满/权限错误就让这份 LKG **永久丢掉**（直到下一次有成功抓取才可能再写）。
+ * 现在：
+ *   · **写成功之后**才清 dirty（且只在写期间没有新结果时清）；
+ *   · 写失败 ⇒ **恢复 dirty** + 记原因（`__boardLkgStateOf().lastError` + 控制台）+ 清零节流（下一次立刻重试）；
+ *   · `writeFileAtomic` 的 `mkdir` 失败不再被吞（原因就落在这里的 `reason` 里）。
+ */
+export async function persistBoardLkgNow(opts: {
+  /** 目标路径（默认 `<DSH_HOME>/dsh-tradewatcher/board-lkg.json`；测试可注入） */
+  target?: string
+  /** 写函数（默认 `writeFileAtomic`；测试注入失败用） */
+  write?: (target: string, text: string) => Promise<void>
+} = {}): Promise<BoardLkgPersistResult> {
+  if (!boardLkgDirty) return { written: false, reason: null }
+  const pending = boardLkgInflight
+  if (pending !== null) return pending
+  const gen = boardLkgGen
+  const entries = [...boardLkg.entries()].slice(-40).map(([key, v]) => ({ key, ts: v.ts, total: v.total, rows: v.rows }))
+  const target = opts.target ?? join(dataHome(), 'board-lkg.json')
+  const write = opts.write ?? writeFileAtomic
+  const run = (async (): Promise<BoardLkgPersistResult> => {
+    try {
+      // 原子写（读者可能正在解析这份文件）
+      await write(target, JSON.stringify({ ts: Date.now(), entries }))
+      boardLkgWrites += 1
+      boardLkgLastError = null
+      // 写期间没有新结果 ⇒ 磁盘上这份就是最新的，可以清 dirty
+      if (boardLkgGen === gen) boardLkgDirty = false
+      return { written: true, reason: null }
+    } catch (error) {
+      // 这份 LKG **没落盘**：dirty 必须保留（下一次还会写），原因必须可见
+      boardLkgDirty = true
+      boardLkgLastWrite = 0
+      const reason = describeBoardLkgError(error, target)
+      boardLkgLastError = { at: Date.now(), reason }
+      console.warn(`[tradewatcher] persist board-lkg failed：${reason}`)
+      return { written: false, reason }
+    } finally {
+      if (boardLkgInflight === run) boardLkgInflight = null
+    }
+  })()
+  boardLkgInflight = run
+  return run
+}
+
+/** 节流入口（调用点用）：10s 内最多一次；失败由 `persistBoardLkgNow` 记账并恢复 dirty */
 function persistBoardLkg(): void {
   if (!boardLkgDirty) return
   const now = Date.now()
   if (now - boardLkgLastWrite < 10_000) return
   boardLkgLastWrite = now
+  void persistBoardLkgNow().catch(() => undefined)
+}
+
+/** 人类可读的写失败原因（带 errno：`mkdir` 失败也落到这里，而不是被吞） */
+function describeBoardLkgError(error: unknown, target: string): string {
+  const code = (error as NodeJS.ErrnoException | null)?.code
+  const message = error instanceof Error ? error.message : String(error)
+  const prefix = typeof code === 'string' && code !== '' && !message.startsWith(`${code}:`) ? `${code}: ` : ''
+  return `${prefix}${message}（目标 ${target}）`
+}
+
+/** 测试/自检：板块 LKG 落盘状态（dirty / 最近一次失败原因 / 成功写入次数 / 是否在飞） */
+export function __boardLkgStateOf(): { dirty: boolean; lastError: { at: number; reason: string } | null; writes: number; inflight: boolean } {
+  return { dirty: boardLkgDirty, lastError: boardLkgLastError, writes: boardLkgWrites, inflight: boardLkgInflight !== null }
+}
+
+/** 清空板块 LKG 内存状态（**测试钩子**：`__` 前缀与全仓约定一致） */
+export function __resetBoardLkgForTest(): void {
+  boardLkg.clear()
+  boardLkgLoaded = null
   boardLkgDirty = false
-  const entries = [...boardLkg.entries()].slice(-40).map(([key, v]) => ({ key, ts: v.ts, total: v.total, rows: v.rows }))
-  void (async () => {
-    try {
-      // 原子写（同上：读者可能正在解析这份文件）
-      await writeFileAtomic(join(dataHome(), 'board-lkg.json'), JSON.stringify({ ts: Date.now(), entries }))
-    } catch (error) {
-      console.warn('[tradewatcher] persist board-lkg failed:', String(error))
-    }
-  })()
+  boardLkgGen = 0
+  boardLkgLastWrite = 0
+  boardLkgWrites = 0
+  boardLkgLastError = null
+  boardLkgInflight = null
+}
+
+/** 塞一条 LKG 并标脏（**测试钩子**：不需要真实上游就能驱动落盘路径） */
+export function __markBoardLkgDirtyForTest(key = 'board:industry:pct:1:40', rows: BoardRow[] = []): void {
+  boardLkg.set(key, { ts: Date.now(), total: rows.length, rows })
+  markBoardLkgDirty()
 }
 
 /** Batch quotes with a 2.5 s TTL + last-known-good on every return path
@@ -4018,7 +4106,7 @@ async function fetchBoardLive(
   const total = num(body?.data?.total as unknown) ?? rows.length
   if (rows.length > 0) {
     boardLkg.set(key, { ts: Date.now(), total, rows })
-    boardLkgDirty = true
+    markBoardLkgDirty()
     persistBoardLkg()
     const fb = (body as { data?: { fallback?: string } } | undefined)?.data?.fallback
     const source = fb === 'tencent' ? 'tencent' : fb === 'sina' ? 'sina' : 'em'

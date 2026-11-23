@@ -11,6 +11,30 @@
 
 ---
 
+## v0.218.0 — 无谓写与 IO 收尾：saveAll 跳过同内容 + 竞价批量 + 五市场并发
+
+`npm run check` **1911 / 1911 × 2 时区**（1893 → 1911）+ build（73 项）+ `tsc` 0。
+
+### 宿主
+
+| # | 问题 | 修法 | 量化 |
+| --- | --- | --- | --- |
+| — | `matchTick` 交易时段每 30s 无条件 `saveAll`，即使零变化也重写三账本 | 锁内逐文件比对**序列化文本**，相同则跳过；只写变化的那份 | **≈520 次/日 × 216KB ≈ 112MB/日 → 同内容 0 写**，mtime 不再无谓变化 |
+| P2-4 | 竞价采样每标的每拍 3 次文件操作；`setInterval` 无在飞闸 | `tick` 单飞（上一拍未完则跳过并计数）；`isCorrupt` 只在读失败时做；一拍内批量写（限 8 并发） | 一拍 40 标的读 **120 → ≤41 次**；重叠 tick 被跳过 |
+| P2-8 | 五市场构建串行（aum/chart/momentum 逐个 await） | `Promise.all` 限 3 并发，`missing[]` 顺序稳定 | 冷启动 **3–6s → ~1.5s** |
+| P2-6 | `persistBoardLkg` 先清 dirty 再异步写，写失败丢 LKG；`mkdir` 失败被吞 | 成功后再清 dirty；失败恢复 dirty 并记录；`mkdir` 失败记录原因 | 写失败不再静默丢 LKG |
+
+### 客户端
+
+| # | 问题 | 修法 | 量化 |
+| --- | --- | --- | --- |
+| P2-11 | `QuoteDrawer` 在 render 体内联 `Date.now()`（StrictMode 双渲染不一致、跨日不更新） | `useNow(60_000)` + 纯函数 `fiveDayCaliberNote({now})` | render 内 `Date.now()` **1 → 0**；跨日文案 2 天 → 3 天 |
+| P2-13 | K 线游标每帧重算可见窗口极值 | `klineVisibleOf` 一次切片 + 一次极值，`useMemo([bars,s,e,mas])`；分层/覆盖层不动 | 同窗口 5 次移动极值计算 **5 → 1 次**；`slice` 2 → 1 次、MA slice 4 → 0 次 |
+
+### 门禁
+
+`tzGuard` 登记表刷新为 **24 个**时区敏感测试文件。`npm run check` **1911 / 1911 × 2 时区** + build（73 项）+ `tsc` 0；新增 `saveAllSkip`（3）、`clientPerfP4`（8）等测试。
+
 ## v0.217.0 — P2 收尾第二批：/prism GET 重活 + portfolio O(P×E) + 客户端 4 条
 
 `npm run check` **1890 / 1890 × 2 时区**（1870 → 1890）+ build（73 项）+ `tsc` 0。

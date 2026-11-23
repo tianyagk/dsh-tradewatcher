@@ -892,7 +892,20 @@ export class PrismTradingStore {
             throw new LedgerUnreadableError(this.ledgerError() ?? String(error), '一次写回棱镜三账本')
           }
         }
-        await writeFileSetAtomic(entries, opts.failCommitAt === undefined ? {} : { failCommitAt: opts.failCommitAt })
+        // 内容没变就不写：交易时段 matchTick 每 30s 调一次 saveAll，即使零变化也会重写三份账本
+        // （实测 ≈112MB/日 无谓写 + 每次 mtime 变化会让读缓存失效）。逐文件比对**我们自己的序列化文本**：
+        // 磁盘文件都是本函数写的（同样 indent=1），文本级比较即可；任何差异都照常整组提交。
+        const unchanged = new Set<string>()
+        for (const entry of entries) {
+          try {
+            const raw = await readFile(entry.target, 'utf8')
+            if (raw === entry.text) unchanged.add(entry.target)
+          } catch { /* 读不到 ⇒ 视为需要写 */ }
+        }
+        const toWrite = entries.filter((e) => !unchanged.has(e.target))
+        if (toWrite.length > 0) {
+          await writeFileSetAtomic(toWrite, opts.failCommitAt === undefined ? {} : { failCommitAt: opts.failCommitAt })
+        }
       },
       { note: 'prism-ledger-saveAll' },
     )

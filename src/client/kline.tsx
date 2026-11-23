@@ -15,6 +15,7 @@ import { klineLayoutOf, klineReadout, klineTipPlacement, nearestIndex, tipPlacem
 import { trendDayCount } from '../shared/model.ts'
 import { shToday } from './marketTime.ts'
 import { rangeStatsText, tradeStatsOf } from './klineStats.ts'
+import { klineVisibleOf } from './klineView.ts'
 
 const PAD_X = 8
 const PAD_TOP = 8
@@ -639,10 +640,17 @@ export function KlineChart(props: {
   const mas = useMemo(() => MA_STYLE.map((s) => ({ ...s, values: ma(closes, s.period) })), [closes])
   const m = useMemo(() => macd(closes), [closes])
 
+  /**
+   * 可见窗口（P2-13）：`[s, e)` 只随 `range`/`bars` 变；游标每帧移动只改 `cursor` state，
+   * 不重算可见切片与 high/low 极值（旧实现在 render 体里每次 `slice + map + Math.max`）。
+   * 依赖固定为 `[bars, s, e, mas]` —— 任一变化才重算 1 次。
+   */
+  const [s, e] = [Math.max(0, Math.min(range[0], bars.length - 2)), Math.min(Math.max(range[1], 2), bars.length)]
+  const visible = useMemo(() => klineVisibleOf(bars, s, e, mas), [bars, s, e, mas])
+
   if (empty) {
     return React.createElement('div', { className: 'tw-muted', style: { textAlign: 'center', padding: 40 } }, '—（K线未取到）')
   }
-  const [s, e] = [Math.max(0, Math.min(range[0], bars.length - 2)), Math.min(Math.max(range[1], 2), bars.length)]
   const count = Math.max(1, e - s)
   /** 画布几何（单一口径）：右侧 56px 轴 + 28px 尾距；柱子在 `barSpan` 内排 */
   const layout = klineLayoutOf(width, count)
@@ -650,11 +658,8 @@ export function KlineChart(props: {
   const xAt = (i: number): number => PAD_X + (i - s) * step + step / 2
   const barW = Math.max(1.2, Math.min(11, step * 0.62))
 
-  const visHigh = bars.slice(s, e).map((b) => b.high)
-  const visLow = bars.slice(s, e).map((b) => b.low)
-  const maVisible = mas.flatMap((ser) => ser.values.slice(s, e).filter((v): v is number => v !== null))
-  const hi = Math.max(...visHigh, ...maVisible)
-  const lo = Math.min(...visLow, ...maVisible)
+  const hi = visible.hi
+  const lo = visible.lo
   const pad = (hi - lo) * 0.05 || 1
   const yOf = (v: number): number => PAD_TOP + ((hi + pad - v) / (hi - lo + pad * 2)) * mainH
 
@@ -780,8 +785,8 @@ export function KlineChart(props: {
 
   children.push(...volumePane({
     top: volTop, height: volH,
-    vols: bars.slice(s, e).map((b) => b.vol),
-    up: bars.slice(s, e).map((b) => b.close >= b.open),
+    vols: visible.bars.map((b) => b.vol),
+    up: visible.bars.map((b) => b.close >= b.open),
     xAt: (i) => xAt(i + s), barW, padX: PAD_X, innerW,
   }))
   children.push(...macdPane({

@@ -12,10 +12,16 @@ import { mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises'
 import { randomBytes } from 'node:crypto'
 import { dirname } from 'node:path'
 
-/** 原子写入文本；父目录不存在时自动创建 */
+/**
+ * 原子写入文本；父目录不存在时自动创建。
+ *
+ * **`mkdir` 失败不吞**（P2-6）：旧实现 `.catch(() => undefined)` 会把"目录建不出来（权限/只读/磁盘满）"
+ * 咽掉，随后 `writeFile` 只报一句 ENOENT —— 调用方看到的原因与真相不符，也没法决定"要不要重试"。
+ * 现在创建失败原样抛出（带 errno），由调用方记录原因（见 `em.persistBoardLkg`）。
+ */
 export async function writeFileAtomic(target: string, text: string): Promise<void> {
   const tmp = `${target}.tmp`
-  await mkdir(dirname(target), { recursive: true }).catch(() => undefined)
+  await mkdir(dirname(target), { recursive: true })
   await writeFile(tmp, text, 'utf8')
   await rename(tmp, target)
 }

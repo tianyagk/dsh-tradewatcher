@@ -1,6 +1,7 @@
 import { shStampText } from './marketTime.ts'
 import { TREND_LKG_RETENTION_NOTE } from '../shared/trendRetention.ts'
-import { TREND_SOURCE_LABEL, type TrendSource } from '../shared/model.ts'
+import { TREND_SOURCE_LABEL, trendDayCount, type TrendCoverage, type TrendSource } from '../shared/model.ts'
+import { trendCaliberOf } from '../shared/trendCaliber.ts'
 /**
  * 为什么日期不能省：K 线兜底那条以前只有 `· 显示上次成功数据（本次刷新失败）`，没有日期 ——
  */
@@ -211,4 +212,45 @@ export function trendLagNote(
     : ''
   const why = typeof trend?.lagReason === 'string' && trend.lagReason !== '' ? ` · 原因：${trend.lagReason}` : ''
   return ` · 数据滞后 ${span}（分钟源：${src}${quote}${why}）`
+}
+
+/**
+ * 五日档口径行的「滞后 / 覆盖」段（P2-11 纯函数）。
+ *
+ * 时间**只能**从参数 `now` 进来：抽屉用 `useNow(60_000)` 驱动它，同一 props 的两次渲染得到
+ * 同一文案（StrictMode 双渲染一致），页面停着也会随分钟 tick 跨日更新。
+ * 判据与文案本身仍在 `shared/trendCaliber.ts`（自然日差 + 工作日近似），这里只做接线与拼装。
+ *
+ * `tab !== '5d'` ⇒ 空串（其它档位没有五日覆盖概念）；没有 `coverage`（真实多日源/老宿主）
+ * 且只有 1 天时给结构性说明——与旧实现逐字一致，不新增提示块。
+ */
+export interface FiveDayCaliberInput {
+  /** 实际页签：只有 `5d` 才产生这段文案 */
+  tab: string
+  points: ReadonlyArray<{ label: string }>
+  coverage: TrendCoverage | undefined
+  /** 最近一次成功快照的短标签（`MM-DD HH:mm`）；拿不到给 null */
+  snapshotAt: string | null
+  /** 唯一时间输入（毫秒）：`useNow(60_000)` —— **不在 render 体里读 `Date.now()`** */
+  now: number
+}
+
+export function fiveDayCaliberNote(input: FiveDayCaliberInput): string {
+  if (input.tab !== '5d') return ''
+  const cov = input.coverage
+  if (cov === undefined) {
+    return trendDayCount(input.points) <= 1 ? ' · 仅 1 天可画（该市场无多日源）' : ''
+  }
+  const last = input.points[input.points.length - 1]
+  const c = trendCaliberOf({
+    // 传原始 label（`2026-09-24 13:41` 或 `09-24`）：解析在 shared/trendCaliber.dayNumberOf 里做，
+    // 界面不要自己 slice —— 截错位置会让滞后判定静默失效（实测踩过：slice(0,5) 截出 `2026-`）
+    lastDay: last !== undefined ? last.label : null,
+    now: input.now,
+    have: cov.have.length,
+    limit: cov.limit,
+    missing: cov.missing,
+    snapshotAt: input.snapshotAt,
+  })
+  return c.text === '' ? '' : ` · ${c.text}`
 }

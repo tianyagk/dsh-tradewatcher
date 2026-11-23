@@ -51,6 +51,7 @@ import { join } from 'node:path'
 import type { MissingField } from '../shared/model.ts'
 import { writeJsonAtomic } from './atomic.ts'
 import { updateJsonLocked } from './lock.ts'
+import { mapLimit } from './concurrency.ts'
 import { gatedFetch, HostBudget } from './robotsGate.ts'
 import { log } from './context.ts'
 import { isFirstBoot, quarantineFile, ReadGuard } from './readGuard.ts'
@@ -879,7 +880,7 @@ export async function flowSnapshotStats(): Promise<{
 
 // ── 取数（五市场原始输入） ───────────────────────────────────────────────────
 
-interface MarketRaw {
+export interface MarketRaw {
   key: FlowMarketKey
   currency: 'USD' | 'CNY' | 'HKD'
   /** 原币规模（A股 = 元，其余 = 美元） */
@@ -953,114 +954,191 @@ async function tencentAumQuotes(): Promise<Record<string, { totalMv: number | nu
   })
 }
 
-/** 各市场当期规模（原币）+ 取不到的原因；汇率两条各自独立成败 */
-export async function marketRaws(): Promise<{ markets: MarketRaw[]; fx: FlowFxOut }> {
+/** 单个市场的取数端口（默认真实上游；测试注入延迟/失败，用来断言「并发构建」与「串行输出逐字一致」） */
+export interface MarketRawDeps {
+  /** 一条汇率：失败/不可用 ⇒ **抛**（与真实实现同语义） */
+  rateOf: (currency: 'CNY' | 'HKD') => Promise<number>
+  /** 市场规模（原币）+ 口径说明；失败 ⇒ 抛（由 buildMarketRaw 记进该市场的 missing） */
+  aumOf: (def: FlowMarketDef) => Promise<{ aumNative: number | null; aumNote: string | null; aumAsOf: number | null }>
+  /** 日线序列（chart = 曲线重建用；momentum = 动量用） */
+  seriesOf: (key: FlowMarketKey, which: 'chart' | 'momentum') => Promise<{ points: FlowSeriesPoint[] | null; missing: MissingField | null }>
+}
+
+/**
+ * 五市场并发度 = **3**。
+ *
+ * 每个市场内部是 aum → chart → momentum 三次独立上游等待（串行链），3 路正好让「三个市场各占
+ * 一条链」同时跑；5 个市场 ⇒ 2 轮。再高只会把新浪/腾讯的并发压力抬高，冷启动收益递减。
+ */
+export const FLOW_MARKET_CONCURRENCY = 3
+
+/**
+ * 单个市场的规模（原币）。三条路径与口径**保持原样**：
+ *   新浪 ETF 节点 nmc（A股）/ 腾讯 f45 总市值（港股）/ 新浪 gb_* 总市值（美日，缺时兜底腾讯 f71 × 最新价）。
+ * 失败 ⇒ **抛**（调用方把它记成该市场的 `missing`，不影响其它市场）。
+ */
+async function aumOfMarket(def: FlowMarketDef): Promise<{ aumNative: number | null; aumNote: string | null; aumAsOf: number | null }> {
+  let aumNative: number | null = null
+  let aumNote: string | null = null
+  let aumAsOf: number | null = null
+  const route = AUM_ROUTE[def.key]
+  if (route.kind === 'sina-etf') {
+    // A股：新浪 ETF 节点 nmc（万元）→ 元
+    const aum = await cached(`aum:etf:${def.key}`, FLOW_QUOTE_TTL_MS, async () => {
+      const row = await fetchSinaEtfNodeSize(route.symbol)
+      if (row.nmcWan === null || !(row.nmcWan > 0)) return { value: null as number | null, note: '新浪 ETF 节点的 nmc（流通市值/规模）字段为空', at: Date.now(), from: '新浪 ETF 节点 nmc' }
+      return { value: row.nmcWan * 1e4, note: null as string | null, at: Date.now(), from: '新浪 ETF 节点 nmc' }
+    })
+    aumNative = aum.value
+    aumNote = aum.note
+    aumAsOf = aum.at
+  } else if (route.kind === 'tencent-quote' || route.kind === 'tencent-shares') {
+    // 港股：腾讯 f45「总市值」（**亿港元**）⇒ ×1e8；
+    // 韩国：腾讯 f71「股本」× 最新价（新浪 gb_ewy 的总市值字段实测为 0 ⇒ 只能用这条）
+    const quotes = await tencentAumQuotes()
+    const q = quotes[route.code.toLowerCase()]
+    if (q === undefined) {
+      aumNote = `腾讯行情没有回 ${route.code} 这一行`
+    } else if (route.kind === 'tencent-quote') {
+      if (q.totalMv === null || !(q.totalMv > 0)) aumNote = `腾讯 ${route.code} 的「总市值」字段为空/为 0`
+      else {
+        aumNative = q.totalMv
+        aumAsOf = Date.now()
+      }
+    } else {
+      if (q.shares === null || !(q.shares > 0)) aumNote = `腾讯 ${route.code} 的「股本」（f71）字段为空/为 0`
+      else if (q.price === null || !(q.price > 0)) aumNote = `腾讯 ${route.code} 没有可用最新价（无法用 股本×价 估算规模）`
+      else {
+        aumNative = q.shares * q.price
+        aumAsOf = Date.now()
+        aumNote = '规模 = 股本（腾讯 f71）× 最新价（推导值：新浪该标的的「总市值」字段实测为 0）'
+      }
+    }
+  } else {
+    // 美国 / 日本：新浪 gb_* 的「总市值」（美元）；缺失时兜底腾讯 f71 × 最新价
+    const aum = await cached(`aum:gb:${def.key}`, FLOW_QUOTE_TTL_MS, async () => {
+      const got = await fetchSinaGb([route.symbol])
+      const q = got[`gb_${route.symbol}`]
+      if (q === undefined) return { value: null as number | null, note: `新浪 gb_${route.symbol} 没有回这一行`, at: Date.now(), from: '新浪 gb_* 总市值' }
+      if (q.totalMv === null || !(q.totalMv > 0)) return { value: null as number | null, note: `新浪 gb_${route.symbol} 的「总市值」字段为空/为 0`, at: Date.now(), from: '新浪 gb_* 总市值' }
+      // 口径自校：总市值 应当 ≈ 最新价 × 股本（实测一致；不一致就如实标出来，不静默用）
+      const implied = q.price !== null && q.shares !== null ? q.price * q.shares : null
+      const drift = implied !== null && implied > 0 ? Math.abs(q.totalMv / implied - 1) : null
+      const note = drift !== null && drift > 0.05 ? `新浪 gb_${route.symbol} 的「总市值」与「最新价×股本」差 ${(drift * 100).toFixed(1)}%（按总市值计，但口径存疑）` : null
+      return { value: q.totalMv, note, at: Date.now(), from: '新浪 gb_* 总市值' }
+    })
+    aumNative = aum.value
+    aumNote = aum.note
+    aumAsOf = aum.at
+    if (aumNative === null) {
+      // 兜底：腾讯 f71（股本）× 最新价（与新浪同口径：都是"发行份额 × 最新价"）
+      const quotes = await tencentAumQuotes()
+      const q = quotes[route.fallbackTencent.toLowerCase()]
+      if (q !== undefined && q.shares !== null && q.shares > 0 && q.price !== null && q.price > 0) {
+        aumNative = q.shares * q.price
+        aumAsOf = Date.now()
+        aumNote = `${aumNote ?? '新浪总市值为空'} ⇒ 兜底用腾讯 ${route.fallbackTencent} 的 股本（f71）× 最新价（推导值）`
+      } else {
+        aumNote = `${aumNote ?? '新浪总市值为空'}；腾讯 ${route.fallbackTencent} 的兜底也不可用（股本/最新价缺）`
+      }
+    }
+  }
+  return { aumNative, aumNote, aumAsOf }
+}
+
+/**
+ * 单个市场的原始输入（**并发与串行都走这一份**：同一份 deps 两次调用输出必须逐字一致）。
+ * 该市场自己的取数失败只落进它自己的 `missing`，绝不抛出（`marketRaws` 的兜底只为防御式收口）。
+ */
+export async function buildMarketRaw(def: FlowMarketDef, rates: FlowRates, deps: MarketRawDeps): Promise<MarketRaw> {
+  const missing: MissingField[] = []
+  let aumNative: number | null = null
+  let aumNote: string | null = null
+  let aumAsOf: number | null = null
+  try {
+    const aum = await deps.aumOf(def)
+    aumNative = aum.aumNative
+    aumNote = aum.aumNote
+    aumAsOf = aum.aumAsOf
+    if (aumNative === null) {
+      missing.push({ what: `${def.name}规模（${def.etf}）`, why: 'transient', note: `${def.name}规模（${def.etf}）：${aumNote ?? '上游没有给出规模'} ⇒ 这一行显示「未取到」，并且不参与份额分母（不用 0 顶替）` })
+    } else if (aumNote !== null) {
+      // 口径自校告警 / 兜底说明**必须被消费**：有值但口径存疑时也进 missing（AUDIT-IMPL46 §6）
+      missing.push({ what: `${def.name}规模（${def.etf}）`, why: 'no-source', note: `${def.name}规模（${def.etf}）：${aumNote}` })
+    }
+  } catch (error) {
+    missing.push({ what: `${def.name}规模（${def.etf}）`, why: 'transient', note: `${def.name}规模（${def.etf}）：本次取数失败（${String(error).slice(0, 120)}）⇒ 稍后重试即可；这一行不参与份额分母` })
+  }
+  // 汇率缺 ⇒ 该市场折算不出来：**明确标注**（行级原因由渲染层给）
+  if (aumNative !== null && def.currency !== 'USD' && rates[def.currency === 'CNY' ? 'usdCny' : 'usdHkd'] === null) {
+    missing.push({
+      what: `${def.name}规模（${def.etf}）折算`,
+      why: 'transient',
+      note: `${def.name}规模是${def.currency === 'CNY' ? '人民币' : '港元'}（${FLOW_FX_LABEL[def.currency]} 换算），本次 ${def.currency === 'CNY' ? '美元/人民币' : '美元/港元'} 汇率未取到 ⇒ 这一行的"规模（美元）"不折算、不进美元合计（不许静默混算）；偏好份额不受影响（权重来自无量纲的偏好分，与汇率无关）`,
+    })
+  }
+  const seriesOf = async (which: 'chart' | 'momentum'): Promise<{ points: FlowSeriesPoint[] | null; missing: MissingField | null }> => {
+    try {
+      return await deps.seriesOf(def.key, which)
+    } catch (error) {
+      const what = `${def.name}${which === 'chart' ? '规模序列' : '动量序列'}`
+      return { points: null, missing: { what, why: 'transient', note: `${what} 本次取数失败（${String(error).slice(0, 120)}）⇒ 稍后重试即可，这一格不用 0 顶替` } }
+    }
+  }
+  const chart = await seriesOf('chart')
+  if (chart.missing !== null) missing.push(chart.missing)
+  const mom = await seriesOf('momentum')
+  if (mom.missing !== null) missing.push(mom.missing)
+  return { key: def.key, currency: def.currency, aumNative, aumNote, aumAsOf, chart: chart.points, momentum: mom.points, missing }
+}
+
+/** 真实上游端口（`marketRaws()` 的默认实现） */
+const defaultMarketRawDeps: MarketRawDeps = { rateOf, aumOf: aumOfMarket, seriesOf: dailySeries }
+
+/**
+ * 各市场当期规模（原币）+ 取不到的原因；汇率两条各自独立成败。
+ *
+ * 并发：5 个市场按 **3 路**同时构建（市场内部 aum → chart → momentum 仍是串行），
+ * 输出顺序**固定 = `FLOW_MARKETS`**（`mapLimit` 按输入下标落位）；某个市场失败只影响它自己。
+ */
+export async function marketRaws(deps: MarketRawDeps = defaultMarketRawDeps): Promise<{ markets: MarketRaw[]; fx: FlowFxOut }> {
   const notes: Partial<Record<'CNY' | 'HKD', string>> = {}
   const rates: FlowRates = { usdCny: null, usdHkd: null }
   let fxAt: number | null = null
-  for (const currency of ['CNY', 'HKD'] as const) {
+  // 两条汇率互不依赖 ⇒ 同时取；各自失败只记自己那条原因
+  const fxResults = await mapLimit(['CNY', 'HKD'] as const, 2, async (currency) => {
     try {
-      const rate = await rateOf(currency)
-      if (currency === 'CNY') rates.usdCny = rate
-      else rates.usdHkd = rate
+      return { currency, rate: await deps.rateOf(currency), error: null as unknown }
+    } catch (error) {
+      return { currency, rate: null as number | null, error }
+    }
+  })
+  for (const r of fxResults) {
+    if (r.rate !== null) {
+      rates[r.currency === 'CNY' ? 'usdCny' : 'usdHkd'] = r.rate
       fxAt = fxAt ?? Date.now()
-    } catch (error) {
-      notes[currency] = `新浪 ${FLOW_FX_SYMBOLS[currency]} 本次没有可用值（${String(error).slice(0, 120)}）`
+    } else {
+      notes[r.currency] = `新浪 ${FLOW_FX_SYMBOLS[r.currency]} 本次没有可用值（${String(r.error).slice(0, 120)}）`
     }
   }
-
-  const markets: MarketRaw[] = []
-  for (const def of FLOW_MARKETS) {
-    const missing: MissingField[] = []
-    let aumNative: number | null = null
-    let aumNote: string | null = null
-    let aumAsOf: number | null = null
-    const route = AUM_ROUTE[def.key]
+  const markets = await mapLimit(FLOW_MARKETS, FLOW_MARKET_CONCURRENCY, async (def): Promise<MarketRaw> => {
     try {
-      if (route.kind === 'sina-etf') {
-        // A股：新浪 ETF 节点 nmc（万元）→ 元
-        const aum = await cached(`aum:etf:${def.key}`, FLOW_QUOTE_TTL_MS, async () => {
-          const row = await fetchSinaEtfNodeSize(route.symbol)
-          if (row.nmcWan === null || !(row.nmcWan > 0)) return { value: null as number | null, note: '新浪 ETF 节点的 nmc（流通市值/规模）字段为空', at: Date.now(), from: '新浪 ETF 节点 nmc' }
-          return { value: row.nmcWan * 1e4, note: null as string | null, at: Date.now(), from: '新浪 ETF 节点 nmc' }
-        })
-        aumNative = aum.value
-        aumNote = aum.note
-        aumAsOf = aum.at
-      } else if (route.kind === 'tencent-quote' || route.kind === 'tencent-shares') {
-        // 港股：腾讯 f45「总市值」（**亿港元**）⇒ ×1e8；
-        // 韩国：腾讯 f71「股本」× 最新价（新浪 gb_ewy 的总市值字段实测为 0 ⇒ 只能用这条）
-        const quotes = await tencentAumQuotes()
-        const q = quotes[route.code.toLowerCase()]
-        if (q === undefined) {
-          aumNote = `腾讯行情没有回 ${route.code} 这一行`
-        } else if (route.kind === 'tencent-quote') {
-          if (q.totalMv === null || !(q.totalMv > 0)) aumNote = `腾讯 ${route.code} 的「总市值」字段为空/为 0`
-          else {
-            aumNative = q.totalMv
-            aumAsOf = Date.now()
-          }
-        } else {
-          if (q.shares === null || !(q.shares > 0)) aumNote = `腾讯 ${route.code} 的「股本」（f71）字段为空/为 0`
-          else if (q.price === null || !(q.price > 0)) aumNote = `腾讯 ${route.code} 没有可用最新价（无法用 股本×价 估算规模）`
-          else {
-            aumNative = q.shares * q.price
-            aumAsOf = Date.now()
-            aumNote = '规模 = 股本（腾讯 f71）× 最新价（推导值：新浪该标的的「总市值」字段实测为 0）'
-          }
-        }
-      } else {
-        // 美国 / 日本：新浪 gb_* 的「总市值」（美元）；缺失时兜底腾讯 f71 × 最新价
-        const aum = await cached(`aum:gb:${def.key}`, FLOW_QUOTE_TTL_MS, async () => {
-          const got = await fetchSinaGb([route.symbol])
-          const q = got[`gb_${route.symbol}`]
-          if (q === undefined) return { value: null as number | null, note: `新浪 gb_${route.symbol} 没有回这一行`, at: Date.now(), from: '新浪 gb_* 总市值' }
-          if (q.totalMv === null || !(q.totalMv > 0)) return { value: null as number | null, note: `新浪 gb_${route.symbol} 的「总市值」字段为空/为 0`, at: Date.now(), from: '新浪 gb_* 总市值' }
-          // 口径自校：总市值 应当 ≈ 最新价 × 股本（实测一致；不一致就如实标出来，不静默用）
-          const implied = q.price !== null && q.shares !== null ? q.price * q.shares : null
-          const drift = implied !== null && implied > 0 ? Math.abs(q.totalMv / implied - 1) : null
-          const note = drift !== null && drift > 0.05 ? `新浪 gb_${route.symbol} 的「总市值」与「最新价×股本」差 ${(drift * 100).toFixed(1)}%（按总市值计，但口径存疑）` : null
-          return { value: q.totalMv, note, at: Date.now(), from: '新浪 gb_* 总市值' }
-        })
-        aumNative = aum.value
-        aumNote = aum.note
-        aumAsOf = aum.at
-        if (aumNative === null) {
-          // 兜底：腾讯 f71（股本）× 最新价（与新浪同口径：都是"发行份额 × 最新价"）
-          const quotes = await tencentAumQuotes()
-          const q = quotes[route.fallbackTencent.toLowerCase()]
-          if (q !== undefined && q.shares !== null && q.shares > 0 && q.price !== null && q.price > 0) {
-            aumNative = q.shares * q.price
-            aumAsOf = Date.now()
-            aumNote = `${aumNote ?? '新浪总市值为空'} ⇒ 兜底用腾讯 ${route.fallbackTencent} 的 股本（f71）× 最新价（推导值）`
-          } else {
-            aumNote = `${aumNote ?? '新浪总市值为空'}；腾讯 ${route.fallbackTencent} 的兜底也不可用（股本/最新价缺）`
-          }
-        }
-      }
-      if (aumNative === null) {
-        missing.push({ what: `${def.name}规模（${def.etf}）`, why: 'transient', note: `${def.name}规模（${def.etf}）：${aumNote ?? '上游没有给出规模'} ⇒ 这一行显示「未取到」，并且不参与份额分母（不用 0 顶替）` })
-      } else if (aumNote !== null) {
-        // 口径自校告警 / 兜底说明**必须被消费**：有值但口径存疑时也进 missing（AUDIT-IMPL46 §6）
-        missing.push({ what: `${def.name}规模（${def.etf}）`, why: 'no-source', note: `${def.name}规模（${def.etf}）：${aumNote}` })
-      }
+      return await buildMarketRaw(def, rates, deps)
     } catch (error) {
-      missing.push({ what: `${def.name}规模（${def.etf}）`, why: 'transient', note: `${def.name}规模（${def.etf}）：本次取数失败（${String(error).slice(0, 120)}）⇒ 稍后重试即可；这一行不参与份额分母` })
+      // 防御式兜底：单市场整行失败不连坐其它市场，也不让整页 5xx
+      const reason = `本次构建失败（${String(error).slice(0, 120)}）`
+      return {
+        key: def.key,
+        currency: def.currency,
+        aumNative: null,
+        aumNote: reason,
+        aumAsOf: null,
+        chart: null,
+        momentum: null,
+        missing: [{ what: `${def.name}（整行）`, why: 'transient', note: `${def.name} ${reason} ⇒ 该行显示「未取到」，不影响其它市场` }],
+      }
     }
-    // 汇率缺 ⇒ 该市场折算不出来：**明确标注**（行级原因由渲染层给）
-    if (aumNative !== null && def.currency !== 'USD' && rates[def.currency === 'CNY' ? 'usdCny' : 'usdHkd'] === null) {
-      missing.push({
-        what: `${def.name}规模（${def.etf}）折算`,
-        why: 'transient',
-        note: `${def.name}规模是${def.currency === 'CNY' ? '人民币' : '港元'}（${FLOW_FX_LABEL[def.currency]} 换算），本次 ${def.currency === 'CNY' ? '美元/人民币' : '美元/港元'} 汇率未取到 ⇒ 这一行的"规模（美元）"不折算、不进美元合计（不许静默混算）；偏好份额不受影响（权重来自无量纲的偏好分，与汇率无关）`,
-      })
-    }
-    const chart = await dailySeries(def.key, 'chart')
-    if (chart.missing !== null) missing.push(chart.missing)
-    const mom = await dailySeries(def.key, 'momentum')
-    if (mom.missing !== null) missing.push(mom.missing)
-    markets.push({ key: def.key, currency: def.currency, aumNative, aumNote, aumAsOf, chart: chart.points, momentum: mom.points, missing })
-  }
+  })
   return { markets, fx: { rates, at: fxAt, notes } }
 }
 

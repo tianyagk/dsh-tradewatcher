@@ -4,7 +4,7 @@
  * the shared client-side chart cache (see chartCache.ts): switching tabs or
  * reopening the same stock costs zero requests while the entry is fresh.
  */
-import React, { useEffect, useRef, useState } from 'react'
+import React, { useEffect, useMemo, useRef, useState } from 'react'
 import type { AuctionInfo, FqMode, MissingField, StockDetail, TradeMark } from '../shared/model.ts'
 import { FQ_LABEL } from '../shared/model.ts'
 import { api } from './api.ts'
@@ -36,10 +36,10 @@ import {
   type ChartTab,
 } from './chartCache.ts'
 
-import { nonSessionOf, trendLagNote, visibleProvenanceOf } from './chartNote.ts'
+import { fiveDayCaliberNote, nonSessionOf, trendLagNote, visibleProvenanceOf } from './chartNote.ts'
 import { sessionOf } from './sessionAxis.ts'
 import { isUsableBaseline } from './trendView.ts'
-import { trendCaliberOf } from '../shared/trendCaliber.ts'
+import { useNow } from './useNow.ts'
 import { ChipsPanel } from './ChipsPanel.tsx'
 import { countMount } from './mounts.ts'
 import { chartFrameOf } from './chartFrame.ts'
@@ -106,6 +106,11 @@ export function QuoteDrawer(props: {
   quoteTs?: number
 }): React.ReactElement {
   const { secid, name, redUp, onClose } = props
+  /**
+   * P2-11：口径行「滞后 N 天」的唯一时间输入。60s 一跳 —— 页面停着不动也会跨日更新；
+   * 同一 props 的两次渲染拿到同一个 `now`（render 体里不许再读当前时刻）。
+   */
+  const now = useNow(60_000)
   // 记住上次看的周期：关掉再打开、换一只标的时不必重新点一次
   const [tab, setTab] = useState<ChartTab>(rememberedTab())
   /** 美股（东财 105/106/107）：口径文案要按事实说（上游只给未复权价 / 周月年由日线聚合） */
@@ -605,6 +610,19 @@ export function QuoteDrawer(props: {
     return lastPoint === undefined ? null : lastPoint.label.slice(5, 16)
   }
 
+  /**
+   * 五日档口径行的「滞后 / 覆盖」段（P2-11）：唯一时间输入是 `now`（`useNow(60_000)`）并进依赖。
+   * 同一 props + 同一 now 的两次渲染结果相同（StrictMode 双渲染一致）；页面停着也会每 60s 跨日更新。
+   * 判据/文案在 `shared/trendCaliber.ts`，拼装在 `chartNote.fiveDayCaliberNote`（纯函数、有断言）。
+   */
+  const fiveDayNote = useMemo(() => fiveDayCaliberNote({
+    tab: payload !== null && payload.kind === 'trend' ? payload.tab : '',
+    points: payload !== null && payload.kind === 'trend' ? payload.trend.points : [],
+    coverage: payload !== null && payload.kind === 'trend' ? payload.trend.coverage : undefined,
+    snapshotAt: snapshotLabel(),
+    now,
+  }), [payload, now])
+
   const caliberLine = (): string => {
     if (payload === null || payload.kind !== 'kline') {
       if (payload !== null && payload.kind === 'trend') {
@@ -620,31 +638,8 @@ export function QuoteDrawer(props: {
         const base = (t.caliber !== undefined && t.caliber !== ''
           ? `${TAB_LABEL[payload.tab]} · ${t.caliber} · 截至 ${last !== undefined ? last.label : '—'}`
           : `${TAB_LABEL[payload.tab]} · 不复权（分时序列无除权概念） · 截至 ${last !== undefined ? last.label.slice(5, 16) : '—'}`) + avgNote
-        // 五日：覆盖情况写进**这一行**（结构性限制不配单独横幅）。
-        // 本地拼接时给出 have/limit 与缺口；真实多日源只有 1 天时明说"仅当日（该市场无多日源）"。
-        const cov = t.coverage
-        // 五日档的诚实化（task-49）：**滞后优先** —— 最新一天不是最近预期交易日时，
-        // 口径行先说"数据滞后 N 天（最近一次成功快照 …）"，再说"仅 N 天可画 / 归档 N 天 / 缺 N 天"。
-        // 判据与文案都在 shared/trendCaliber.ts（纯函数、有断言）：自然日差 + **工作日近似**（无交易日历）。
-        const fiveMarker = payload.tab !== '5d'
-          ? ''
-          : cov !== undefined
-            ? ((): string => {
-                const c = trendCaliberOf({
-                  // 传原始 label（`2026-09-24 13:41` 或 `09-24`）：解析在 shared/trendCaliber.dayNumberOf 里做，
-                  // 界面不要自己 slice —— 截错位置会让滞后判定静默失效（实测踩过：slice(0,5) 截出 `2026-`）
-                  lastDay: last !== undefined ? last.label : null,
-                  now: Date.now(),
-                  have: cov.have.length,
-                  limit: cov.limit,
-                  missing: cov.missing,
-                  snapshotAt: snapshotLabel(),
-                })
-                return c.text === '' ? '' : ` · ${c.text}`
-              })()
-            : trendDayCount(t.points) <= 1
-              ? ' · 仅 1 天可画（该市场无多日源）'
-              : ''
+        // 五日：覆盖/滞后写进**这一行**（结构性限制不配单独横幅）—— 见上方 fiveDayNote（P2-11）。
+        const fiveMarker = fiveDayNote
         // 归档失败属运维细节：正文不再占位，原因并入口径条的完整解释（见 caliberExplain）
         // 该标的不适用分时段网格（美股/国际指数/外盘商品/期货）⇒ 一句话如实说明
         const gridNote = sessionOf(secid) === null ? ' · 无固定交易时段' : ''
