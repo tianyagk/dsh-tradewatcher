@@ -32,7 +32,7 @@ test('⑦ 退化路径：未命中字段写卡片底部', () => {
   assert.match(PAGE, /if \(hit === undefined\) setSaveErr\(msg\)/)
 })
 test('⑧ 成功后刷新', () => {
-  assert.match(PAGE, /if \(r\.ok\) \{ setEditSecid\(null\); load\(\) \}/)
+  assert.match(PAGE, /if \(r\.ok\) \{ setEditSecid\(null\); load\(\); return \}/)
 })
 test('⑨ 成本必须正数', () => { assert.match(PAGE, /'成本必须是正数'/) })
 test('⑩ 股数校验沿用纯函数', () => {

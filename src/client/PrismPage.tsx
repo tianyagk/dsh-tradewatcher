@@ -439,7 +439,12 @@ export function PrismPage(props: { active?: boolean; redUp?: boolean } = {}): Re
       ? api.prismCash(Number(editDraft.shares))
       : api.prismPosition({ op: 'update', secid: editSecid, shares: Number(editDraft.shares), cost: Number(editDraft.cost) })
     p
-      .then((r) => { if (r.ok) { setEditSecid(null); load() } else setRowErr(r.error ?? '保存失败') })
+      .then((r) => {
+        if (r.ok) { setEditSecid(null); load(); return }
+        const msg = r.error ?? '保存失败'
+        // 宿主比客户端旧时（只重启客户端/只构建了前端）会回「未知 action」——直接说清怎么修
+        setRowErr(/未知 action/.test(msg) ? `${msg}：宿主进程未加载新接口，请重启 dsh-web` : msg)
+      })
       .catch((e: Error) => setRowErr(e.message))
       .finally(() => setSaving(false))
   }
