@@ -282,9 +282,12 @@ test('㉙ 页面：七个 tab 由 FLOW_TABS 渲染 + 真实计数 + 「只读 ·
   assert.match(PAGE, /flowCounts\[t\.id\]/)
 })
 
-test('㉚ 页面：「重放今日」无接口 ⇒ disabled + title 说明', () => {
+test('㉚ 页面：「重放今日」接宿主既有 action:run（v0.218.3 起可点，不再是 disabled 占位）', () => {
   assert.match(PAGE, /'↺ 重放今日'/)
-  assert.match(PAGE, /'data-role': 'ad-replay', disabled: true, title: '宿主未提供重放接口'/)
+  assert.match(PAGE, /'data-role': 'ad-replay'/)
+  assert.match(PAGE, /onClick: replayToday/)
+  assert.match(PAGE, /api\.prismRun\(slot\)/)
+  assert.ok(!/disabled: true, title: '宿主未提供重放接口'/.test(PAGE), '不得再写死 disabled')
 })
 
 test('㉛ 页面：图失败 ⇒ `—（图未取到）`，并走既有 trend/kline（无新路由）', () => {
@@ -547,6 +550,7 @@ test('57 页面：只读派生 —— 持仓分析不写 runs、不参与「重�
   assert.equal(JSON.stringify(RUNS), before, 'flowEntriesOf 不得改写 runs 入参')
   const runCount = fn.filter((e) => e.kind === 'SCAN').length
   assert.equal(runCount, RUNS.length, 'HOLD 不改写 runs 派生条数')
-  assert.match(PAGE, /disabled: true, title: '宿主未提供重放接口'[\s\S]{0,40}'↺ 重放今日'/)
+  // 重放按钮从 v0.218.3 起可用：只读派生仍不得把 HOLD 写进 runs
+  assert.match(PAGE, /onClick: replayToday/)
   assert.throws(() => assert.equal(runCount, RUNS.length + HOLDS.length, '反例上：把 HOLD 混进 runs'), /反例上/, '⚠ 反例注入必须失败')
 })

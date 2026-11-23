@@ -11,6 +11,28 @@
 
 ---
 
+## v0.218.3 — 「重放今日」可用了
+
+`npm run check` **1924 / 1924 × 2 时区**（1920 → 1924）+ build（73 项）+ `tsc` 0。
+
+### 现象
+决策流右上角「↺ 重放今日」始终**灰掉**（`disabled: true`，title「宿主未提供重放接口」），无法手动重跑当日决策。
+
+### 根因
+宿主 `POST /tradewatcher/prism {action:'run', slot}` **一直存在**（手动补跑/重放，只写 `lastFired`、不占用自动节奏），
+是客户端把按钮写死成 disabled 占位，从未接线。
+
+### 修法
+- 按钮接 `replayToday`：`api.prismRun(shClockText(Date.now()).slice(0,5))` → 成功后 `load()` 回读；
+- 重放中 `disabled` + 文案「↻ 重放中…」，防连点重复跑；
+- 失败写 `err`（「重放失败：…」），不再静默；
+- 超时上限沿用既有 `prismRun` 的 120s（实测一轮 66.6s）。
+
+### 验证
+- 端到端实测：`POST {action:'run', slot:'14:55'}` → **HTTP 200 / 66.6s**，`state.runs` 新增该轮（20 条末位），`desk.decisionFlow` 289 → **311 条**。
+- 新增 `prismReplay` 4 条断言（按钮不写死 disabled、走 `api.prismRun`、重放中禁用、反例旧实现被抓）。
+- 同步更新 3 条旧断言（㉚/57/㊻）为「已接线」口径。
+
 ## v0.218.2 — 修复决策流「展开」闪烁 / 按钮消失
 
 `npm run check` **1920 / 1920 × 2 时区**（1914 → 1920）+ build（73 项）+ `tsc` 0。

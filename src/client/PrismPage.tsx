@@ -251,6 +251,18 @@ export function PrismPage(props: { active?: boolean; redUp?: boolean } = {}): Re
     setErr(null)
     api.prismState().then((r) => stateGateRef.current?.push(r)).catch((e: Error) => setErr(e.message))
   }, [])
+  /** 「重放今日」：用当前行情手动重跑一轮（宿主 action:'run'，不占用自动节奏） */
+  const [replaying, setReplaying] = React.useState(false)
+  const replayToday = React.useCallback((): void => {
+    setReplaying(true)
+    setErr(null)
+    const slot = shClockText(Date.now()).slice(0, 5)
+    api.prismRun(slot)
+      .then(() => { load() })
+      .catch((e: Error) => setErr(`重放失败：${e.message}`))
+      .finally(() => { setReplaying(false) })
+  }, [load])
+
   /** 自检：只在挂载时跑一次；宿主侧会真发 llm.stream（最长 20s），不得挂在保存路径上 */
   const loadSelf = React.useCallback((): void => {
     api.prismSelftest().then((r) => setSelf({ ok: r.ok, ms: r.elapsedMs })).catch(() => setSelf(null))
@@ -766,7 +778,13 @@ export function PrismPage(props: { active?: boolean; redUp?: boolean } = {}): Re
       React.createElement('h2', null, '决策流'),
       React.createElement('span', { className: 'tw-ad-flow-meta', 'data-role': 'ad-flow-meta' }, `只读 · ${flowCounts.all} 条留痕`),
       React.createElement('span', { className: 'tw-ad-sp' }),
-      React.createElement('button', { className: 'tw-ad-fchip', 'data-role': 'ad-replay', disabled: true, title: '宿主未提供重放接口' }, '↺ 重放今日')),
+      React.createElement('button', {
+        className: `tw-ad-fchip${replaying ? ' is-busy' : ''}`,
+        'data-role': 'ad-replay',
+        disabled: replaying,
+        title: replaying ? '正在用当前行情重跑…' : '用当前行情重跑一轮决策（不占用自动节奏）',
+        onClick: replayToday,
+      }, replaying ? '↻ 重放中…' : '↺ 重放今日')),
     React.createElement('div', { className: 'tw-ad-flow-bar', role: 'tablist', 'data-role': 'ad-flow-bar' },
       ...FLOW_TABS.map((t) => React.createElement('button', {
         key: t.id, type: 'button', role: 'tab', 'aria-selected': flowTab === t.id, 'data-tab': t.id,
@@ -779,7 +797,7 @@ export function PrismPage(props: { active?: boolean; redUp?: boolean } = {}): Re
           ...flowView.rows.map((e) => flowEntryNode(e)),
           flowView.truncated
             ? React.createElement('div', { key: 'more', className: 'tw-ad-feed-more' }, `仅显示最近 ${flowView.shown} 条 · 共 ${flowView.total} 条`)
-            : null)), [flowView, flowCounts, flowTab, flowEntries])
+            : null)), [flowView, flowCounts, flowTab, flowEntries, replaying, replayToday])
 
   // ── 右栏 · 账户总览（大数 + 今日/累计 + 四格 + 仓位条）──
   const ov = desk?.overview
