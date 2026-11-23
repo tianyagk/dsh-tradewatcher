@@ -2,7 +2,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
-import { clampOverflowApply } from './clampBatch.ts'
+import { clampOverflowApply, createClampBatcher } from './clampBatch.ts'
 
 const PAGE = readFileSync(new URL('./PrismPage.tsx', import.meta.url), 'utf8')
 
@@ -53,4 +53,36 @@ test('⑥ 隐藏（0 高）→ 显示：批处理器必须补测并把 overflow 
   onResize?.()
   b.flush()
   assert.deepEqual(seen, [true], `显示后必须补报 true，实际 ${JSON.stringify(seen)}`)
+})
+
+test('⑦ 展开态完全不参与测量（否则批测量临时夹行 ⇒ 高度变 ⇒ RO 再触发 ⇒ 长短缩放闪烁）', () => {
+  const page = readFileSync(new URL('./PrismPage.tsx', import.meta.url), 'utf8')
+  const i = page.indexOf('function FlowTextView')
+  const seg = page.slice(i, page.indexOf('function flowRowNode'))
+  assert.match(seg, /if \(open\) return undefined/, '展开时必须跳过 watch')
+  assert.match(seg, /\}, \[text, open\]\)/, 'effect 必须随 open 重跑（收起后重新登记）')
+})
+
+test('⑧ 只有宽度变化才重测：高度变化（自己夹行造成的）不得再触发测量', () => {
+  const node = {
+    classList: { tokens: new Set<string>(), contains(t: string) { return this.tokens.has(t) }, add(t: string) { this.tokens.add(t) }, remove(t: string) { this.tokens.delete(t) } },
+    scrollHeight: 112, clientHeight: 56, offsetWidth: 800,
+  }
+  let onResize: (() => void) | null = null
+  const b = createClampBatcher({
+    schedule: () => undefined,
+    createObserver: (cb) => { onResize = cb; return { observe: () => undefined, unobserve: () => undefined, disconnect: () => undefined } },
+  })
+  const seen: boolean[] = []
+  b.watch(node, (v) => seen.push(v))
+  b.flush()
+  assert.deepEqual(seen, [true])
+  const before = b.stats().measurements
+  onResize?.()            // 仅高度变化（宽度没变）
+  b.flush()
+  assert.equal(b.stats().measurements, before, '同宽不得重测')
+  node.offsetWidth = 600  // 宽度变了
+  onResize?.()
+  b.flush()
+  assert.equal(b.stats().measurements, before + 1, '宽度变了必须重测一次')
 })

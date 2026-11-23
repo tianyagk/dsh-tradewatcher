@@ -26,6 +26,8 @@ export interface ClampNode {
   }
   scrollHeight: number
   clientHeight: number
+  /** 宽度（可选）：只有宽度变了才需要重测 —— 夹行会改高度，但不改宽度；按高度触发会自激成死循环 */
+  offsetWidth?: number
 }
 
 export interface ClampObserver {
@@ -89,6 +91,8 @@ interface Entry {
   onChange: (overflow: boolean) => void
   /** 上一次上报的值（null = 还没测过） */
   last: boolean | null
+  /** 上次测量时的宽度（用于过滤"只是高度变了"的 resize 通知） */
+  width: number
 }
 
 export function createClampBatcher(deps: ClampBatchDeps = {}): ClampBatcher {
@@ -131,6 +135,7 @@ export function createClampBatcher(deps: ClampBatchDeps = {}): ClampBatcher {
       const e = batch[i]!
       const next = results[i]
       if (next === null || next === undefined) { dirty.add(e); deferred = true; continue }
+      e.width = e.el.offsetWidth ?? e.width
       if (e.last === next) continue
       e.last = next
       e.onChange(next)
@@ -154,8 +159,12 @@ export function createClampBatcher(deps: ClampBatchDeps = {}): ClampBatcher {
   }
 
   const markAll = (): void => {
-    for (const e of entries.values()) dirty.add(e)
-    scheduleFlush()
+    for (const e of entries.values()) {
+      // 未测过 ⇒ 必测；宽度变了 ⇒ 重测；只有高度变 ⇒ 跳过（那是我们自己夹行/还原造成的）
+      const w = e.el.offsetWidth ?? Number.NaN
+      if (e.last === null || (Number.isFinite(w) && w !== e.width)) dirty.add(e)
+    }
+    if (dirty.size > 0) scheduleFlush()
   }
 
   const ensureObserver = (): ClampObserver | null => {
@@ -176,7 +185,7 @@ export function createClampBatcher(deps: ClampBatchDeps = {}): ClampBatcher {
 
   return {
     watch(el, onOverflow) {
-      const entry: Entry = { el, onChange: onOverflow, last: null }
+      const entry: Entry = { el, onChange: onOverflow, last: null, width: el.offsetWidth ?? Number.NaN }
       entries.set(el, entry)
       dirty.add(entry)
       ensureObserver()?.observe(el)

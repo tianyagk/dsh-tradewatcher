@@ -104,15 +104,18 @@ function FlowTextView(props: { text: string | null; label: string }): React.Reac
   React.useLayoutEffect(() => {
     const el = ref.current
     if (el === null || text === null) return undefined
+    // 展开态**完全不参与测量**：批测量会临时给元素加 `is-clamp`（读高度用），而展开块一旦被临时夹回
+    // 3 行，高度就变 ⇒ ResizeObserver 再触发 ⇒ 再测 ⇒ 「长短缩放」闪烁，按钮也会来回跳。
+    // 收起后重新登记并同步测一次即可。
+    if (open) return undefined
     const stop = clampBatcher.watch(el, (measured) => {
-      // 展开态下忽略「不溢出」的测量结果，否则按钮消失 + 夹行回弹 ⇒ 展开闪烁
       setOverflow((prev) => clampOverflowApply(openRef.current, measured, prev))
     })
-    // 首测必须**同步**在 useLayoutEffect 里做：微任务阶段读高度可能还没排版（隐藏页/刚挂载 ⇒ 0 高
-    // ⇒ 误判"不溢出"，「展开」按钮永远不出现）。批处理器仍负责后续 resize 的合并测量。
+    // 首测必须同步在 useLayoutEffect 里做：微任务阶段读高度可能还没排版（隐藏页/刚挂载 ⇒ 0 高
+    // ⇒ 误判"不溢出"，「展开」按钮永远不出现）。
     clampBatcher.flush()
     return stop
-  }, [text])
+  }, [text, open])
   if (text === null) {
     return React.createElement('span', { className: 'v', title: `本条未给出「${props.label}」段（宿主报告里没有对应段落）` }, FLOW_MISSING)
   }
