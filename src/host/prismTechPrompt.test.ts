@@ -53,3 +53,32 @@ test('④ 运行时：新闻只进「信息面」这一路（其余三路与汇�
     assert.ok(seen.slice(0, 4).filter((t) => t.includes('本段不解读新闻')).length === 3, '其余三路必须写明不解读新闻')
   } finally { await rm(dir, { recursive: true, force: true }) }
 })
+
+test('⑤ 运行时：技术面段落进入提示词，位置在账户快照之后、行业暴露之前；缺省时不出现', async () => {
+  const { mkdtemp, rm } = await import('node:fs/promises')
+  const { tmpdir } = await import('node:os')
+  const { join } = await import('node:path')
+  const { PrismStore } = await import('./prismStore.ts')
+  const { runPrismAnalysis } = await import('./prismPipeline.ts')
+  const dir = await mkdtemp(join(tmpdir(), 'prism-tech-sec-'))
+  try {
+    const store = new PrismStore(dir)
+    await store.init()
+    const seen: string[] = []
+    let n = 0
+    const llm = { stream: (opts: { messages: Array<{ content: unknown }> }) => {
+      n += 1
+      const raw = opts.messages[0]?.content
+      seen.push(Array.isArray(raw) ? raw.map((b) => (b as { text?: string }).text ?? '').join('') : String(raw))
+      const text = n <= 4 ? `r${n}` : '汇总\n```json\n{"note":"不买：x；不卖：y","limits":{"singlePct":20,"totalPct":50,"note":"x"},"orders":[],"cancel":[]}\n```'
+      return (async function* () { yield { type: 'text-delta', text } })()
+    } }
+    const get = (name: string): unknown => name === 'llm' ? llm : name === 'agentDefaultModel' ? { currentSelection: () => ({ provider: 'p', model: 'm' }) } : undefined
+    const tech = '【指数技术面（由本地日线计算；缺数据写 —）】\n- 中证1000：收 5812.32'
+    await runPrismAnalysis(store, '10:15', { positions: '—', quotes: '—', account: '总资产：1', news: [], skeleton: '骨架', tech, exposure: '【行业暴露】x' } as never, { get, now: () => 1 })
+    const first = seen[0]!
+    const iTech = first.indexOf('【指数技术面'); const iAcc = first.indexOf('【账户快照'); const iExp = first.indexOf('【行业暴露')
+    assert.ok(iTech > iAcc, '技术面必须在账户快照之后')
+    assert.ok(iExp < 0 || iTech < iExp, '技术面必须在行业暴露之前')
+  } finally { await rm(dir, { recursive: true, force: true }) }
+})
