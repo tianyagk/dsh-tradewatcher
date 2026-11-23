@@ -19,9 +19,11 @@ import type { PrismAccount, PrismFill, PrismOrder, PrismRun, PrismSettings, Pris
 import { PRISM_INTERVAL_OPTIONS, PRISM_MAX_TIMES, PRISM_SKELETON_MAX } from '../shared/prism.ts'
 import { applyPriceCorrection } from './prismCorrection.ts'
 import { indexTechTextOf } from './indexTech.ts'
+import { candidatesTextOf, type CandidateInput } from './candidateStats.ts'
+import { isValidSecid } from './prismDeskWrite.ts'
 import { backfillNews, incrementalNews } from './prismNews.ts'
 import { runPrismAnalysis, type PrismInputs } from './prismPipeline.ts'
-import { fetchIndustryOverview, fetchKline, fetchQuotes } from './em.ts'
+import { fetchIndustryOverview, fetchKline, fetchQuotes, fetchValuationBatch } from './em.ts'
 import { assemblePortfolio } from './portfolio.ts'
 import { industryExposureOf, needsIndustryOf, unavailableExposure } from './prismExposure.ts'
 import { applyDrawdownGate, drawdownGateOf, evaluationOf, EVAL_MIN_SAMPLE } from './prismEval.ts'
@@ -249,6 +251,29 @@ async function indexTechCachedOf(): Promise<string> {
   return text
 }
 
+/** 候选池缓存：10 分钟（持仓+自选 50+ 只日线，逐轮全量回源会拖慢研判） */
+let candidatesCache: { key: string; at: number; text: string } | null = null
+async function candidatesCachedOf(deps: PrismRouteDeps, watch: ReadonlyArray<{ secid: string; name: string }>): Promise<string> {
+  const account = deps.trading.account()
+  const prices: Record<string, number | null> = {}
+  for (const p of account.positions) prices[p.secid] = null
+  const held = account.positions
+    .map((p) => ({ secid: p.secid, name: p.name, held: true as const }))
+    .sort((a, b) => b.secid.localeCompare(a.secid))
+  const heldSet = new Set(held.map((h) => h.secid))
+  const rest = watch.filter((w) => !heldSet.has(w.secid)).map((w) => ({ secid: w.secid, name: w.name, held: false as const }))
+  // 只保留可交易的沪深 A 股 / ETF（港股/美股/期货在引擎里本来就下不了单，列出来只占上下文）
+  const list: CandidateInput[] = [...held, ...rest].filter((c) => isValidSecid(c.secid))
+  const key = list.map((c) => c.secid).join(',')
+  if (candidatesCache !== null && candidatesCache.key === key && Date.now() - candidatesCache.at < 10 * 60_000) return candidatesCache.text
+  const text = await candidatesTextOf(list, {
+    loadBars: async (secid) => (await fetchKline(secid, 101, 120, 0))?.days ?? null,
+    loadValuation: (secids) => fetchValuationBatch(secids),
+  })
+  candidatesCache = { key, at: Date.now(), text }
+  return text
+}
+
 export const prismInputsOf = async (deps: PrismRouteDeps): Promise<PrismInputs> => {
   const watch = deps.data.watchData().items
   const port = deps.data.portData()
@@ -299,6 +324,7 @@ export const prismInputsOf = async (deps: PrismRouteDeps): Promise<PrismInputs> 
     skeleton: deps.store.skeleton(),
     exposure: exposureText,
     tech: await indexTechCachedOf().catch(() => '【指数技术面（由本地日线计算；缺数据写 —）】\n—（本轮取数失败）'),
+    candidates: await candidatesCachedOf(deps, watch).catch(() => '【候选池（持仓 + 自选）】\n—（本轮取数失败）'),
   }
 }
 

@@ -143,7 +143,7 @@ test('③ 原因取值：skipReason → rejectReason → 当日 rejects 对应�
 test('④ 提示词：新增「不得重复被拒」，既有强制规则一条不少', async () => {
   const src = readFileSync(join(process.cwd(), 'src/host/prismPipeline.ts'), 'utf8')
   const rules = src.match(/【强制·[^】]+】/g) ?? []
-  assert.equal(rules.length, 5, '强制规则 = 风险暴露/双侧/空单说明/不得重复被拒/只认棱镜账户')
+  assert.equal(rules.length, 6, '强制规则 = 风险暴露/双侧/空单说明/不得重复被拒/只认棱镜账户/候选池')
   for (const key of ['风险暴露', '双侧', '空单说明', '不得重复被拒', '只认棱镜账户']) assert.ok(rules.some((r) => r.includes(key)), `缺规则：${key}`)
   const rule = '今日已因同一原因被拒的委托，不得原样重发；若仍要交易，必须先核对可用数量/可用资金，并说明与上次不同的依据。'
   assert.equal(src.includes(rule), true, '新规则文案必须逐字存在')
@@ -151,7 +151,7 @@ test('④ 提示词：新增「不得重复被拒」，既有强制规则一条�
   assert.equal(injected.includes('【强制·不得重复被拒】'), false)
   assert.throws(() => assert.match(injected, /【强制·不得重复被拒】/, '⚠ 注入：提示词缺新规则'), /注入/)
 
-  // 运行时证据：汇总请求体真的带上 5 条强制规则（不是只写在源码注释里）
+  // 运行时证据：汇总请求体真的带上 6 条强制规则（不是只写在源码注释里）
   const dir = await mkdtemp(join(tmpdir(), 'prism-reject-prompt-'))
   try {
     const store = new PrismStore(dir)
@@ -176,7 +176,7 @@ test('④ 提示词：新增「不得重复被拒」，既有强制规则一条�
     assert.equal(seen.length, 5)
     const summary = seen[4] ?? ''
     assert.ok(summary.includes('【强制·不得重复被拒】'), '汇总请求体必须带新规则')
-    assert.equal((summary.match(/【强制·/g) ?? []).length, 5, '汇总请求体必须带满 5 条强制规则')
+    assert.equal((summary.match(/【强制·/g) ?? []).length, 6, '汇总请求体必须带满 6 条强制规则')
   } finally {
     await rm(dir, { recursive: true, force: true })
   }

@@ -4320,3 +4320,33 @@ export async function searchSymbols(query: string, limit = 14): Promise<SuggestI
   }
   return out
 }
+
+/**
+ * 批量估值（PE 动态 / PB / 总市值）：候选池一次请求拿全。
+ *
+ * 与 `fetchStockDetail` 同一个上游（`ulist.np`，字段表一致），只是 secids 用逗号拼成一次请求——
+ * 选股上下文里有 50+ 只标的，逐只打会变成 50 次请求。
+ */
+export async function fetchValuationBatch(
+  secids: readonly string[],
+  fetcher: (hosts: readonly string[], path: string) => Promise<unknown> = fetchAny,
+): Promise<Record<string, { pe: number | null; pb: number | null; totalMv: number | null; name: string | null }>> {
+  const list = [...new Set(secids)].filter((s) => SECID_RE.test(s))
+  const out: Record<string, { pe: number | null; pb: number | null; totalMv: number | null; name: string | null }> = {}
+  if (list.length === 0) return out
+  const chunks: string[][] = []
+  for (let i = 0; i < list.length; i += 40) chunks.push(list.slice(i, i + 40))
+  for (const chunk of chunks) {
+    try {
+      const json = await fetcher(QUOTE_HOSTS, `/api/qt/ulist.np/get?secids=${encodeURIComponent(chunk.join(','))}&fltt=2&invt=2&fields=${QUOTE_FIELDS}`)
+      for (const it of diffList(json)) {
+        const code = String(it.f12 ?? '')
+        const market = String(it.f13 ?? '')
+        const secid = `${market}.${code}`
+        if (!chunk.includes(secid)) continue
+        out[secid] = { pe: num(it.f9), pb: num(it.f23), totalMv: num(it.f20), name: typeof it.f14 === 'string' ? it.f14 : null }
+      }
+    } catch { /* 单批失败：该批全部按缺数据（—）处理，不编 */ }
+  }
+  return out
+}
