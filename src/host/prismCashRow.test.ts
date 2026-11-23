@@ -44,9 +44,10 @@ test('④ 反例：不含现金时持仓权重之和只有 60.3%（说明旧口�
   assert.ok(posOnly < 1, '只有持仓行时达不到 100% ⇒ 现金必须单独成行')
 })
 
-test('⑤ 界面：现金行不可编辑、不可移除、不可点开详情', () => {
+test('⑤ 界面：现金行可编辑金额，但不可移除、不可点开详情', () => {
   const page = readFileSync(new URL('../client/PrismPage.tsx', import.meta.url), 'utf8')
-  assert.match(page, /p\.kind !== 'cash' && \(e\.key === 'Enter'/)
-  assert.match(page, /editing \|\| p\.kind === 'cash' \? null : React\.createElement\('button'/)
-  assert.match(page, /p\.kind === 'cash'\s*\?\s*'—'/)
+  assert.match(page, /p\.kind !== 'cash' && \(e\.key === 'Enter'/, '现金行不得打开个股详情')
+  assert.match(page, /editSecid === 'CASH'/, '现金行必须有独立保存分支')
+  assert.match(page, /api\.prismCash\(Number\(editDraft\.shares\)\)/, '现金行走 action:cash')
+  assert.match(page, /p\.kind === 'cash' \? \[\] : \[React\.createElement\('button'/, '现金行不提供「移除」')
 })

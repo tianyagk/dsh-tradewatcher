@@ -579,7 +579,7 @@ export function makePrismRoutes(deps: PrismRouteDeps): PluginWebRoute[] {
           return
         }
         try {
-          const body = (await readBody(req)) as { op?: unknown; shares?: unknown; cost?: unknown; confirm?: unknown; action?: unknown; times?: unknown; intervalSec?: unknown; text?: unknown; slot?: unknown; capitalLimit?: unknown; orderId?: unknown; provider?: unknown; model?: unknown; industryLimits?: unknown; secid?: unknown; at?: unknown; price?: unknown; newPrice?: unknown; basis?: unknown; backupOf?: unknown } | null
+          const body = (await readBody(req)) as { op?: unknown; shares?: unknown; cost?: unknown; confirm?: unknown; action?: unknown; times?: unknown; intervalSec?: unknown; text?: unknown; slot?: unknown; capitalLimit?: unknown; orderId?: unknown; provider?: unknown; model?: unknown; industryLimits?: unknown; secid?: unknown; at?: unknown; price?: unknown; newPrice?: unknown; basis?: unknown; backupOf?: unknown; cash?: unknown } | null
           const action = body !== null && typeof body.action === 'string' ? body.action : ''
           if (action === 'ledgerRepair') {
             // P0-2 首次修复：从 *.bak / .corrupt-* 恢复；成功后才解除 degraded
@@ -761,6 +761,22 @@ export function makePrismRoutes(deps: PrismRouteDeps): PluginWebRoute[] {
             await recordEquity(deps)
             if (slot !== 'manual') await store.markFired(dayOf(Date.now()), slot)
             send(res, 200, { ok: true, asOf: Date.now(), run, orders: deps.trading.orders() })
+            return
+          }
+          if (action === 'cash') {
+            // 「现金持仓可编辑」：用户直接设当前现金余额（不动 realized，不补记成交）
+            const cash = Number(body?.cash)
+            if (!Number.isFinite(cash) || cash < 0) { send(res, 400, { ok: false, error: '现金必须是非负数' }); return }
+            const next = await deps.trading.runExclusive(async () => {
+              deps.trading.assertWritable('调整现金')
+              await deps.trading.reloadForWrite()
+              deps.trading.assertWritable('调整现金')
+              const account = deps.trading.account()
+              const value = { ...account, cash: Math.round(cash * 100) / 100 }
+              await deps.trading.saveAll({ account: value, orders: deps.trading.orders(), fills: deps.trading.fills() })
+              return value
+            })
+            send(res, 200, { ok: true, account: next })
             return
           }
           if (action === 'capital') {

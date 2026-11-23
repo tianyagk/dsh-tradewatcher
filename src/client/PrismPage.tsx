@@ -421,6 +421,11 @@ export function PrismPage(props: { active?: boolean; redUp?: boolean } = {}): Re
   }
   const editError = ((): string | null => {
     if (editSecid === null) return null
+    if (editSecid === 'CASH') {
+      const v = Number(editDraft.shares)
+      if (!Number.isFinite(v) || v < 0) return '现金必须是非负数'
+      return null
+    }
     const bad = positionErrorOf(editSecid, Number(editDraft.shares), true)
     if (bad !== null) return bad
     const c = Number(editDraft.cost)
@@ -430,7 +435,10 @@ export function PrismPage(props: { active?: boolean; redUp?: boolean } = {}): Re
   const submitUpdate = (): void => {
     if (editSecid === null || editError !== null) return
     setSaving(true); setRowErr(null)
-    api.prismPosition({ op: 'update', secid: editSecid, shares: Number(editDraft.shares), cost: Number(editDraft.cost) })
+    const p: Promise<{ ok: boolean; error?: string }> = editSecid === 'CASH'
+      ? api.prismCash(Number(editDraft.shares))
+      : api.prismPosition({ op: 'update', secid: editSecid, shares: Number(editDraft.shares), cost: Number(editDraft.cost) })
+    p
       .then((r) => { if (r.ok) { setEditSecid(null); load() } else setRowErr(r.error ?? '保存失败') })
       .catch((e: Error) => setRowErr(e.message))
       .finally(() => setSaving(false))
@@ -596,7 +604,7 @@ export function PrismPage(props: { active?: boolean; redUp?: boolean } = {}): Re
             React.createElement('span', { className: 'tw-ad-pos-code' }, `${codeOf(p.secid)} · `,
               React.createElement('em', { className: 'tw-ad-ind', title: '行业：宿主无单票行业字段' }, '—'))),
           React.createElement('div', { className: 'tw-ad-pos-cell' }, editing
-            ? React.createElement('input', { className: 'tw-ad-inline', type: 'number', 'aria-label': `股数 ${p.name}`, value: editDraft.shares, onChange: (e: React.ChangeEvent<HTMLInputElement>) => setEditDraft({ ...editDraft, shares: e.target.value }) })
+            ? React.createElement('input', { className: 'tw-ad-inline', type: 'number', 'aria-label': `${p.kind === 'cash' ? '金额' : '股数'} ${p.name}`, value: editDraft.shares, onChange: (e: React.ChangeEvent<HTMLInputElement>) => setEditDraft({ ...editDraft, shares: e.target.value }) })
             : numText(p.qty, p.kind === 'cash' ? 2 : 0)),
           React.createElement('div', { className: 'tw-ad-pos-cell' }, p.kind === 'cash'
             ? '—'
@@ -605,7 +613,7 @@ export function PrismPage(props: { active?: boolean; redUp?: boolean } = {}): Re
               : numText(p.cost, 3)),
           React.createElement('div', { className: 'tw-ad-pos-cell', title: p.weight === null ? '缺现价或总资产，权重不可算' : `权重分母 = 总资产 ${wanOf(totalAssets)}` }, weightTextOf(p.weight)),
           React.createElement('div', { className: `tw-ad-pos-cell tw-ad-pnl is-${tone}`, title: pctTitle === null ? '缺现价或成本，盈亏比例不可算' : `成本 ${numText(p.cost, 3)} · ${pctTitle}` }, pnlTextOf(p.pnl)),
-          React.createElement('div', { className: 'tw-ad-pos-more' }, editing || p.kind === 'cash' ? null : React.createElement('button', {
+          React.createElement('div', { className: 'tw-ad-pos-more' }, editing ? null : React.createElement('button', {
             className: 'tw-ad-more', 'aria-label': `更多操作 ${p.name}`, 'aria-haspopup': 'menu',
             onClick: (e: React.MouseEvent) => { e.stopPropagation(); setMenuFor(menuFor === p.secid ? null : p.secid) },
           }, '⋯')))
@@ -624,10 +632,10 @@ export function PrismPage(props: { active?: boolean; redUp?: boolean } = {}): Re
                   role: 'menuitem',
                   onClick: () => { setEditSecid(p.secid); setEditDraft({ shares: String(p.qty), cost: String(p.cost) }); setRowErr(null); setMenuFor(null) },
                 }, '编辑'),
-                React.createElement('button', {
+                ...(p.kind === 'cash' ? [] : [React.createElement('button', {
                   role: 'menuitem',
                   onClick: () => { setConfirmDel(p.secid); setMenuFor(null) },
-                }, '移除'))]
+                }, '移除')]))]
             : []
           return React.createElement('div', { key: `${p.secid}-item`, className: 'tw-ad-pos-item', 'data-secid': p.secid }, row, ...editBar, ...errRow, ...menu)
         }))

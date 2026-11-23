@@ -11,6 +11,25 @@
 
 ---
 
+## v0.219.1 — 现金持仓可编辑（直接设当前现金余额）
+
+`npm run check` **1943 / 1943 × 2 时区**（1940 → 1943）+ build（73 项）+ `tsc` 0。
+
+### 需求
+历史账目里有 bug 造成的偏差，用户要求最简单的解法：**现金行可编辑，手动填当前现金**。
+
+### 实现
+| 层 | 改动 |
+| --- | --- |
+| 宿主 | 新增 `POST /tradewatcher/prism {action:'cash', cash}`：非负校验 → `runExclusive` → `reloadForWrite` → `saveAll`；**只改 cash、不动 realized**（不是成交，不产生盈亏） |
+| 客户端 | 现金行的「⋯」菜单提供 **编辑**（无「移除」）；输入框改为金额；保存走 `api.prismCash()`；点击仍不打开个股详情 |
+| 渲染 | 现金行保存后 `desk.overview.totalAssets`、全部权重自动按新总资产重算（含现金行 100% 口径） |
+
+### 验证
+新增 `prismCashEdit.test.ts` 3 条（cash 分支存在且走 runExclusive+saveAll、只改 cash 不改 realized、负数 400）；
+`prismCashRow` ⑤ 更新为「可编辑金额、不可移除、不可点开」。
+`npm run check` **1943 / 1943 × 2 时区** + build（73 项）+ `tsc` 0。
+
 ## v0.219.0 — 模拟盘权重口径：现金单独作为一行持仓
 
 `npm run check` **1940 / 1940 × 2 时区**（1935 → 1940）+ build（73 项）+ `tsc` 0。

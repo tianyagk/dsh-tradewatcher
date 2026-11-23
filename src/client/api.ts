@@ -584,6 +584,12 @@ export const api = {
     }, 20_000)
   },
   /** 模拟盘：改资金上限（入金） */
+  /** 直接设现金余额（现金行可编辑） */
+  prismCash(cash: number): Promise<{ ok: boolean; account: PrismAccount }> {
+    return requestWithTimeout('/tradewatcher/prism', {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action: 'cash', cash }),
+    }, 20_000)
+  },
   prismCapital(capitalLimit: number): Promise<{ ok: boolean; account: PrismAccount }> {
     return requestWithTimeout('/tradewatcher/prism', {
       method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action: 'capital', capitalLimit }),
