@@ -1,10 +1,18 @@
 /** 棱镜持仓表单校验（纯函数，页面与测试共用）。 */
 const SECID_OK = /^(60|68|00|30|51|56|58)\d{4}$/
 
-export function positionErrorOf(code: string, shares: number): string | null {
-  if (!SECID_OK.test(code)) return '仅支持沪深 A 股与 ETF'
+/** 行内编辑传的是带市场的 secid（`1.601872`）；表单新增传的是 6 位代码。两种都认。 */
+export function bareCodeOf(code: string): string {
+  return code.replace(/^\d\./, '').trim()
+}
+
+/**
+ * @param allowOddLot 修改已有持仓时允许零股（89 股这类），新增仍要求整手
+ */
+export function positionErrorOf(code: string, shares: number, allowOddLot = false): string | null {
+  if (!SECID_OK.test(bareCodeOf(code))) return '仅支持沪深 A 股与 ETF'
   if (!Number.isInteger(shares) || shares <= 0) return '股数必须是正整数'
-  if (shares % 100 !== 0) return '股数必须是 100 的整数倍'
+  if (!allowOddLot && shares % 100 !== 0) return '股数必须是 100 的整数倍'
   return null
 }
 

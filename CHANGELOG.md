@@ -11,6 +11,30 @@
 
 ---
 
+## v0.218.5 — 修复「持仓明细改完保存不了」
+
+`npm run check` **1933 / 1933 × 2 时区**（1928 → 1933）+ build（73 项）+ `tsc` 0。
+
+### 现象
+持仓明细里把 招商轮船 改成 26 股 / 成本 17 后点「保存」，没有任何变化，表单下方红字「仅支持沪深 A 股与 ETF」。
+
+### 两条根因（都命中）
+
+| # | 根因 | 证据 |
+| --- | --- | --- |
+| 1 | 行内编辑传的是**带市场前缀**的 secid（`1.601872`），而 `positionErrorOf` 用 6 位正则 `^(60\|68\|00\|30\|51\|56\|58)\d{4}$` 校验 ⇒ 直接判非法 | `prismForm.ts:2-5`；`PrismPage.tsx:421` 传 `editSecid` |
+| 2 | 零股被拒：客户端与服务端都要求「100 的整数倍」，而 89 股/26 股这类零股是真实存在的 | `prismForm.ts:7`、`prismDeskWrite.ts:35` |
+
+### 修法
+- `bareCodeOf(code)`：先剥掉 `1.` / `0.` 前缀再校验；`positionErrorOf(code, shares, allowOddLot)`。
+- 行内编辑（update）传 `allowOddLot = true`；新增（add）仍要求整手。
+- 宿主 `validatePositionInput`：`update` 只要求正整数，`add` 才要求 100 的整数倍。
+- 宿主 `applyPositionOp('update')` 同步 `netCost = 股数 × 成本`（上一次修的一并生效）。
+
+### 验证
+新增 `prismPositionSave.test.ts` 5 条：带前缀 secid 通过、零股通过/整手限制、非法输入仍拒、宿主 add/update 差异、89→26 股端到端（`qty:26 / cost:17 / netCost:442`）。
+`npm run check` **1933 / 1933 × 2 时区** + build（73 项）+ `tsc` 0。
+
 ## v0.218.4 — 修正「只剩几十股仍判超 20% 单票上限」
 
 `npm run check` **1928 / 1928 × 2 时区**（1924 → 1928）+ build（73 项）+ `tsc` 0。

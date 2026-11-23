@@ -418,7 +418,7 @@ export function PrismPage(props: { active?: boolean; redUp?: boolean } = {}): Re
   }
   const editError = ((): string | null => {
     if (editSecid === null) return null
-    const bad = positionErrorOf(editSecid, Number(editDraft.shares))
+    const bad = positionErrorOf(editSecid, Number(editDraft.shares), true)
     if (bad !== null) return bad
     const c = Number(editDraft.cost)
     if (!Number.isFinite(c) || c <= 0) return '成本必须是正数'

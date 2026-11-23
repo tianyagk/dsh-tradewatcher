@@ -39,7 +39,9 @@ export function validatePositionInput(input: PositionInput): string | null {
   if (!isValidSecid(input.secid)) return 'secid 必须是沪深 A 股或 ETF（如 1.600519 / 1.510300）'
   if (op === 'remove') return null
   const shares = input.shares
-  if (typeof shares !== 'number' || !Number.isInteger(shares) || shares <= 0 || shares % 100 !== 0) return 'shares 必须是正整数且为 100 的整数倍'
+  if (typeof shares !== 'number' || !Number.isInteger(shares) || shares <= 0) return 'shares 必须是正整数'
+  // 新增必须整手；**修改已有持仓允许零股**（拆股/送股/长期持有后会出现 89 股这类零股，不能因此存不进去）
+  if (op === 'add' && shares % 100 !== 0) return 'shares 必须是正整数且为 100 的整数倍'
   const cost = input.cost
   if (typeof cost !== 'number' || !Number.isFinite(cost) || cost <= 0) return 'cost 必须是有限正数'
   return null
