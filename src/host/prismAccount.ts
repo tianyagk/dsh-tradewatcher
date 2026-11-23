@@ -266,9 +266,12 @@ export function applyFill(account: PrismAccount, order: PrismOrder, fill: PrismF
   } else {
     const p = positions[idx]
     if (p === undefined) throw new Error('卖出无持仓（内部错误）')
+    if (fill.shares > p.qty) throw new Error(`卖出超过持仓（内部错误：${fill.shares} > ${p.qty}）`)
     cash = money(cash + fill.amount - fill.fee)
-    realized = money(realized + (fill.price - p.cost) * fill.shares - fill.fee)
+    // 摊薄成本口径（仓库既有裁决，不改）：卖出所得（减费）冲减账面成本 ⇒ 盈利卖出会摊低成本，
+    // 亏损卖出会抬高成本。`cost` 因此不是"移动加权"，界面也标"摊薄成本"。
     const net = p.netCost ?? p.qty * p.cost
+    realized = money(realized + (fill.amount - fill.fee) - (p.cost * fill.shares))
     p.netCost = money(net - (fill.amount - fill.fee))
     p.qty -= fill.shares
     p.available = Math.max(0, p.available - fill.shares)

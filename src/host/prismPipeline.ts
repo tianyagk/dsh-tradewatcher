@@ -79,7 +79,7 @@ const compileInput = (inputs: PrismInputs): string => {
     inputs.skeleton.trim() || '—',
     '【账户快照（模拟盘，只读；数字均带单位）】',
     inputs.account || '—（未取到账户快照）',
-    '【真实持仓（只读）】',
+    '【真实账户持仓（只读参考 —— 禁止用于计算棱镜仓位/权重）】',
     inputs.positions || '—',
     // 同键 ETF 合并成一行：让模型看见「这两只是同一条腿」，不重复建仓
     ...(inputs.products !== undefined && inputs.products.trim() !== '' ? [inputs.products] : []),
@@ -160,6 +160,8 @@ export async function runPrismAnalysis(
           '\n【强制·双侧】orders 允许卖单，卖单字段同样是 {secid, side:\'sell\', price, shares, reason}；不能只考虑买入侧。' +
           '\n【强制·空单说明】orders 为空时，note 必须分两段：「不买的理由」与「不卖的理由」；缺一段即视为不合格。' +
           '\n【强制·不得重复被拒】今日已因同一原因被拒的委托，不得原样重发；若仍要交易，必须先核对可用数量/可用资金，并说明与上次不同的依据。' +
+          '\n【强制·只认棱镜账户】仓位、权重、可用数量一律以【账户快照（模拟盘）】里的「棱镜持仓明细」为准；【真实账户持仓】只是研究参考，不得用它的股数/成本计算占比或判断「超单票上限」。' +
+
           '\n最后另起一行输出一个 ```json 代码块，字段：' +
           '{"note":"本轮决策理由（一句话；orders 为空时必须同时说明不买与不卖）",' +
           '"limits":{"singlePct":数字或null,"totalPct":数字或null,"byIndustry":{"行业":数字},"note":"仓位上限依据"},' +

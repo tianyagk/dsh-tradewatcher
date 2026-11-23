@@ -67,7 +67,8 @@ export function applyPositionOp(account: PrismAccount, input: PositionInput, now
     if (idx < 0) return { ok: false, error: '该标的不在持仓，请用 add' }
     const shares = input.shares as number
     const cost = round2(input.cost as number)
-    positions[idx] = { ...positions[idx]!, qty: shares, available: Math.min(positions[idx]!.available, shares), cost }
+    // netCost 必须跟着改：否则只改 cost 会留下「成本 × 数量 ≠ 账面净成本」的脏数据
+    positions[idx] = { ...positions[idx]!, qty: shares, available: Math.min(positions[idx]!.available, shares), cost, netCost: round2(shares * cost) }
     note = `调整持仓 ${secid} → ${shares} 股 @ ${cost}`
   } else {
     if (idx < 0) return { ok: false, error: '该标的不在持仓' }

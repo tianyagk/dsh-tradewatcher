@@ -85,6 +85,15 @@ export function accountSnapshotOf(
     `可买额度：${account.cash.toFixed(2)} 元`,
     `当日已成交笔数：${filledToday} 笔`,
     `未成交挂单：${pendingCount} 笔`,
+    '棱镜持仓明细（模拟盘，权重 = 市值 ÷ 总资产）：',
+    ...(account.positions.length === 0
+      ? ['—（空仓）']
+      : account.positions.map((p) => {
+        const mv = p.qty * (prices[p.secid] ?? p.cost)
+        const w = total > 0 ? (mv / total) * 100 : null
+        const px = prices[p.secid]
+        return `- ${p.name}（${p.secid}）：${p.qty} 股，成本 ${p.cost.toFixed(3)}，现价 ${px === null || px === undefined ? '—（未取到）' : px.toFixed(3)}，市值 ${mv.toFixed(2)}，权重 ${w === null ? '—' : `${w.toFixed(2)}%`}`
+      })),
   ].join('\n')
 }
 
