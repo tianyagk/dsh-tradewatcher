@@ -374,11 +374,11 @@ const cleanInline = (s: string): string =>
     .trim()
 
 /** 找 `**标签**：内容`（允许 `-` 前缀、冒号在粗体内、内容在下一行）；找不到 ⇒ null */
-const labelledOf = (text: string, label: '依据' | '判断'): string | null => {
+const labelledOf = (text: string, label: '依据' | '判断' | '观察' | '推理' | '结论'): string | null => {
   const lines = text.split(/\r?\n/)
   for (let i = 0; i < lines.length; i += 1) {
     const line = lines[i].replace(/\*\*/g, '').trim()
-    const m = line.match(/^(?:[-*+]\s*)?(依据|判断)\s*(?:[：:]\s*(.*))?$/)
+    const m = line.match(/^(?:[-*+]\s*)?(依据|判断|观察|推理|结论)\s*(?:[：:]\s*(.*))?$/)
     if (m === null || m[1] !== label) continue
     let content = (m[2] ?? '').trim()
     if (content === '') {
@@ -387,7 +387,7 @@ const labelledOf = (text: string, label: '依据' | '判断'): string | null => 
         if (raw === '') continue
         if (/^#{1,6}\s/.test(raw)) break
         const next = raw.replace(/\*\*/g, '').trim()
-        if (/^(?:[-*+]\s*)?(依据|判断|总判断)\s*(?:[：:]|$)/.test(next)) break
+        if (/^(?:[-*+]\s*)?(依据|判断|总判断|观察|推理|结论)\s*(?:[：:]|$)/.test(next)) break
         content = next.replace(/^[-*+]\s*/, '').trim()
         break
       }
@@ -443,10 +443,20 @@ export function firstSentenceOf(text: string | null | undefined): string | null 
  */
 export function threeOf(text: string | null | undefined, summary?: string | null): FlowThree {
   const md = typeof text === 'string' ? text : ''
+  // v0.220.1：报告结尾必须有「观察/推理/结论」三行摘要块（提示词强制）。有块就**只用块**——
+  // 以前没有块时结论会退回 `runs[].summary` 第一句，四张卡片结论因此一模一样。
+  const block = {
+    observation: labelledOf(md, '观察'),
+    reasoning: labelledOf(md, '推理'),
+    conclusion: labelledOf(md, '结论'),
+  }
+  if (block.observation !== null && block.reasoning !== null && block.conclusion !== null) return block
   return {
-    observation: labelledOf(md, '依据') ?? FLOW_MISSING,
-    reasoning: labelledOf(md, '判断') ?? FLOW_MISSING,
-    conclusion: totalJudgmentOf(md) ?? firstSentenceOf(summary) ?? FLOW_MISSING,
+    observation: block.observation ?? labelledOf(md, '依据') ?? FLOW_MISSING,
+    reasoning: block.reasoning ?? labelledOf(md, '判断') ?? FLOW_MISSING,
+    // 兜底也要「本报告自己的结论」：先总判断，再本条判断句，最后才用 summary（旧实现直接跳到 summary，
+    // 四张卡片因此共用同一句「必须先降低风险暴露…」）
+    conclusion: block.conclusion ?? totalJudgmentOf(md) ?? labelledOf(md, '判断') ?? firstSentenceOf(summary) ?? FLOW_MISSING,
   }
 }
 

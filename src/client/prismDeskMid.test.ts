@@ -353,17 +353,18 @@ test('㊲ threeOf：观察←依据、推理←判断、结论←总判断，且
   }
 })
 
-test('㊳ threeOf：抽不到的段落严格 —（本条未给出），不得拿别的段落顶替', () => {
+test('㊳ threeOf：观察缺失严格 —；结论优先本报告判断句（v0.220.1 起，不再跳到 summary）', () => {
   const t = threeOf('- **判断**：只有推理，没有观察。')
   assert.equal(t.observation, FLOW_MISSING)
   assert.equal(t.reasoning, '只有推理，没有观察。')
-  assert.equal(t.conclusion, FLOW_MISSING)
+  assert.equal(t.conclusion, '只有推理，没有观察。')
   assert.ok(!t.observation.includes('推理'), '观察缺失时不得用判断段顶替')
 })
 
 test('㊴ threeOf：没有总判断 ⇒ 取 summary 第一句（跳过标题，不取第二句）', () => {
   const summary = '## 一页汇总（5 条）\n\n**1｜风险暴露：结论是不主动降，只做结构修正。** 第二句不得出现。'
-  assert.equal(threeOf('- **依据**：x\n- **判断**：y', summary).conclusion, '1｜风险暴露：结论是不主动降，只做结构修正。')
+  assert.equal(threeOf('- **依据**：x\n- **判断**：y', summary).conclusion, 'y', '有本报告判断句时不用 summary')
+  assert.equal(threeOf('纯文本，无任何判断行。', summary).conclusion, '1｜风险暴露：结论是不主动降，只做结构修正。')
   assert.equal(firstSentenceOf(summary), '1｜风险暴露：结论是不主动降，只做结构修正。')
   assert.equal(firstSentenceOf('### 只有标题'), null)
 })
@@ -384,13 +385,13 @@ test('㊶ ANALYZE 条目带三要素；缺观察时保留 —（本条未给出�
   }] }).find((e) => e.kind === 'ANALYZE')
   assert.equal(full?.three?.observation, '沪深300 跌 0.59%。')
   assert.equal(full?.three?.reasoning, '缩圈。')
-  assert.equal(full?.three?.conclusion, '本轮只减仓。')
+  assert.equal(full?.three?.conclusion, '缩圈。', 'v0.220.1：结论优先本报告判断句')
   const missing = flowEntriesOf({ runs: [{
     startedAt: 30, finishedAt: 40,
     analyses: [{ key: 'b', label: '外盘', text: '**判断**：只有推理。', error: null }],
   }] }).find((e) => e.kind === 'ANALYZE')
   assert.equal(missing?.three?.observation, FLOW_MISSING)
-  assert.equal(missing?.three?.conclusion, FLOW_MISSING)
+  assert.equal(missing?.three?.conclusion, '只有推理。', '有判断句就用它，没有才 —')
 })
 
 test('㊷ ORDER / RISK 仍是动作 / 依据 / 风控三段，不注入 three', () => {
