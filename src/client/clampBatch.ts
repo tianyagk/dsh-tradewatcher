@@ -39,6 +39,8 @@ export interface ClampBatchDeps {
   schedule?: (cb: () => void) => void
   /** 共用的观察者工厂（默认懒建一个 `ResizeObserver`；返回 null = 环境不支持） */
   createObserver?: (onResize: () => void) => ClampObserver | null
+  /** 补测调度（默认下一帧；测试可同步）—— 供"隐藏时测不到"的块在排版完成后重测 */
+  nextFrame?: (cb: () => void) => void
 }
 
 export interface ClampBatchStats {
@@ -56,6 +58,19 @@ export interface ClampBatcher {
   /** 立即跑一批（测试用；生产由 scheduler/观察者触发） */
   flush: () => void
   stats: () => ClampBatchStats
+}
+
+/**
+ * 展开态下**不得**把 overflow 改回 false。
+ *
+ * 事故形态（用户报「展开闪烁」）：点「展开」→ 文本撑开 → ResizeObserver 触发 → 批测量在未夹行状态下量到
+ * `scrollHeight === clientHeight` ⇒ 判定"不溢出" ⇒ `setOverflow(false)` ⇒ 「收起」按钮消失、卡片跳一下，
+ * 下一次渲染又按 overflow 决定夹行 —— 看起来就是闪一下。
+ *
+ * 口径：`open === true` 时保持上一次的 overflow（按钮与全文都在）；收起后由下一次测量重新决定。
+ */
+export function clampOverflowApply(open: boolean, measured: boolean, prev: boolean): boolean {
+  return open ? prev : measured
 }
 
 /** 视觉层夹行的 class（与 `styles.ts` 的 `.tw-ad-verdict .vt .v.is-clamp` 同名） */
@@ -82,6 +97,7 @@ export function createClampBatcher(deps: ClampBatchDeps = {}): ClampBatcher {
   const schedule = deps.schedule ?? ((cb: () => void): void => { queueMicrotask(cb) })
   let observer: ClampObserver | null = null
   let scheduled = false
+  let retryScheduled = false
   const stats: ClampBatchStats = { observers: 0, batches: 0, measurements: 0 }
 
   const flush = (): void => {
@@ -100,20 +116,34 @@ export function createClampBatcher(deps: ClampBatchDeps = {}): ClampBatcher {
       }
     }
     // 读阶段：所有写已落地，整批只强制一次布局
-    const results: boolean[] = []
+    // `null` = 这一块此刻没有布局（`display:none` 的保活页 / 刚挂载还没排版）⇒ **不上报**，
+    // 否则会把"0 高"当成"不溢出"，等页面真正显示时按钮已经不出现了（实机复现：切到棱镜后无「展开」）。
+    let deferred = false
+    const results: Array<boolean | null> = []
     for (const e of batch) {
       stats.measurements += 1
-      results.push(clampOverflowOf(e.el))
+      results.push(e.el.clientHeight <= 0 ? null : clampOverflowOf(e.el))
     }
     // 写阶段②：还原 class
     for (const e of added) e.el.classList.remove(CLAMP_CLASS)
     // 上报（值没变就不 setState：省掉无意义的重渲染）
     for (let i = 0; i < batch.length; i += 1) {
       const e = batch[i]!
-      const next = results[i]!
+      const next = results[i]
+      if (next === null || next === undefined) { dirty.add(e); deferred = true; continue }
       if (e.last === next) continue
       e.last = next
       e.onChange(next)
+    }
+    // 有块此刻没有布局（隐藏页/刚挂载）：下一帧补测一次，不能等 ResizeObserver（它可能不再触发）
+    if (deferred && !retryScheduled) {
+      retryScheduled = true
+      const run = (): void => { retryScheduled = false; scheduleFlush() }
+      const nextFrame = deps.nextFrame ?? ((cb: () => void): void => {
+        if (typeof requestAnimationFrame === 'function') requestAnimationFrame(() => cb())
+        else setTimeout(cb, 16)
+      })
+      nextFrame(run)
     }
   }
 

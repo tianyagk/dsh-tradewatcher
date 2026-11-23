@@ -121,7 +121,8 @@ test('P2-5 批处理：180 块只建 1 个观察者、只强制布局 1 次（�
   // 接线：PrismPage 的 FlowTextView 真的走了批处理器，且不再自建观察者
   const page = strip(read('PrismPage.tsx'))
   const flowText = sliceBetween(page, 'function FlowTextView', 'function flowRowNode')
-  assert.match(flowText, /clampBatcher\.watch\(el, setOverflow\)/, 'FlowTextView 必须登记到共用批处理器')
+  assert.match(flowText, /clampBatcher\.watch\(el, \(measured\) =>/, 'FlowTextView 必须登记到共用批处理器')
+  assert.match(flowText, /clampOverflowApply\(openRef\.current, measured, prev\)/, '展开态必须守卫 overflow（防闪烁）')
   assert.equal(/new ResizeObserver/.test(flowText), false, 'FlowTextView 不许再自建观察者')
 })
 

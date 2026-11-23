@@ -14,7 +14,7 @@ import { useNow } from './useNow.ts'
 import { usePanelVisible } from './usePageIdle.ts'
 import { createPrismRefresher } from './prismRefresh.ts'
 import { createStateGate } from './prismStateGate.ts'
-import { clampBatcher } from './clampBatch.ts'
+import { clampBatcher, clampOverflowApply } from './clampBatch.ts'
 import { positionErrorOf } from './prismForm.ts'
 import { KlineChart, TrendChart } from './kline.tsx'
 import { Sparkline } from './charts.tsx'
@@ -92,6 +92,8 @@ function FlowTextView(props: { text: string | null; label: string }): React.Reac
   const [open, setOpen] = React.useState(false)
   const [overflow, setOverflow] = React.useState(false)
   const ref = React.useRef<HTMLSpanElement | null>(null)
+  const openRef = React.useRef(open)
+  openRef.current = open
   const text = props.text
   // 只有**真实溢出 3 行**才出「展开」：在 890px 宽能放下的短句不制造无效按钮；
   // 374px 窄栏由共用 ResizeObserver 重新测量，同一段会自动变成可展开。
@@ -102,7 +104,14 @@ function FlowTextView(props: { text: string | null; label: string }): React.Reac
   React.useLayoutEffect(() => {
     const el = ref.current
     if (el === null || text === null) return undefined
-    return clampBatcher.watch(el, setOverflow)
+    const stop = clampBatcher.watch(el, (measured) => {
+      // 展开态下忽略「不溢出」的测量结果，否则按钮消失 + 夹行回弹 ⇒ 展开闪烁
+      setOverflow((prev) => clampOverflowApply(openRef.current, measured, prev))
+    })
+    // 首测必须**同步**在 useLayoutEffect 里做：微任务阶段读高度可能还没排版（隐藏页/刚挂载 ⇒ 0 高
+    // ⇒ 误判"不溢出"，「展开」按钮永远不出现）。批处理器仍负责后续 resize 的合并测量。
+    clampBatcher.flush()
+    return stop
   }, [text])
   if (text === null) {
     return React.createElement('span', { className: 'v', title: `本条未给出「${props.label}」段（宿主报告里没有对应段落）` }, FLOW_MISSING)

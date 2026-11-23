@@ -11,6 +11,24 @@
 
 ---
 
+## v0.218.2 — 修复决策流「展开」闪烁 / 按钮消失
+
+`npm run check` **1920 / 1920 × 2 时区**（1914 → 1920）+ build（73 项）+ `tsc` 0。
+
+### 现象
+点「展开」后卡片闪一下：按钮消失、文字回弹再展开。
+
+### 两条根因
+
+| # | 根因 | 修法 |
+| --- | --- | --- |
+| 1 | 展开后文本撑开 ⇒ `ResizeObserver` 触发批测量 ⇒ 未夹行状态下量到 `scrollHeight === clientHeight` ⇒ 判定「不溢出」 ⇒ `setOverflow(false)` ⇒ 「收起」按钮消失、夹行回弹 | 批处理器回调加 `openRef` 守卫：`clampOverflowApply(open, measured, prev)` —— 展开态**保持** overflow=true，收起后才按测量重判 |
+| 2 | 首测在 `queueMicrotask` 里做，早于排版；隐藏页（保活）或刚挂载时 `clientHeight = 0` ⇒ 误判「不溢出」 ⇒ 按钮**永远不出现** | ① `useLayoutEffect` 里同步 `clampBatcher.flush()` 做首测（此时 DOM 已在文档里，读高度必触发布局）；② `clientHeight <= 0` 的结果**不上报**并留在待测集合；③ 下一帧补测一次（不再依赖 ResizeObserver 是否再触发） |
+
+### 验证
+- 新增 `src/client/flowExpandFlicker.test.ts` **6 条**：展开态保持 true、收起态按测量、`openRef` 守卫接线、反例（直接写回 ⇒ 按钮消失）、零高度不上报、隐藏→显示补报 true。
+- `npm run check` **1920 / 1920 × 2 时区** + build（73 项）+ `tsc` 0。
+
 ## v0.218.1 — 收尾两条：两融回填并发 + 金额档案缓存
 
 `npm run check` **1914 / 1914 × 2 时区**（1911 → 1914）+ build（73 项）+ `tsc` 0。
