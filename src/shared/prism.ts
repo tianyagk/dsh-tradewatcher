@@ -70,7 +70,7 @@ export interface PrismAnalysis {
 }
 
 export interface PrismReport {
-  /** 分报告角色（A股宏观/外盘/大宗/信息面） */
+  /** 分报告角色（技术面/外盘/大宗/信息面） */
   role: string
   text: string | null
   error: string | null
@@ -152,16 +152,27 @@ export const PRISM_NEWS_GAP_MS = 3_000
 export const PRISM_RUNS_KEEP = 20
 
 export const PRISM_ANALYSIS_META: ReadonlyArray<{ key: PrismAnalysis['key']; label: string; prompt: string }> = [
-  { key: 'a-macro', label: 'A股宏观', prompt: '聚焦 A股宏观：政策、流动性、指数与风格。只给判断与依据，不写免责声明。' },
+  {
+    key: 'a-macro',
+    label: '技术面',
+    prompt: '聚焦 A股技术面：只解读【指数技术面】里的指标与量能动量（中证1000/中证2000/沪深300/科创50/科创半导体ETF），'
+      + '逐只说清趋势（均线排列）、动能（MACD/RSI）、量能（量比）与区间位置，给出对风格（小微盘/蓝筹/科技）的含义。'
+      + '不要解读新闻与政策（新闻统一由信息面分析）。只给判断与依据，不写免责声明。',
+  },
   { key: 'overseas', label: '外盘', prompt: '聚焦外盘：美股、美债、汇率与主要指数。只给判断与依据，不写免责声明。' },
   { key: 'commodity', label: '大宗', prompt: '聚焦大宗商品：原油、贵金属、有色与黑色。只给判断与依据，不写免责声明。' },
-  { key: 'info', label: '信息面', prompt: '聚焦信息面：金十快讯里对 A股有影响的事件与主题。只给判断与依据，不写免责声明。' },
+  {
+    key: 'info',
+    label: '信息面',
+    prompt: '聚焦信息面：统一解读近 24h 金十快讯（宏观/政策/行业/公司）对 A股与现存持仓的影响，'
+      + '给出事件→受影响标的→方向与力度。新闻解读只在本段出现，其他段不得重复转述新闻。只给判断与依据，不写免责声明。',
+  },
 ]
 
 export const PRISM_DEFAULT_SKELETON = `# 棱镜研判骨架（可编辑）
 
 - 视角：以持仓为中心，先风险后机会。
-- 顺序：A股宏观 → 外盘 → 大宗 → 信息面 → 汇总。
+- 顺序：技术面 → 外盘 → 大宗 → 信息面 → 汇总。
 - 输出：每段给「判断 / 依据 / 需要盯的变量」，不写免责声明。
 - 缺失数据写 — 并给一句原因。`
 

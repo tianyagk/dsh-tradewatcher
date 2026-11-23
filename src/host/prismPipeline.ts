@@ -1,5 +1,6 @@
 /**
- * 棱镜研判管线（批次 2）：4 路并行分析（A股宏观 / 外盘 / 大宗 / 信息面）+ 1 次汇总。
+ * 棱镜研判管线（批次 2）：4 路并行分析（技术面 / 外盘 / 大宗 / 信息面）+ 1 次汇总。
+ * v0.220.0：技术面改为指数技术指标（量能/动量），新闻解读统一收口到信息面。
  *
  * 输入：真实持仓（只读，来自既有持仓核算）、`prism-skeleton.md`、金十 24h 新闻、
  * 本插件行情摘要（既有行情链，**不接新源**）。
@@ -33,6 +34,8 @@ export interface PrismInputs {
    * 自带标题，缺省 ⇒ 提示词里不出这一段（旧调用方行为不变）。
    */
   products?: string
+  /** v0.220.0：【指数技术面】段落（中证1000/2000、沪深300、科创50、科创半导体ETF 的指标/量能/动量） */
+  tech?: string
 }
 
 export interface PrismPipelineDeps {
@@ -72,13 +75,14 @@ export function mandateHashOf(skeleton: string, settings: Record<string, unknown
   return createHash('sha256').update(canonical({ skeleton, params })).digest('hex')
 }
 
-const compileInput = (inputs: PrismInputs): string => {
+const compileInput = (inputs: PrismInputs, withNews = true): string => {
   const news = inputs.news.slice(0, 30).map((n) => `- ${n.time} ${n.text}`).join('\n')
   return [
     '【研判骨架】',
     inputs.skeleton.trim() || '—',
     '【账户快照（模拟盘，只读；数字均带单位）】',
     inputs.account || '—（未取到账户快照）',
+    ...(inputs.tech !== undefined && inputs.tech.trim() !== '' ? [inputs.tech] : []),
     '【真实账户持仓（只读参考 —— 禁止用于计算棱镜仓位/权重）】',
     inputs.positions || '—',
     // 同键 ETF 合并成一行：让模型看见「这两只是同一条腿」，不重复建仓
@@ -88,7 +92,7 @@ const compileInput = (inputs: PrismInputs): string => {
     '【行情摘要】',
     inputs.quotes || '—',
     '【金十快讯（24h）】',
-    news || '—（24h 内没有取到新闻）',
+    withNews ? (news || '—（24h 内没有取到新闻）') : '—（本段不解读新闻；新闻统一由信息面分析，见该段）',
   ].join('\n')
 }
 
@@ -129,9 +133,11 @@ export async function runPrismAnalysis(
   }
   const llm = resolved.llm as LlmStreamFace
   const model = { provider: resolved.info.provider, model: resolved.info.model }
-  const context = compileInput(inputs)
+  const contextAll = compileInput(inputs)                    // 信息面：带新闻
+  const contextNoNews = compileInput(inputs, false)          // 其余三路：不带新闻（新闻解读只出现在信息面）
   const analyses: PrismAnalysis[] = await Promise.all(
     PRISM_ANALYSIS_META.map(async (meta) => {
+      const context = meta.key === 'info' ? contextAll : contextNoNews
       const result = await streamText(
         llm,
         model,
@@ -154,7 +160,7 @@ export async function runPrismAnalysis(
       model,
       [{
         role: 'user',
-        content: `${context}\n\n【四路结论】\n${digest}\n\n【任务】把四路结论汇总成 5 条以内的要点，指出分歧与需要盯的变量。` +
+        content: `${contextNoNews}\n\n【四路结论】\n${digest}\n\n【任务】把四路结论汇总成 5 条以内的要点，指出分歧与需要盯的变量。` +
           '\n必须依据【账户快照】计算仓位上限；正常应当给出 singlePct/totalPct，确实无法计算时才用 null 并在 limits.note 说明原因。' +
           '\n【强制·风险暴露】必须先判断是否需要降低风险暴露（减仓/止损/清仓），给出结论与理由；若判断不减，必须写明为什么满仓是合理的。' +
           '\n【强制·双侧】orders 允许卖单，卖单字段同样是 {secid, side:\'sell\', price, shares, reason}；不能只考虑买入侧。' +

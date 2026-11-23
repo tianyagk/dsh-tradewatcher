@@ -23,7 +23,7 @@ test('⑦ 4 路并行 + 1 次汇总；失败只留痕、不自动重试（调用
         maxActive = Math.max(maxActive, active)
         const raw = opts.messages[0]?.content
         const text = Array.isArray(raw) ? raw.map((b) => (b as { text?: string }).text ?? '').join('') : String(raw)
-        const fail = text.includes('信息面')
+        const fail = text.includes('聚焦信息面')
         return (async function* () {
           await new Promise((r) => setTimeout(r, 5))
           active -= 1

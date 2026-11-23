@@ -18,6 +18,7 @@ import type { DataStore } from './store.ts'
 import type { PrismAccount, PrismFill, PrismOrder, PrismRun, PrismSettings, PrismState } from '../shared/prism.ts'
 import { PRISM_INTERVAL_OPTIONS, PRISM_MAX_TIMES, PRISM_SKELETON_MAX } from '../shared/prism.ts'
 import { applyPriceCorrection } from './prismCorrection.ts'
+import { indexTechTextOf } from './indexTech.ts'
 import { backfillNews, incrementalNews } from './prismNews.ts'
 import { runPrismAnalysis, type PrismInputs } from './prismPipeline.ts'
 import { fetchIndustryOverview, fetchKline, fetchQuotes } from './em.ts'
@@ -237,6 +238,17 @@ export function etfProductsTextOf(
   return ['【ETF 按产品合并】', '（同键 = 同一跟踪标的、不同基金公司，属同一条腿；加仓请直接加已持有的那只）', ...(rows.length === 0 ? ['—（无同产品多标的持仓）'] : rows)].join('\n')
 }
 
+/** 指数技术面缓存：5 分钟（一轮研判 10 分钟一次，避免每轮 5 条日线全量回源） */
+let techCache: { at: number; text: string } | null = null
+async function indexTechCachedOf(): Promise<string> {
+  if (techCache !== null && Date.now() - techCache.at < 5 * 60_000) return techCache.text
+  const text = await indexTechTextOf({
+    loadBars: async (secid) => (await fetchKline(secid, 101, 120, 0))?.days ?? null,
+  })
+  techCache = { at: Date.now(), text }
+  return text
+}
+
 export const prismInputsOf = async (deps: PrismRouteDeps): Promise<PrismInputs> => {
   const watch = deps.data.watchData().items
   const port = deps.data.portData()
@@ -286,6 +298,7 @@ export const prismInputsOf = async (deps: PrismRouteDeps): Promise<PrismInputs> 
     news,
     skeleton: deps.store.skeleton(),
     exposure: exposureText,
+    tech: await indexTechCachedOf().catch(() => '【指数技术面（由本地日线计算；缺数据写 —）】\n—（本轮取数失败）'),
   }
 }
 
