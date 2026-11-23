@@ -11,6 +11,24 @@
 
 ---
 
+## v0.213.1 — 新增人工错价订正接口 `action:'priceCorrection'`
+
+`npm run check` **1797 / 1797 × 2 时区**（1791 → 1797）+ build（73 项）+ `tsc` 0。
+
+事故：2026-11-20 买入 `1.511130 30年国债ETF博时` 成交价 **121.825**，而该标的当日区间 **110.93–111.50**（价格实际取自 511090），造成 −2 069 元假亏损。
+
+| 项 | 内容 |
+| --- | --- |
+| 接口 | `POST /tradewatcher/prism {action:'priceCorrection', orderId, newPrice, basis}` |
+| 口径 | 只允许**已成交**委托；每笔 fill 的 amount/fee 按新价重算（佣金万 2.5 最低 5 + 过户费万 0.1；卖出加印花税千 1） |
+| 账户 | 现金差额 `delta = Σ(旧 amount+旧 fee) − Σ(新 amount+新 fee)` 计入现金；同标的 `netCost` 同步扣减，`cost = netCost / qty` |
+| 留痕 | 写 `order.corrections[]`（at/oldPrice/newPrice/delta/basis），不覆盖历史 |
+| 拒绝 | 未成交、无成交记录、新旧价相同、无依据、非有限正数 ⇒ 400 + 原因 |
+
+### 验证
+
+`npm run check` **1797 / 1797 × 2 时区** + build（73 项）+ `tsc` 0；新增 `prismCorrection.test.ts` 6 条（含反例：newPrice=0 必败）。
+
 ## v0.213.0 — 决策上下文感知被拒委托 + 服务端去重闸
 
 `npm run check` **1791 / 1791 × 2 时区**（1781 → 1791）+ build（73 项）+ `tsc` 0。

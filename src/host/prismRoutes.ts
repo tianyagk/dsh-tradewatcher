@@ -17,6 +17,7 @@ import { PrismTradingStore, applyFeeCorrection, clampDecision, copyAtCost, daySt
 import type { DataStore } from './store.ts'
 import type { PrismAccount, PrismFill, PrismOrder, PrismRun, PrismSettings, PrismState } from '../shared/prism.ts'
 import { PRISM_INTERVAL_OPTIONS, PRISM_MAX_TIMES, PRISM_SKELETON_MAX } from '../shared/prism.ts'
+import { applyPriceCorrection } from './prismCorrection.ts'
 import { backfillNews, incrementalNews } from './prismNews.ts'
 import { runPrismAnalysis, type PrismInputs } from './prismPipeline.ts'
 import { fetchIndustryOverview, fetchKline, fetchQuotes } from './em.ts'
@@ -449,7 +450,7 @@ export function makePrismRoutes(deps: PrismRouteDeps): PluginWebRoute[] {
           return
         }
         try {
-          const body = (await readBody(req)) as { op?: unknown; shares?: unknown; cost?: unknown; confirm?: unknown; action?: unknown; times?: unknown; intervalSec?: unknown; text?: unknown; slot?: unknown; capitalLimit?: unknown; orderId?: unknown; provider?: unknown; model?: unknown; industryLimits?: unknown; secid?: unknown; at?: unknown; price?: unknown } | null
+          const body = (await readBody(req)) as { op?: unknown; shares?: unknown; cost?: unknown; confirm?: unknown; action?: unknown; times?: unknown; intervalSec?: unknown; text?: unknown; slot?: unknown; capitalLimit?: unknown; orderId?: unknown; provider?: unknown; model?: unknown; industryLimits?: unknown; secid?: unknown; at?: unknown; price?: unknown; newPrice?: unknown; basis?: unknown } | null
           const action = body !== null && typeof body.action === 'string' ? body.action : ''
           if (action === 'position') {
             const op = typeof body?.op === 'string' ? body.op : ''
@@ -536,6 +537,23 @@ export function makePrismRoutes(deps: PrismRouteDeps): PluginWebRoute[] {
             const result = applyFeeCorrection(deps.trading.account(), deps.trading.fills(), { orderId, secid, at, price })
             await deps.trading.saveAccount(result.account, { explicitReset: true })
             send(res, 200, { ok: true, ...result, account: result.account })
+            return
+          }
+          if (action === 'priceCorrection') {
+            const orderId = typeof body?.orderId === 'string' ? body.orderId : ''
+            const newPrice = typeof body?.newPrice === 'number' ? body.newPrice : NaN
+            const basis = typeof body?.basis === 'string' ? body.basis : ''
+            if (orderId === '' || !Number.isFinite(newPrice) || basis.trim() === '') {
+              send(res, 400, { ok: false, error: 'priceCorrection 缺 orderId/newPrice/basis' }); return
+            }
+            try {
+              const result = applyPriceCorrection(deps.trading.account(), deps.trading.orders(), deps.trading.fills(), { orderId, newPrice, basis })
+              await deps.trading.saveAccount(result.account, { explicitReset: true })
+              await deps.trading.saveOrders(result.orders, result.fills)
+              send(res, 200, { ok: true, note: result.note, delta: result.delta, oldPrice: result.oldPrice, newPrice: result.newPrice, account: result.account })
+            } catch (error) {
+              send(res, 400, { ok: false, error: String((error as Error).message ?? error) })
+            }
             return
           }
           if (action === 'model') {
