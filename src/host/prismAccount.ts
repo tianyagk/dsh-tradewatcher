@@ -9,10 +9,18 @@
  *   · 费用：佣金万 2.5（最低 5 元）+ 卖出印花税千 1 + 过户费万 0.1；不计滑点；
  *   · A股：T+1、涨跌停不可成交、停牌不可成交、100 股整手；违反 → `rejected` + 原因（不静默丢）。
  *
- * 三个账本文件都走 `updateJsonLocked` + `ReadGuard`；坏文件先 `quarantineFile` 隔离。
+ * 三个账本文件（account / orders / equity）走 `updateJsonLocked` + `ReadGuard`。
+ *
+ * 两条红线（v0.215.0，AUDIT-HOST-PERF P0-1/P0-2）：
+ *   ① **单飞 + 一次写**：`runExclusive` 串行化 matchTick / 落单 / 订正 / 持仓调整；
+ *      `saveAll` 在同一组文件锁内把三份账本一次提交（先写唯一临时文件，再 rename；
+ *      提交失败按写前字节回滚）。
+ *   ② **读不到 ≠ 空库**：parse 错误 / EACCES / 非预期结构 ⇒ `degraded`（fail-closed），
+ *      禁止任何写入，`account()` 返回 null 语义；只有 `repairLedger` 从 `*.bak` /
+ *      `.corrupt-*` 恢复成功才解除。
  */
-import { mkdir, readFile } from 'node:fs/promises'
-import { join } from 'node:path'
+import { mkdir, readFile, readdir, stat } from 'node:fs/promises'
+import { basename, isAbsolute, join } from 'node:path'
 import type {
   PrismAccount,
   PrismClampEvent,
@@ -27,10 +35,11 @@ import type {
   PrismPosition,
 } from '../shared/prism.ts'
 import { dataHome } from './store.ts'
-import { readJsonForUpdate, updateJsonLocked } from './lock.ts'
-import { ReadGuard, quarantineFile } from './readGuard.ts'
+import { LockTimeoutError, readJsonForUpdate, updateJsonLocked, withFileLocks } from './lock.ts'
+import { ReadGuard, isFirstBoot, quarantineFile } from './readGuard.ts'
 import { dayOf, hhmmOf } from './time.ts'
 import { withHostBreaker } from './breakerFetch.ts'
+import { writeFileAtomic, writeFileSetAtomic, type AtomicFileSetEntry } from './atomic.ts'
 
 import { PRISM_DEFAULT_CAPITAL } from '../shared/prism.ts'
 export const PRISM_INITIAL_CAPITAL = PRISM_DEFAULT_CAPITAL
@@ -425,9 +434,129 @@ export function parseDecision(text: string | null): PrismDecision | null {
 
 /* ────────────────────────── 账本存储 ────────────────────────── */
 
+/** 三份账本（物理文件）；`saveAll` 在同一组文件锁内一次提交这三份。 */
+export const PRISM_LEDGER_FILES = ['prism-account.json', 'prism-orders.json', 'prism-equity.json'] as const
+export type PrismLedgerFile = (typeof PRISM_LEDGER_FILES)[number]
+
+/** 账本读不到 ⇒ 写入被拒（fail-closed）。消息前缀是契约：界面/接口都按「账本不可读」识别。 */
+export class LedgerUnreadableError extends Error {
+  readonly reason: string
+  readonly action: string
+  constructor(reason: string, action = '写回棱镜账本') {
+    super(`账本不可读，已停止写入（${reason}）；拒绝${action}`)
+    this.name = 'LedgerUnreadableError'
+    this.reason = reason
+    this.action = action
+  }
+}
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  value !== null && typeof value === 'object' && !Array.isArray(value)
+
+const ACCOUNT_KEYS = ['capital', 'capitalLimit', 'cash', 'realized', 'positions'] as const
+
+/** 账户根结构校验：返回 null = 可接受；字符串 = 非预期结构的原因 */
+function validateAccountRoot(root: unknown): string | null {
+  if (!isRecord(root)) return root === null ? '内容为 null' : `顶层不是对象（${Array.isArray(root) ? '数组' : typeof root}）`
+  if (root['account'] !== undefined) {
+    return isRecord(root['account']) ? null : 'account 字段不是对象'
+  }
+  if (!ACCOUNT_KEYS.some((k) => root[k] !== undefined)) return '没有任何账户字段（不是棱镜账户）'
+  if (root['positions'] !== undefined && !Array.isArray(root['positions'])) return 'positions 不是数组'
+  if (root['cash'] !== undefined && typeof root['cash'] !== 'number') return 'cash 不是数字'
+  return null
+}
+
+function validateOrdersRoot(root: unknown): string | null {
+  if (!isRecord(root)) return root === null ? '内容为 null' : `顶层不是对象（${Array.isArray(root) ? '数组' : typeof root}）`
+  if (root['orders'] !== undefined && !Array.isArray(root['orders'])) return 'orders 不是数组'
+  if (root['fills'] !== undefined && !Array.isArray(root['fills'])) return 'fills 不是数组'
+  return null
+}
+
+function validateEquityRoot(root: unknown): string | null {
+  if (!isRecord(root)) return root === null ? '内容为 null' : `顶层不是对象（${Array.isArray(root) ? '数组' : typeof root}）`
+  if (!Array.isArray(root['points'])) return '缺少 points 数组'
+  return null
+}
+
+function validatorOf(file: string): (root: unknown) => string | null {
+  if (file === 'prism-account.json') return validateAccountRoot
+  if (file === 'prism-orders.json') return validateOrdersRoot
+  return validateEquityRoot
+}
+
+/** 降级时 `account()` 的返回值：数值一律 null（不是 0、更不是初始 150 万），并带 degraded/ledgerError */
+function degradedAccount(reason: string): PrismAccount {
+  const nullNumber = null as unknown as number
+  return {
+    day: '',
+    capital: nullNumber,
+    capitalLimit: nullNumber,
+    cash: nullNumber,
+    realized: nullNumber,
+    dayStartEquity: null,
+    positions: [],
+    copiedAt: null,
+    copyLogs: [],
+    degraded: true,
+    ledgerError: reason,
+  } as unknown as PrismAccount
+}
+
+/** 合并委托：以 id 为键；`next` 覆盖同 id 的磁盘旧值，磁盘独有的保留（不丢别的进程刚写的单） */
+function mergeOrders(disk: readonly PrismOrder[], next: readonly PrismOrder[]): PrismOrder[] {
+  const byId = new Map<string, PrismOrder>()
+  for (const o of disk) if (o !== null && typeof o === 'object' && typeof o.id === 'string') byId.set(o.id, o)
+  for (const o of next) byId.set(o.id, o)
+  return [...byId.values()]
+}
+
+/** 合并成交：同委托/标的/bar/价/方向/股数视为同一笔（重复写入幂等） */
+function mergeFills(disk: readonly PrismFill[], next: readonly PrismFill[]): PrismFill[] {
+  const keyOf = (f: PrismFill): string => `${f.orderId}|${f.secid}|${f.at}|${f.price}|${f.side}|${f.shares}`
+  const byKey = new Map<string, PrismFill>()
+  for (const f of disk) if (f !== null && typeof f === 'object') byKey.set(keyOf(f), f)
+  for (const f of next) byKey.set(keyOf(f), f)
+  return [...byKey.values()].sort((a, b) => a.at - b.at)
+}
+
+/** 合并净值点：同一天 `next` 覆盖磁盘旧值 */
+function mergeEquity(disk: readonly PrismEquityPoint[], next: readonly PrismEquityPoint[]): PrismEquityPoint[] {
+  const byDay = new Map<string, PrismEquityPoint>()
+  for (const p of disk) if (p !== null && typeof p === 'object' && typeof p.day === 'string') byDay.set(p.day, p)
+  for (const p of next) byDay.set(p.day, p)
+  return [...byDay.values()].sort((a, b) => (a.day < b.day ? -1 : a.day > b.day ? 1 : 0))
+}
+
+export interface PrismLedgerSnapshot {
+  account: PrismAccount
+  orders: PrismOrder[]
+  fills: PrismFill[]
+  /** 缺省 ⇒ 沿用内存里的净值点（仍会随三账本一起落盘） */
+  equity?: PrismEquityPoint[]
+}
+
+export interface SaveAllOptions {
+  /** 测试注入：第 N 个文件（1-based）提交前失败；生产不传 */
+  failCommitAt?: number
+}
+
+export interface LedgerRepairResult {
+  ok: boolean
+  repaired: Array<{ file: string; source: string }>
+  degraded: boolean
+  reason: string | null
+  notes: string[]
+}
+
 export class PrismTradingStore {
   private readonly dir: string
   private readonly guard = new ReadGuard()
+  /** file(绝对路径) → 读失败原因；非空 ⇒ degraded（fail-closed） */
+  private readonly degradedReasons = new Map<string, string>()
+  /** `runExclusive` 的 Promise 链尾（同进程互斥；失败不阻塞后继） */
+  private exclusiveTail: Promise<unknown> = Promise.resolve()
   private accountValue: PrismAccount = {
     day: '',
     capital: PRISM_INITIAL_CAPITAL,
@@ -451,44 +580,112 @@ export class PrismTradingStore {
     return join(this.dir, name)
   }
 
+  /** 是否因账本读不到而停写（P0-2）。 */
+  get degraded(): boolean {
+    return this.degradedReasons.size > 0
+  }
+
+  /** 全部读失败原因（文件 + errno/parse 说明）；null = 健康 */
+  ledgerError(): string | null {
+    if (this.degradedReasons.size === 0) return null
+    return [...this.degradedReasons.entries()]
+      .map(([file, reason]) => `${basename(file)}: ${reason}`)
+      .join('；')
+  }
+
+  degradedInfo(): { active: boolean; reason: string | null; files: Array<{ file: string; reason: string }> } {
+    return {
+      active: this.degraded,
+      reason: this.ledgerError(),
+      files: [...this.degradedReasons.entries()].map(([file, reason]) => ({ file: basename(file), reason })),
+    }
+  }
+
+  /** 写前守卫：degraded 或任一账本被 ReadGuard 标记 ⇒ 抛 `LedgerUnreadableError`。 */
+  assertWritable(action = '写回棱镜账本'): void {
+    const reason = this.ledgerError()
+    if (reason !== null) throw new LedgerUnreadableError(reason, action)
+    for (const name of PRISM_LEDGER_FILES) {
+      this.guard.assertWritable(this.pathOf(name), action)
+    }
+  }
+
+  /**
+   * 单飞：把 `fn` 排在 Promise 链尾，前一个结束（成功或失败）才轮到下一个。
+   * matchTick / placeDecision / priceCorrection / position 等"读内存 → 改 → 写盘"必须整体进来。
+   */
+  async runExclusive<T>(fn: () => Promise<T> | T): Promise<T> {
+    const run = this.exclusiveTail.then(() => fn())
+    this.exclusiveTail = run.then(() => undefined, () => undefined)
+    return run
+  }
+
   async init(): Promise<void> {
     await mkdir(this.dir, { recursive: true })
-    const acc = await this.readJson('prism-account.json')
-    if (acc !== null && typeof acc === 'object') {
+    await this.reloadForWrite()
+  }
+
+  /** 从磁盘重新装载三账本；读失败只标记 degraded（不抛、不写）。 */
+  async reloadForWrite(): Promise<void> {
+    const acc = await this.readLedger('prism-account.json')
+    if (acc !== null) {
       // 三种历史格式都兼容：裸 account / { v, account } / { v, account, fills } 或 { v, ...account, fills }
       const root = acc as { account?: unknown }
-      const saved = root.account !== null && typeof root.account === 'object' ? root.account : acc
+      const saved = isRecord(root.account) ? root.account : acc
       this.accountValue = normalizeAccount(saved as Record<string, unknown>)
     }
     await this.reloadOrders(acc)
-    const eq = await this.readJson('prism-equity.json')
-    const eqRoot = eq as { points?: unknown } | null
-    this.equityValue = Array.isArray(eqRoot?.points) ? (eqRoot?.points as PrismEquityPoint[]) : []
+    const eq = await this.readLedger('prism-equity.json')
+    if (eq !== null) {
+      this.equityValue = (eq as { points: PrismEquityPoint[] }).points
+    }
   }
 
-  private async readJson(name: string): Promise<unknown> {
+  private markDegraded(file: string, error: unknown): string {
+    const reason = this.guard.markUnreadable(file, error)
+    this.degradedReasons.set(file, reason)
+    console.warn(`[tradewatcher] 棱镜账本不可读（${file}）：${reason.slice(0, 120)} —— 已停止写入`)
+    return reason
+  }
+
+  /** 锁外只读装载：parse 错误 / EACCES / 非预期结构都算"读不到"，绝不返回空库。 */
+  private async readLedger(name: PrismLedgerFile): Promise<unknown> {
     const file = this.pathOf(name)
     try {
-      const disk = await readJsonForUpdate(file, 'null')
+      const disk = await readJsonForUpdate(file, 'throw')
+      if (disk === null) {
+        // 只有 ENOENT（首次启动）才是真的没有
+        this.guard.clear(file)
+        return null
+      }
+      const problem = validatorOf(name)(disk)
+      if (problem !== null) throw new Error(`非预期结构：${problem}`)
       this.guard.clear(file)
       return disk
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
-        this.guard.markUnreadable(file, error)
-        console.warn(`[tradewatcher] 棱镜账本读不到（${file}）：${String(error).slice(0, 80)}`)
+      if (isFirstBoot(error)) {
+        this.guard.clear(file)
+        return null
       }
+      this.markDegraded(file, error)
       return null
     }
   }
 
+  /**
+   * 启动时的隔离检查。**读不到/坏掉的账本不隔离**：改名会让下一次启动把它当"首次启动"，
+   * 30 秒后又被空库覆盖。坏文件留在原地，`degraded` 才能跨重启继续挡住写入；
+   * 恢复走 `repairLedger`（从 `.bak` / `.corrupt-*` 复制，原坏文件在修复时才隔离）。
+   */
   async quarantine(): Promise<void> {
-    for (const name of ['prism-account.json', 'prism-orders.json', 'prism-equity.json']) {
+    for (const name of PRISM_LEDGER_FILES) {
       const file = this.pathOf(name)
+      if (this.guard.isBlocked(file)) continue
       try {
         JSON.parse(await readFile(file, 'utf8'))
       } catch (error) {
-        if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue
-        if (error instanceof SyntaxError) await quarantineFile(file)
+        if (isFirstBoot(error)) continue
+        if (error instanceof SyntaxError) this.markDegraded(file, error)
       }
     }
   }
@@ -496,7 +693,13 @@ export class PrismTradingStore {
   /** v0.203.0：数据目录（手工调整的 ledger 与账户同目录） */
   dirOf(): string { return this.dir }
 
-  account(): PrismAccount { return JSON.parse(JSON.stringify(this.accountValue)) as PrismAccount }
+  /** 读账户。degraded ⇒ 数值全 null（不是 0、不是初始 150 万）+ degraded/ledgerError。 */
+  account(): PrismAccount {
+    const reason = this.ledgerError()
+    if (reason !== null) return degradedAccount(reason)
+    return JSON.parse(JSON.stringify(this.accountValue)) as PrismAccount
+  }
+
   orders(): PrismOrder[] { return this.ordersValue.slice() }
   fills(): PrismFill[] { return this.fillsValue.slice() }
   equity(): PrismEquityPoint[] { return this.equityValue.slice() }
@@ -506,7 +709,7 @@ export class PrismTradingStore {
    * GET 会重新调用：外部/上一进程写入的订单不需要重启才能看见。
    */
   async reloadOrders(accountRoot: unknown = null): Promise<void> {
-    const ord = await this.readJson('prism-orders.json')
+    const ord = await this.readLedger('prism-orders.json')
     const ordRoot = ord as { orders?: unknown; fills?: unknown } | null
     const accRoot = accountRoot as { fills?: unknown; orders?: unknown; account?: { fills?: unknown; orders?: unknown } } | null
     const fileOrders = Array.isArray(ordRoot?.orders) ? (ordRoot?.orders as PrismOrder[]) : []
@@ -521,25 +724,265 @@ export class PrismTradingStore {
     this.fillsValue = fileFills.length > 0 ? fileFills : embeddedFills
   }
 
+  /** 写失败若是"读不到/坏文件"（不是锁超时），标记 degraded，避免下一次拿空库覆盖。 */
+  private noteWriteFailure(file: string, error: unknown): void {
+    if (error instanceof LockTimeoutError) return
+    const code = (error as NodeJS.ErrnoException | null)?.code
+    const text = String(error)
+    if (
+      code === 'EACCES' || code === 'EPERM' || code === 'EIO' || code === 'ENOSPC' || code === 'EROFS' ||
+      /内容无法解析|非预期结构|Unexpected|JSON/.test(text)
+    ) {
+      this.markDegraded(file, error)
+    }
+  }
+
+  /**
+   * 写失败若是"读不到/坏文件"（不是锁超时），升级为 degraded 并抛 `LedgerUnreadableError`：
+   * 对外统一是「账本不可读，已停止写入（原因）」，而不是一句底层 parse 错误。
+   */
+  private rethrowWriteFailure(file: string, error: unknown, action: string): never {
+    this.noteWriteFailure(file, error)
+    if (!(error instanceof LockTimeoutError) && this.degraded) {
+      throw new LedgerUnreadableError(this.ledgerError() ?? String(error), action)
+    }
+    throw error
+  }
+
   async saveAccount(account: PrismAccount, opts: { explicitReset?: boolean } = {}): Promise<void> {
+    const file = this.pathOf('prism-account.json')
+    this.assertWritable('写回棱镜账户')
     const oldHasData = this.accountValue.positions.length > 0 || this.fillsValue.length > 0
     if (opts.explicitReset !== true && oldHasData && account.positions.length === 0 && this.fillsValue.length === 0) {
       console.warn('[tradewatcher] accountWriteGuard：拒绝把已有持仓/成交流水的账户写成空账户（如确需重置请显式 reset）')
       throw new Error('accountWriteGuard：拒绝把已有数据的账户写成空账户')
     }
+    try {
+      await updateJsonLocked(file, (disk) => {
+        this.assertWritable('写回棱镜账户')
+        if (disk !== null && !isRecord(disk)) throw new Error(`prism-account.json 非预期结构：顶层不是对象`)
+        return { v: 1, account }
+      })
+    } catch (error) {
+      this.rethrowWriteFailure(file, error, '写回棱镜账户')
+    }
     this.accountValue = account
-    await updateJsonLocked(this.pathOf('prism-account.json'), () => ({ v: 1, account })).catch(() => undefined)
   }
 
+  /**
+   * 写委托/成交。`update` 回调必须用**磁盘最新值**合并（审计 P0-1）：
+   * 别的进程刚写的委托/成交不能被本进程的内存快照整份覆盖。
+   */
   async saveOrders(orders: PrismOrder[], fills: PrismFill[]): Promise<void> {
-    this.ordersValue = orders
-    this.fillsValue = fills
-    await updateJsonLocked(this.pathOf('prism-orders.json'), () => ({ v: 1, orders, fills })).catch(() => undefined)
+    const file = this.pathOf('prism-orders.json')
+    this.assertWritable('写回棱镜委托')
+    let mergedOrders: PrismOrder[] = orders
+    let mergedFills: PrismFill[] = fills
+    try {
+      await updateJsonLocked(file, (disk) => {
+        this.assertWritable('写回棱镜委托')
+        if (disk !== null && !isRecord(disk)) throw new Error('prism-orders.json 非预期结构：顶层不是对象')
+        const root = isRecord(disk) ? disk : null
+        const diskOrders = Array.isArray(root?.['orders']) ? (root?.['orders'] as PrismOrder[]) : []
+        const diskFills = Array.isArray(root?.['fills']) ? (root?.['fills'] as PrismFill[]) : []
+        mergedOrders = mergeOrders(diskOrders, orders)
+        mergedFills = mergeFills(diskFills, fills)
+        return { v: 1, orders: mergedOrders, fills: mergedFills }
+      })
+    } catch (error) {
+      this.rethrowWriteFailure(file, error, '写回棱镜委托')
+    }
+    this.ordersValue = mergedOrders
+    this.fillsValue = mergedFills
   }
 
   async saveEquity(points: PrismEquityPoint[]): Promise<void> {
-    this.equityValue = points
-    await updateJsonLocked(this.pathOf('prism-equity.json'), () => ({ v: 1, points })).catch(() => undefined)
+    const file = this.pathOf('prism-equity.json')
+    this.assertWritable('写回棱镜净值')
+    let merged: PrismEquityPoint[] = points
+    try {
+      await updateJsonLocked(file, (disk) => {
+        this.assertWritable('写回棱镜净值')
+        if (disk !== null && !isRecord(disk)) throw new Error('prism-equity.json 非预期结构：顶层不是对象')
+        const root = isRecord(disk) ? disk : null
+        const diskPoints = Array.isArray(root?.['points']) ? (root?.['points'] as PrismEquityPoint[]) : []
+        merged = mergeEquity(diskPoints, points)
+        return { v: 1, points: merged }
+      })
+    } catch (error) {
+      this.rethrowWriteFailure(file, error, '写回棱镜净值')
+    }
+    this.equityValue = merged
+  }
+
+  /**
+   * **三账本一次写**（P0-1 核心）：同一组文件锁内写 account / orders(含 fills) / equity。
+   * 先全部写唯一临时文件，再逐个 rename；提交中途失败按写前字节回滚。
+   * 内存只在三份都落盘成功后才更新（失败 ⇒ 内存/磁盘都不前进）。
+   */
+  async saveAll(next: PrismLedgerSnapshot, opts: SaveAllOptions = {}): Promise<void> {
+    this.assertWritable('一次写回棱镜三账本')
+    const equity = next.equity ?? this.equityValue
+    const entries: AtomicFileSetEntry[] = [
+      { target: this.pathOf('prism-account.json'), text: JSON.stringify({ v: 1, account: next.account }, null, 1) },
+      { target: this.pathOf('prism-orders.json'), text: JSON.stringify({ v: 1, orders: next.orders, fills: next.fills }, null, 1) },
+      { target: this.pathOf('prism-equity.json'), text: JSON.stringify({ v: 1, points: equity }, null, 1) },
+    ]
+    await withFileLocks(
+      entries.map((e) => e.target),
+      async () => {
+        this.assertWritable('一次写回棱镜三账本')
+        // 锁内再确认磁盘现状：坏文件/非预期结构 ⇒ 拒绝覆盖（读不到 ≠ 空库）
+        for (const name of PRISM_LEDGER_FILES) {
+          const file = this.pathOf(name)
+          try {
+            const disk = await readJsonForUpdate(file, 'throw')
+            if (disk === null) continue
+            const problem = validatorOf(name)(disk)
+            if (problem !== null) throw new Error(`${name} 非预期结构：${problem}`)
+          } catch (error) {
+            this.markDegraded(file, error)
+            throw new LedgerUnreadableError(this.ledgerError() ?? String(error), '一次写回棱镜三账本')
+          }
+        }
+        await writeFileSetAtomic(entries, opts.failCommitAt === undefined ? {} : { failCommitAt: opts.failCommitAt })
+      },
+      { note: 'prism-ledger-saveAll' },
+    )
+    this.accountValue = next.account
+    this.ordersValue = next.orders
+    this.fillsValue = next.fills
+    this.equityValue = equity
+  }
+
+  private async exists(path: string): Promise<boolean> {
+    try {
+      await stat(path)
+      return true
+    } catch {
+      return false
+    }
+  }
+
+  private backupPathOf(backupOf: string): string {
+    return isAbsolute(backupOf) || backupOf.includes('/') || backupOf.includes('\\') ? backupOf : join(this.dir, backupOf)
+  }
+
+  /** `backupOf`（文件名或路径）对应的账本目标；不是棱镜账本 ⇒ null */
+  private targetForBackupName(name: string): string | null {
+    const base = basename(name)
+    for (const file of PRISM_LEDGER_FILES) {
+      if (base === file || base.startsWith(`${file}.bak`) || base.startsWith(`${file}.corrupt-`) || base.startsWith(`${file}.quarantine-`)) {
+        return this.pathOf(file)
+      }
+    }
+    return null
+  }
+
+  /** 最新备份：`<file>.bak` / `<file>.bak-*` / `<file>.corrupt-*` / `<file>.quarantine-*`，按 mtime 倒序 */
+  private async newestBackupOf(target: string): Promise<string | null> {
+    const base = basename(target)
+    let names: string[]
+    try {
+      names = await readdir(this.dir)
+    } catch {
+      return null
+    }
+    const candidates = names.filter(
+      (n) => n === `${base}.bak` || n.startsWith(`${base}.bak-`) || n.startsWith(`${base}.corrupt-`) || n.startsWith(`${base}.quarantine-`),
+    )
+    const rows = await Promise.all(candidates.map(async (n) => {
+      const p = join(this.dir, n)
+      try {
+        return { p, n, mtime: (await stat(p)).mtimeMs }
+      } catch {
+        return null
+      }
+    }))
+    const valid = rows.filter((r): r is { p: string; n: string; mtime: number } => r !== null)
+    valid.sort((a, b) => b.mtime - a.mtime || (a.n < b.n ? 1 : a.n > b.n ? -1 : 0))
+    return valid[0]?.p ?? null
+  }
+
+  private async ledgerFileValid(target: string): Promise<boolean> {
+    const name = basename(target)
+    if (!(PRISM_LEDGER_FILES as readonly string[]).includes(name)) return false
+    try {
+      const disk = await readJsonForUpdate(target, 'throw')
+      return disk !== null && validatorOf(name)(disk) === null
+    } catch {
+      return false
+    }
+  }
+
+  private clearDegraded(target: string): void {
+    this.degradedReasons.delete(target)
+    this.guard.clear(target)
+  }
+
+  /**
+   * 首次修复路径（P0-2）：从 `*.bak` / `.corrupt-*` 恢复。
+   * `backupOf` 可给备份文件名/路径（如 `prism-account.json.bak`），也可给账本名表示"用该账本最新备份"。
+   * 只有恢复并重新装载成功后 `degraded` 才解除；没有可用备份 ⇒ 保持 degraded 并如实返回原因。
+   */
+  async repairLedger(opts: { backupOf?: string } = {}): Promise<LedgerRepairResult> {
+    return this.runExclusive(async () => {
+      const notes: string[] = []
+      const repaired: Array<{ file: string; source: string }> = []
+      const jobs: Array<{ target: string; source: string | null }> = []
+      if (opts.backupOf !== undefined && opts.backupOf.trim() !== '') {
+        const target = this.targetForBackupName(opts.backupOf)
+        if (target === null) throw new Error(`backupOf 不是棱镜账本备份：${opts.backupOf}`)
+        const explicitSource = basename(opts.backupOf) === basename(target) ? null : this.backupPathOf(opts.backupOf)
+        jobs.push({ target, source: explicitSource ?? (await this.newestBackupOf(target)) })
+      } else {
+        for (const target of this.degradedReasons.keys()) jobs.push({ target, source: await this.newestBackupOf(target) })
+      }
+      if (jobs.length === 0) {
+        notes.push('没有处于 degraded 的账本，无需修复')
+      }
+      for (const job of jobs) {
+        const file = basename(job.target)
+        // 显式给了 backupOf ⇒ 强制从该备份恢复（即使当前文件"看起来可读"）；
+        // 未指定时先看当前文件是否已经恢复可读，避免无谓覆盖。
+        if (opts.backupOf === undefined && await this.ledgerFileValid(job.target)) {
+          this.clearDegraded(job.target)
+          repaired.push({ file, source: '当前文件（已可读）' })
+          notes.push(`${file} 当前文件已可读，无需从备份恢复`)
+          continue
+        }
+        if (job.source === null) {
+          notes.push(`${file} 没有可用备份（*.bak / .corrupt-*）`)
+          continue
+        }
+        const text = await readFile(job.source, 'utf8')
+        let parsed: unknown
+        try {
+          parsed = JSON.parse(text) as unknown
+        } catch (error) {
+          throw new Error(`备份 ${basename(job.source)} 不是合法 JSON：${String(error).slice(0, 120)}`)
+        }
+        const problem = validatorOf(file)(parsed)
+        if (problem !== null) throw new Error(`备份 ${basename(job.source)} 不是有效棱镜账本：${problem}`)
+        // 原坏文件改名留存（不覆盖证据）；再原子恢复
+        if (await this.exists(job.target)) {
+          const parked = await quarantineFile(job.target)
+          if (parked !== null) notes.push(`${file} 原文件已隔离为 ${basename(parked)}`)
+        }
+        await writeFileAtomic(job.target, text)
+        this.clearDegraded(job.target)
+        repaired.push({ file, source: basename(job.source) })
+        notes.push(`${file} 已从 ${basename(job.source)} 恢复`)
+      }
+      await this.reloadForWrite()
+      return {
+        ok: this.degradedReasons.size === 0,
+        repaired,
+        degraded: this.degraded,
+        reason: this.ledgerError(),
+        notes,
+      }
+    })
   }
 }
 
@@ -932,6 +1375,21 @@ export async function placeDecision(
   now: number,
   quotes: Record<string, QuoteLite>,
 ): Promise<PlaceDecisionResult> {
+  // 单飞 + fail-closed：读盘最新 → 改内存 → 一次写三账本；degraded 时在第一次 assert 就拒绝。
+  return store.runExclusive(async () => {
+    store.assertWritable('落单')
+    await store.reloadForWrite()
+    store.assertWritable('落单')
+    return placeDecisionLocked(store, decision, now, quotes)
+  })
+}
+
+async function placeDecisionLocked(
+  store: PrismTradingStore,
+  decision: PrismDecision,
+  now: number,
+  quotes: Record<string, QuoteLite>,
+): Promise<PlaceDecisionResult> {
   const day = dayOf(now)
   const account = rollDay(store.account(), day, store.equity().at(-1)?.equity ?? null)
   const orders = store.orders().map((o) => ({ ...o }))
@@ -994,8 +1452,7 @@ export async function placeDecision(
     orders.push(order)
     out.push(order)
   }
-  await store.saveAccount(account)
-  await store.saveOrders(orders, store.fills())
+  await store.saveAll({ account, orders, fills: store.fills(), equity: store.equity() })
   return {
     orders: out,
     rejects,
@@ -1043,6 +1500,19 @@ export function rebuildFromOrders(account: PrismAccount, orders: readonly PrismO
 
 /** 30 秒撮合：跨日挂单失效；1 分钟 high/low 触及按挂单价成交；净值每日一点 */
 export async function matchTick(
+  store: PrismTradingStore,
+  deps: TradingDeps,
+): Promise<{ filled: number; rejected: number; skipped: Array<{ id: string; code: string; reason: string }>; rejects: Array<{ id: string; code: string; reason: string }> }> {
+  // 单飞 + fail-closed：10 个并发 matchTick 也只能一个接一个从磁盘重新装载后撮合。
+  return store.runExclusive(async () => {
+    store.assertWritable('自动撮合')
+    await store.reloadForWrite()
+    store.assertWritable('自动撮合')
+    return matchTickLocked(store, deps)
+  })
+}
+
+async function matchTickLocked(
   store: PrismTradingStore,
   deps: TradingDeps,
 ): Promise<{ filled: number; rejected: number; skipped: Array<{ id: string; code: string; reason: string }>; rejects: Array<{ id: string; code: string; reason: string }> }> {
@@ -1174,10 +1644,9 @@ export async function matchTick(
     fills.push(fill)
     filled += 1
   }
-  await store.saveAccount(account)
-  await store.saveOrders(orders, fills)
+  // 三账本一次写：账户（钱）、委托/成交（流水）、净值点必须在同一把文件锁内提交
   const quoteMap = await deps.quotes(account.positions.map((p) => p.secid)).catch(() => ({}))
   const point = equityPointOf(account, (secid) => quoteMap[secid]?.price ?? null, now)
-  await store.saveEquity(upsertEquity(store.equity(), point))
+  await store.saveAll({ account, orders, fills, equity: upsertEquity(store.equity(), point) })
   return { filled, rejected, skipped, rejects: skipped }
 }

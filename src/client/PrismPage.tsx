@@ -11,6 +11,8 @@ import { Field, Modal, Skeleton } from './ui'
 import { missText, numText } from './uiText.ts'
 import { shClockText } from './marketTime.ts'
 import { useNow } from './useNow.ts'
+import { usePanelVisible } from './usePageIdle.ts'
+import { createPrismRefresher } from './prismRefresh.ts'
 import { positionErrorOf } from './prismForm.ts'
 import { KlineChart, TrendChart } from './kline.tsx'
 import { Sparkline } from './charts.tsx'
@@ -183,6 +185,18 @@ const LOGO_PROPS: React.SVGProps<SVGSVGElement> = {
   strokeLinecap: 'round', strokeLinejoin: 'round', 'aria-hidden': true,
 }
 
+/**
+ * 顶部状态条的时钟**叶子**（AUDIT-CLIENT-PERF P1-3）。
+ *
+ * 之前 `useNow(1000)` 挂在 `PrismPage` 根节点上：秒针每跳一次就 `setState`，整个三栏
+ * （顶栏/上限卡/持仓/详情/总览/右栏/绩效/状态条，约 300 个元素）跟着重渲染 —— 而全页只有这 8 个字符的
+ * 时钟需要 1s 精度。现在 1s 的 state 只活在这个子树里，根组件一整天都不会因为秒针重渲。
+ */
+export function AgentClock(): React.ReactElement {
+  const now = useNow(1000)
+  return React.createElement('div', { className: 'tw-ad-clock', 'data-role': 'ad-clock', title: '北京时间' }, shClockText(now))
+}
+
 export function PrismPage(props: { active?: boolean; redUp?: boolean } = {}): React.ReactElement {
   const redUp = props.redUp !== false
   const [state, setState] = React.useState<Awaited<ReturnType<typeof api.prismState>> | null>(null)
@@ -207,14 +221,28 @@ export function PrismPage(props: { active?: boolean; redUp?: boolean } = {}): Re
   const [panelTab, setPanelTab] = React.useState<'pos' | 'ord'>('pos')
   const [boxRef, boxW] = useBoxWidth(760)
   const capBusy = React.useRef(false)
-  const now = useNow(1000)
+  /** 页面容器（下面根节点上的 `ref`）：父级不传 `active` 时用它判"在不在视口内" */
+  const pageRef = React.useRef<HTMLDivElement | null>(null)
+  const containerVisible = usePanelVisible(pageRef)
+  /**
+   * 本页是否"当前页"（AUDIT-CLIENT-PERF P1-1）——两个信号**同时**成立才算激活：
+   *   · 父级 `active`（`index.tsx` 传 `active: page === 'prism'`；`false` 一律不刷）；
+   *   · 页面容器与视口相交（`IntersectionObserver` 对 `display:none` 报 `isIntersecting:false`）：
+   *     父级不传 `active` 时它就是唯一判据；传了 `true` 时再叠一层，防"面板整体被藏起来"，
+   *     以及观察器不可用（`null`）时的失败放行口径与 `idle.ts` 保持一致。
+   */
+  const isActive = props.active === false ? false : containerVisible
 
+  /** 只拉行情状态：写操作后刷新用这个（自检是真实 LLM 调用，不能每次保存都跑） */
   const load = React.useCallback((): void => {
     setErr(null)
     api.prismState().then((r) => setState(r)).catch((e: Error) => setErr(e.message))
+  }, [])
+  /** 自检：只在挂载时跑一次；宿主侧会真发 llm.stream（最长 20s），不得挂在保存路径上 */
+  const loadSelf = React.useCallback((): void => {
     api.prismSelftest().then((r) => setSelf({ ok: r.ok, ms: r.elapsedMs })).catch(() => setSelf(null))
   }, [])
-  React.useEffect(() => { load() }, [load])
+  React.useEffect(() => { load(); loadSelf() }, [load, loadSelf])
 
   /**
    * 静默刷新：只重拉 `/tradewatcher/prism`，不跑 selftest、不清错、不闪骨架。
@@ -223,15 +251,32 @@ export function PrismPage(props: { active?: boolean; redUp?: boolean } = {}): Re
   const refresh = React.useCallback((): void => {
     api.prismState().then((r) => setState(r)).catch(() => undefined)
   }, [])
+  /**
+   * 30s 静默刷新（AUDIT-CLIENT-PERF P1-1）：**只有"本页是当前页"时才建定时器**。
+   *
+   * 旧实现的守卫只判 `document.visibilityState === 'hidden'`，而宿主切页签用的是 `display:none`
+   * （文档一直 visible）⇒ 切到自选/持仓后棱镜仍在 2 次/分请求 `/prism`，整棵隐藏树跟着重渲染。
+   * 现在：`isActive !== true` ⇒ effect 直接 return（连 interval 都不建，切走必然停止轮询）；
+   * 切回（`isActive` 由 false→true，effect 重跑）⇒ 立即补刷一次；文档由隐藏转可见也补刷一次。
+   */
+  const loadAlreadyRan = React.useRef<boolean>(isActive)
   React.useEffect(() => {
-    const id = setInterval(() => {
-      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return
-      refresh()
-    }, PRISM_AUTO_REFRESH_MS)
-    const onVisible = (): void => { if (document.visibilityState === 'visible') refresh() }
+    if (!isActive) return undefined
+    const gate = createPrismRefresher({
+      read: () => ({
+        active: isActive,
+        documentHidden: typeof document !== 'undefined' && document.visibilityState === 'hidden',
+      }),
+      refresh,
+    })
+    const id = setInterval(() => { gate.tick() }, PRISM_AUTO_REFRESH_MS)
+    const onVisible = (): void => { gate.activate() }
     document.addEventListener('visibilitychange', onVisible)
+    // 切回本页 ⇒ 立即刷一次；"首次挂载就是当前页"时 load() 刚拉过，不重复打同一条路由
+    if (!loadAlreadyRan.current) gate.activate()
+    loadAlreadyRan.current = false
     return () => { clearInterval(id); document.removeEventListener('visibilitychange', onVisible) }
-  }, [refresh])
+  }, [isActive, refresh])
 
   // desk 在回包顶层（与 state 同级），不在 state 内——之前读 state.state.desk 恒 undefined，导致四区块全部『未取到』
   const desk = (state as unknown as { desk?: Desk } | null | undefined)?.desk
@@ -417,7 +462,7 @@ export function PrismPage(props: { active?: boolean; redUp?: boolean } = {}): Re
         React.createElement('i', { className: 'tw-ad-pulse' }),
         React.createElement('span', { className: 'tw-ad-run-t' }, 'RUNNING'),
         React.createElement('span', { className: 'tw-ad-run-n', 'data-role': 'ad-run-n' }, runsBadgeOf(runsCount))),
-      React.createElement('div', { className: 'tw-ad-clock', 'data-role': 'ad-clock', title: '北京时间' }, shClockText(now)),
+      React.createElement(AgentClock, null),
       React.createElement('button', {
         className: 'tw-ad-ibtn', 'data-role': 'ad-pause', disabled: true,
         title: '宿主未提供暂停接口', 'aria-label': '暂停（宿主未提供接口）',
@@ -888,7 +933,7 @@ export function PrismPage(props: { active?: boolean; redUp?: boolean } = {}): Re
           statusItem(f, false),
         ])))
 
-  return React.createElement('div', { className: 'tw-ad-root', 'data-role': 'prism-agentdesk' },
+  return React.createElement('div', { className: 'tw-ad-root', 'data-role': 'prism-agentdesk', ref: pageRef },
     topbar,
     React.createElement('div', { className: 'tw-ad-board' },
       React.createElement('div', { className: 'tw-ad-col tw-ad-col-human' },

@@ -631,7 +631,7 @@ export function RescuePanel(props: {
             className: 'tw-badge',
             title: snapshot.note ?? (data as { staleNote?: string })?.staleNote ?? '',
             style: { color: LEVEL_COLOR[1], borderColor: LEVEL_COLOR[1] },
-          }, `上次数据 ${snapshot.lastSampleTs !== null ? shClockText(snapshot.lastSampleTs).slice(0, 5) : ''}`)
+          }, `上次数据 ${snapshot.lastSampleTs != null ? shClockText(snapshot.lastSampleTs).slice(0, 5) : ''}`)
         : null,
       snapshot !== null && (snapshot.completeness?.missing.length ?? 0) > 0
         ? React.createElement('span', {
@@ -650,7 +650,7 @@ export function RescuePanel(props: {
             className: 'tw-muted',
             style: { fontSize: 12 },
             title: [
-              snapshot.lastSampleTs !== null ? `数据时刻 ${fmtStamp(snapshot.lastSampleTs)}（最近一次成功采样）` : '尚未成功采样',
+              snapshot.lastSampleTs != null ? `数据时刻 ${fmtStamp(snapshot.lastSampleTs)}（最近一次成功采样）` : '尚未成功采样',
               snapshot.lastFailTs !== null && snapshot.lastFailTs !== undefined ? `最近一次采样失败：${fmtStamp(snapshot.lastFailTs)}` : null,
               snapshot.flowSource === 'tencent' ? '数据来源：腾讯备用数据源（无分单资金流）' : snapshot.flowSource === 'em' ? '数据来源：东方财富（含分单资金流）' : null,
               snapshot.note ?? null,
@@ -661,7 +661,7 @@ export function RescuePanel(props: {
               ? `采样暂停 · 下次 ${snapshot.activeWindow?.nextLabel ?? '—'}（${pauseReason}）`
               : `采样中 · ${snapshot.activeIntervalSec}s`}` +
             // 「数据 HH:mm:ss」= 这份数据是几点拿到的（不是响应时刻、更不是失败时刻）
-            `${snapshot.lastSampleTs !== null ? ` · 数据 ${shClockText(snapshot.lastSampleTs)}` : ''}` +
+            `${snapshot.lastSampleTs != null ? ` · 数据 ${shClockText(snapshot.lastSampleTs)}` : ''}` +
             `${snapshot.flowSource === 'tencent' ? ' · 腾讯源' : ''}` +
             // 两种"不新鲜"必须分开说：有失败时刻 = 采样失败；只有缺口标记 = 当日有过缺口
             //（磁盘上的旧快照、会话未采样等）；仅 stale（本会话未采样）由「上次数据」红标说明。

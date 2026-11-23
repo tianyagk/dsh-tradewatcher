@@ -3,11 +3,14 @@ import { test } from 'node:test'
 import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import assert from 'node:assert/strict'
-import { mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs'
 import { join, join as joinPath } from 'node:path'
-import { DOGWATCH_POOL, cacheUsableOf, fetchDogwatch, wanToYi, detectCorporateActions, indexSeriesOf, isShenzhenCode, loadSharesOf, parseSseShares, poolCoverageOf, ratioOf, sharesStaleOf, sharesCachePath, weightedPctOf } from './dogwatch.ts'
+import { DOGWATCH_POOL, cacheUsableOf, fetchDogwatch, wanToYi, detectCorporateActions, indexSeriesOf, isShenzhenCode, loadSharesOf, parseSseShares, poolCoverageOf, ratioOf, sharesStaleOf, sharesCachePath, summaryCachePath, weightedPctOf, createNetworkGate, readAllDiskShares, DOGWATCH_PARSE_YIELD_EVERY, DOGWATCH_BIG_FILE_BYTES } from './dogwatch.ts'
 // 独立 DSH_HOME：避免与其它测试文件共享 dogwatch 缓存目录
 process.env.DSH_HOME = mkdtempSync(joinPath(tmpdir(), 'dw-main-'))
+
+/** 测试里不需要批间节流：全部走磁盘/注入数据，120ms 纯等待没有意义 */
+const dw = (w: Parameters<typeof fetchDogwatch>[0], deps: Parameters<typeof fetchDogwatch>[1]) => fetchDogwatch(w, { gapMs: 0, ...deps })
 
 test('① 加仓指数首日 = 100（不等于 100 ⇒ 败）', () => {
   const s = indexSeriesOf([{ day: 'd1', volWan: 1000 }, { day: 'd2', volWan: 1100 }], [])
@@ -240,8 +243,8 @@ test('① 第二次同窗口调用 fetched = 0（>0 ⇒ 败）', async () => {
   const now = Date.parse('2026-11-16T10:00:00+08:00')
   const days = tradingDaysBack(95, now)
   seedDays(days, (i) => 100000 + i * 1000)
-  const a = await fetchDogwatch('3m', { now, quotes: async () => ({}) })
-  const b = await fetchDogwatch('3m', { now: now + 1000, quotes: async () => ({}) })
+  const a = await dw('3m', { now, gapMs: 0, quotes: async () => ({}) })
+  const b = await dw('3m', { now: now + 1000, gapMs: 0, quotes: async () => ({}) })
   assert.equal(b.stats.fetched, 0, `第二次必须 0 请求（实得 ${b.stats.fetched}）`)
   assert.equal(b.stats.cached, true, '必须命中汇总缓存')
   assert.throws(() => assert.equal(b.stats.fetched, a.stats.fetched + 1, '反例上：重拉'), /反例上/, '⚠ 反例注入必须失败')
@@ -250,8 +253,8 @@ test('① 第二次同窗口调用 fetched = 0（>0 ⇒ 败）', async () => {
 test('② 5 分钟内重复调用 fetched = 0（重拉 ⇒ 败）', async () => {
   const now = Date.parse('2026-11-17T10:00:00+08:00')
   seedDays(tradingDaysBack(95, now), (i) => 100000 + i * 1000)
-  await fetchDogwatch('3m', { now, quotes: async () => ({}) })
-  const r = await fetchDogwatch('3m', { now: now + 4 * 60_000, quotes: async () => ({}) })
+  await dw('3m', { now, gapMs: 0, quotes: async () => ({}) })
+  const r = await dw('3m', { now: now + 4 * 60_000, quotes: async () => ({}) })
   assert.equal(r.stats.fetched, 0)
   assert.equal(r.stats.cached, true)
   assert.ok(r.stats.elapsedMs < 50, `命中缓存必须 <50ms（实得 ${r.stats.elapsedMs}）`)
@@ -261,8 +264,8 @@ test('② 5 分钟内重复调用 fetched = 0（重拉 ⇒ 败）', async () => 
 test('③ 换窗口（6m→3m）fetched = 0（复用同一批日文件）', async () => {
   const now = Date.parse('2026-11-18T10:00:00+08:00')
   seedDays(tradingDaysBack(200, now), (i) => 100000 + i * 1000)
-  await fetchDogwatch('6m', { now, quotes: async () => ({}) })
-  const r = await fetchDogwatch('3m', { now: now + 2000, quotes: async () => ({}) })
+  await dw('6m', { now, gapMs: 0, quotes: async () => ({}) })
+  const r = await dw('3m', { now: now + 2000, quotes: async () => ({}) })
   assert.equal(r.stats.fetched, 0, '短窗必须完全复用长窗的日文件')
   assert.throws(() => assert.equal(r.stats.fetched, 1, '反例上：重拉'), /反例上/, '⚠ 反例注入必须失败')
 })
@@ -275,7 +278,7 @@ test('④ 删掉某一天文件 ⇒ 只补该 1 天（补全窗 ⇒ 败）', asy
   const victim = days[80]!
   unlinkSync(sharesCachePath(victim))
   const refill = Object.fromEntries(DOGWATCH_POOL.map((p, i) => [p.code, { name: p.name, volWan: 100000 + i * 1000 }]))
-  const r = await fetchDogwatch('3m', {
+  const r = await dw('3m', {
     now, quotes: async () => ({}), bypassCache: true,
     loadShares: async () => new Map(Object.entries(refill)),
   })
@@ -304,8 +307,8 @@ test('⑤ 损坏文件 ⇒ 仅重拉该日（整窗重拉 ⇒ 败）', async () 
 test('⑥ 进程内缓存命中 elapsedMs < 50（重算整窗 ⇒ 败）', async () => {
   const now = Date.parse('2026-11-21T10:00:00+08:00')
   seedDays(tradingDaysBack(95, now), (i) => 100000 + i * 1000)
-  await fetchDogwatch('3m', { now, quotes: async () => ({}) })
-  const r = await fetchDogwatch('3m', { now: now + 60_000, quotes: async () => ({}) })
+  await dw('3m', { now, gapMs: 0, quotes: async () => ({}) })
+  const r = await dw('3m', { now: now + 60_000, quotes: async () => ({}) })
   assert.ok(r.stats.elapsedMs < 50, `命中必须 <50ms（实得 ${r.stats.elapsedMs}）`)
   assert.equal(r.stats.fetched, 0)
   assert.throws(() => assert.ok(r.stats.elapsedMs >= 50, '反例上：重算'), /反例上/, '⚠ 反例注入必须失败')
@@ -464,15 +467,237 @@ test('P2-4 量纲判不出 ⇒ missing 含固定原因文本（缺 ⇒ 败）', 
 test('P3-1 二次打开：elapsedMs < 100 且 fetched = 0（内存/落盘汇总命中）', async () => {
   const now = Date.parse('2026-11-23T10:00:00+08:00')
   seedDays(tradingDaysBack(95, now), (i) => 100000 + i * 1000)
-  await fetchDogwatch('3m', { now, quotes: async () => ({}) })
-  const second = await fetchDogwatch('3m', { now: now + 1000, quotes: async () => ({}) })
+  await dw('3m', { now, gapMs: 0, quotes: async () => ({}) })
+  const second = await dw('3m', { now: now + 1000, gapMs: 0, quotes: async () => ({}) })
   assert.equal(second.stats.fetched, 0)
   assert.ok(second.stats.elapsedMs < 100, `二次打开必须 <100ms（实得 ${second.stats.elapsedMs}）`)
   // 内存 TTL 过期后走**落盘汇总**：零读盘、零重算
-  const third = await fetchDogwatch('3m', { now: now + 6 * 60_000, quotes: async () => ({}) })
+  const third = await dw('3m', { now: now + 6 * 60_000, quotes: async () => ({}) })
   assert.equal(third.stats.fromDisk, 0, '落盘汇总命中时不得逐日读盘')
   assert.equal(third.stats.fetched, 0)
   assert.equal(third.stats.cached, true)
   assert.ok(third.stats.elapsedMs < 100, `落盘命中必须 <100ms（实得 ${third.stats.elapsedMs}）`)
   assert.throws(() => assert.equal(third.stats.fromDisk, 84, '反例上：逐日读盘'), /反例上/, '⚠ 反例注入必须失败')
+})
+
+// ── v0.215.0：宿主审计 P0-3（2y 冷启动 62.5s / 同步解析 571ms 阻塞） ────────
+//
+// 三条不变量：
+//   ① 网络节流只对**真的发起的网络请求**计时（磁盘命中一秒都不等）；
+//   ② 磁盘读与网络拉取分成两段：先并发读全部日文件，再只对缺失日走网络；
+//   ③ 日文件用 fs.promises 读，解析每 N 个文件 / 每个 >1MiB 大文件让出一次事件循环。
+
+/** 注入时钟：sleep 只记账并推进逻辑时间，不真的等（断言「等待毫秒」而不是墙钟） */
+const fakeClock = (start = 0): { now: () => number; sleep: (ms: number) => Promise<void>; sleeps: number[]; total: () => number } => {
+  let t = start
+  const sleeps: number[] = []
+  return {
+    now: () => t,
+    sleep: async (ms: number) => { sleeps.push(ms); t += ms },
+    sleeps,
+    total: () => sleeps.reduce((a, b) => a + b, 0),
+  }
+}
+
+const fullRows = (base: number): Record<string, { name: string; volWan: number }> =>
+  Object.fromEntries(DOGWATCH_POOL.map((p, i) => [p.code, { name: p.name, volWan: base + i }]))
+
+test('P0-3-1 网络闸契约：4 个并发请求发起时刻 = 0/120/240/360ms（不排队 ⇒ 败）', async () => {
+  const clock = fakeClock()
+  const gate = createNetworkGate(120, clock)
+  const starts: number[] = []
+  await Promise.all([0, 1, 2, 3].map(() => gate.run(async () => { starts.push(clock.now()) })))
+  assert.deepEqual(starts, [0, 120, 240, 360], `相邻网络请求必须间隔 ≥120ms（实得 ${starts.join('/')}）`)
+  assert.equal(gate.waitCount(), 3, '第一次请求不等待，后三次各等一次')
+  assert.equal(gate.waitedMs(), 360, '总等待 = 3 × 120ms')
+  assert.throws(() => assert.deepEqual(starts, [0, 0, 0, 0], '反例上：并发齐发'), /反例上/, '⚠ 反例注入必须失败')
+  // gapMs ≤ 0 ⇒ 完全不等待（假 loader / 无网络场景）
+  const noWait = createNetworkGate(0, clock)
+  const t0 = clock.now()
+  await Promise.all([0, 1, 2].map(() => noWait.run(async () => { starts.push(clock.now()) })))
+  assert.equal(noWait.waitedMs(), 0)
+  assert.equal(clock.now(), t0, 'gapMs=0 不得推进时间')
+})
+
+test('P0-3-2 全命中磁盘 ⇒ 节流总等待 0ms（默认 120ms 也不付；逐条 sleep 回潮 ⇒ 败）', async () => {
+  const now = Date.parse('2028-01-10T10:00:00+08:00')
+  const days = tradingDaysBack(63 + 21, now) // 3m 窗口口径：63 个交易日 + 20 日均额前置
+  assert.equal(days.length, 84)
+  seedDays(days, (i) => 100000 + i * 1000)
+  const clock = fakeClock()
+  let loaderCalls = 0
+  const t0 = Date.now()
+  // 注意：**不传 gapMs**（走生产默认 120）—— 只要磁盘命中，120ms 就不该出现
+  const r = await fetchDogwatch('3m', {
+    now, bypassCache: true, clock, quotes: async () => ({}),
+    loadShares: async () => { loaderCalls += 1; return new Map() },
+  })
+  const wall = Date.now() - t0
+  assert.equal(loaderCalls, 0, '全命中磁盘不得调 loadShares')
+  assert.equal(r.stats.fromDisk, days.length)
+  assert.equal(r.stats.fetched, 0)
+  assert.equal(clock.sleeps.length, 0, `磁盘命中必须零等待（实得 ${clock.sleeps.length} 次 / ${clock.total()}ms）`)
+  assert.equal(clock.total(), 0, '总等待必须是 0ms')
+  assert.ok(wall < 2_000, `全命中必须 <2s（实得 ${wall}ms；旧实现 ${days.length}/4×120 ≈ ${Math.round(days.length / 4 * 120)}ms）`)
+  assert.throws(() => assert.equal(clock.total(), 120, '反例上：磁盘命中仍付节流'), /反例上/, '⚠ 反例注入必须失败')
+})
+
+test('P0-3-3 缺 3 天 ⇒ 网络恰好 3 次且相邻间隔 ≥120ms；磁盘命中天零等待', async () => {
+  const now = Date.parse('2028-01-11T10:00:00+08:00')
+  const days = tradingDaysBack(63 + 21, now)
+  assert.equal(days.length, 84, '3m 窗口 = 84 个交易日')
+  seedDays(days, (i) => 200000 + i * 1000)
+  const victims = [days[10]!, days[40]!, days[70]!]
+  for (const d of victims) unlinkSync(sharesCachePath(d))
+  const clock = fakeClock()
+  const callAt: number[] = []
+  const refill = fullRows(300000)
+  const r = await fetchDogwatch('3m', {
+    now, bypassCache: true, clock, quotes: async () => ({}),
+    loadShares: async () => { callAt.push(clock.now()); return new Map(Object.entries(refill)) },
+  })
+  assert.equal(callAt.length, 3, `只有 3 个缺失日走网络（实得 ${callAt.length}）`)
+  assert.equal(r.stats.fetched, 3)
+  assert.equal(r.stats.fromDisk, days.length - 3)
+  const gaps = callAt.slice(1).map((t, i) => t - callAt[i]!)
+  assert.ok(gaps.length === 2 && gaps.every((g) => g >= 120), `相邻网络请求必须 ≥120ms（实得 ${gaps.join(',')}）`)
+  assert.equal(clock.sleeps.length, 2, `只有第 2/3 次网络请求付等待（实得 ${clock.sleeps.length} 次）`)
+  assert.equal(clock.total(), 240, `总等待 = 2 × 120ms（实得 ${clock.total()}ms）`)
+  // 磁盘命中的 81 天一天都不等：若按旧语义逐条 sleep，等待会是 80 次以上
+  assert.ok(clock.sleeps.length < days.length - 3, '磁盘命中日不得产生等待')
+  assert.throws(() => assert.equal(clock.total(), days.length * 120, '反例上：按天数睡'), /反例上/, '⚠ 反例注入必须失败')
+})
+
+test('P0-3-4 反例对照：改回「每条固定 sleep」⇒ 521 天累计等待 62.5s（墙钟 ≈15.6s），断言必败', async () => {
+  /**
+   * 复刻修复前的 `mapWithConcurrency(items, 4, 120, fn)`：sleep 与「是否真的发起网络」无关。
+   * 用假时钟跑 521 天全命中磁盘的工作负载 ⇒ 累计等待 62.4s（4 路并发把墙钟摊成 ≈15.6s）；
+   * 现行实现（P0-3-2）累计等待 0ms。
+   */
+  const clock = fakeClock()
+  const days = tradingDaysBack(521, Date.parse('2036-01-05T10:00:00+08:00'))
+  const legacy = async (items: readonly string[], limit: number, gapMs: number): Promise<number> => {
+    let i = 0
+    let waited = 0
+    const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+      while (i < items.length) {
+        i += 1
+        // 磁盘命中：没有网络请求，旧实现照样 sleep
+        if (gapMs > 0 && i < items.length) { waited += gapMs; await clock.sleep(gapMs) }
+      }
+    })
+    await Promise.all(workers)
+    return waited
+  }
+  const legacyWaited = await legacy(days, 4, 120)
+  assert.ok(legacyWaited >= 62_000, `旧语义 521 天 ≈62.5s（实得 ${legacyWaited}ms）`)
+  assert.throws(() => assert.equal(legacyWaited, 0, '反例上：每批固定 sleep'), /反例上/, '⚠ 反例注入必须失败')
+  // 源码级防线：日文件阶段不得再出现「带 gap 的并发池」
+  const src = readFileSync(new URL('./dogwatch.ts', import.meta.url), 'utf8')
+  assert.equal(src.includes('mapWithConcurrency(tradingDays'), false, '日文件阶段不得再套用逐条 sleep 的并发池')
+})
+
+test('P0-3-5 解析每 32 个日文件让出一次（不让出 ⇒ 败）', async () => {
+  const days = Array.from({ length: 100 }, (_, i) => `p03-${String(i).padStart(3, '0')}`)
+  mkdirSync(join(sharesCachePath(days[0]!), '..'), { recursive: true })
+  for (const d of days) writeFileSync(sharesCachePath(d), JSON.stringify({ day: d, rows: fullRows(400000) }))
+  const reasons: string[] = []
+  const out = await readAllDiskShares(days, { onYield: (r) => reasons.push(r) })
+  assert.equal(out.stats.parsed, 100, '100 个文件都要解析')
+  assert.equal(out.stats.hit, 100)
+  assert.equal(DOGWATCH_PARSE_YIELD_EVERY, 32)
+  assert.equal(out.stats.yields, Math.floor(100 / DOGWATCH_PARSE_YIELD_EVERY), `100 文件应让出 3 次（实得 ${out.stats.yields}）`)
+  assert.deepEqual(reasons, ['every-n', 'every-n', 'every-n'])
+  // 反例：不让出（yieldEvery 调到 1000）⇒ 0 次 ⇒ 与 3 不等
+  const noYield = await readAllDiskShares(days, { yieldEvery: 1_000 })
+  assert.equal(noYield.stats.yields, 0)
+  assert.throws(() => assert.equal(noYield.stats.yields, 3, '反例上：解析全程不让出'), /反例上/, '⚠ 反例注入必须失败')
+})
+
+test('P0-3-6 单文件 >1MiB ⇒ 解析后单独让出一次（阈值 1 MiB）', async () => {
+  assert.equal(DOGWATCH_BIG_FILE_BYTES, 1024 * 1024)
+  const day = 'p03-big'
+  const rows = fullRows(500000)
+  rows['filler'] = { name: 'x'.repeat(1_200_000), volWan: 1 }
+  mkdirSync(join(sharesCachePath(day), '..'), { recursive: true })
+  writeFileSync(sharesCachePath(day), JSON.stringify({ day, rows }))
+  const reasons: string[] = []
+  // yieldEvery 拉大，排除「第 N 个文件」那条路径，只剩大文件让出
+  const out = await readAllDiskShares([day], { yieldEvery: 1_000, onYield: (r) => reasons.push(r) })
+  assert.ok(out.stats.bytes > DOGWATCH_BIG_FILE_BYTES, `文件必须 >1MiB（实得 ${out.stats.bytes} 字节）`)
+  assert.deepEqual(reasons, ['big-file'])
+  assert.throws(() => assert.deepEqual(reasons, [], '反例上：大文件不让出'), /反例上/, '⚠ 反例注入必须失败')
+})
+
+test('P0-3-7 521 天空盘 + 假 loader（无网络、gapMs 0）⇒ <15s 客户端超时线', async () => {
+  const now = Date.parse('2035-06-03T10:00:00+08:00')
+  const days = tradingDaysBack(500 + 21, now)
+  assert.equal(days.length, 521, `2y 窗口必须覆盖 521 个交易日（实得 ${days.length}）`)
+  let calls = 0
+  const refill = fullRows(600000)
+  const t0 = Date.now()
+  const r = await fetchDogwatch('2y', {
+    now, bypassCache: true, gapMs: 0, clock: fakeClock(), quotes: async () => ({}),
+    loadShares: async () => { calls += 1; return new Map(Object.entries(refill)) },
+  })
+  const elapsed = Date.now() - t0
+  assert.equal(calls, 521, `空盘 521 天 = 521 次 loader 调用（实得 ${calls}）`)
+  assert.equal(r.stats.fetched, 521)
+  assert.equal(r.stats.fromDisk, 0)
+  assert.equal(r.series.length, 521)
+  assert.ok(elapsed < 15_000, `空盘 521 天必须 <15s（实得 ${elapsed}ms）`)
+  // 旧实现：521 × 120ms = 62.5s 纯等待（P0-3-4 已单独用假时钟钉住）
+  assert.throws(() => assert.ok(elapsed >= 62_500, '反例上：仍按天数睡'), /反例上/, '⚠ 反例注入必须失败')
+})
+
+test('P0-3-8 真实 2y 冷启动（512 盘命中 + 9 缺）⇒ <15s，只付 9 次网络节流', async () => {
+  const now = Date.parse('2040-06-03T10:00:00+08:00')
+  const days = tradingDaysBack(521, now)
+  seedDays(days.slice(0, 512), (i) => 700000 + i * 1000)
+  const clock = fakeClock()
+  const refill = fullRows(800000)
+  const t0 = Date.now()
+  const r = await fetchDogwatch('2y', {
+    now, bypassCache: true, clock, quotes: async () => ({}),
+    loadShares: async () => new Map(Object.entries(refill)),
+  })
+  const elapsed = Date.now() - t0
+  assert.equal(r.stats.fromDisk, 512, `512 天必须零网络命中磁盘（实得 ${r.stats.fromDisk}）`)
+  assert.equal(r.stats.fetched, 9, `只有 9 天走网络（实得 ${r.stats.fetched}）`)
+  assert.equal(clock.sleeps.length, 8, `9 次网络请求 = 8 次间隔等待（实得 ${clock.sleeps.length}）`)
+  assert.equal(clock.total(), 8 * 120, `总等待 = 8 × 120ms（实得 ${clock.total()}ms）`)
+  assert.ok(elapsed < 15_000, `真实 2y 冷启动必须 <15s（实得 ${elapsed}ms）`)
+  assert.throws(() => assert.equal(clock.total(), 512 * 120, '反例上：磁盘命中天也睡'), /反例上/, '⚠ 反例注入必须失败')
+})
+
+test('P0-3-9 日文件读取走 fs.promises.readFile（readFileSync 回潮 ⇒ 败）', () => {
+  const src = readFileSync(new URL('./dogwatch.ts', import.meta.url), 'utf8')
+  assert.equal(src.includes('readFileSync(sharesCachePath'), false, '日文件不得再用 readFileSync')
+  assert.match(src, /const buf = await readFile\(path\)/, '日文件必须走 fs.promises.readFile')
+  assert.match(src, /setImmediate/, '解析让出必须走 setImmediate')
+  assert.throws(() => assert.equal(src.includes('readFileSync(sharesCachePath'), true, '反例上：同步读日文件'), /反例上/, '⚠ 反例注入必须失败')
+})
+
+test('P0-3-10 语义保留：stats 键不变 / 汇总仍落盘 / bypassCache 仍跳过', async () => {
+  const now = Date.parse('2028-02-07T10:00:00+08:00')
+  const days = tradingDaysBack(63 + 21, now)
+  assert.equal(days.length, 84)
+  seedDays(days, (i) => 900000 + i * 1000)
+  const first = await fetchDogwatch('3m', { now, quotes: async () => ({}), gapMs: 0 })
+  assert.deepEqual(
+    Object.keys(first.stats).sort(),
+    ['elapsedMs', 'fetched', 'fromDisk', 'hit', 'pool'],
+    'stats 字段集合不得增删（审计要求：stats 字段不变）',
+  )
+  assert.equal(first.stats.fromDisk, days.length)
+  assert.equal(first.stats.pool, 14)
+  assert.equal(first.stats.hit >= 13, true)
+  assert.equal(existsSync(summaryCachePath('3m', '2028-02-07')), true, '汇总必须落盘')
+  const cached = await fetchDogwatch('3m', { now: now + 1_000, quotes: async () => ({}) })
+  assert.equal(cached.stats.cached, true, '5 分钟内必须命中汇总缓存')
+  assert.equal(cached.stats.fetched, 0)
+  const bypass = await fetchDogwatch('3m', { now: now + 2_000, bypassCache: true, quotes: async () => ({}) })
+  assert.equal(bypass.stats.cached, undefined, 'bypassCache 必须跳过汇总缓存')
+  assert.equal(bypass.stats.fromDisk, days.length, 'bypass 后仍逐日读盘')
+  assert.throws(() => assert.equal(bypass.stats.cached, true, '反例上：bypassCache 失效'), /反例上/, '⚠ 反例注入必须失败')
 })

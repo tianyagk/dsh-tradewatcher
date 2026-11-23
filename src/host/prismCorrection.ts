@@ -61,12 +61,15 @@ export function applyPriceCorrection(
   const oldPrice = group[0]?.price ?? order.fillPrice ?? order.price
   if (Math.abs(oldPrice - newPrice) < 1e-9) throw new Error('新旧价格相同，无需订正')
 
+  // 差额方向必须按买卖分开口径：
+  //   买入：delta = 旧(成交额+费用) − 新(成交额+费用)，多付 ⇒ 正数退回
+  //   卖出：delta = 新(成交额−费用) − 旧(成交额−费用)，少收 ⇒ 负数（现金减少）
   let delta = 0
   const nextFills: PrismFill[] = fills.map((f) => {
     if (f.orderId !== order.id) return f
     const amount = money(f.shares * newPrice)
     const fee = feeOf(amount, f.side)
-    delta += (f.amount + f.fee) - (amount + fee)
+    delta += f.side === 'buy' ? (f.amount + f.fee) - (amount + fee) : (amount - fee) - (f.amount - f.fee)
     return { ...f, price: newPrice, amount, fee }
   })
   delta = money(delta)
@@ -82,16 +85,21 @@ export function applyPriceCorrection(
     ],
   }))
 
-  const positions = account.positions.map((p) => {
-    if (p.secid !== order.secid) return p
-    const netCost = money(p.netCost - delta)
-    const cost = p.qty > 0 ? Math.round((netCost / p.qty) * 10_000) / 10_000 : p.cost
-    return { ...p, netCost, cost }
-  })
+  const isBuy = (group[0]?.side ?? 'buy') === 'buy'
+  const positions = isBuy
+    ? account.positions.map((p) => {
+      if (p.secid !== order.secid) return p
+      const netCost = money(p.netCost - delta)
+      const cost = p.qty > 0 ? Math.round((netCost / p.qty) * 10_000) / 10_000 : p.cost
+      return { ...p, netCost, cost }
+    })
+    : account.positions
 
   const nextAccount: PrismAccount = {
     ...account,
     cash: money(account.cash + delta),
+    // 卖出订正的差额进已实现盈亏（买入不动 realized）
+    realized: isBuy ? account.realized : money(account.realized + delta),
     positions,
   }
   const note = `订正 ${order.name} 成交价 ${oldPrice} → ${newPrice}；现金差额 ${delta >= 0 ? '+' : ''}${delta}`

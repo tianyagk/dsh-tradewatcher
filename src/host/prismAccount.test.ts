@@ -146,20 +146,34 @@ test('⑧ 净值每日一点：同日覆盖、跨日新增', () => {
   assert.equal(upsertEquity([p2], p3).length, 2)
 })
 
-test('⑦ 三账本走锁 + 读守卫 + 坏文件隔离', async () => {
+test('⑦ 三账本走锁 + 读守卫 + 坏文件 fail-closed（不再当空库）', async () => {
   const src = await import('node:fs/promises').then((m) => m.readFile(new URL('./prismAccount.ts', import.meta.url), 'utf8'))
   assert.match(src, /updateJsonLocked/)
   assert.match(src, /ReadGuard/)
   assert.match(src, /quarantineFile/)
+  assert.match(src, /runExclusive/)
+  assert.match(src, /saveAll/)
   const dir = await mkdtemp(join(tmpdir(), 'prism-acc3-'))
   try {
     await writeFile(join(dir, 'prism-account.json'), '{bad json')
     const store = new PrismTradingStore(dir)
     await store.init()
     await store.quarantine()
-    const files = await readdir(dir)
-    assert.equal(files.some((f) => f.includes('.corrupt')), true, '坏文件必须被隔离保留')
-    assert.equal(store.account().cash, PRISM_INITIAL_CAPITAL, '隔离后从容重建')
+    // P0-2：坏文件**不隔离、不当空库**——留在原地挡住写入，等 repair
+    assert.equal(store.degraded, true, '坏账本必须标记 degraded')
+    assert.equal((store.account() as unknown as { cash: number | null }).cash, null, 'degraded 时 account 必须是 null 语义，不是初始 150 万')
+    assert.equal((await readdir(dir)).some((f) => f.includes('.corrupt')), false, '未经修复不得把坏文件改名（改名后重启会当首次启动）')
+    // 无备份 ⇒ 修复失败，仍 degraded
+    const failed = await store.repairLedger()
+    assert.equal(failed.ok, false)
+    assert.equal(store.degraded, true)
+    // 有备份 ⇒ 修复成功，坏文件被隔离保留，account 恢复
+    await writeFile(join(dir, 'prism-account.json.bak-20260101'), JSON.stringify({ v: 1, account: emptyAccount() }))
+    const fixed = await store.repairLedger()
+    assert.equal(fixed.ok, true)
+    assert.equal(store.degraded, false)
+    assert.equal(store.account().cash, PRISM_INITIAL_CAPITAL)
+    assert.equal((await readdir(dir)).some((f) => f.includes('.corrupt')), true, '修复时坏文件必须被隔离保留')
   } finally {
     await rm(dir, { recursive: true, force: true })
   }

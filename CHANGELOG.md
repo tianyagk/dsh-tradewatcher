@@ -11,6 +11,45 @@
 
 ---
 
+## v0.215.0 — 全仓异常与低效专项：3 条 P0 + 8 条 P1
+
+三份审计：`docs/AUDIT-HOST-PERF.md`（P0 3 / P1 9 / P2 8）、`docs/AUDIT-CLIENT-PERF.md`（P0 0 / P1 8 / P2 17）、`docs/AUDIT-TESTS-PERF.md`（P1 5）。
+`npm run check` **1848 / 1848 × 2 时区**（1811 → 1848）+ build（73 项）+ `tsc` 0。
+
+### P0（数据安全）
+
+| # | 问题 | 修法 |
+| --- | --- | --- |
+| P0-1 | 棱镜撮合可并发重入；账户/委托/成交三账本非事务写，中途失败留半状态 | `runExclusive` 单飞（matchTick / placeDecision / priceCorrection / position 全走）；`saveAll` 一次写三文件，失败回滚 |
+| P0-2 | 账本读失败被当空库，30s 内被自动撮合覆盖（171 委托 / 394 成交 / 11 持仓） | fail-closed：`degraded` + null 语义；禁止一切写入（返回「账本不可读，已停止写入」）；`action:'ledgerRepair'` 恢复 |
+| P0-3 | 汪汪队 2y 冷启动越过 15s 客户端线；512 文件同步解析阻塞事件循环 ≈200ms | 网络节流改 `NetworkGate`（只在真实请求时计时）+ 并发 16 异步读盘 + 每 32 文件 `setImmediate`；**15.83s → 1.25s**，事件循环停顿 **200ms → 21.9ms** |
+
+### P1（低效与隐患）
+
+| # | 问题 | 修法 | 效果 |
+| --- | --- | --- | --- |
+| 1 | 每次保存触发真实 LLM 自检（最长 20s） | 自检只在挂载跑一次 | 保存路径去掉 20s |
+| 2 | 棱镜 30s 轮询不看页面激活 | 仅可见且激活时轮询，切回立即刷 | 后台零请求 |
+| 3 | 根节点 `useNow(1000)` 每秒重建三栏 | 时钟下沉为 `AgentClock` 叶子 | 根组件不再每秒重渲 |
+| 4 | 大盘页 mousemove 每次 setState 整页重渲 | 图表内状态 + `requestAnimationFrame` 合帧 | 同帧 ≤1 次提交 |
+| 5 | 大盘页三个请求竞态（加载更多重复追加 / 切 scope 覆盖 / 详情串台） | 统一 `createRequestGen` 代号丢弃 | 乱序响应不再串台 |
+| 6 | `/breadth` 每拍请求但从不渲染 | 实现 60s 节流（保留调用点，rowOwnership 需要） | 10 分钟 60 次 → 10 次 |
+| 7 | `/marketExtras` 仅为 `data-limits` 排障属性请求 | 默认不发，仅 `?debug=1` | 默认零请求 |
+| 8 | `dayTradesOf` 每条流水 new Intl（38–90ms/次 `/portfolio`） | 复用 `dayOf` 缓存格式化器 | **38–90ms → 3.89ms** |
+| 9 | `lastSampleTs !== null` 漏 `undefined` ⇒ 大盘页白屏 | 改 `!= null`（3 处）+ 断言 | 消除白屏 |
+
+### 测试与门禁
+
+- `index.test.ts` 空等 5s 且断言失效（`inits === 1` 永不为真）⇒ 改相对计数 + `waitForCondition` 超时 `assert.fail`。
+- `dogwatch` 测试 120ms/批 纯等待 ⇒ `gapMs` 注入（测试 0）：单文件 **7.1s → 0.59s**。
+- 新增 `src/tzGuard.test.ts` + `scripts/tz-files.json`：登记 23 个时区敏感测试文件，为后续把第二遍收窄成「子集 × 多时区」留出安全网（实测子集 9.9s/TZ）。
+- 测试两遍总耗时 **69s → 49s**（24.3s/遍）。
+
+### 验证
+
+`npm run check` **1848 / 1848 × 2 时区** + build（73 项）+ `tsc` 0。
+新增测试：`prismLedgerP0`（并发一致性、写失败回滚、损坏零写入）、`clientPerfP1`（13 条）、`tzGuard`（3 条）等。
+
 ## v0.214.0 — 棱镜：同产品重复闸 + 委托价偏离闸 + 上下文【ETF 按产品合并】
 
 `npm run check` **1811 / 1811 × 2 时区**（1797 → 1811）+ build（73 项）+ `tsc` 0。

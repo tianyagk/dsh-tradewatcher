@@ -9,6 +9,7 @@
  * 费用：按配对数量按比例分摊买卖两边的 `fee`，`净盈亏 = 毛盈亏 − 分摊费用`。
  */
 import type { LedgerEntry } from '../shared/model.ts'
+import { dayOf } from './time.ts'
 
 export interface DayTradeRound {
   day: string
@@ -80,7 +81,7 @@ export function dayTradesOf(entries: readonly LedgerEntry[]): DayTradeResult {
   )
   const byDay = new Map<string, LedgerEntry[]>()
   for (const e of trades) {
-    const day = new Date(e.ts).toLocaleDateString('sv-SE', { timeZone: 'Asia/Shanghai' })
+    const day = dayOf(e.ts)
     const key = `${e.posId}|${day}`
     const list = byDay.get(key) ?? []
     list.push(e)
@@ -88,7 +89,7 @@ export function dayTradesOf(entries: readonly LedgerEntry[]): DayTradeResult {
   }
   const rounds: DayTradeRound[] = []
   const unmatched: DayTradeUnmatched[] = unpriced.map((e) => ({
-    day: new Date(e.ts).toLocaleDateString('sv-SE', { timeZone: 'Asia/Shanghai' }),
+    day: dayOf(e.ts),
     posId: e.posId,
     id: e.id,
     verb: e.verb,

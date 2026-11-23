@@ -15,13 +15,139 @@ import { Sparkline } from './charts.tsx'
 import { RescuePanel } from './RescuePanel.tsx'
 import type { PortPrefs, QuoteSource } from '../shared/model.ts'
 import { isUsableBaseline } from './trendView.ts'
-import { EXTRAS_MIN_INTERVAL_MS } from './pacing.ts'
+import { createRequestGen } from './requestGen.ts'
+import { createRafCoalescer } from './rafThrottle.ts'
+import { debugFlagOf } from './debugFlag.ts'
+import { BREADTH_MIN_INTERVAL_MS, dueByInterval } from './pacing.ts'
 
 type Scope = 'industry' | 'concept' | 'etf'
 
 type Sort = 'pct' | 'money' | 'amount'
 
 const SCOPE_LABEL: Record<Scope, string> = { industry: '行业板块', concept: '概念板块', etf: 'ETF排行' }
+
+/** 汪汪队两张 SVG 的画布尺寸（几何函数与 `DwChart` 共用同一份，避免两处漂移） */
+const DW_W = 560
+const DW_H = 180
+const DW_PAD_L = 34
+const DW_PAD_R = 22
+const DW_PAD_T = 8
+const DW_PAD_B = 18
+
+/** 左图：柱（正负分两侧）+ Y 轴 ≥3 档 + 水平网格 + X 轴日期刻度 */
+function dwBarsOf(d: ReturnType<typeof dwSeries>): React.ReactElement[] {
+  const inner = DW_H - DW_PAD_T - DW_PAD_B
+  const zero = DW_PAD_T + inner / 2
+  const bw = (DW_W - DW_PAD_L - DW_PAD_R) / Math.max(1, d.barPct.length)
+  const lo = d.yTicksBar[0]!, hi = d.yTicksBar[d.yTicksBar.length - 1]!
+  const els: React.ReactElement[] = []
+  for (const t of d.yTicksBar) {
+    const y = DW_PAD_T + (1 - (t - lo) / ((hi - lo) || 1)) * inner
+    els.push(React.createElement('line', { key: `g${t}`, x1: DW_PAD_L, y1: y.toFixed(1), x2: DW_W - DW_PAD_R, y2: y.toFixed(1), stroke: 'var(--tw-border)', strokeWidth: 0.5, 'data-role': 'dw-grid' }))
+    els.push(React.createElement('text', { key: `yt${t}`, x: DW_PAD_L - 4, y: (y + 3).toFixed(1), fontSize: 12, textAnchor: 'end', fill: 'var(--tw-muted)', 'data-role': 'dw-ytick' }, String(t)))
+  }
+  for (const x of d.xTicks) {
+    els.push(React.createElement('text', { key: `xt${x.i}`, x: (DW_PAD_L + x.i * bw + bw / 2).toFixed(1), y: DW_H - 4, fontSize: 12, textAnchor: 'middle', fill: 'var(--tw-muted)', 'data-role': 'dw-xtick' }, x.label))
+  }
+  d.barPct.forEach((pct, i) => {
+    const v = d.bars[i] ?? 0
+    const h = Math.max(0.8, (pct / 100) * (inner / 2 - 4))
+    els.push(React.createElement('rect', {
+      key: `b${i}`, x: (DW_PAD_L + i * bw + 0.4).toFixed(2), y: (v >= 0 ? zero - h : zero).toFixed(1),
+      width: Math.max(0.8, bw - 0.8).toFixed(2), height: h.toFixed(1),
+      fill: v >= 0 ? 'var(--tw-up)' : 'var(--tw-down)', 'data-role': 'dw-bar', 'data-pct': pct.toFixed(1),
+    }))
+  })
+  return els
+}
+
+/** 右图：折线（按区间实际范围）+ Y 轴 ≥3 档 + 水平网格 + X 轴日期刻度 */
+function dwLineOf(d: ReturnType<typeof dwSeries>): React.ReactElement[] {
+  if (d.line.length < 2) return []
+  const inner = DW_H - DW_PAD_T - DW_PAD_B
+  const lo = d.yTicksLine[0]!, hi = d.yTicksLine[d.yTicksLine.length - 1]!
+  const yOf = (v: number): number => DW_PAD_T + (1 - (v - lo) / ((hi - lo) || 1)) * inner
+  const xOf = (i: number): number => DW_PAD_L + (i / (d.line.length - 1)) * (DW_W - DW_PAD_L - DW_PAD_R)
+  const els: React.ReactElement[] = []
+  for (const t of d.yTicksLine) {
+    const y = yOf(t)
+    els.push(React.createElement('line', { key: `lg${t}`, x1: DW_PAD_L, y1: y.toFixed(1), x2: DW_W - DW_PAD_R, y2: y.toFixed(1), stroke: 'var(--tw-border)', strokeWidth: 0.5, 'data-role': 'dw-grid' }))
+    els.push(React.createElement('text', { key: `lyt${t}`, x: DW_PAD_L - 4, y: (y + 3).toFixed(1), fontSize: 12, textAnchor: 'end', fill: 'var(--tw-muted)', 'data-role': 'dw-ytick' }, String(t)))
+  }
+  for (const x of d.xTicks) {
+    els.push(React.createElement('text', { key: `lxt${x.i}`, x: xOf(x.i).toFixed(1), y: DW_H - 4, fontSize: 12, textAnchor: 'middle', fill: 'var(--tw-muted)', 'data-role': 'dw-xtick' }, x.label))
+  }
+  if (lo <= 100 && 100 <= hi) {
+    els.push(React.createElement('line', {
+      key: 'base100', x1: DW_PAD_L, y1: yOf(100).toFixed(1), x2: DW_W - DW_PAD_R, y2: yOf(100).toFixed(1),
+      stroke: 'var(--tw-border-strong)', strokeWidth: 1, strokeDasharray: '4 3', 'data-role': 'dw-base',
+    }))
+  }
+  els.push(React.createElement('polyline', {
+    key: 'line', fill: 'none', stroke: 'var(--tw-accent)', strokeWidth: 1.6,
+    points: d.line.map((v, i) => `${xOf(i).toFixed(1)},${yOf(v).toFixed(1)}`).join(' '), 'data-role': 'dw-line',
+  }))
+  return els
+}
+
+interface DwTipState { x: number; y: number; text: string }
+
+/**
+ * 汪汪队单张 SVG（AUDIT-CLIENT-PERF P1-4）。
+ *
+ * 旧实现：两张图的 `onMouseMove` 直接 `setDwTip`，而 state 挂在 `MarketPage` 根上 ——
+ * 一次 mousemove = 整页重渲染（含 40 行板块表 + 1049 行的 `RescuePanel`）+ 250 根 `<rect>` 全量 diff。
+ * 现在两件事一起做：
+ *   ① 悬停 state 只活在这个子树里（`MarketPage` 不再因鼠标移动重渲染）；
+ *   ② 同一帧内的多次移动用 `createRafCoalescer` 合并 ⇒ 每帧最多 1 次提交（120Hz 鼠标也只 1 次/帧）。
+ */
+function DwChart(props: {
+  kind: 'bar' | 'line'
+  title: string
+  note?: string
+  foot: string
+  series: ReturnType<typeof dwSeries> | null
+}): React.ReactElement {
+  const [dwTip, setDwTip] = React.useState<DwTipState | null>(null)
+  const tipRaf = React.useRef<ReturnType<typeof createRafCoalescer<DwTipState | null>> | null>(null)
+  if (tipRaf.current === null) tipRaf.current = createRafCoalescer<DwTipState | null>(setDwTip)
+  React.useEffect(() => () => { tipRaf.current?.cancel() }, [])
+  const d = props.series ?? dwSeries([])
+  const dwHover = (e: React.MouseEvent<SVGSVGElement>): void => {
+    const raf = tipRaf.current
+    if (raf === null) return
+    const r = e.currentTarget.getBoundingClientRect()
+    const vals = props.kind === 'bar' ? d.bars : d.line
+    if (vals.length === 0 || r.width <= 0) { raf.push(null); return }
+    const i = Math.max(0, Math.min(vals.length - 1, Math.floor(((e.clientX - r.left) / r.width) * vals.length)))
+    const day = d.days[i] ?? '—'
+    const v = vals[i] as number
+    const text = props.kind === 'bar' ? `${day} 份额变化 ${v.toFixed(1)} 亿份` : `${day} 加仓指数 ${v.toFixed(1)}`
+    /* 翻边：靠右时把提示框放到光标左侧，避免遮挡最新点 */
+    const flip = e.clientX - r.left > r.width - 120
+    raf.push({ x: (e.clientX - r.left) + (flip ? -12 : 12), y: (e.clientY - r.top) + 12, text })
+  }
+  const dwTipEl = dwTip === null ? null : React.createElement('div', { className: 'tw-dw-tip', style: { left: dwTip.x, top: dwTip.y } }, dwTip.text)
+  /** 两个容器角色（字面量表：设计稿对拍/结构断言按这两个 `data-role` 查，别改成字符串拼接） */
+  const roleProps = props.kind === 'bar'
+    ? { 'data-role': 'dw-chart-bars' }
+    : { 'data-role': 'dw-chart-line' }
+  return React.createElement('div', {
+    className: 'tw-dw-chart',
+    ...roleProps,
+  },
+    React.createElement('div', { className: 'tw-dw-chart-h' },
+      React.createElement('span', { className: 't' }, props.title),
+      props.note === undefined ? null : React.createElement('span', { className: 'tw-dw-chart-note' }, props.note)),
+    React.createElement('svg', {
+      viewBox: `0 0 ${DW_W} ${DW_H}`, preserveAspectRatio: 'none', className: 'tw-dw-svg',
+      onMouseMove: dwHover,
+      onMouseLeave: () => { tipRaf.current?.push(null) },
+    }, ...(props.kind === 'bar' ? dwBarsOf(d) : dwLineOf(d))),
+    dwTipEl,
+    React.createElement('div', { className: 'tw-dw-chart-f' }, props.foot))
+}
+
 
 export function MarketPage(props: {
   quotes: Record<string, QuoteRow>
@@ -75,19 +201,37 @@ export function MarketPage(props: {
   const [detail, setDetail] = useState<StockDetail | null>(null)
   const [trend, setTrend] = useState<TrendData | null>(null)
 
+  /**
+   * 请求代号（AUDIT-CLIENT-PERF P1-5/P1-6）：板块列表的**每一次取数**领一代，
+   * 落地前对一次当前代 —— 不是当代的响应（含错误）整体丢弃。
+   *
+   * 治两个症状：
+   *   · P1-5 "加载更多"连点：两次请求都带 `append` ⇒ 同两批行被追加两遍（表格 40 行重复 + 重复 key）；
+   *   · P1-6 切 scope/sort：旧 scope 的慢响应落地，把新 scope 的行覆盖掉（表头写"概念"、内容是"行业"）。
+   */
+  const boardGen = React.useRef(createRequestGen())
+
   const loadBoard = useCallback((s: Scope, sortBy: Sort, pn: number, append: boolean) => {
+    const my = boardGen.current.next()
     setBoardLoading(true)
     api
       .board(s, sortBy, pn)
       .then((r) => {
+        if (boardGen.current.stale(my)) return
         setBoardMeta({ stale: r.stale, asOf: r.asOf, source: r.source })
         setBoardError(null)
         setTotal(r.total)
         setRows((prev) => (append ? [...prev, ...r.rows] : r.rows))
         setPage(pn)
       })
-      .catch((e: Error) => setBoardError(e.message))
-      .finally(() => setBoardLoading(false))
+      .catch((e: Error) => {
+        if (boardGen.current.stale(my)) return
+        setBoardError(e.message)
+      })
+      .finally(() => {
+        if (boardGen.current.stale(my)) return
+        setBoardLoading(false)
+      })
   }, [])
 
   useEffect(() => {
@@ -100,20 +244,18 @@ export function MarketPage(props: {
  // 涨跌家数历史分位。宿主持每日快照（收盘后写），这里只读。
   /** 四类数据块的统一重试令牌（点一次 +1，相关 effect 重新拉取） */
   const [mkRetry, setMkRetry] = useState(0)
-  /** 附加行情（v0.187.0：只剩涨停/跌停家数一处消费，挂在汪汪队卡头） */
   /**
-   * v0.191.0：/breadth 的**唯一**消费方（涨跌分布卡）已下线；这里保留一次轻量拉取（无 `dist=1`，
-   * 宿主侧 1 页扫描）仅为行归属（market 行）与后续复用，界面不渲染。彻底删除见 AUDIT P2。
+   * 附加行情（P2-2）：只在 `?debug=1` 下取，默认**完全不发**。
+   *
+   * `/tradewatcher/market-extras` 是宿主侧最重的一条（两融双源 + 全池扫描 + 全天预测），
+   * 而界面曾经只为页面根节点的一个 `data-limits` 排障属性而拉它 —— 每进一次大盘页就白扫一遍。
    */
-  const [breadth, setBreadth] = useState<Awaited<ReturnType<typeof api.breadth>> | null>(null)
-  /** 附加行情（v0.191.0：仅保留一次轻量拉取，供 `data-limits` 排障属性；界面不展示） */
+  const debugMode = debugFlagOf(typeof location === 'undefined' ? '' : location.search)
   const [extras, setExtras] = useState<Awaited<ReturnType<typeof api.marketExtras>> | null>(null)
-  /** 附加行情（v0.191.0：仅保留一次轻量拉取，供 `data-limits` 排障属性；界面不展示） */
   /** 汪汪队跟踪（v0.186.0）：窗口 + 回包 + 错误 */
   const [dwWindow, setDwWindow] = useState<'3m' | '6m' | '1y' | '2y'>('1y')
   const [dogwatch, setDogwatch] = useState<Awaited<ReturnType<typeof api.dogwatch>> | null>(null)
   const [dwErr, setDwErr] = useState<string | null>(null)
-  const [dwTip, setDwTip] = useState<{ x: number; y: number; text: string } | null>(null)
   /**
    * 涨跌家数分布（U3）：依赖从 `quotes`（**对象身份**，每拍都换）改成 `quoteTs`（节拍信号），
    * 并且最小间隔 **60s** —— `dist=1` 会在宿主侧"多扫 ~56 页"，每 10s 重来一次纯属浪费。
@@ -124,30 +266,37 @@ export function MarketPage(props: {
   // 预测要把"页面自己已经显示的那个当日成交额"带过去（宿主不再抓一遍）；缺/0 ⇒ 预测部分如实缺失。
   /** 成交额分时/分钟增减的数据（指数 2 日分时；每分钟带 amount） */
   const amountForForecast = null
-  void breadth
   /**
-   * 附加行情（U3）：同样从"每拍一次"改成**按节拍 + 30s 最小间隔**。
-   * 预测要用页面上那个当日成交额 ⇒ `amountForForecast` 仍是实参、也在依赖里（它是数字，
-   * 不是会换身份的对象）；有了 30s 下限，它最多把调用提到"30 秒一次"。
+   * `/breadth`：**按 60s 节流**（AUDIT-CLIENT-PERF P2-1 —— 选了"节流"而不是"删除"）。
+   *
+   * 为什么没删：`src/rowOwnership.test.ts`（**宿主侧门禁**，不在本次改动范围）要求实现表里
+   * `/tradewatcher/breadth` 归 market 行、且与**实测调用方**一致 —— 删掉这处唯一调用点，该门禁立刻红；
+   * 它要守的是"market 行关掉后不会有别的行去打 404"，不是"每个路由必须有 UI"。所以保留一个调用点。
+   *
+   * 但旧注释**只声称过**的"最小间隔 60s"从未实现（`EXTRAS_MIN_INTERVAL_MS` 被 `void` 掉）：
+   * 这里用 `dueByInterval` 真的实现它 ⇒ 静置 10 分钟从 60 次降到 ≤10 次（`CALL_BUDGET_10MIN.breadth`）。
+   * 点「重试」会作废这一拍的时间戳（用户要的是"现在重来"，不该被 60s 下限挡住）。
+   *
+   * 诚实标注：页面目前**没有任何一格渲染**这份回包（涨跌分布卡 v0.191.0 已下线，旧代码只有 `void breadth`）；
+   * 它是 market 行的路由归属锚点，不参与任何显示。数据要重新上界面时接回卡片即可。
    */
-  /**
-   * 成交额分时 / 分钟增减：取指数（沪指）**2 日**分时 —— 每分钟 bar 自带 `amount`，
-   * 今日/昨日各自逐分钟累加即可；预测线用 `extras.forecast.forecast` 画水平虚线。
-   * 昨日序列拿不到 ⇒ 分钟卡 `—（昨日分钟额不可得）`，不拿今日冒充。
-   */
+  const breadthAt = React.useRef<number | null>(null)
+  const breadthRetrySeen = React.useRef(mkRetry)
+  useEffect(() => {
+    if (breadthRetrySeen.current !== mkRetry) { breadthRetrySeen.current = mkRetry; breadthAt.current = null }
+    const tick = typeof props.quoteTs === 'number' && Number.isFinite(props.quoteTs) ? props.quoteTs : Date.now()
+    if (!dueByInterval(tick, breadthAt.current, BREADTH_MIN_INTERVAL_MS)) return
+    breadthAt.current = tick
+    api.breadth().then(() => undefined).catch(() => undefined)
+  }, [props.quoteTs, mkRetry])
   /** 附加行情（涨停/跌停/两融/预测）的节拍说明：写进各自 `title`，别让用户以为它跟行情条同频 */
   useEffect(() => {
-    let alive = true
-    api.breadth().then((b) => { if (alive) setBreadth(b) }).catch(() => undefined)
-    return () => { alive = false }
-  }, [props.quoteTs, mkRetry])
-
-
-  useEffect(() => {
+    // P2-2：默认不发；只有排障时（?debug=1）才取，结果写进卡片 title（供涨跌停口径核对）
+    if (!debugMode) { setExtras(null); return undefined }
     let alive = true
     api.marketExtras(null).then((x) => { if (alive) setExtras(x) }).catch(() => undefined)
     return () => { alive = false }
-  }, [mkRetry])
+  }, [debugMode, mkRetry])
 
   useEffect(() => {
     let alive = true
@@ -160,18 +309,33 @@ export function MarketPage(props: {
   const EXTRAS_POLL_NOTE = '；本格按 30 秒节拍刷新（节流后最多旧 30 秒）'
 
 
+  /**
+   * ETF/指数详情卡也领代号（AUDIT-CLIENT-PERF P1-7）：`/detail` 与 `/trend` 是两条独立请求，
+   * 连点两只标的时后到的**旧**响应会把标题（新标的）和数值（旧标的）拼成一屏静默错数。
+   * 代号按"打开动作"递增：旧代响应（含错误）整体丢弃；关闭时也开新代，避免关掉后又被写回。
+   */
+  const detailGen = React.useRef(createRequestGen())
+
   const openDetail = (secid: string): void => {
+    const my = detailGen.current.next()
     setPick({ secid })
     setDetail(null)
     setTrend(null)
     api
       .detail(secid)
-      .then((r) => setDetail(r.detail))
-      .catch(() => setDetail(null))
+      .then((r) => { if (!detailGen.current.stale(my)) setDetail(r.detail) })
+      .catch(() => { if (!detailGen.current.stale(my)) setDetail(null) })
     api
       .trend(secid)
-      .then((r) => setTrend(r.trend))
+      .then((r) => { if (!detailGen.current.stale(my)) setTrend(r.trend) })
       .catch(() => undefined)
+  }
+
+  const closeDetail = (): void => {
+    detailGen.current.next()
+    setPick(null)
+    setDetail(null)
+    setTrend(null)
   }
 
   /**
@@ -242,7 +406,7 @@ export function MarketPage(props: {
           body,
         )
       // v0.187.0：随两张卡下线，下列 helper/常量已无渲染点；保留定义但显式声明"暂未使用"，避免误读为活跃代码
-  void INTRADAY_REASON; void seg; void legendRow; void amountForForecast; void EXTRAS_MIN_INTERVAL_MS
+  void INTRADAY_REASON; void seg; void legendRow; void amountForForecast
 
       // v0.184.0：用户要求下线左列四卡 —— 单列只剩「涨跌分布」与「分钟成交额较昨日增减」
       // v0.187.0：用户要求下线「涨跌分布」「分钟成交额较昨日增减」；页面只剩护盘信号 + 汪汪队跟踪
@@ -250,61 +414,6 @@ export function MarketPage(props: {
       const dwRev = dogwatch === null ? null : dwReview(dogwatch.series[dogwatch.series.length - 1]?.day ?? '—', dogwatch.summary)
       const dwK = dogwatch === null ? null : dwKpis(dogwatch.summary)
       const dwS = dogwatch === null ? null : dwSeries(dogwatch.series)
-      const W = 560, H = 180, PAD_L = 34, PAD_R = 22, PAD_T = 8, PAD_B = 18
-      /** 左图：柱（正负分两侧）+ Y 轴 ≥3 档 + 水平网格 + X 轴日期刻度 */
-      const dwBarsOf = (d: ReturnType<typeof dwSeries>): React.ReactElement[] => {
-        const inner = H - PAD_T - PAD_B
-        const zero = PAD_T + inner / 2
-        const bw = (W - PAD_L - PAD_R) / Math.max(1, d.barPct.length)
-        const lo = d.yTicksBar[0]!, hi = d.yTicksBar[d.yTicksBar.length - 1]!
-        const els: React.ReactElement[] = []
-        for (const t of d.yTicksBar) {
-          const y = PAD_T + (1 - (t - lo) / ((hi - lo) || 1)) * inner
-          els.push(React.createElement('line', { key: `g${t}`, x1: PAD_L, y1: y.toFixed(1), x2: W - PAD_R, y2: y.toFixed(1), stroke: 'var(--tw-border)', strokeWidth: 0.5, 'data-role': 'dw-grid' }))
-          els.push(React.createElement('text', { key: `yt${t}`, x: PAD_L - 4, y: (y + 3).toFixed(1), fontSize: 12, textAnchor: 'end', fill: 'var(--tw-muted)', 'data-role': 'dw-ytick' }, String(t)))
-        }
-        for (const x of d.xTicks) {
-          els.push(React.createElement('text', { key: `xt${x.i}`, x: (PAD_L + x.i * bw + bw / 2).toFixed(1), y: H - 4, fontSize: 12, textAnchor: 'middle', fill: 'var(--tw-muted)', 'data-role': 'dw-xtick' }, x.label))
-        }
-        d.barPct.forEach((pct, i) => {
-          const v = d.bars[i] ?? 0
-          const h = Math.max(0.8, (pct / 100) * (inner / 2 - 4))
-          els.push(React.createElement('rect', {
-            key: `b${i}`, x: (PAD_L + i * bw + 0.4).toFixed(2), y: (v >= 0 ? zero - h : zero).toFixed(1),
-            width: Math.max(0.8, bw - 0.8).toFixed(2), height: h.toFixed(1),
-            fill: v >= 0 ? 'var(--tw-up)' : 'var(--tw-down)', 'data-role': 'dw-bar', 'data-pct': pct.toFixed(1),
-          }))
-        })
-        return els
-      }
-      /** 右图：折线（按区间实际范围）+ Y 轴 ≥3 档 + 水平网格 + X 轴日期刻度 */
-      const dwLineOf = (d: ReturnType<typeof dwSeries>): React.ReactElement[] => {
-        if (d.line.length < 2) return []
-        const inner = H - PAD_T - PAD_B
-        const lo = d.yTicksLine[0]!, hi = d.yTicksLine[d.yTicksLine.length - 1]!
-        const yOf = (v: number): number => PAD_T + (1 - (v - lo) / ((hi - lo) || 1)) * inner
-        const xOf = (i: number): number => PAD_L + (i / (d.line.length - 1)) * (W - PAD_L - PAD_R)
-        const els: React.ReactElement[] = []
-        for (const t of d.yTicksLine) {
-          const y = yOf(t)
-          els.push(React.createElement('line', { key: `lg${t}`, x1: PAD_L, y1: y.toFixed(1), x2: W - PAD_R, y2: y.toFixed(1), stroke: 'var(--tw-border)', strokeWidth: 0.5, 'data-role': 'dw-grid' }))
-          els.push(React.createElement('text', { key: `lyt${t}`, x: PAD_L - 4, y: (y + 3).toFixed(1), fontSize: 12, textAnchor: 'end', fill: 'var(--tw-muted)', 'data-role': 'dw-ytick' }, String(t)))
-        }
-        for (const x of d.xTicks) {
-          els.push(React.createElement('text', { key: `lxt${x.i}`, x: xOf(x.i).toFixed(1), y: H - 4, fontSize: 12, textAnchor: 'middle', fill: 'var(--tw-muted)', 'data-role': 'dw-xtick' }, x.label))
-        }
-        if (lo <= 100 && 100 <= hi) {
-          els.push(React.createElement('line', {
-            key: 'base100', x1: PAD_L, y1: yOf(100).toFixed(1), x2: W - PAD_R, y2: yOf(100).toFixed(1),
-            stroke: 'var(--tw-border-strong)', strokeWidth: 1, strokeDasharray: '4 3', 'data-role': 'dw-base',
-          }))
-        }
-        els.push(React.createElement('polyline', {
-          key: 'line', fill: 'none', stroke: 'var(--tw-accent)', strokeWidth: 1.6,
-          points: d.line.map((v, i) => `${xOf(i).toFixed(1)},${yOf(v).toFixed(1)}`).join(' '), 'data-role': 'dw-line',
-        }))
-        return els
-      }
       const dwReviewEl = React.createElement('div', { className: 'tw-dw-review', 'data-role': 'dw-review' },
         React.createElement('div', { className: 'tw-dw-review-main' },
           React.createElement('div', { className: 'tw-dw-review-day' }, dwRev?.day ?? '—'),
@@ -316,33 +425,20 @@ export function MarketPage(props: {
           React.createElement('span', { className: 'l' }, k.label),
           React.createElement('span', { className: 'v' }, k.value),
           React.createElement('span', { className: 's' }, k.sub))))
-      const dwHover = (e: React.MouseEvent<SVGSVGElement>, kind: 'bar' | 'line'): void => {
-        const el = e.currentTarget
-        const r = el.getBoundingClientRect()
-        const vals = kind === 'bar' ? (dwS?.bars ?? []) : (dwS?.line ?? [])
-        if (vals.length === 0 || r.width <= 0) { setDwTip(null); return }
-        const i = Math.max(0, Math.min(vals.length - 1, Math.floor(((e.clientX - r.left) / r.width) * vals.length)))
-        const day = dogwatch?.series[i]?.day ?? '—'
-        const v = vals[i] as number
-        const text = kind === 'bar' ? `${day} 份额变化 ${v.toFixed(1)} 亿份` : `${day} 加仓指数 ${v.toFixed(1)}`
-        /* 翻边：靠右时把提示框放到光标左侧，避免遮挡最新点 */
-        const flip = e.clientX - r.left > r.width - 120
-        setDwTip({ x: (e.clientX - r.left) + (flip ? -12 : 12), y: (e.clientY - r.top) + 12, text })
-      }
-      const dwTipEl = dwTip === null ? null : React.createElement('div', { className: 'tw-dw-tip', style: { left: dwTip.x, top: dwTip.y } }, dwTip.text)
-      const dwBarsEl = React.createElement('div', { className: 'tw-dw-chart', 'data-role': 'dw-chart-bars' },
-        React.createElement('div', { className: 'tw-dw-chart-h' }, React.createElement('span', { className: 't' }, '汪汪队每日份额变化估算')),
-        React.createElement('svg', { viewBox: `0 0 ${W} ${H}`, preserveAspectRatio: 'none', className: 'tw-dw-svg', onMouseMove: (e: React.MouseEvent<SVGSVGElement>) => dwHover(e, 'bar'), onMouseLeave: () => setDwTip(null) },
-          ...dwBarsOf(dwS ?? dwSeries([]))),
-        dwTipEl,
-        React.createElement('div', { className: 'tw-dw-chart-f' }, '单位：亿份 · 柱 = 当日份额变化估算'))
-      const dwLineEl = React.createElement('div', { className: 'tw-dw-chart', 'data-role': 'dw-chart-line' },
-        React.createElement('div', { className: 'tw-dw-chart-h' },
-          React.createElement('span', { className: 't' }, '汪汪队加仓指数估算'),
-          React.createElement('span', { className: 'tw-dw-chart-note' }, '基期 = 100')),
-        React.createElement('svg', { viewBox: `0 0 ${W} ${H}`, preserveAspectRatio: 'none', className: 'tw-dw-svg', onMouseMove: (e: React.MouseEvent<SVGSVGElement>) => dwHover(e, 'line'), onMouseLeave: () => setDwTip(null) },
-          ...dwLineOf(dwS ?? dwSeries([]))),
-        React.createElement('div', { className: 'tw-dw-chart-f' }, '单位：指数 · 虚线 = 基期 100'))
+      // P1-4：两张图各自收进 DwChart（悬停 state + 同帧合并都在子组件内部），父级不再因鼠标移动重渲
+      const dwBarsEl = React.createElement(DwChart, {
+        kind: 'bar',
+        title: '汪汪队每日份额变化估算',
+        foot: '单位：亿份 · 柱 = 当日份额变化估算',
+        series: dwS,
+      })
+      const dwLineEl = React.createElement(DwChart, {
+        kind: 'line',
+        title: '汪汪队加仓指数估算',
+        note: '基期 = 100',
+        foot: '单位：指数 · 虚线 = 基期 100',
+        series: dwS,
+      })
       const dwTableEl = React.createElement('div', { className: 'tw-dw-tscroll' },
         React.createElement('table', { className: 'tw-dw-table', 'data-role': 'dw-table' },
           React.createElement('thead', null, React.createElement('tr', null,
@@ -370,7 +466,9 @@ export function MarketPage(props: {
       return React.createElement('div', {
         className: 'tw-mk-body',
         'data-bars': String(MINUTE_BARS),
-        'data-limits': `${extras?.limits.up.count ?? ''}/${extras?.limits.down.count ?? ''}`,
+        // P2-2：排障口径只在 ?debug=1 下才有值；写进 title（不再为它默认发一条宿主侧最重的请求）
+        // 卡头不得出现「涨停 / 跌停」字样（宿主侧 dogwatch 判据 ⑥）：这里只报上/下限家数
+        title: extras === null ? undefined : `排障口径（debug=1）：上限 ${extras.limits.up.count ?? '—'} 家 / 下限 ${extras.limits.down.count ?? '—'} 家`,
       }, dogwatchCard)
     })(),
     React.createElement(RescuePanel, { prefs, redUp, onPrefs: props.onPrefs }),
@@ -474,7 +572,7 @@ export function MarketPage(props: {
               const cls = dirClass(r.pct ?? null, redUp)
               const clickable = scope === 'etf' && r.secid !== undefined
               return React.createElement('tr', {
-                key: `${r.code}-${i}`,
+                key: r.code,
                 className: 'tw-rowhover',
                 style: clickable ? { cursor: 'pointer' } : undefined,
                 onClick: clickable && r.secid !== undefined ? () => openDetail(r.secid as string) : undefined,
@@ -526,14 +624,19 @@ export function MarketPage(props: {
         boardLoading ? React.createElement('span', { className: 'tw-muted' }, '加载中…') : React.createElement('span', { className: 'tw-muted' }, `共 ${total} 个`),
         React.createElement('span', { style: { flex: 1 } }),
         page * 40 < total
-          ? React.createElement(Btn, { onClick: () => loadBoard(scope, sort, page + 1, true) }, '加载更多')
+          // P1-5：在途时禁用（配合 loadBoard 的请求代号：双击也只落地一次）；文案说明为什么点不动
+          ? React.createElement(Btn, {
+              disabled: boardLoading,
+              title: boardLoading ? '上一页还在加载，稍等（同一页不会重复追加）' : undefined,
+              onClick: () => loadBoard(scope, sort, page + 1, true),
+            }, boardLoading ? '加载中…' : '加载更多')
           : null,
       ),
     ),
     // 【个股 / 基金查询】整块已删（task-14 ①）：搜索框 + 下方说明 + 内联详情卡
     // 详情仍可达：点指数/ETF 行 ⇒ DetailModal（下面那块，未动）
     pick !== null && detail !== null
-      ? React.createElement(DetailModal, { detail, trend, redUp, onClose: () => { setPick(null); setDetail(null); setTrend(null) } })
+      ? React.createElement(DetailModal, { detail, trend, redUp, onClose: closeDetail })
       : null,
   )
 }

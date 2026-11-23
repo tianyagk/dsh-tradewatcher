@@ -13,7 +13,7 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { PluginWebRoute } from './context.ts'
 import type { PrismStore } from './prismStore.ts'
-import { PrismTradingStore, applyFeeCorrection, clampDecision, copyAtCost, dayStartMismatchOf, equityPointOf, isEtfName, matchTick, placeDecision, productKeyOf, rebuildFromOrders, upsertEquity, type QuoteLite } from './prismAccount.ts'
+import { LedgerUnreadableError, PrismTradingStore, applyFeeCorrection, clampDecision, copyAtCost, dayStartMismatchOf, equityPointOf, isEtfName, matchTick, placeDecision, productKeyOf, rebuildFromOrders, upsertEquity, type QuoteLite } from './prismAccount.ts'
 import type { DataStore } from './store.ts'
 import type { PrismAccount, PrismFill, PrismOrder, PrismRun, PrismSettings, PrismState } from '../shared/prism.ts'
 import { PRISM_INTERVAL_OPTIONS, PRISM_MAX_TIMES, PRISM_SKELETON_MAX } from '../shared/prism.ts'
@@ -374,6 +374,8 @@ const tradingOf = (trading: PrismTradingStore, prices: Record<string, number | n
 })
 
 export async function runPrismForSlot(deps: PrismRouteDeps, slot: string): Promise<Awaited<ReturnType<typeof runPrismAnalysis>>> {
+  // P0-2：账本读不到时，连研判落单都不许开始（先给明确的 400，而不是跑完 LLM 再报错）
+  deps.trading.assertWritable('棱镜研判落单')
   const inputs = await prismInputsOf(deps)
   const now = deps.now ?? Date.now
   const run = await runPrismAnalysis(deps.store, slot, inputs, { get: deps.get, model: deps.store.settings().model ?? null, now })
@@ -442,8 +444,27 @@ export function makePrismRoutes(deps: PrismRouteDeps): PluginWebRoute[] {
       path: '/tradewatcher/prism',
       handler: async (req, res) => {
         if (req.method === 'GET') {
-          kickNews(store)
+          // P0-2：账本读不到 ⇒ 不读"内存空库"、不写 equity，直接把降级状态告诉界面
+          if (deps.trading.degraded) {
+            send(res, 503, {
+              ok: false,
+              degraded: true,
+              error: deps.trading.ledgerError() ?? '账本不可读，已停止写入',
+              ledger: deps.trading.degradedInfo(),
+            })
+            return
+          }
           await deps.trading.reloadOrders()
+          if (deps.trading.degraded) {
+            send(res, 503, {
+              ok: false,
+              degraded: true,
+              error: deps.trading.ledgerError() ?? '账本不可读，已停止写入',
+              ledger: deps.trading.degradedInfo(),
+            })
+            return
+          }
+          kickNews(store)
           await recordEquity(deps)
           const account = deps.trading.account()
           const settings = store.settings()
@@ -496,14 +517,33 @@ export function makePrismRoutes(deps: PrismRouteDeps): PluginWebRoute[] {
           return
         }
         try {
-          const body = (await readBody(req)) as { op?: unknown; shares?: unknown; cost?: unknown; confirm?: unknown; action?: unknown; times?: unknown; intervalSec?: unknown; text?: unknown; slot?: unknown; capitalLimit?: unknown; orderId?: unknown; provider?: unknown; model?: unknown; industryLimits?: unknown; secid?: unknown; at?: unknown; price?: unknown; newPrice?: unknown; basis?: unknown } | null
+          const body = (await readBody(req)) as { op?: unknown; shares?: unknown; cost?: unknown; confirm?: unknown; action?: unknown; times?: unknown; intervalSec?: unknown; text?: unknown; slot?: unknown; capitalLimit?: unknown; orderId?: unknown; provider?: unknown; model?: unknown; industryLimits?: unknown; secid?: unknown; at?: unknown; price?: unknown; newPrice?: unknown; basis?: unknown; backupOf?: unknown } | null
           const action = body !== null && typeof body.action === 'string' ? body.action : ''
+          if (action === 'ledgerRepair') {
+            // P0-2 首次修复：从 *.bak / .corrupt-* 恢复；成功后才解除 degraded
+            const backupOf = typeof body?.backupOf === 'string' && body.backupOf.trim() !== '' ? body.backupOf.trim() : undefined
+            try {
+              const repaired = await deps.trading.repairLedger(backupOf === undefined ? {} : { backupOf })
+              send(res, repaired.ok ? 200 : 400, { ok: repaired.ok, action: 'ledgerRepair', ...repaired, ledger: deps.trading.degradedInfo() })
+            } catch (error) {
+              send(res, 400, { ok: false, action: 'ledgerRepair', error: String((error as Error).message ?? error).slice(0, 160), ledger: deps.trading.degradedInfo() })
+            }
+            return
+          }
           if (action === 'position') {
             const op = typeof body?.op === 'string' ? body.op : ''
             const input = { op, secid: body?.secid, shares: body?.shares, cost: body?.cost, confirm: body?.confirm }
-            const result = applyPositionOp(deps.trading.account(), input, Date.now())
+            const result = await deps.trading.runExclusive(async () => {
+              deps.trading.assertWritable('持仓调整')
+              await deps.trading.reloadForWrite()
+              deps.trading.assertWritable('持仓调整')
+              const r = applyPositionOp(deps.trading.account(), input, Date.now())
+              if (!r.ok) return r
+              // 持仓调整也必须与 orders/equity 一起走"三账本一次写"，不能只改 account
+              await deps.trading.saveAll({ account: r.account!, orders: deps.trading.orders(), fills: deps.trading.fills() })
+              return r
+            })
             if (!result.ok) { send(res, 400, { ok: false, error: result.error }); return }
-            await deps.trading.saveAccount(result.account!, { explicitReset: true })
             if (result.entry !== undefined) appendPrismLedger(deps.trading.dirOf(), result.entry)
             send(res, 200, { ok: true, positions: result.account!.positions, note: result.note })
             return
@@ -580,8 +620,14 @@ export function makePrismRoutes(deps: PrismRouteDeps): PluginWebRoute[] {
             if (orderId === '' || secid === '' || !Number.isFinite(at) || !Number.isFinite(price)) {
               send(res, 400, { ok: false, error: 'feeCorrection 缺 orderId/secid/at/price' }); return
             }
-            const result = applyFeeCorrection(deps.trading.account(), deps.trading.fills(), { orderId, secid, at, price })
-            await deps.trading.saveAccount(result.account, { explicitReset: true })
+            const result = await deps.trading.runExclusive(async () => {
+              deps.trading.assertWritable('费用订正')
+              await deps.trading.reloadForWrite()
+              deps.trading.assertWritable('费用订正')
+              const r = applyFeeCorrection(deps.trading.account(), deps.trading.fills(), { orderId, secid, at, price })
+              await deps.trading.saveAll({ account: r.account, orders: deps.trading.orders(), fills: deps.trading.fills() })
+              return r
+            })
             send(res, 200, { ok: true, ...result, account: result.account })
             return
           }
@@ -593,9 +639,15 @@ export function makePrismRoutes(deps: PrismRouteDeps): PluginWebRoute[] {
               send(res, 400, { ok: false, error: 'priceCorrection 缺 orderId/newPrice/basis' }); return
             }
             try {
-              const result = applyPriceCorrection(deps.trading.account(), deps.trading.orders(), deps.trading.fills(), { orderId, newPrice, basis })
-              await deps.trading.saveAccount(result.account, { explicitReset: true })
-              await deps.trading.saveOrders(result.orders, result.fills)
+              const result = await deps.trading.runExclusive(async () => {
+                deps.trading.assertWritable('错价订正')
+                await deps.trading.reloadForWrite()
+                deps.trading.assertWritable('错价订正')
+                const r = applyPriceCorrection(deps.trading.account(), deps.trading.orders(), deps.trading.fills(), { orderId, newPrice, basis })
+                // 订正同时改账户现金与成交价：必须三账本一次写，不能先 account 后 orders
+                await deps.trading.saveAll({ account: r.account, orders: r.orders, fills: r.fills })
+                return r
+              })
               send(res, 200, { ok: true, note: result.note, delta: result.delta, oldPrice: result.oldPrice, newPrice: result.newPrice, account: result.account })
             } catch (error) {
               send(res, 400, { ok: false, error: String((error as Error).message ?? error) })
@@ -655,44 +707,54 @@ export function makePrismRoutes(deps: PrismRouteDeps): PluginWebRoute[] {
               send(res, 400, { ok: false, error: '资金上限必须是正数' })
               return
             }
-            const account = deps.trading.account()
-            const cash = Math.round((account.cash + (limit - account.capitalLimit)) * 100) / 100
-            if (cash < 0) {
-              send(res, 400, { ok: false, error: '资金上限低于当前持仓成本 + 已用现金，不能把现金改为负数' })
-              return
-            }
-            const next = { ...account, capital: limit, capitalLimit: limit, cash }
-            await deps.trading.saveAccount(next)
+            const next = await deps.trading.runExclusive(async () => {
+              deps.trading.assertWritable('调整资金上限')
+              await deps.trading.reloadForWrite()
+              deps.trading.assertWritable('调整资金上限')
+              const account = deps.trading.account()
+              const cash = Math.round((account.cash + (limit - account.capitalLimit)) * 100) / 100
+              if (cash < 0) return { error: '资金上限低于当前持仓成本 + 已用现金，不能把现金改为负数' as const }
+              const value = { ...account, capital: limit, capitalLimit: limit, cash }
+              await deps.trading.saveAll({ account: value, orders: deps.trading.orders(), fills: deps.trading.fills() })
+              return { account: value }
+            })
+            if ('error' in next) { send(res, 400, { ok: false, error: next.error }); return }
             const settings = await store.saveCapital(limit)
-            send(res, 200, { ok: true, account: next, settings })
+            send(res, 200, { ok: true, account: next.account, settings })
             return
           }
           if (action === 'copy') {
             const rows = await copyRowsOf(deps)
             const required = Math.round(rows.reduce((sum, r) => sum + Math.round(Math.max(0, r.cost) * 100) / 100 * Math.max(0, r.qty), 0) * 100) / 100
-            const account = deps.trading.account()
-            const capitalBefore = account.capitalLimit
-            const capitalAfter = Math.max(capitalBefore, required)
-            const raised = capitalAfter > capitalBefore
-            const result = copyAtCost(rows, { ...account, capitalLimit: capitalAfter, capital: capitalAfter }, Date.now())
-            result.account.capital = capitalAfter
-            await deps.trading.saveAccount(result.account, { explicitReset: true })
-            const settings = await store.saveCapital(capitalAfter)
+            const copied = await deps.trading.runExclusive(async () => {
+              deps.trading.assertWritable('按成本复制持仓')
+              await deps.trading.reloadForWrite()
+              deps.trading.assertWritable('按成本复制持仓')
+              const account = deps.trading.account()
+              const capitalBefore = account.capitalLimit
+              const capitalAfter = Math.max(capitalBefore, required)
+              const raised = capitalAfter > capitalBefore
+              const result = copyAtCost(rows, { ...account, capitalLimit: capitalAfter, capital: capitalAfter }, Date.now())
+              result.account.capital = capitalAfter
+              await deps.trading.saveAll({ account: result.account, orders: deps.trading.orders(), fills: deps.trading.fills() })
+              return { result, capitalBefore, capitalAfter, raised }
+            })
+            const settings = await store.saveCapital(copied.capitalAfter)
             await recordEquity(deps)
             send(res, 200, {
               ok: true,
-              account: { ...result.account, capital: capitalAfter },
+              account: { ...copied.result.account, capital: copied.capitalAfter },
               settings,
               copy: {
                 requestedPositions: rows.length,
-                copiedPositions: result.account.positions.length,
+                copiedPositions: copied.result.account.positions.length,
                 required,
-                capitalBefore,
-                capitalAfter,
-                raised,
+                capitalBefore: copied.capitalBefore,
+                capitalAfter: copied.capitalAfter,
+                raised: copied.raised,
               },
-              log: result.log,
-              skipped: result.skipped,
+              log: copied.result.log,
+              skipped: copied.result.skipped,
             })
             return
           }
@@ -704,17 +766,20 @@ export function makePrismRoutes(deps: PrismRouteDeps): PluginWebRoute[] {
           }
           if (action === 'cancel') {
             const orderId = typeof body?.orderId === 'string' ? body.orderId : ''
-            const orders = deps.trading.orders()
-            const order = orders.find((o) => o.id === orderId && o.status === 'pending')
-            if (order === undefined) {
-              send(res, 200, { ok: false, error: '没有可撤销的挂单' })
-              return
-            }
-            order.status = 'cancelled'
-            order.cancelledAt = Date.now()
-            order.cancelReason = '手动撤销'
-            await deps.trading.saveOrders(orders, deps.trading.fills())
-            send(res, 200, { ok: true, orders })
+            const result = await deps.trading.runExclusive(async () => {
+              deps.trading.assertWritable('撤单')
+              await deps.trading.reloadForWrite()
+              deps.trading.assertWritable('撤单')
+              const orders = deps.trading.orders()
+              const order = orders.find((o) => o.id === orderId && o.status === 'pending')
+              if (order === undefined) return { ok: false as const, error: '没有可撤销的挂单' }
+              order.status = 'cancelled'
+              order.cancelledAt = Date.now()
+              order.cancelReason = '手动撤销'
+              await deps.trading.saveAll({ account: deps.trading.account(), orders, fills: deps.trading.fills() })
+              return { ok: true as const, orders }
+            })
+            send(res, 200, result)
             return
           }
           if (action === 'match') {
@@ -728,7 +793,9 @@ export function makePrismRoutes(deps: PrismRouteDeps): PluginWebRoute[] {
           }
           send(res, 400, { ok: false, error: '未知 action' })
         } catch (error) {
-          send(res, 500, { ok: false, error: String(error).slice(0, 160) })
+          // P0-2：账本不可读是**客户端可纠正**的状态（去修复），不是 500
+          const status = error instanceof LedgerUnreadableError ? 400 : 500
+          send(res, status, { ok: false, error: String((error as Error).message ?? error).slice(0, 160) })
         }
       },
     },

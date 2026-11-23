@@ -116,6 +116,8 @@ interface FakeCtx {
 async function waitForCondition(cond: () => boolean, ms = 5000): Promise<void> {
   const t0 = Date.now()
   while (!cond() && Date.now() - t0 < ms) await new Promise((r) => setTimeout(r, 20))
+  // 超时必须失败：以前静默返回 ⇒ 后面的断言可能因为「条件从未成立」而永远拿到旧状态（假绿）
+  if (!cond()) assert.fail(`waitForCondition 超时（${ms}ms）`)
 }
 
 function fakeCtx(kernel?: CoreKernel): FakeCtx {
@@ -175,11 +177,13 @@ test('向后兼容：无 config ⇒ row=all（全量，与拆分前逐字一致�
 
 test('calendar 行：只注册日历那一段；core 行不含日历（行未激活 ⇒ 路由天然 404）', async () => {
   setKernel(null)
+  const initsBefore = __kernelStats.inits
   const core = fakeCtx()
   apply(core.ctx, { row: 'core' }) // core
   const cal = fakeCtx()
   apply(cal.ctx, { row: 'calendar' })
-  await waitForCondition(() => __kernelStats.inits === 1)
+  // 判据：两次 apply 只新建**一个**内核（绝对值随前面用例变化，不能写死 === 1）
+  await waitForCondition(() => __kernelStats.inits === initsBefore + 1)
   const calRoutes = cal.routes.filter((p) => p.startsWith('/tradewatcher/calendar'))
   assert.ok(calRoutes.length > 0, `calendar 行应注册日历路由（实际 ${JSON.stringify(cal.routes)}）`)
   assert.equal(cal.routes.every((p) => p.startsWith('/tradewatcher/calendar')), true, 'calendar 行不许注册别的路由')

@@ -25,6 +25,6 @@ test('③ 页面隐藏时不刷新，重新可见立即刷新一次', () => {
   assert.match(PAGE, /removeEventListener\('visibilitychange'/)
 })
 
-test('④ 首屏仍走 load()（含 selftest），刷新不替换它', () => {
-  assert.match(PAGE, /React\.useEffect\(\(\) => \{ load\(\) \}, \[load\]\)/)
+test('④ 首屏仍走 load() + loadSelf()，静默刷新不替换它', () => {
+  assert.match(PAGE, /React\.useEffect\(\(\) => \{ load\(\); loadSelf\(\) \}/)
 })

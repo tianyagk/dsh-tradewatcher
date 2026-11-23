@@ -52,3 +52,33 @@ test('⑤ 无依据拒绝订正', () => {
 test('⑥ 反例：把 newPrice 传成 0 必须拒绝（不得把成本写成 0）', () => {
   assert.throws(() => applyPriceCorrection(account(), [order()], [fill()], { orderId: 'o-test', newPrice: 0, basis: 'x' }), /有限正数/)
 })
+
+test('⑦ 卖出方向的错价订正：少收 ⇒ 负数差额（补回现金需减现金）', () => {
+  const acc = {
+    day: '2026-11-20', capital: 1_800_000, capitalLimit: 1_800_000, cash: 100_000, realized: 0, dayStartEquity: null,
+    positions: [{ secid: '1.511130', name: '30年国债ETF博时', qty: 100, available: 100, cost: 100, netCost: 10_000 }],
+  } as PrismAccount
+  const o = { ...order(), id: 'o-sell', side: 'sell' as const, price: 100, fillPrice: 100, shares: 100, filledShares: 100 } as PrismOrder
+  const f = { orderId: 'o-sell', secid: '1.511130', name: '30年国债ETF博时', side: 'sell' as const, price: 100, shares: 100, amount: 10_000, fee: 15.1, at: 2, source: '1min' } as PrismFill
+  const r = applyPriceCorrection(acc, [o], [f], { orderId: 'o-sell', newPrice: 90, basis: '错价卖出' }, 1000)
+  // 新价更低 ⇒ 卖出少收 1000 ⇒ delta 为负（现金减少 1000 左右）
+  assert.ok(r.delta < -900, `卖出少收应产生负差额，实际 ${r.delta}`)
+  assert.equal(r.fills[0].price, 90)
+  assert.ok(r.account.cash < 100_000)
+})
+
+test('⑧ 二次订正可累积留痕（corrections 不覆盖历史）', () => {
+  const r1 = applyPriceCorrection(account(), [order()], [fill()], { orderId: 'o-test', newPrice: 111.48, basis: '第一次' }, 1000)
+  const r2 = applyPriceCorrection(r1.account, r1.orders, r1.fills, { orderId: 'o-test', newPrice: 111.0, basis: '第二次' }, 2000)
+  assert.equal(r2.orders[0].corrections?.length, 2)
+  assert.equal(r2.orders[0].corrections?.[0].newPrice, 111.48)
+  assert.equal(r2.orders[0].corrections?.[1].newPrice, 111.0)
+  assert.equal(r2.orders[0].fillPrice, 111.0)
+})
+
+test('⑨ 路由分派：action 名称必须在本文件真实存在（防改名后无测试）', async () => {
+  const { readFileSync } = await import('node:fs')
+  const routes = readFileSync(new URL('./prismRoutes.ts', import.meta.url), 'utf8')
+  assert.match(routes, /action === 'priceCorrection'/)
+  assert.match(routes, /applyPriceCorrection\(/)
+})

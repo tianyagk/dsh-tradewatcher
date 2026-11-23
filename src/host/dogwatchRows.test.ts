@@ -10,6 +10,9 @@ import { DOGWATCH_POOL, fetchDogwatch, sharesCachePath, tradingDaysBack } from '
 process.env.DSH_HOME = mkdtempSync(joinPath(tmpdir(), 'dw-rows-'))
 import { dwReview, dwTable } from '../client/dogwatchView.ts'
 
+/** 测试里不需要批间节流：全部走磁盘/注入数据，120ms 纯等待没有意义 */
+const dw = (w: Parameters<typeof fetchDogwatch>[0], deps: Parameters<typeof fetchDogwatch>[1]) => fetchDogwatch(w, { gapMs: 0, ...deps })
+
 const NOW = Date.parse('2026-11-17T10:00:00+08:00')
 
 async function payload(): Promise<Awaited<ReturnType<typeof fetchDogwatch>>> {
@@ -20,7 +23,7 @@ async function payload(): Promise<Awaited<ReturnType<typeof fetchDogwatch>>> {
     writeFileSync(sharesCachePath(d), JSON.stringify({ day: d, rows }))
   })
   const nav: Record<string, number> = { '510300': 4.082, '510310': 3.5, '510330': 4.1, '510350': 1.2 }
-  return fetchDogwatch('3m', {
+  return dw('3m', {
     now: NOW,
     bypassCache: true,
     loadShares: undefined,

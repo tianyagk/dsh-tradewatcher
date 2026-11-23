@@ -10,7 +10,8 @@
  *
  * 两个保护：折算检测（份额跳 >20% 且价格无 >5% 跳空 ⇒ 该日顺延并记账）、未日更自检（≥70% 同值 ⇒ stale）。
  */
-import { mkdirSync, readdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { mkdir, readFile, readdir, unlink, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { dataHome } from './store.ts'
 import { fetchTextHost } from './hostFetch.ts'
@@ -239,33 +240,176 @@ export function cacheUsableOf(rows: Map<string, { name: string; volWan: number }
   return poolCoverageOf(rows).usable
 }
 
-function readDiskShares(day: string): Map<string, { name: string; volWan: number }> | null {
+// ── 网络节流（只在真的发起网络请求时付） ─────────────────────────────────
+
+export interface NetworkClock {
+  now: () => number
+  sleep: (ms: number) => Promise<void>
+}
+
+export interface NetworkGate {
+  /** 包住一次**真实网络请求**：与上一次请求的发起时刻至少相隔 gapMs */
+  run: <T>(task: () => Promise<T>) => Promise<T>
+  /** 累计等待毫秒 / 等待次数（排障与断言用） */
+  waitedMs: () => number
+  waitCount: () => number
+}
+
+/**
+ * 网络节流闸：记录**上一次网络请求的发起时刻**，保证相邻两次间隔 ≥ gapMs。
+ * 与旧的「每条任务固定 sleep」不同：磁盘命中/内存命中不经过这里 ⇒ 一秒都不等。
+ * 并发调用按发起顺序排队领取发车时刻（4 并发 ⇒ 0 / 120 / 240 / 360 ms）。
+ */
+export function createNetworkGate(gapMs: number, clock: Partial<NetworkClock> = {}): NetworkGate {
+  const now = clock.now ?? Date.now
+  const sleep = clock.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)))
+  const gap = Number.isFinite(gapMs) && gapMs > 0 ? gapMs : 0
+  let lastStart: number | null = null
+  let waited = 0
+  let waits = 0
+  let queue: Promise<unknown> = Promise.resolve()
+  const run = <T>(task: () => Promise<T>): Promise<T> => {
+    const turn = queue.then(async () => {
+      if (gap > 0 && lastStart !== null) {
+        const wait = lastStart + gap - now()
+        if (wait > 0) {
+          waited += wait
+          waits += 1
+          await sleep(wait)
+        }
+      }
+      lastStart = now()
+    })
+    queue = turn.catch(() => undefined)
+    return turn.then(task)
+  }
+  return { run, waitedMs: () => waited, waitCount: () => waits }
+}
+
+// ── 磁盘日文件（异步读 + 让出事件循环） ──────────────────────────────────
+
+/** 磁盘日文件并发读条数：本地小文件，16 路足够（与网络并发 4 无关） */
+export const DOGWATCH_DISK_CONCURRENCY = 16
+/** 每解析 N 个日文件用 `setImmediate` 让出一次事件循环 */
+export const DOGWATCH_PARSE_YIELD_EVERY = 32
+/** 单文件 >1 MiB ⇒ 解析后额外让出一次（大文件 JSON.parse 会占满一段 CPU） */
+export const DOGWATCH_BIG_FILE_BYTES = 1024 * 1024
+
+type ShareRows = Map<string, { name: string; volWan: number }>
+
+interface DiskShareFile {
+  /** 可用行（池覆盖 ≥90%）⇒ 非 null */
+  rows: ShareRows | null
+  /** 读入字节数（缺失/损坏 ⇒ 0） */
+  bytes: number
+  /** 文件读到且 JSON.parse 成功（不代表可用） */
+  parsed: boolean
+}
+
+/**
+ * 读单个日文件：**`fs.promises.readFile`**（不再 `readFileSync` 阻塞事件循环）。
+ * 缺失/损坏 ⇒ `rows: null` 并删掉该日文件（与旧语义一致：下一次请求只补这一天）。
+ */
+async function readDiskSharesFile(day: string): Promise<DiskShareFile> {
+  const path = sharesCachePath(day)
   try {
-    const raw = JSON.parse(readFileSync(sharesCachePath(day), 'utf8')) as { day?: string; rows?: Record<string, { name: string; volWan: number }> }
-    if (raw.day !== day || raw.rows === undefined) return null
+    const buf = await readFile(path)
+    const raw = JSON.parse(buf.toString('utf8')) as { day?: string; rows?: Record<string, { name: string; volWan: number }> }
+    if (raw.day !== day || raw.rows === undefined) return { rows: null, bytes: buf.byteLength, parsed: true }
     const rows = new Map(Object.entries(raw.rows))
     // 残缺缓存（池覆盖 <90%）⇒ 视为未命中，调用方会重拉并覆盖
-    return cacheUsableOf(rows) ? rows : null
+    return { rows: cacheUsableOf(rows) ? rows : null, bytes: buf.byteLength, parsed: true }
   } catch {
-    // 损坏文件：删掉该日，下一次请求只补这一天（不影响其它日）
-    try { unlinkSync(sharesCachePath(day)) } catch { /* ignore */ }
-    return null
+    // 损坏/缺失：删掉该日（缺失时 unlink 也会失败，忽略），下一次请求只补这一天
+    await unlink(path).catch(() => undefined)
+    return { rows: null, bytes: 0, parsed: false }
   }
 }
 
-function writeDiskShares(day: string, rows: Map<string, { name: string; volWan: number }>): void {
+/** 读单个日文件（磁盘永久缓存）；不可用 ⇒ null */
+async function readDiskShares(day: string): Promise<ShareRows | null> {
+  return (await readDiskSharesFile(day)).rows
+}
+
+export interface DiskReadStats {
+  /** 发起的文件读次数（含缺失） */
+  files: number
+  /** JSON.parse 成功的文件数 */
+  parsed: number
+  /** 可用命中 / 不可用（缺失、损坏、残缺） */
+  hit: number
+  miss: number
+  /** 读入字节数 */
+  bytes: number
+  /** 让出事件循环次数 */
+  yields: number
+}
+
+/**
+ * 并发读一批日文件（**纯磁盘，不经过网络节流**）。
+ * 调用方必须先整体读盘、再只对缺失日走网络；否则磁盘命中也会被网络节流惩罚（审计 P0-3）。
+ * 单文件 > `bigFileBytes`，或每 `yieldEvery` 个文件解析完 ⇒ `setImmediate` 让出事件循环。
+ */
+export async function readAllDiskShares(
+  days: readonly string[],
+  opts: {
+    concurrency?: number
+    yieldEvery?: number
+    bigFileBytes?: number
+    onYield?: (reason: 'big-file' | 'every-n') => void
+  } = {},
+): Promise<{ rows: Map<string, ShareRows>; stats: DiskReadStats }> {
+  const limit = Math.max(1, Math.min(opts.concurrency ?? DOGWATCH_DISK_CONCURRENCY, days.length || 1))
+  const yieldEvery = Math.max(1, opts.yieldEvery ?? DOGWATCH_PARSE_YIELD_EVERY)
+  const bigBytes = opts.bigFileBytes ?? DOGWATCH_BIG_FILE_BYTES
+  const rows = new Map<string, ShareRows>()
+  const stats: DiskReadStats = { files: 0, parsed: 0, hit: 0, miss: 0, bytes: 0, yields: 0 }
+  let cursor = 0
+  const yieldOnce = async (reason: 'big-file' | 'every-n'): Promise<void> => {
+    stats.yields += 1
+    opts.onYield?.(reason)
+    await new Promise<void>((resolve) => setImmediate(resolve))
+  }
+  const worker = async (): Promise<void> => {
+    while (cursor < days.length) {
+      const day = days[cursor] as string
+      cursor += 1
+      const file = await readDiskSharesFile(day)
+      stats.files += 1
+      stats.bytes += file.bytes
+      if (file.parsed) stats.parsed += 1
+      if (file.rows !== null) { rows.set(day, file.rows); stats.hit += 1 } else { stats.miss += 1 }
+      // 每 N 个文件固定让出一次；大文件（>1 MiB）在非整点位置也单独让出
+      if (file.parsed && stats.parsed % yieldEvery === 0) await yieldOnce('every-n')
+      else if (file.bytes > bigBytes) await yieldOnce('big-file')
+    }
+  }
+  await Promise.all(Array.from({ length: limit }, worker))
+  return { rows, stats }
+}
+
+async function writeDiskShares(day: string, rows: ShareRows): Promise<void> {
+  const path = sharesCachePath(day)
   try {
-    mkdirSync(dirname(sharesCachePath(day)), { recursive: true })
-    writeFileSync(sharesCachePath(day), JSON.stringify({ day, rows: Object.fromEntries(rows) }))
+    await mkdir(dirname(path), { recursive: true })
+    await writeFile(path, JSON.stringify({ day, rows: Object.fromEntries(rows) }))
   } catch {
     /* 缓存写失败不影响回包 */
   }
 }
 
 /** 取某日份额：磁盘永久缓存 → 当日 5 分钟内存 → 上游（0.72s） */
-export async function loadSharesOf(day: string, now: number = Date.now()): Promise<Map<string, { name: string; volWan: number }>> {
-  const disk = readDiskShares(day)
+export async function loadSharesOf(day: string, now: number = Date.now()): Promise<ShareRows> {
+  const disk = await readDiskShares(day)
   if (disk !== null) return disk
+  return loadSharesFromNetwork(day, now)
+}
+
+/**
+ * **只走网络**（跳过磁盘）：`fetchDogwatch` 已整体读过盘，只对缺失日调用，
+ * 避免同一文件读两遍（审计 P2-3）。当日 5 分钟内存缓存与同日在飞合并仍然生效。
+ */
+export async function loadSharesFromNetwork(day: string, now: number = Date.now()): Promise<ShareRows> {
   const isToday = day === dayOf(now)
   if (isToday) {
     const hit = memToday.get(day)
@@ -278,7 +422,7 @@ export async function loadSharesOf(day: string, now: number = Date.now()): Promi
     const text = await fetchTextHost(SSE_HOST, url, { referer: 'http://www.sse.com.cn/' })
     const rows = parseSseShares(text)
     if (rows.size > 0) {
-      writeDiskShares(day, rows)
+      await writeDiskShares(day, rows)
       if (isToday) memToday.set(day, { at: now, rows })
     }
     return rows
@@ -322,7 +466,11 @@ export function tradingDaysBack(count: number, now: number = Date.now()): string
   return out
 }
 
-/** 4 并发 + 120ms 批间等待 */
+/**
+ * 限并发池。
+ * ⚠ `gapMs` 是**逐条固定 sleep**（修复前的旧语义，仅留作对照组）：它不知道任务是否真的发起了网络请求，
+ * 磁盘命中也会照付 —— 生产路径不要传 `gapMs > 0`；网络节流请用 `createNetworkGate`。
+ */
 export async function mapWithConcurrency<T, R>(items: readonly T[], limit: number, gapMs: number, fn: (item: T) => Promise<R>): Promise<R[]> {
   const out = new Array<R>(items.length)
   let i = 0
@@ -366,16 +514,19 @@ export interface DogwatchPayload {
 
 /** 20 日均额档案（每日落盘，供次日算放大倍数；历史不变 ⇒ 永久缓存） */
 function amountArchivePath(day: string): string { return join(dataHome(), 'dogwatch', `amount-${day}.json`) }
-function readAmountArchive(): Map<string, number> {
+async function readAmountArchive(): Promise<Map<string, number>> {
   const out = new Map<string, number>()
   try {
     const dir = join(dataHome(), 'dogwatch')
-    for (const f of readdirSync(dir)) {
+    const files = await readdir(dir)
+    await Promise.all(files.map(async (f) => {
       const m = /^amount-(\d{4}-\d{2}-\d{2})\.json$/.exec(f)
-      if (m === null) continue
-      const v = JSON.parse(readFileSync(join(dir, f), 'utf8')) as { total?: number }
-      if (typeof v.total === 'number') out.set(m[1] as string, v.total)
-    }
+      if (m === null) return
+      try {
+        const v = JSON.parse(await readFile(join(dir, f), 'utf8')) as { total?: number }
+        if (typeof v.total === 'number') out.set(m[1] as string, v.total)
+      } catch { /* 单文件坏 ⇒ 跳过（不整份失败） */ }
+    }))
   } catch { /* 无档案 */ }
   return out
 }
@@ -418,6 +569,14 @@ export async function fetchDogwatch(
     /** 测试/强制刷新：跳过内存与落盘汇总缓存 */
     bypassCache?: boolean
     /**
+     * **两次真实网络请求**之间的最小间隔（毫秒）：生产默认 120。
+     * 只对 `loadShares`（网络分支）生效；磁盘命中不经过节流 ⇒ 一秒都不等。
+     * 测试注入假 `loadShares`（无网络）时可传 0。
+     */
+    gapMs?: number
+    /** 测试注入：节流时钟（不传 ⇒ 真实 `Date.now` + `setTimeout`） */
+    clock?: Partial<NetworkClock>
+    /**
      * 某交易日的「池价跳空%」（当日收盘 / 前收 − 1，单位 %）。
      * 缺省 ⇒ 全部按 `null` 传入 ⇒ `detectCorporateActions` **不判折算**（无证据不猜，按申赎计入）。
      * 生产侧由 `routes.ts` 用既有 510300 日线缓存提供；测试可注入假序列。
@@ -440,23 +599,30 @@ export async function fetchDogwatch(
   }
   const days = Math.max(21, DOGWATCH_WINDOWS[window] ?? DOGWATCH_WINDOWS['1y'] as number) + 21
   const tradingDays = tradingDaysBack(days, now)
-  const loadShares = deps.loadShares ?? ((d: string) => loadSharesOf(d, now))
+  /** 网络分支：默认跳过磁盘（本函数已整体读过盘），只对缺失日调用 */
+  const loadShares = deps.loadShares ?? ((d: string) => loadSharesFromNetwork(d, now))
+  /** 网络节流：只在真的发起请求时付（磁盘命中不经过这里） */
+  const gate = createNetworkGate(deps.gapMs ?? 120, deps.clock)
   const missing: DogwatchPayload['missing'] = []
   // 池：只保留沪市；深市代码出现 ⇒ 排除并记账
   const pool = DOGWATCH_POOL.filter((p) => {
     if (isShenzhenCode(p.code)) { missing.push({ what: p.code, why: 'no-source', note: '深市无日频份额' }); return false }
     return true
   })
-  let fromDisk = 0
+  // ① 并发读全部日文件（纯磁盘，不节流）
+  const disk = await readAllDiskShares(tradingDays)
+  const fromDisk = disk.stats.hit
+  // ② 只有缺失日走网络：并发 4 + 网络节流（相邻两次请求间隔 ≥gapMs）
+  const missingDays = tradingDays.filter((day) => !disk.rows.has(day))
+  const fetchedRows = new Map<string, ShareRows>()
   let fetched = 0
-  const perDay = await mapWithConcurrency(tradingDays, 4, 120, async (day) => {
-    // 读盘优先：磁盘已有 ⇒ 零网络；缺失/损坏 ⇒ 只补这一天
-    const disk = readDiskShares(day)
-    if (disk !== null) { fromDisk += 1; return { day, rows: disk } }
-    const rows = await loadShares(day)
-    if (rows.size > 0) fetched += 1
-    return { day, rows }
+  await mapWithConcurrency(missingDays, 4, 0, async (day) => {
+    const rows = await gate.run(() => loadShares(day))
+    if (rows.size > 0) { fetchedRows.set(day, rows); fetched += 1 }
+    return day
   })
+  const emptyRows = new Map<string, { name: string; volWan: number }>()
+  const perDay = tradingDays.map((day) => ({ day, rows: disk.rows.get(day) ?? fetchedRows.get(day) ?? emptyRows }))
   const totalSeries = perDay.map(({ day, rows }) => {
     let sum = 0
     for (const p of pool) sum += rows.get(p.code)?.volWan ?? 0
@@ -533,7 +699,7 @@ export async function fetchDogwatch(
     for (const r of rows) r.sharesDelta = null
   }
   const totalAmount = rows.some((r) => r.amount !== null) ? rows.reduce((a, r) => a + (r.amount ?? 0), 0) : null
-  const archive = readAmountArchive()
+  const archive = await readAmountArchive()
   const prev20 = [...archive.entries()].filter(([d]) => d < (last?.day ?? '')).sort((a, b) => (a[0] < b[0] ? -1 : 1)).slice(-20).map(([, v]) => v)
   if (last !== undefined && totalAmount !== null) writeAmountArchive(last.day, totalAmount)
   const ratio = ratioOf(totalAmount, prev20)
