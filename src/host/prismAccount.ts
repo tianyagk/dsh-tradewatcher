@@ -160,7 +160,10 @@ export function rejectReasonOf(order: PrismOrder, ctx: OrderCheckContext): strin
   }
   if (order.side === 'sell') {
     if (ctx.positionQty <= 0) return '无持仓不可卖'
-    if (ctx.availableQty < order.shares) return `T+1 不可卖（今日可卖 ${ctx.availableQty} 股）`
+    // 必须比「**剩余未成交**股数」：用原始 shares 比较时，部分成交后（如 1000 股成交 789、剩 211）
+    // 会把剩余 211 误判成 T+1 不可卖——而它正是今天可卖的那 211 股（实测 2026-11-24 儒意电影）。
+    const remaining = Math.max(0, order.shares - (order.filledShares ?? 0))
+    if (ctx.availableQty < remaining) return `T+1 不可卖（今日可卖 ${ctx.availableQty} 股，剩余 ${remaining} 股）`
   }
   return null
 }
