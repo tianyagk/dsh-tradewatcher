@@ -70,7 +70,8 @@ export function applyPositionOp(account: PrismAccount, input: PositionInput, now
     const shares = input.shares as number
     const cost = round2(input.cost as number)
     // netCost 必须跟着改：否则只改 cost 会留下「成本 × 数量 ≠ 账面净成本」的脏数据
-    positions[idx] = { ...positions[idx]!, qty: shares, available: Math.min(positions[idx]!.available, shares), cost, netCost: round2(shares * cost) }
+    // 手工调整是**账面**动作，不是成交：股数调大时新增部分不受 T+1 限制（实测：24 000 股里 13 572 股被当"今日买入"锁住）
+    positions[idx] = { ...positions[idx]!, qty: shares, available: shares, cost, netCost: round2(shares * cost), avgCost: cost }
     note = `调整持仓 ${secid} → ${shares} 股 @ ${cost}`
   } else {
     if (idx < 0) return { ok: false, error: '该标的不在持仓' }

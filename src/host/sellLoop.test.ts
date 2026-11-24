@@ -59,3 +59,23 @@ test('⑤ 可用为 0 ⇒ 明确拒绝（不产生空卖单）', () => {
   assert.equal(r.decision.orders.length, 0)
   assert.match(String(r.rejected[0]?.reason), /今日可卖 0 股/)
 })
+
+test('⑥ 手工调大股数 ⇒ 可卖数量同步解锁（账面调整不是成交，不该按 T+1 锁住）', async () => {
+  const { applyPositionOp } = await import('./prismDeskWrite.ts')
+  const before = {
+    day: '2026-11-24', capital: 1_800_000, capitalLimit: 1_800_000, cash: 0, realized: 0, dayStartEquity: null,
+    positions: [{ secid: '1.601872', name: '招商轮船', qty: 10_428, available: 10_428, cost: 21.63, netCost: 225_000 }],
+  } as never
+  const r = applyPositionOp(before, { op: 'update', secid: '1.601872', shares: 24_000, cost: 18.21 }, 1)
+  assert.equal(r.ok, true)
+  const p = r.account!.positions[0]!
+  assert.equal(p.qty, 24_000)
+  assert.equal(p.available, 24_000, `调大后必须全部可卖，实际 ${p.available}`)
+  assert.equal(p.avgCost, 18.21)
+})
+
+test('⑦ 裁剪上下文必须带 available（否则卖单不会被裁到可卖数量）', async () => {
+  const { readFileSync } = await import('node:fs')
+  const routes = readFileSync(new URL('./prismRoutes.ts', import.meta.url), 'utf8')
+  assert.match(routes, /positions: account\.positions\.map\(\(p\) => \(\{ secid: p\.secid, qty: p\.qty, available: p\.available/)
+})

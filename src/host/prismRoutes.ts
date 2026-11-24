@@ -530,7 +530,7 @@ export async function runPrismForSlot(deps: PrismRouteDeps, slot: string): Promi
     .map((o) => ({ secid: o.secid, name: o.name }))
   const clamped = clampDecision(run.decision, {
     cash: account.cash,
-    positions: account.positions.map((p) => ({ secid: p.secid, qty: p.qty, price: quotes[p.secid]?.price ?? p.cost, name: p.name })),
+    positions: account.positions.map((p) => ({ secid: p.secid, qty: p.qty, available: p.available, price: quotes[p.secid]?.price ?? p.cost, name: p.name })),
     limits,
     constraints: {
       perStockPct: settings.perStockPct ?? null,
@@ -869,7 +869,9 @@ export function makePrismRoutes(deps: PrismRouteDeps): PluginWebRoute[] {
               const unrealized = rows.reduce((a, r) => a + (r.mv - r.net), 0)
               const realized = realizedFromIdentity(equity, account.capital, unrealized)
               const before = account.realized
-              const value = { ...account, realized }
+              // 账面校平同时把可卖数量对齐持仓：手工调整过的股数不应再被当成"今日买入"锁住
+              const positionsFixed = account.positions.map((p) => ({ ...p, available: p.qty }))
+              const value = { ...account, realized, positions: positionsFixed }
               await deps.trading.saveAll({ account: value, orders: deps.trading.orders(), fills: deps.trading.fills() })
               await deps.store.patchSettings({ gateBaseAt: Date.now() })
               return { before, after: realized, equity, unrealized, cash: account.cash }
