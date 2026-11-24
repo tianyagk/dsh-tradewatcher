@@ -195,6 +195,15 @@ export class PrismStore {
     return this.settings()
   }
 
+  /** 通用设置补丁（v0.222.0）：仅用于回撤闸门基线等少量字段，避免再加一堆专用方法 */
+  async patchSettings(patch: Partial<PrismSettings>): Promise<PrismSettings> {
+    this.settingsValue = { ...this.settingsValue, ...patch }
+    await updateJsonLocked(this.pathOf('prism-settings.json'), () => ({ v: 1, ...this.settingsValue })).catch((error) => {
+      this.guard.markUnreadable(this.pathOf('prism-settings.json'), error)
+    })
+    return this.settings()
+  }
+
   /** 兼容旧调用：只更新时点（行为与 v0.206.0 完全一致） */
   async saveTimes(times: string[]): Promise<PrismSettings> {
     return this.saveSchedule({ times })

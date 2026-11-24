@@ -330,6 +330,18 @@ export function copyAtCost(
   return { ok: true, account: next, log, skipped }
 }
 
+/**
+ * 常规恒等式反解已实现盈亏：`equity = capital + realized + unrealized`
+ * ⇒ `realized = equity − capital − unrealized`。
+ *
+ * 只用于「校平账本」：历史 bug 让 realized 字段与现金/持仓对不上（实测差 846 280 元），
+ * 这条式子用当前可观测的 equity / 未实现盈亏把它重新对齐（不编造成交）。
+ */
+export function realizedFromIdentity(equity: number, capital: number, unrealized: number): number {
+  if (![equity, capital, unrealized].every((v) => Number.isFinite(v))) return 0
+  return Math.round((equity - capital - unrealized) * 100) / 100
+}
+
 /** 新交易日：T+1 解锁（available = qty）；dayStartEquity 用上一日收盘净值 */
 export function rollDay(account: PrismAccount, day: string, previousEquity: number | null): PrismAccount {
   if (account.day === day) return account

@@ -115,12 +115,23 @@ export function evaluationOf(
 }
 
 /** P-20：资本调整后序列的自高点回撤/单日跌幅；只决定拒买/提示，不发起卖出 */
+export interface DrawdownGateOpts {
+  /** 日跌幅熔断阈值（%）：缺省 3；0 或负 ⇒ 关闭该维度 */
+  dailyLimitPct?: number
+  /** 累计回撤熔断阈值（%）：缺省 10；0 或负 ⇒ 关闭该维度 */
+  cumulativeLimitPct?: number
+  /** 基线时刻：只统计 `at > baseAt` 的净值点（账本校平后从 0 起算） */
+  baseAt?: number
+}
+
 export function drawdownGateOf(
   points: readonly PrismEquityPoint[],
   previous?: PrismDrawdownGate | null,
   at = Date.now(),
+  opts: DrawdownGateOpts = {},
 ): PrismDrawdownGate {
-  const valid = points.filter((p) => typeof p.capital === 'number')
+  const baseAt = typeof opts.baseAt === 'number' && opts.baseAt > 0 ? opts.baseAt : 0
+  const valid = points.filter((p) => typeof p.capital === 'number' && (baseAt === 0 || (typeof p.at === 'number' && p.at > baseAt)))
   if (valid.length < 2) {
     return {
       dailyPct: null, cumulativePct: null, peak: null, triggered: false,
@@ -138,13 +149,16 @@ export function drawdownGateOf(
   const capDenom = Math.abs(((valid[valid.length - 1] as { capital?: number }).capital ?? 0)) || Math.abs((valid[0] as { capital?: number }).capital ?? 0)
   const denom = capDenom > 0 ? capDenom : Math.abs(prev) || 1
   const dailyPct = (last - prev) / denom * 100
-  const peakProfit = Math.max(0, ...values)
+  // 校平（baseAt）后：峰值只取窗口内，基线点即新高 ⇒ 累计从 0 起算；未校平时仍以 0 为历史峰值
+  const peakProfit = baseAt > 0 ? Math.max(...values) : Math.max(0, ...values)
   const peak = (peakProfit / denom) * 100
   const series = values.map((v) => (v / denom) * 100)
   const cumulativePct = (series[series.length - 1] as number) - peak
   // 先按展示精度取整再比较阈值，避免 -9.999999999999998 逃过 -10
-  const dailyTriggered = dailyPct !== null && round(dailyPct) <= -3
-  const cumulativeTriggered = cumulativePct !== null && round(cumulativePct) <= -10
+  const dailyLimit = typeof opts.dailyLimitPct === 'number' ? opts.dailyLimitPct : 3
+  const cumLimit = typeof opts.cumulativeLimitPct === 'number' ? opts.cumulativeLimitPct : 10
+  const dailyTriggered = dailyLimit > 0 && dailyPct !== null && round(dailyPct) <= -dailyLimit
+  const cumulativeTriggered = cumLimit > 0 && cumulativePct !== null && round(cumulativePct) <= -cumLimit
   const triggered = dailyTriggered || cumulativeTriggered
   const freezeRound = triggered && previous?.triggered === true && previous.freezeRound !== true
   return {

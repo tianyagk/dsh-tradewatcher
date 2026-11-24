@@ -13,7 +13,7 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { PluginWebRoute } from './context.ts'
 import type { PrismStore } from './prismStore.ts'
-import { LedgerUnreadableError, PrismTradingStore, applyFeeCorrection, clampDecision, copyAtCost, dayStartMismatchOf, equityPointOf, isEtfName, matchTick, placeDecision, productKeyOf, rebuildFromOrders, upsertEquity, type QuoteLite } from './prismAccount.ts'
+import { LedgerUnreadableError, PrismTradingStore, applyFeeCorrection, clampDecision, copyAtCost, dayStartMismatchOf, equityPointOf, isEtfName, matchTick, placeDecision, productKeyOf, realizedFromIdentity, rebuildFromOrders, upsertEquity, type QuoteLite } from './prismAccount.ts'
 import type { DataStore } from './store.ts'
 import type { PrismAccount, PrismFill, PrismOrder, PrismRun, PrismSettings, PrismState } from '../shared/prism.ts'
 import { PRISM_INTERVAL_OPTIONS, PRISM_MAX_TIMES, PRISM_SKELETON_MAX } from '../shared/prism.ts'
@@ -551,7 +551,12 @@ export async function runPrismForSlot(deps: PrismRouteDeps, slot: string): Promi
     pendingBuys,
   })
   const previous = deps.store.runs().filter((r) => r.startedAt < run.startedAt).at(-1)?.drawdown ?? null
-  const drawdown = drawdownGateOf(deps.trading.equity(), previous, run.startedAt)
+  const settingsNow = deps.store.settings()
+  const drawdown = drawdownGateOf(deps.trading.equity(), previous, run.startedAt, {
+    dailyLimitPct: typeof settingsNow.maxDDPct === 'number' ? settingsNow.maxDDPct : 3,
+    cumulativeLimitPct: typeof settingsNow.maxCumDDPct === 'number' ? settingsNow.maxCumDDPct : 10,
+    baseAt: settingsNow.gateBaseAt,
+  })
   run.decision = applyDrawdownGate(clamped.decision, drawdown)
   run.drawdown = drawdown
   // 边界口径：用 run 触发时刻（startedAt），不是分析结束后的墙钟；14:59:09 ⇒ 14:59 可下单
@@ -843,6 +848,33 @@ export function makePrismRoutes(deps: PrismRouteDeps): PluginWebRoute[] {
               return value
             })
             send(res, 200, { ok: true, account: next })
+            return
+          }
+          if (action === 'rebase') {
+            // 账本校平：realized := equity − capital − 未实现盈亏；并把回撤闸门基线挪到当前净值点。
+            // 目的：历史 bug 造成的 realized/净值序列失真不再让「累计 −17%」永久冻结新买单。
+            const quotes = await quoteLiteOf(deps, deps.trading.account().positions.map((p) => p.secid)).catch(() => ({}))
+            const out = await deps.trading.runExclusive(async () => {
+              deps.trading.assertWritable('校平账本')
+              await deps.trading.reloadForWrite()
+              deps.trading.assertWritable('校平账本')
+              const account = deps.trading.account()
+              const rows = account.positions.map((p) => {
+                const px = quotes[p.secid]?.price ?? null
+                const mv = px === null ? p.qty * p.cost : p.qty * px
+                const net = p.netCost ?? p.qty * p.cost
+                return { mv, net }
+              })
+              const equity = rows.reduce((a, r) => a + r.mv, 0) + account.cash
+              const unrealized = rows.reduce((a, r) => a + (r.mv - r.net), 0)
+              const realized = realizedFromIdentity(equity, account.capital, unrealized)
+              const before = account.realized
+              const value = { ...account, realized }
+              await deps.trading.saveAll({ account: value, orders: deps.trading.orders(), fills: deps.trading.fills() })
+              await deps.store.patchSettings({ gateBaseAt: Date.now() })
+              return { before, after: realized, equity, unrealized, cash: account.cash }
+            })
+            send(res, 200, { ok: true, ...out })
             return
           }
           if (action === 'capital') {
