@@ -193,6 +193,11 @@ export interface PrismPosition {
   cost: number
   /** 摊薄净成本（口径唯一事实源；旧账本无此字段时按 qty×cost 回退） */
   netCost?: number
+  /**
+   * 买入均价（**卖出不变**；v0.222.2）。用于止损判定：
+   * 摊薄成本会因亏损卖出而抬高 ⇒ 越卖越"亏"，触发止损再卖，形成卖出循环。
+   */
+  avgCost?: number
 }
 
 export interface PrismFill {
@@ -301,7 +306,7 @@ export type PrismIndustryLimits = Record<string, number> | Array<{ name: string;
 export interface PrismClampEvent {
   at: number
   secid: string
-  dimension: 'single' | 'industry' | 'total' | 'cash' | 'perStock' | 'perOrder' | 'maxPos' | 'minCash' | 'maxDD' | 'stopLoss'
+  dimension: 'single' | 'industry' | 'total' | 'cash' | 'perStock' | 'perOrder' | 'maxPos' | 'minCash' | 'maxDD' | 'stopLoss' | 'available'
   before: number
   after: number
   basis: string

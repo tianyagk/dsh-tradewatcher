@@ -258,11 +258,14 @@ export function applyFill(account: PrismAccount, order: PrismOrder, fill: PrismF
     if (money(fill.amount + fill.fee) > money(cash)) throw new Error('现金不足（内部错误：成交前未校验）')
     cash = money(cash - fill.amount - fill.fee)
     if (idx < 0) {
-      positions.push({ secid: order.secid, name: order.name, qty: fill.shares, available: 0, cost: money((fill.amount + fill.fee) / fill.shares) })
+      positions.push({ secid: order.secid, name: order.name, qty: fill.shares, available: 0, cost: money((fill.amount + fill.fee) / fill.shares), avgCost: money((fill.amount + fill.fee) / fill.shares) })
     } else {
       const p = positions[idx] as PrismPosition
       const net = p.netCost ?? p.qty * p.cost
+      const avg0 = p.avgCost ?? p.cost
       p.netCost = money(net + fill.amount + fill.fee)
+      // 买入均价：只有买入会改变它（卖出不动），作为止损判定的成本口径
+      p.avgCost = money((avg0 * p.qty + fill.amount + fill.fee) / (p.qty + fill.shares))
       p.qty += fill.shares
       p.cost = money(p.netCost / p.qty)
     }
@@ -1209,7 +1212,7 @@ export const isEtfName = (name: string): boolean => /ETF/i.test(name ?? '')
 export interface ClampContext {
   cash: number
   /** `name` 用于同产品闸（缺 ⇒ 该持仓不参与判据，并记 skipped） */
-  positions: ReadonlyArray<{ secid: string; qty: number; price: number | null; name?: string | null; industry?: string | null }>
+  positions: ReadonlyArray<{ secid: string; qty: number; price: number | null; name?: string | null; industry?: string | null; available?: number }>
   limits: { singlePct?: number | null; totalPct?: number | null; byIndustry?: PrismIndustryLimits }
   industries?: Record<string, string | null>
   at: number
@@ -1331,7 +1334,26 @@ export function clampDecision(decision: PrismDecision, ctx: ClampContext): Clamp
         continue
       }
     }
-    if (order.side === 'sell') { orders.push(order); continue }
+    if (order.side === 'sell') {
+      // 卖出先按 T+1 可用数量裁剪：不裁的话每轮都会提交超额卖单 → 被拒 → 下轮再提交（实测 11-24 连续 4400/6000/10900 被拒）
+      const pos = positions.find((p) => p.secid === order.secid)
+      // 持仓不存在 ⇒ 不在这里裁（交给下单时的「无持仓不可卖」拒绝，保持旧行为）
+      if (pos === undefined) { orders.push(order); continue }
+      // 旧夹具/旧账本没有 available 字段 ⇒ 视为全部可卖（不改变历史行为）
+      const avail = Math.max(0, Math.floor((pos.available ?? pos.qty) / 100) * 100)
+      const wanted = lot(order.shares)
+      if (avail <= 0) {
+        rejected.push({ secid: order.secid, side: 'sell', price: order.price, shares: order.shares, reason: '今日可卖 0 股（T+1），本轮不下单' })
+        continue
+      }
+      if (wanted > avail) {
+        events.push({ at: ctx.at, secid: order.secid, dimension: 'available', before: wanted, after: avail, basis: `T+1 可卖 ${avail} 股` })
+        orders.push({ ...order, shares: avail })
+        continue
+      }
+      orders.push(order)
+      continue
+    }
     // ── A. 同产品重复闸（v0.214.0）：只拦买单；已持有「另一只」同键 ETF、
     //    或今日已有同键挂单 ⇒ 拒绝（对已持有的那只继续加仓不拦）。
     const targetName = nameOf(order.secid)

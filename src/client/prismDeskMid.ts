@@ -332,7 +332,7 @@ const sourceLabelOf = (s: string | undefined): string | null => (s === undefined
 const CLAMP_DIM: Readonly<Record<string, string>> = {
   single: '单票权重', industry: '行业权重', total: '总仓位', cash: '现金下限',
   perStock: '单票上限', perOrder: '单笔金额', maxPos: '最大总仓位', minCash: '最低现金留存',
-  maxDD: '日回撤', stopLoss: '止损线',
+  maxDD: '日回撤', stopLoss: '止损线', available: '可卖数量',
 }
 const clampDimOf = (d: string): string => CLAMP_DIM[d] ?? d
 
