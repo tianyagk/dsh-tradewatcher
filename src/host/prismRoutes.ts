@@ -540,7 +540,9 @@ export async function runPrismForSlot(deps: PrismRouteDeps, slot: string): Promi
       maxDDPct: settings.maxDDPct ?? null,
       minCashPct: settings.minCashPct ?? null,
     },
-    costs: Object.fromEntries(account.positions.map((p) => [p.secid, p.netCost ?? p.cost])),
+    // 止损判定要比的是**每股成本**：netCost 是总成本（几千几万），拿它和现价比会算出 −99.9%，
+    // 把所有「加仓已持有标的」的买单全部误判成触及止损（实测 2026-11-24 工商银行/长债ETF）。
+    costs: Object.fromEntries(account.positions.map((p) => [p.secid, p.qty > 0 ? p.cost : 0])),
     dayDrawdownPct,
     industries: Object.fromEntries(Object.entries(industries).map(([k, v]) => [k, v?.name ?? null])),
     at: run.startedAt,

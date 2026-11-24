@@ -129,13 +129,18 @@ export function drawdownGateOf(
       reason: '资本调整后净值点不足 2 个，无法计算回撤', at,
     }
   }
+  // 收益序列仍用「盈利 = equity − capital」（入金不算收益），但**百分比分母用 capital**。
+  // 旧实现用「盈利」当分母：累计亏损后基数只剩几十万，日波动几万就被放大成 −3% 假熔断
+  // （实测 2026-11-24 10:05「回撤闸门：触发，拒新买单」）。
   const values = valid.map((p) => p.equity - (p.capital as number))
   const last = values[values.length - 1] as number
   const prev = values[values.length - 2] as number
-  const dailyPct = prev !== 0 ? (last / prev - 1) * 100 : null
-  const base = values[0] as number
-  const series = base !== 0 ? values.map((v) => (v / base - 1) * 100) : values.map(() => 0)
-  const peak = Math.max(0, ...series)
+  const capDenom = Math.abs(((valid[valid.length - 1] as { capital?: number }).capital ?? 0)) || Math.abs((valid[0] as { capital?: number }).capital ?? 0)
+  const denom = capDenom > 0 ? capDenom : Math.abs(prev) || 1
+  const dailyPct = (last - prev) / denom * 100
+  const peakProfit = Math.max(0, ...values)
+  const peak = (peakProfit / denom) * 100
+  const series = values.map((v) => (v / denom) * 100)
   const cumulativePct = (series[series.length - 1] as number) - peak
   // 先按展示精度取整再比较阈值，避免 -9.999999999999998 逃过 -10
   const dailyTriggered = dailyPct !== null && round(dailyPct) <= -3
