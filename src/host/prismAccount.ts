@@ -1342,8 +1342,19 @@ export function clampDecision(decision: PrismDecision, ctx: ClampContext): Clamp
     const px = order.price
     const existing = buyValue(order.secid)
     const dims: Array<{ dimension: PrismClampEvent['dimension']; max: number | null; current: number; basis: string }> = []
-    if (!missingPrice && typeof ctx.limits.singlePct === 'number' && totalAssets > 0) {
-      dims.push({ dimension: 'single', max: totalAssets * ctx.limits.singlePct / 100, current: existing, basis: `单票 ${ctx.limits.singlePct}% × 总资产 ${totalAssets.toFixed(2)}` })
+    // 单票上限：**用户配置优先**。模型自报的 limits.singlePct 只作兜底——
+    // 否则「设置里 30%、骨架里 20%、模型照抄骨架」会让配置形同虚设（实测：配置 30，决策仍按 20 减仓）。
+    const configuredSingle = typeof ctx.constraints?.perStockPct === 'number' ? ctx.constraints.perStockPct : null
+    const singleLimitPct = configuredSingle ?? (typeof ctx.limits.singlePct === 'number' ? ctx.limits.singlePct : null)
+    if (!missingPrice && singleLimitPct !== null && totalAssets > 0) {
+      dims.push({
+        dimension: 'single',
+        max: totalAssets * singleLimitPct / 100,
+        current: existing,
+        basis: configuredSingle !== null
+          ? `单票上限 ${singleLimitPct}%（用户配置）× 总资产 ${totalAssets.toFixed(2)}`
+          : `单票 ${singleLimitPct}% × 总资产 ${totalAssets.toFixed(2)}`,
+      })
     }
     const industry = ctx.industries?.[order.secid] ?? positions.find((p) => p.secid === order.secid)?.industry ?? null
     const indLimit = industry === null ? undefined : industryLimitOf(industry)
@@ -1356,7 +1367,8 @@ export function clampDecision(decision: PrismDecision, ctx: ClampContext): Clamp
       dims.push({ dimension: 'total', max: totalAssets * ctx.limits.totalPct / 100, current: currentTotal, basis: `总仓 ${ctx.limits.totalPct}% × 总资产` })
     }
     const c = ctx.constraints ?? {}
-    if (!missingPrice && typeof c.perStockPct === 'number' && totalAssets > 0) {
+    // 配置了 perStockPct 时，上面 single 维度已经用它 ⇒ 不再重复加一条同义的 perStock 维度
+    if (configuredSingle === null && !missingPrice && typeof c.perStockPct === 'number' && totalAssets > 0) {
       dims.push({ dimension: 'perStock', max: totalAssets * c.perStockPct / 100, current: existing, basis: `单票上限 ${c.perStockPct}% × 总资产` })
     }
     if (typeof c.perOrderYuan === 'number' && c.perOrderYuan >= 0) {

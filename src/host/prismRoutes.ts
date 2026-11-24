@@ -251,6 +251,30 @@ async function indexTechCachedOf(): Promise<string> {
   return text
 }
 
+/** 用户配置的硬边界（与骨架冲突时以这里为准；模型必须按这些值填 limits） */
+export function limitsTextOf(settings: {
+  perStockPct?: number | null; stopLossPct?: number | null; perOrderYuan?: number | null
+  maxPosPct?: number | null; maxDDPct?: number | null; minCashPct?: number | null
+  industryLimits?: Record<string, number>
+}): string {
+  const pct = (v: number | null | undefined): string => (typeof v === 'number' ? `${v}%` : '未设置')
+  const yuan = (v: number | null | undefined): string => (typeof v === 'number' ? `${v} 元` : '未设置')
+  const ind = settings.industryLimits === undefined || Object.keys(settings.industryLimits).length === 0
+    ? '未设置'
+    : Object.entries(settings.industryLimits).map(([k, v]) => `${k} ${v}%`).join('，')
+  return [
+    '【约束（用户配置，硬边界）】',
+    `单票上限：${pct(settings.perStockPct)}（limits.singlePct 必须填这个值）`,
+    `单票止损线：${pct(settings.stopLossPct)}`,
+    `单笔金额上限：${yuan(settings.perOrderYuan)}`,
+    `最大总仓位：${pct(settings.maxPosPct)}`,
+    `日回撤熔断：${pct(settings.maxDDPct)}`,
+    `最低现金留存：${pct(settings.minCashPct)}`,
+    `单板块上限：${ind}`,
+    '（与研判骨架里的旧数值冲突时，一律以本段配置为准）',
+  ].join('\n')
+}
+
 /** 候选池缓存：10 分钟（持仓+自选 50+ 只日线，逐轮全量回源会拖慢研判） */
 let candidatesCache: { key: string; at: number; text: string } | null = null
 async function candidatesCachedOf(deps: PrismRouteDeps, watch: ReadonlyArray<{ secid: string; name: string }>): Promise<string> {
@@ -325,6 +349,7 @@ export const prismInputsOf = async (deps: PrismRouteDeps): Promise<PrismInputs> 
     exposure: exposureText,
     tech: await indexTechCachedOf().catch(() => '【指数技术面（由本地日线计算；缺数据写 —）】\n—（本轮取数失败）'),
     candidates: await candidatesCachedOf(deps, watch).catch(() => '【候选池（持仓 + 自选）】\n—（本轮取数失败）'),
+    limits: limitsTextOf(deps.store.settings()),
   }
 }
 

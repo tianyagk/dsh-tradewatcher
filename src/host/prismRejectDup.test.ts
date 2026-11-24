@@ -143,8 +143,8 @@ test('③ 原因取值：skipReason → rejectReason → 当日 rejects 对应�
 test('④ 提示词：新增「不得重复被拒」，既有强制规则一条不少', async () => {
   const src = readFileSync(join(process.cwd(), 'src/host/prismPipeline.ts'), 'utf8')
   const rules = src.match(/【强制·[^】]+】/g) ?? []
-  assert.equal(rules.length, 6, '强制规则 = 风险暴露/双侧/空单说明/不得重复被拒/只认棱镜账户/候选池')
-  for (const key of ['风险暴露', '双侧', '空单说明', '不得重复被拒', '只认棱镜账户']) assert.ok(rules.some((r) => r.includes(key)), `缺规则：${key}`)
+  assert.equal(rules.length, 7, '强制规则 = 风险暴露/双侧/空单说明/不得重复被拒/只认棱镜账户/单票以配置为准/候选池')
+  for (const key of ['风险暴露', '双侧', '空单说明', '不得重复被拒', '只认棱镜账户', '单票以配置为准']) assert.ok(rules.some((r) => r.includes(key)), `缺规则：${key}`)
   const rule = '今日已因同一原因被拒的委托，不得原样重发；若仍要交易，必须先核对可用数量/可用资金，并说明与上次不同的依据。'
   assert.equal(src.includes(rule), true, '新规则文案必须逐字存在')
   const injected = src.replace('【强制·不得重复被拒】', '')
@@ -176,7 +176,7 @@ test('④ 提示词：新增「不得重复被拒」，既有强制规则一条�
     assert.equal(seen.length, 5)
     const summary = seen[4] ?? ''
     assert.ok(summary.includes('【强制·不得重复被拒】'), '汇总请求体必须带新规则')
-    assert.equal((summary.match(/【强制·/g) ?? []).length, 6, '汇总请求体必须带满 6 条强制规则')
+    assert.equal((summary.match(/【强制·/g) ?? []).length, 7, '汇总请求体必须带满 7 条强制规则')
   } finally {
     await rm(dir, { recursive: true, force: true })
   }
