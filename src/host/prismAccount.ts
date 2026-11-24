@@ -367,7 +367,9 @@ export function equityPointOf(
     cash: account.cash,
     positionsValue,
     realized: account.realized,
-    unrealized: money(equity - account.capitalLimit),
+    // 未实现盈亏 = Σ(市值 − 账面成本)，与 rebase 的恒等式同口径；
+    // 旧实现写的是 `equity − capitalLimit`（其实是总盈亏），导致 equity ≠ capital + realized + unrealized。
+    unrealized: money(account.positions.reduce((a, p) => a + (p.qty * (priceOf(p.secid) ?? p.cost) - (p.netCost ?? p.qty * p.cost)), 0)),
     at: now,
   }
 }

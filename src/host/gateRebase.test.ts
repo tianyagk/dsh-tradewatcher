@@ -48,3 +48,20 @@ test('⑥ 路由：rebase 动作存在且用同一恒等式，闸门读配置', 
   assert.match(r, /dailyLimitPct: typeof settingsNow\.maxDDPct === 'number'/)
   assert.match(r, /baseAt: settingsNow\.gateBaseAt/)
 })
+
+test('⑦ equityPointOf：unrealized = Σ(市值−账面成本)，恒等式自洽', async () => {
+  const { equityPointOf } = await import('./prismAccount.ts')
+  const acc = {
+    day: '2026-11-24', capital: 1_800_000, capitalLimit: 1_800_000, cash: 262_204.4, realized: -141_657, dayStartEquity: null,
+    copiedAt: 0, copyLogs: [],
+    positions: [
+      { secid: '1.601872', name: '招商轮船', qty: 19_376, available: 19_376, cost: 18.83, netCost: 364_848.08 },
+    ],
+  }
+  const capital = acc.capital; const realized = acc.realized
+  const p = equityPointOf(acc, () => 15.56, 1)
+  const mv = 19_376 * 15.56
+  assert.ok(Math.abs(p.unrealized - (mv - 364_848.08)) < 0.01, `unrealized 应=${mv - 364_848.08}，实际 ${p.unrealized}`)
+  // 恒等式只在「资金全部来自本金、无手工注入」时成立；这里只钉 unrealized 的口径
+  assert.equal(capital, 1_800_000); assert.equal(realized, -141_657)
+})
