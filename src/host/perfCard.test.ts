@@ -14,7 +14,13 @@ test('① 5 个净值点也能算出回撤（不再要求 30 窗口）', () => {
   assert.ok((e.drawdown.value as number) < 0)
 })
 
-test('② 决策数优先用累计计数（不被 20 条保留上限卡住）', () => {
+test('② 决策数取累计与内存的较大值（升级首轮不会从 20 掉到 1）', () => {
+  const runs20 = Array.from({ length: 20 }, (_, i) => ({ startedAt: i, finishedAt: i + 1 })) as never
+  assert.equal(prismPerformanceOf([], null, runs20, 1).runsCount, 20)
+  assert.equal(prismPerformanceOf([], null, runs20, 137).runsCount, 137)
+})
+
+test('②b 决策数优先用累计计数（不被 20 条保留上限卡住）', () => {
   const runs = Array.from({ length: 20 }, (_, i) => ({ startedAt: i, finishedAt: i + 1 })) as never
   const p = prismPerformanceOf([], null, runs, 137)
   assert.equal(p.runsCount, 137)

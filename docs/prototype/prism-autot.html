@@ -1,0 +1,228 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>棱镜 · 自动做T（设计稿）</title>
+<style>
+  :root{
+    --bg:#f6f7f9; --card:#ffffff; --line:#e6e8ec; --text:#1f2329; --muted:#6b7280;
+    --up:#d64545; --down:#1a9c6b; --accent:#3b6ef6; --warn:#b26a00; --chip:#f1f3f7;
+    --radius:10px; --font:12px/1.5 -apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);font:var(--font)}
+  .page{max-width:1080px;margin:0 auto;padding:20px 20px 48px}
+  h1{font-size:16px;margin:0}
+  h2{font-size:13px;margin:0}
+  .sub{font-size:12px;color:var(--muted);margin:2px 0 0}
+  .topbar{display:flex;align-items:center;gap:12px;margin-bottom:14px}
+  .tabs{display:flex;gap:6px;margin-left:auto}
+  .tab{font-size:12px;padding:4px 10px;border-radius:999px;background:var(--chip);color:var(--muted)}
+  .tab.on{background:#e8efff;color:var(--accent);font-weight:600}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);padding:14px 16px;margin-bottom:14px}
+  .card-head{display:flex;align-items:flex-start;gap:12px;margin-bottom:12px}
+  .card-head .right{margin-left:auto;display:flex;align-items:center;gap:10px}
+  .badge{font-size:12px;padding:2px 8px;border-radius:999px;background:var(--chip);color:var(--muted)}
+  .badge.on{background:#e7f6ef;color:var(--down)}
+  .badge.off{background:#f3f4f6;color:var(--muted)}
+  .badge.warn{background:#fff4e5;color:var(--warn)}
+  .badge.blue{background:#e8efff;color:var(--accent)}
+  .switch{position:relative;display:inline-flex;align-items:center;gap:8px;font-size:12px;color:var(--muted);cursor:pointer}
+  .switch input{appearance:none;width:38px;height:22px;border-radius:999px;background:#cfd4dc;position:relative;outline:none;transition:.18s}
+  .switch input:checked{background:var(--accent)}
+  .switch input::after{content:"";position:absolute;top:3px;left:3px;width:16px;height:16px;border-radius:50%;background:#fff;transition:.18s}
+  .switch input:checked::after{left:19px}
+  .chips{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px}
+  .chip{background:var(--chip);border-radius:8px;padding:8px 10px;min-width:150px}
+  .chip .k{font-size:12px;color:var(--muted)}
+  .chip .v{font-size:15px;font-weight:600;margin-top:2px}
+  .chip .v.up{color:var(--up)} .chip .v.down{color:var(--down)}
+  .params{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;border-top:1px dashed var(--line);padding-top:12px}
+  .param .k{font-size:12px;color:var(--muted)}
+  .param .v{font-size:13px;font-weight:600;margin-top:2px}
+  .param select,.param input{font:inherit;padding:4px 8px;border:1px solid var(--line);border-radius:6px;background:#fff}
+  table{width:100%;border-collapse:collapse;font-size:12px}
+  th,td{padding:8px 6px;border-bottom:1px solid var(--line);text-align:right;white-space:nowrap}
+  th{color:var(--muted);font-weight:500}
+  th:first-child,td:first-child{text-align:left}
+  .name{font-weight:600}
+  .code{color:var(--muted);font-size:12px;margin-left:6px}
+  .up{color:var(--up)} .down{color:var(--down)} .muted{color:var(--muted)}
+  .row-off td{opacity:.55}
+  .mini{display:inline-block;padding:1px 6px;border-radius:999px;background:var(--chip);color:var(--muted);font-size:12px}
+  .mini.buy{background:#fdecec;color:var(--up)}
+  .mini.sell{background:#e7f6ef;color:var(--down)}
+  .two{display:grid;grid-template-columns:1.5fr 1fr;gap:14px}
+  @media (max-width:860px){.two{grid-template-columns:1fr}.params{grid-template-columns:repeat(2,1fr)}}
+  .plan{border:1px solid var(--line);border-radius:8px;padding:12px}
+  .plan-line{display:flex;justify-content:space-between;font-size:12px;padding:5px 0;border-bottom:1px dashed var(--line)}
+  .plan-line:last-child{border-bottom:none}
+  .plan-line .k{color:var(--muted)}
+  .plan-line .v{font-weight:600}
+  .timeline{list-style:none;margin:0;padding:0}
+  .timeline li{display:grid;grid-template-columns:56px 18px 1fr auto;gap:8px;align-items:start;padding:7px 0}
+  .timeline .t{color:var(--muted);font-size:12px}
+  .dot{width:8px;height:8px;border-radius:50%;background:var(--line);margin-top:5px}
+  .dot.ok{background:var(--down)} .dot.blue{background:var(--accent)} .dot.warn{background:var(--warn)}
+  .timeline .what{font-size:12px}
+  .timeline .amt{font-size:12px;font-weight:600}
+  .note{font-size:12px;color:var(--muted);margin-top:10px}
+  .foot{font-size:12px;color:var(--muted);text-align:center;margin-top:6px}
+  .empty{padding:18px 6px;color:var(--muted);font-size:12px}
+</style>
+</head>
+<body>
+<div class="page">
+  <div class="topbar">
+    <h1>棱镜 · 模拟盘</h1>
+    <div class="tabs">
+      <span class="tab">持仓</span>
+      <span class="tab">决策流</span>
+      <span class="tab on">自动做T</span>
+      <span class="tab">设置</span>
+    </div>
+  </div>
+
+  <!-- 总开关 -->
+  <section class="card">
+    <div class="card-head">
+      <div>
+        <h2>自动做T</h2>
+        <p class="sub">对中长期持仓做日内正T / 反T，净持仓不变；收益单独记账，用于压低有效成本。</p>
+      </div>
+      <div class="right">
+        <span class="badge on">已开启</span>
+        <label class="switch"><input type="checkbox" checked /> 总开关</label>
+      </div>
+    </div>
+
+    <div class="chips">
+      <div class="chip"><div class="k">今日轮次</div><div class="v">1 / 2</div></div>
+      <div class="chip"><div class="k">今日做T收益</div><div class="v up">+112.30</div></div>
+      <div class="chip"><div class="k">累计做T收益</div><div class="v up">+1 864.20</div></div>
+      <div class="chip"><div class="k">有效成本降幅</div><div class="v down">−0.42%</div></div>
+    </div>
+
+    <div class="params">
+      <div class="param"><div class="k">单轮上限（占底仓）</div><div class="v">
+        <select><option>10%</option><option selected>20%</option><option>30%</option></select>
+      </div></div>
+      <div class="param"><div class="k">最小价差（扣费前）</div><div class="v"><input value="0.80" size="4" /> %</div></div>
+      <div class="param"><div class="k">每日最多轮次</div><div class="v">
+        <select><option selected>1</option><option>2</option><option>3</option></select>
+      </div></div>
+      <div class="param"><div class="k">最晚回补</div><div class="v"><input value="14:50" size="5" /></div></div>
+    </div>
+  </section>
+
+  <!-- 持仓表 -->
+  <section class="card">
+    <div class="card-head">
+      <div><h2>做T标的</h2><p class="sub">逐只开关；只有「中长期持有」的持仓可开启。</p></div>
+      <div class="right"><span class="badge blue">今日已触发 1 只</span></div>
+    </div>
+    <table>
+      <thead>
+        <tr>
+          <th>标的</th><th>底仓 / 可卖</th><th>账面成本</th><th>有效成本</th><th>今日计划</th><th>状态</th><th>做T</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><span class="name">招商轮船</span><span class="code">601872</span></td>
+          <td>8 743 / 8 743</td>
+          <td>18.21</td>
+          <td class="down">17.94</td>
+          <td><span class="mini buy">正T</span> 买 15.20 / 卖 15.45 · 500 股</td>
+          <td><span class="badge on">已完成</span></td>
+          <td><label class="switch"><input type="checkbox" checked /></label></td>
+        </tr>
+        <tr>
+          <td><span class="name">工商银行</span><span class="code">601398</span></td>
+          <td>13 000 / 13 000</td>
+          <td>9.11</td>
+          <td class="down">9.06</td>
+          <td><span class="mini sell">反T</span> 卖 9.28 / 买 9.16 · 2 000 股</td>
+          <td><span class="badge blue">待触发</span></td>
+          <td><label class="switch"><input type="checkbox" checked /></label></td>
+        </tr>
+        <tr>
+          <td><span class="name">沪深300ETF华泰柏瑞</span><span class="code">510300</span></td>
+          <td>75 800 / 75 800</td>
+          <td>4.23</td>
+          <td>4.23</td>
+          <td class="muted">—（价差 0.42% &lt; 0.80%）</td>
+          <td><span class="badge">不做</span></td>
+          <td><label class="switch"><input type="checkbox" checked /></label></td>
+        </tr>
+        <tr class="row-off">
+          <td><span class="name">儒意电影</span><span class="code">002739</span></td>
+          <td>11 / 11</td>
+          <td>17.27</td>
+          <td>17.27</td>
+          <td class="muted">—（持仓不足 100 股，无法整手）</td>
+          <td><span class="badge off">跳过</span></td>
+          <td><label class="switch"><input type="checkbox" /></label></td>
+        </tr>
+        <tr class="row-off">
+          <td><span class="name">中远海控</span><span class="code">601919</span></td>
+          <td>2 000 / 0</td>
+          <td>17.45</td>
+          <td>17.45</td>
+          <td class="muted">—（今日买入，T+1 可卖 0）</td>
+          <td><span class="badge off">跳过</span></td>
+          <td><label class="switch"><input type="checkbox" checked /></label></td>
+        </tr>
+      </tbody>
+    </table>
+    <p class="note">有效成本 = 账面成本 − 累计做T净收益 ÷ 当前持仓；做T收益不重复计入已实现盈亏。</p>
+  </section>
+
+  <div class="two">
+    <!-- 计划详情 -->
+    <section class="card">
+      <div class="card-head">
+        <div><h2>今日计划 · 招商轮船</h2><p class="sub">正T：先买 500 股，再卖底仓 500 股；净持仓不变。</p></div>
+        <div class="right"><span class="badge on">已结算</span></div>
+      </div>
+      <div class="plan">
+        <div class="plan-line"><span class="k">方向</span><span class="v">正T（先买后卖）</span></div>
+        <div class="plan-line"><span class="k">买腿</span><span class="v">500 股 @ 15.20</span></div>
+        <div class="plan-line"><span class="k">卖腿</span><span class="v">500 股 @ 15.45</span></div>
+        <div class="plan-line"><span class="k">价差</span><span class="v down">1.64%（扣费前）</span></div>
+        <div class="plan-line"><span class="k">预计费用</span><span class="v">12.60（佣金 10.00 + 印花税 3.86 + 过户费）</span></div>
+        <div class="plan-line"><span class="k">预计净收益</span><span class="v up">+112.30</span></div>
+        <div class="plan-line"><span class="k">失效条件</span><span class="v muted">跌破 15.05 或 14:50 未完成</span></div>
+        <div class="plan-line"><span class="k">计划依据</span><span class="v muted">ATR14 0.31 / 20日低 14.98 / MA20 15.36</span></div>
+      </div>
+    </section>
+
+    <!-- 今日流水 -->
+    <section class="card">
+      <div class="card-head">
+        <div><h2>今日流水</h2><p class="sub">每腿成交都来自真实回报；失败也会留痕。</p></div>
+      </div>
+      <ul class="timeline">
+        <li><span class="t">09:41</span><span class="dot blue"></span><span class="what">买入 500 股 @ 15.20（正T 第一腿）</span><span class="amt">−7 600.00</span></li>
+        <li><span class="t">10:26</span><span class="dot ok"></span><span class="what">卖出 500 股 @ 15.45（底仓，可用 ≥ 500）</span><span class="amt up">+7 725.00</span></li>
+        <li><span class="t">10:26</span><span class="dot ok"></span><span class="what">结算：净收益 +112.30，已入做T收益池</span><span class="amt up">+112.30</span></li>
+        <li><span class="t">14:50</span><span class="dot"></span><span class="what">无未完成计划，无需强制回补</span><span class="amt muted">—</span></li>
+      </ul>
+      <p class="note">反T 示例：先卖 2 000 股 @ 9.28，再买回 2 000 股 @ 9.16 ⇒ 净收益约 +228.00（含费）。</p>
+    </section>
+  </div>
+
+  <!-- 空态示例 -->
+  <section class="card">
+    <div class="card-head">
+      <div><h2>未开启时的空态</h2><p class="sub">默认关闭；关闭时不产生任何 T 单，也不占用决策流。</p></div>
+      <div class="right"><span class="badge off">关闭</span></div>
+    </div>
+    <div class="empty">自动做T已关闭。开启后，仅对标注「中长期持有」的持仓生成计划；每轮最多动用底仓的 20%。</div>
+  </section>
+
+  <p class="foot">设计稿 · 示例数据，非真实成交；样式沿用棱镜现有卡片与 12px 字号基准。</p>
+</div>
+</body>
+</html>

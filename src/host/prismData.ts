@@ -280,7 +280,7 @@ export function prismPerformanceOf(
   const withEnd = runs.filter((r) => typeof r.finishedAt === 'number')
   const latencyMs = withEnd.length === 0 ? null : withEnd.reduce((a, r) => a + ((r.finishedAt as number) - r.startedAt), 0) / withEnd.length
   missing.push({ what: 'token 用量', why: 'no-source', note: 'token 用量无源' })
-  return { returnPct, benchmarkPct, excessPct, maxDrawdown, hitRate, runsCount: typeof runsTotal === 'number' && runsTotal > 0 ? runsTotal : runs.length, latencyMs, tokenUsage: null, missing }
+  return { returnPct, benchmarkPct, excessPct, maxDrawdown, hitRate, runsCount: Math.max(typeof runsTotal === 'number' ? runsTotal : 0, runs.length), latencyMs, tokenUsage: null, missing }
 }
 
 /* ────────────────────────── 持仓分析（v0.212.0） ────────────────────────── */
