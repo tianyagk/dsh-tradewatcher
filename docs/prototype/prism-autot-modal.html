@@ -3,12 +3,12 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>棱镜 · 自动做T 弹窗 v2（设计稿）</title>
+<title>棱镜 · 自动做T 弹窗 v3（自适应设计稿）</title>
 <style>
   :root{
     --bg:#f6f7f9; --card:#fff; --line:#e6e8ec; --text:#1f2329; --muted:#6b7280;
-    --up:#d64545; --down:#1a9c6b; --accent:#3b6ef6; --warn:#b26a00; --chip:#f1f3f7;
-    --font:12px/1.55 -apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;
+    --up:#d64545; --down:#1a9c6b; --accent:#3b6ef6; --chip:#f1f3f7;
+    --font:12px/1.5 -apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;
   }
   *{box-sizing:border-box}
   body{margin:0;background:var(--bg);color:var(--text);font:var(--font);overflow:hidden}
@@ -20,84 +20,94 @@
   .tab.on{background:#e8efff;color:var(--accent);font-weight:600}
   .tools{margin-left:auto;display:flex;gap:8px;align-items:center}
   .btn{font:inherit;border:1px solid var(--line);background:#fff;border-radius:8px;padding:5px 10px;cursor:pointer}
-  .btn.primary{background:var(--accent);border-color:var(--accent);color:#fff}
-  .btn.ghost{background:transparent}
   .entry{display:inline-flex;align-items:center;gap:6px;border:1px solid #cdd9ff;background:#eef3ff;color:var(--accent);border-radius:8px;padding:5px 10px;font-weight:600}
   .dot{width:7px;height:7px;border-radius:50%;background:var(--down)}
   .card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px 16px;margin-bottom:12px}
   .card h2{font-size:13px;margin:0 0 10px}
   table{width:100%;border-collapse:collapse;font-size:12px}
-  th,td{padding:7px 6px;border-bottom:1px solid var(--line);text-align:right;white-space:nowrap}
+  th,td{padding:6px;border-bottom:1px solid var(--line);text-align:right;white-space:nowrap}
   th{color:var(--muted);font-weight:500}
   th:first-child,td:first-child{text-align:left}
   .muted{color:var(--muted)} .up{color:var(--up)} .down{color:var(--down)}
   .dim{filter:blur(1px);opacity:.55;pointer-events:none;user-select:none}
 
   .backdrop{position:fixed;inset:0;background:rgba(20,24,35,.38);backdrop-filter:blur(1.5px);z-index:40}
-  .modal{position:fixed;top:48px;right:36px;width:760px;max-height:calc(100vh - 96px);overflow:auto;
-    background:#fff;border-radius:12px;box-shadow:0 18px 48px rgba(16,24,40,.28);z-index:50}
-  @media (max-width:900px){.modal{top:0;right:0;width:100%;height:100%;max-height:none;border-radius:0}}
-  .m-head{position:sticky;top:0;background:#fff;border-bottom:1px solid var(--line);padding:14px 16px;display:flex;gap:10px;align-items:flex-start;z-index:2}
+  /* 自适应弹窗：宽度随视口收缩；内容按两栏排，正常视口不出滚动条 */
+  .modal{position:fixed;z-index:50;top:50%;left:50%;transform:translate(-50%,-50%);
+    width:min(920px, calc(100vw - 32px));max-height:calc(100vh - 40px);
+    background:#fff;border-radius:12px;box-shadow:0 18px 48px rgba(16,24,40,.28);
+    display:flex;flex-direction:column;overflow:hidden}
+  .m-head{position:sticky;top:0;background:#fff;border-bottom:1px solid var(--line);padding:12px 16px;display:flex;gap:10px;align-items:flex-start;z-index:2}
   .m-head h1{font-size:14px;margin:0}
   .m-head .sub{font-size:12px;color:var(--muted);margin:2px 0 0}
   .m-head .right{margin-left:auto;display:flex;align-items:center;gap:8px}
   .icon{width:26px;height:26px;border-radius:6px;border:1px solid var(--line);background:#fff;cursor:pointer;line-height:24px;text-align:center}
-  .m-body{padding:14px 16px}
-  .chips{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:12px}
-  .chip{background:var(--chip);border-radius:8px;padding:8px 10px}
+  .m-body{padding:12px 16px;display:flex;flex-direction:column;gap:10px;overflow:hidden}
+  .chips{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px}
+  .chip{background:var(--chip);border-radius:8px;padding:7px 10px}
   .chip .k{font-size:12px;color:var(--muted)}
-  .chip .v{font-size:15px;font-weight:600;margin-top:2px}
+  .chip .v{font-size:15px;font-weight:600;margin-top:1px}
   .badge{font-size:12px;padding:1px 7px;border-radius:999px;background:var(--chip);color:var(--muted);display:inline-block}
   .badge.on{background:#e7f6ef;color:var(--down)}
   .badge.blue{background:#e8efff;color:var(--accent)}
   .badge.off{background:#f3f4f6;color:var(--muted)}
-  .badge.warn{background:#fff4e5;color:var(--warn)}
   .mini{display:inline-block;padding:1px 6px;border-radius:999px;font-size:12px;background:var(--chip);color:var(--muted)}
   .mini.buy{background:#fdecec;color:var(--up)}
   .mini.sell{background:#e7f6ef;color:var(--down)}
   .row-off td{opacity:.55}
+  .table-wrap{overflow-x:auto;overflow-y:hidden}
   .switch{display:inline-flex;align-items:center;cursor:pointer}
   .switch input{appearance:none;width:34px;height:20px;border-radius:999px;background:#cfd4dc;position:relative;transition:.18s;outline:none}
   .switch input:checked{background:var(--accent)}
   .switch input::after{content:"";position:absolute;top:3px;left:3px;width:14px;height:14px;border-radius:50%;background:#fff;transition:.18s}
   .switch input:checked::after{left:17px}
-  .human{font-size:12px;color:var(--accent);font-weight:600}
-  .detail{border:1px solid var(--line);border-radius:8px;padding:12px;margin-top:12px}
-  .detail h3{font-size:12px;margin:0 0 8px;color:var(--muted);font-weight:600}
-  .tri{display:grid;gap:6px}
-  .tri .row{display:grid;grid-template-columns:48px 1fr;gap:8px;padding:6px 0;border-bottom:1px dashed var(--line)}
+  .grid2{display:grid;grid-template-columns:1.15fr .85fr;gap:12px;min-height:0}
+  .panel{border:1px solid var(--line);border-radius:8px;padding:10px 12px;min-height:0}
+  .panel h3{font-size:12px;margin:0 0 6px;color:var(--muted);font-weight:600}
+  .tri .row{display:grid;grid-template-columns:44px 1fr;gap:6px;padding:5px 0;border-bottom:1px dashed var(--line)}
   .tri .row:last-child{border-bottom:none}
   .tri .lab{color:var(--muted)}
-  .tri .txt{line-height:1.7}
-  .meta{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:10px}
-  .meta div{background:var(--chip);border-radius:6px;padding:6px 8px}
+  .tri .txt{line-height:1.6}
+  .meta{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-top:8px}
+  .meta div{background:var(--chip);border-radius:6px;padding:5px 7px}
   .meta .k{color:var(--muted);font-size:12px}
-  .meta .v{font-weight:600;margin-top:2px}
-  .tl{list-style:none;margin:10px 0 0;padding:0}
-  .tl li{display:grid;grid-template-columns:52px 14px 1fr auto;gap:8px;padding:6px 0;align-items:start}
+  .meta .v{font-weight:600;margin-top:1px}
+  .tl{list-style:none;margin:4px 0 0;padding:0}
+  .tl li{display:grid;grid-template-columns:42px 10px 1fr auto;gap:6px;padding:5px 0;align-items:start}
   .tl .t{color:var(--muted)}
-  .tl .d{width:8px;height:8px;border-radius:50%;background:var(--line);margin-top:5px}
-  .tl .d.ok{background:var(--down)} .tl .d.blue{background:var(--accent)} .tl .d.warn{background:var(--warn)}
+  .tl .d{width:7px;height:7px;border-radius:50%;background:var(--line);margin-top:5px}
+  .tl .d.ok{background:var(--down)} .tl .d.blue{background:var(--accent)}
   .tl .a{font-weight:600}
-  .fold{margin-top:12px;border-top:1px dashed var(--line);padding-top:10px;color:var(--muted)}
-  .fold summary{cursor:pointer;font-size:12px}
-  .fold p{margin:8px 0 0;line-height:1.7}
-  .foot{font-size:12px;color:var(--muted);text-align:center;padding:10px 0 16px}
   .pill{position:fixed;right:24px;bottom:24px;background:#101828;color:#fff;border-radius:999px;padding:8px 14px;font-size:12px;z-index:35;box-shadow:0 8px 20px rgba(16,24,40,.3)}
   .pill b{color:#7ee2b8}
-  .note{font-size:12px;color:var(--muted);margin-top:8px}
+
+  /* 窄屏：单栏，隐藏次要列，判断列换行 */
+  @media (max-width:860px){
+    .grid2{grid-template-columns:1fr}
+    .col-cost,.col-result{display:none}
+    td.judge{white-space:normal;line-height:1.45}
+    .modal{width:calc(100vw - 24px)}
+  }
+  /* 更窄：全屏 sheet + 紧凑字号 */
+  @media (max-width:560px){
+    .modal{width:100vw;height:100vh;max-height:none;border-radius:0;top:0;left:0;transform:none}
+    .m-body{padding:10px 12px;gap:8px}
+    .chips{grid-template-columns:repeat(2,minmax(0,1fr))}
+  }
+  /* 矮屏：只压缩间距，不产生滚动 */
+  @media (max-height:700px){
+    .m-body{gap:8px;padding:10px 14px}
+    th,td{padding:5px 6px}
+    .panel{padding:8px 10px}
+  }
 </style>
 </head>
 <body>
-  <!-- 背景：棱镜原页面（仅示意，被遮罩压暗） -->
   <div class="app dim" aria-hidden="true">
     <div class="top">
       <span class="brand">棱镜 · 模拟盘</span>
       <div class="tabs"><span class="tab on">持仓</span><span class="tab">决策流</span><span class="tab">设置</span></div>
-      <div class="tools">
-        <span class="entry"><span class="dot"></span>自动做T</span>
-        <button class="btn">重放今日</button>
-      </div>
+      <div class="tools"><span class="entry"><span class="dot"></span>自动做T</span><button class="btn">重放今日</button></div>
     </div>
     <div class="card">
       <h2>持仓 · 11</h2>
@@ -118,7 +128,6 @@
 
   <div class="backdrop"></div>
 
-  <!-- 弹窗卡片 -->
   <section class="modal" role="dialog" aria-label="自动做T">
     <header class="m-head">
       <div>
@@ -140,74 +149,70 @@
         <div class="chip"><div class="k">有效成本降幅</div><div class="v down">−0.42%</div></div>
       </div>
 
-      <table>
-        <thead><tr><th>标的</th><th>底仓 / 可卖</th><th>账面成本</th><th>有效成本</th><th>Agent 今日判断</th><th>结果</th><th>做T</th></tr></thead>
-        <tbody>
-          <tr>
-            <td><b>招商轮船</b> <span class="muted">601872</span></td>
-            <td>8 743 / 8 743</td><td>18.21</td><td class="down">17.94</td>
-            <td><span class="mini buy">正T</span> 15.20 ↔ 15.45 · 500 股</td>
-            <td><span class="badge on">已完成 +112.30</span></td>
-            <td><label class="switch" title="HUMAN：是否允许该标的做T"><input type="checkbox" checked /></label></td>
-          </tr>
-          <tr>
-            <td><b>工商银行</b> <span class="muted">601398</span></td>
-            <td>13 000 / 13 000</td><td>9.11</td><td class="down">9.06</td>
-            <td><span class="mini sell">反T</span> 9.28 ↔ 9.16 · 2 000 股</td>
-            <td><span class="badge blue">待触发</span></td>
-            <td><label class="switch"><input type="checkbox" checked /></label></td>
-          </tr>
-          <tr>
-            <td><b>沪深300ETF华泰柏瑞</b> <span class="muted">510300</span></td>
-            <td>75 800 / 75 800</td><td>4.23</td><td>4.23</td>
-            <td class="muted">不做：价差 0.42% &lt; 0.80%</td>
-            <td><span class="badge">—</span></td>
-            <td><label class="switch"><input type="checkbox" checked /></label></td>
-          </tr>
-          <tr class="row-off">
-            <td><b>中远海控</b> <span class="muted">601919</span></td>
-            <td>2 000 / 0</td><td>17.45</td><td>17.45</td>
-            <td class="muted">跳过：今日买入，可卖 0</td>
-            <td><span class="badge off">—</span></td>
-            <td><label class="switch"><input type="checkbox" checked /></label></td>
-          </tr>
-        </tbody>
-      </table>
-      <p class="note"><span class="human">做T</span> 是唯一可操作项；其余均为 Agent 判断结果的展示。</p>
-
-      <div class="detail">
-        <h3>Agent 判断 · 招商轮船（今日）</h3>
-        <div class="tri">
-          <div class="row"><span class="lab">观察</span><span class="txt">ATR14 0.31；20 日低 14.98；MA20 15.36；持仓成本 18.21；浮亏 −15.2%</span></div>
-          <div class="row"><span class="lab">推理</span><span class="txt">波动足以覆盖双边费用；15.20 贴近 20 日低有支撑，15.45 靠近 MA20 压力；正T 不动净持仓，适合中长期底仓</span></div>
-          <div class="row"><span class="lab">结论</span><span class="txt">做正T 500 股，价差 1.64%，预计净收益 112.30；跌破 15.05 或 14:50 未完成则放弃</span></div>
-        </div>
-        <div class="meta">
-          <div><div class="k">方向 / 股数</div><div class="v">正T · 500 股</div></div>
-          <div><div class="k">买卖价</div><div class="v">15.20 / 15.45</div></div>
-          <div><div class="k">价差（扣费前）</div><div class="v down">1.64%</div></div>
-        </div>
-        <ul class="tl">
-          <li><span class="t">09:41</span><span class="d blue"></span><span><span class="badge blue">T·买入</span> 500 股 @15.20（正T 第一腿）</span><span class="a">−7 600.00</span></li>
-          <li><span class="t">10:26</span><span class="d ok"></span><span><span class="badge on">T·卖出</span> 500 股 @15.45（底仓，可用 ≥ 500）</span><span class="a up">+7 725.00</span></li>
-          <li><span class="t">10:26</span><span class="d ok"></span><span><span class="badge on">T·结算</span> 净收益 +112.30，有效成本 18.21 → 17.94</span><span class="a up">+112.30</span></li>
-          <li><span class="t">14:50</span><span class="d"></span><span class="muted">无未完成计划，无需强制回补</span><span class="a muted">—</span></li>
-        </ul>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>标的</th><th>底仓 / 可卖</th><th class="col-cost">账面成本</th><th>有效成本</th><th>Agent 今日判断</th><th class="col-result">结果</th><th>做T</th></tr></thead>
+          <tbody>
+            <tr>
+              <td><b>招商轮船</b> <span class="muted">601872</span></td>
+              <td>8 743 / 8 743</td><td class="col-cost">18.21</td><td class="down">17.94</td>
+              <td class="judge"><span class="mini buy">正T</span> 15.20 ↔ 15.45 · 500 股</td>
+              <td class="col-result"><span class="badge on">已完成 +112.30</span></td>
+              <td><label class="switch" title="是否允许该标的做T"><input type="checkbox" checked /></label></td>
+            </tr>
+            <tr>
+              <td><b>工商银行</b> <span class="muted">601398</span></td>
+              <td>13 000 / 13 000</td><td class="col-cost">9.11</td><td class="down">9.06</td>
+              <td class="judge"><span class="mini sell">反T</span> 9.28 ↔ 9.16 · 2 000 股</td>
+              <td class="col-result"><span class="badge blue">待触发</span></td>
+              <td><label class="switch"><input type="checkbox" checked /></label></td>
+            </tr>
+            <tr>
+              <td><b>沪深300ETF华泰柏瑞</b> <span class="muted">510300</span></td>
+              <td>75 800 / 75 800</td><td class="col-cost">4.23</td><td>4.23</td>
+              <td class="judge muted">不做：价差 0.42% &lt; 0.80%</td>
+              <td class="col-result"><span class="badge">—</span></td>
+              <td><label class="switch"><input type="checkbox" checked /></label></td>
+            </tr>
+            <tr class="row-off">
+              <td><b>中远海控</b> <span class="muted">601919</span></td>
+              <td>2 000 / 0</td><td class="col-cost">17.45</td><td>17.45</td>
+              <td class="judge muted">跳过：今日买入，可卖 0</td>
+              <td class="col-result"><span class="badge off">—</span></td>
+              <td><label class="switch"><input type="checkbox" checked /></label></td>
+            </tr>
+          </tbody>
+        </table>
       </div>
 
-      <details class="fold">
-        <summary>策略口径（Agent 与引擎决定，无需手动设置）</summary>
-        <p>单轮 ≤ 底仓 20% · 最小价差 0.80%（须覆盖双边费用）· 每日最多 1 轮 · 最晚 14:50 回补 · 收盘净持仓必须不变。<br>
-        开启某只持仓的做T后，从下一个交易日起由 Agent 每日判断；关闭时撤销该标的未成交的 T 腿。</p>
-      </details>
+      <div class="grid2">
+        <div class="panel">
+          <h3>Agent 判断 · 招商轮船（今日）</h3>
+          <div class="tri">
+            <div class="row"><span class="lab">观察</span><span class="txt">ATR14 0.31；20 日低 14.98；MA20 15.36；持仓成本 18.21；浮亏 −15.2%</span></div>
+            <div class="row"><span class="lab">推理</span><span class="txt">波动足以覆盖双边费用；15.20 贴近 20 日低有支撑，15.45 靠近 MA20 压力；正T 不动净持仓，适合中长期底仓</span></div>
+            <div class="row"><span class="lab">结论</span><span class="txt">做正T 500 股，价差 1.64%，预计净收益 112.30；跌破 15.05 或 14:50 未完成则放弃</span></div>
+          </div>
+          <div class="meta">
+            <div><div class="k">方向 / 股数</div><div class="v">正T · 500 股</div></div>
+            <div><div class="k">买卖价</div><div class="v">15.20 / 15.45</div></div>
+            <div><div class="k">价差（扣费前）</div><div class="v down">1.64%</div></div>
+          </div>
+        </div>
 
-      <p class="note">主决策若要对同一标的减仓，会先撤销未成交的 T 腿并留痕；T 完成前该标的禁止新开仓。</p>
-
-      <div class="foot">设计稿 · 示例数据；关闭弹窗后原页面布局与状态不变。</div>
+        <div class="panel">
+          <h3>今日流水</h3>
+          <ul class="tl">
+            <li><span class="t">09:41</span><span class="d blue"></span><span><span class="badge blue">T·买入</span> 500 股 @15.20</span><span class="a">−7 600.00</span></li>
+            <li><span class="t">10:26</span><span class="d ok"></span><span><span class="badge on">T·卖出</span> 500 股 @15.45</span><span class="a up">+7 725.00</span></li>
+            <li><span class="t">10:26</span><span class="d ok"></span><span><span class="badge on">T·结算</span> +112.30</span><span class="a up">+112.30</span></li>
+            <li><span class="t">14:50</span><span class="d"></span><span class="muted">无需强制回补</span><span class="a muted">—</span></li>
+          </ul>
+        </div>
+      </div>
     </div>
   </section>
 
-  <!-- 最小化态示意 -->
   <div class="pill">自动做T · 1/2 轮 · <b>+112.30</b></div>
 </body>
 </html>

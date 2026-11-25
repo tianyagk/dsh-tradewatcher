@@ -268,7 +268,10 @@ export function prismPerformanceOf(
   const missing: PrismMissing[] = []
   const first = equity[0]
   const last = equity.at(-1)
-  const returnPct = first !== undefined && last !== undefined && first.equity > 0 ? (last.equity / first.equity - 1) * 100 : null
+  // 全期收益必须是「当前净值 ÷ 当前本金 − 1」：直接用首末净值比会把入金/改本金算成收益
+  // （实测首点 1,281,801 → 1,456,405 得 +13.62%，但本金 1,800,000 ⇒ 实际 −19.09%）
+  const lastCapital = num(last?.capital)
+  const returnPct = last !== undefined && lastCapital !== null && lastCapital > 0 ? (last.equity / lastCapital - 1) * 100 : null
   const b0 = num(first?.benchmarkClose)
   const b1 = num(last?.benchmarkClose)
   const benchmarkPct = b0 === null || b1 === null || b0 <= 0 ? null : (b1 / b0 - 1) * 100

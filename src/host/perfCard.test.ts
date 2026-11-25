@@ -25,3 +25,14 @@ test('③ 路由：决策后累加 runsTotal，并提供 backfillBenchmark', () 
   assert.ok(!/runsTotal/.test(src), '不再使用累计计数')
   assert.match(src, /action === 'backfillBenchmark'/)
 })
+
+test('④ 全期收益按「净值 ÷ 本金」算，不用首末净值比（入金不算收益）', async () => {
+  const { prismPerformanceOf } = await import('./prismData.ts')
+  const pts = [
+    { day: '2026-10-22', at: 1, equity: 1_281_801.66, capital: 2_000_000, cash: 0, positionsValue: 0, realized: 0, unrealized: 0, benchmarkClose: 4036.3 },
+    { day: '2026-11-25', at: 2, equity: 1_456_404.58, capital: 1_800_000, cash: 0, positionsValue: 0, realized: 0, unrealized: 0, benchmarkClose: 3898.24 },
+  ] as never
+  const p = prismPerformanceOf(pts, null, [])
+  assert.equal(Math.round(p.returnPct! * 100) / 100, -19.09)
+  assert.equal(Math.round(p.excessPct! * 100) / 100, -15.67)
+})
