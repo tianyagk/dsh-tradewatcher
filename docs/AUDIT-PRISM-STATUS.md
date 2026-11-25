@@ -30,7 +30,7 @@
 | D3 | 部分修复 v0.237.0 | `saveAll` 锁内合并磁盘净值点，`saveEquity` 单独写入不再被覆盖；`appendPrismLedger` 仍为独立追加 |
 | D4 | ✅ 已修 v0.236.0 | `runExclusive` 用 AsyncLocalStorage 识别重入（同上下文复用锁，并发请求仍排队） |
 | C2 | 暂不采纳 | ETF 撮合允许非整手（仓内已有 5062 份的既有口径与测试）；改为整手会破坏现有成交口径 |
-| C3 | P2 | 部分成交被拒时 `order.fee` 未累计 |
+| C3 | ✅ 已修 v0.238.0 | 每笔成交都累计 `order.fee` |
 | A8–A17 / B5–B12 / C5–C12 | P2 | 见原审计文档 |
 | PROMPT 剩余 | P1/P2 | 四路提示词 78K 字符可压缩；两处分母仍有成本/现价混用 |
 | UI 剩余 | P2 | 回包 `analyses[].text` 445KB 可通过预抽 three 再降 |

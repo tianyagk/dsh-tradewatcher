@@ -29,3 +29,11 @@ test('④ 老账本无 available ⇒ 下单校验按 qty 判可卖（源码断�
   const src = readFileSync(new URL('./prismAccount.ts', import.meta.url), 'utf8')
   assert.match(src, /const available = position\?\.available \?\? position\?\.qty \?\? 0/)
 })
+
+test('⑤ 部分成交也累计 order.fee（不只在完全成交时）', () => {
+  const src = readFileSync(new URL('./prismAccount.ts', import.meta.url), 'utf8')
+  const i = src.indexOf('order.filledShares = (order.filledShares ?? 0) + take')
+  const block = src.slice(i, i + 400)
+  assert.match(block, /order\.fee = \(order\.fee \?\? 0\) \+ fee/)
+  assert.ok(block.indexOf('order.fee =') < block.indexOf("order.status = 'filled'"), 'fee 必须在分支前累计')
+})

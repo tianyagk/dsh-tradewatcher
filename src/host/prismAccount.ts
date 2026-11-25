@@ -1874,11 +1874,12 @@ async function matchTickLocked(
     account.realized = nextAccount.realized
     account.positions = nextAccount.positions
     order.filledShares = (order.filledShares ?? 0) + take
+    // 每笔成交都累计手续费（旧实现只在完全成交时加，部分成交被拒后 order.fee 缺失，审计 C3）
+    order.fee = (order.fee ?? 0) + fee
     if (order.filledShares >= order.shares) {
       order.status = 'filled'
       order.filledAt = hit.at
       order.fillPrice = hit.price
-      order.fee = (order.fee ?? 0) + fee
       order.source = '1min'
       order.skipCode = undefined
       order.skipReason = undefined
