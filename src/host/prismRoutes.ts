@@ -13,7 +13,7 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { PluginWebRoute } from './context.ts'
 import type { PrismStore } from './prismStore.ts'
-import { LedgerUnreadableError, PrismTradingStore, applyFeeCorrection, clampDecision, copyAtCost, dayStartMismatchOf, equityPointOf, isEtfName, matchTick, placeDecision, productKeyOf, realizedFromIdentity, rebuildFromOrders, upsertEquity, type QuoteLite } from './prismAccount.ts'
+import { LedgerUnreadableError, PrismTradingStore, applyFeeCorrection, avgCostFromHistory, clampDecision, copyAtCost, dayStartMismatchOf, equityPointOf, isEtfName, matchTick, placeDecision, productKeyOf, realizedFromIdentity, rebuildFromOrders, upsertEquity, type QuoteLite } from './prismAccount.ts'
 import type { DataStore } from './store.ts'
 import type { PrismAccount, PrismFill, PrismOrder, PrismRun, PrismSettings, PrismState } from '../shared/prism.ts'
 import { PRISM_INTERVAL_OPTIONS, PRISM_MAX_TIMES, PRISM_SKELETON_MAX } from '../shared/prism.ts'
@@ -848,6 +848,24 @@ export function makePrismRoutes(deps: PrismRouteDeps): PluginWebRoute[] {
               return value
             })
             send(res, 200, { ok: true, account: next })
+            return
+          }
+          if (action === 'backfillAvgCost') {
+            const out = await deps.trading.runExclusive(async () => {
+              deps.trading.assertWritable('回填买入均价')
+              await deps.trading.reloadForWrite()
+              deps.trading.assertWritable('回填买入均价')
+              const account = deps.trading.account()
+              const logs = account.copyLogs as ReadonlyArray<{ at: number; after?: string[] }>
+              const positions = account.positions.map((p) => ({
+                ...p,
+                avgCost: avgCostFromHistory(p.secid, logs, deps.trading.fills(), p.cost),
+              }))
+              const value = { ...account, positions }
+              await deps.trading.saveAll({ account: value, orders: deps.trading.orders(), fills: deps.trading.fills() })
+              return positions.map((p) => ({ secid: p.secid, name: p.name, cost: p.cost, avgCost: p.avgCost }))
+            })
+            send(res, 200, { ok: true, positions: out })
             return
           }
           if (action === 'rebase') {

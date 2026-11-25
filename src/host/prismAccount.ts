@@ -345,6 +345,39 @@ export function realizedFromIdentity(equity: number, capital: number, unrealized
   return Math.round((equity - capital - unrealized) * 100) / 100
 }
 
+/**
+ * 回填「买入均价 avgCost」：从**最近一次复制基准**出发，只叠加其后的买入成交（卖出不影响）。
+ *
+ * 用途：老持仓没有 avgCost，止损只能回落用摊薄成本 —— 而摊薄成本会被亏损卖出越推越高
+ * （实测招商轮船 cost 30.71 vs 真实买入均价约 18.2，浮亏显示 −49%，把止损循环又带起来）。
+ */
+export function avgCostFromHistory(
+  secid: string,
+  copyLogs: ReadonlyArray<{ at: number; after?: string[] }> | undefined,
+  fills: ReadonlyArray<{ secid: string; side: 'buy' | 'sell'; at: number; shares: number; amount: number; fee: number }>,
+  fallback: number,
+): number {
+  let baseQty = 0
+  let baseCost = fallback
+  let baseAt = 0
+  for (const log of copyLogs ?? []) {
+    const hit = (log.after ?? []).find((s) => s.startsWith(`${secid}×`))
+    if (hit === undefined) continue
+    const m = /^[^×]+×(\d+)@([\d.]+)$/.exec(hit)
+    if (m === null) continue
+    baseQty = Number(m[1]); baseCost = Number(m[2]); baseAt = log.at
+  }
+  let qty = baseQty
+  let avg = baseCost
+  const buys = fills.filter((f) => f.secid === secid && f.side === 'buy' && f.at > baseAt).sort((a, b) => a.at - b.at)
+  for (const f of buys) {
+    const total = avg * qty + f.amount + f.fee
+    qty += f.shares
+    avg = qty > 0 ? total / qty : avg
+  }
+  return Math.round(avg * 100) / 100
+}
+
 /** 新交易日：T+1 解锁（available = qty）；dayStartEquity 用上一日收盘净值 */
 export function rollDay(account: PrismAccount, day: string, previousEquity: number | null): PrismAccount {
   if (account.day === day) return account
