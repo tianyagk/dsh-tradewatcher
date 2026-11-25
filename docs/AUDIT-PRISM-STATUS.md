@@ -35,6 +35,14 @@
 | PROMPT 剩余 | P1/P2 | 四路提示词 78K 字符可压缩；两处分母仍有成本/现价混用 |
 | UI 剩余 | P2 | 回包 `analyses[].text` 445KB 可通过预抽 three 再降 |
 
+## 端到端验收
+
+重启后运行：`node scripts/verify-prism.mjs --write`
+（默认只读；`--write` 会执行 `backfillAvgCost` + `normalizeCostBasis`）
+
+2026-11-25 12:5x 对**未重启宿主**（v0.224.1）实测：7 项中 4 项通过，3 项失败均为「未重启/未迁移」：
+回包 1 616 KiB（>1MB）、版本 0.224.1（<0.238.0）、6 只持仓 cost≠avgCost。
+
 ## 验证基线
 
 `npm run check`：**2042 / 2042 × 2 时区** + build（73 项）+ `tsc` 0。

@@ -11,6 +11,15 @@
 
 ---
 
+## v0.238.1 — 新增棱镜端到端验收脚本
+
+`node scripts/verify-prism.mjs [--write]`
+
+检查 7 项：回包 <1MB、宿主版本、`available ≤ qty`、全部持仓有 `avgCost`、`cost` 已对齐、闸门状态可读、净值恒等式误差 <1 元。
+`--write` 会先跑 `backfillAvgCost` + `normalizeCostBasis`。
+
+对当前未重启宿主（v0.224.1）实测：**4/7 通过**；失败 3 项正是未重启/未迁移（回包 1 616 KiB、版本 0.224.1、6 只 cost≠avgCost）。
+
 ## v0.238.0 — 部分成交也累计 order.fee（C3）
 
 `npm run check` **2047 / 2047 × 2 时区**（2046 → 2047）+ build（73 项）+ `tsc` 0。
