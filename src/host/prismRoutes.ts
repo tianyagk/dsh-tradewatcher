@@ -567,6 +567,10 @@ export async function runPrismForSlot(deps: PrismRouteDeps, slot: string): Promi
   const result = await placeDecision(deps.trading, run.decision, run.startedAt, quotes)
   // 保留裁剪/去重阶段的 rejects（此前被 placeDecision 的 rejects 覆盖 ⇒ 去重闸留痕会消失）
   run.decision = { ...run.decision, rejects: [...run.decision.rejects, ...result.rejects] }
+  // 单票上限以配置为准：模型自报值可能照抄骨架里的旧数字，落盘前统一成配置值（否则界面显示 20%、实际按 30% 裁）
+  if (typeof settingsNow.perStockPct === 'number') {
+    run.decision = { ...run.decision, limits: { ...run.decision.limits, singlePct: settingsNow.perStockPct } }
+  }
   run.placement = result.placement
   await deps.store.replaceRun(run)
   return run

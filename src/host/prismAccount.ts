@@ -473,12 +473,14 @@ export function parseDecisionDetailed(text: string | null): { decision: PrismDec
       .filter((o): o is Record<string, unknown> => o !== null && typeof o === 'object')
       .map((o) => ({
         secid: typeof o['secid'] === 'string' ? o['secid'] : '',
-        side: o['side'] === 'sell' ? ('sell' as const) : ('buy' as const),
+        // 方向缺省/拼错 ⇒ 丢弃（旧实现默认按 buy，可能把"卖"当"买"下出去）
+        side: (o['side'] === 'sell' ? 'sell' : o['side'] === 'buy' ? 'buy' : '') as 'buy' | 'sell' | '',
         price: Number(o['price']),
         shares: Math.round(Number(o['shares'])),
         reason: typeof o['reason'] === 'string' ? o['reason'] : '',
       }))
-      .filter((o) => /^[0-9]{1,3}\.[A-Za-z0-9]+$/.test(o.secid) && o.price > 0 && o.shares > 0)
+      .filter((o) => (o.side === 'buy' || o.side === 'sell') && /^[0-9]{1,3}\.[A-Za-z0-9]+$/.test(o.secid) && o.price > 0 && o.shares > 0)
+      .map((o) => ({ ...o, side: o.side as 'buy' | 'sell' }))
     const cancel = Array.isArray(raw['cancel']) ? raw['cancel'].filter((x): x is string => typeof x === 'string') : []
     const dropped = ordersRaw.length - orders.length
     const parseError = dropped > 0 ? `orders 中有 ${dropped} 笔字段非法被丢弃（原始 ${ordersRaw.length} 笔）` : null

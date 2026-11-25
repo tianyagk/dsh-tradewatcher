@@ -51,3 +51,14 @@ test('⑤ 界面：现金行可编辑金额，但不可移除、不可点开详�
   assert.match(page, /api\.prismCash\(Number\(editDraft\.shares\)\)/, '现金行走 action:cash')
   assert.match(page, /p\.kind === 'cash' \? \[\] : \[React\.createElement\('button'/, '现金行不提供「移除」')
 })
+
+test('⑥ 侧栏汇总不得把现金行算进「持仓市值/浮动盈亏」', async () => {
+  const { accountViewOf } = await import('../client/prismDeskSide.ts')
+  const rows = [
+    { secid: '1.518880', name: '黄金ETF华安', qty: 100, cost: 8, price: 9, marketValue: 900, pnl: 100 },
+    { secid: 'CASH', name: '现金', qty: 500, cost: 0, price: null, marketValue: 500, pnl: null, kind: 'cash' as const },
+  ]
+  const v = accountViewOf({ totalAssets: 1400, capital: 1800, cash: 500, realized: 0, rows, equity: [], dayPnl: null, floatSum: null } as never)
+  const mv = v.cells.find((c) => c.key === 'mv')
+  assert.equal(mv?.value, '900.00', `持仓市值应为 900（不含现金 500），实际 ${mv?.value}`)
+})

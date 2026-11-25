@@ -53,14 +53,16 @@ export function ratioPctOf(v: number | null | undefined, digits = 1): string {
 
 /* ────────────────────────── 账户总览 ────────────────────────── */
 
-export interface SidePositionRow { marketValue?: number | null; pnl?: number | null }
+export interface SidePositionRow { marketValue?: number | null; pnl?: number | null; kind?: 'cash' }
 export interface EquityPointLike { day: string; realized: number; capital?: number | null }
 
 /** 浮盈合计：任一行缺 pnl ⇒ null（不部分求和，与左栏同一口径） */
 function sumOf(rows: ReadonlyArray<SidePositionRow>, key: 'marketValue' | 'pnl'): number | null {
-  if (rows.length === 0) return null
+  // 现金行（kind:'cash'）不是持仓：计入「持仓市值/浮动盈亏」会把现金重复算一遍（实测多报 34.9%）
+  const held = rows.filter((r) => r.kind !== 'cash')
+  if (held.length === 0) return null
   let sum = 0
-  for (const r of rows) {
+  for (const r of held) {
     const v = finite(r[key])
     if (v === null) return null
     sum += v
