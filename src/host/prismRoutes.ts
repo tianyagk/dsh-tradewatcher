@@ -96,7 +96,10 @@ export function accountSnapshotOf(
         const w = total > 0 ? (mv / total) * 100 : null
         const px = prices[p.secid]
         const avg = typeof (p as { avgCost?: number }).avgCost === 'number' ? (p as { avgCost?: number }).avgCost as number : null
-        return `- ${p.name}（${p.secid}）：${p.qty} 股，摊薄成本 ${p.cost.toFixed(3)}${avg === null ? '' : `，买入均价 ${avg.toFixed(3)}`}，现价 ${px === null || px === undefined ? '—（未取到）' : px.toFixed(3)}，市值 ${mv.toFixed(2)}，权重 ${w === null ? '—' : `${w.toFixed(2)}%`}`
+        const costText = avg === null
+          ? `摊薄成本 ${p.cost.toFixed(3)}（无买入均价，止损暂按此值）`
+          : `成本（止损口径=买入均价） ${avg.toFixed(3)}；摊薄成本 ${p.cost.toFixed(3)}（仅展示，不用于止损）`
+        return `- ${p.name}（${p.secid}）：${p.qty} 股，${costText}，现价 ${px === null || px === undefined ? '—（未取到）' : px.toFixed(3)}，市值 ${mv.toFixed(2)}，权重 ${w === null ? '—' : `${w.toFixed(2)}%`}`
       })),
   ].join('\n')
 }
