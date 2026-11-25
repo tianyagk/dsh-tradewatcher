@@ -14,6 +14,7 @@ import { useNow } from './useNow.ts'
 import { usePanelVisible } from './usePageIdle.ts'
 import { createPrismRefresher } from './prismRefresh.ts'
 import { createStateGate } from './prismStateGate.ts'
+import { createRequestGen } from './requestGen.ts'
 import { clampBatcher, clampOverflowApply } from './clampBatch.ts'
 import { positionErrorOf } from './prismForm.ts'
 import { KlineChart, TrendChart } from './kline.tsx'
@@ -246,13 +247,17 @@ export function PrismPage(props: { active?: boolean; redUp?: boolean } = {}): Re
    * 这里落地前比一次整包指纹（`prismStateGate.ts`），相同就整条刷新路径都不进渲染。
    */
   type PrismPayload = Awaited<ReturnType<typeof api.prismState>>
+  const reqGenRef = React.useRef(createRequestGen())
   const stateGateRef = React.useRef<{ push: (r: PrismPayload) => boolean } | null>(null)
   if (stateGateRef.current === null) stateGateRef.current = createStateGate<PrismPayload>((r) => setState(r))
 
   /** 只拉行情状态：写操作后刷新用这个（自检是真实 LLM 调用，不能每次保存都跑） */
   const load = React.useCallback((): void => {
     setErr(null)
-    api.prismState().then((r) => stateGateRef.current?.push(r)).catch((e: Error) => setErr(e.message))
+    const gen = reqGenRef.current.next()
+    api.prismState()
+      .then((r) => { if (!reqGenRef.current.stale(gen)) stateGateRef.current?.push(r) })
+      .catch((e: Error) => { if (!reqGenRef.current.stale(gen)) setErr(e.message) })
   }, [])
   /** 「重放今日」：用当前行情手动重跑一轮（宿主 action:'run'，不占用自动节奏） */
   const [replaying, setReplaying] = React.useState(false)
@@ -277,7 +282,11 @@ export function PrismPage(props: { active?: boolean; redUp?: boolean } = {}): Re
    * 自动决策由宿主在交易时段按周期写入，页面必须能自己看到新记录，否则要手动刷新。
    */
   const refresh = React.useCallback((): void => {
-    api.prismState().then((r) => stateGateRef.current?.push(r)).catch(() => undefined)
+    // 请求代号（P1-2）：旧回包晚到不得覆盖新状态（写操作后 30s 窗口内会回退）
+    const gen = reqGenRef.current.next()
+    api.prismState()
+      .then((r) => { if (!reqGenRef.current.stale(gen)) stateGateRef.current?.push(r) })
+      .catch(() => undefined)
   }, [])
   /**
    * 30s 静默刷新（AUDIT-CLIENT-PERF P1-1）：**只有"本页是当前页"时才建定时器**。

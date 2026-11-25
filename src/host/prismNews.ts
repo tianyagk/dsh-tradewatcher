@@ -104,7 +104,8 @@ export async function backfillNews(store: PrismStore, deps: PrismNewsDeps = {}):
       }
       cursor = page.oldest ?? undefined
     }
-    if (pages >= PRISM_NEWS_PAGE_MAX) done = false
+    // 恰好第 MAX 页就是最后一页时，上面已 done=true，不能再被覆盖（否则永远 backfilling，每 30s 重抓）
+    if (pages >= PRISM_NEWS_PAGE_MAX && !done) done = false
   } catch (error) {
     const status = statusOf(
       { state: 'error', pages, lastSeenId: null, fetchedAt: now(), reason: `金十取数失败（${String(error).slice(0, 80)}）`, items: 0 },
@@ -161,6 +162,8 @@ export async function incrementalNews(store: PrismStore, deps: PrismNewsDeps = {
     await store.saveNews([], status)
     return status
   }
+  // 没有新条目就不写盘：GET /prism 每 30s 会调一次，旧实现每次重写 380KB（审计 UI P1-6）
+  if (collected.length === 0 && before.status.state === 'ready') return before.status
   const newest = collected.slice().sort((a, b) => (a.time < b.time ? 1 : -1))[0] ?? null
   const status = statusOf(
     {

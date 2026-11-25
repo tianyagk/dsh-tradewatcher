@@ -81,7 +81,8 @@ test('⑤ token 用量恒 null 且 missing 含条目（给 0 或假值 ⇒ 败�
 
 test('⑥ 旧字段未被删除或改名（回包新增 desk 且保留 state/trading/modelCatalog）', () => {
   const src = readFileSync(new URL('./prismRoutes.ts', import.meta.url), 'utf8')
-  const block = src.slice(src.indexOf("send(res, 200, {"), src.indexOf("return", src.indexOf("send(res, 200, {")))
+  const start = src.indexOf("slimPrismPayload({")
+  const block = src.slice(start, src.indexOf("return", start))
   for (const key of ['ok: true', 'asOf:', 'state:', 'trading:', 'modelCatalog,']) assert.ok(block.includes(key), `回包缺旧字段 ${key}`)
   assert.ok(block.includes('desk,'), '回包必须新增 desk')
   const injected = block.replace('desk,', '')

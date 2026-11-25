@@ -493,6 +493,23 @@ const stateOf = (store: PrismStore, get: (n: string) => unknown): PrismState => 
   }
 }
 
+/**
+ * HTTP 回包瘦身（审计 UI P1）：`runs[].reports[].text` 与 `desk.decisionFlow` 客户端零引用，
+ * 单次回包合计约 557KB（33.5%）。只影响回包，落盘结构不变。
+ */
+export function slimPrismPayload<T extends Record<string, unknown>>(payload: T): T {
+  const state = payload['state'] as { runs?: Array<Record<string, unknown>> } | undefined
+  if (state !== undefined && Array.isArray(state.runs)) {
+    state.runs = state.runs.map((r) => {
+      const { reports: _reports, ...rest } = r
+      return rest
+    })
+  }
+  const desk = payload['desk'] as { decisionFlow?: unknown } | undefined
+  if (desk !== undefined && 'decisionFlow' in desk) delete desk.decisionFlow
+  return payload
+}
+
 const tradingOf = (trading: PrismTradingStore, prices: Record<string, number | null> = {}): {
   account: ReturnType<PrismTradingStore['account']>
   orders: ReturnType<PrismTradingStore['orders']>
@@ -653,14 +670,14 @@ export function makePrismRoutes(deps: PrismRouteDeps): PluginWebRoute[] {
             constraints: { perStockPct: settings.perStockPct ?? null, stopLossPct: settings.stopLossPct ?? null },
           })
           // 顶层 `state` 也带模拟盘字段（旧消费者读 state.account；页面读 trading）
-          send(res, 200, {
+          send(res, 200, slimPrismPayload({
             ok: true,
             asOf: Date.now(),
             state: { ...stateOf(store, deps.get), ...tradingWithDecision, modelCatalog },
             trading: tradingWithDecision,
             modelCatalog,
             desk,
-          })
+          }))
           return
         }
         if (req.method !== 'POST') {

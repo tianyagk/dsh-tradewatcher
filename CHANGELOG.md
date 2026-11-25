@@ -11,6 +11,21 @@
 
 ---
 
+## v0.227.0 — 回包瘦身 / 旧回包防覆盖 / 新闻无谓写盘
+
+`npm run check` **2021 / 2021 × 2 时区**（2016 → 2021）+ build（73 项）+ `tsc` 0。
+
+| # | 来源 | 问题 | 修法 |
+| --- | --- | --- | --- |
+| 1 | UI P1 | 回包 1.63MiB，`runs[].reports[].text`（445KB）与 `desk.decisionFlow`（111KB）客户端零引用 | `slimPrismPayload()` 只在下发前剥离，落盘结构不变 |
+| 2 | UI P1-2 | 30s 静默刷新无请求代号：旧回包晚到会覆盖新状态 | `load`/`refresh` 领 `createRequestGen` 代次，落地前判 `stale` |
+| 3 | UI P1-6 | `GET /prism` 每 30s 调 `incrementalNews`，无新条目也重写 380KB | 无新条目且状态 ready ⇒ 直接返回，不写盘 |
+| 4 | UI P1-6 | `backfillNews` 第 10 页恰好完成时 `done` 被覆盖成 false ⇒ 永远 backfilling | 改为 `if (pages >= MAX && !done) done = false` |
+
+### 验证
+新增 `slimPayload.test.ts`（剥离字段/反例）、`requestGenWiring.test.ts`（两处领代号）、`newsIncremental.test.ts`（无新条目不写盘、有新条目写一次）。
+`npm run check` **2021 / 2021 × 2 时区** + build（73 项）+ `tsc` 0。
+
 ## v0.226.1 — 修「刷新指纹恒失效」（asOf 参与指纹）
 
 `npm run check` **2016 / 2016 × 2 时区**（2015 → 2016）+ build（73 项）+ `tsc` 0。
