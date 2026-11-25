@@ -233,6 +233,13 @@ export interface PrismOrder {
   status: 'pending' | 'filled' | 'cancelled' | 'rejected'
   /** 最近处理的 bar 时间；同一 bar 不重复下单，下一根 bar 才推进 */
   lastBarTime?: number
+  /** v0.241.0：自动做T 委托（并入主挂单管线） */
+  channel?: 'autoT'
+  tPlanId?: string
+  pairId?: string
+  leg?: 'open' | 'close'
+  /** 自动做T 截止时刻（epoch ms）：到点撤单 */
+  expireAt?: number
   /** 已成交股数（部分成交时 < shares；status 仍 pending，余量排队） */
   filledShares?: number
   /** 本轮不成交的稳定原因码（vol-missing / vol-zero / trend-no-1min / transient-source） */
@@ -331,6 +338,12 @@ export interface PrismDecision {
   note?: string | null
   orders: Array<{ secid: string; side: 'buy' | 'sell'; price: number; shares: number; reason: string }>
   cancel: string[]
+  /** v0.241.0：自动做T 计划（不占 orders；由引擎转成配对挂单） */
+  tPlans?: Array<{
+    secid: string; direction: 'buy-first' | 'sell-first'
+    buyPrice: number; sellPrice: number; shares: number
+    observe?: string | null; reasoning?: string | null; conclusion?: string | null
+  }>
   /** 引擎拒绝的委托（盘后/资金/约束），带原因；不是「模型没动作」 */
   rejects: Array<{ secid: string; side: 'buy' | 'sell'; price: number; shares: number; reason: string }>
   /** 汇总 JSON 解析失败时的原文（不得静默成 0 笔） */

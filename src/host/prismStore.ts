@@ -46,6 +46,7 @@ export interface AutoTPlanRec {
   buyPrice: number | null; sellPrice: number | null; shares: number
   status: 'planned' | 'waiting' | 'open-filled' | 'done' | 'aborted'
   observe: string | null; reasoning: string | null; conclusion: string | null
+  pairId?: string
   at: number
 }
 export interface AutoTTradeRec {

@@ -12,7 +12,7 @@
  */
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { PluginWebRoute } from './context.ts'
-import type { AutoTFile, AutoTResultRec, PrismStore } from './prismStore.ts'
+import type { AutoTFile, AutoTPlanRec, AutoTResultRec, PrismStore } from './prismStore.ts'
 import { LedgerUnreadableError, PrismTradingStore, applyFeeCorrection, avgCostFromHistory, clampDecision, copyAtCost, dayStartMismatchOf, equityPointOf, isEtfName, matchTick, placeDecision, productKeyOf, realizedFromIdentity, rebuildFromOrders, upsertEquity, type QuoteLite } from './prismAccount.ts'
 import { dataHome, type DataStore } from './store.ts'
 import type { PrismAccount, PrismFill, PrismOrder, PrismRun, PrismSettings, PrismState } from '../shared/prism.ts'
@@ -406,6 +406,13 @@ export const prismInputsOf = async (deps: PrismRouteDeps): Promise<PrismInputs> 
     tech: await indexTechCachedOf().catch(() => '【指数技术面（由本地日线计算；缺数据写 —）】\n—（本轮取数失败）'),
     candidates: await candidatesCachedOf(deps, watch).catch(() => '【候选池（持仓 + 自选）】\n—（本轮取数失败）'),
     limits: limitsTextOf(deps.store.settings()),
+    autoT: (() => {
+      const cfg = deps.store.settings().autoT
+      if (cfg?.enabled !== true) return '【自动做T·可计划标的】未开启（不要输出 tPlans，给空数组）'
+      const rows = account.positions.filter((p) => cfg.positions?.[p.secid]?.enabled === true && p.qty > 0)
+      if (rows.length === 0) return '【自动做T·可计划标的】无（没有开启做T的持仓；tPlans 给空数组）'
+      return ['【自动做T·可计划标的】（只对这些持仓给 tPlans）', ...rows.map((p) => `- ${p.name}（${p.secid}）：持仓 ${p.qty}，可卖 ${p.available}，买入均价 ${p.avgCost ?? p.cost}`)].join('\n')
+    })(),
     drawdown: (() => {
       const st = deps.store.settings()
       const g = drawdownGateOf(deps.trading.equity(), deps.store.runs().at(-1)?.drawdown ?? null, Date.now(), {
@@ -587,6 +594,43 @@ const tradingOf = (trading: PrismTradingStore, prices: Record<string, number | n
   exposure: unavailableExposure('本次操作未重算行业暴露（GET 时计算）'),
 })
 
+/** 把 tPlans 转成配对挂单（channel:'autoT'），与主委托同管线 */
+async function placeAutoTPairs(deps: PrismRouteDeps, run: PrismRun): Promise<void> {
+  const cfg = deps.store.settings().autoT
+  const plans = run.decision.tPlans ?? []
+  if (cfg?.enabled !== true || plans.length === 0) return
+  const day = dayOf(Date.now())
+  const deadline = Date.parse(`${day}T14:50:00+08:00`)
+  if (!(Date.now() < deadline)) return
+  const records: AutoTPlanRec[] = []
+  await deps.trading.runExclusive(async () => {
+    await deps.trading.reloadForWrite()
+    const account = deps.trading.account()
+    const orders = deps.trading.orders().slice()
+    const fills = deps.trading.fills()
+    for (const plan of plans) {
+      if (cfg.positions?.[plan.secid]?.enabled !== true) continue
+      const pos = account.positions.find((p) => p.secid === plan.secid)
+      if (pos === undefined) continue
+      const cap = Math.min(pos.available, Math.floor((pos.qty * 0.2) / 100) * 100, plan.shares)
+      if (cap < 100) continue
+      if ((plan.sellPrice / plan.buyPrice - 1) * 100 < 0.8) continue
+      const pairId = `T-${day.replace(/-/g, '')}-${plan.secid}-${Date.now().toString(36)}`
+      const at = Date.now()
+      orders.push(
+        { id: `${pairId}-buy`, secid: plan.secid, name: pos.name, side: 'buy', price: plan.buyPrice, shares: cap, reason: '自动做T·买入腿', decidedAt: at, day, status: 'pending', channel: 'autoT', tPlanId: pairId, pairId, leg: 'open', expireAt: deadline },
+        { id: `${pairId}-sell`, secid: plan.secid, name: pos.name, side: 'sell', price: plan.sellPrice, shares: cap, reason: '自动做T·卖出腿', decidedAt: at, day, status: 'pending', channel: 'autoT', tPlanId: pairId, pairId, leg: 'close', expireAt: deadline },
+      )
+      records.push({ id: pairId, secid: plan.secid, name: pos.name, day, direction: plan.direction, buyPrice: plan.buyPrice, sellPrice: plan.sellPrice, shares: cap, status: 'waiting', observe: plan.observe ?? null, reasoning: plan.reasoning ?? null, conclusion: plan.conclusion ?? null, pairId, at })
+    }
+    await deps.trading.saveAll({ account, orders, fills })
+    if (records.length > 0) {
+      const file = deps.store.autoT()
+      await deps.store.saveAutoT({ ...file, plans: [...file.plans, ...records] })
+    }
+  })
+}
+
 export async function runPrismForSlot(deps: PrismRouteDeps, slot: string): Promise<Awaited<ReturnType<typeof runPrismAnalysis>>> {
   // P0-2：账本读不到时，连研判落单都不许开始（先给明确的 400，而不是跑完 LLM 再报错）
   deps.trading.assertWritable('棱镜研判落单')
@@ -657,6 +701,7 @@ export async function runPrismForSlot(deps: PrismRouteDeps, slot: string): Promi
   const result = await placeDecision(deps.trading, run.decision, run.startedAt, quotes)
   // 保留裁剪/去重阶段的 rejects（此前被 placeDecision 的 rejects 覆盖 ⇒ 去重闸留痕会消失）
   run.decision = { ...run.decision, rejects: [...run.decision.rejects, ...result.rejects] }
+  await placeAutoTPairs(deps, run).catch((error) => { run.error = `自动做T下单失败：${String((error as Error)?.message ?? error)}` })
   // 单票上限以配置为准：模型自报值可能照抄骨架里的旧数字，落盘前统一成配置值（否则界面显示 20%、实际按 30% 裁）
   if (typeof settingsNow.perStockPct === 'number') {
     run.decision = { ...run.decision, limits: { ...run.decision.limits, singlePct: settingsNow.perStockPct } }

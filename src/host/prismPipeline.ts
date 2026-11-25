@@ -40,6 +40,8 @@ export interface PrismInputs {
   candidates?: string
   /** v0.221.2：【约束（用户配置，硬边界）】——与骨架冲突时以此为准 */
   limits?: string
+  /** v0.241.0：【自动做T·可计划标的】 */
+  autoT?: string
   /** v0.226.0：【回撤闸门】引擎判定，模型必须看到 */
   drawdown?: string
 }
@@ -92,6 +94,7 @@ const compileInput = (inputs: PrismInputs, withNews = true): string => {
     ...(inputs.candidates !== undefined && inputs.candidates.trim() !== '' ? [inputs.candidates] : []),
     ...(inputs.limits !== undefined && inputs.limits.trim() !== '' ? [inputs.limits] : []),
     ...(inputs.drawdown !== undefined && inputs.drawdown.trim() !== '' ? [inputs.drawdown] : []),
+    ...(inputs.autoT !== undefined && inputs.autoT.trim() !== '' ? [inputs.autoT] : []),
     '【真实账户持仓（只读参考 —— 禁止用于计算棱镜仓位/权重）】',
     inputs.positions || '—',
     // 同键 ETF 合并成一行：让模型看见「这两只是同一条腿」，不重复建仓
@@ -183,6 +186,7 @@ export async function runPrismAnalysis(
           '\n【强制·双侧】orders 允许卖单，卖单字段同样是 {secid, side:\'sell\', price, shares, reason}；不能只考虑买入侧。' +
           '\n【强制·空单说明】orders 为空时，note 必须分两段：「不买的理由」与「不卖的理由」；缺一段即视为不合格。' +
           '\n【强制·不得重复被拒】今日已因同一原因被拒的委托，不得原样重发；若仍要交易，必须先核对可用数量/可用资金，并说明与上次不同的依据。' +
+          '\n【强制·自动做T】只对【自动做T·可计划标的】里的持仓给 tPlans；其余一律不给。tPlans 每项 {secid,direction:buy-first|sell-first,buyPrice,sellPrice,shares,observe,reasoning,conclusion}；shares 必须是 100 的倍数且 ≤ 可卖数量与底仓 20%；价差（sellPrice/buyPrice−1）必须 ≥0.8% 且覆盖双边费用；不打算做就给空数组，禁止编造。' +
           '\n【强制·措辞】不得使用「唯一 / 全部 / 所有」等绝对量词，除非逐只对照候选池确认只有一只；两笔委托不得都称「唯一」。' +
           '\n【强制·止损口径】判断「浮亏是否触及止损线」必须用「买入均价」（卖出不变），不得用摊薄成本——摊薄成本会被亏损卖出推高，越卖越亏。' +
           '\n【强制·单票以配置为准】limits.singlePct 必须等于【约束（用户配置，硬边界）】里的单票上限（不是骨架里的历史数字）；超限减仓按配置值算，不得引用骨架旧值。' +

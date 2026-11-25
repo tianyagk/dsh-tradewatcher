@@ -39,6 +39,7 @@ import { dataHome } from './store.ts'
 import { LockTimeoutError, readJsonForUpdate, updateJsonLocked, withFileLocks } from './lock.ts'
 import { ReadGuard, isFirstBoot, quarantineFile } from './readGuard.ts'
 import { dayOf, hhmmOf } from './time.ts'
+import type { AutoTFile, AutoTResultRec } from './prismStore.ts'
 import { withHostBreaker } from './breakerFetch.ts'
 import { writeFileAtomic, writeFileSetAtomic, type AtomicFileSetEntry } from './atomic.ts'
 
@@ -518,6 +519,18 @@ export function parseDecisionDetailed(text: string | null): { decision: PrismDec
         if (typeof v === 'number' && Number.isFinite(v) && v >= 0 && v <= 100) byIndustry[name] = v
       }
     }
+    const tPlansRaw = Array.isArray(raw['tPlans']) ? raw['tPlans'] : []
+    const tPlans = tPlansRaw
+      .filter((p): p is Record<string, unknown> => p !== null && typeof p === 'object')
+      .map((p) => ({
+        secid: typeof p['secid'] === 'string' ? p['secid'] : '',
+        direction: p['direction'] === 'sell-first' ? ('sell-first' as const) : ('buy-first' as const),
+        buyPrice: Number(p['buyPrice']), sellPrice: Number(p['sellPrice']), shares: Math.round(Number(p['shares'])),
+        observe: typeof p['observe'] === 'string' ? p['observe'] : null,
+        reasoning: typeof p['reasoning'] === 'string' ? p['reasoning'] : null,
+        conclusion: typeof p['conclusion'] === 'string' ? p['conclusion'] : null,
+      }))
+      .filter((p) => /^[0-9]{1,3}\.[A-Za-z0-9]+$/.test(p.secid) && p.buyPrice > 0 && p.sellPrice > p.buyPrice && p.shares >= 100 && p.shares % 100 === 0)
     const decision: PrismDecision = {
       limits: {
         singlePct: typeof limitsRaw['singlePct'] === 'number' && limitsRaw['singlePct'] >= 0 && limitsRaw['singlePct'] <= 100 ? limitsRaw['singlePct'] : null,
@@ -532,6 +545,7 @@ export function parseDecisionDetailed(text: string | null): { decision: PrismDec
           : null,
       orders,
       cancel,
+      ...(tPlans.length === 0 ? {} : { tPlans }),
       rejects: [],
       parseError,
     }
@@ -959,6 +973,23 @@ export class PrismTradingStore {
     this.ordersValue = mergedOrders
     this.fillsValue = mergedFills
     this.invalidateOrdersCache()
+  }
+
+  /** 自动做T 账本（与主三账本同目录，成交仍以 fills 为准） */
+  async autoT(): Promise<AutoTFile> {
+    try {
+      const disk = await readJsonForUpdate(this.pathOf('prism-autot.json'), 'throw') as { plans?: unknown; trades?: unknown; results?: unknown } | null
+      if (disk === null) return { plans: [], trades: [], results: [] }
+      return {
+        plans: (Array.isArray(disk.plans) ? disk.plans : []) as AutoTFile['plans'],
+        trades: (Array.isArray(disk.trades) ? disk.trades : []) as AutoTFile['trades'],
+        results: (Array.isArray(disk.results) ? disk.results : []) as AutoTFile['results'],
+      }
+    } catch { return { plans: [], trades: [], results: [] } }
+  }
+
+  async saveAutoT(next: AutoTFile): Promise<void> {
+    await updateJsonLocked(this.pathOf('prism-autot.json'), () => ({ v: 1, ...next })).catch(() => undefined)
   }
 
   async saveEquity(points: PrismEquityPoint[]): Promise<void> {
@@ -1636,7 +1667,7 @@ async function placeDecisionLocked(
   quotes: Record<string, QuoteLite>,
 ): Promise<PlaceDecisionResult> {
   const day = dayOf(now)
-  const account = rollDay(store.account(), day, store.equity().at(-1)?.equity ?? null)
+  let account = rollDay(store.account(), day, store.equity().at(-1)?.equity ?? null)
   const orders = store.orders().map((o) => ({ ...o }))
   for (const id of decision.cancel) {
     const o = orders.find((x) => x.id === id && x.status === 'pending')
@@ -1764,7 +1795,7 @@ async function matchTickLocked(
   const now = (deps.now ?? Date.now)()
   const day = dayOf(now)
   const rate = deps.participationRate ?? 0.1
-  const account = rollDay(store.account(), day, store.equity().at(-1)?.equity ?? null)
+  let account = rollDay(store.account(), day, store.equity().at(-1)?.equity ?? null)
   const orders = store.orders().map((o) => ({ ...o }))
   const fills = store.fills().slice()
   let filled = 0
@@ -1893,6 +1924,53 @@ async function matchTickLocked(
   }
   // 三账本一次写：账户（钱）、委托/成交（流水）、净值点必须在同一把文件锁内提交
   // 取价失败 ⇒ 不写净值点（否则整仓按成本计，会打出假的日跌幅/假熔断）
+  // 自动做T：两腿都成交 ⇒ 结算；到截止时间未完成 ⇒ 撤单并标记 aborted
+  try {
+    const file = await store.autoT()
+    let changed = false
+    for (const plan of file.plans) {
+      if (plan.status === 'done' || plan.status === 'aborted') continue
+      const pair = orders.filter((o) => o.pairId === plan.pairId)
+      if (pair.length < 2) continue
+      const buy = pair.find((o) => o.side === 'buy')
+      const sell = pair.find((o) => o.side === 'sell')
+      if (buy === undefined || sell === undefined) continue
+      if (buy.status === 'filled' && sell.status === 'filled') {
+        const sumOf = (id: string, key: 'amount' | 'fee'): number => fills.filter((f) => f.orderId === id).reduce((a, f) => a + f[key], 0)
+        const net = Math.round((sumOf(sell.id, 'amount') - sumOf(buy.id, 'amount') - sumOf(buy.id, 'fee') - sumOf(sell.id, 'fee')) * 100) / 100
+        const rec: AutoTResultRec = {
+          id: `${plan.id}-r`, planId: plan.id, secid: plan.secid, day,
+          buyPrice: buy.fillPrice ?? plan.buyPrice ?? 0, sellPrice: sell.fillPrice ?? plan.sellPrice ?? 0,
+          shares: plan.shares, fees: Math.round((sumOf(buy.id, 'fee') + sumOf(sell.id, 'fee')) * 100) / 100, net, at: now,
+        }
+        file.results.push(rec)
+        plan.status = 'done'
+        changed = true
+        continue
+      }
+      const deadline = Math.max(...pair.map((o) => o.expireAt ?? 0))
+      if (deadline > 0 && now >= deadline) {
+        const filledLeg = pair.find((o) => o.status === 'filled' || (o.filledShares ?? 0) > 0)
+        for (const o of pair) if (o.status === 'pending') { o.status = 'cancelled'; o.cancelledAt = now; o.cancelReason = '自动做T截止' }
+        if (filledLeg !== undefined) {
+          // 已成交一腿：按现价强制平掉，保证收盘净持仓不变（失败也会体现在净收益里）
+          const q = await deps.quotes([plan.secid]).catch(() => ({}))
+          const px = q[plan.secid]?.price
+          if (typeof px === 'number' && Number.isFinite(px) && px > 0) {
+            const side: 'buy' | 'sell' = filledLeg.side === 'buy' ? 'sell' : 'buy'
+            const fee = feesOf(side, px, plan.shares).total
+            const fill = { orderId: `${plan.id}-forced`, secid: plan.secid, name: plan.name, side, price: px, shares: plan.shares, amount: Math.round(px * plan.shares * 100) / 100, fee, at: now, source: '1min' as const }
+            account = applyFill(account, { ...filledLeg, id: `${plan.id}-forced`, side, price: px, shares: plan.shares, status: 'pending', day }, fill)
+            fills.push(fill)
+          }
+        }
+        plan.status = 'aborted'
+        changed = true
+      }
+    }
+    if (changed) await store.saveAutoT(file)
+  } catch { /* 自动做T 账本异常不影响主账 */ }
+
   let quoteMap: Record<string, { price?: number | null }> | null = null
   try { quoteMap = await deps.quotes(account.positions.map((p) => p.secid)) } catch { quoteMap = null }
   const equity = quoteMap === null
