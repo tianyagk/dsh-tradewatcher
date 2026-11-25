@@ -397,7 +397,7 @@ export interface PrismDrawdownGate {
   cashMinPct: number
   /** 连续两次触发后的单轮冻结 */
   freezeRound: boolean
-  status: '正常' | '已拒新买单'
+  status: '正常' | '已拒新买单' | '未启用（样本不足）'
   n: number
   reason: string | null
   at: number

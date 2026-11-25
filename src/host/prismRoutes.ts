@@ -951,9 +951,8 @@ export function makePrismRoutes(deps: PrismRouteDeps): PluginWebRoute[] {
               const unrealized = rows.reduce((a, r) => a + (r.mv - r.net), 0)
               const realized = realizedFromIdentity(equity, account.capital, unrealized)
               const before = account.realized
-              // 账面校平同时把可卖数量对齐持仓：手工调整过的股数不应再被当成"今日买入"锁住
-              const positionsFixed = account.positions.map((p) => ({ ...p, available: p.qty }))
-              const value = { ...account, realized, positions: positionsFixed }
+              // 不再把 available 全部解锁（审计 C1：当日买入会被校平绕过 T+1）；手工调整已在 update 时解锁
+              const value = { ...account, realized }
               await deps.trading.saveAll({ account: value, orders: deps.trading.orders(), fills: deps.trading.fills() })
               await deps.store.patchSettings({ gateBaseAt: Date.now() })
               return { before, after: realized, equity, unrealized, cash: account.cash }
@@ -1001,6 +1000,10 @@ export function makePrismRoutes(deps: PrismRouteDeps): PluginWebRoute[] {
               const raised = capitalAfter > capitalBefore
               const result = copyAtCost(rows, { ...account, capitalLimit: capitalAfter, capital: capitalAfter }, Date.now())
               result.account.capital = capitalAfter
+              // 复制 = 新账本：旧挂单全部作废（否则旧买单用新现金成交、旧卖单卖掉新持仓）
+              for (const o of deps.trading.orders()) {
+                if (o.status === 'pending') { o.status = 'cancelled'; o.cancelledAt = Date.now(); o.cancelReason = '复制重置' }
+              }
               await deps.trading.saveAll({ account: result.account, orders: deps.trading.orders(), fills: deps.trading.fills() })
               return { result, capitalBefore, capitalAfter, raised }
             })

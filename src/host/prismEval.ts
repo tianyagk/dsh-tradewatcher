@@ -136,7 +136,7 @@ export function drawdownGateOf(
     return {
       dailyPct: null, cumulativePct: null, peak: null, triggered: false,
       dailyTriggered: false, cumulativeTriggered: false, targetTotalPct: 100,
-      cashMinPct: 0, freezeRound: false, status: '正常', n: valid.length,
+      cashMinPct: 0, freezeRound: false, status: '未启用（样本不足）', n: valid.length,
       reason: '资本调整后净值点不足 2 个，无法计算回撤', at,
     }
   }

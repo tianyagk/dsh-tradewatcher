@@ -328,6 +328,8 @@ export function copyAtCost(
   const next: PrismAccount = {
     ...account,
     cash: remaining,
+    // 复制 = 新账本：已实现盈亏归零（旧实现沿用上一本账，导致 equity−capital 与 realized 永久不自洽）
+    realized: 0,
     positions,
     copiedAt: now,
     copyLogs: [...account.copyLogs, log].slice(-20),
@@ -423,7 +425,12 @@ export function equityPointOf(
   now: number,
   benchmarkClose: number | null = null,
 ): PrismEquityPoint {
-  const positionsValue = money(account.positions.reduce((a, p) => a + p.qty * (priceOf(p.secid) ?? p.cost), 0))
+  const markOf = (secid: string, cost: number): number => {
+    const px = priceOf(secid)
+    // 0/NaN/负价一律视为缺价（否则市值会被打成 0 或 NaN，直接触发假熔断）
+    return typeof px === 'number' && Number.isFinite(px) && px > 0 ? px : cost
+  }
+  const positionsValue = money(account.positions.reduce((a, p) => a + p.qty * markOf(p.secid, p.cost), 0))
   const equity = money(account.cash + positionsValue)
   const day = account.day || dayOf(now)
   return {
@@ -436,7 +443,7 @@ export function equityPointOf(
     realized: account.realized,
     // 未实现盈亏 = Σ(市值 − 账面成本)，与 rebase 的恒等式同口径；
     // 旧实现写的是 `equity − capitalLimit`（其实是总盈亏），导致 equity ≠ capital + realized + unrealized。
-    unrealized: money(account.positions.reduce((a, p) => a + (p.qty * (priceOf(p.secid) ?? p.cost) - (p.netCost ?? p.qty * p.cost)), 0)),
+    unrealized: money(account.positions.reduce((a, p) => a + (p.qty * markOf(p.secid, p.cost) - (p.netCost ?? p.qty * p.cost)), 0)),
     at: now,
   }
 }
@@ -495,8 +502,8 @@ export function parseDecisionDetailed(text: string | null): { decision: PrismDec
     }
     const decision: PrismDecision = {
       limits: {
-        singlePct: typeof limitsRaw['singlePct'] === 'number' ? limitsRaw['singlePct'] : null,
-        totalPct: typeof limitsRaw['totalPct'] === 'number' ? limitsRaw['totalPct'] : null,
+        singlePct: typeof limitsRaw['singlePct'] === 'number' && limitsRaw['singlePct'] >= 0 && limitsRaw['singlePct'] <= 100 ? limitsRaw['singlePct'] : null,
+        totalPct: typeof limitsRaw['totalPct'] === 'number' && limitsRaw['totalPct'] >= 0 && limitsRaw['totalPct'] <= 100 ? limitsRaw['totalPct'] : null,
         note: typeof limitsRaw['note'] === 'string' ? limitsRaw['note'] : null,
         ...(Object.keys(byIndustry).length === 0 ? {} : { byIndustry }),
       },
