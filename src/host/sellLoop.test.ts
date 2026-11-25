@@ -17,10 +17,10 @@ const acc = (): PrismAccount => ({
 const sellOrder = (shares: number): PrismOrder => ({ id: 'o', secid: '1.601872', name: '招商轮船', side: 'sell', price: 15.5, shares, reason: 'x', decidedAt: 1, day: '2026-11-24', status: 'filled', filledShares: shares, filledAt: 2, fillPrice: 15.5 } as PrismOrder)
 const sellFill = (shares: number): PrismFill => ({ orderId: 'o', secid: '1.601872', name: '招商轮船', side: 'sell', price: 15.5, shares, amount: 15.5 * shares, fee: 5, at: 2, source: '1min' })
 
-test('① 亏损卖出会抬高摊薄成本，但买入均价 avgCost 不变', () => {
+test('① 亏损卖出不再抬高成本（v0.226.0 起卖出只冲减账面成本）', () => {
   const r = applyFill(acc(), sellOrder(1_000), sellFill(1_000))
   const p = r.positions[0]!
-  assert.ok(p.cost > 18.83, `摊薄成本应被抬高，实际 ${p.cost}`)
+  assert.equal(p.cost, 18.83, `卖出后每股成本应保持 18.83，实际 ${p.cost}`)
   assert.equal(p.avgCost, 18.23, '买入均价不得因卖出变化')
 })
 

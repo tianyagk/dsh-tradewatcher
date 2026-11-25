@@ -274,11 +274,13 @@ export function applyFill(account: PrismAccount, order: PrismOrder, fill: PrismF
     if (p === undefined) throw new Error('卖出无持仓（内部错误）')
     if (fill.shares > p.qty) throw new Error(`卖出超过持仓（内部错误：${fill.shares} > ${p.qty}）`)
     cash = money(cash + fill.amount - fill.fee)
-    // 摊薄成本口径（仓库既有裁决，不改）：卖出所得（减费）冲减账面成本 ⇒ 盈利卖出会摊低成本，
-    // 亏损卖出会抬高成本。`cost` 因此不是"移动加权"，界面也标"摊薄成本"。
+    // v0.226.0：卖出只冲减**账面成本**（每股成本 × 股数），不再用卖出所得冲减。
+    // 旧写法在盈利卖出时会把 netCost 冲成负数 ⇒ cost 为负 ⇒ 浮盈被放大一倍（审计 A1）；
+    // 亏损卖出也不再抬高成本（用户反馈的"越卖越亏"）。卖出盈亏全部体现在 realized。
     const net = p.netCost ?? p.qty * p.cost
-    realized = money(realized + (fill.amount - fill.fee) - (p.cost * fill.shares))
-    p.netCost = money(net - (fill.amount - fill.fee))
+    const book = money(p.cost * fill.shares)
+    realized = money(realized + (fill.amount - fill.fee) - book)
+    p.netCost = money(net - book)
     p.qty -= fill.shares
     p.available = Math.max(0, p.available - fill.shares)
     if (p.qty > 0) p.cost = money((p.netCost as number) / p.qty)
@@ -978,6 +980,26 @@ export class PrismTradingStore {
             this.markDegraded(file, error)
             throw new LedgerUnreadableError(this.ledgerError() ?? String(error), '一次写回棱镜三账本')
           }
+        }
+        // v0.226.0：跨进程保护（审计 D1）——本进程写回前，磁盘上的 orders/fills 不得比内存里多。
+        // 少一条就说明另有写入者（另一个 dsh-web 实例、手工脚本），整份覆盖会静默丢成交 ⇒ 拒绝并让人重试。
+        try {
+          const diskOrders = await readJsonForUpdate(this.pathOf('prism-orders.json'), 'throw') as
+            { orders?: Array<{ id?: unknown }>; fills?: Array<{ orderId?: unknown; at?: unknown; shares?: unknown }> } | null
+          if (diskOrders !== null) {
+            const key = (f: { orderId?: unknown; at?: unknown; shares?: unknown }): string => `${String(f.orderId)}|${String(f.at)}|${String(f.shares)}`
+            const mine = new Set(next.fills.map(key))
+            const lostFills = (diskOrders.fills ?? []).filter((f) => !mine.has(key(f)))
+            const mineOrders = new Set(next.orders.map((o) => o.id))
+            const lostOrders = (diskOrders.orders ?? []).filter((o) => !mineOrders.has(String(o.id)))
+            if (lostFills.length > 0 || lostOrders.length > 0) {
+              throw new Error(`账本已被其他进程写入（成交 ${lostFills.length} 笔 / 委托 ${lostOrders.length} 笔），拒绝覆盖`)
+            }
+          }
+        } catch (error) {
+          if (error instanceof LedgerUnreadableError) throw error
+          this.markDegraded(this.pathOf('prism-orders.json'), error)
+          throw new LedgerUnreadableError(String((error as Error)?.message ?? error), '一次写回棱镜三账本')
         }
         // 内容没变就不写：交易时段 matchTick 每 30s 调一次 saveAll，即使零变化也会重写三份账本
         // （实测 ≈112MB/日 无谓写 + 每次 mtime 变化会让读缓存失效）。逐文件比对**我们自己的序列化文本**：

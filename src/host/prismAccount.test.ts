@@ -273,7 +273,7 @@ test('注入：绕开成交前校验直接 applyFill ⇒ 必须抛错（现金�
   )
 })
 
-test('摊薄成本：买 100@10 → 卖 50@12 ⇒ 剩余 50 股成本 8.00（不是移动加权 10.00）', () => {
+test('成本口径（v0.226.0）：买 100@10 → 卖 50@12 ⇒ 剩余 50 股成本仍 10.00，盈利进 realized', () => {
   const buy = applyFill(emptyAccount(), orderOf({ price: 10, shares: 100, side: 'buy' }), {
     orderId: 'b', secid: '1.600519', name: '贵州茅台', side: 'buy', price: 10, shares: 100, amount: 1000, fee: 0, at: 1, source: '1min',
   })
@@ -282,6 +282,7 @@ test('摊薄成本：买 100@10 → 卖 50@12 ⇒ 剩余 50 股成本 8.00（不
     orderId: 's', secid: '1.600519', name: '贵州茅台', side: 'sell', price: 12, shares: 50, amount: 600, fee: 0, at: 2, source: '1min',
   })
   assert.equal(sell.positions[0]?.qty, 50)
-  assert.equal(sell.positions[0]?.netCost, 400)
-  assert.equal(sell.positions[0]?.cost, 8, '摊薄口径 (1000−600)/50 = 8.00')
+  assert.equal(sell.positions[0]?.netCost, 500, '卖出只冲减账面成本 50×10')
+  assert.equal(sell.positions[0]?.cost, 10, '每股成本不因盈利卖出而变低')
+  assert.equal(sell.realized, 100, '盈利 = (12−10)×50')
 })

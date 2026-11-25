@@ -354,6 +354,16 @@ export const prismInputsOf = async (deps: PrismRouteDeps): Promise<PrismInputs> 
     tech: await indexTechCachedOf().catch(() => '【指数技术面（由本地日线计算；缺数据写 —）】\n—（本轮取数失败）'),
     candidates: await candidatesCachedOf(deps, watch).catch(() => '【候选池（持仓 + 自选）】\n—（本轮取数失败）'),
     limits: limitsTextOf(deps.store.settings()),
+    drawdown: (() => {
+      const st = deps.store.settings()
+      const g = drawdownGateOf(deps.trading.equity(), deps.store.runs().at(-1)?.drawdown ?? null, Date.now(), {
+        dailyLimitPct: typeof st.maxDDPct === 'number' ? st.maxDDPct : 3,
+        cumulativeLimitPct: typeof st.maxCumDDPct === 'number' ? st.maxCumDDPct : 10,
+        baseAt: st.gateBaseAt,
+      })
+      const pct = (v: number | null): string => (v === null ? '—（样本不足）' : `${v.toFixed(2)}%`)
+      return `【回撤闸门（引擎判定，先于你的决策）】\n日跌幅 ${pct(g.dailyPct)}；累计回撤 ${pct(g.cumulativePct)}；状态：${g.status}${g.triggered ? `（本轮新买单会被直接拒绝；目标总仓 ${g.targetTotalPct}%、现金下限 ${g.cashMinPct}%）` : ''}`
+    })(),
   }
 }
 
@@ -856,6 +866,26 @@ export function makePrismRoutes(deps: PrismRouteDeps): PluginWebRoute[] {
               return value
             })
             send(res, 200, { ok: true, account: next })
+            return
+          }
+          if (action === 'normalizeCostBasis') {
+            // 把历史「摊薄成本」归一为买入均价：v0.226.0 起卖出不再改变每股成本，
+            // 但旧账本里的 cost 仍是摊薄口径（招商轮船 39.64 vs 均价 18.21）⇒ 一次性对齐。
+            const out = await deps.trading.runExclusive(async () => {
+              deps.trading.assertWritable('成本口径归一')
+              await deps.trading.reloadForWrite()
+              deps.trading.assertWritable('成本口径归一')
+              const account = deps.trading.account()
+              const positions = account.positions.map((p) => {
+                const avg = typeof p.avgCost === 'number' && p.avgCost > 0 ? p.avgCost : null
+                if (avg === null) return p
+                return { ...p, cost: avg, netCost: Math.round(avg * p.qty * 100) / 100 }
+              })
+              const value = { ...account, positions }
+              await deps.trading.saveAll({ account: value, orders: deps.trading.orders(), fills: deps.trading.fills() })
+              return positions.map((p) => ({ secid: p.secid, name: p.name, qty: p.qty, cost: p.cost, netCost: p.netCost }))
+            })
+            send(res, 200, { ok: true, positions: out })
             return
           }
           if (action === 'backfillAvgCost') {

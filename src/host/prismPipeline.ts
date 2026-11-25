@@ -40,6 +40,8 @@ export interface PrismInputs {
   candidates?: string
   /** v0.221.2：【约束（用户配置，硬边界）】——与骨架冲突时以此为准 */
   limits?: string
+  /** v0.226.0：【回撤闸门】引擎判定，模型必须看到 */
+  drawdown?: string
 }
 
 export interface PrismPipelineDeps {
@@ -89,6 +91,7 @@ const compileInput = (inputs: PrismInputs, withNews = true): string => {
     ...(inputs.tech !== undefined && inputs.tech.trim() !== '' ? [inputs.tech] : []),
     ...(inputs.candidates !== undefined && inputs.candidates.trim() !== '' ? [inputs.candidates] : []),
     ...(inputs.limits !== undefined && inputs.limits.trim() !== '' ? [inputs.limits] : []),
+    ...(inputs.drawdown !== undefined && inputs.drawdown.trim() !== '' ? [inputs.drawdown] : []),
     '【真实账户持仓（只读参考 —— 禁止用于计算棱镜仓位/权重）】',
     inputs.positions || '—',
     // 同键 ETF 合并成一行：让模型看见「这两只是同一条腿」，不重复建仓
