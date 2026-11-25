@@ -28,8 +28,8 @@
 | 编号 | 严重度 | 摘要 |
 | --- | --- | --- |
 | D3 | P2 | `saveEquity`/`saveCapital`/`patchSettings`/`appendPrismLedger` 仍在临界区外 |
-| D4 | P2 | `runExclusive` 不可重入、无超时 |
-| C2 | P2 | 撮合部分成交不取整手，可能留下非整手持仓 |
+| D4 | ✅ 已修 v0.236.0 | `runExclusive` 用 AsyncLocalStorage 识别重入（同上下文复用锁，并发请求仍排队） |
+| C2 | 暂不采纳 | ETF 撮合允许非整手（仓内已有 5062 份的既有口径与测试）；改为整手会破坏现有成交口径 |
 | C3 | P2 | 部分成交被拒时 `order.fee` 未累计 |
 | A8–A17 / B5–B12 / C5–C12 | P2 | 见原审计文档 |
 | PROMPT 剩余 | P1/P2 | 四路提示词 78K 字符可压缩；两处分母仍有成本/现价混用 |

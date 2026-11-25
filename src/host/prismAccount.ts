@@ -19,6 +19,7 @@
  *      禁止任何写入，`account()` 返回 null 语义；只有 `repairLedger` 从 `*.bak` /
  *      `.corrupt-*` 恢复成功才解除。
  */
+import { AsyncLocalStorage } from 'node:async_hooks'
 import { mkdir, readFile, readdir, stat } from 'node:fs/promises'
 import { basename, isAbsolute, join } from 'node:path'
 import type {
@@ -660,6 +661,8 @@ export class PrismTradingStore {
   private readonly degradedReasons = new Map<string, string>()
   /** `runExclusive` 的 Promise 链尾（同进程互斥；失败不阻塞后继） */
   private exclusiveTail: Promise<unknown> = Promise.resolve()
+  /** 只用于识别「同一异步上下文内的重入」，不能用一个全局布尔（并发请求会互相放行） */
+  private readonly exclusiveCtx = new AsyncLocalStorage<true>()
   private accountValue: PrismAccount = {
     day: '',
     capital: PRISM_INITIAL_CAPITAL,
@@ -727,7 +730,9 @@ export class PrismTradingStore {
    * matchTick / placeDecision / priceCorrection / position 等"读内存 → 改 → 写盘"必须整体进来。
    */
   async runExclusive<T>(fn: () => Promise<T> | T): Promise<T> {
-    const run = this.exclusiveTail.then(() => fn())
+    // 重入：已在临界区内 ⇒ 直接执行（同一持锁者），否则会排在链尾等待自己、永久挂住（审计 D4）
+    if (this.exclusiveCtx.getStore() === true) return fn()
+    const run = this.exclusiveTail.then(() => this.exclusiveCtx.run(true, fn))
     this.exclusiveTail = run.then(() => undefined, () => undefined)
     return run
   }
@@ -1807,6 +1812,7 @@ async function matchTickLocked(
     const remaining = order.shares - (order.filledShares ?? 0)
     const barFilled = fills.filter((f) => f.secid === order.secid && f.at === hit.at).reduce((sum, f) => sum + f.shares, 0)
     const barCap = Math.max(0, Math.floor(volume * rate) - barFilled)
+    // 部分成交按量能上限原样成交（ETF 允许非整手撮合，仓里已有 5062 份的既有口径与测试；审计 C2 暂不采纳）
     const take = Math.min(remaining, barCap)
     if (take <= 0) {
       order.skipCode = 'bar-volume-used'
