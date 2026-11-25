@@ -157,16 +157,16 @@ test('⑬ 委托进度：已成/总量；缺 filledShares ⇒ 0；股数 0 ⇒ 0
 
 /* ───────────── ④ Agent 绩效 ───────────── */
 
-test('⑭ 绩效四格：决策 20 / 胜率 — / 回撤 — / 超额 —（无源不写 0）', () => {
-  const cells = perfCellsOf({ runsCount: 20, hitRate: null, maxDrawdown: null, excessPct: null })
-  assert.deepEqual(cells.map((c) => c.label), ['决策', '胜率', '回撤', '超额'])
+test('⑭ 绩效四格：交易日 20 / 胜率 — / 回撤 — / 超额 —（无源不写 0）', () => {
+  const cells = perfCellsOf({ runsCount: 20, tradingDays: 20, hitRate: null, maxDrawdown: null, excessPct: null })
+  assert.deepEqual(cells.map((c) => c.label), ['交易日', '胜率', '回撤', '超额'])
   assert.deepEqual(cells.map((c) => c.value), ['20', '—', '—', '—'])
   assert.match(cells[1].title, /样本不足/)
   assert.match(cells[3].title, /基准/)
 })
 
 test('⑮ 绩效有源：胜率 0 是有效值（不得当成缺失）', () => {
-  const cells = perfCellsOf({ runsCount: 3, hitRate: 0, maxDrawdown: -6.8, excessPct: 1.24 })
+  const cells = perfCellsOf({ runsCount: 3, tradingDays: 3, hitRate: 0, maxDrawdown: -6.8, excessPct: 1.24 })
   assert.deepEqual(cells.map((c) => c.value), ['3', '0.00%', '-6.80%', '+1.24%'])
 })
 

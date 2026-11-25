@@ -25,7 +25,7 @@ test('① 六个区块字段齐全（缺一 ⇒ 败）', () => {
   assert.deepEqual(Object.keys(d.positions.rows[0]!).sort(), ['available', 'cost', 'marketValue', 'name', 'pnl', 'price', 'qty', 'secid', 'weight'])
   assert.deepEqual(Object.keys(d.holdings[0]!).sort(), ['dayPnl', 'missing', 'prevClose', 'secid', 'thesis'])
   assert.deepEqual(Object.keys(d.overview).sort(), ['available', 'cash', 'missing', 'positionPct', 'totalAssets'])
-  assert.deepEqual(Object.keys(d.performance).sort(), ['benchmarkPct', 'excessPct', 'hitRate', 'latencyMs', 'maxDrawdown', 'missing', 'returnPct', 'runsCount', 'tokenUsage'])
+  assert.deepEqual(Object.keys(d.performance).sort(), ['benchmarkPct', 'excessPct', 'hitRate', 'latencyMs', 'maxDrawdown', 'missing', 'returnPct', 'runsCount', 'tokenUsage', 'tradingDays'])
   assert.throws(() => assert.ok('limits2' in d, '反例上：缺区块'), /反例上/, '⚠ 反例注入必须失败')
 })
 

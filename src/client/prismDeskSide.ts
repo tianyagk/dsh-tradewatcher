@@ -186,6 +186,7 @@ export interface PerfCell { key: string; label: string; value: string; title: st
 
 export interface PerfInput {
   runsCount: number | null
+  tradingDays?: number | null
   hitRate: number | null
   maxDrawdown: number | null
   excessPct: number | null
@@ -196,9 +197,9 @@ export interface PerfInput {
  * 宿主任一指标为 null ⇒ `—` + title（样本不足 / 缺基准），**不写 0**。
  */
 export function perfCellsOf(p: PerfInput): PerfCell[] {
-  const runs = finite(p.runsCount)
+  const tradingDays = finite(p.tradingDays)
   return [
-    { key: 'runs', label: '决策', value: runs === null ? '—' : String(Math.trunc(runs)), title: '累计决策轮次（desk.performance.runsCount）' },
+    { key: 'runs', label: '交易日', value: tradingDays === null ? '—' : String(Math.trunc(tradingDays)), title: '从建立模拟盘到当前的交易日数（按交易日历计算）' },
     { key: 'hit', label: '胜率', value: signedPctOrDash(p.hitRate), title: p.hitRate === null ? '宿主样本不足，胜率不可算' : '评估窗口胜率' },
     { key: 'dd', label: '回撤', value: signedPctOrDash(p.maxDrawdown), title: p.maxDrawdown === null ? '宿主未给回撤评估值' : '最大回撤' },
     { key: 'excess', label: '超额', value: signedPctOrDash(p.excessPct), title: p.excessPct === null ? '缺基准收益（净值点无沪深300收盘）' : '相对基准超额' },

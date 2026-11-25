@@ -264,7 +264,7 @@ export function prismPerformanceOf(
   equity: readonly PrismEquityPoint[],
   evaluation: PrismEvaluation | null,
   runs: readonly PrismRun[],
-): { returnPct: number | null; benchmarkPct: number | null; excessPct: number | null; maxDrawdown: number | null; hitRate: number | null; runsCount: number; latencyMs: number | null; tokenUsage: null; missing: PrismMissing[] } {
+): { returnPct: number | null; benchmarkPct: number | null; excessPct: number | null; maxDrawdown: number | null; hitRate: number | null; runsCount: number; tradingDays: number | null; latencyMs: number | null; tokenUsage: null; missing: PrismMissing[] } {
   const missing: PrismMissing[] = []
   const first = equity[0]
   const last = equity.at(-1)
@@ -280,7 +280,17 @@ export function prismPerformanceOf(
   const latencyMs = withEnd.length === 0 ? null : withEnd.reduce((a, r) => a + ((r.finishedAt as number) - r.startedAt), 0) / withEnd.length
   missing.push({ what: 'token 用量', why: 'no-source', note: 'token 用量无源' })
   return { returnPct, benchmarkPct, excessPct, maxDrawdown, hitRate, // 决策数 = 账本里实际保留的决策轮次（不掺累计计数、不估算丢失历史）
-    runsCount: runs.length, latencyMs, tokenUsage: null, missing }
+    runsCount: runs.length,
+    // 交易日数：从建立模拟盘（最早净值点）到当前，按净值点日期去重、剔除周末
+    tradingDays: (() => {
+      const days = [...new Set(equity.map((p) => p.day))].filter((d) => {
+        const at = Date.parse(`${d}T00:00:00+08:00`)
+        if (!Number.isFinite(at)) return false
+        const w = new Date(at).getUTCDay()
+        return w !== 0 && w !== 6
+      })
+      return days.length > 0 ? days.length : null
+    })(), latencyMs, tokenUsage: null, missing }
 }
 
 /* ────────────────────────── 持仓分析（v0.212.0） ────────────────────────── */

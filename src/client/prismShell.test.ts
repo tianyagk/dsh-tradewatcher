@@ -67,7 +67,7 @@ test('⑮ 动作胶囊五色映射', () => {
 test('⑯ 右栏四格 + 绩效四格（第二批：设计稿口径）', () => {
   const SIDE = readFileSync(new URL('./prismDeskSide.ts', import.meta.url), 'utf8')
   for (const k of ['可用资金', '持仓市值', '浮动盈亏', '今日已实现']) assert.ok(SIDE.includes(k), k)
-  for (const k of ['决策', '胜率', '回撤', '超额']) assert.ok(SIDE.includes(`label: '${k}'`), k)
+  for (const k of ['交易日', '胜率', '回撤', '超额']) assert.ok(SIDE.includes(`label: '${k}'`), k)
   assert.match(PAGE, /acctView\.cells/)
   assert.match(PAGE, /perfCells\.map/)
 },)
@@ -76,7 +76,8 @@ test('⑰ 绩效无源 ⇒ —（不写 0）；sparkline 少于 2 点写「样�
   for (const c of perfCellsOf({ runsCount: 20, hitRate: null, maxDrawdown: null, excessPct: null })) {
     if (c.key !== 'runs') assert.equal(c.value, '—', `${c.label} 无源必须 —`)
   }
-  assert.equal(perfCellsOf({ runsCount: 20, hitRate: null, maxDrawdown: null, excessPct: null })[0].value, '20')
+  assert.equal(perfCellsOf({ runsCount: 20, hitRate: null, maxDrawdown: null, excessPct: null })[0].value, '—', '无交易日源 ⇒ —')
+  assert.equal(perfCellsOf({ runsCount: 20, tradingDays: 20, hitRate: null, maxDrawdown: null, excessPct: null })[0].value, '20')
   assert.equal(sparkOf([{ equity: 1 }]).has, false)
   assert.match(PAGE, /'—（样本不足）'/)
 })
