@@ -10,6 +10,8 @@ import { readFileSync } from 'node:fs'
 import {
   accountViewOf, blockedTodayOf, moneyOf, orderProgressOf, pendingOrdersOf,
   perfCellsOf, ratioPctOf, realizedTodayOf, signedMoneyOf, signedPctOf, sparkOf, statusFactsOf,
+  autoTChipsOf, autoTEntryStatusOf, autoTFlowOf, autoTJudgeOf, autoTPerPositionTextOf,
+  autoTOf, autoTPillTextOf, autoTPlanNetOf, autoTPlanSettlementOf, autoTSwitchPatchOf, autoTWinRateTextOf,
 } from './prismDeskSide.ts'
 
 const PAGE = readFileSync(new URL('./PrismPage.tsx', import.meta.url), 'utf8')
@@ -297,3 +299,97 @@ test('㉙ 页面：账户四格取 desk.overview.cash（不是可用额度 avail
   assert.ok(!PAGE.includes('available: ov?.available'), '可用资金不得用 overview.available 顶替')
 })
 
+
+
+/* ───────────── 自动做T 弹窗（v5，前端契约） ───────────── */
+
+const AUTOT_SAMPLE = {
+  autoT: {
+    state: 'running',
+    enabled: true,
+    positions: { '1.601872': { enabled: true, hold: true }, '1.601398': { enabled: false, hold: true } },
+    today: {
+      rounds: 1,
+      limit: 2,
+      profit: 112.3,
+      plans: [
+        { id: 'T-1', secid: '1.601872', name: '招商轮船', direction: 'buy-first', buyPrice: 15.2, sellPrice: 15.45, shares: 500, status: 'done', observe: 'ATR14 0.31', reasoning: '波动覆盖费用', conclusion: '做正T 500 股' },
+        { id: 'T-2', secid: '1.601398', name: '工商银行', direction: 'sell-first', buyPrice: 9.16, sellPrice: 9.28, shares: 2000, status: 'waiting', observe: 'o', reasoning: 'r', conclusion: 'c' },
+      ],
+      trades: [
+        { id: 'tr-1', planId: 'T-1', secid: '1.601872', side: 'buy', shares: 500, price: 15.2, at: 1759000000000, leg: 'open' },
+        { id: 'tr-2', planId: 'T-1', secid: '1.601872', side: 'sell', shares: 500, price: 15.45, at: 1759002000000, leg: 'close' },
+      ],
+    },
+    stats: { rounds: 20, profit: 1752.9, winRate: 70, n: 20 },
+    perPosition: { '1.601872': { rounds: 12, profit: 1240.5, winRate: 67, n: 18 } },
+    effectiveCost: { '1.601872': 17.94 },
+  },
+}
+
+test('㉚ 自动做T：单只统计行 = 做T N 次 · +X · 胜率 Y%（n=）', () => {
+  assert.equal(autoTPerPositionTextOf({ rounds: 12, profit: 1240.5, winRate: 67, n: 18 }), '做T 12 次 · +1,240.50 · 胜率 67%（n=18）')
+  assert.equal(autoTPerPositionTextOf({ rounds: 0, profit: 0, winRate: null, n: 0 }), '做T 0 次 · 0.00 · 胜率 —（n=0）')
+  assert.equal(autoTPerPositionTextOf(null), '做T 0 次 · — · 胜率 —（n=0）')
+})
+
+test('㉛ 自动做T：胜率 n=0 一律 —（n=0），不写 0%；缺 rate 也不编', () => {
+  assert.equal(autoTWinRateTextOf(0, 0), '—（n=0）')
+  assert.equal(autoTWinRateTextOf(null, 0), '—（n=0）')
+  assert.equal(autoTWinRateTextOf(70, 20), '70%（n=20）')
+  assert.equal(autoTWinRateTextOf(66.7, 18), '66.7%（n=18）')
+  assert.equal(autoTWinRateTextOf(null, 20), '—（n=20）')
+  assert.equal(autoTWinRateTextOf(null, null), '—')
+})
+
+test('㉜ 自动做T：无 autoT 字段 ⇒ 空态/灰点/胶囊全是 —，不报错不编数', () => {
+  assert.equal(autoTOf({ ok: true, state: {} }), null)
+  assert.equal(autoTOf({ autoT: undefined }), null)
+  assert.equal(autoTOf({ state: { autoT: null } }), null)
+  assert.equal(autoTEntryStatusOf(null), 'closed')
+  assert.equal(autoTJudgeOf(null, '1.601872').text, '—（自动做T 未启用）')
+  const chips = autoTChipsOf(null)
+  assert.equal(chips.length, 5)
+  assert.deepEqual(chips.map((c) => c.value), ['—', '—', '—', '—', '—'])
+  assert.equal(autoTPillTextOf(null), '自动做T · — · —')
+})
+
+test('㉝ 自动做T：回包解析 + 5 个 chip 只出在顶部（今日/累计/胜率）', () => {
+  const a = autoTOf(AUTOT_SAMPLE)
+  assert.ok(a !== null)
+  const chips = autoTChipsOf(a)
+  assert.deepEqual(chips.map((c) => c.value), ['1 / 2', '+112.30', '20 次', '+1,752.90', '70%（n=20）'])
+  assert.equal(a.positions['1.601872'].enabled, true)
+  assert.equal(a.effectiveCost['1.601872'], 17.94)
+  assert.equal(autoTEntryStatusOf(a), 'unfinished')
+  assert.equal(autoTFlowOf(a).map((e) => e.label).join('|'), 'T·买入|T·卖出|T·结算')
+  assert.equal(autoTPlanNetOf(a.today.plans[0], a.today.trades), 125)
+  assert.equal(autoTPlanSettlementOf(a, a.today.plans[0]), null)
+  const single = autoTOf({ autoT: { ...AUTOT_SAMPLE.autoT, today: { ...AUTOT_SAMPLE.autoT.today, plans: [AUTOT_SAMPLE.autoT.today.plans[0]] } } })
+  assert.ok(single !== null)
+  assert.equal(autoTPlanSettlementOf(single, single.today.plans[0]), 112.3)
+})
+
+test('㉞ 自动做T：开关 payload 只带变化项，非法键/值被拒', () => {
+  const p = autoTSwitchPatchOf({ '1.601872': true, '1.601398': false }, { '1.601872': false, '1.601398': false })
+  assert.deepEqual(p, { ok: true, patch: { positions: { '1.601872': { enabled: true } }, changed: 1 } })
+  const zero = autoTSwitchPatchOf({ '1.601872': false }, { '1.601872': false })
+  assert.deepEqual(zero, { ok: true, patch: { positions: {}, changed: 0 } })
+  assert.equal(autoTSwitchPatchOf({ '': true }, {}).ok, false)
+  assert.equal(autoTSwitchPatchOf({ '1.601872': 'yes' }, {}).ok, false)
+  assert.equal(autoTSwitchPatchOf(null, {}).ok, false)
+})
+
+test('㉟ 自动做T 弹窗：入口在「重放今日」左侧；开关 aria-disabled；关闭提交；响应式列隐藏', () => {
+  const entryAt = PAGE.indexOf("'data-role': 'ad-autot-entry'")
+  const replayAt = PAGE.indexOf("'data-role': 'ad-replay'")
+  assert.ok(entryAt > 0 && replayAt > entryAt, '自动做T 入口必须在重放今日左侧')
+  assert.match(PAGE, /'aria-disabled': none \|\| props\.saving \? 'true' : 'false'/)
+  assert.match(PAGE, /api\.prismAutoT\(\{ positions: patch\.patch\.positions \}\)/)
+  assert.match(PAGE, /'data-role': 'ad-autot-modal'/)
+  assert.match(PAGE, /自动做T 未启用/)
+  assert.match(PAGE, /dirClass\(c\.tone === 'up'/)
+  assert.match(CSS, /\.tw-ad-autot-col-cost,\.tw-ad-autot-col-result\{display:none\}/)
+  assert.match(CSS, /@media \(max-width:560px\)\{[\s\S]*?\.tw-ad-autot-chips\{grid-template-columns:repeat\(2/)
+  assert.ok(!PAGE.includes('tw-ad-autot-sum'), '不得有表底合计行')
+})

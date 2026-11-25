@@ -351,7 +351,7 @@ test('㊻ 不新增路由 / 不新增依赖：页面只打既有棱镜接口与�
   const calls = [...new Set([...PAGE.matchAll(/api\.(\w+)\(/g)].map((m) => m[1]))].sort()
   // 第二批起按拍板 Q2 复用既有 /tradewatcher/trend、/tradewatcher/kline（只读、无新路由）
   // v0.206.x：决策周期下拉复用既有 POST /tradewatcher/prism（action:'settings'），不是新路由
-  for (const c of calls) assert.ok(['prismState', 'prismSelftest', 'detail', 'prismPosition', 'prismCapital', 'prismConstraints', 'prismSetInterval', 'prismRun', 'prismCash', 'trend', 'kline'].includes(c as string), `新增了接口调用 ${c}`)
+  for (const c of calls) assert.ok(['prismState', 'prismSelftest', 'detail', 'prismPosition', 'prismCapital', 'prismConstraints', 'prismSetInterval', 'prismRun', 'prismCash', 'prismAutoT', 'trend', 'kline'].includes(c as string), `新增了接口调用 ${c}`)
   assert.ok(!/prismTrend|prismKline|fetch\(/.test(PAGE), '不得新增 prismTrend/prismKline 之类的新路由封装')
   // 决策周期走的仍是同一条路由 + 同一个 action
   const intervalBlock = API.slice(API.indexOf('prismSetInterval'), API.indexOf('prismSetIndustryLimits'))

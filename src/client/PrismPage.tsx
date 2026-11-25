@@ -7,8 +7,9 @@
  */
 import * as React from 'react'
 import { api } from './api.ts'
-import { Field, Modal, Skeleton } from './ui'
+import { Field, Modal, Skeleton, useEscapeLayer } from './ui'
 import { missText, numText } from './uiText.ts'
+import { dirClass } from './format.ts'
 import { shClockText } from './marketTime.ts'
 import { useNow } from './useNow.ts'
 import { usePanelVisible } from './usePageIdle.ts'
@@ -34,9 +35,14 @@ import {
   type DeskFlowEntry, type DeskFlowTab, type QuoteFacts,
 } from './prismDeskMid.ts'
 import {
-  accountViewOf, blockedTodayOf, intervalSecOf, orderProgressOf, pendingOrdersOf, perfCellsOf, sparkOf, statusFactsOf,
+  accountViewOf, blockedTodayOf, autoTChipsOf, autoTCostTextOf, autoTDirectionLabelOf,
+  autoTEffectiveCostTextOf, autoTEntryStatusOf, autoTEntryTitleOf, autoTFlowOf, autoTFocusPlanOf,
+  autoTJudgeOf, autoTPerPositionTextOf, autoTPillTextOf, autoTPlanResultOf, autoTPlanSettlementOf,
+  autoTSpreadPctOf, autoTStateTextOf, autoTSwitchDraftOf, autoTSwitchPatchOf, autoTOf,
+  signedMoneyOf, intervalSecOf, orderProgressOf, pendingOrdersOf, perfCellsOf, sparkOf, statusFactsOf,
   INTERVAL_OPTIONS,
 } from './prismDeskSide.ts'
+import type { PrismAutoT } from './prismDeskSide.ts'
 import { PRISM_DEFAULT_INTERVAL_SEC } from '../shared/prism.ts'
 
 /** 棱镜页面静默刷新间隔：30s（自动决策最短周期 300s，30s 足够及时且不打扰） */
@@ -205,6 +211,156 @@ export function AgentClock(): React.ReactElement {
   return React.createElement('div', { className: 'tw-ad-clock', 'data-role': 'ad-clock', title: '北京时间' }, shClockText(now))
 }
 
+
+/** 自动做T 弹窗：只读统计 + 逐只开关（唯一人工操作） */
+interface AutoTRow { secid: string; name: string; qty: number; available: number | null; cost: number | null }
+
+function AutoTModal(props: {
+  autoT: PrismAutoT | null
+  rows: AutoTRow[]
+  draft: Record<string, boolean>
+  saved: Record<string, boolean>
+  saving: boolean
+  error: string | null
+  redUp: boolean
+  onToggle: (secid: string, enabled: boolean) => void
+  onMinimize: () => void
+  onClose: () => void
+}): React.ReactElement {
+  useEscapeLayer(() => { if (!props.saving) props.onClose() })
+  const dialogRef = React.useRef<HTMLElement | null>(null)
+  React.useEffect(() => { dialogRef.current?.querySelector<HTMLElement>('button:not([disabled])')?.focus() }, [])
+  const a = props.autoT
+  const chips = autoTChipsOf(a)
+  const focusPlan = autoTFocusPlanOf(a)
+  const flow = autoTFlowOf(a)
+  const none = a === null
+  const stateClass = none || !a.enabled ? 'is-off' : a.state === 'paused' ? 'is-paused' : 'is-running'
+  const spread = autoTSpreadPctOf(focusPlan)
+  const tri: Array<[string, string | null]> = focusPlan === null
+    ? []
+    : [['观察', focusPlan.observe], ['推理', focusPlan.reasoning], ['结论', focusPlan.conclusion]]
+  const metaOf = (label: string, value: string, title: string | null): React.ReactElement =>
+    React.createElement('div', { key: label, title: title ?? undefined },
+      React.createElement('span', { className: 'k' }, label),
+      React.createElement('span', { className: 'v' }, value))
+  return React.createElement('div', {
+    className: 'tw-ad-autot-mask',
+    onMouseDown: (e: React.MouseEvent) => { if (e.target === e.currentTarget && !props.saving) props.onClose() },
+  },
+  React.createElement('section', {
+    ref: dialogRef, className: 'tw-ad-autot', role: 'dialog', 'aria-modal': 'true', 'aria-label': '自动做T',
+    'data-role': 'ad-autot-modal',
+  },
+  React.createElement('header', { className: 'tw-ad-autot-head' },
+    React.createElement('div', null, React.createElement('h2', null, '自动做T')),
+    React.createElement('div', { className: 'right' },
+      React.createElement('span', { className: `tw-ad-autot-state ${stateClass}`, 'data-role': 'ad-autot-state' }, autoTStateTextOf(a)),
+      props.saving ? React.createElement('span', { className: 'tw-ad-autot-saving' }, '保存中…') : null,
+      React.createElement('button', {
+        type: 'button', className: 'tw-ad-autot-icon', title: '最小化', 'aria-label': '最小化自动做T',
+        disabled: props.saving, onClick: props.onMinimize,
+      }, '—'),
+      React.createElement('button', {
+        type: 'button', className: 'tw-ad-autot-icon', title: '关闭', 'aria-label': '关闭自动做T',
+        disabled: props.saving, onClick: props.onClose,
+      }, '×'))),
+  React.createElement('div', { className: 'tw-ad-autot-body' },
+    none ? React.createElement('div', { className: 'tw-ad-autot-empty', 'data-role': 'ad-autot-empty' },
+      React.createElement('b', null, '自动做T 未启用'),
+      React.createElement('span', null, '宿主回包没有 autoT 字段；逐只开关暂不开放')) : null,
+    React.createElement('div', { className: 'tw-ad-autot-chips', 'data-role': 'ad-autot-chips' },
+      ...chips.map((c) => React.createElement('div', { key: c.key, className: 'tw-ad-autot-chip', title: c.title, 'data-chip': c.key },
+        React.createElement('div', { className: 'k' }, c.label),
+        React.createElement('div', { className: `v ${dirClass(c.tone === 'up' ? 1 : c.tone === 'down' ? -1 : 0, props.redUp)}` }, c.value)))),
+    React.createElement('div', { className: 'tw-ad-autot-tablewrap' },
+      React.createElement('table', { className: 'tw-ad-autot-table' },
+        React.createElement('thead', null,
+          React.createElement('tr', null,
+            React.createElement('th', null, '标的'),
+            React.createElement('th', { className: 'tw-ad-autot-col-qty' }, '底仓 / 可卖'),
+            React.createElement('th', { className: 'tw-ad-autot-col-cost' }, '账面成本'),
+            React.createElement('th', null, '有效成本'),
+            React.createElement('th', { className: 'tw-ad-autot-judge-col' }, 'Agent 今日判断'),
+            React.createElement('th', { className: 'tw-ad-autot-col-result' }, '结果'),
+            React.createElement('th', { className: 'tw-ad-autot-switch-col' }, '做T'))),
+        React.createElement('tbody', null,
+          props.rows.length === 0
+            ? React.createElement('tr', null, React.createElement('td', { colSpan: 7, className: 'tw-ad-autot-cell-empty' }, missText('持仓')))
+            : props.rows.map((row) => {
+                const enabled = a !== null && props.draft[row.secid] === true
+                const flag = a?.positions[row.secid]
+                const judge = autoTJudgeOf(a, row.secid)
+                const plan = judge.plan
+                const result = autoTPlanResultOf(plan)
+                const settle = plan === null ? null : autoTPlanSettlementOf(a, plan)
+                const resultText = settle === null ? result.label : `${result.label} ${signedMoneyOf(settle)}`
+                const resultTitle = settle === null ? result.title : '今日做T结算（宿主值）'
+                const off = flag !== undefined && !flag.hold
+                return React.createElement('tr', { key: row.secid, className: off ? 'is-off' : undefined, 'data-secid': row.secid },
+                  React.createElement('td', { className: 'tw-ad-autot-name-cell' },
+                    React.createElement('b', { title: row.name }, row.name),
+                    React.createElement('span', { className: 'tw-ad-autot-code' }, codeOf(row.secid)),
+                    React.createElement('span', { className: 'tw-ad-autot-qty-mobile' },
+                      `底仓 ${groupOf(row.qty)} · 可卖 ${row.available === null ? '—' : groupOf(row.available)}`),
+                    enabled
+                      ? React.createElement('span', {
+                          className: 'tw-ad-autot-sub', 'data-role': 'ad-autot-pos-stat',
+                          title: a?.perPosition[row.secid] === undefined ? '宿主未给出该标的累计做T统计' : null,
+                        }, autoTPerPositionTextOf(a?.perPosition[row.secid] ?? null))
+                      : null),
+                  React.createElement('td', { className: 'tw-ad-autot-col-qty', title: row.available === null ? '账户未给出该标的可卖数量' : '底仓 / T+1 可卖' },
+                    `${groupOf(row.qty)} / ${row.available === null ? '—' : groupOf(row.available)}`),
+                  React.createElement('td', { className: 'tw-ad-autot-col-cost' }, autoTCostTextOf(row.cost)),
+                  React.createElement('td', { title: a === null ? '自动做T 未启用，无有效成本' : (a.effectiveCost[row.secid] === undefined || a.effectiveCost[row.secid] === null ? '宿主未给出该标的有效成本' : '有效成本由宿主按做T收益池折算') },
+                    autoTEffectiveCostTextOf(a, row.secid)),
+                  React.createElement('td', { className: 'tw-ad-autot-judge', title: judge.title },
+                    judge.direction === null
+                      ? React.createElement('span', { className: judge.muted ? 'muted' : undefined }, judge.text)
+                      : [React.createElement('span', { key: 'dir', className: `tw-ad-autot-badge is-plan${judge.direction === '反T' ? ' is-sell' : ' is-buy'}` }, judge.direction),
+                          React.createElement('span', { key: 'txt' }, ` ${judge.text}`)]),
+                  React.createElement('td', { className: 'tw-ad-autot-col-result' },
+                    plan === null
+                      ? React.createElement('span', { className: 'muted', title: '今日无做T计划' }, '—')
+                      : React.createElement('span', { className: `tw-ad-autot-badge is-${result.tone}`, title: resultTitle }, resultText)),
+                  React.createElement('td', { className: 'tw-ad-autot-switch-col' },
+                    React.createElement('button', {
+                      type: 'button', role: 'switch', 'data-role': 'ad-autot-switch', 'data-secid': row.secid,
+                      'aria-checked': enabled, 'aria-disabled': none || props.saving ? 'true' : 'false',
+                      disabled: none || props.saving,
+                      className: `tw-ad-autot-switch${enabled ? ' on' : ''}`,
+                      title: none ? '自动做T 未启用，开关已禁用' : (enabled ? '关闭该标的自动做T' : '开启该标的自动做T'),
+                      onClick: () => props.onToggle(row.secid, !enabled),
+                    }, React.createElement('i', { 'aria-hidden': true }))))
+              }))))),
+    React.createElement('div', { className: 'tw-ad-autot-grid' },
+      React.createElement('div', { className: 'tw-ad-autot-panel' },
+        React.createElement('h3', null, focusPlan === null ? 'Agent 判断（今日）' : `Agent 判断 · ${focusPlan.name}（今日）`),
+        focusPlan === null
+          ? React.createElement('div', { className: 'tw-ad-autot-panel-empty' }, '—（今日无做T计划）')
+          : React.createElement('div', { className: 'tw-ad-autot-tri' },
+              ...tri.map(([label, text]) => React.createElement('div', { key: label, className: 'row' },
+                React.createElement('span', { className: 'lab' }, label),
+                React.createElement('span', { className: 'txt', title: text === null ? `宿主未给出「${label}」段` : text }, text ?? '—')))),
+        React.createElement('div', { className: 'tw-ad-autot-meta' },
+          metaOf('方向 / 股数', focusPlan === null ? '—' : `${autoTDirectionLabelOf(focusPlan)} · ${focusPlan.shares === null ? '—' : `${groupOf(focusPlan.shares)} 股`}`, focusPlan === null ? '今日无做T计划' : null),
+          metaOf('买卖价', focusPlan === null ? '—' : `${focusPlan.buyPrice === null ? '—' : focusPlan.buyPrice.toFixed(2)} / ${focusPlan.sellPrice === null ? '—' : focusPlan.sellPrice.toFixed(2)}`, focusPlan === null ? '今日无做T计划' : null),
+          metaOf('价差（扣费前）', spread === null ? '—' : `${spread.toFixed(2)}%`, spread === null ? '缺买价或卖价，价差不可算' : '买价与卖价的价差（未扣费用）'))),
+      React.createElement('div', { className: 'tw-ad-autot-panel' },
+        React.createElement('h3', null, '今日流水'),
+        flow.length === 0
+          ? React.createElement('div', { className: 'tw-ad-autot-panel-empty' }, a === null ? '—（自动做T 未启用）' : '—（今日无做T流水）')
+          : React.createElement('ul', { className: 'tw-ad-autot-tl', 'data-role': 'ad-autot-flow' },
+              ...flow.map((e) => React.createElement('li', { key: e.id, 'data-kind': e.kind },
+                React.createElement('span', { className: 't', title: e.timeTitle }, e.timeText),
+                React.createElement('i', { className: `d is-${e.kind}`, 'aria-hidden': true }),
+                React.createElement('span', { className: 'what' },
+                  React.createElement('span', { className: `tw-ad-autot-badge is-${e.kind === 'settle' ? 'ok' : e.kind === 'fail' ? 'off' : 'blue'}` }, e.label),
+                  ` ${e.text}`),
+                React.createElement('span', { className: `a ${dirClass(e.tone === 'up' ? 1 : e.tone === 'down' ? -1 : 0, props.redUp)}`, title: e.kind === 'settle' ? '今日做T结算（宿主值）' : null }, e.amountText))))),
+    props.error === null ? null : React.createElement('div', { className: 'tw-ad-autot-err', role: 'alert' }, props.error))))
+}
+
 export function PrismPage(props: { active?: boolean; redUp?: boolean } = {}): React.ReactElement {
   const redUp = props.redUp !== false
   const [state, setState] = React.useState<Awaited<ReturnType<typeof api.prismState>> | null>(null)
@@ -223,6 +379,12 @@ export function PrismPage(props: { active?: boolean; redUp?: boolean } = {}): Re
   const [capText, setCapText] = React.useState<string | null>(null)
   const [menuFor, setMenuFor] = React.useState<string | null>(null)
   const [helpOpen, setHelpOpen] = React.useState(false)
+  /** 自动做T 弹窗：draft 只存逐只开关（关闭时脏值直接提交） */
+  const [autoTOpen, setAutoTOpen] = React.useState(false)
+  const [autoTMin, setAutoTMin] = React.useState(false)
+  const [autoTDraft, setAutoTDraft] = React.useState<Record<string, boolean> | null>(null)
+  const [autoTSaving, setAutoTSaving] = React.useState(false)
+  const [autoTErr, setAutoTErr] = React.useState<string | null>(null)
   const [chartTab, setChartTab] = React.useState<'trend' | 'kline'>('trend')
   const [chart, setChart] = React.useState<ChartState>({ kind: 'idle' })
   const [flowTab, setFlowTab] = React.useState<'all' | DeskFlowTab>('all')
@@ -353,6 +515,8 @@ export function PrismPage(props: { active?: boolean; redUp?: boolean } = {}): Re
 
   const acct = state?.state.account ?? null
   const acctPositions = acct?.positions ?? []
+  /** 自动做T：回包可选字段；缺失 ⇒ null（入口仍显示，弹窗走空态） */
+  const autoT = React.useMemo(() => autoTOf(state), [state])
   const fills = state?.state.fills ?? []
   const settings = state?.state.settings ?? null
   // 决策周期：显示回包已保存值；未保存（旧宿主/旧文件）⇒ 600s。宿主按它在交易时段内周期触发。
@@ -495,6 +659,55 @@ export function PrismPage(props: { active?: boolean; redUp?: boolean } = {}): Re
     ? desk.positions.rows.map((r) => ({ ...r, pnl: r.pnl ?? null, weight: weightOf(r.marketValue ?? null, totalAssets) ?? r.weight ?? null }))
     : acctPositions.map((p) => ({ secid: p.secid, name: p.name, qty: p.qty, cost: p.cost, pnl: null as number | null, weight: null as number | null }))
   const floatSum = pnlSumOf(posRows)
+
+  // ── 自动做T：持仓行 / 开关草稿 / 打开与关闭（关闭时脏值直接提交）──
+  const autoTRows: AutoTRow[] = posRows
+    .filter((r) => r.kind !== 'cash')
+    .map((r) => ({
+      secid: r.secid,
+      name: r.name,
+      qty: r.qty,
+      cost: r.cost,
+      available: acctPositions.find((p) => p.secid === r.secid)?.available ?? null,
+    }))
+  const autoTSaved = autoTSwitchDraftOf(autoT, autoTRows.map((r) => r.secid))
+  /** 草稿只存用户改过的标的；未改的永远跟随宿主最新值（弹窗开着时刷新也不会误提交旧快照） */
+  const autoTEffective = { ...autoTSaved, ...(autoTDraft ?? {}) }
+  const autoTEntryStatus = autoTEntryStatusOf(autoT)
+  const autoTEntryTitle = autoTEntryTitleOf(autoT)
+  const openAutoT = React.useCallback((): void => {
+    setAutoTErr(null)
+    setAutoTMin(false)
+    setAutoTOpen(true)
+    setAutoTDraft((prev) => prev ?? {})
+  }, [])
+  const toggleAutoT = (secid: string, enabled: boolean): void => {
+    setAutoTErr(null)
+    setAutoTDraft((prev) => ({ ...(prev ?? {}), [secid]: enabled }))
+  }
+  const minimizeAutoT = (): void => { setAutoTOpen(false); setAutoTMin(true) }
+  const closeAutoT = (): void => {
+    if (autoTSaving) return
+    if (autoT === null) {
+      setAutoTOpen(false); setAutoTMin(false); setAutoTDraft(null); setAutoTErr(null)
+      return
+    }
+    const patch = autoTSwitchPatchOf(autoTEffective, autoTSaved)
+    if (patch.ok === false) { setAutoTErr(patch.error); return }
+    if (patch.patch.changed === 0) {
+      setAutoTOpen(false); setAutoTMin(false); setAutoTDraft(null); setAutoTErr(null)
+      return
+    }
+    setAutoTSaving(true); setAutoTErr(null)
+    api.prismAutoT({ positions: patch.patch.positions })
+      .then((r) => {
+        if (!r.ok) { setAutoTErr(r.error ?? '保存失败'); return }
+        setAutoTOpen(false); setAutoTMin(false); setAutoTDraft(null)
+        load()
+      })
+      .catch((e: Error) => setAutoTErr(e.message))
+      .finally(() => setAutoTSaving(false))
+  }
 
   // ── 顶部状态条（56px）──
   const topbar = React.createElement('header', { className: 'tw-ad-top', 'data-role': 'ad-top' },
@@ -808,6 +1021,12 @@ export function PrismPage(props: { active?: boolean; redUp?: boolean } = {}): Re
       React.createElement('h2', null, '决策流'),
       React.createElement('span', { className: 'tw-ad-flow-meta', 'data-role': 'ad-flow-meta' }, `只读 · ${flowCounts.all} 条留痕`),
       React.createElement('span', { className: 'tw-ad-sp' }),
+      // 「重放今日」左侧：自动做T 入口（状态点 灰=关闭 / 绿=运行中 / 橙=有未完成 T 单）
+      React.createElement('button', {
+        type: 'button', className: `tw-ad-autot-entry is-${autoTEntryStatus}`,
+        'data-role': 'ad-autot-entry', 'aria-haspopup': 'dialog', title: autoTEntryTitle,
+        onClick: openAutoT,
+      }, React.createElement('i', { className: 'tw-ad-autot-dot', 'aria-hidden': true }), '自动做T'),
       React.createElement('button', {
         className: `tw-ad-fchip${replaying ? ' is-busy' : ''}`,
         'data-role': 'ad-replay',
@@ -827,7 +1046,7 @@ export function PrismPage(props: { active?: boolean; redUp?: boolean } = {}): Re
           ...flowView.rows.map((e) => flowEntryNode(e)),
           flowView.truncated
             ? React.createElement('div', { key: 'more', className: 'tw-ad-feed-more' }, `仅显示最近 ${flowView.shown} 条 · 共 ${flowView.total} 条`)
-            : null)), [flowView, flowCounts, flowTab, flowEntries, replaying, replayToday])
+            : null)), [flowView, flowCounts, flowTab, flowEntries, replaying, replayToday, autoTEntryStatus, autoTEntryTitle, openAutoT])
 
   // ── 右栏 · 账户总览（大数 + 今日/累计 + 四格 + 仓位条）──
   const ov = desk?.overview
@@ -1026,5 +1245,25 @@ export function PrismPage(props: { active?: boolean; redUp?: boolean } = {}): Re
       ? null
       : React.createElement(Modal, { title: '移除持仓', onClose: () => setConfirmDel(null) },
           React.createElement('div', { className: 'tw-ad-empty' }, '确认移除该持仓？'),
-          React.createElement('button', { className: 'tw-ad-primary', onClick: () => removePos(confirmDel), disabled: saving }, saving ? '保存中…' : '确认移除')))
+          React.createElement('button', { className: 'tw-ad-primary', onClick: () => removePos(confirmDel), disabled: saving }, saving ? '保存中…' : '确认移除')),
+    autoTOpen
+      ? React.createElement(AutoTModal, {
+          autoT,
+          rows: autoTRows,
+          draft: autoTEffective,
+          saved: autoTSaved,
+          saving: autoTSaving,
+          error: autoTErr,
+          redUp,
+          onToggle: toggleAutoT,
+          onMinimize: minimizeAutoT,
+          onClose: closeAutoT,
+        })
+      : null,
+    autoTMin && !autoTOpen
+      ? React.createElement('button', {
+          type: 'button', className: 'tw-ad-autot-pill', 'data-role': 'ad-autot-pill',
+          title: '展开自动做T', 'aria-label': '展开自动做T弹窗', onClick: openAutoT,
+        }, autoTPillTextOf(autoT))
+      : null)
 }

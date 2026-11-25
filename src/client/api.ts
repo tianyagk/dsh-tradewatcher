@@ -221,6 +221,7 @@ export interface LeveragePayloadDto {
 
 import type { ToneRow as ToneRowDto } from './stripTone.ts'
 import { parseSelftestBody } from './prismView.ts'
+import type { PrismAutoT } from './prismDeskSide.ts'
 import type { PrismAccount, PrismNewsStatus, PrismOrder, PrismRun, PrismSettings, PrismState, PrismTradingState } from '../shared/prism.ts'
 /** Same-origin JSON calls to the /tradewatcher/* host routes. */
 import type {
@@ -628,6 +629,15 @@ export const api = {
     return requestWithTimeout('/tradewatcher/prism', {
       method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action: 'run', slot }),
     }, 120_000)
+  },
+  /**
+   * 棱镜：自动做T 开关写（唯一人工操作）。
+   * `positions` 只带本次变化的标的；宿主回包带最新 `autoT`，页面保存成功后重新拉回包。
+   */
+  prismAutoT(patch: { enabled?: boolean; positions?: Record<string, { enabled: boolean }> }): Promise<{ ok: boolean; autoT: PrismAutoT; error?: string }> {
+    return requestWithTimeout('/tradewatcher/prism', {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action: 'autoT', ...patch }),
+    }, 20_000)
   },
   /** 导出备份（P0-9）：GET /tradewatcher/backup */
   exportBackup(): Promise<{ ok: boolean; bundle: unknown; unreadable: string[] }> {

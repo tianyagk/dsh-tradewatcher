@@ -210,6 +210,7 @@ bash scripts/install.sh
 | `~/.dsh/dsh-tradewatcher/prism-runs.json` | 棱镜研判结果（4 路分析 + 1 次汇总，保留最近 20 次）；失败留痕、不自动重试 |
 | `~/.dsh/dsh-tradewatcher/prism-account.json` | 棱镜模拟盘账户：资金上限（初始 150 万，可入金）、现金、持仓与成本、已实现盈亏、复制留痕；复制按**真实成本价**（只读真实持仓） |
 | `~/.dsh/dsh-tradewatcher/prism-orders.json` | 棱镜挂单/成交：`{orders, fills}`；挂单**当日有效**，跨日失效；撤销/不可成交（T+1/涨跌停/停牌/整手）都留原因 |
+| `~/.dsh/dsh-tradewatcher/prism-autot.json` | 自动做T 账本：`{plans, trades, results}`；只存计划/成交腿/结算（成交金额仍以 `prism-orders.json` 的 fills 为准），与主三账本分开，失败不影响主账 |
 | `~/.dsh/dsh-tradewatcher/prism-equity.json` | 棱镜每日净值曲线（一天一点）：`{points:[{day,equity,cash,positionsValue,realized,unrealized,at}]}` |
 | `~/.dsh/dsh-tradewatcher/fupan.json` | 复盘笔记（第 8 行 `fupan`）：`{ v:1, notes:[{id,date,text,pinnedTo?,source,at}] }`，`at` = 最后一次写入时刻。有界：单条正文 ≤4000 字、≤2000 条、序列化后 ≤512 KB；条数/体积超限时按「最久未更新」丢弃并在回包 `dropped` 段**逐条**留痕（置顶的最后才丢），单条超长直接 400 **不截断**。读不到（权限/磁盘）≠ 没有笔记 ⇒ 本次启动拒绝写回并如实披露；坏 JSON 先隔离保留原字节再从容开始 |
 | `~/.dsh/dsh-tradewatcher/global-flow.json` | 工具箱「全球资金流蛋糕模型」的每日份额快照：一天一条、保留 90 天（一天 ≈ 0.9KB）；**成分一变，旧快照整份作废并留痕**，不与新成分混用 |

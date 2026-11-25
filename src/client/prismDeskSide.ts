@@ -9,6 +9,7 @@
  * - 行情源 / 温度 / 约束版本宿主无字段 ⇒ `—` + title 原因。
  */
 import type { Tone } from './prismDeskMid.ts'
+import { shClockText } from './marketTime.ts'
 import { PRISM_DEFAULT_INTERVAL_SEC, PRISM_INTERVAL_OPTIONS } from '../shared/prism.ts'
 
 const finite = (v: number | null | undefined): number | null =>
@@ -290,4 +291,465 @@ export function blockedTodayOf(
   for (const o of orders) if (o.day === day && o.status === 'rejected') n += 1
   for (const r of runs) if (r.day === day) n += r.decision?.rejects?.length ?? 0
   return n
+}
+
+/* ────────────────────────── 自动做T（弹窗） ────────────────────────── */
+/**
+ * 数据契约（宿主 GET /tradewatcher/prism 顶层可选字段）：
+ * - `positions` = 逐只开关 + 中长期持有标记；
+ * - `today` = 今日轮次/收益/计划/成交腿；
+ * - `stats` / `perPosition` = 累计统计（胜率 n 是样本数；n=0 ⇒ 胜率不可算）；
+ * - `effectiveCost` = 宿主算好的有效成本（客户端只展示，不重算）。
+ *
+ * 本模块只做**展示格式化与容错**：字段缺失一律 `—` + 原因，不用 0 顶替、不编数。
+ */
+export type AutoTState = 'running' | 'closed' | 'paused'
+export type AutoTPlanStatus = 'planned' | 'waiting' | 'open-filled' | 'done' | 'aborted' | 'unknown'
+export type AutoTResultTone = 'ok' | 'blue' | 'off' | 'flat'
+
+export interface AutoTPlan {
+  id: string
+  secid: string
+  name: string
+  direction: 'buy-first' | 'sell-first'
+  buyPrice: number | null
+  sellPrice: number | null
+  shares: number | null
+  status: AutoTPlanStatus
+  observe: string | null
+  reasoning: string | null
+  conclusion: string | null
+}
+
+export interface AutoTTrade {
+  id: string
+  planId: string
+  secid: string
+  side: 'buy' | 'sell'
+  shares: number | null
+  price: number | null
+  at: number | null
+  leg: 'open' | 'close' | 'unknown'
+  forced: boolean
+}
+
+export interface AutoTPositionFlag { enabled: boolean; hold: boolean }
+export interface AutoTStats { rounds: number | null; profit: number | null; winRate: number | null; n: number | null }
+export interface AutoTToday { rounds: number | null; limit: number | null; profit: number | null; plans: AutoTPlan[]; trades: AutoTTrade[] }
+export interface PrismAutoT {
+  state: AutoTState
+  enabled: boolean
+  positions: Record<string, AutoTPositionFlag>
+  today: AutoTToday
+  stats: AutoTStats
+  perPosition: Record<string, AutoTStats>
+  effectiveCost: Record<string, number | null>
+}
+export interface AutoTSwitchPatch { positions: Record<string, { enabled: boolean }>; changed: number }
+export type AutoTSwitchPatchResult = { ok: true; patch: AutoTSwitchPatch } | { ok: false; error: string }
+
+const recordOf = (v: unknown): Record<string, unknown> | null =>
+  v !== null && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : null
+
+const textOf = (v: unknown): string | null => (typeof v === 'string' && v.trim() !== '' ? v : null)
+
+const intOf = (v: unknown): number | null => {
+  const n = finite(v as number)
+  return n === null ? null : Math.trunc(n)
+}
+
+const planStatusOf = (v: unknown): AutoTPlanStatus =>
+  v === 'planned' || v === 'waiting' || v === 'open-filled' || v === 'done' || v === 'aborted' ? v : 'unknown'
+
+function planOf(v: unknown): AutoTPlan | null {
+  const o = recordOf(v)
+  if (o === null) return null
+  const secid = textOf(o.secid)
+  if (secid === null) return null
+  return {
+    id: textOf(o.id) ?? `${secid}-plan`,
+    secid,
+    name: textOf(o.name) ?? secid,
+    direction: o.direction === 'sell-first' ? 'sell-first' : 'buy-first',
+    buyPrice: finite(o.buyPrice as number),
+    sellPrice: finite(o.sellPrice as number),
+    shares: intOf(o.shares),
+    status: planStatusOf(o.status),
+    observe: textOf(o.observe),
+    reasoning: textOf(o.reasoning),
+    conclusion: textOf(o.conclusion),
+  }
+}
+
+function tradeOf(v: unknown): AutoTTrade | null {
+  const o = recordOf(v)
+  if (o === null) return null
+  const id = textOf(o.id)
+  const planId = textOf(o.planId)
+  const secid = textOf(o.secid)
+  if (id === null || planId === null || secid === null) return null
+  return {
+    id,
+    planId,
+    secid,
+    side: o.side === 'sell' ? 'sell' : 'buy',
+    shares: intOf(o.shares),
+    price: finite(o.price as number),
+    at: finite(o.at as number),
+    leg: o.leg === 'open' || o.leg === 'close' ? o.leg : 'unknown',
+    forced: o.forced === true,
+  }
+}
+
+function statsOf(v: unknown): AutoTStats {
+  const o = recordOf(v)
+  return {
+    rounds: o === null ? null : intOf(o.rounds),
+    profit: o === null ? null : finite(o.profit as number),
+    winRate: o === null ? null : finite(o.winRate as number),
+    n: o === null ? null : intOf(o.n),
+  }
+}
+
+function statsBagOf(v: unknown): Record<string, AutoTStats> {
+  const bag = recordOf(v)
+  const out: Record<string, AutoTStats> = {}
+  if (bag === null) return out
+  for (const [secid, raw] of Object.entries(bag)) {
+    if (secid.trim() === '') continue
+    out[secid] = statsOf(raw)
+  }
+  return out
+}
+
+/**
+ * 从 `/tradewatcher/prism` 回包取 `autoT` 并做结构容错。
+ * 没有该字段 / 不是对象 ⇒ `null`（界面走「自动做T 未启用」空态，不报错）。
+ * 兼容宿主把字段放在顶层或 `state` 内的两种写法。
+ */
+export function autoTOf(payload: unknown): PrismAutoT | null {
+  const bag = recordOf(payload)
+  if (bag === null) return null
+  const nested = recordOf(bag.state)
+  const raw = bag.autoT !== undefined ? bag.autoT : nested?.autoT
+  const o = recordOf(raw)
+  if (o === null) return null
+  const positions: Record<string, AutoTPositionFlag> = {}
+  const posBag = recordOf(o.positions)
+  if (posBag !== null) {
+    for (const [secid, rawFlag] of Object.entries(posBag)) {
+      if (secid.trim() === '') continue
+      const f = recordOf(rawFlag)
+      if (f === null) continue
+      positions[secid] = { enabled: f.enabled === true, hold: f.hold === true }
+    }
+  }
+  const todayBag = recordOf(o.today)
+  const plansRaw = todayBag?.plans
+  const tradesRaw = todayBag?.trades
+  const plans = Array.isArray(plansRaw) ? plansRaw.map(planOf).filter((p): p is AutoTPlan => p !== null) : []
+  const trades = Array.isArray(tradesRaw) ? tradesRaw.map(tradeOf).filter((t): t is AutoTTrade => t !== null) : []
+  const effectiveRaw = recordOf(o.effectiveCost)
+  const effectiveCost: Record<string, number | null> = {}
+  if (effectiveRaw !== null) {
+    for (const [secid, v] of Object.entries(effectiveRaw)) {
+      if (secid.trim() === '') continue
+      effectiveCost[secid] = finite(v as number)
+    }
+  }
+  return {
+    state: o.state === 'running' || o.state === 'paused' ? o.state : 'closed',
+    enabled: o.enabled === true,
+    positions,
+    today: {
+      rounds: todayBag === null || todayBag === undefined ? null : intOf(todayBag.rounds),
+      limit: todayBag === null || todayBag === undefined ? null : intOf(todayBag.limit),
+      profit: todayBag === null || todayBag === undefined ? null : finite(todayBag.profit as number),
+      plans,
+      trades,
+    },
+    stats: statsOf(o.stats),
+    perPosition: statsBagOf(o.perPosition),
+    effectiveCost,
+  }
+}
+
+/** 有未完成 T 单 = 今日存在未走完（planned / waiting / open-filled）的计划 */
+export function autoTHasUnfinishedOf(a: PrismAutoT | null): boolean {
+  if (a === null) return false
+  return a.today.plans.some((p) => p.status === 'planned' || p.status === 'waiting' || p.status === 'open-filled')
+}
+
+/** 入口按钮状态：灰=关闭、绿=运行中、橙=有未完成 T 单（橙优先） */
+export function autoTEntryStatusOf(a: PrismAutoT | null): 'closed' | 'running' | 'unfinished' {
+  if (a === null || !a.enabled || a.state === 'closed') return 'closed'
+  if (autoTHasUnfinishedOf(a)) return 'unfinished'
+  return a.state === 'running' ? 'running' : 'closed'
+}
+
+/** 入口按钮 / 标题的无障碍说明 */
+export function autoTEntryTitleOf(a: PrismAutoT | null): string {
+  if (a === null) return '自动做T 未启用（宿主回包没有 autoT 字段）'
+  if (!a.enabled) return '自动做T 已关闭'
+  if (autoTHasUnfinishedOf(a)) return '自动做T · 有未完成 T 单'
+  if (a.state === 'paused') return '自动做T 已暂停'
+  if (a.state === 'running') return '自动做T 运行中'
+  return '自动做T 已关闭'
+}
+
+/** 弹窗头部状态徽标文案 */
+export function autoTStateTextOf(a: PrismAutoT | null): string {
+  if (a === null || !a.enabled) return '未启用'
+  if (a.state === 'paused') return '已暂停'
+  if (a.state === 'running') return 'Agent 运行中'
+  return '已关闭'
+}
+
+export interface AutoTChip { key: string; label: string; value: string; tone: Tone; title: string }
+
+/** 胜率文本：n=0 ⇒ `—（n=0）`；有 n、缺 rate ⇒ `—（n=N）`；都不写 0% */
+export function autoTWinRateTextOf(winRate: number | null | undefined, n: number | null | undefined): string {
+  const sample = finite(n)
+  if (sample === null) return '—'
+  const rate = finite(winRate)
+  if (sample <= 0 || rate === null) return `—（n=${sample}）`
+  const pct = rate.toFixed(1).replace(/\.0$/, '')
+  return `${pct}%（n=${sample}）`
+}
+
+function winRateTitleOf(winRate: number | null | undefined, n: number | null | undefined): string {
+  const sample = finite(n)
+  if (sample === null) return '宿主未给出胜率样本数 n'
+  if (sample <= 0) return '样本数 n=0，胜率不可算'
+  if (finite(winRate) === null) return `宿主未给出胜率（n=${sample}）`
+  return `胜率 = 盈利轮次 / 总轮次（n=${sample}）`
+}
+
+/** 今日轮次：`1 / 2`；缺一项如实留 `—` */
+export function autoTTodayRoundsTextOf(a: PrismAutoT | null): string {
+  const rounds = finite(a?.today.rounds)
+  const limit = finite(a?.today.limit)
+  if (rounds === null && limit === null) return '—'
+  if (limit === null) return String(rounds)
+  return `${rounds === null ? '—' : String(rounds)} / ${String(limit)}`
+}
+
+/** 顶部 5 个统计 chip（唯一汇总口径；表格不再出合计行） */
+export function autoTChipsOf(a: PrismAutoT | null): AutoTChip[] {
+  const noData = '自动做T 未启用（宿主回包没有 autoT 字段）'
+  const todayProfit = a?.today.profit ?? null
+  const totalRounds = a?.stats.rounds ?? null
+  const totalProfit = a?.stats.profit ?? null
+  const winRate = a?.stats.winRate ?? null
+  const n = a?.stats.n ?? null
+  const rounds = finite(a?.today.rounds)
+  const limit = finite(a?.today.limit)
+  const roundsTitle = a === null
+    ? noData
+    : rounds === null
+      ? '宿主未给出今日已完成轮次'
+      : limit === null
+        ? '宿主未给出每日轮次上限'
+        : '今日已完成轮次 / 每日上限'
+  return [
+    { key: 'today-rounds', label: '今日轮次', value: autoTTodayRoundsTextOf(a), tone: 'flat', title: roundsTitle },
+    { key: 'today-profit', label: '今日做T收益', value: signedMoneyOf(todayProfit), tone: toneOf(todayProfit), title: a === null ? noData : (todayProfit === null ? '宿主未给出今日做T收益' : '今日做T净收益（宿主结算值）') },
+    { key: 'total-rounds', label: '累计做T次数', value: totalRounds === null ? '—' : `${String(totalRounds)} 次`, tone: 'flat', title: a === null ? noData : (totalRounds === null ? '宿主未给出累计做T次数' : '累计完成轮次（两腿都成交且净持仓复原）') },
+    { key: 'total-profit', label: '累计做T收益', value: signedMoneyOf(totalProfit), tone: toneOf(totalProfit), title: a === null ? noData : (totalProfit === null ? '宿主未给出累计做T收益' : '累计做T净收益（宿主结算值）') },
+    { key: 'win-rate', label: '做T胜率', value: autoTWinRateTextOf(winRate, n), tone: 'flat', title: a === null ? noData : winRateTitleOf(winRate, n) },
+  ]
+}
+
+/** 单只统计（名称下方一行）：做T N 次 · +X · 胜率 Y%（n=）；整条缺 ⇒ 0 次 · — · —（n=0） */
+export function autoTPerPositionTextOf(stat: AutoTStats | null | undefined): string {
+  if (stat === null || stat === undefined) return '做T 0 次 · — · 胜率 —（n=0）'
+  const rounds = finite(stat.rounds)
+  const profit = stat.profit
+  const win = autoTWinRateTextOf(stat.winRate, stat.n)
+  return `做T ${rounds === null ? '—' : String(rounds)} 次 · ${signedMoneyOf(profit)} · 胜率 ${win}`
+}
+
+/** 今日轮次胶囊文案：`自动做T · 1 / 2 轮 · +112.30` */
+export function autoTPillTextOf(a: PrismAutoT | null): string {
+  const rounds = autoTTodayRoundsTextOf(a)
+  const profit = signedMoneyOf(a?.today.profit ?? null)
+  return `自动做T · ${rounds === '—' ? '—' : `${rounds} 轮`} · ${profit}`
+}
+
+/** 该标的今日计划：优先取未中止的计划，没有则回退最后一条 */
+export function autoTPlanOf(a: PrismAutoT | null, secid: string): AutoTPlan | null {
+  if (a === null) return null
+  const list = a.today.plans.filter((p) => p.secid === secid)
+  return list.find((p) => p.status !== 'aborted') ?? list[list.length - 1] ?? null
+}
+
+/** 弹窗左下「Agent 判断」面板选中的计划：第一条未中止的计划（没有则第一条） */
+export function autoTFocusPlanOf(a: PrismAutoT | null): AutoTPlan | null {
+  if (a === null) return null
+  return a.today.plans.find((p) => p.status !== 'aborted') ?? a.today.plans[0] ?? null
+}
+
+export interface AutoTJudgeView { text: string; muted: boolean; title: string; plan: AutoTPlan | null; direction: string | null }
+
+export function autoTDirectionLabelOf(plan: AutoTPlan): string {
+  return plan.direction === 'sell-first' ? '反T' : '正T'
+}
+
+function priceTextOf(v: number | null): string {
+  return v === null ? '—' : v.toFixed(2)
+}
+
+/** 持仓表「Agent 今日判断」：开关/持有标记/计划三层，缺哪层说哪层 */
+export function autoTJudgeOf(a: PrismAutoT | null, secid: string): AutoTJudgeView {
+  if (a === null) return { text: '—（自动做T 未启用）', muted: true, title: '宿主回包没有 autoT 字段', plan: null, direction: null }
+  const flag = a.positions[secid]
+  if (flag === undefined || !flag.enabled) return { text: '未开启做T', muted: true, title: '该标的的自动做T 开关当前为关闭', plan: null, direction: null }
+  if (!flag.hold) return { text: '非中长期持有', muted: true, title: '该标的未标记为中长期持有，不做T', plan: null, direction: null }
+  const plan = autoTPlanOf(a, secid)
+  if (plan === null) return { text: '今日无计划', muted: true, title: '今日该标的没有做T计划（价差不足/风控/数据缺失）', plan: null, direction: null }
+  const parts = [`${priceTextOf(plan.buyPrice)} ↔ ${priceTextOf(plan.sellPrice)}`, plan.shares === null ? '— 股' : `${moneyOf(plan.shares, 0)} 股`]
+  return { text: parts.join(' · '), muted: false, title: `计划 ${plan.id}`, plan, direction: autoTDirectionLabelOf(plan) }
+}
+
+export interface AutoTResultView { label: string; tone: AutoTResultTone; title: string }
+
+/** 计划结果徽标（只描述状态；金额在页面按成交腿价差估算并标注未扣费） */
+export function autoTPlanResultOf(plan: AutoTPlan | null): AutoTResultView {
+  if (plan === null) return { label: '—', tone: 'flat', title: '今日无做T计划' }
+  switch (plan.status) {
+    case 'planned': return { label: '已计划', tone: 'blue', title: '计划已生成，等待触发' }
+    case 'waiting': return { label: '待触发', tone: 'blue', title: '条件单已挂出，等待价格触发' }
+    case 'open-filled': return { label: '一腿已成', tone: 'blue', title: '已成交一腿，等待回补腿' }
+    case 'done': return { label: '已完成', tone: 'ok', title: '两腿都成交，净持仓复原' }
+    case 'aborted': return { label: '已中止', tone: 'off', title: '本轮已中止（未完成，不计入完成次数）' }
+    default: return { label: '—', tone: 'flat', title: '宿主未给出可识别的计划状态' }
+  }
+}
+
+/** 价差（扣费前，%）：(sell / buy − 1) × 100；价格缺失 ⇒ null */
+export function autoTSpreadPctOf(plan: AutoTPlan | null): number | null {
+  if (plan === null || plan.buyPrice === null || plan.sellPrice === null || plan.buyPrice <= 0) return null
+  return (plan.sellPrice / plan.buyPrice - 1) * 100
+}
+
+/** 单轮估算净额（按成交腿价差，**未扣费用**）：卖腿金额 − 买腿金额；缺一腿 ⇒ null */
+export function autoTPlanNetOf(plan: AutoTPlan | null, trades: ReadonlyArray<AutoTTrade>): number | null {
+  if (plan === null) return null
+  let buy = 0
+  let sell = 0
+  let buyShares = 0
+  let sellShares = 0
+  for (const t of trades) {
+    if (t.planId !== plan.id || t.price === null || t.shares === null) continue
+    if (t.side === 'buy') { buy += t.price * t.shares; buyShares += t.shares }
+    else { sell += t.price * t.shares; sellShares += t.shares }
+  }
+  if (buyShares <= 0 || sellShares <= 0) return null
+  return sell - buy
+}
+
+/**
+ * 单轮结算金额：回包没有逐轮净额，只有 `today.profit`。
+ * 仅当今日只有这一条计划、且该计划已完成时，才把今日收益原样挂到它上面；
+ * 多计划无法拆分 ⇒ null（界面写 — 并说明原因，不拿成交腿价差冒充已扣费净额）。
+ */
+export function autoTPlanSettlementOf(a: PrismAutoT | null, plan: AutoTPlan | null): number | null {
+  if (a === null || plan === null || plan.status !== 'done') return null
+  if (a.today.plans.length !== 1) return null
+  return a.today.profit
+}
+
+export interface AutoTFlowEvent {
+  id: string
+  kind: 'buy' | 'sell' | 'settle' | 'fail'
+  label: string
+  at: number | null
+  timeText: string
+  timeTitle: string
+  text: string
+  amountText: string
+  tone: Tone
+}
+
+/** 今日流水：T·买入 / T·卖出 / T·结算 / T·失败（按成交时刻升序；结算金额按价差估算并注明未扣费） */
+export function autoTFlowOf(a: PrismAutoT | null): AutoTFlowEvent[] {
+  if (a === null) return []
+  const planById = new Map(a.today.plans.map((p) => [p.id, p]))
+  const events: AutoTFlowEvent[] = []
+  for (const t of a.today.trades) {
+    const plan = planById.get(t.planId) ?? null
+    const amount = t.price === null || t.shares === null ? null : (t.side === 'sell' ? 1 : -1) * t.price * t.shares
+    const failure = t.forced
+    events.push({
+      id: `trade-${t.id}`,
+      kind: failure ? 'fail' : t.side,
+      label: failure ? 'T·失败' : (t.side === 'sell' ? 'T·卖出' : 'T·买入'),
+      at: t.at,
+      timeText: t.at === null ? '—' : shClockText(t.at).slice(0, 5),
+      timeTitle: t.at === null ? '宿主未给出成交时刻' : `成交时刻（北京时间）${shClockText(t.at)}`,
+      text: `${plan?.name ?? t.secid} ${t.shares === null ? '—' : moneyOf(t.shares, 0)} 股 @${t.price === null ? '—' : t.price.toFixed(2)}`,
+      amountText: signedMoneyOf(amount),
+      tone: 'flat',
+    })
+  }
+  for (const plan of a.today.plans) {
+    if (plan.status !== 'done') continue
+    const settle = autoTPlanSettlementOf(a, plan)
+    const legs = a.today.trades.filter((t) => t.planId === plan.id && t.at !== null)
+    if (legs.length === 0) continue
+    const at = Math.max(...legs.map((t) => t.at as number))
+    events.push({
+      id: `settle-${plan.id}`,
+      kind: 'settle',
+      label: 'T·结算',
+      at,
+      timeText: shClockText(at).slice(0, 5),
+      timeTitle: settle === null ? '宿主未给出单轮结算金额（今日收益无法拆分到单轮）' : '今日做T结算（宿主值）',
+      text: settle === null ? `结算 · ${plan.name}（单轮金额不可拆）` : `结算 · ${plan.name}`,
+      amountText: signedMoneyOf(settle),
+      tone: toneOf(settle),
+    })
+  }
+  return events.sort((x, y) => (x.at ?? Number.POSITIVE_INFINITY) - (y.at ?? Number.POSITIVE_INFINITY))
+}
+
+/** 持仓开关草稿：以回包 positions 为唯一基线（缺失按 false，开关本身仍可操作） */
+export function autoTSwitchDraftOf(a: PrismAutoT | null, secids: ReadonlyArray<string>): Record<string, boolean> {
+  const out: Record<string, boolean> = {}
+  for (const secid of secids) {
+    if (typeof secid !== 'string' || secid.trim() === '') continue
+    out[secid] = a?.positions[secid]?.enabled === true
+  }
+  return out
+}
+
+/**
+ * 开关 POST payload：只带发生变化的标的；校验键非空、值必须是布尔。
+ * 没有变化时 `patch.changed === 0`（页面据此直接关闭，不发空请求）。
+ */
+export function autoTSwitchPatchOf(draft: unknown, saved: Readonly<Record<string, boolean>>): AutoTSwitchPatchResult {
+  const bag = recordOf(draft)
+  if (bag === null) return { ok: false, error: '开关状态无效' }
+  const positions: Record<string, { enabled: boolean }> = {}
+  let changed = 0
+  for (const [secid, value] of Object.entries(bag)) {
+    if (secid.trim() === '') return { ok: false, error: '标的代码不能为空' }
+    if (typeof value !== 'boolean') return { ok: false, error: `${secid} 的开关值必须是布尔值` }
+    if (saved[secid] === value) continue
+    positions[secid] = { enabled: value }
+    changed += 1
+  }
+  return { ok: true, patch: { positions, changed } }
+}
+
+/** 有效成本显示：宿主值原样展示（最多 3 位小数），缺失 ⇒ — */
+export function autoTEffectiveCostTextOf(a: PrismAutoT | null, secid: string): string {
+  const v = a === null ? null : finite(a.effectiveCost[secid])
+  return v === null ? '—' : v.toFixed(3).replace(/\.?0+$/, '')
+}
+
+/** 成本价显示（账面成本；宿主值最多 3 位小数） */
+export function autoTCostTextOf(v: number | null | undefined): string {
+  const n = finite(v)
+  return n === null ? '—' : n.toFixed(3).replace(/\.?0+$/, '')
 }

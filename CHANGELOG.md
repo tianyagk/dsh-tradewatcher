@@ -11,6 +11,29 @@
 
 ---
 
+## v0.240.0 — 自动做T（第一阶段）：弹窗界面 + 宿主开关/账本接口
+
+`npm run check` **2057 / 2057 × 2 时区** + build（73 项）+ `tsc` 0。
+
+### 前端（src/client）
+| 文件 | 内容 |
+| --- | --- |
+| `PrismPage.tsx` | 决策流卡片头新增「自动做T」入口（灰/绿/橙状态点）+ 浮层 `AutoTModal` + 最小化胶囊；Esc/遮罩关闭；关闭时提交未保存开关 |
+| `prismDeskSide.ts` | `PrismAutoT` 类型与 `autoTOf` 容错；5 个统计 chip、单只统计、胜率 n=0、空态、开关 payload 校验 |
+| `api.ts` | `api.prismAutoT(patch)`（action:'autoT'） |
+| `styles.ts` | `.tw-ad-autot-*`：920px 两栏、<860 单栏隐藏两列、<560 全屏 sheet；字号 ≥12px |
+
+### 宿主（src/host）
+- `prismStore.ts`：新增 `prism-autot.json` 账本（`{plans, trades, results}`）与读写方法，与主三账本分离。
+- `prismRoutes.ts`：`autoTPayloadOf()` 生成回包（state/positions/today/stats/perPosition/effectiveCost）；GET 顶层与 `state` 同时下发；新增 `action:'autoT'` 更新总开关与逐只开关。
+- `settings.autoT`：`{enabled, positions}`（人类只控制开关）。
+
+### 尚未实现（如实）
+T 计划的生成（LLM 输出 `tPlans`）与「并入主挂单」的执行/回补/结算逻辑尚未接入；当前界面打开会显示空态或仅有开关，
+不会产生任何 T 单，也不会影响主决策。
+
+### 验证
+`npm run check` **2057 / 2057 × 2 时区** + build（73 项）+ `tsc` 0。
 ## v0.239.5 — 全期收益改为「净值 ÷ 本金」，超额随之纠正
 
 `npm run check` **2051 / 2051 × 2 时区** + build（73 项）+ `tsc` 0。

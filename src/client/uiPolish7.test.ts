@@ -1,4 +1,4 @@
-/** 第 7 轮：响应式断点统一（5 档阶梯）。 */
+/** 第 7 轮：响应式断点统一（7 档阶梯；560/860 为棱镜自动做T 弹窗的设计稿断点）。 */
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
@@ -7,12 +7,12 @@ const CSS = readFileSync(new URL('./styles.ts', import.meta.url), 'utf8')
 const BREAKPOINTS = [...CSS.matchAll(/@media \((?:max|min)-width:(\d+)px\)/g)].map((m) => Number(m[1]))
 const SET = [...new Set(BREAKPOINTS)].sort((a, b) => a - b)
 
-test('① 断点集合恰为 {430,600,760,900,1100}（999/899/1099/700/639 ⇒ 败）', () => {
-  assert.deepEqual(SET, [430, 600, 760, 900, 1100], `实得 ${SET.join(',')}`)
+test('① 断点集合恰为 {430,560,600,760,860,900,1100}（999/899/1099/700/639 ⇒ 败）', () => {
+  assert.deepEqual(SET, [430, 560, 600, 760, 860, 900, 1100], `实得 ${SET.join(',')}`)
   for (const bad of [999, 899, 1099, 700, 639]) {
     const injected = `${CSS}\n@media (max-width:${bad}px){.x{display:none}}`
     const s2 = [...new Set([...injected.matchAll(/@media \((?:max|min)-width:(\d+)px\)/g)].map((m) => Number(m[1])))].sort((a, b) => a - b)
-    assert.notDeepEqual(s2, [430, 600, 760, 900, 1100], `注入 ${bad} ⇒ 判失败`)
+    assert.notDeepEqual(s2, [430, 560, 600, 760, 860, 900, 1100], `注入 ${bad} ⇒ 判失败`)
   }
 })
 

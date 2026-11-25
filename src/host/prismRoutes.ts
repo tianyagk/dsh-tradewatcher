@@ -12,7 +12,7 @@
  */
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { PluginWebRoute } from './context.ts'
-import type { PrismStore } from './prismStore.ts'
+import type { AutoTFile, AutoTResultRec, PrismStore } from './prismStore.ts'
 import { LedgerUnreadableError, PrismTradingStore, applyFeeCorrection, avgCostFromHistory, clampDecision, copyAtCost, dayStartMismatchOf, equityPointOf, isEtfName, matchTick, placeDecision, productKeyOf, realizedFromIdentity, rebuildFromOrders, upsertEquity, type QuoteLite } from './prismAccount.ts'
 import { dataHome, type DataStore } from './store.ts'
 import type { PrismAccount, PrismFill, PrismOrder, PrismRun, PrismSettings, PrismState } from '../shared/prism.ts'
@@ -253,6 +253,58 @@ async function indexTechCachedOf(): Promise<string> {
   })
   techCache = { at: Date.now(), text }
   return text
+}
+
+/** 自动做T 回包：计划/成交/结算 → 界面结构（缺数据一律 null，不编 0） */
+export function autoTPayloadOf(
+  store: { autoT: () => AutoTFile; settings: () => PrismSettings },
+  account: PrismAccount,
+  today: string,
+  degraded = false,
+): Record<string, unknown> {
+  const file = store.autoT()
+  const cfg = store.settings().autoT
+  const enabled = cfg?.enabled === true
+  const positions: Record<string, { enabled: boolean; hold: boolean }> = {}
+  for (const p of account.positions) {
+    if (p.qty <= 0) continue
+    positions[p.secid] = { enabled: cfg?.positions?.[p.secid]?.enabled === true, hold: true }
+  }
+  const plans = file.plans.filter((p) => p.day === today)
+  const planIds = new Set(plans.map((p) => p.id))
+  const trades = file.trades.filter((t) => planIds.has(t.planId))
+  const results = file.results.filter((r) => r.day === today)
+  const num = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null)
+  const sum = (list: Array<{ net?: number | null }>): number | null => {
+    if (list.length === 0) return null
+    const vals = list.map((x) => num(x.net))
+    return vals.every((v): v is number => v !== null) ? vals.reduce((a, b) => a + b, 0) : null
+  }
+  const statsOf = (list: AutoTResultRec[]): { rounds: number; profit: number | null; winRate: number | null; n: number } => {
+    const rounds = list.length
+    const profit = sum(list)
+    if (rounds === 0) return { rounds: 0, profit: null, winRate: null, n: 0 }
+    const wins = list.filter((r) => (num(r.net) ?? 0) > 0).length
+    return { rounds, profit, winRate: Math.round((wins / rounds) * 10000) / 100, n: rounds }
+  }
+  const perPosition: Record<string, ReturnType<typeof statsOf>> = {}
+  for (const p of account.positions) {
+    perPosition[p.secid] = statsOf(file.results.filter((r) => r.secid === p.secid))
+  }
+  const effectiveCost: Record<string, number | null> = {}
+  for (const p of account.positions) {
+    const profit = statsOf(file.results.filter((r) => r.secid === p.secid)).profit
+    effectiveCost[p.secid] = p.qty > 0 && profit !== null ? Math.round((p.cost - profit / p.qty) * 1000) / 1000 : p.cost
+  }
+  return {
+    state: degraded ? 'paused' : enabled ? 'running' : 'closed',
+    enabled,
+    positions,
+    today: { rounds: results.length, limit: 2, profit: sum(results), plans, trades },
+    stats: statsOf(file.results),
+    perPosition,
+    effectiveCost,
+  }
 }
 
 /** 用户配置的硬边界（与骨架冲突时以这里为准；模型必须按这些值填 limits） */
@@ -667,6 +719,7 @@ export function makePrismRoutes(deps: PrismRouteDeps): PluginWebRoute[] {
           const latestDecision = store.runs().at(-1)?.decision ?? null
           const tradingWithDecision = { ...trading, decision: latestDecision }
           const modelCatalog = await modelCatalogOf(deps.get)
+          const autoT = autoTPayloadOf(store, account, dayOf(Date.now()))
           // v0.202.0：AGENT DESK 六区块新增字段（只读追加，旧字段一个不删）
           const desk = prismDeskOf({
             account: accountView,
@@ -684,10 +737,11 @@ export function makePrismRoutes(deps: PrismRouteDeps): PluginWebRoute[] {
           send(res, 200, slimPrismPayload({
             ok: true,
             asOf: Date.now(),
-            state: { ...stateOf(store, deps.get), ...tradingWithDecision, modelCatalog },
+            state: { ...stateOf(store, deps.get), ...tradingWithDecision, modelCatalog, autoT },
             // 顶层 trading 与 state 是同一对象（重复序列化 260KB，审计 UI）：客户端只读 state
             modelCatalog,
             desk,
+            autoT,
           }))
           return
         }
@@ -878,6 +932,23 @@ export function makePrismRoutes(deps: PrismRouteDeps): PluginWebRoute[] {
             await recordEquity(deps)
             if (slot !== 'manual') await store.markFired(dayOf(Date.now()), slot)
             send(res, 200, { ok: true, asOf: Date.now(), run, orders: deps.trading.orders() })
+            return
+          }
+          if (action === 'autoT') {
+            const bodyObj = (body ?? {}) as { enabled?: unknown; positions?: unknown }
+            const current = deps.store.settings().autoT ?? { enabled: false, positions: {} }
+            const nextPositions: Record<string, { enabled: boolean }> = { ...current.positions }
+            if (bodyObj.positions !== null && typeof bodyObj.positions === 'object' && !Array.isArray(bodyObj.positions)) {
+              for (const [secid, raw] of Object.entries(bodyObj.positions as Record<string, unknown>)) {
+                if (!isValidSecid(secid)) continue
+                const flag = raw !== null && typeof raw === 'object' ? (raw as { enabled?: unknown }).enabled : undefined
+                if (typeof flag === 'boolean') nextPositions[secid] = { enabled: flag }
+              }
+            }
+            const enabled = typeof bodyObj.enabled === 'boolean' ? bodyObj.enabled : current.enabled
+            await deps.store.patchSettings({ autoT: { enabled, positions: nextPositions } })
+            const accountNow = deps.trading.account()
+            send(res, 200, { ok: true, autoT: autoTPayloadOf(deps.store, accountNow, dayOf(Date.now())) })
             return
           }
           if (action === 'cash') {

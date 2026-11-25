@@ -39,6 +39,25 @@ const intervalSecOf = (v: unknown): number => (
   typeof v === 'number' && (PRISM_INTERVAL_OPTIONS as readonly number[]).includes(v) ? v : PRISM_DEFAULT_INTERVAL_SEC
 )
 
+/** 自动做T 账本（只存计划/成交/结算，成交金额仍以主账本 fills 为准） */
+export interface AutoTPlanRec {
+  id: string; secid: string; name: string; day: string
+  direction: 'buy-first' | 'sell-first'
+  buyPrice: number | null; sellPrice: number | null; shares: number
+  status: 'planned' | 'waiting' | 'open-filled' | 'done' | 'aborted'
+  observe: string | null; reasoning: string | null; conclusion: string | null
+  at: number
+}
+export interface AutoTTradeRec {
+  id: string; planId: string; secid: string; side: 'buy' | 'sell'
+  shares: number; price: number; at: number; leg: 'open' | 'close'; forced?: boolean
+}
+export interface AutoTResultRec {
+  id: string; planId: string; secid: string; day: string
+  buyPrice: number; sellPrice: number; shares: number; fees: number; net: number; at: number
+}
+export interface AutoTFile { plans: AutoTPlanRec[]; trades: AutoTTradeRec[]; results: AutoTResultRec[] }
+
 export class PrismStore {
   private readonly dir: string
   private readonly guard = new ReadGuard()
@@ -47,6 +66,7 @@ export class PrismStore {
   private newsStatus: PrismNewsStatus = { ...DEFAULT_STATUS }
   private newsItems: PrismNewsItem[] = []
   private runsValue: PrismRun[] = []
+  private autoTValue: AutoTFile = { plans: [], trades: [], results: [] }
   private initialized = false
 
   constructor(dir = dataHome()) {
@@ -64,6 +84,7 @@ export class PrismStore {
     await this.loadSettings()
     await this.loadNews()
     await this.loadRuns()
+    await this.loadAutoT()
     try {
       this.skeletonValue = await readFile(this.pathOf('prism-skeleton.md'), 'utf8')
     } catch (error) {
@@ -165,6 +186,27 @@ export class PrismStore {
         items: this.newsItems.length,
       }
     }
+  }
+
+  private async loadAutoT(): Promise<void> {
+    const disk = await this.loadJson<{ plans?: unknown; trades?: unknown; results?: unknown }>('prism-autot.json')
+    if (disk === null) return
+    const arr = (v: unknown): unknown[] => (Array.isArray(v) ? v : [])
+    this.autoTValue = {
+      plans: arr(disk.plans) as AutoTPlanRec[],
+      trades: arr(disk.trades) as AutoTTradeRec[],
+      results: arr(disk.results) as AutoTResultRec[],
+    }
+  }
+
+  autoT(): AutoTFile {
+    return JSON.parse(JSON.stringify(this.autoTValue)) as AutoTFile
+  }
+
+  /** 写入自动做T 账本（计划/成交/结算）；与主三账本分开，失败不影响主账 */
+  async saveAutoT(next: AutoTFile): Promise<void> {
+    this.autoTValue = next
+    await updateJsonLocked(this.pathOf('prism-autot.json'), () => ({ v: 1, ...next })).catch(() => undefined)
   }
 
   private async loadRuns(): Promise<void> {
