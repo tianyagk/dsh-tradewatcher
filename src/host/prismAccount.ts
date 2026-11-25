@@ -458,6 +458,11 @@ export function dayStartMismatchOf(account: PrismAccount, points: readonly Prism
 }
 
 export function upsertEquity(list: readonly PrismEquityPoint[], point: PrismEquityPoint): PrismEquityPoint[] {
+  // 同日只保留**更晚**的点：GET 与撮合并发时，晚到的旧快照不得覆盖新点（审计 D2）
+  const same = list.find((p) => p.day === point.day)
+  if (same !== undefined && typeof same.at === 'number' && typeof point.at === 'number' && point.at < same.at) {
+    return [...list]
+  }
   const out = list.filter((p) => p.day !== point.day)
   out.push(point)
   return out.sort((a, b) => (a.day < b.day ? -1 : 1)).slice(-365)
@@ -1856,8 +1861,12 @@ async function matchTickLocked(
     filled += 1
   }
   // 三账本一次写：账户（钱）、委托/成交（流水）、净值点必须在同一把文件锁内提交
-  const quoteMap = await deps.quotes(account.positions.map((p) => p.secid)).catch(() => ({}))
-  const point = equityPointOf(account, (secid) => quoteMap[secid]?.price ?? null, now)
-  await store.saveAll({ account, orders, fills, equity: upsertEquity(store.equity(), point) })
+  // 取价失败 ⇒ 不写净值点（否则整仓按成本计，会打出假的日跌幅/假熔断）
+  let quoteMap: Record<string, { price?: number | null }> | null = null
+  try { quoteMap = await deps.quotes(account.positions.map((p) => p.secid)) } catch { quoteMap = null }
+  const equity = quoteMap === null
+    ? store.equity()
+    : upsertEquity(store.equity(), equityPointOf(account, (secid) => quoteMap![secid]?.price ?? null, now))
+  await store.saveAll({ account, orders, fills, equity })
   return { filled, rejected, skipped, rejects: skipped }
 }
