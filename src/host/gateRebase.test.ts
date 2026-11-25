@@ -38,7 +38,7 @@ test('④ 基线之后有两点：从校平点重新起算', () => {
 test('⑤ realized 恒等式：equity = capital + realized + unrealized', () => {
   assert.equal(realizedFromIdentity(1_494_381.09, 1_800_000, -163_961.91), -141_657)
   assert.equal(1_800_000 + -141_657 + -163_961.91, 1_494_381.09)
-  assert.equal(realizedFromIdentity(NaN, 1, 1), 0)
+  assert.equal(realizedFromIdentity(NaN, 1, 1), null, '非法输入必须返回 null（不得洗成 0）')
 })
 
 test('⑥ 路由：rebase 动作存在且用同一恒等式，闸门读配置', () => {

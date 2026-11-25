@@ -24,3 +24,8 @@ test('③ matchTick 取价失败 ⇒ 不写净值点', () => {
   assert.match(block, /quoteMap === null/)
   assert.match(block, /store\.equity\(\)/)
 })
+
+test('④ 老账本无 available ⇒ 下单校验按 qty 判可卖（源码断言）', () => {
+  const src = readFileSync(new URL('./prismAccount.ts', import.meta.url), 'utf8')
+  assert.match(src, /const available = position\?\.available \?\? position\?\.qty \?\? 0/)
+})

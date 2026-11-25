@@ -220,7 +220,8 @@ export function fillRejectReasonOf(
     return null
   }
   const position = account.positions.find((p) => p.secid === order.secid)
-  const available = position?.available ?? 0
+  // 老账本没有 available ⇒ 按 qty 处理（与 clamp 的回落一致，否则合法卖单会被判 T+1 0 股）
+  const available = position?.available ?? position?.qty ?? 0
   if (available < order.shares) {
     return `T+1 不可卖（今日可卖 ${available} 股，需要 ${order.shares} 股）`
   }
@@ -344,8 +345,9 @@ export function copyAtCost(
  * 只用于「校平账本」：历史 bug 让 realized 字段与现金/持仓对不上（实测差 846 280 元），
  * 这条式子用当前可观测的 equity / 未实现盈亏把它重新对齐（不编造成交）。
  */
-export function realizedFromIdentity(equity: number, capital: number, unrealized: number): number {
-  if (![equity, capital, unrealized].every((v) => Number.isFinite(v))) return 0
+export function realizedFromIdentity(equity: number, capital: number, unrealized: number): number | null {
+  // 数据不完整 ⇒ null（调用方必须拒绝写入），不要返回 0 把已实现盈亏洗成 0（审计 A7）
+  if (![equity, capital, unrealized].every((v) => Number.isFinite(v))) return null
   return Math.round((equity - capital - unrealized) * 100) / 100
 }
 

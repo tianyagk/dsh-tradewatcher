@@ -960,6 +960,7 @@ export function makePrismRoutes(deps: PrismRouteDeps): PluginWebRoute[] {
               const equity = rows.reduce((a, r) => a + r.mv, 0) + account.cash
               const unrealized = rows.reduce((a, r) => a + (r.mv - r.net), 0)
               const realized = realizedFromIdentity(equity, account.capital, unrealized)
+              if (realized === null) throw new Error('账本数据不完整（净值/本金/未实现盈亏含非法值），已拒绝校平')
               const before = account.realized
               // 不再把 available 全部解锁（审计 C1：当日买入会被校平绕过 T+1）；手工调整已在 update 时解锁
               const value = { ...account, realized }
