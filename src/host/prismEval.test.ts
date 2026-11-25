@@ -38,9 +38,10 @@ test('P-03 超额含费/不含费两个数；n<30 ⇒ —+原因，不返回 0�
   const small = evaluationOf(points.slice(0, 10), {}, 1, EVAL_MIN_SAMPLE)
   assert.equal(small.excess.withFee, null)
   assert.match(small.excess.reason ?? '', /样本不足 n=\d+ < 30/)
-  assert.equal(small.drawdown.value, null)
-  assert.match(small.drawdown.reason ?? '', /样本不足/)
-  assert.notEqual(small.drawdown.value, 0)
+  // v0.239.0：回撤只看净值，不再被 30 窗口门槛卡成「—」
+  assert.equal(typeof small.drawdown.value, 'number')
+  assert.equal(small.drawdown.reason, null)
+  assert.equal(small.hitRate.value, null, '命中率仍需要基准与 30 窗口')
 })
 
 test('P-03 文案不含「预测能力」', () => {

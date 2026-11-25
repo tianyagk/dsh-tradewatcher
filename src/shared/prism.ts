@@ -42,6 +42,8 @@ export interface PrismSettings {
   minCashPct?: number | null
   /** 累计回撤熔断%（v0.222.0；缺省 10，0 = 关闭该维度） */
   maxCumDDPct?: number | null
+  /** 累计决策轮次（历史总数；runs 只保留最近 20 条） */
+  runsTotal?: number
   /** 回撤闸门基线时刻（v0.222.0）：账本校平后只统计此刻之后的净值点，累计回撤从 0 重新起算 */
   gateBaseAt?: number
 }

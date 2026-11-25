@@ -605,6 +605,7 @@ export async function runPrismForSlot(deps: PrismRouteDeps, slot: string): Promi
   const result = await placeDecision(deps.trading, run.decision, run.startedAt, quotes)
   // 保留裁剪/去重阶段的 rejects（此前被 placeDecision 的 rejects 覆盖 ⇒ 去重闸留痕会消失）
   run.decision = { ...run.decision, rejects: [...run.decision.rejects, ...result.rejects] }
+  await deps.store.patchSettings({ runsTotal: (deps.store.settings().runsTotal ?? 0) + 1 })
   // 单票上限以配置为准：模型自报值可能照抄骨架里的旧数字，落盘前统一成配置值（否则界面显示 20%、实际按 30% 裁）
   if (typeof settingsNow.perStockPct === 'number') {
     run.decision = { ...run.decision, limits: { ...run.decision.limits, singlePct: settingsNow.perStockPct } }
@@ -675,6 +676,7 @@ export function makePrismRoutes(deps: PrismRouteDeps): PluginWebRoute[] {
             orders: deps.trading.orders(),
             fills: deps.trading.fills(),
             runs: store.runs(),
+            runsTotal: (settings.runsTotal ?? 0) > 0 ? settings.runsTotal : store.runs().length,
             equity: deps.trading.equity(),
             evaluation,
             // 已保存约束（只读）：持仓分析的「超单票上限 / 触及止损线」只认它，缺 ⇒ null（不套默认 15/8）
@@ -902,6 +904,31 @@ export function makePrismRoutes(deps: PrismRouteDeps): PluginWebRoute[] {
               return value
             })
             send(res, 200, { ok: true, account: next })
+            return
+          }
+          if (action === 'backfillBenchmark') {
+            // 回填历史净值点的基准收盘价（1.000300 日线）：缺失会让「超额/命中率」永远是 —。
+            const k = await (deps.kline ?? fetchKline)('1.000300', 101, 250).catch(() => null)
+            const closes = new Map<string, number>()
+            for (const d of k?.days ?? []) if (typeof d.close === 'number' && d.close > 0) closes.set(d.date, d.close)
+            if (closes.size === 0) { send(res, 400, { ok: false, error: '基准日线取数失败，未做任何修改' }); return }
+            const out = await deps.trading.runExclusive(async () => {
+              deps.trading.assertWritable('回填基准收盘')
+              await deps.trading.reloadForWrite()
+              deps.trading.assertWritable('回填基准收盘')
+              const before = deps.trading.equity()
+              let filled = 0
+              const pointsFixed = before.map((p) => {
+                if (typeof p.benchmarkClose === 'number' && p.benchmarkClose > 0) return p
+                const c = closes.get(p.day)
+                if (c === undefined) return p
+                filled += 1
+                return { ...p, benchmarkClose: c }
+              })
+              await deps.trading.saveEquity(pointsFixed)
+              return { filled, total: before.length, missing: pointsFixed.filter((p) => typeof p.benchmarkClose !== 'number').map((p) => p.day) }
+            })
+            send(res, 200, { ok: true, ...out })
             return
           }
           if (action === 'normalizeCostBasis') {

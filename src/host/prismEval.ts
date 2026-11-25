@@ -93,16 +93,16 @@ export function evaluationOf(
   } else {
     excess = { withFee: round(avg(withFee) as number), withoutFee: round(avg(withoutFee) as number), reason: null, n }
   }
-  const adjusted = valid.map((p) => p.equity - (p.capital as number))
-  const baseAdj = adjusted[0] as number
-  const series = baseAdj !== 0 ? adjusted.map((v) => (v / baseAdj - 1) * 100) : adjusted.map(() => 0)
-  let peakSeries = 0
+  // 回撤只看净值本身：与基准无关，也不受 30 窗口门槛限制（否则「回撤」永远显示 —）。
+  // 口径：净值/本金比值的自高点回撤（capital 变化不产生假回撤）。
+  const rel = valid.map((p) => ((p.capital as number) > 0 ? p.equity / (p.capital as number) : p.equity))
+  let peakRel = 0
   let dd = 0
-  for (const v of series) {
-    peakSeries = Math.max(peakSeries, v)
-    dd = Math.min(dd, v - peakSeries)
+  for (const v of rel) {
+    peakRel = Math.max(peakRel, v)
+    if (peakRel > 0) dd = Math.min(dd, (v / peakRel - 1) * 100)
   }
-  const ddReason = sampleShort
+  const ddReason = valid.length >= 2 ? null : '有效净值点不足 2 个'
   const hitReason = benchmarkMissing ? '基准 1.000300 收盘缺失' : sampleShort
   const hits = withFee.filter((x) => x > 0).length
   return {
