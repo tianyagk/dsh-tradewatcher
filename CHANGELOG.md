@@ -11,6 +11,20 @@
 
 ---
 
+## v0.228.0 — 行业上限配置优先 / 盘前净值守卫 / 缺价不再拿成本顶替
+
+`npm run check` **2024 / 2024 × 2 时区**（2021 → 2024）+ build（73 项）+ `tsc` 0。
+
+| # | 来源 | 问题 | 修法 |
+| --- | --- | --- | --- |
+| 1 | PROMPT P0-1 | 行业上限 `{...settings.industryLimits, ...decisionIndustry}`：模型自报值覆盖用户配置 | 顺序反转，**配置优先**，模型只补未配置的行业 |
+| 2 | ACCOUNT B1 | 盘前 GET 也记录净值点，用盘前价覆盖上一交易日收盘 | `recordEquity` 在 09:30 前直接返回（`equityRecordAllowed`） |
+| 3 | PROMPT P0-2 | 裁剪上下文用 `price ?? cost` 顶替缺价，导致「按成本算权重」与提示词不一致，`missingPrice` 护栏恒 false | 缺价传 `null`，让护栏真正生效（跳过并留痕） |
+
+### 验证
+新增 `equityDayGuard.test.ts` 3 条：09:29 前不记录、09:30 起记录、上下文缺价必须传 null。
+`npm run check` **2024 / 2024 × 2 时区** + build（73 项）+ `tsc` 0。
+
 ## v0.227.0 — 回包瘦身 / 旧回包防覆盖 / 新闻无谓写盘
 
 `npm run check` **2021 / 2021 × 2 时区**（2016 → 2021）+ build（73 项）+ `tsc` 0。

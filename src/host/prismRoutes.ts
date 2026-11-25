@@ -405,7 +405,13 @@ const copyRowsOf = async (deps: PrismRouteDeps): Promise<Array<{ secid: string; 
  *
  * `quotes` 可由调用方传入（GET 本来就要取同一份行情，别取两次）；缺省自己取。
  */
+/** 净值点只在开盘后记录：盘前 GET 会把「今日盘前价」写到上一交易日名下（审计 B1） */
+export function equityRecordAllowed(hhmm: string): boolean {
+  return hhmm >= '09:30'
+}
+
 const recordEquity = async (deps: PrismRouteDeps, now = Date.now(), quotesGiven?: Record<string, QuoteLite>): Promise<boolean> => {
+  if (!equityRecordAllowed(hhmmOf(now))) return false
   const account = deps.trading.account()
   const before = deps.trading.equity()
   const last = before.at(-1) ?? null
@@ -545,7 +551,8 @@ export async function runPrismForSlot(deps: PrismRouteDeps, slot: string): Promi
   const industries = await fetchIndustryOverview(account.positions.map((p) => p.secid)).catch(() => ({}))
   const settings = deps.store.settings()
   const decisionIndustry = Array.isArray(run.decision.limits.byIndustry) ? Object.fromEntries(run.decision.limits.byIndustry.map((x) => [x.name, x.limitPct])) : (run.decision.limits.byIndustry ?? {})
-  const limits = { ...run.decision.limits, byIndustry: { ...(settings.industryLimits ?? {}), ...decisionIndustry } }
+  // 行业上限：**用户配置优先**，模型自报只补未配置的行业（否则模型可自证放宽上限）
+  const limits = { ...run.decision.limits, byIndustry: { ...decisionIndustry, ...(settings.industryLimits ?? {}) } }
   const eq = deps.trading.equity()
   const lastEq = eq.at(-1)
   const dayDrawdownPct = lastEq !== undefined && lastEq.equity > 0 && account.dayStartEquity !== null
@@ -561,7 +568,8 @@ export async function runPrismForSlot(deps: PrismRouteDeps, slot: string): Promi
     .map((o) => ({ secid: o.secid, name: o.name }))
   const clamped = clampDecision(run.decision, {
     cash: account.cash,
-    positions: account.positions.map((p) => ({ secid: p.secid, qty: p.qty, available: p.available, price: quotes[p.secid]?.price ?? p.cost, name: p.name })),
+    // 缺价 ⇒ 传 null（不要拿成本冒充现价）：clamp 会按 missingPrice 跳过并留痕，避免「按成本算权重」与提示词不一致
+    positions: account.positions.map((p) => ({ secid: p.secid, qty: p.qty, available: p.available, price: quotes[p.secid]?.price ?? null, name: p.name })),
     limits,
     constraints: {
       perStockPct: settings.perStockPct ?? null,
