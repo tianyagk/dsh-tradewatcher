@@ -31,3 +31,19 @@ test('② 有新条目 ⇒ 正常写盘', async () => {
   } as never)
   assert.equal(saves, 1)
 })
+
+test('③ 旧新闻缺 important / 时间格式为 ISO 时仍保留（不被静默清空）', async () => {
+  const { mkdtemp, writeFile } = await import('node:fs/promises')
+  const { tmpdir } = await import('node:os')
+  const { join } = await import('node:path')
+  const { PrismStore } = await import('./prismStore.ts')
+  const dir = await mkdtemp(join(tmpdir(), 'prism-news-load-'))
+  const nowIso = new Date().toISOString()
+  await writeFile(join(dir, 'prism-news.json'), JSON.stringify({ v: 1, status: { state: 'ready' }, items: [
+    { id: 'n1', time: nowIso, text: 'a' },
+    { id: 'n2', time: nowIso.replace('T', ' ').slice(0, 19), text: 'b', important: true },
+  ] }), 'utf8')
+  const s = new PrismStore(dir); await s.init()
+  assert.equal(s.news().items.length, 2)
+  assert.equal(s.news().items.every((i) => typeof i.important === 'boolean'), true)
+})

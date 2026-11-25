@@ -11,6 +11,19 @@
 
 ---
 
+## v0.234.0 — 新闻时间解析统一 + 缺 important 不再丢条目
+
+`npm run check` **2041 / 2041 × 2 时区**（2040 → 2041）+ build（73 项）+ `tsc` 0。
+
+| # | 来源 | 问题 | 修法 |
+| --- | --- | --- | --- |
+| 1 | UI P2 | news 两套时间解析（store `Date.parse` vs `parseMarketStamp`）：格式一变重启即静默清空 | 统一用 `parseMarketStamp` |
+| 2 | UI P2 | `isNewsItem` 要求 `important` 必须是 boolean，缺字段整条丢 | 缺省按 `false` 补齐，不再丢条目 |
+
+### 验证
+新增断言：缺 `important` 的旧条目、ISO 与 `YYYY-MM-DD HH:mm:ss` 两种时间格式在重启后都保留。
+`npm run check` **2041 / 2041 × 2 时区** + build（73 项）+ `tsc` 0。
+
 ## v0.233.0 — 同日净值点只由更晚的写 / 取价失败不写净值点
 
 `npm run check` **2040 / 2040 × 2 时区**（2037 → 2040）+ build（73 项）+ `tsc` 0。

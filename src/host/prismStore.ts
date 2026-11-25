@@ -28,7 +28,7 @@ import { dataHome } from './store.ts'
 import { readJsonForUpdate, updateJsonLocked } from './lock.ts'
 import { ReadGuard, quarantineFile } from './readGuard.ts'
 import { writeFileAtomic } from './atomic.ts'
-import { beijingIsoOf, dayOf } from './time.ts'
+import { beijingIsoOf, dayOf, parseMarketStamp } from './time.ts'
 
 const DEFAULT_STATUS: PrismNewsStatus = { state: 'idle', pages: 0, lastSeenId: null, fetchedAt: null, reason: null, items: 0 }
 
@@ -147,9 +147,13 @@ export class PrismStore {
   private async loadNews(): Promise<void> {
     const disk = await this.loadJson<{ status?: unknown; items?: unknown }>('prism-news.json')
     if (disk === null) return
-    const items = Array.isArray(disk.items) ? disk.items.filter(isNewsItem) : []
+    const items = Array.isArray(disk.items) ? disk.items.filter(isNewsItem).map((it) => ({ ...it, important: it.important === true })) : []
     const cutoff = Date.now() - PRISM_NEWS_KEEP_MS
-    this.newsItems = items.filter((it) => Date.parse(it.time.replace(' ', 'T') + '+08:00') >= cutoff)
+    // 与 prismNews 共用同一个时间解析（旧实现用 Date.parse，格式一变就静默清空）
+    this.newsItems = items.filter((it) => {
+      const ts = parseMarketStamp(it.time)
+      return Number.isFinite(ts) && ts >= cutoff
+    })
     const st = disk.status as Partial<PrismNewsStatus> | undefined
     if (st !== undefined && typeof st === 'object' && typeof st.state === 'string') {
       this.newsStatus = {
@@ -286,7 +290,8 @@ export class PrismStore {
     const merged = new Map<string, PrismNewsItem>()
     for (const it of [...items, ...this.newsItems]) {
       if (!isNewsItem(it)) continue
-      if (Date.parse(it.time.replace(' ', 'T') + '+08:00') < cutoff) continue
+      const ts = parseMarketStamp(it.time)
+      if (!Number.isFinite(ts) || ts < cutoff) continue
       merged.set(it.id, it)
     }
     this.newsItems = [...merged.values()].sort((a, b) => (a.time < b.time ? 1 : -1))
@@ -343,7 +348,8 @@ export function normalizeRunOf(r: PrismRun): PrismRun {
 const isNewsItem = (v: unknown): v is PrismNewsItem => {
   if (v === null || typeof v !== 'object') return false
   const o = v as Record<string, unknown>
-  return typeof o['id'] === 'string' && typeof o['time'] === 'string' && typeof o['text'] === 'string' && typeof o['important'] === 'boolean'
+  // important 缺省视为 false（旧文件/上游缺字段不该整条丢，审计：news 形状差异）
+  return typeof o['id'] === 'string' && typeof o['time'] === 'string' && typeof o['text'] === 'string'
 }
 
 const isRun = (v: unknown): v is PrismRun => {
