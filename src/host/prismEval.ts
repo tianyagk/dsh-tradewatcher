@@ -67,14 +67,17 @@ export function evaluationOf(
       benchmarkMissing = true
       continue
     }
-    const base = a.equity - (a.capital as number)
-    const end = b.equity - (b.capital as number)
+    // 用「净值/本金」比做区间收益：累计亏损时用「盈利」当基数会变负，导致所有窗口被跳过（胜率恒 —）
+    const capA = (a.capital as number) > 0 ? (a.capital as number) : a.equity
+    const capB = (b.capital as number) > 0 ? (b.capital as number) : b.equity
+    const base = a.equity / capA
+    const end = b.equity / capB
     if (!(base > 0)) continue
     const port = (end / base - 1) * 100
     const fee = Object.entries(feesByDay)
       .filter(([day]) => day > a.day && day <= b.day)
       .reduce((sum, [, v]) => sum + v, 0)
-    const noFee = port + (fee / base) * 100
+    const noFee = port + (fee / a.equity) * 100
     const bench = (b.benchmarkClose / a.benchmarkClose - 1) * 100
     const ex = port - bench
     withFee.push(ex)
