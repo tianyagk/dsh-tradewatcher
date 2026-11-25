@@ -58,27 +58,33 @@ export function applyPositionOp(account: PrismAccount, input: PositionInput, now
   const idx = account.positions.findIndex((p) => p.secid === secid)
   const before = idx >= 0 ? { qty: account.positions[idx]!.qty, cost: account.positions[idx]!.cost } : null
   const positions = account.positions.slice()
+  // 手工调整必须成对记账：持仓变动按成本冲减/增加现金，否则总资产会凭空增减（审计 A4）
+  let cash = account.cash
   let note = ''
   if (op === 'add') {
     if (idx >= 0) return { ok: false, error: '该标的已在持仓，请用 update' }
     const shares = input.shares as number
     const cost = round2(input.cost as number)
-    positions.push({ secid, name: secid, qty: shares, available: shares, cost } as PrismPosition)
-    note = `新增持仓 ${secid} ${shares} 股 @ ${cost}`
+    positions.push({ secid, name: secid, qty: shares, available: shares, cost, netCost: round2(shares * cost), avgCost: cost } as PrismPosition)
+    cash = round2(cash - shares * cost)
+    note = `新增持仓 ${secid} ${shares} 股 @ ${cost}（现金 −${round2(shares * cost)}）`
   } else if (op === 'update') {
     if (idx < 0) return { ok: false, error: '该标的不在持仓，请用 add' }
     const shares = input.shares as number
     const cost = round2(input.cost as number)
     // netCost 必须跟着改：否则只改 cost 会留下「成本 × 数量 ≠ 账面净成本」的脏数据
     // 手工调整是**账面**动作，不是成交：股数调大时新增部分不受 T+1 限制（实测：24 000 股里 13 572 股被当"今日买入"锁住）
+    const delta = shares - positions[idx]!.qty
     positions[idx] = { ...positions[idx]!, qty: shares, available: shares, cost, netCost: round2(shares * cost), avgCost: cost }
-    note = `调整持仓 ${secid} → ${shares} 股 @ ${cost}`
+    cash = round2(cash - delta * cost)
+    note = `调整持仓 ${secid} → ${shares} 股 @ ${cost}（现金 ${delta >= 0 ? '−' : '+'}${Math.abs(round2(delta * cost))}）`
   } else {
     if (idx < 0) return { ok: false, error: '该标的不在持仓' }
     const p = positions[idx]!
     if (p.qty !== 0 && input.confirm !== true) return { ok: false, error: `持仓 ${secid} 仍有 ${p.qty} 股，需 confirm:true 才能删除` }
+    cash = round2(cash + p.qty * p.cost)
     positions.splice(idx, 1)
-    note = `删除持仓 ${secid}`
+    note = `删除持仓 ${secid}（现金 +${round2(p.qty * p.cost)}）`
   }
   const entry: PrismLedgerEntry = {
     id: `M${now.toString(36)}${Math.random().toString(36).slice(2, 6)}`,
@@ -86,7 +92,7 @@ export function applyPositionOp(account: PrismAccount, input: PositionInput, now
     before, after: op === 'remove' ? null : { qty: positions.find((p) => p.secid === secid)!.qty, cost: positions.find((p) => p.secid === secid)!.cost },
     note,
   }
-  return { ok: true, account: { ...account, positions }, note, entry }
+  return { ok: true, account: { ...account, cash, positions }, note, entry }
 }
 
 export function prismLedgerPath(dir: string): string { return join(dir, 'prism-ledger.jsonl') }

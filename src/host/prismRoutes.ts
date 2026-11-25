@@ -548,7 +548,9 @@ export async function runPrismForSlot(deps: PrismRouteDeps, slot: string): Promi
   }
   const account = deps.trading.account()
   const quotes = run.decision.orders.length > 0 ? await quoteLiteOf(deps, run.decision.orders.map((o) => o.secid)) : {}
-  const industries = await fetchIndustryOverview(account.positions.map((p) => p.secid)).catch(() => ({}))
+  // 行业归属要覆盖「本轮新开仓」的标的：只查已持仓会让新开仓的行业上限永远不生效（审计 F3）
+  const industrySecids = [...new Set([...account.positions.map((p) => p.secid), ...run.decision.orders.map((o) => o.secid)])]
+  const industries = await fetchIndustryOverview(industrySecids).catch(() => ({}))
   const settings = deps.store.settings()
   const decisionIndustry = Array.isArray(run.decision.limits.byIndustry) ? Object.fromEntries(run.decision.limits.byIndustry.map((x) => [x.name, x.limitPct])) : (run.decision.limits.byIndustry ?? {})
   // 行业上限：**用户配置优先**，模型自报只补未配置的行业（否则模型可自证放宽上限）
@@ -887,8 +889,16 @@ export function makePrismRoutes(deps: PrismRouteDeps): PluginWebRoute[] {
               await deps.trading.reloadForWrite()
               deps.trading.assertWritable('调整现金')
               const account = deps.trading.account()
+              const before = account.cash
               const value = { ...account, cash: Math.round(cash * 100) / 100 }
               await deps.trading.saveAll({ account: value, orders: deps.trading.orders(), fills: deps.trading.fills() })
+              // 现金是账外注资/提取：必须留痕（审计 A5），否则净值凭空变化且无记录
+              appendPrismLedger(deps.trading.dirOf(), {
+                id: `C${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`,
+                ts: Date.now(), kind: 'manual-adjust', op: 'update', secid: 'CASH',
+                before: { qty: before, cost: 1 }, after: { qty: value.cash, cost: 1 },
+                note: `现金 ${before} → ${value.cash}（差额 ${Math.round((value.cash - before) * 100) / 100}，账外资金变动）`,
+              })
               return value
             })
             send(res, 200, { ok: true, account: next })
