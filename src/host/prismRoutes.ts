@@ -95,7 +95,8 @@ export function accountSnapshotOf(
         const mv = p.qty * (prices[p.secid] ?? p.cost)
         const w = total > 0 ? (mv / total) * 100 : null
         const px = prices[p.secid]
-        return `- ${p.name}（${p.secid}）：${p.qty} 股，成本 ${p.cost.toFixed(3)}，现价 ${px === null || px === undefined ? '—（未取到）' : px.toFixed(3)}，市值 ${mv.toFixed(2)}，权重 ${w === null ? '—' : `${w.toFixed(2)}%`}`
+        const avg = typeof (p as { avgCost?: number }).avgCost === 'number' ? (p as { avgCost?: number }).avgCost as number : null
+        return `- ${p.name}（${p.secid}）：${p.qty} 股，摊薄成本 ${p.cost.toFixed(3)}${avg === null ? '' : `，买入均价 ${avg.toFixed(3)}`}，现价 ${px === null || px === undefined ? '—（未取到）' : px.toFixed(3)}，市值 ${mv.toFixed(2)}，权重 ${w === null ? '—' : `${w.toFixed(2)}%`}`
       })),
   ].join('\n')
 }
