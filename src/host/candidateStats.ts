@@ -53,8 +53,9 @@ export async function candidatesTextOf(candidates: readonly CandidateInput[], de
     rows.push(candidateRowOf(c, bars ?? [], valuation[c.secid]))
   }
   return [
-    '【候选池（持仓 + 自选；指标由后端算好，叙事状态由你判断）】',
+    `【候选池（持仓 + 自选，共 ${rows.length} 只；指标由后端算好，叙事状态由你判断）】`,
     '（买卖只能在候选池内选；指标不得自行编造。缺失写 —。叙事状态需结合新闻与骨架说明处在展望期还是兑现期）',
+    '（本表按输入顺序、未排序。使用「唯一 / 全部 / 所有」等绝对说法前，必须逐只对照本表；表中存在第二只同类时不得写「唯一」）',
     ...rows.map(candidateLineOf),
   ].join('\n')
 }

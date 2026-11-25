@@ -37,7 +37,8 @@ test('③ 顺序 = 传入顺序（持仓在前、自选在后），不做动量�
 
 test('④ 段落带口径说明：指标已算好、叙事状态由模型判断', async () => {
   const text = await candidatesTextOf([{ secid: '1.600938', name: '中国海油', held: false }], { loadBars: async () => rising, loadValuation: async () => ({}) })
-  assert.match(text, /【候选池（持仓 \+ 自选；指标由后端算好，叙事状态由你判断）】/)
+  assert.match(text, /【候选池（持仓 \+ 自选，共 1 只；指标由后端算好，叙事状态由你判断）】/)
+  assert.match(text, /使用「唯一 \/ 全部 \/ 所有」等绝对说法前/)
   assert.match(text, /指标不得自行编造/)
 })
 
