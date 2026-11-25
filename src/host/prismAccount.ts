@@ -471,6 +471,16 @@ export function upsertEquity(list: readonly PrismEquityPoint[], point: PrismEqui
   return out.sort((a, b) => (a.day < b.day ? -1 : 1)).slice(-365)
 }
 
+/** 合并两组净值点：同一天取 `at` 更大的那条（保存时防丢点） */
+export function mergeEquityLists(a: readonly PrismEquityPoint[], b: readonly PrismEquityPoint[]): PrismEquityPoint[] {
+  const byDay = new Map<string, PrismEquityPoint>()
+  for (const p of [...a, ...b]) {
+    const prev = byDay.get(p.day)
+    if (prev === undefined || (typeof p.at === 'number' && typeof prev.at === 'number' && p.at >= prev.at)) byDay.set(p.day, p)
+  }
+  return [...byDay.values()].sort((x, y) => (x.day < y.day ? -1 : 1)).slice(-365)
+}
+
 /**
  * 解析汇总里的严格 JSON 决策块（```json … ```）。
  * 失败 ⇒ `decision=null` + `parseError` 带**原文**（不得静默成 0 笔）。
@@ -1018,6 +1028,18 @@ export class PrismTradingStore {
         } catch (error) {
           if (error instanceof LedgerUnreadableError) throw error
           this.markDegraded(this.pathOf('prism-orders.json'), error)
+          throw new LedgerUnreadableError(String((error as Error)?.message ?? error), '一次写回棱镜三账本')
+        }
+        // 净值文件可能被 recordEquity 的 saveEquity 单独写过：锁内合并，不能拿内存旧列表覆盖（审计 D3）
+        try {
+          const diskEq = await readJsonForUpdate(this.pathOf('prism-equity.json'), 'throw') as { points?: PrismEquityPoint[] } | null
+          if (diskEq !== null && Array.isArray(diskEq.points)) {
+            const merged = mergeEquityLists(next.equity ?? this.equityValue, diskEq.points)
+            const entry = entries.find((e) => e.target === this.pathOf('prism-equity.json'))
+            if (entry !== undefined) entry.text = JSON.stringify({ v: 1, points: merged }, null, 1)
+          }
+        } catch (error) {
+          this.markDegraded(this.pathOf('prism-equity.json'), error)
           throw new LedgerUnreadableError(String((error as Error)?.message ?? error), '一次写回棱镜三账本')
         }
         // 内容没变就不写：交易时段 matchTick 每 30s 调一次 saveAll，即使零变化也会重写三份账本

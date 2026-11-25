@@ -11,6 +11,21 @@
 
 ---
 
+## v0.237.0 — saveAll 锁内合并净值点（D3 部分）
+
+`npm run check` **2046 / 2046 × 2 时区**（2044 → 2046）+ build（73 项）+ `tsc` 0。
+
+### 问题
+`recordEquity` 走 `saveEquity` 单独写 `prism-equity.json`；`saveAll` 用内存里的旧 `equityValue` 整份覆盖
+⇒ 期间新写的净值点被丢掉，回撤闸门/绩效读到旧值。
+
+### 修法
+`saveAll` 的锁内先读磁盘净值点，与内存按天合并（同一天取 `at` 更大者）再写；新增 `mergeEquityLists()`。
+
+### 验证
+新增 `equityMerge.test.ts`：同日取更晚点；`saveEquity` 写入后 `saveAll` 覆盖不丢点（重新 init 读盘校验）。
+`npm run check` **2046 / 2046 × 2 时区** + build（73 项）+ `tsc` 0。
+
 ## v0.236.0 — runExclusive 支持「同上下文重入」，并发仍严格串行
 
 `npm run check` **2044 / 2044 × 2 时区**（2042 → 2044）+ build（73 项）+ `tsc` 0。
