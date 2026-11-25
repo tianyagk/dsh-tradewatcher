@@ -40,8 +40,19 @@
 重启后运行：`node scripts/verify-prism.mjs --write`
 （默认只读；`--write` 会执行 `backfillAvgCost` + `normalizeCostBasis`）
 
-2026-11-25 12:5x 对**未重启宿主**（v0.224.1）实测：7 项中 4 项通过，3 项失败均为「未重启/未迁移」：
-回包 1 616 KiB（>1MB）、版本 0.224.1（<0.238.0）、6 只持仓 cost≠avgCost。
+**2026-11-25 13:09 重启后实测：8 / 8 通过。**
+
+| 检查 | 实测 |
+| --- | --- |
+| 回包体积 | **825 KiB**（原 1 616 KiB） |
+| 部署特征（无顶层 trading + <1MB） | 通过 |
+| `available ≤ qty` | 通过 |
+| 全部持仓有 `avgCost` | 通过 |
+| `cost` 已对齐 `avgCost` | 通过（招商轮船 **18.21**、儒意 **17.27**） |
+| 闸门状态可读 | 通过 |
+| 净值恒等式误差 | **0.00** |
+
+迁移动作：`backfillAvgCost` → `normalizeCostBasis` → `rebase`（后者把 `realized` 按恒等式重算为 −248 117.67）。
 
 ## 验证基线
 

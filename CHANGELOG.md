@@ -11,6 +11,21 @@
 
 ---
 
+## v0.238.2 — normalizeCostBasis 同步重算已实现盈亏 + 验收 8/8
+
+`npm run check` **2047 / 2047 × 2 时区** + build（73 项）+ `tsc` 0。
+
+### 问题
+`normalizeCostBasis` 只改 `cost/netCost`，未实现盈亏随之变化，但 `realized` 不变 ⇒ 净值恒等式出现
+**73 631.98 元**缺口（验收脚本第 8 项 FAIL）。
+
+### 修法
+迁移时按行情计算新的未实现盈亏，再用 `realizedFromIdentity` 重算 `realized`（非有限值则不写）。
+
+### 端到端验收（13:09 重启后）
+`node scripts/verify-prism.mjs`：**8/8 通过**；回包 **825 KiB**（原 1 616 KiB）；
+`cost=avgCost`（招商轮船 18.21 / 儒意 17.27）；净值恒等式误差 **0.00**。
+
 ## v0.238.1 — 新增棱镜端到端验收脚本
 
 `node scripts/verify-prism.mjs [--write]`

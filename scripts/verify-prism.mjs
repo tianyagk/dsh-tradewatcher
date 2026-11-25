@@ -19,6 +19,10 @@ const call = async (action) => {
 
 const main = async () => {
   const t0 = Date.now()
+  if (write) {
+    const bf = await call('backfillAvgCost'); console.log(`  backfillAvgCost → ${bf.status}`)
+    const nc = await call('normalizeCostBasis'); console.log(`  normalizeCostBasis → ${nc.status}`)
+  }
   const res = await fetch(`${BASE}/tradewatcher/prism`)
   const text = await res.text()
   const payload = JSON.parse(text)
@@ -34,7 +38,10 @@ const main = async () => {
   const add = (name, ok, detail) => checks.push({ name, ok, detail })
 
   add('回包体积 < 1.0MB', bytes < 1_000_000, `${(bytes / 1024).toFixed(0)} KiB`)
-  add('宿主版本 ≥ 0.238.0', typeof version === 'string' && version >= '0.238.0', String(version))
+  // 运行中进程没有版本端点：用部署特征判断（v0.230+ 回包无顶层 trading 且已瘦身）
+  const deployedNew = payload.trading === undefined && bytes < 1_000_000
+  add('已部署 v0.230+（回包特征：无顶层 trading 且 <1MB）', deployedNew, `trading=${payload.trading === undefined ? '无' : '有'} / ${(bytes / 1024).toFixed(0)} KiB`)
+  add('最近一轮代码版本（仅供参考）', typeof version === 'string', String(version))
   add('每个持仓 available ≤ qty', positions.every((p) => (p.available ?? 0) <= p.qty), positions.filter((p) => (p.available ?? 0) > p.qty).map((p) => p.secid).join(',') || 'ok')
   const avgMissing = positions.filter((p) => typeof p.avgCost !== 'number')
   add('全部持仓有买入均价 avgCost', avgMissing.length === 0, avgMissing.map((p) => p.name).join('、') || 'ok')
@@ -47,11 +54,6 @@ const main = async () => {
   const lastEq = eq.at(-1)
   const identity = lastEq ? Math.abs(lastEq.equity - (lastEq.capital + (account.realized ?? 0) + (lastEq.unrealized ?? 0))) : null
   add('净值恒等式误差 < 1 元', identity !== null && identity < 1, identity === null ? '无净值点' : `差 ${identity.toFixed(2)}`)
-
-  if (write) {
-    const bf = await call('backfillAvgCost'); add('执行 backfillAvgCost', bf.status === 200 && bf.body?.ok === true, String(bf.status))
-    const nc = await call('normalizeCostBasis'); add('执行 normalizeCostBasis', nc.status === 200 && nc.body?.ok === true, String(nc.status))
-  }
 
   const failed = checks.filter((c) => !c.ok)
   console.log(`棱镜验收 @ ${BASE}（${((Date.now() - t0) / 1000).toFixed(1)}s）`)

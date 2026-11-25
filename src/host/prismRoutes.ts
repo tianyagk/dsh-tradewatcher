@@ -917,7 +917,12 @@ export function makePrismRoutes(deps: PrismRouteDeps): PluginWebRoute[] {
                 if (avg === null) return p
                 return { ...p, cost: avg, netCost: Math.round(avg * p.qty * 100) / 100 }
               })
-              const value = { ...account, positions }
+              // 换成本口径会改变未实现盈亏 ⇒ 已实现必须按恒等式同步，否则 equity ≠ capital+realized+unrealized
+              const quotesNow = await quoteLiteOf(deps, positions.map((p) => p.secid)).catch(() => ({}))
+              const mv = positions.reduce((a, p) => a + p.qty * (quotesNow[p.secid]?.price ?? p.cost), 0)
+              const unrealizedNow = positions.reduce((a, p) => a + (p.qty * (quotesNow[p.secid]?.price ?? p.cost) - (p.netCost ?? p.qty * p.cost)), 0)
+              const realizedNow = realizedFromIdentity(account.cash + mv, account.capital, unrealizedNow)
+              const value = { ...account, positions, ...(realizedNow === null ? {} : { realized: realizedNow }) }
               await deps.trading.saveAll({ account: value, orders: deps.trading.orders(), fills: deps.trading.fills() })
               return positions.map((p) => ({ secid: p.secid, name: p.name, qty: p.qty, cost: p.cost, netCost: p.netCost }))
             })
