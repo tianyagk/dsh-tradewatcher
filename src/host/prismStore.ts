@@ -94,7 +94,7 @@ export class PrismStore {
   }
 
   private async loadSettings(): Promise<void> {
-    const disk = await this.loadJson<{ times?: unknown; intervalSec?: unknown; lastAutoAt?: unknown; lastFired?: unknown; model?: unknown; capital?: unknown; participationRate?: unknown; industryLimits?: unknown; perStockPct?: unknown; stopLossPct?: unknown; perOrderYuan?: unknown; maxPosPct?: unknown; maxDDPct?: unknown; minCashPct?: unknown }>('prism-settings.json')
+    const disk = await this.loadJson<{ times?: unknown; intervalSec?: unknown; lastAutoAt?: unknown; lastFired?: unknown; model?: unknown; capital?: unknown; participationRate?: unknown; industryLimits?: unknown; perStockPct?: unknown; stopLossPct?: unknown; perOrderYuan?: unknown; maxPosPct?: unknown; maxDDPct?: unknown; minCashPct?: unknown; maxCumDDPct?: unknown; gateBaseAt?: unknown }>('prism-settings.json')
     if (disk === null) return
     const times = Array.isArray(disk.times) ? disk.times.filter((t): t is string => typeof t === 'string' && /^\d{2}:\d{2}$/.test(t)) : []
     const capital = typeof disk.capital === 'number' && Number.isFinite(disk.capital) && disk.capital > 0 ? disk.capital : PRISM_DEFAULT_CAPITAL
@@ -133,6 +133,9 @@ export class PrismStore {
       maxPosPct: numOrNull(disk.maxPosPct),
       maxDDPct: numOrNull(disk.maxDDPct),
       minCashPct: numOrNull(disk.minCashPct),
+      // v0.224.1：这两个字段以前没进 init ⇒ 每次重启都丢（回撤闸门基线失效、累计阈值回默认）
+      maxCumDDPct: numOrNull(disk.maxCumDDPct),
+      gateBaseAt: typeof disk.gateBaseAt === 'number' && Number.isFinite(disk.gateBaseAt) && disk.gateBaseAt > 0 ? disk.gateBaseAt : undefined,
     }
   }
 

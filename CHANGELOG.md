@@ -11,6 +11,24 @@
 
 ---
 
+## v0.224.1 — 修「闸门基线每次重启就丢」
+
+`npm run check` **2003 / 2003 × 2 时区**（2001 → 2003）+ build（73 项）+ `tsc` 0。
+
+### 问题
+`rebase` 写的 `gateBaseAt` 在重启后变回 `null`，累计回撤又按全历史算出 −18.3%，闸门再次「已拒新买单」。
+
+### 根因
+`PrismStore.init()` 读取 `prism-settings.json` 时**逐字段重建** settings，没有包含 `gateBaseAt` / `maxCumDDPct`
+⇒ 文件里有值，内存里被丢掉；随后一次设置保存就把文件覆盖成无这两个字段。
+
+### 修法
+`init()` 补读这两个字段（`gateBaseAt` 需 >0，`maxCumDDPct` 数字或 null）。
+
+### 验证
+新增 `settingsPersist.test.ts` 2 条：`patchSettings` 写入后重新 `init` 仍在；缺省时不写 0。
+`npm run check` **2003 / 2003 × 2 时区** + build（73 项）+ `tsc` 0。
+
 ## v0.224.0 — 买入均价回填改为完整重放（含卖出与手工调整）
 
 `npm run check` **2001 / 2001 × 2 时区**（1999 → 2001）+ build（73 项）+ `tsc` 0。
