@@ -14,13 +14,13 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { PluginWebRoute } from './context.ts'
 import type { PrismStore } from './prismStore.ts'
 import { LedgerUnreadableError, PrismTradingStore, applyFeeCorrection, avgCostFromHistory, clampDecision, copyAtCost, dayStartMismatchOf, equityPointOf, isEtfName, matchTick, placeDecision, productKeyOf, realizedFromIdentity, rebuildFromOrders, upsertEquity, type QuoteLite } from './prismAccount.ts'
-import type { DataStore } from './store.ts'
+import { dataHome, type DataStore } from './store.ts'
 import type { PrismAccount, PrismFill, PrismOrder, PrismRun, PrismSettings, PrismState } from '../shared/prism.ts'
 import { PRISM_INTERVAL_OPTIONS, PRISM_MAX_TIMES, PRISM_SKELETON_MAX } from '../shared/prism.ts'
 import { applyPriceCorrection } from './prismCorrection.ts'
 import { indexTechTextOf } from './indexTech.ts'
 import { candidatesTextOf, type CandidateInput } from './candidateStats.ts'
-import { isValidSecid } from './prismDeskWrite.ts'
+import { isValidSecid, readPrismLedger } from './prismDeskWrite.ts'
 import { backfillNews, incrementalNews } from './prismNews.ts'
 import { runPrismAnalysis, type PrismInputs } from './prismPipeline.ts'
 import { fetchIndustryOverview, fetchKline, fetchQuotes, fetchValuationBatch } from './em.ts'
@@ -863,7 +863,7 @@ export function makePrismRoutes(deps: PrismRouteDeps): PluginWebRoute[] {
               const logs = account.copyLogs as ReadonlyArray<{ at: number; after?: string[] }>
               const positions = account.positions.map((p) => ({
                 ...p,
-                avgCost: avgCostFromHistory(p.secid, logs, deps.trading.fills(), p.cost),
+                avgCost: avgCostFromHistory(p.secid, logs, deps.trading.fills(), readPrismLedger(dataHome()) as never, p.cost),
               }))
               const value = { ...account, positions }
               await deps.trading.saveAll({ account: value, orders: deps.trading.orders(), fills: deps.trading.fills() })

@@ -355,6 +355,7 @@ export function avgCostFromHistory(
   secid: string,
   copyLogs: ReadonlyArray<{ at: number; after?: string[] }> | undefined,
   fills: ReadonlyArray<{ secid: string; side: 'buy' | 'sell'; at: number; shares: number; amount: number; fee: number }>,
+  adjustments: ReadonlyArray<{ at: number; secid: string; before?: { qty: number; cost: number } | null; after?: { qty: number; cost: number } | null }> | undefined,
   fallback: number,
 ): number {
   let baseQty = 0
@@ -367,15 +368,43 @@ export function avgCostFromHistory(
     if (m === null) continue
     baseQty = Number(m[1]); baseCost = Number(m[2]); baseAt = log.at
   }
+  // 单条事件流：复制基准 → 成交 → 手工调整（手工调整按 after 重置 qty/均价）
+  const events: Array<{ at: number; kind: 'buy' | 'sell' | 'adjust'; shares?: number; amount?: number; fee?: number; qty?: number; cost?: number }> = []
+  for (const f of fills) if (f.secid === secid && f.at > baseAt) events.push({ at: f.at, kind: f.side, shares: f.shares, amount: f.amount, fee: f.fee })
+  for (const a of adjustments ?? []) {
+    if (a.secid !== secid || a.at <= baseAt) continue
+    if (a.after === null || a.after === undefined) events.push({ at: a.at, kind: 'adjust', qty: 0, cost: 0 })
+    else events.push({ at: a.at, kind: 'adjust', qty: a.after.qty, cost: a.after.cost })
+  }
+  events.sort((x, y) => x.at - y.at)
   let qty = baseQty
   let avg = baseCost
-  const buys = fills.filter((f) => f.secid === secid && f.side === 'buy' && f.at > baseAt).sort((a, b) => a.at - b.at)
-  for (const f of buys) {
-    const total = avg * qty + f.amount + f.fee
-    qty += f.shares
-    avg = qty > 0 ? total / qty : avg
+  for (const e of events) {
+    if (e.kind === 'adjust') {
+      qty = e.qty ?? 0
+      // 手工调整给的是摊薄成本；作为新的起始均价（用户明确设定的口径）
+      avg = qty > 0 ? (e.cost ?? avg) : 0
+      continue
+    }
+    if (e.kind === 'buy') {
+      const total = avg * qty + (e.amount ?? 0) + (e.fee ?? 0)
+      qty += e.shares ?? 0
+      avg = qty > 0 ? total / qty : avg
+      continue
+    }
+    // sell：数量减少，均价不变；卖空到 0 后重置（之后再有买入会重新建立均价）
+    qty -= e.shares ?? 0
+    if (qty <= 0) { qty = 0; avg = 0 }
   }
-  return Math.round(avg * 100) / 100
+  // 低价 ETF（<10 元）保留 3 位小数，否则 0.6952 会被抹成 0.70
+  if (qty > 0 && avg > 0) return avg < 10 ? Math.round(avg * 1000) / 1000 : Math.round(avg * 100) / 100
+  // 账本自相矛盾（手工调整前的历史与当前不符）：退化为「基准后买入加权」，仍没有就回落
+  const buys = (fills as ReadonlyArray<{ secid: string; side: string; at: number; shares: number; amount: number; fee: number }>)
+    .filter((f) => f.secid === secid && f.side === 'buy' && f.at > baseAt).sort((a, b) => a.at - b.at)
+  if (buys.length === 0) return Math.round(fallback * 100) / 100
+  let q = 0; let a = 0
+  for (const b of buys) { const t = a * q + b.amount + b.fee; q += b.shares; a = q > 0 ? t / q : a }
+  return a < 10 ? Math.round(a * 1000) / 1000 : Math.round(a * 100) / 100
 }
 
 /** 新交易日：T+1 解锁（available = qty）；dayStartEquity 用上一日收盘净值 */
