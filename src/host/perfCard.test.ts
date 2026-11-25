@@ -14,20 +14,14 @@ test('① 5 个净值点也能算出回撤（不再要求 30 窗口）', () => {
   assert.ok((e.drawdown.value as number) < 0)
 })
 
-test('② 决策数取累计与内存的较大值（升级首轮不会从 20 掉到 1）', () => {
-  const runs20 = Array.from({ length: 20 }, (_, i) => ({ startedAt: i, finishedAt: i + 1 })) as never
-  assert.equal(prismPerformanceOf([], null, runs20, 1).runsCount, 20)
-  assert.equal(prismPerformanceOf([], null, runs20, 137).runsCount, 137)
-})
-
-test('②b 决策数优先用累计计数（不被 20 条保留上限卡住）', () => {
-  const runs = Array.from({ length: 20 }, (_, i) => ({ startedAt: i, finishedAt: i + 1 })) as never
-  const p = prismPerformanceOf([], null, runs, 137)
-  assert.equal(p.runsCount, 137)
+test('② 决策数 = 账本里实际保留的决策轮次', () => {
+  const runs20 = Array.from({ length: 20 }, (_, i) => ({ startedAt: i, finishedAt: i + 1 }))
+  assert.equal(prismPerformanceOf([], null, runs20 as never).runsCount, 20)
+  assert.equal(prismPerformanceOf([], null, runs20.slice(0, 7) as never).runsCount, 7)
 })
 
 test('③ 路由：决策后累加 runsTotal，并提供 backfillBenchmark', () => {
   const src = readFileSync(new URL('./prismRoutes.ts', import.meta.url), 'utf8')
-  assert.match(src, /runsTotal: \(deps\.store\.settings\(\)\.runsTotal \?\? 0\) \+ 1/)
+  assert.ok(!/runsTotal/.test(src), '不再使用累计计数')
   assert.match(src, /action === 'backfillBenchmark'/)
 })

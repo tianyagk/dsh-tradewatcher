@@ -103,12 +103,13 @@ export function evaluationOf(
     if (peakRel > 0) dd = Math.min(dd, (v / peakRel - 1) * 100)
   }
   const ddReason = valid.length >= 2 ? null : '有效净值点不足 2 个'
-  const hitReason = benchmarkMissing ? '基准 1.000300 收盘缺失' : sampleShort
+  // 胜率按「目前可追溯的最早决策日」起算，不硬性要求 30 个窗口；样本量随结果一起返回
+  const hitReason = benchmarkMissing ? '基准 1.000300 收盘缺失' : nUsed === 0 ? '无可用窗口' : null
   const hits = withFee.filter((x) => x > 0).length
   return {
     excess,
     drawdown: { value: ddReason === null ? round(dd) : null, reason: ddReason, n },
-    hitRate: { value: hitReason === null && nUsed > 0 ? round((hits / nUsed) * 100) : null, reason: hitReason, n },
+    hitRate: { value: hitReason === null && nUsed > 0 ? round((hits / nUsed) * 100) : null, reason: hitReason, n: nUsed },
     n, embargoDays: EMBARGO_DAYS, footnote: EVAL_FOOTNOTE, curve,
     reason: excess.reason,
   }

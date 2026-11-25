@@ -264,7 +264,6 @@ export function prismPerformanceOf(
   equity: readonly PrismEquityPoint[],
   evaluation: PrismEvaluation | null,
   runs: readonly PrismRun[],
-  runsTotal?: number,
 ): { returnPct: number | null; benchmarkPct: number | null; excessPct: number | null; maxDrawdown: number | null; hitRate: number | null; runsCount: number; latencyMs: number | null; tokenUsage: null; missing: PrismMissing[] } {
   const missing: PrismMissing[] = []
   const first = equity[0]
@@ -280,7 +279,8 @@ export function prismPerformanceOf(
   const withEnd = runs.filter((r) => typeof r.finishedAt === 'number')
   const latencyMs = withEnd.length === 0 ? null : withEnd.reduce((a, r) => a + ((r.finishedAt as number) - r.startedAt), 0) / withEnd.length
   missing.push({ what: 'token 用量', why: 'no-source', note: 'token 用量无源' })
-  return { returnPct, benchmarkPct, excessPct, maxDrawdown, hitRate, runsCount: Math.max(typeof runsTotal === 'number' ? runsTotal : 0, runs.length), latencyMs, tokenUsage: null, missing }
+  return { returnPct, benchmarkPct, excessPct, maxDrawdown, hitRate, // 决策数 = 账本里实际保留的决策轮次（不掺累计计数、不估算丢失历史）
+    runsCount: runs.length, latencyMs, tokenUsage: null, missing }
 }
 
 /* ────────────────────────── 持仓分析（v0.212.0） ────────────────────────── */
@@ -435,8 +435,6 @@ export function prismDeskOf(input: {
   runs: readonly PrismRun[]
   equity: readonly PrismEquityPoint[]
   evaluation: PrismEvaluation | null
-  /** 累计决策轮次（历史总数；缺省用内存里保留的 runs 数） */
-  runsTotal?: number
   /** 已保存约束（只读；缺字段 ⇒ null，绝不用设计稿默认值） */
   constraints?: { perStockPct?: number | null; stopLossPct?: number | null } | null
 }): {
@@ -459,7 +457,7 @@ export function prismDeskOf(input: {
   }))
   const overview = prismAccountOverviewOf(input.account, input.prices)
   const holdingAnalyses = holdingAnalysesOf(input.account, input.prices, overview, input.constraints ?? null, holdings, input.runs)
-  const performance = prismPerformanceOf(input.equity, input.evaluation, input.runs, input.runsTotal)
+  const performance = prismPerformanceOf(input.equity, input.evaluation, input.runs)
   const seen = new Set<string>()
   const missing: PrismMissing[] = []
   for (const m of [...limits.missing, ...positions.missing, ...holdings.flatMap((h) => h.missing), ...overview.missing, ...performance.missing]) {

@@ -41,7 +41,10 @@ test('P-03 超额含费/不含费两个数；n<30 ⇒ —+原因，不返回 0�
   // v0.239.0：回撤只看净值，不再被 30 窗口门槛卡成「—」
   assert.equal(typeof small.drawdown.value, 'number')
   assert.equal(small.drawdown.reason, null)
-  assert.equal(small.hitRate.value, null, '命中率仍需要基准与 30 窗口')
+  // v0.239.2：命中率按可追溯窗口计算，不再硬性要求 30
+  assert.equal(typeof small.hitRate.value, 'number')
+  assert.equal(small.hitRate.reason, null)
+  assert.equal(small.hitRate.n > 0, true, '必须回报实际参与统计的窗口数')
 })
 
 test('P-03 文案不含「预测能力」', () => {
