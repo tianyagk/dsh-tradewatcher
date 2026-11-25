@@ -15,16 +15,22 @@
 
 /** 稳定序列化：对象键排序，`undefined` 按 `null`（宿主 JSON 回包没有 undefined，只为健壮） */
 export function stableTextOf(value: unknown): string {
+  return stableTextOfInner(value, 0)
+}
+
+function stableTextOfInner(value: unknown, depth: number): string {
+  if (depth > 40) return 'null'
   if (value === null || value === undefined) return 'null'
   const t = typeof value
   if (t === 'number') return Number.isFinite(value as number) ? String(value) : 'null'
   if (t === 'boolean') return value === true ? 'true' : 'false'
   if (t === 'string') return JSON.stringify(value)
-  if (Array.isArray(value)) return `[${value.map(stableTextOf).join(',')}]`
+  if (Array.isArray(value)) return `[${value.map((v) => stableTextOfInner(v, depth + 1)).join(',')}]`
   if (t === 'object') {
     const bag = value as Record<string, unknown>
-    const keys = Object.keys(bag).filter((k) => bag[k] !== undefined).sort()
-    return `{${keys.map((k) => `${JSON.stringify(k)}:${stableTextOf(bag[k])}`).join(',')}}`
+    // asOf 是宿主每次请求的「响应时刻」，内容没变也会变 ⇒ 从指纹里排除（否则指纹闸永远不命中）
+    const keys = Object.keys(bag).filter((k) => k !== 'asOf' && bag[k] !== undefined).sort()
+    return `{${keys.map((k) => `${JSON.stringify(k)}:${stableTextOfInner(bag[k], depth + 1)}`).join(',')}}`
   }
   return 'null'
 }
