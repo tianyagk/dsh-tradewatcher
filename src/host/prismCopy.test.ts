@@ -89,16 +89,16 @@ test('⑤ 连续两次 copy 不累加：数量/现金不变', async () => {
   } finally { await rm(dir, { recursive: true, force: true }) }
 })
 
-test('真实持仓为空 ⇒ required=0，不改上限', async () => {
+test('真实持仓为空 ⇒ 拒绝复制（不清空模拟盘、不重置现金）', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'prismcopy4-'))
   try {
     const store = new PrismStore(dir); const trading = new PrismTradingStore(dir)
     await store.init(); await trading.init()
     await trading.saveAccount({ ...trading.account(), capitalLimit: 1_750_000, cash: 1_750_000 }, { explicitReset: true })
     const r = await call(store, trading, fakeData([]), { action: 'copy' })
-    assert.equal(r['copy']['required'], 0)
-    assert.equal(r['copy']['raised'], false)
-    assert.equal(r['account']['capitalLimit'], 1_750_000)
-    assert.equal(r['account']['cash'], 1_750_000)
+    assert.equal(r['ok'], false)
+    assert.match(String(r['error']), /真实持仓为空/)
+    assert.equal(trading.account().cash, 1_750_000, '现金不得被重置')
+
   } finally { await rm(dir, { recursive: true, force: true }) }
 })

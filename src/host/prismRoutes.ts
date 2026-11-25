@@ -99,7 +99,7 @@ export function accountSnapshotOf(
         const costText = avg === null
           ? `摊薄成本 ${p.cost.toFixed(3)}（无买入均价，止损暂按此值）`
           : `成本（止损口径=买入均价） ${avg.toFixed(3)}；摊薄成本 ${p.cost.toFixed(3)}（仅展示，不用于止损）`
-        return `- ${p.name}（${p.secid}）：${p.qty} 股，${costText}，现价 ${px === null || px === undefined ? '—（未取到）' : px.toFixed(3)}，市值 ${mv.toFixed(2)}，权重 ${w === null ? '—' : `${w.toFixed(2)}%`}`
+        return `- ${p.name}（${p.secid}）：${p.qty} 股（可卖 ${p.available} 股），${costText}，现价 ${px === null || px === undefined ? '—（未取到）' : px.toFixed(3)}，市值 ${mv.toFixed(2)}，权重 ${w === null ? '—' : `${w.toFixed(2)}%`}`
       })),
   ].join('\n')
 }
@@ -929,6 +929,11 @@ export function makePrismRoutes(deps: PrismRouteDeps): PluginWebRoute[] {
           }
           if (action === 'copy') {
             const rows = await copyRowsOf(deps)
+            // 真实持仓为空时按成本复制会把模拟盘清空并重置现金（审计 A2）⇒ 直接拒绝
+            if (rows.length === 0) {
+              send(res, 400, { ok: false, error: '真实持仓为空：按成本复制会清空模拟盘并重置现金，已拒绝。请先用有持仓的账户，或显式清仓。' })
+              return
+            }
             const required = Math.round(rows.reduce((sum, r) => sum + Math.round(Math.max(0, r.cost) * 100) / 100 * Math.max(0, r.qty), 0) * 100) / 100
             const copied = await deps.trading.runExclusive(async () => {
               deps.trading.assertWritable('按成本复制持仓')

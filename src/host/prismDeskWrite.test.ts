@@ -67,7 +67,7 @@ test('④ clampDecision 六维度各一条裁剪用例（缺维度 ⇒ 败）', 
   // v0.221.2：配置的单票上限走 single 维度（配置优先），不再单列 perStock
   assert.ok(run({ perStockPct: 1 }).events.some((e) => e.dimension === 'single'), 'perStockPct ⇒ single')
   assert.ok(run({ perOrderYuan: 10_000 }).events.some((e) => e.dimension === 'perOrder'), 'perOrderYuan')
-  assert.ok(run({ maxPosPct: 1 }).events.some((e) => e.dimension === 'maxPos'), 'maxPosPct')
+  assert.ok(run({ maxPosPct: 1 }).events.some((e) => e.dimension === 'total'), 'maxPosPct ⇒ total')
   assert.ok(run({ minCashPct: 99 }).events.some((e) => e.dimension === 'minCash'), 'minCashPct')
   assert.ok(run({ maxDDPct: 2 }, { dayDrawdownPct: -3 }).events.some((e) => e.dimension === 'maxDD'), 'maxDDPct')
   assert.ok(run({ stopLossPct: 5 }, { costs: { '1.510300': 10 } }).events.some((e) => e.dimension === 'stopLoss'), 'stopLossPct')

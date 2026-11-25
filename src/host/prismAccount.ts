@@ -311,7 +311,7 @@ export function copyAtCost(
       skipped.push(`${r.secid}×${r.qty}@${cost.toFixed(2)}（剩余现金 ${remaining.toFixed(2)} 不足）`)
       continue
     }
-    positions.push({ secid: r.secid, name: r.name, qty: take, available: take, cost, netCost: money(take * cost) })
+    positions.push({ secid: r.secid, name: r.name, qty: take, available: take, cost, netCost: money(take * cost), avgCost: cost })
     remaining = money(remaining - take * cost)
     if (take < r.qty) skipped.push(`${r.secid} 仅复制 ${take}/${r.qty} 股（剩余现金不足）`)
   }
@@ -1465,9 +1465,11 @@ export function clampDecision(decision: PrismDecision, ctx: ClampContext): Clamp
       const currentIndustry = industryValue(industry) + accepted.filter((x) => x.industry === industry).reduce((sum, x) => sum + x.value, 0)
       dims.push({ dimension: 'industry', max: totalAssets * indLimit / 100, current: currentIndustry, basis: `行业 ${industry} ${indLimit}% × 总资产` })
     }
-    if (!missingPrice && typeof ctx.limits.totalPct === 'number' && totalAssets > 0) {
+    // 总仓上限：配置优先（maxPosPct），模型自报 totalPct 只在未配置时兜底
+    const totalPct = typeof ctx.constraints?.maxPosPct === 'number' ? ctx.constraints.maxPosPct : ctx.limits.totalPct
+    if (!missingPrice && typeof totalPct === 'number' && totalAssets > 0) {
       const currentTotal = positions.reduce((sum, p) => sum + p.value, 0) + accepted.reduce((sum, x) => sum + x.value, 0)
-      dims.push({ dimension: 'total', max: totalAssets * ctx.limits.totalPct / 100, current: currentTotal, basis: `总仓 ${ctx.limits.totalPct}% × 总资产` })
+      dims.push({ dimension: 'total', max: totalAssets * totalPct / 100, current: currentTotal, basis: `总仓 ${totalPct}% × 总资产${typeof ctx.constraints?.maxPosPct === 'number' ? '（用户配置）' : ''}` })
     }
     const c = ctx.constraints ?? {}
     // 配置了 perStockPct 时，上面 single 维度已经用它 ⇒ 不再重复加一条同义的 perStock 维度
@@ -1481,10 +1483,7 @@ export function clampDecision(decision: PrismDecision, ctx: ClampContext): Clamp
         shares = maxSharesByOrder
       }
     }
-    if (!missingPrice && typeof c.maxPosPct === 'number' && totalAssets > 0) {
-      const currentTotal = positions.reduce((sum, p) => sum + p.value, 0) + accepted.reduce((sum, x) => sum + x.value, 0)
-      dims.push({ dimension: 'maxPos', max: totalAssets * c.maxPosPct / 100, current: currentTotal, basis: `总仓上限 ${c.maxPosPct}%` })
-    }
+    // 配置了 maxPosPct 时上面的 total 维度已用它 ⇒ 不再重复一条同义维度
     const dd = ctx.dayDrawdownPct
     if (typeof c.maxDDPct === 'number' && typeof dd === 'number' && -dd >= c.maxDDPct) {
       events.push({ at: ctx.at, secid: order.secid, dimension: 'maxDD', before: shares, after: 0, basis: `日回撤 ${dd.toFixed(2)}% 触发熔断 ${c.maxDDPct}%` })

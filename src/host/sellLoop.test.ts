@@ -79,3 +79,9 @@ test('⑦ 裁剪上下文必须带 available（否则卖单不会被裁到可卖
   const routes = readFileSync(new URL('./prismRoutes.ts', import.meta.url), 'utf8')
   assert.match(routes, /positions: account\.positions\.map\(\(p\) => \(\{ secid: p\.secid, qty: p\.qty, available: p\.available/)
 })
+
+test('⑧ 持仓快照必须给「可卖数量」（卖单按 T+1 静默裁剪，模型需要看到）', async () => {
+  const { readFileSync } = await import('node:fs')
+  const routes = readFileSync(new URL('./prismRoutes.ts', import.meta.url), 'utf8')
+  assert.match(routes, /股（可卖 \$\{p\.available\} 股）/)
+})
