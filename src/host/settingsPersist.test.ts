@@ -28,3 +28,18 @@ test('② 缺省时不写 0 / 不猜（undefined）', async () => {
     assert.equal(a.settings().maxCumDDPct, undefined, '默认不带该字段（未设置）')
   } finally { await rm(dir, { recursive: true, force: true }) }
 })
+
+test('③ saveRun 立即归一（rejects/parseError 缺省补齐），重启前后形状一致', async () => {
+  const { PrismStore, normalizeRunOf } = await import('./prismStore.ts')
+  const dir = await mkdtemp(join(tmpdir(), 'prism-runs-'))
+  try {
+    const s = new PrismStore(dir); await s.init()
+    const raw = { startedAt: 1_795_000_000_000, slot: '10:00', codeVersion: 'x', analyses: [], summary: null, error: null,
+      decision: { limits: { singlePct: 30, totalPct: 100, note: null }, orders: [], cancel: [] } } as never
+    await s.saveRun(raw)
+    const saved = s.runs().at(-1)!
+    assert.deepEqual(saved.decision!.rejects, [])
+    assert.equal(saved.decision!.parseError, null)
+    assert.equal(saved.day, normalizeRunOf(raw).day)
+  } finally { await rm(dir, { recursive: true, force: true }) }
+})

@@ -11,6 +11,21 @@
 
 ---
 
+## v0.229.1 — run 写盘即归一（重启前后形状一致）
+
+`npm run check` **2026 / 2026 × 2 时区**（2025 → 2026）+ build（73 项）+ `tsc` 0。
+
+### 问题
+`day`/`at`/`reports`/`decision.rejects`/`parseError` 的补全只在**启动读盘**时做，
+`saveRun`/`replaceRun` 原样落盘 ⇒ 同一个 run 重启前后字段形状不同，前端遇到的缺字段取决于"跑了几次"。
+
+### 修法
+抽出 `normalizeRunOf()`，读盘与写盘共用；`saveRun`/`replaceRun` 先归一。
+
+### 验证
+新增断言：`saveRun` 后 `decision.rejects = []`、`parseError = null`，`day` 与归一函数一致。
+`npm run check` **2026 / 2026 × 2 时区** + build（73 项）+ `tsc` 0。
+
 ## v0.229.0 — 止损缺均价改为「不判定但留痕」+ 账本错误不再静默
 
 `npm run check` **2025 / 2025 × 2 时区**（2024 → 2025）+ build（73 项）+ `tsc` 0。

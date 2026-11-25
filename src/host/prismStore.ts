@@ -162,17 +162,7 @@ export class PrismStore {
     const disk = await this.loadJson<{ runs?: unknown }>('prism-runs.json')
     if (disk === null) return
     const rawRuns = Array.isArray(disk.runs) ? disk.runs.filter(isRun).slice(-PRISM_RUNS_KEEP) : []
-    this.runsValue = rawRuns.map((r) => ({
-      ...r,
-      day: typeof r.day === 'string' ? r.day : dayOf(r.startedAt),
-      at: typeof r.at === 'string' ? r.at : beijingIsoOf(r.startedAt),
-      reports: Array.isArray(r.reports) && r.reports.length > 0
-        ? r.reports
-        : (r.analyses ?? []).map((a) => ({ role: a.label, text: a.text, error: a.error })),
-      decision: r.decision === null || r.decision === undefined
-        ? null
-        : { ...r.decision, rejects: r.decision.rejects ?? [], parseError: r.decision.parseError ?? null },
-    }))
+    this.runsValue = rawRuns.map(normalizeRunOf)
   }
 
   settings(): PrismSettings {
@@ -305,6 +295,7 @@ export class PrismStore {
 
   /** 同一轮（startedAt 相同）替换：盘后 rejects 等后置信息要能落盘 */
   async replaceRun(run: PrismRun): Promise<void> {
+    run = normalizeRunOf(run)
     const i = this.runsValue.findIndex((r) => r.startedAt === run.startedAt)
     if (i >= 0) this.runsValue[i] = run
     else this.runsValue = [...this.runsValue, run].slice(-PRISM_RUNS_KEEP)
@@ -312,7 +303,7 @@ export class PrismStore {
   }
 
   async saveRun(run: PrismRun): Promise<void> {
-    this.runsValue = [...this.runsValue, run].slice(-PRISM_RUNS_KEEP)
+    this.runsValue = [...this.runsValue, normalizeRunOf(run)].slice(-PRISM_RUNS_KEEP)
     await updateJsonLocked(this.pathOf('prism-runs.json'), () => ({ v: 1, runs: this.runsValue })).catch(() => undefined)
   }
 
@@ -326,6 +317,21 @@ export class PrismStore {
         if (error instanceof SyntaxError) await quarantineFile(file)
       }
     }
+  }
+}
+
+/** run 归一：读盘与写盘共用，保证「重启前后形状一致」（审计：归一化只在启动做） */
+export function normalizeRunOf(r: PrismRun): PrismRun {
+  return {
+    ...r,
+    day: typeof r.day === 'string' ? r.day : dayOf(r.startedAt),
+    at: typeof r.at === 'string' ? r.at : beijingIsoOf(r.startedAt),
+    reports: Array.isArray(r.reports) && r.reports.length > 0
+      ? r.reports
+      : (r.analyses ?? []).map((a) => ({ role: a.label, text: a.text, error: a.error })),
+    decision: r.decision === null || r.decision === undefined
+      ? null
+      : { ...r.decision, rejects: r.decision.rejects ?? [], parseError: r.decision.parseError ?? null },
   }
 }
 
