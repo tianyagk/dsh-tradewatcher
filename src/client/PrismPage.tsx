@@ -286,7 +286,10 @@ export function PrismPage(props: { active?: boolean; redUp?: boolean } = {}): Re
     const gen = reqGenRef.current.next()
     api.prismState()
       .then((r) => { if (!reqGenRef.current.stale(gen)) stateGateRef.current?.push(r) })
-      .catch(() => undefined)
+      .catch((e: Error) => {
+        // 账本不可读/degraded 不能被静默吞掉：否则页面永远停在旧数据（审计 UI P1-3）
+        if (!reqGenRef.current.stale(gen) && /账本|degraded|unreadable|ledger/i.test(e.message)) setErr(`刷新失败：${e.message}`)
+      })
   }, [])
   /**
    * 30s 静默刷新（AUDIT-CLIENT-PERF P1-1）：**只有"本页是当前页"时才建定时器**。

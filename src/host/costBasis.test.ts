@@ -48,3 +48,14 @@ test('⑤ 回撤闸门状态进入提示词上下文（审计 P0-4）', async ()
   assert.match(routes, /【回撤闸门（引擎判定，先于你的决策）】/)
   assert.match(pipe, /inputs\.drawdown/)
 })
+
+test('⑥ 缺买入均价 ⇒ 止损不判定但留痕（不拿摊薄成本兜底）', async () => {
+  const { clampDecision } = await import('./prismAccount.ts')
+  const dec = { limits: { singlePct: 100, totalPct: 100, note: null }, orders: [{ secid: '1.600938', side: 'buy', price: 30, shares: 100, reason: 'x' }], cancel: [], rejects: [], parseError: null }
+  const r = clampDecision(dec as never, {
+    cash: 1_000_000, positions: [{ secid: '1.600938', qty: 1_000, available: 1_000, price: 30, name: '中国海油' }],
+    limits: {}, at: 1, constraints: { stopLossPct: 20 }, costs: {},
+  } as never)
+  assert.equal(r.events.filter((e) => e.dimension === 'stopLoss').length, 0)
+  assert.equal(r.skipped.some((s) => s.gate === 'stopLoss'), true, '必须留痕')
+})

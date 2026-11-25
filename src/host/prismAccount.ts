@@ -1513,6 +1513,10 @@ export function clampDecision(decision: PrismDecision, ctx: ClampContext): Clamp
       continue
     }
     const cost = ctx.costs?.[order.secid]
+    // 缺买入均价 ⇒ 不做止损判定并留痕（不要拿摊薄成本兜底：会被亏损卖出越推越高，形成卖出循环）
+    if (typeof c.stopLossPct === 'number' && (typeof cost !== 'number' || !(cost > 0))) {
+      skipped.push({ secid: order.secid, gate: 'stopLoss', reason: '缺买入均价，未做止损判定（先执行 backfillAvgCost）' })
+    }
     if (typeof c.stopLossPct === 'number' && typeof cost === 'number' && cost > 0) {
       const lossPct = (px / cost - 1) * 100
       if (lossPct <= -c.stopLossPct) {

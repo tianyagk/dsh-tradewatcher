@@ -16,7 +16,8 @@ test('② 静默刷新只拉 prismState，不跑 selftest、不清错误', () =>
   assert.ok(m, '必须存在 refresh 回调')
   assert.match(m[1], /api\.prismState\(\)/)
   assert.ok(!/prismSelftest/.test(m[1]), '刷新不得重复跑 selftest')
-  assert.ok(!/setErr/.test(m[1]), '刷新不得清错误态')
+  assert.ok(!/setErr\(null\)/.test(m[1]), '刷新不得清空错误态')
+  assert.match(m[1], /账本\|degraded\|unreadable\|ledger/, '账本类错误必须提示，不能静默吞掉')
 })
 
 test('③ 页面隐藏时不刷新，重新可见立即刷新一次', () => {

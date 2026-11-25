@@ -14,9 +14,10 @@ const ROUTES = readFileSync(new URL('./prismRoutes.ts', import.meta.url), 'utf8'
 test('① 止损成本必须是每股成本（p.cost），不得用 netCost', () => {
   const i = ROUTES.indexOf('costs: Object.fromEntries')
   assert.ok(i > 0)
-  const seg = ROUTES.slice(i, i + 220)
-  assert.match(seg, /p\.qty > 0 \? \(p\.avgCost \?\? p\.cost\) : 0/)
+  const seg = ROUTES.slice(i, i + 260)
+  assert.match(seg, /p\.avgCost as number/)
   assert.ok(!/p\.netCost \?\? p\.cost/.test(seg), '旧写法（netCost ?? cost）会把总成本当每股成本')
+  assert.ok(!/p\.avgCost \?\? p\.cost/.test(seg), '缺均价不得回落摊薄成本（会形成卖出循环）')
 })
 
 const pt = (day: string, equity: number, capital: number): PrismEquityPoint => ({ day, equity, capital, at: 0 } as PrismEquityPoint)

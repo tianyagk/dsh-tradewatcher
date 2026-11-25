@@ -581,7 +581,8 @@ export async function runPrismForSlot(deps: PrismRouteDeps, slot: string): Promi
     },
     // 止损判定要比的是**每股成本**：netCost 是总成本（几千几万），拿它和现价比会算出 −99.9%，
     // 把所有「加仓已持有标的」的买单全部误判成触及止损（实测 2026-11-24 工商银行/长债ETF）。
-    costs: Object.fromEntries(account.positions.map((p) => [p.secid, p.qty > 0 ? (p.avgCost ?? p.cost) : 0])),
+    // 只给「有买入均价」的持仓；缺的留给 clamp 记 skipped（不拿摊薄成本兜底）
+    costs: Object.fromEntries(account.positions.filter((p) => p.qty > 0 && typeof p.avgCost === 'number').map((p) => [p.secid, p.avgCost as number])),
     dayDrawdownPct,
     industries: Object.fromEntries(Object.entries(industries).map(([k, v]) => [k, v?.name ?? null])),
     at: run.startedAt,
