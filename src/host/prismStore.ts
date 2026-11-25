@@ -96,7 +96,8 @@ export class PrismStore {
   private async loadSettings(): Promise<void> {
     const disk = await this.loadJson<{ times?: unknown; intervalSec?: unknown; lastAutoAt?: unknown; lastFired?: unknown; model?: unknown; capital?: unknown; participationRate?: unknown; industryLimits?: unknown; perStockPct?: unknown; stopLossPct?: unknown; perOrderYuan?: unknown; maxPosPct?: unknown; maxDDPct?: unknown; minCashPct?: unknown; maxCumDDPct?: unknown; gateBaseAt?: unknown }>('prism-settings.json')
     if (disk === null) return
-    const times = Array.isArray(disk.times) ? disk.times.filter((t): t is string => typeof t === 'string' && /^\d{2}:\d{2}$/.test(t)) : []
+    // 严格 HH:MM（旧正则 ^\d{2}:\d{2}$ 会放过 99:99）
+    const times = Array.isArray(disk.times) ? disk.times.filter((t): t is string => typeof t === 'string' && /^([01]\d|2[0-3]):[0-5]\d$/.test(t)) : []
     const capital = typeof disk.capital === 'number' && Number.isFinite(disk.capital) && disk.capital > 0 ? disk.capital : PRISM_DEFAULT_CAPITAL
     const participationRate = typeof disk.participationRate === 'number' && Number.isFinite(disk.participationRate) && disk.participationRate > 0 && disk.participationRate <= 1 ? disk.participationRate : 0.1
     const industryLimits: Record<string, number> = {}
@@ -108,7 +109,9 @@ export class PrismStore {
     const lastFired: Record<string, string[]> = {}
     if (disk.lastFired !== null && typeof disk.lastFired === 'object') {
       for (const [day, slots] of Object.entries(disk.lastFired as Record<string, unknown>)) {
-        if (/^\d{4}-\d{2}-\d{2}$/.test(day) && Array.isArray(slots)) lastFired[day] = slots.filter((s): s is string => typeof s === 'string')
+        if (/^\d{4}-\d{2}-\d{2}$/.test(day) && Array.isArray(slots)) {
+          lastFired[day] = slots.filter((s): s is string => typeof s === 'string' && /^([01]\d|2[0-3]):[0-5]\d$/.test(s))
+        }
       }
     }
     const rawModel = disk.model
@@ -118,7 +121,9 @@ export class PrismStore {
       typeof (rawModel as { model?: unknown }).model === 'string'
         ? { provider: (rawModel as { provider: string }).provider, model: (rawModel as { model: string }).model }
         : null
-    const numOrNull = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null)
+    // 百分比类约束只接受 0–100；金额类只接受 ≥0（负数此前会被原样收下，让裁剪阈值变成负值）
+    const pctOrNull = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) && v >= 0 && v <= 100 ? v : null)
+    const moneyOrNull = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : null)
     this.settingsValue = {
       times: times.length > 0 ? times : [...PRISM_DEFAULT_TIMES],
       // 旧文件没有 intervalSec / 值非法（含旧档位 900）⇒ 600（不是"未设置"，界面按 600s 显示）
@@ -127,14 +132,14 @@ export class PrismStore {
       lastAutoAt: typeof disk.lastAutoAt === 'number' && Number.isFinite(disk.lastAutoAt) && disk.lastAutoAt > 0 ? disk.lastAutoAt : undefined,
       lastFired, model, capital, participationRate, industryLimits,
       // v0.203.0：约束六字段（旧文件没有 ⇒ null，不猜）
-      perStockPct: numOrNull(disk.perStockPct),
-      stopLossPct: numOrNull(disk.stopLossPct),
-      perOrderYuan: numOrNull(disk.perOrderYuan),
-      maxPosPct: numOrNull(disk.maxPosPct),
-      maxDDPct: numOrNull(disk.maxDDPct),
-      minCashPct: numOrNull(disk.minCashPct),
+      perStockPct: pctOrNull(disk.perStockPct),
+      stopLossPct: pctOrNull(disk.stopLossPct),
+      perOrderYuan: moneyOrNull(disk.perOrderYuan),
+      maxPosPct: pctOrNull(disk.maxPosPct),
+      maxDDPct: pctOrNull(disk.maxDDPct),
+      minCashPct: pctOrNull(disk.minCashPct),
       // v0.224.1：这两个字段以前没进 init ⇒ 每次重启都丢（回撤闸门基线失效、累计阈值回默认）
-      maxCumDDPct: numOrNull(disk.maxCumDDPct),
+      maxCumDDPct: pctOrNull(disk.maxCumDDPct),
       gateBaseAt: typeof disk.gateBaseAt === 'number' && Number.isFinite(disk.gateBaseAt) && disk.gateBaseAt > 0 ? disk.gateBaseAt : undefined,
     }
   }

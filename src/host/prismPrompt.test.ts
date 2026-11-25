@@ -80,11 +80,11 @@ test('orders=[] 且 note 只讲买入侧 ⇒ 决策自检必败；两侧齐全�
 })
 
 
-test('API 同一份账户：state.account 与 trading.account 由同一个 tradingWithDecision 展开', () => {
+test('API 账户只下发一份：state 由 tradingWithDecision 展开，顶层 trading 已删除（审计：重复 260KB）', () => {
   const routes = readFileSync(join(process.cwd(), 'src/host/prismRoutes.ts'), 'utf8')
   assert.match(routes, /const tradingWithDecision = \{ \.\.\.trading, decision: latestDecision \}/)
   assert.match(routes, /state: \{ \.\.\.stateOf\(store, deps\.get\), \.\.\.tradingWithDecision, modelCatalog \}/)
-  assert.match(routes, /trading: tradingWithDecision/)
+  assert.ok(!/^\s+trading: tradingWithDecision,/m.test(routes), '顶层 trading 不得再下发')
 })
 
 

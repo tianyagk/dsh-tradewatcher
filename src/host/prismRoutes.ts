@@ -683,7 +683,7 @@ export function makePrismRoutes(deps: PrismRouteDeps): PluginWebRoute[] {
             ok: true,
             asOf: Date.now(),
             state: { ...stateOf(store, deps.get), ...tradingWithDecision, modelCatalog },
-            trading: tradingWithDecision,
+            // 顶层 trading 与 state 是同一对象（重复序列化 260KB，审计 UI）：客户端只读 state
             modelCatalog,
             desk,
           }))

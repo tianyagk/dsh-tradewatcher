@@ -43,14 +43,14 @@ test('① capital 落 settings，3 次 GET 恒为新值；重启仍保留', asyn
     await store.init(); await trading.init()
     await call(store, trading, 'POST', { action: 'copy' })
     const baseline = await call(store, trading, 'GET')
-    const baseCash = baseline['trading']['account']['cash']
+    const baseCash = baseline['state']['account']['cash']
     const res = await call(store, trading, 'POST', { action: 'capital', capitalLimit: 2_000_000 })
     assert.equal(res['account']['capitalLimit'], 2_000_000)
     assert.equal(res['settings']['capital'], 2_000_000)
     const seen: Array<{ capital: number; cash: number }> = []
     for (let i = 0; i < 3; i += 1) {
       const got = await call(store, trading, 'GET')
-      seen.push({ capital: got['trading']['account']['capitalLimit'], cash: got['trading']['account']['cash'] })
+      seen.push({ capital: got['state']['account']['capitalLimit'], cash: got['state']['account']['cash'] })
       await new Promise((r) => setTimeout(r, 2))
     }
     assert.deepEqual(seen.map((x) => x.capital), [2_000_000, 2_000_000, 2_000_000])
@@ -60,10 +60,10 @@ test('① capital 落 settings，3 次 GET 恒为新值；重启仍保留', asyn
     await store.init(); await trading.init()
     const again = await call(store, trading, 'GET')
     assert.equal(again['state']['settings']['capital'], 2_000_000)
-    assert.equal(again['trading']['account']['capitalLimit'], 2_000_000)
-    assert.equal(again['trading']['account']['cash'], baseCash + 500_000)
-    assert.equal(again['state']['settings']['capital'], again['trading']['account']['capital'], 'settings.capital 与 account.capital 必须相等')
-    assert.equal(again['trading']['account']['capital'], 2_000_000)
+    assert.equal(again['state']['account']['capitalLimit'], 2_000_000)
+    assert.equal(again['state']['account']['cash'], baseCash + 500_000)
+    assert.equal(again['state']['settings']['capital'], again['state']['account']['capital'], 'settings.capital 与 account.capital 必须相等')
+    assert.equal(again['state']['account']['capital'], 2_000_000)
   } finally {
     await rm(dir, { recursive: true, force: true })
   }
@@ -77,11 +77,9 @@ test('② GET 不写 account：现金/copiedAt/逐字节 account 三次相同', 
     await call(store, trading, 'POST', { action: 'copy' })
     const a = await call(store, trading, 'GET')
     const b = await call(store, trading, 'GET')
-    assert.equal(a['trading']['account']['cash'], b['trading']['account']['cash'])
-    assert.equal(a['trading']['account']['copiedAt'], b['trading']['account']['copiedAt'])
-    assert.equal(JSON.stringify(a['trading']['account']), JSON.stringify(b['trading']['account']))
-    assert.equal(a['state']['account']['cash'], a['trading']['account']['cash'])
-    assert.equal(JSON.stringify(a['state']['account']), JSON.stringify(a['trading']['account']), '两处必须逐字节相同')
+    assert.equal(a['state']['account']['cash'], b['state']['account']['cash'])
+    assert.equal(a['state']['account']['copiedAt'], b['state']['account']['copiedAt'])
+    assert.equal(JSON.stringify(a['state']['account']), JSON.stringify(b['state']['account']))
   } finally {
     await rm(dir, { recursive: true, force: true })
   }
@@ -96,7 +94,7 @@ test('③ copiedAt 非空后 GET 不复制；④ 入金只改上限与现金，�
     const at = copied['account']['copiedAt']
     const positions = JSON.stringify(copied['account']['positions'])
     const g1 = await call(store, trading, 'GET')
-    assert.equal(g1['trading']['account']['copiedAt'], at)
+    assert.equal(g1['state']['account']['copiedAt'], at)
     const dep = await call(store, trading, 'POST', { action: 'capital', capitalLimit: 2_000_000 })
     assert.equal(dep['account']['copiedAt'], at)
     assert.equal(JSON.stringify(dep['account']['positions']), positions)

@@ -79,11 +79,11 @@ test('⑤ token 用量恒 null 且 missing 含条目（给 0 或假值 ⇒ 败�
   assert.throws(() => assert.equal(p.tokenUsage, 0, '反例上：写 0'), /反例上/, '⚠ 反例注入必须失败')
 })
 
-test('⑥ 旧字段未被删除或改名（回包新增 desk 且保留 state/trading/modelCatalog）', () => {
+test('⑥ 回包保留 state/modelCatalog/desk（顶层 trading 已按审计删除，避免重复序列化）', () => {
   const src = readFileSync(new URL('./prismRoutes.ts', import.meta.url), 'utf8')
   const start = src.indexOf("slimPrismPayload({")
   const block = src.slice(start, src.indexOf("return", start))
-  for (const key of ['ok: true', 'asOf:', 'state:', 'trading:', 'modelCatalog,']) assert.ok(block.includes(key), `回包缺旧字段 ${key}`)
+  for (const key of ['ok: true', 'asOf:', 'state:', 'modelCatalog,']) assert.ok(block.includes(key), `回包缺旧字段 ${key}`)
   assert.ok(block.includes('desk,'), '回包必须新增 desk')
   const injected = block.replace('desk,', '')
   assert.throws(() => assert.ok(injected.includes('desk,'), '反例上：缺 desk'), /反例上/, '⚠ 反例注入必须失败')

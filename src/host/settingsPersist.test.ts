@@ -43,3 +43,22 @@ test('③ saveRun 立即归一（rejects/parseError 缺省补齐），重启前�
     assert.equal(saved.day, normalizeRunOf(raw).day)
   } finally { await rm(dir, { recursive: true, force: true }) }
 })
+
+test('④ 读回校验：99:99 / 负百分比 / 负金额 ⇒ 丢弃，不写进内存', async () => {
+  const { writeFile } = await import('node:fs/promises')
+  const dir = await mkdtemp(join(tmpdir(), 'prism-settings3-'))
+  try {
+    await writeFile(join(dir, 'prism-settings.json'), JSON.stringify({
+      v: 1, times: ['09:35', '99:99'], lastFired: { '2026-11-25': ['25:00', '10:00'] },
+      perStockPct: -5, stopLossPct: 150, perOrderYuan: -1, maxPosPct: 80, maxDDPct: 5, minCashPct: 0,
+    }), 'utf8')
+    const s = new PrismStore(dir); await s.init()
+    const v = s.settings()
+    assert.deepEqual(v.times, ['09:35'])
+    assert.equal(v.perStockPct, null)
+    assert.equal(v.stopLossPct, null)
+    assert.equal(v.perOrderYuan, null)
+    assert.equal(v.maxPosPct, 80)
+    assert.deepEqual(v.lastFired['2026-11-25'], ['10:00'])
+  } finally { await rm(dir, { recursive: true, force: true }) }
+})

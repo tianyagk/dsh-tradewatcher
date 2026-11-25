@@ -175,7 +175,7 @@ test('P2-7 数据变化 ⇒ 各自触发 1 次（cash → equity 写；委托文
     const readBefore = h.trading.ordersIo.read
     const afterOrders = await h.get()
     assert.equal(h.trading.ordersIo.read - readBefore, 1, '委托文件变了必须重读 1 次')
-    assert.ok((afterOrders['trading']['orders'] as PrismOrder[]).some((o) => o.id === extra.id), '新委托必须立刻出现在 GET 回包里')
+    assert.ok((afterOrders['state']['orders'] as PrismOrder[]).some((o) => o.id === extra.id), '新委托必须立刻出现在 GET 回包里')
 
     // ③ 持仓 secid 集合变了 ⇒ 行业请求 1 次（净值不变 ⇒ 不写盘）
     const acc2 = h.trading.account()
