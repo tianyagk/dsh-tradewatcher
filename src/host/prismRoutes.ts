@@ -454,29 +454,23 @@ async function factorRowsOf(deps: PrismRouteDeps, watch: ReadonlyArray<{ secid: 
 }
 
 /** 主决策因子表：持仓 + 自选，日线只用已完成 bar，现价来自行情摘要；5 分钟缓存 */
-let factorsCache: { key: string; at: number; text: string } | null = null
 async function factorsCachedOf(deps: PrismRouteDeps, watch: ReadonlyArray<{ secid: string; name: string }>): Promise<string> {
-  const account = deps.trading.account()
-  const held = account.positions.map((p) => ({ secid: p.secid, name: p.name }))
-  const seen = new Set(held.map((h) => h.secid))
-  const rest = watch.filter((w) => !seen.has(w.secid)).slice(0, 40)
-  const list = [...held, ...rest].filter((x) => isValidSecid(x.secid))
-  const key = list.map((x) => x.secid).join(',')
-  if (factorsCache !== null && factorsCache.key === key && Date.now() - factorsCache.at < 5 * 60_000) return factorsCache.text
-  const today = dayOf(Date.now())
-  const loadK = deps.kline ?? fetchKline
-  const rows = await Promise.all(list.map(async (x) => {
-    try {
-      const k = await loadK(x.secid, 101, 140, 1)
-      const bars = (k?.days ?? []).filter((b) => b.date < today)
-      const m = factorMetricsOf(bars, /ETF|基金/i.test(x.name) ? 'etf' : 'stock')
-      if (m === null) return `- ${x.name}（${x.secid}）：—（无日K）`
-      const f = (v: number | null | undefined, d = 2): string => (v === null || v === undefined ? '—' : v.toFixed(d))
-      return `- ${x.name}（${x.secid}）：收 ${f(m.lastClose)}；ATR ${f(m.atrPct)}%/分位 ${f(m.atrRank120, 0)}；日均振幅 ${f(m.amp20Pct)}%；MA20偏离 ${f(m.distMa20Pct)}%/MA60偏离 ${f(m.distMa60Pct)}%；RSI ${f(m.rsi14, 0)}；20日位置 ${f(m.pos20, 0)}；5/20/60日 ${f(m.ret5)}/${f(m.ret20)}/${f(m.ret60)}%；趋势效率 ${f(m.eff20, 0)}`
-    } catch { return `- ${x.name}（${x.secid}）：—（取数失败）` }
-  }))
-  const text = ['【因子表（日线 PIT：只用已完成 bar，前复权；收益/波动为 %）】', ...rows].join('\n')
-  factorsCache = { key, at: Date.now(), text }
+  const rows = await factorRowsOf(deps, watch)
+  const f = (v: unknown, d = 2): string => (typeof v === 'number' && Number.isFinite(v) ? v.toFixed(d) : '—')
+  const text = ['【因子表（PIT：日线只用已完成 bar、前复权；日内为持仓实时；收益/波动为 %）】', ...rows.map((r) => {
+    if (r['missing'] != null) return `- ${String(r['name'])}（${String(r['secid'])}）：—（${String(r['missing'])}）`
+    const base = `- ${String(r['name'])}（${String(r['secid'])}）：收 ${f(r['lastClose'])}；ATR ${f(r['atrPct'])}%/分位 ${f(r['atrRank120'], 0)}；日均振幅 ${f(r['amp20Pct'])}%；MA20偏离 ${f(r['distMa20Pct'])}%/MA60偏离 ${f(r['distMa60Pct'])}%；RSI ${f(r['rsi14'], 0)}；20日位置 ${f(r['pos20'], 0)}；5/20/60日 ${f(r['ret5'])}/${f(r['ret20'])}/${f(r['ret60'])}%；趋势效率 ${f(r['eff20'], 0)}`
+    const extra = [
+      r['vwapDevPct'] !== null && r['vwapDevPct'] !== undefined ? `VWAP偏离 ${f(r['vwapDevPct'])}%` : null,
+      r['posDay'] !== null && r['posDay'] !== undefined ? `当日位置 ${f(r['posDay'], 0)}` : null,
+      r['adv20'] !== null && r['adv20'] !== undefined ? `ADV20 ${f(Number(r['adv20']) / 1e8)}亿` : null,
+      r['fillMinutes'] !== null && r['fillMinutes'] !== undefined ? `预计成交 ${f(r['fillMinutes'], 1)}分` : null,
+      r['onshare20'] !== null && r['onshare20'] !== undefined ? `隔夜贡献 ${f(r['onshare20'], 0)}%` : null,
+      r['rvol'] !== null && r['rvol'] !== undefined ? `量能节奏 ${f(r['rvol'])}` : null,
+      r['distLimitUpPct'] !== null && r['distLimitUpPct'] !== undefined ? `距涨停 ${f(r['distLimitUpPct'])}%` : null,
+    ].filter((x): x is string => x !== null)
+    return extra.length > 0 ? `${base}；${extra.join('；')}` : base
+  })].join('\n')
   return text
 }
 
