@@ -563,9 +563,9 @@ export function autoTChipsOf(a: PrismAutoT | null): AutoTChip[] {
   ]
 }
 
-/** 单只统计（名称下方一行）：做T N 次 · +X · 胜率 Y%（n=）；整条缺 ⇒ 0 次 · — · —（n=0） */
+/** 单只统计（名称下方一行）：做T N 次 · +X · 胜率 Y%（n=）；整条缺 ⇒ —（不写 0 次冒充真实统计） */
 export function autoTPerPositionTextOf(stat: AutoTStats | null | undefined): string {
-  if (stat === null || stat === undefined) return '做T 0 次 · — · 胜率 —（n=0）'
+  if (stat === null || stat === undefined) return '做T — · — · 胜率 —（n=0）'
   const rounds = finite(stat.rounds)
   const profit = stat.profit
   const win = autoTWinRateTextOf(stat.winRate, stat.n)

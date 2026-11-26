@@ -2000,6 +2000,7 @@ async function matchTickLocked(
         if (delta !== 0) {
           const q = await deps.quotes([plan.secid]).catch(() => ({}))
           const px = q[plan.secid]?.price
+          try {
           if (typeof px === 'number' && Number.isFinite(px) && px > 0) {
             const side: 'buy' | 'sell' = delta > 0 ? 'sell' : 'buy'
             const shares = Math.abs(delta)
@@ -2007,6 +2008,11 @@ async function matchTickLocked(
             const fill = { orderId: `${plan.id}-forced`, secid: plan.secid, name: plan.name, side, price: px, shares, amount: Math.round(px * shares * 100) / 100, fee, at: now, source: '1min' as const }
             account = applyFill(account, { ...(buyLeg ?? sellLeg)!, id: `${plan.id}-forced`, side, price: px, shares, status: 'pending', day }, fill)
             fills.push(fill)
+          } else {
+            plan.failReason = '强制回补失败：缺有效现价'
+          }
+          } catch (error) {
+            plan.failReason = `强制回补失败：${String((error as Error)?.message ?? error).slice(0, 80)}`
           }
         }
         plan.status = 'aborted'

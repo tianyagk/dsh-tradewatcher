@@ -330,7 +330,7 @@ const AUTOT_SAMPLE = {
 test('㉚ 自动做T：单只统计行 = 做T N 次 · +X · 胜率 Y%（n=）', () => {
   assert.equal(autoTPerPositionTextOf({ rounds: 12, profit: 1240.5, winRate: 67, n: 18 }), '做T 12 次 · +1,240.50 · 胜率 67%（n=18）')
   assert.equal(autoTPerPositionTextOf({ rounds: 0, profit: 0, winRate: null, n: 0 }), '做T 0 次 · 0.00 · 胜率 —（n=0）')
-  assert.equal(autoTPerPositionTextOf(null), '做T 0 次 · — · 胜率 —（n=0）')
+  assert.equal(autoTPerPositionTextOf(null), '做T — · — · 胜率 —（n=0）')
 })
 
 test('㉛ 自动做T：胜率 n=0 一律 —（n=0），不写 0%；缺 rate 也不编', () => {

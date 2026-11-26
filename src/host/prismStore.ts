@@ -47,6 +47,8 @@ export interface AutoTPlanRec {
   status: 'planned' | 'waiting' | 'open-filled' | 'done' | 'aborted'
   observe: string | null; reasoning: string | null; conclusion: string | null
   pairId?: string
+  /** 强制回补失败原因（有值 ⇒ 净持仓可能偏离，需次日处理） */
+  failReason?: string
   at: number
 }
 export interface AutoTTradeRec {
