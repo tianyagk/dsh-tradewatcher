@@ -40,3 +40,12 @@ test('③ 路由：tPlans → 配对挂单（channel:autoT）并结算/截止回
   assert.match(acc, /plan\.status = 'aborted'/)
   assert.match(acc, /-forced/)
 })
+
+test('④ ETF 卖出免印花税；股票仍收 0.1%', async () => {
+  const { feesOf } = await import('./prismAccount.ts')
+  const etf = feesOf('sell', 2.32, 10_000, 0, 0, true)
+  const stock = feesOf('sell', 10, 10_000, 0, 0, false)
+  assert.equal(etf.stamp, 0)
+  assert.equal(stock.stamp, 100)
+  assert.ok(etf.total < stock.total / 2)
+})

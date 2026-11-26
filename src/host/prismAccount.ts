@@ -69,12 +69,14 @@ export function feesOf(
   shares: number,
   priorAmount = 0,
   priorCommission = 0,
+  /** ETF 免印花税（A 股规则）；普通股票 false */
+  stampExempt = false,
 ): FeeBreakdown {
   const amount = price * shares
   const totalAmount = priorAmount + amount
   const dueCommission = Math.max(COMMISSION_MIN, money(totalAmount * COMMISSION_RATE))
   const commission = money(Math.max(0, dueCommission - priorCommission))
-  const stamp = side === 'sell' ? money(amount * STAMP_RATE) : 0
+  const stamp = side === 'sell' && !stampExempt ? money(amount * STAMP_RATE) : 0
   const transfer = money(amount * TRANSFER_RATE)
   return { commission, stamp, transfer, total: money(commission + stamp + transfer) }
 }
@@ -1885,7 +1887,7 @@ async function matchTickLocked(
     const prior = fills.filter((f) => f.orderId === order.id)
     const priorAmount = prior.reduce((sum, f) => sum + f.amount, 0)
     const priorCommission = prior.reduce((sum, f) => sum + (typeof f.commission === 'number' ? f.commission : 0), 0)
-    const feeParts = feesOf(order.side, hit.price, take, priorAmount, priorCommission)
+    const feeParts = feesOf(order.side, hit.price, take, priorAmount, priorCommission, /ETF/i.test(order.name))
     const fee = feeParts.total
     const fill: PrismFill = {
       orderId: order.id,
@@ -1958,7 +1960,7 @@ async function matchTickLocked(
           const px = q[plan.secid]?.price
           if (typeof px === 'number' && Number.isFinite(px) && px > 0) {
             const side: 'buy' | 'sell' = filledLeg.side === 'buy' ? 'sell' : 'buy'
-            const fee = feesOf(side, px, plan.shares).total
+            const fee = feesOf(side, px, plan.shares, 0, 0, /ETF/i.test(plan.name)).total
             const fill = { orderId: `${plan.id}-forced`, secid: plan.secid, name: plan.name, side, price: px, shares: plan.shares, amount: Math.round(px * plan.shares * 100) / 100, fee, at: now, source: '1min' as const }
             account = applyFill(account, { ...filledLeg, id: `${plan.id}-forced`, side, price: px, shares: plan.shares, status: 'pending', day }, fill)
             fills.push(fill)

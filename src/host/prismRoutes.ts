@@ -618,7 +618,7 @@ async function placeAutoTPairs(deps: PrismRouteDeps, run: PrismRun): Promise<voi
       if (pos === undefined) continue
       const cap = Math.min(pos.available, Math.floor((pos.qty * 0.2) / 100) * 100, plan.shares)
       if (cap < 100) continue
-      if ((plan.sellPrice / plan.buyPrice - 1) * 100 < 0.8) continue
+      if ((plan.sellPrice / plan.buyPrice - 1) * 100 < 1.2) continue
       const pairId = `T-${day.replace(/-/g, '')}-${plan.secid}-${Date.now().toString(36)}`
       const at = Date.now()
       orders.push(

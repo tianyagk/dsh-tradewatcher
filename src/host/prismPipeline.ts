@@ -186,7 +186,7 @@ export async function runPrismAnalysis(
           '\n【强制·双侧】orders 允许卖单，卖单字段同样是 {secid, side:\'sell\', price, shares, reason}；不能只考虑买入侧。' +
           '\n【强制·空单说明】orders 为空时，note 必须分两段：「不买的理由」与「不卖的理由」；缺一段即视为不合格。' +
           '\n【强制·不得重复被拒】今日已因同一原因被拒的委托，不得原样重发；若仍要交易，必须先核对可用数量/可用资金，并说明与上次不同的依据。' +
-          '\n【强制·自动做T】只对【自动做T·可计划标的】里的持仓给 tPlans；其余一律不给。tPlans 每项 {secid,direction,buyPrice,sellPrice,shares,observe,reasoning,conclusion}；direction 只有 buy-first（正T，先买后卖，需要现金）与 sell-first（反T，先卖底仓再买回，不需要现金）；shares 必须是 100 的倍数且 ≤ 可卖数量与底仓 20%；价差（sellPrice/buyPrice−1）必须 ≥0.8% 且覆盖双边费用。现金不足时优先判断反T，不要因为没现金就一律不做；确实没有可做的才给空数组，并在 observe 里写一句为什么不做（空数组时也允许给一条「不做」说明项，shares=0 不落单）。禁止编造。' +
+          '\n【强制·自动做T】只对【自动做T·可计划标的】里的持仓给 tPlans；其余一律不给。tPlans 每项 {secid,direction,buyPrice,sellPrice,shares,observe,reasoning,conclusion}；direction 只有 buy-first（正T，先买后卖，需要现金）与 sell-first（反T，先卖底仓再买回，不需要现金）；shares 必须是 100 的倍数且 ≤ 可卖数量与底仓 20%；价差（sellPrice/buyPrice−1）必须 ≥1.2% 且覆盖双边费用（低于 1.2% 的价差不足以覆盖一个最小变动单位的逆向风险）。现金不足时优先判断反T，不要因为没现金就一律不做；确实没有可做的才给空数组，并在 observe 里写一句为什么不做（空数组时也允许给一条「不做」说明项，shares=0 不落单）。禁止编造。' +
           '\n【强制·措辞】不得使用「唯一 / 全部 / 所有」等绝对量词，除非逐只对照候选池确认只有一只；两笔委托不得都称「唯一」。' +
           '\n【强制·止损口径】判断「浮亏是否触及止损线」必须用「买入均价」（卖出不变），不得用摊薄成本——摊薄成本会被亏损卖出推高，越卖越亏。' +
           '\n【强制·单票以配置为准】limits.singlePct 必须等于【约束（用户配置，硬边界）】里的单票上限（不是骨架里的历史数字）；超限减仓按配置值算，不得引用骨架旧值。' +
