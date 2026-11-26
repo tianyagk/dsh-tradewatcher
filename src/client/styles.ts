@@ -1170,6 +1170,7 @@ color-scheme:dark}
 .tw-ad-more{width:24px;height:24px;border-radius:6px;border:0;background:none;color:var(--tw-muted);font-size:14px;line-height:1;cursor:pointer}
 .tw-ad-more:hover{background:var(--tw-card2);color:var(--tw-text)}
 .tw-ad-more:focus-visible{outline:2px solid var(--tw-accent);outline-offset:2px}
+.tw-ad-pos-item:last-child .tw-ad-menu{top:auto;bottom:26px}
 .tw-ad-menu{position:absolute;right:8px;top:28px;z-index:42;display:flex;flex-direction:column;min-width:78px;padding:4px;border-radius:8px;background:var(--tw-card);border:1px solid var(--tw-border-strong);box-shadow:0 8px 24px -18px #000}
 .tw-ad-menu button{height:26px;border:0;border-radius:5px;background:none;color:var(--tw-dim);font-size:12px;text-align:left;padding:0 8px;cursor:pointer}
 .tw-ad-menu button:hover{background:var(--tw-card2);color:var(--tw-text)}

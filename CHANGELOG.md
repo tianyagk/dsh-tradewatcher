@@ -11,6 +11,19 @@
 
 ---
 
+## v0.241.4 — 修「现金行⋯菜单被裁掉」（最后一行的菜单改为向上展开）
+
+`npm run check` **2060 / 2060 × 2 时区** + build（73 项）+ `tsc` 0。
+
+### 问题
+`.tw-ad-pos-list` 是 `overflow:auto` 的滚动容器，最后一行的 `⋯` 菜单用 `top:28px` 向下展开，
+被容器底边裁掉 ⇒ 现金行点开后只看到一小截白框，看不到「编辑/移除」。
+
+### 修法
+`.tw-ad-pos-item:last-child .tw-ad-menu{ top:auto; bottom:26px }` —— 最后一行菜单向上展开。
+
+### 验证
+`npm run check` **2060 / 2060 × 2 时区** + build（73 项）+ `tsc` 0。
 ## v0.241.3 — 做T 提示词补充「现金不足优先反T」
 
 `npm run check` **2060 / 2060 × 2 时区** + build（73 项）+ `tsc` 0。
