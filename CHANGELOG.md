@@ -11,6 +11,12 @@
 
 ---
 
+## v0.253.1 — 因子/门槛行为级测试补强（审计 #24）
+
+`npm run check` **2069 / 2069 × 2 时区** + build（73 项）+ `tsc` 0。
+
+- PIT cutoff：cutoff 后的 bar 不参与 ATR/振幅（断言 bars 数与 ATR 变化）；
+- 门槛行为：tick-high / cash-low / available-low / pending-conflict / net-low 逐条触发。
 ## v0.253.0 — 因子日志 + autoT 保留上限 + U3 空态
 
 `npm run check` **2067 / 2067 × 2 时区** + build（73 项）+ `tsc` 0。
