@@ -225,7 +225,7 @@ test('㉒ 七 tab 计数：全部=去重条数；挂单/风控/约束各按视�
 })
 
 test('㉓ 过滤：七个 tab 的 id 与设计稿一致', () => {
-  assert.deepEqual(FLOW_TABS.map((t) => t.label), ['全部', '决策', '分析', '持仓', '挂单', '风控', '约束'])
+  assert.deepEqual(FLOW_TABS.map((t) => t.label), ['全部', '决策', '分析', '持仓', '挂单', '做T', '风控', '约束'])
   const entries = flowEntriesOf({ runs: RUNS, orders: ORDERS })
   assert.equal(flowFilterOf(entries, 'all').length, flowCountsOf(entries).all)
   assert.equal(flowFilterOf(entries, 'cons').length, 1)
@@ -555,4 +555,16 @@ test('57 页面：只读派生 —— 持仓分析不写 runs、不参与「重�
   // 重放按钮从 v0.218.3 起可用：只读派生仍不得把 HOLD 写进 runs
   assert.match(PAGE, /onClick: replayToday/)
   assert.throws(() => assert.equal(runCount, RUNS.length + HOLDS.length, '反例上：把 HOLD 混进 runs'), /反例上/, '⚠ 反例注入必须失败')
+})
+
+test('做T 委托进「做T」筛选，普通委托不进', () => {
+  const base = { secid: '1.600938', name: '中国海油', side: 'buy' as const, price: 30, shares: 100, status: 'pending', decidedAt: 1, filledAt: 2 }
+  const entries = flowEntriesOf({ orders: [
+    { ...base, id: 'o1', channel: 'autoT' },
+    { ...base, id: 'o2' },
+  ] })
+  const t = entries.find((e) => e.id === 'order-o1')!
+  const normal = entries.find((e) => e.id === 'order-o2')!
+  assert.equal(t.cats.includes('autoT'), true)
+  assert.equal(normal.cats.includes('autoT'), false)
 })

@@ -227,7 +227,7 @@ export function thesisViewOf(src: ThesisWire | null | undefined): ThesisView {
 /* ────────────────────────── 决策流 ────────────────────────── */
 
 export type DeskFlowKind = 'ORDER' | 'SCAN' | 'ANALYZE' | 'RISK' | 'HOLD'
-export type DeskFlowTab = 'scan' | 'analyze' | 'holding' | 'order' | 'risk' | 'cons'
+export type DeskFlowTab = 'scan' | 'analyze' | 'holding' | 'order' | 'autoT' | 'risk' | 'cons'
 export interface DeskFlowTabDef { id: 'all' | DeskFlowTab; label: string }
 
 /** 七个筛选 tab（顺序 = 设计稿；`持仓` 为 v0.212.0 新增，计数 = 持仓数） */
@@ -237,6 +237,7 @@ export const FLOW_TABS: ReadonlyArray<DeskFlowTabDef> = [
   { id: 'analyze', label: '分析' },
   { id: 'holding', label: '持仓' },
   { id: 'order', label: '挂单' },
+  { id: 'autoT', label: '做T' },
   { id: 'risk', label: '风控' },
   { id: 'cons', label: '约束' },
 ]
@@ -284,6 +285,8 @@ export interface FlowOrderInput {
   skipReason?: string
   /** 委托来源（旧订单无此字段 ⇒ 不写来源，不猜） */
   origin?: string
+  /** v0.243.0：自动做T 委托（channel:'autoT'）单独进「做T」筛选 */
+  channel?: string
 }
 
 export interface FlowRunInput {
@@ -569,7 +572,8 @@ export function flowEntriesOf(input: {
       id: `order-${o.id}`,
       at,
       kind: 'ORDER',
-      cats: rejected ? ['order', 'risk'] : ['order'],
+      // T 委托只进「做T」，不进「挂单」（用户要求两类分开统计）
+      cats: o.channel === 'autoT' ? (rejected ? ['autoT', 'risk'] : ['autoT']) : rejected ? ['order', 'risk'] : ['order'],
       title: `${sideLabelOf(o.side)} ${o.name} ${groupInt(o.shares)} 股`,
       action: `${sideLabelOf(o.side)} ${groupInt(o.shares)} 股 @${num2(o.price)} · ${orderStatusOf(o.status)}${tag}${src === null ? '' : ` · ${src}`}`,
       basis: plainOf(o.rejectReason ?? o.reason ?? o.skipReason) ?? null,
