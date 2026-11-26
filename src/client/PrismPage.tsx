@@ -379,16 +379,16 @@ function AutoTModal(props: {
     props.error === null ? null : React.createElement('div', { className: 'tw-ad-autot-err', role: 'alert' }, props.error))))
 }
 
-const FACTOR_COLS: Array<{ key: string; label: string; def: boolean }> = [
+const FACTOR_COLS: Array<{ key: string; label: string; def: boolean; signed?: boolean }> = [
   { key: 'lastClose', label: '收盘', def: true },
   { key: 'atrPct', label: 'ATR%', def: true },
   { key: 'atrRank120', label: 'ATR分位', def: true },
   { key: 'amp20Pct', label: '日均振幅', def: true },
-  { key: 'distMa20Pct', label: 'MA20偏离', def: true },
-  { key: 'distMa60Pct', label: 'MA60偏离', def: false },
+  { key: 'distMa20Pct', label: 'MA20偏离', def: true, signed: true },
+  { key: 'distMa60Pct', label: 'MA60偏离', def: false, signed: true },
   { key: 'rsi14', label: 'RSI14', def: true },
   { key: 'pos20', label: '20日位置', def: true },
-  { key: 'ret', label: '5/20/60日', def: true },
+  { key: 'ret', label: '5/20/60日', def: true, signed: true },
   { key: 'eff20', label: '趋势效率', def: false },
 ]
 
@@ -416,7 +416,10 @@ function FactorDrawer(props: {
   const rows = byFilter.filter((r) => q.trim() === '' || `${String(r['name'] ?? '')}${String(r['secid'] ?? '')}`.includes(q.trim()))
   const selected = rows.find((r) => r['secid'] === sel) ?? rows[0] ?? null
   const heldCount = props.rows.filter((r) => r['held'] === true).length
-  const detail = (k: string, v: string): React.ReactElement => React.createElement('div', { key: k }, React.createElement('span', { className: 'k' }, k), ' ', React.createElement('span', { className: 'v' }, v))
+  const toneOf = (v: unknown): string => (typeof v === 'number' && Number.isFinite(v) && v !== 0 ? dirClass(v, true) : '')
+  const cellTone = (r: Record<string, unknown>, c: { key: string; signed?: boolean }): string => (c.signed === true ? toneOf(c.key === 'ret' ? r['ret5'] : r[c.key]) : '')
+  const cellClass = (r: Record<string, unknown>, c: { key: string; signed?: boolean }): string => { const tone = cellTone(r, c); return `c-${c.key}${tone === '' ? '' : ` ${tone}`}` }
+  const detail = (k: string, v: string, tone = ''): React.ReactElement => React.createElement('div', { key: k }, React.createElement('span', { className: 'k' }, k), ' ', React.createElement('span', { className: `v${tone === '' ? '' : ` ${tone}`}` }, v))
   return React.createElement('div', { className: 'tw-ad-factor-mask', onMouseDown: (e: React.MouseEvent) => { if (e.target === e.currentTarget) props.onClose() } },
     React.createElement('section', { className: 'tw-ad-factor', role: 'dialog', 'aria-modal': 'true', 'aria-label': '因子库' },
       React.createElement('header', { className: 'tw-ad-factor-head' },
@@ -447,7 +450,7 @@ function FactorDrawer(props: {
             React.createElement('table', null,
               React.createElement('thead', null, React.createElement('tr', null,
                 React.createElement('th', null, '标的'),
-                ...FACTOR_COLS.filter((c) => props.cols.has(c.key)).map((c) => React.createElement('th', { key: c.key }, c.label)))),
+                ...FACTOR_COLS.filter((c) => props.cols.has(c.key)).map((c) => React.createElement('th', { key: c.key, className: `c-${c.key}` }, c.label)))),
               React.createElement('tbody', null, ...rows.map((r) => React.createElement('tr', {
                 key: String(r['secid']), className: selected?.['secid'] === r['secid'] ? 'is-on' : undefined,
                 onClick: () => setSel(String(r['secid'])),
@@ -456,7 +459,7 @@ function FactorDrawer(props: {
                   React.createElement('b', null, String(r['name'] ?? r['secid'])),
                   React.createElement('span', { className: 'code' }, String(r['secid'])),
                   React.createElement('span', { className: 'sub2' }, r['held'] === true ? `持仓 ${groupOf(Number(r['qty'] ?? 0))} · 可卖 ${r['available'] === null || r['available'] === undefined ? '—' : groupOf(Number(r['available']))}` : '自选 · 未持仓')),
-                ...FACTOR_COLS.filter((c) => props.cols.has(c.key)).map((c) => React.createElement('td', { key: c.key, title: r['missing'] != null ? String(r['missing']) : undefined }, r['missing'] != null ? '—' : cell(r, c.key)))))))),
+                ...FACTOR_COLS.filter((c) => props.cols.has(c.key)).map((c) => React.createElement('td', { key: c.key, className: cellClass(r, c), title: r['missing'] != null ? String(r['missing']) : undefined }, r['missing'] != null ? '—' : cell(r, c.key)))))))),
       selected === null
         ? null
         : React.createElement('div', { className: 'tw-ad-factor-detail' },
@@ -465,10 +468,10 @@ function FactorDrawer(props: {
               React.createElement('div', { className: 'kv' },
                 detail('ATR14', `${num(selected['atrPct'])}%`), detail('ATR分位120', num(selected['atrRank120'], 0)),
                 detail('日均振幅20', `${num(selected['amp20Pct'])}%`), detail('一跳占比', `${num(selected['tickPct'], 3)}%`),
-                detail('MA20偏离', `${num(selected['distMa20Pct'])}%`), detail('RSI14', num(selected['rsi14'], 0)),
+                detail('MA20偏离', `${num(selected['distMa20Pct'])}%`, toneOf(selected['distMa20Pct'])), detail('RSI14', num(selected['rsi14'], 0)),
                 detail('20日位置', num(selected['pos20'], 0)), detail('趋势效率20', num(selected['eff20'], 0)),
-                detail('5日收益', `${num(selected['ret5'])}%`), detail('20日收益', `${num(selected['ret20'])}%`),
-                detail('60日收益', `${num(selected['ret60'])}%`), detail('数据截止', String(selected['asOf'] ?? '—')))),
+                detail('5日收益', `${num(selected['ret5'])}%`, toneOf(selected['ret5'])), detail('20日收益', `${num(selected['ret20'])}%`, toneOf(selected['ret20'])),
+                detail('60日收益', `${num(selected['ret60'])}%`, toneOf(selected['ret60'])), detail('数据截止', String(selected['asOf'] ?? '—')))),
             React.createElement('div', { className: 'use' },
               React.createElement('h3', null, '口径与来源'),
               React.createElement('div', null, '日线：前复权，只用已完成 bar。'),
