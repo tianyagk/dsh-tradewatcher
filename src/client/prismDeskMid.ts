@@ -252,6 +252,8 @@ export interface DeskFlowEntry {
   scope?: 'run' | 'order' | 'holding'
   /** 所属筛选视图（可多属：被拦截的委托同属「挂单」「风控」） */
   cats: DeskFlowTab[]
+  /** v0.244.1：委托状态（做T tab 默认隐藏已撤单） */
+  orderStatus?: string
   title: string
   action: string
   basis: string | null
@@ -574,6 +576,7 @@ export function flowEntriesOf(input: {
       kind: 'ORDER',
       // T 委托只进「做T」，不进「挂单」（用户要求两类分开统计）
       cats: o.channel === 'autoT' ? (rejected ? ['autoT', 'risk'] : ['autoT']) : rejected ? ['order', 'risk'] : ['order'],
+      orderStatus: o.status,
       title: `${sideLabelOf(o.side)} ${o.name} ${groupInt(o.shares)} 股`,
       action: `${sideLabelOf(o.side)} ${groupInt(o.shares)} 股 @${num2(o.price)} · ${orderStatusOf(o.status)}${tag}${src === null ? '' : ` · ${src}`}`,
       basis: plainOf(o.rejectReason ?? o.reason ?? o.skipReason) ?? null,
@@ -625,13 +628,16 @@ export interface FlowCounts { all: number; scan: number; analyze: number; holdin
 
 /** 七个 tab 的计数（同一份 entries 逐条数；被拦截委托在「挂单」「风控」各记一次，`all` 是去重条数） */
 export function flowCountsOf(entries: readonly DeskFlowEntry[]): FlowCounts {
-  const n = (tab: DeskFlowTab): number => entries.filter((e) => e.cats.includes(tab)).length
+  const n = (tab: DeskFlowTab): number => flowFilterOf(entries, tab).length
   return { all: entries.length, scan: n('scan'), analyze: n('analyze'), holding: n('holding'), order: n('order'), autoT: n('autoT'), risk: n('risk'), cons: n('cons') }
 }
 
 /** 按 tab 过滤（`all` 原样返回） */
 export function flowFilterOf(entries: readonly DeskFlowEntry[], tab: 'all' | DeskFlowTab): DeskFlowEntry[] {
-  return tab === 'all' ? [...entries] : entries.filter((e) => e.cats.includes(tab))
+  if (tab === 'all') return [...entries]
+  // 做T tab 默认隐藏已撤单（历史留痕仍在「全部」与数据里，不删）
+  if (tab === 'autoT') return entries.filter((e) => e.cats.includes('autoT') && e.orderStatus !== 'cancelled')
+  return entries.filter((e) => e.cats.includes(tab))
 }
 
 /** 单屏渲染上限：决策流可能上千条，页面每秒重渲染时钟，必须截断（截断事实在页脚如实写出来） */

@@ -62,3 +62,16 @@ test('④ 读回校验：99:99 / 负百分比 / 负金额 ⇒ 丢弃，不写进
     assert.deepEqual(v.lastFired['2026-11-25'], ['10:00'])
   } finally { await rm(dir, { recursive: true, force: true }) }
 })
+
+test('⑤ autoT 开关写→重启→读 必须保留', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'prism-autot-settings-'))
+  try {
+    const a = new PrismStore(dir); await a.init()
+    await a.patchSettings({ autoT: { enabled: true, positions: { '1.601872': { enabled: true }, '1.510300': { enabled: false } } } })
+    const b = new PrismStore(dir); await b.init()
+    const v = b.settings().autoT
+    assert.equal(v?.enabled, true)
+    assert.equal(v?.positions['1.601872']?.enabled, true)
+    assert.equal(v?.positions['1.510300']?.enabled, false)
+  } finally { await rm(dir, { recursive: true, force: true }) }
+})

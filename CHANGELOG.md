@@ -11,6 +11,19 @@
 
 ---
 
+## v0.244.1 — 自动做T 开关持久化；弹窗不裁内容；做T tab 隐藏已撤单
+
+`npm run check` **2064 / 2064 × 2 时区** + build（73 项）+ `tsc` 0。
+新增审计：`docs/AUDIT-PRISM-UI-POLISH.md`（20 条：P1 7 / P2 13）。
+
+| # | 问题 | 修法 |
+| --- | --- | --- |
+| 1 | P1-1 `loadSettings` 没读 `autoT` ⇒ 重启后开关全丢、界面回「已关闭」 | 读回校验（secid 格式、enabled 布尔），并补「写→重启→读」测试 |
+| 2 | P1-2 弹窗在 1440/1280/1024 高度裁内容（27/61/88px） | `.tw-ad-autot-grid` 改 `grid-template-rows:minmax(0,1fr)` + `overflow:hidden`，面板内部滚动 |
+| 3 | P1-3 做T tab 46/50 是已撤单 | 做T tab 默认隐藏 `cancelled`（历史仍保留在「全部」），计数同步 |
+
+### 验证
+`npm run check` **2064 / 2064 × 2 时区** + build（73 项）+ `tsc` 0；新增「autoT 持久化」「做T tab 过滤」断言。
 ## v0.244.0 — 自动做T 审计首批修复（P0×2 + 单账本）
 
 `npm run check` **2062 / 2062 × 2 时区** + build（73 项）+ `tsc` 0。

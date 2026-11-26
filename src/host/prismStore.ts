@@ -116,7 +116,7 @@ export class PrismStore {
   }
 
   private async loadSettings(): Promise<void> {
-    const disk = await this.loadJson<{ times?: unknown; intervalSec?: unknown; lastAutoAt?: unknown; lastFired?: unknown; model?: unknown; capital?: unknown; participationRate?: unknown; industryLimits?: unknown; perStockPct?: unknown; stopLossPct?: unknown; perOrderYuan?: unknown; maxPosPct?: unknown; maxDDPct?: unknown; minCashPct?: unknown; maxCumDDPct?: unknown; gateBaseAt?: unknown }>('prism-settings.json')
+    const disk = await this.loadJson<{ times?: unknown; intervalSec?: unknown; lastAutoAt?: unknown; lastFired?: unknown; model?: unknown; capital?: unknown; participationRate?: unknown; industryLimits?: unknown; perStockPct?: unknown; stopLossPct?: unknown; perOrderYuan?: unknown; maxPosPct?: unknown; maxDDPct?: unknown; minCashPct?: unknown; maxCumDDPct?: unknown; gateBaseAt?: unknown; autoT?: unknown }>('prism-settings.json')
     if (disk === null) return
     // 严格 HH:MM（旧正则 ^\d{2}:\d{2}$ 会放过 99:99）
     const times = Array.isArray(disk.times) ? disk.times.filter((t): t is string => typeof t === 'string' && /^([01]\d|2[0-3]):[0-5]\d$/.test(t)) : []
@@ -135,6 +135,21 @@ export class PrismStore {
           lastFired[day] = slots.filter((s): s is string => typeof s === 'string' && /^([01]\d|2[0-3]):[0-5]\d$/.test(s))
         }
       }
+    }
+    // v0.244.1：autoT 开关必须读回（否则重启后开关全丢、界面又变回「已关闭」）
+    const rawAutoT = disk.autoT
+    let autoT: { enabled: boolean; positions: Record<string, { enabled: boolean }> } | undefined
+    if (rawAutoT !== null && typeof rawAutoT === 'object' && !Array.isArray(rawAutoT)) {
+      const o = rawAutoT as { enabled?: unknown; positions?: unknown }
+      const positions: Record<string, { enabled: boolean }> = {}
+      if (o.positions !== null && typeof o.positions === 'object' && !Array.isArray(o.positions)) {
+        for (const [secid, v] of Object.entries(o.positions as Record<string, unknown>)) {
+          if (!/^[0-9]{1,3}\.[A-Za-z0-9]+$/.test(secid)) continue
+          const flag = v !== null && typeof v === 'object' ? (v as { enabled?: unknown }).enabled : undefined
+          if (typeof flag === 'boolean') positions[secid] = { enabled: flag }
+        }
+      }
+      autoT = { enabled: o.enabled === true || Object.values(positions).some((p) => p.enabled), positions }
     }
     const rawModel = disk.model
     const model =
@@ -163,6 +178,7 @@ export class PrismStore {
       // v0.224.1：这两个字段以前没进 init ⇒ 每次重启都丢（回撤闸门基线失效、累计阈值回默认）
       maxCumDDPct: pctOrNull(disk.maxCumDDPct),
       gateBaseAt: typeof disk.gateBaseAt === 'number' && Number.isFinite(disk.gateBaseAt) && disk.gateBaseAt > 0 ? disk.gateBaseAt : undefined,
+      ...(autoT === undefined ? {} : { autoT }),
     }
   }
 

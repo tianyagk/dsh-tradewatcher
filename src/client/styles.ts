@@ -1461,7 +1461,7 @@ color-scheme:dark}
 .tw-root .tw-ad-autot-switch:disabled{opacity:.45;cursor:not-allowed}
 .tw-root .tw-ad-autot-switch:focus-visible{outline:2px solid var(--tw-accent);outline-offset:2px}
 
-.tw-ad-autot-grid{display:grid;grid-template-columns:1.15fr .85fr;gap:12px;min-height:0;flex:0 0 auto;max-height:34vh}
+.tw-ad-autot-grid{display:grid;grid-template-columns:1.15fr .85fr;grid-template-rows:minmax(0,1fr);gap:12px;min-height:0;flex:1 1 auto;overflow:hidden}
 .tw-ad-autot-panel{min-height:0;overflow-y:auto;scrollbar-width:none;padding:8px 12px;border:1px solid var(--tw-border);border-radius:8px;background:var(--tw-bg)}
 .tw-ad-autot-panel::-webkit-scrollbar{display:none}
 .tw-ad-autot-panel h3{margin:0 0 6px;font-size:12px;font-weight:600;color:var(--tw-muted)}

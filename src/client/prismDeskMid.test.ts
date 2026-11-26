@@ -568,3 +568,14 @@ test('做T 委托进「做T」筛选，普通委托不进', () => {
   assert.equal(t.cats.includes('autoT'), true)
   assert.equal(normal.cats.includes('autoT'), false)
 })
+
+test('做T tab 默认隐藏已撤单，计数同步', () => {
+  const base = { secid: '1.600938', name: '中国海油', side: 'buy' as const, price: 30, shares: 100, decidedAt: 1, filledAt: 2, channel: 'autoT' as const }
+  const entries = flowEntriesOf({ orders: [
+    { ...base, id: 'a', status: 'pending' },
+    { ...base, id: 'b', status: 'cancelled' },
+    { ...base, id: 'c', status: 'filled' },
+  ] })
+  assert.equal(flowFilterOf(entries, 'autoT').length, 2)
+  assert.equal(flowCountsOf(entries).autoT, 2)
+})
