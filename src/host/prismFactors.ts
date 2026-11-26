@@ -21,6 +21,21 @@ export interface FactorMetrics {
   amp20Pct: number | null
   /** 一跳 / 现价 × 100 */
   tickPct: number | null
+  /** 区间收益（%） */
+  ret5?: number | null
+  ret20?: number | null
+  ret60?: number | null
+  /** 均线与偏离（%） */
+  ma20?: number | null
+  ma60?: number | null
+  distMa20Pct?: number | null
+  distMa60Pct?: number | null
+  /** RSI14（0–100） */
+  rsi14?: number | null
+  /** 20 日区间位置（0–100，0=最低，100=最高） */
+  pos20?: number | null
+  /** 20 日趋势效率（0–100，越高越单边） */
+  eff20?: number | null
   /** 实际使用的已完成 bar 数 */
   bars: number
 }
@@ -85,6 +100,32 @@ export function tickSizeOf(assetType: AssetType): number | null {
   return null
 }
 
+const retOf = (bars: readonly DayBar[], n: number): number | null => {
+  if (bars.length <= n) return null
+  const last = bars[bars.length - 1]!
+  const base = bars[bars.length - 1 - n]!
+  return base.close > 0 ? (last.close / base.close - 1) * 100 : null
+}
+
+const maOf = (bars: readonly DayBar[], n: number): number | null => {
+  if (bars.length < n) return null
+  const win = bars.slice(-n)
+  return win.reduce((a, b) => a + b.close, 0) / n
+}
+
+const rsiOf = (bars: readonly DayBar[], n = 14): number | null => {
+  if (bars.length <= n) return null
+  let gain = 0
+  let loss = 0
+  for (let i = bars.length - n; i < bars.length; i += 1) {
+    const d = bars[i]!.close - bars[i - 1]!.close
+    if (d > 0) gain += d
+    else loss -= d
+  }
+  if (gain + loss === 0) return 50
+  return (gain / (gain + loss)) * 100
+}
+
 /** 只保留 date <= cutoff 的 bar（回测/PIT 用；cutoff 为空则全量） */
 export function barsAt(bars: readonly DayBar[], cutoff?: string): DayBar[] {
   if (cutoff === undefined) return [...bars]
@@ -97,12 +138,31 @@ export function factorMetricsOf(bars: readonly DayBar[], assetType: AssetType, c
   const last = use[use.length - 1]
   if (last === undefined) return null
   const tick = tickSizeOf(assetType)
+  const ma20 = maOf(use, 20)
+  const ma60 = maOf(use, 60)
+  const win20 = use.slice(-20)
+  const hi20 = win20.length === 20 ? Math.max(...win20.map((b) => b.high)) : null
+  const lo20 = win20.length === 20 ? Math.min(...win20.map((b) => b.low)) : null
+  const pos20 = hi20 !== null && lo20 !== null && hi20 > lo20 ? ((last.close - lo20) / (hi20 - lo20)) * 100 : null
+  const changes = use.slice(-21).map((b, i, arr) => (i === 0 ? 0 : Math.abs(b.close - arr[i - 1]!.close)))
+  const path = changes.reduce((a, b) => a + b, 0)
+  const eff20 = use.length >= 21 && path > 0 ? (Math.abs(last.close - use[use.length - 21]!.close) / path) * 100 : null
   return {
     lastClose: last.close,
     atrPct: atrPctOf(use),
     atrRank120: atrRank120Of(use),
     amp20Pct: amp20PctOf(use),
     tickPct: tick === null || !(last.close > 0) ? null : (tick / last.close) * 100,
+    ret5: retOf(use, 5),
+    ret20: retOf(use, 20),
+    ret60: retOf(use, 60),
+    ma20,
+    ma60,
+    distMa20Pct: ma20 !== null && ma20 > 0 ? (last.close / ma20 - 1) * 100 : null,
+    distMa60Pct: ma60 !== null && ma60 > 0 ? (last.close / ma60 - 1) * 100 : null,
+    rsi14: rsiOf(use),
+    pos20,
+    eff20,
     bars: use.length,
   }
 }

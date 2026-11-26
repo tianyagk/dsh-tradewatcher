@@ -392,6 +392,33 @@ async function autoTContextOf(deps: PrismRouteDeps, account: PrismAccount): Prom
   return ['【自动做T·可计划标的】（只对这些持仓给 tPlans；ATR14 与 20 日振幅已算好，直接用）', ...lines].join('\n')
 }
 
+/** 主决策因子表：持仓 + 自选，日线只用已完成 bar，现价来自行情摘要；5 分钟缓存 */
+let factorsCache: { key: string; at: number; text: string } | null = null
+async function factorsCachedOf(deps: PrismRouteDeps, watch: ReadonlyArray<{ secid: string; name: string }>): Promise<string> {
+  const account = deps.trading.account()
+  const held = account.positions.map((p) => ({ secid: p.secid, name: p.name }))
+  const seen = new Set(held.map((h) => h.secid))
+  const rest = watch.filter((w) => !seen.has(w.secid)).slice(0, 40)
+  const list = [...held, ...rest].filter((x) => isValidSecid(x.secid))
+  const key = list.map((x) => x.secid).join(',')
+  if (factorsCache !== null && factorsCache.key === key && Date.now() - factorsCache.at < 5 * 60_000) return factorsCache.text
+  const today = dayOf(Date.now())
+  const loadK = deps.kline ?? fetchKline
+  const rows = await Promise.all(list.map(async (x) => {
+    try {
+      const k = await loadK(x.secid, 101, 140, 1)
+      const bars = (k?.days ?? []).filter((b) => b.date < today)
+      const m = factorMetricsOf(bars, /ETF|基金/i.test(x.name) ? 'etf' : 'stock')
+      if (m === null) return `- ${x.name}（${x.secid}）：—（无日K）`
+      const f = (v: number | null | undefined, d = 2): string => (v === null || v === undefined ? '—' : v.toFixed(d))
+      return `- ${x.name}（${x.secid}）：收 ${f(m.lastClose)}；ATR ${f(m.atrPct)}%/分位 ${f(m.atrRank120, 0)}；日均振幅 ${f(m.amp20Pct)}%；MA20偏离 ${f(m.distMa20Pct)}%/MA60偏离 ${f(m.distMa60Pct)}%；RSI ${f(m.rsi14, 0)}；20日位置 ${f(m.pos20, 0)}；5/20/60日 ${f(m.ret5)}/${f(m.ret20)}/${f(m.ret60)}%；趋势效率 ${f(m.eff20, 0)}`
+    } catch { return `- ${x.name}（${x.secid}）：—（取数失败）` }
+  }))
+  const text = ['【因子表（日线 PIT：只用已完成 bar，前复权；收益/波动为 %）】', ...rows].join('\n')
+  factorsCache = { key, at: Date.now(), text }
+  return text
+}
+
 export const prismInputsOf = async (deps: PrismRouteDeps): Promise<PrismInputs> => {
   const watch = deps.data.watchData().items
   const port = deps.data.portData()
@@ -442,6 +469,7 @@ export const prismInputsOf = async (deps: PrismRouteDeps): Promise<PrismInputs> 
     skeleton: deps.store.skeleton(),
     exposure: exposureText,
     tech: await indexTechCachedOf().catch(() => '【指数技术面（由本地日线计算；缺数据写 —）】\n—（本轮取数失败）'),
+    factors: await factorsCachedOf(deps, watch).catch(() => '【因子表】\n—（本轮取数失败）'),
     candidates: await candidatesCachedOf(deps, watch).catch(() => '【候选池（持仓 + 自选）】\n—（本轮取数失败）'),
     limits: limitsTextOf(deps.store.settings()),
     autoT: await autoTContextOf(deps, account).catch(() => '【自动做T·可计划标的】\n—（ATR/振幅取数失败，本轮不要给 tPlans）'),

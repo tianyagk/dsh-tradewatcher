@@ -36,6 +36,8 @@ export interface PrismInputs {
   products?: string
   /** v0.220.0：【指数技术面】段落（中证1000/2000、沪深300、科创50、科创半导体ETF 的指标/量能/动量） */
   tech?: string
+  /** v0.254.0：【因子表】持仓 + 自选的核心因子（日线 PIT + 现价） */
+  factors?: string
   /** v0.221.0：【候选池】段落（持仓 + 自选；技术/动量/估值已算好，叙事状态由模型判断） */
   candidates?: string
   /** v0.221.2：【约束（用户配置，硬边界）】——与骨架冲突时以此为准 */
@@ -91,6 +93,7 @@ const compileInput = (inputs: PrismInputs, withNews = true): string => {
     '【账户快照（模拟盘，只读；数字均带单位）】',
     inputs.account || '—（未取到账户快照）',
     ...(inputs.tech !== undefined && inputs.tech.trim() !== '' ? [inputs.tech] : []),
+    ...(inputs.factors !== undefined && inputs.factors.trim() !== '' ? [inputs.factors] : []),
     ...(inputs.candidates !== undefined && inputs.candidates.trim() !== '' ? [inputs.candidates] : []),
     ...(inputs.limits !== undefined && inputs.limits.trim() !== '' ? [inputs.limits] : []),
     ...(inputs.drawdown !== undefined && inputs.drawdown.trim() !== '' ? [inputs.drawdown] : []),
@@ -181,6 +184,7 @@ export async function runPrismAnalysis(
         role: 'user',
         content: `${contextNoNews}\n\n${inputs.autoT !== undefined && inputs.autoT.trim() !== '' ? inputs.autoT + '\n\n' : ''}【四路结论】\n${digest}\n\n【任务】把四路结论汇总成 5 条以内的要点，指出分歧与需要盯的变量。` +
           '\n必须依据【账户快照】计算仓位上限；正常应当给出 singlePct/totalPct，确实无法计算时才用 null 并在 limits.note 说明原因。' +
+          '\n【强制·因子表】技术面/波动/位置/动量一律以【因子表】的引擎值为准（前复权、已完成 bar）；不得自行从 K 线重算，缺数写 — + 原因；因子表不构成买卖建议，只作事实依据。' +
           '\n【强制·风险暴露】必须先判断是否需要降低风险暴露（减仓/止损/清仓），给出结论与理由；若判断不减，必须写明为什么满仓是合理的。' +
           '\n【强制·双侧】orders 允许卖单，卖单字段同样是 {secid, side:\'sell\', price, shares, reason}；不能只考虑买入侧。' +
           '\n【强制·空单说明】orders 为空时，note 必须分两段：「不买的理由」与「不卖的理由」；缺一段即视为不合格。' +
