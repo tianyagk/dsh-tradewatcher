@@ -47,3 +47,16 @@ test('④ ETF 卖出免印花税；股票仍收 0.1%', async () => {
   assert.equal(stock.stamp, 100)
   assert.ok(etf.total < stock.total / 2)
 })
+
+test('⑤ 换日生成 dayOpenQty 开盘快照（收盘对账基线）', async () => {
+  const { rollDay } = await import('./prismAccount.ts')
+  const acc = {
+    day: '2026-11-25', capitalLimit: 1_000_000, cash: 1000, realized: 0, dayStartEquity: null,
+    positions: [{ secid: '1.601872', name: '招商轮船', qty: 1000, available: 1000, cost: 10, avgCost: 10 }],
+    copiedAt: null, copyLogs: [],
+  } as never
+  const next = rollDay(acc, '2026-11-26', 1_000_000)
+  assert.equal(next.dayOpenQty?.['1.601872'], 1000)
+  const same = rollDay(next, '2026-11-26', 1_000_000)
+  assert.equal(same.dayOpenQty?.['1.601872'], 1000)
+})

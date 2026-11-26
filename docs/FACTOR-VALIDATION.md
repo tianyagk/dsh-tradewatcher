@@ -1,6 +1,6 @@
 # FACTOR-VALIDATION — 因子验证与做T反事实回放（可执行方案）
 
-- 基线：`dsh-tradewatcher` **v0.249.0** / HEAD `2a91e97`（2026-11-26 14:01 +08）；盘点后工作树前进到 **v0.249.1 / `d27fba9`**（差异只有 autoT 注入位置，见 `docs/FACTOR-IMPLEMENTATION.md` §5.6），本文数字仍按 v0.249.0 快照。
+- 基线：任务指定 `dsh-tradewatcher` **v0.249.0** / HEAD `2a91e97`（2026-11-26 14:01 +08）；盘点后工作树前进到 **v0.250.0 / `e181bce`**（新增 `prismFactors/prismGates` 纯函数与四份文档），本文数据仍按 2026-11-26 快照，引用行号以 v0.249.0 为准。
 - 数据快照：本机 `~/.dsh/dsh-tradewatcher`，**2026-11-26 15:00 CST** 只读盘点。
 - 性质：**只设计、只读、不改代码**。本文不实现任何脚本，不修改 `src/**`；落地时新增 `research/factor-validation/` 与独立输出目录，不进入生产构建。
 - 规范层级（先说清，避免和同仓文档打架）：
@@ -56,7 +56,7 @@ G4 上线门：G1+G2+G3 全过，且运行约束（fillRate/legOut/回撤）全�
 | # | 事项 | 本方案口径 |
 | --- | --- | --- |
 | 1 | **因子 ID** | 一律用 SPEC ID：`TRD.MOM20`、`TRD.MA20DEV`、`POS.PCT252`、`VOL.ATR14`、`VOL.AMP20`、`VOL.ATRRANK120`、`TRD.EFF20`、`LIQ.ADV20`、`EXE.TICK`、`EXE.FILL`、`EXE.LIMITDIST`、`PRT.WEIGHT`；扩展用 `TRD.MOM5/60`、`TRD.RSI14`、`VOL.RANGE20`、`VOL.BETA60`、`POS.PCT20`、`LIQ.VOLRATIO`、`EXE.FEE_RT`。本文括号里的旧名只作对照，不另立口径。 |
-| 2 | **AMP20 ≠ RANGE20** | `VOL.AMP20` 是 20 日**日均**振幅（分母前收，中位约 4.54%）；`VOL.RANGE20` 是 20 日**区间**幅度（中位约 27.92%）。旧「20日振幅 ≥3%」是 RANGE20 口径，**已废止**；做T门槛只用 AMP20（建议阈值 1.2%），RANGE20 只做箱体描述。 |
+| 2 | **AMP20 ≠ RANGE20** | `VOL.AMP20` 是 20 日**日均**振幅（分母前收，中位约 4.54%）；`VOL.RANGE20` 是 20 日**区间**幅度（中位约 27.92%）。旧「20日振幅 ≥3%」是 RANGE20 口径，**在 v2 中已废止**；v1 仍保留作现行产品基线，但只用于量化差异。v2 的做T门槛只用 AMP20（建议阈值 1.2%），RANGE20 只做箱体描述。 |
 | 3 | **门槛版本** | 产品现行是 `t-gate-v1`（PRD：ATR14≥1.5%、`amp20Pct`(RANGE20)≥3%、价差≥1.2%、净额门槛）；SPEC §4.2 给出 `t-gate-v2`（G0–G10：ATR 自适应下限、ATRRANK120≥40、AMP20≥1.2、EFF20≤0.45、TICK≤0.10%、FILL≤3min、LIMITDIST、netEdge≥0.25%、s=ATR14/4）。本方案把 **v1 作为基线、v2 作为待验证门槛**，H3 同时比较 `no-gate / v1 / v2` 三臂；不把 v1 的「几乎不筛」当成有效门槛。PRD 的 `amp20Pct` 是 RANGE20 口径；v2 按 SPEC 改用 AMP20 日均口径（阈值 1.2%），两者在报告里必须分列。 |
 | 4 | **产品边界** | 即使 H1/H2 通过，也不得把因子接进 `candidateStats`、四路分析或主决策下单（PRD D1/R1–R3）；本方案只服务 autoT 的可执行性验证。影子 B 只允许用 **`t-gate-v2`** 或已通过 G1 的因子做 filter，不做评分/排序/推荐。 |
 
@@ -126,7 +126,7 @@ G4 上线门：G1+G2+G3 全过，且运行约束（fillRate/legOut/回撤）全�
 
 ### 2.1 快照与 universe
 
-**R1 快照不可变。** 以 `2026-11-26 15:00 CST` 为 `S0`；把 `klines/`、`trends/`、`prism-autot.json`、`prism-account.json`、`prism-orders.json`、`prism-equity.json`、`positions.json` 复制/硬链接到 `data/snapshots/S0/`，生成 `manifest.json`（逐文件 sha256、字节数、mtime）。任何测试只读 `S0`；新增数据 = `S1`，不得覆盖 `S0`。
+**R1 快照不可变。** 以 `2026-11-26 15:00 CST` 为 `S0`；把 `klines/`、`trends/`、`prism-autot.json`、`prism-account.json`、`prism-orders.json`、`prism-equity.json`、`positions.json`、`prism-factor/`（若已存在）复制/硬链接到 `data/snapshots/S0/`，生成 `manifest.json`（逐文件 sha256、字节数、mtime）。任何测试只读 `S0`；新增数据 = `S1`，不得覆盖 `S0`。
 
 **R15 universe 快照。** 生成 `universe.csv`，一行一个 `secid`，字段：
 
@@ -240,6 +240,7 @@ bars, fqt1_ok, v3_ok, has_1min, held_at_S0, in_watchlist, in_universe, exclude_r
 - 研究横截面：`bars >= 120`；生产：`bars >= 250`。
 - 只有短窗因子（`TRD.MOM5/20`、`TRD.MA20DEV`、`TRD.RSI14`、`VOL.ATR14`、`POS.PCT20`）可在 60–119 根时做**单因子描述**，但不得进入横截面排名/生产。
 - 1–66 根的文件/标的：一律不进入主表；只在排除台账列出。
+- **产品门槛的 25 根 ≠ 研究横截面的 120/250 根**：v1/v2 的 `bars>=25` 是运行时「能不能算 ATR」的下限；研究面板要求 120/250 是为了让 60 日因子和 forward 收益有足够历史，二者不能互相替代。
 
 ### 2.5 1 分钟数据清洗
 
@@ -360,7 +361,7 @@ computeIntradayAt(points: readonly TrendPoint[], cutoffTs: number, ctx: Intraday
 
 `NO_BARS`、`SHORT_HISTORY`、`PARTIAL_LAST_BAR`、`SUSPENDED`、`SUSPENDED_WINDOW`、`LIMIT_LOCKED`、`NO_VOLUME`、`NO_AMOUNT`、`STALE`、`BAD_OHLC`、`PRICE_JUMP`、`CORPORATE_ACTION`、`UNKNOWN_LIMIT_RULE`、`NOT_IN_UNIVERSE`、`MINUTE_GAP`、`SHORT_MINUTE_SERIES`、`ATR_RANK_SHORT`、`QUOTE_STALE`、`LKG_QUOTE`、`FILL_TOO_LONG`。
 
-> 09:45 入场时，`ret30m` 必为 `null`（没有 t-30m），`tickPct/posDay/vwapDev` 只有约 14 个点；这是设计使然，不得用更早的集合竞价点补足。`volPace/amountPace` 在 12 天面板的前几天会因历史 profile <10 天而为 `null`；不得把 min profile 降到 3 天来凑样本（预注册固定 10 天）。
+> 09:45 入场时，`INT.RET30M` 必为 `null`（没有 t-30m），`INT.UPTICK`/`INT.POSDAY`/`INT.VWAPDEV` 只有约 14 个点；这是设计使然，不得用更早的集合竞价点补足。`INT.VOLPACE`/`INT.AMTPACE` 在 12 天面板的前几天会因历史 profile <10 天而为 `null`；不得把 min profile 降到 3 天来凑样本（预注册固定 10 天）。
 
 > 命名冲突：`tickPct` 在本方案明确为**上涨分钟占比**（0–100），不是逐笔涨跌幅；不要与「tick 收益率」混用。若产品原字段另有含义，实现时改名为 `upTickPct`，避免同名异义。
 
@@ -516,7 +517,7 @@ out/fv/<snapshot>/run_manifest.json
 2. 非 ST/*ST/退；非停牌；非一字板；非新股前 5 日；行情不是 `lkg`。
 3. 1 分钟 ≥230 点；零量点 ≤5%；无 >5 分钟缺口 ×2。
 4. `P0>0.5` 元；当日涨跌停价可计算；`P0` 不在涨停/跌停价上。
-5. 日线因子一律用 `computeDailyAt(bars, cutoff=d-1)`，即**前一交易日收盘**；不得用当日未完成日线 bar。
+5. 日线因子一律用 `computeDailyAt(bars, cutoff=prevTradingDay(d))`，即**前一交易日收盘**；不得用当日未完成日线 bar。日线根数：v1 要求 `bars>=25`，v2 要求 `bars>=21`（代码 `prismGates` 口径），研究面板仍要求 120/250。
 
 > `ADV20`/流动性由 v2 的 G7 `EXE.FILL` 使用；v1 保持 PRD 基线，不额外加流动性闸。这样三臂的差异只来自各自门槛，不来自共同预筛。
 
@@ -567,6 +568,8 @@ minSpread% = max(0.8, 2.2×feeRT% + TICK, 0.25×ATR14)
 > **v1 的 `RANGE20>=3%` 已废止**：SPEC 实测中位 27.92%，通过率 95%，等于没筛；v1 只作为「现行产品基线」保留，不能拿它证明「门槛有效」。v2 的 `AMP20>=1.2%` 才是日均振幅口径；两者不得共用「振幅」二字。
 >
 > 本文不替产品拍板 v1→v2；H3 只提供证据。即使 v2 通过，切换仍要按 PRD/D1 裁决、bump `T_GATE_VERSION` 并留 CHANGELOG。
+>
+> **v2 口径锁定**：本文上面的 v2 表是 **SPEC §4.2 目标口径**（G0–G10）。v0.250.0 的 `src/host/prismGates.ts` 已落一版 `AUTO_T_RULES.version='t-gate-v2'`，常量与 SPEC 目标并不完全一致（例如 `minAtrPct=1.0`、`maxTickPct=0.5`、`minSpreadPct=1.2`、无 EFF/FILL/LIMITDIST 闸）。**PRE-REGISTRATION 必须二选一并写死**：要么用 SPEC 目标表（实现另补缺口），要么用代码 `AUTO_T_RULES` 的实际常量并记 `gateVersion='t-gate-v2-code'`；不得在同一实验里混用两套阈值。 另外，`prismFactors.atrRank120Of` 当前用 `<20` 个观测就放行，SPEC 要求 60；用代码口径时必须在报告写 `ATRRANK_MIN=20`，不能与 SPEC 60 混比。 用 v2-code 时还要注意 `prismGates.evaluateAutoT` 内 `isEtf=false` 硬编码：ETF 费用会被高估，回放必须按标的类型传 `stampExempt`，不能直接复用该常量。
 
 ### 5.4 计划构造（固定规则，不用 LLM）
 
@@ -676,8 +679,8 @@ minSpread% = max(0.8, 2.2×feeRT% + TICK, 0.25×ATR14)
 | `legOutRate` | `count(legOut)/count(firstLegFilled)` | **主（约束）** |
 | `legOutFailRate` | `count(legOutFail)/count(firstLegFilled)` | 主（尾部） |
 | `maxDD` | 按日累计 net / 日初 equity 的 `min(cum/cummax-1)` | 主 |
-| `CVaR5_day` | 最差 5% **日净额**（name-day 聚合后）的均值，按日初 equity 折 bps | **主（尾部）** |
-| `CVaR5_attempt` | 最差 5% 单次 `net_bps` 的均值 | 次（单笔尾部） |
+| `CVaR5_day` | **5% 尾部**：最差 5% **日净额**（name-day 聚合后）的均值，按日初 equity 折 bps | **主（尾部）** |
+| `CVaR5_attempt` | **5% 尾部（单笔）**：最差 5% 单次 `net_bps` 的均值 | 次 |
 | `tailLoss5` | 日净额的 5% 分位 | 主 |
 | `fees` | 双边费用合计 / notional | 次 |
 | `turnover` | 成交名义金额 / 日初 equity | 次 |
@@ -690,6 +693,7 @@ minSpread% = max(0.8, 2.2×feeRT% + TICK, 0.25×ATR14)
 - 方向：sell-first / buy-first；
 - 入场时点：5 个；
 - 门槛：no-gate / v1 / v2；
+- **样本重叠**：`v1∩v2`（配对比较）/ `v2-only`（v2 新增）/ `v1-only`（v2 剔除）三列必须分列；主比较 `v2−v1` 用 **v1∩v2 配对样本**，另报全样本；不得把 v2-only 的收益说成「v1 也会错过/也会赚」；
 - 子周期：前 6 天 / 后 6 天（仅描述，当前 12 天不够做推断）；
 - 标的类型：股票 / ETF；
 - 是否 legOut。
@@ -701,7 +705,7 @@ minSpread% = max(0.8, 2.2×feeRT% + TICK, 0.25×ATR14)
 - **主指标**：先对每个 name-day 的 5 个时点取等权平均，再对日取平均；`n_days=12` 是实际独立单元，`n_attempts=335` 不是。
 - **最小样本**：`n_days>=20` 且 `closed round trips>=100` 才可下统计结论；当前 12 天/0 完整往返 → **样本不足**。
 - **leave-one-out**：去掉贡献最大的 1 个 name / 1 天 / 前 5% 的 attempt，主指标符号不得翻转；否则标 `CONCENTRATED`。
-- **多重比较**：5 个入场时点 × 2 方向 = 10 个格；只报全表 + CI，不挑「最好格」；如要选时点，必须用独立样本预注册。
+- **多重比较**：5 个入场时点 × 2 方向 × 3 臂（no-gate/v1/v2）= 30 个格；只报全表 + CI，不挑「最好格」；主检验固定为 v2−v1 的 sell-first 全时点聚合，其余格子只作描述。
 
 ### 5.10 回放验收（工程层，不是效果层）
 
@@ -731,7 +735,7 @@ minSpread% = max(0.8, 2.2×feeRT% + TICK, 0.25×ATR14)
 | 资金 | 每日开盘把 S0 账户克隆成 A/B 两本账：相同 cash、positions、available、dayStartEquity；两本账完全隔离 |
 | 候选 | 同一 `universe.csv`、同一数据时刻、同一候选池；不得给 B 额外标的 |
 | 模型 | **每轮只调用一次 LLM**，同一 prompt、同一模型版本、temperature=0、同一 seed；输出一份中性 `tPlans` 候选集 |
-| 处理 | A=现行策略（`t-gate-v1`，全部合格计划）；B=只使用 **`t-gate-v2`** 和/或 **G1 通过的因子** 过滤后的计划（具体组合在 PRE-REGISTRATION 固定；影子期间不得新增）；**只有 B 不同** |
+| 处理 | A=现行策略（`t-gate-v1`，全部合格计划）；B=只使用 **`t-gate-v2`（或 `t-gate-v2-code`，见 §5.3）** 和/或 **G1 通过的因子** 过滤后的计划（具体组合在 PRE-REGISTRATION 固定；影子期间不得新增）；**只有 B 不同** |
 | 成交 | A/B 共用同一个 §5.5 成交模型、费用、滑点、14:50 规则 |
 | 日志 | 每轮写 `tGateCensus`（候选/各闸淘汰/过闸）与每个 secid 的 `gateVersion/gateCode`；B 的 `t-gate-v2` 版本必须可追溯 |
 | 随机化 | 每轮 A/B 执行顺序随机；报告标签用 X/Y，分析锁定后再解码 |
@@ -743,6 +747,7 @@ minSpread% = max(0.8, 2.2×feeRT% + TICK, 0.25×ATR14)
 
 - **主指标**：`ΔNet_bps = mean_day( B_day_net_bps - A_day_net_bps )`，其中 A=`t-gate-v1`、B=`t-gate-v2`（或预注册的 v2 + 因子 filter），`day_net_bps = 当日 T 净额 / 日初 equity × 10000`。
 - **配对**：同一天 A/B 用同一账户克隆、同一候选、同一成交模型 → 按日配对。
+- **配对样本**：除全候选比较外，另报 **v1∩v2 的 matched 子样本**（同一 name-day 上 A/B 都有计划）；避免「B 只做 3 只、A 做 10 只」的暴露差异被当成门槛 alpha。
 - **CI**：按日 block bootstrap 10,000 次，95% 百分位 CI；同时报 paired t（day cluster）。
 - **MDE**：用实际日配对差的 sd 计算「80% 功效、α=0.05（单尾）」的最小可检测效应；若 MDE > 经济门槛，报告 `UNDERPOWERED`，不得把「不显著」写成「无效」。
 - **经济门槛**：`ΔNet_bps >= max(5 bp/日, 10% × abs(A 的平均日净额))`；且 B 的 `legOutRate<=20%`、`fillRate>=30%`、`maxDD` 不比 A 差超过 1pp。
@@ -795,10 +800,10 @@ minSpread% = max(0.8, 2.2×feeRT% + TICK, 0.25×ATR14)
 - **通过**：全部满足 → `通过（面板内）`；若符号为正，**直接淘汰 H2**，不得反向解释成「动量」。
 - **说明**：这条直接检验产品里「20 日位置低 → 超跌修复」的叙事；若 H2 不成立，做T 的「低吸」理由缺少日线证据。
 
-### H3：`t-gate-v2` 比 `t-gate-v1` 提高每轮净期望
+### H3：`t-gate-v2`（或 `t-gate-v2-code`）比 `t-gate-v1` 提高每轮净期望
 
 - **定义**：三臂见 §5.3：`no-gate` / `v1` / `v2`。主比较是 **v2 − v1**（现行产品基线），次比较是 **v2 − no-gate**；其他条件、成交模型、费用完全相同。
-- **检验**（在 G2 回放，样本足够时）：
+- **检验**（在 G2 回放，样本足够时；主检验在 **v1∩v2 配对样本**，另报全样本）：
   ```text
   Δ_main = netExpectation(v2) - netExpectation(v1)
   Δ_sec  = netExpectation(v2) - netExpectation(no-gate)
@@ -835,6 +840,8 @@ minSpread% = max(0.8, 2.2×feeRT% + TICK, 0.25×ATR14)
 
 ## 9. 验收清单
 
+> **证据的定义**：不是一张收益曲线、也不是一句「IC 0.05」，而是**预注册 hash + 可复现的 artifact + 按日 cluster 的 95% CI + placebo/负对照 + 子周期/稳健性**这一整套。缺任何一项，只能写「未验证 / 样本不足」。`通过（面板内）` 与 `门槛有效` 是两个不同层级；后者必须多过回放/影子。
+
 ### 9.1 数据门（D）
 
 - [ ] **D1** `S0` 快照 + `manifest.json` + 逐文件 sha256；测试只读 `S0`。
@@ -846,7 +853,7 @@ minSpread% = max(0.8, 2.2×feeRT% + TICK, 0.25×ATR14)
 - [ ] **D7** 毒化 bar 测试通过（未来数据不改变输出）。
 - [ ] **D8** 样本矩阵与 §1 一致：日线股票 36 只/约 580 天；日内 12 天/22 只；T 主池 67 name-day；autot 0 完整往返。
 - [ ] **D9** SPEC §7 的 V1–V12 全过；至少 V2（未完成 bar）、V3（无前视）、V7（AMP20≠RANGE20）、V8（t-gate 8 行 fixture 逐行一致）在 CI 中有断言。
-- [ ] **D10** 每条日志/每条 attempt 带 `T_GATE_VERSION`（`t-gate-v1`/`t-gate-v2`）；改阈值必须 bump 版本，旧记录保留旧版本。
+- [ ] **D10** 每条日志/每条 attempt 带 `T_GATE_VERSION`（或代码 `AUTO_T_RULES.version`；`t-gate-v1`/`t-gate-v2`/`t-gate-v2-code`）；改阈值必须 bump 版本，旧记录保留旧版本。
 
 ### 9.2 因子有效（F）
 
@@ -867,8 +874,8 @@ minSpread% = max(0.8, 2.2×feeRT% + TICK, 0.25×ATR14)
 
 ### 9.3 门槛有效（G）
 
-- [ ] **G1** `t-gate-v1` / `t-gate-v2` 定义冻结（§5.3），回放同时跑 no-gate / v1 / v2 三臂。
-- [ ] **G2** `Δ_main = netExpectation(v2) − netExpectation(v1) >= 10 bp/attempt`，且 v2 `netExpectation>=0`；95% CI 下限 >0。
+- [ ] **G1** `t-gate-v1` / `t-gate-v2`（或代码 `t-gate-v2-code` 实际常量）定义冻结（§5.3），回放同时跑 no-gate / v1 / v2 三臂；版本与常量写进 manifest。
+- [ ] **G2** 在 `v1∩v2` 配对样本上 `Δ_main = netExpectation(v2) − netExpectation(v1) >= 10 bp/attempt`，且 v2 `netExpectation>=0`；95% CI 下限 >0；另报全样本。
 - [ ] **G3** v2 `legOutRate<=20%`、`fillRate>=30%`、`bothLegsRate>=60%`；且 v2 `fillRate >= 50% × v1 fillRate`（防「筛得只剩 1 只」）。
 - [ ] **G4** v2 maxDD 不比 v1 差超过 1pp；CVaR5 的亏损绝对值不超过 v1 的 1.5 倍。
 - [ ] **G5** 去掉贡献最大的 1 只/1 天/前 5% attempt，`Δ_main` 符号不翻转。
@@ -948,6 +955,18 @@ out/fv/S0/verdict.md
 out/fv/S0/run_manifest.json
 ```
 
+研究目录（待实现，不进 `src/**`）：
+
+```text
+research/factor-validation/
+  build_snapshot.py     # S0 + universe.csv + exclusions.csv
+  factors.py            # computeDailyAt / computeIntradayAt / FactorEnvelope
+  ic_test.py            # IC/ICIR/分组/子周期/placebo
+  replay.py             # no-gate/v1/v2 三臂 + 成交模型
+  shadow.py             # 30 天 A/B 配对 + CI/MDE
+  report.py             # verdict.md + 图表
+```
+
 ---
 
 ## 10. 执行顺序与停止条件
@@ -981,7 +1000,7 @@ out/fv/S0/run_manifest.json
 
 ### G3 影子 A/B（30 个交易日）
 
-1. 只在 **G2 的 H3 门槛通过**（或 G1 有 `通过（面板内）` 因子作为 B 的附加条件）时启动；若 B 只用 `t-gate-v2`，不要求 H1/H2 通过；否则不做（B=A 无意义）。
+1. 只在 **G2 的 H3 门槛通过**（或 G1 有 `通过（面板内）` 因子作为 B 的附加条件）时启动；若 B 只用 `t-gate-v2`（或 `t-gate-v2-code`），不要求 H1/H2 通过；否则不做（B=A 无意义）。
 2. 每日 3 轮，A/B 克隆账户；写 `shadow_rounds.csv`。
 3. 30 天后锁定分析；算主指标/CI/MDE；写 `verdict.md`。
 
@@ -1071,9 +1090,9 @@ daily_panel.parquet:
   tradable_1, tradable_5, tradable_20, exclusion_reason
 
 replay_attempts.csv:
-  attempt_id, day, secid, entry_time, direction, gate_pass,
+  attempt_id, day, secid, entry_time, direction, gate_version, gate_pass,
   qty, available, shares, p0, buy_price, sell_price, spread_bps,
-  atr_pct, range20, adv20_amount,
+  atr_pct, amp20_pct, atr_rank120, eff20, tick_pct, fill_min, limit_dist_pct, adv20_amount,
   first_leg, first_fill_at, first_fill_shares, first_fill_price,
   second_leg, second_fill_at, second_fill_shares, second_fill_price,
   leg_out, leg_out_fail, leg_out_price, fees, net, notional, net_bps,
@@ -1144,6 +1163,7 @@ PY
 | 把 12 天当 12 个月 | `trends` 稠密日 12 天 | §5.9 日级 cluster，`n_days=12` |
 | 只报胜率/最好时点 | 现有 autoT stats 只看 results | §5.8 强制 PF/legOut/CVaR5/全表 |
 | 用当前观察池外推全市场 | U_FIXED 是 `BACKFILL-SURVIVOR` | §2.1 标签 + §9.7 禁止措辞 |
+| 代码 `t-gate-v2` 与 SPEC 目标口径不一致 | `src/host/prismGates.ts` 的 `AUTO_T_RULES`（minAtr 1.0 / maxTick 0.5 / 无 EFF/FILL/LIMITDIST）；`prismFactors.atrRank120Of` 的 `<20` 观测门槛 | §5.3「v2 口径锁定」：PRE-REGISTRATION 二选一，记 `t-gate-v2-code` 与 `ATRRANK_MIN`，不得混算 |
 
 ---
 

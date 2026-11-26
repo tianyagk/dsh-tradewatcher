@@ -419,9 +419,14 @@ export function avgCostFromHistory(
 
 /** 新交易日：T+1 解锁（available = qty）；dayStartEquity 用上一日收盘净值 */
 export function rollDay(account: PrismAccount, day: string, previousEquity: number | null): PrismAccount {
-  if (account.day === day) return account
+  if (account.day === day) {
+    // 老账本/进程中途启动：没有开盘快照时，用当前持仓补一份，至少让收盘对账有基线
+    if (account.dayOpenQty !== undefined) return account
+    return { ...account, dayOpenQty: Object.fromEntries(account.positions.map((p) => [p.secid, p.qty])) }
+  }
   const positions = account.positions.map((p) => ({ ...p, available: p.qty }))
-  return { ...account, day, positions, dayStartEquity: previousEquity ?? account.dayStartEquity }
+  const dayOpenQty = Object.fromEntries(positions.map((p) => [p.secid, p.qty]))
+  return { ...account, day, positions, dayStartEquity: previousEquity ?? account.dayStartEquity, dayOpenQty }
 }
 
 /** 当日净值（一个交易日一个点；同一天再算就覆盖） */
@@ -986,6 +991,7 @@ export class PrismTradingStore {
         plans: (Array.isArray(disk.plans) ? disk.plans : []) as AutoTFile['plans'],
         trades: (Array.isArray(disk.trades) ? disk.trades : []) as AutoTFile['trades'],
         results: (Array.isArray(disk.results) ? disk.results : []) as AutoTFile['results'],
+        recons: (Array.isArray((disk as { recons?: unknown }).recons) ? (disk as { recons?: unknown }).recons : []) as AutoTFile['recons'],
       }
     } catch { return { plans: [], trades: [], results: [] } }
   }
@@ -2018,6 +2024,20 @@ async function matchTickLocked(
         }
         plan.status = 'aborted'
         changed = true
+      }
+    }
+    // 收盘/轮末对账：只核对「今天有过 T 计划」的标的，净持仓应与开盘一致
+    if (account.dayOpenQty !== undefined) {
+      const tSecids = new Set(file.plans.filter((p) => p.day === day).map((p) => p.secid))
+      for (const secid of tSecids) {
+        const openQty = account.dayOpenQty[secid] ?? 0
+        const closeQty = account.positions.find((p) => p.secid === secid)?.qty ?? 0
+        const diff = closeQty - openQty
+        const hasPending = orders.some((o) => o.channel === 'autoT' && o.secid === secid && o.status === 'pending')
+        if (diff !== 0 && !hasPending && !(file.recons ?? []).some((r) => r.day === day && r.secid === secid)) {
+          file.recons = [...(file.recons ?? []), { day, secid, openQty, closeQty, diff, at: now }]
+          changed = true
+        }
       }
     }
     if (changed) autoTPending = file

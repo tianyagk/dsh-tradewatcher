@@ -11,6 +11,16 @@
 
 ---
 
+## v0.250.1 — 自动做T 收盘净持仓对账（审计 #11）
+
+`npm run check` **2067 / 2067 × 2 时区** + build（73 项）+ `tsc` 0。
+
+- `PrismAccount.dayOpenQty`：换日时记录开盘持仓快照；同日缺失时用当前持仓补基线；
+- `matchTick` 轮末对「当日有过 T 计划」的标的核对 `closeQty − openQty`，无 pending 腿且不一致 ⇒ 写 `prism-autot.json.recons`（day/secid/开平/差额/时间）；
+- 新增 `rollDay` 快照测试。
+
+### 状态
+对账记录已落盘，但 UI 尚未展示；下一步接 `#10` 关闭开关处理已成交腿与 `#16` 强制回补 T+1/涨跌停校验。
 ## v0.250.0 — 因子层地基：prismFactors / prismGates（纯函数，未接线）
 
 `npm run check` **2066 / 2066 × 2 时区** + build（73 项）+ `tsc` 0。

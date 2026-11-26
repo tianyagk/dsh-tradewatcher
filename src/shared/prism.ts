@@ -305,6 +305,8 @@ export interface PrismAccount {
   cash: number
   realized: number
   dayStartEquity: number | null
+  /** 当日开盘持仓快照（收盘对账用；缺失 = 老账本未记录） */
+  dayOpenQty?: Record<string, number>
   positions: PrismPosition[]
   copiedAt: number | null
   copyLogs: PrismCopyLog[]

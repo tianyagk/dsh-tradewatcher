@@ -59,7 +59,8 @@ export interface AutoTResultRec {
   id: string; planId: string; secid: string; day: string
   buyPrice: number; sellPrice: number; shares: number; fees: number; net: number; at: number
 }
-export interface AutoTFile { plans: AutoTPlanRec[]; trades: AutoTTradeRec[]; results: AutoTResultRec[] }
+export interface AutoTRecon { day: string; secid: string; openQty: number; closeQty: number; diff: number; at: number }
+export interface AutoTFile { plans: AutoTPlanRec[]; trades: AutoTTradeRec[]; results: AutoTResultRec[]; recons?: AutoTRecon[] }
 
 export class PrismStore {
   private readonly dir: string
