@@ -197,7 +197,9 @@ export async function runPrismAnalysis(
           '{"note":"本轮决策理由（一句话；orders 为空时必须同时说明不买与不卖）",' +
           '"limits":{"singlePct":数字或null,"totalPct":数字或null,"byIndustry":{"行业":数字},"note":"仓位上限依据"},' +
           '"orders":[{"secid":"1.600519","side":"buy|sell","price":数字,"shares":整百,"reason":"原因"}],' +
-          '"cancel":["订单id"]}。严格 JSON（不得注释、尾逗号、额外文字）；没有挂单就输出空数组；不要输出别的 JSON。',
+          '"cancel":["订单id"],' +
+          '"tPlans":[{"secid":"1.600519","direction":"buy-first|sell-first","buyPrice":数字,"sellPrice":数字,"shares":整百,"observe":"观察","reasoning":"推理","conclusion":"结论"}]}。' +
+          'tPlans 必须出现：没有计划就输出空数组 []；只对【自动做T·可计划标的】给计划。严格 JSON（不得注释、尾逗号、额外文字）；不要输出别的 JSON。',
       }],
       '你是严谨的市场研判助手。只依据给定材料，缺失就写 — 并给一句原因；不写免责声明。',
       deps.signal,
