@@ -330,7 +330,7 @@ const AUTOT_SAMPLE = {
 test('㉚ 自动做T：单只统计行 = 做T N 次 · +X · 胜率 Y%（n=）', () => {
   assert.equal(autoTPerPositionTextOf({ rounds: 12, profit: 1240.5, winRate: 67, n: 18 }), '做T 12 次 · +1,240.50 · 胜率 67%（n=18）')
   assert.equal(autoTPerPositionTextOf({ rounds: 0, profit: 0, winRate: null, n: 0 }), '做T 0 次 · 0.00 · 胜率 —（n=0）')
-  assert.equal(autoTPerPositionTextOf(null), '做T — · — · 胜率 —（n=0）')
+  assert.equal(autoTPerPositionTextOf(null), '做T — · — · 胜率 —（宿主未给统计）')
 })
 
 test('㉛ 自动做T：胜率 n=0 一律 —（n=0），不写 0%；缺 rate 也不编', () => {
@@ -358,7 +358,7 @@ test('㉝ 自动做T：回包解析 + 5 个 chip 只出在顶部（今日/累计
   const a = autoTOf(AUTOT_SAMPLE)
   assert.ok(a !== null)
   const chips = autoTChipsOf(a)
-  assert.deepEqual(chips.map((c) => c.value), ['1 / 2', '+112.30', '20 次', '+1,752.90', '70%（n=20）'])
+  assert.deepEqual(chips.map((c) => c.value), ['1 轮', '+112.30', '20 次', '+1,752.90', '70%（n=20）'])
   assert.equal(a.positions['1.601872'].enabled, true)
   assert.equal(a.effectiveCost['1.601872'], 17.94)
   assert.equal(autoTEntryStatusOf(a), 'unfinished')

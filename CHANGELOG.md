@@ -11,6 +11,20 @@
 
 ---
 
+## v0.252.0 — 做T 门槛结果进 payload + 弹窗三处文案（PRD U1/U2/N-1/N-3）
+
+`npm run check` **2067 / 2067 × 2 时区** + build（73 项）+ `tsc` 0。
+
+| 项 | 修法 |
+| --- | --- |
+| payload | 计划记录新增 `gateCode/gateDetail/gateVersion/spreadPct/netYuan`；被门槛拒绝的计划也落一条 `aborted` 记录，带唯一原因 |
+| U1 | 表头「Agent 今日判断」→「今日计划 / 门槛」；被拒计划显示 `条件不足 · <原因>`（muted，无红绿） |
+| U2 | 左面板「价差（扣费前）」→「价差 / 扣费后净额」，净额取引擎 gate 值 |
+| N-1 | 「今日轮次」由 `3 / 2` 改为 `3 轮`（分母不再误读） |
+| N-3 | 缺 perPosition 统计 → `胜率 —（宿主未给统计）` |
+
+### 尚未做
+U3 空态计数、因子日志、影子 A/B。
 ## v0.251.0 — 做T 门槛接线：evaluateAutoT + 关闭保留回补腿 + 强制回补 T+1
 
 `npm run check` **2067 / 2067 × 2 时区** + build（73 项）+ `tsc` 0。

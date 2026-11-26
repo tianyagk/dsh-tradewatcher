@@ -49,6 +49,12 @@ export interface AutoTPlanRec {
   pairId?: string
   /** 强制回补失败原因（有值 ⇒ 净持仓可能偏离，需次日处理） */
   failReason?: string
+  /** v0.252.0：门槛结果（t-gate-v2） */
+  gateCode?: string
+  gateDetail?: string
+  gateVersion?: string
+  spreadPct?: number | null
+  netYuan?: number | null
   at: number
 }
 export interface AutoTTradeRec {

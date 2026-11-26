@@ -298,7 +298,7 @@ function AutoTModal(props: {
             React.createElement('th', { className: 'tw-ad-autot-col-qty' }, '底仓 / 可卖'),
             React.createElement('th', { className: 'tw-ad-autot-col-cost' }, '账面成本'),
             React.createElement('th', null, '有效成本'),
-            React.createElement('th', { className: 'tw-ad-autot-judge-col' }, 'Agent 今日判断'),
+            React.createElement('th', { className: 'tw-ad-autot-judge-col' }, '今日计划 / 门槛'),
             React.createElement('th', { className: 'tw-ad-autot-col-result' }, '结果'),
             React.createElement('th', { className: 'tw-ad-autot-switch-col' }, '做T'))),
         React.createElement('tbody', null,
@@ -363,7 +363,7 @@ function AutoTModal(props: {
         React.createElement('div', { className: 'tw-ad-autot-meta' },
           metaOf('方向 / 股数', focusPlan === null ? '—' : `${autoTDirectionLabelOf(focusPlan)} · ${focusPlan.shares === null ? '—' : `${groupOf(focusPlan.shares)} 股`}`, focusPlan === null ? '今日无做T计划' : null),
           metaOf('买卖价', focusPlan === null ? '—' : `${focusPlan.buyPrice === null ? '—' : focusPlan.buyPrice.toFixed(2)} / ${focusPlan.sellPrice === null ? '—' : focusPlan.sellPrice.toFixed(2)}`, focusPlan === null ? '今日无做T计划' : null),
-          metaOf('价差（扣费前）', spread === null ? '—' : `${spread > 0 ? '+' : ''}${spread.toFixed(2)}%`, spread === null ? '缺买价或卖价，价差不可算' : '买价与卖价的价差（未扣费用）'))),
+          metaOf('价差 / 扣费后净额', `${spread === null ? '—' : `${spread > 0 ? '+' : ''}${spread.toFixed(2)}%`} / ${focusPlan?.netYuan === null || focusPlan?.netYuan === undefined ? '—' : signedMoneyOf(focusPlan.netYuan)}`, '按计划价与双边费用估算，未成交；旧计划可能无净额'))),
       React.createElement('div', { className: 'tw-ad-autot-panel' },
         React.createElement('h3', null, '今日流水'),
         flow.length === 0

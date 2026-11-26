@@ -26,7 +26,7 @@ import { runPrismAnalysis, type PrismInputs } from './prismPipeline.ts'
 import { fetchIndustryOverview, fetchKline, fetchQuotes, fetchValuationBatch } from './em.ts'
 import { atrFromBars } from './atr.ts'
 import { factorMetricsOf } from './prismFactors.ts'
-import { evaluateAutoT } from './prismGates.ts'
+import { AUTO_T_RULES, evaluateAutoT } from './prismGates.ts'
 import { assemblePortfolio } from './portfolio.ts'
 import { industryExposureOf, needsIndustryOf, unavailableExposure } from './prismExposure.ts'
 import { applyDrawdownGate, drawdownGateOf, evaluationOf, EVAL_MIN_SAMPLE } from './prismEval.ts'
@@ -684,6 +684,7 @@ async function placeAutoTPairs(deps: PrismRouteDeps, run: PrismRun): Promise<voi
       if (cap < 100) continue
       // 引擎门槛：因子快照（只用已完成 bar）+ 16 原因码（t-gate-v2）
       let gateOk = false
+      let gateResult: ReturnType<typeof evaluateAutoT> | null = null
       try {
         const loadK = deps.kline ?? fetchKline
         const k = await loadK(plan.secid, 101, 140, 1)
@@ -694,7 +695,11 @@ async function placeAutoTPairs(deps: PrismRouteDeps, run: PrismRun): Promise<voi
           cash: account.cash, available: pos.available, positionQty: pos.qty,
           pendingShares: 0, nowHHMM: Number(new Date().toTimeString().slice(0, 5).replace(':', '')),
         })
+        gateResult = gate
         gateOk = gate.ok
+        if (!gate.ok) {
+          records.push({ id: `T-${day.replace(/-/g, '')}-${plan.secid}-${Date.now().toString(36)}`, secid: plan.secid, name: pos.name, day, direction: plan.direction, buyPrice: plan.buyPrice, sellPrice: plan.sellPrice, shares: 0, status: 'aborted', observe: plan.observe ?? null, reasoning: plan.reasoning ?? null, conclusion: plan.conclusion ?? null, gateCode: gate.code ?? 'unknown', gateDetail: gate.detail, gateVersion: AUTO_T_RULES.version, spreadPct: gate.spreadPct, netYuan: gate.netYuan, at: Date.now() })
+        }
       } catch { gateOk = false }
       if (!gateOk) continue
       const openSide: 'buy' | 'sell' = plan.direction === 'sell-first' ? 'sell' : 'buy'
@@ -707,7 +712,7 @@ async function placeAutoTPairs(deps: PrismRouteDeps, run: PrismRun): Promise<voi
       orders.push(
         { id: `${pairId}-${openSide}`, secid: plan.secid, name: pos.name, side: openSide, price: openPrice, shares: cap, reason: `自动做T·${openSide === 'buy' ? '买入' : '卖出'}腿`, decidedAt: at, day, status: 'pending', channel: 'autoT', tPlanId: pairId, pairId, leg: 'open', expireAt: deadline },
       )
-      records.push({ id: pairId, secid: plan.secid, name: pos.name, day, direction: plan.direction, buyPrice: plan.buyPrice, sellPrice: plan.sellPrice, shares: cap, status: 'waiting', observe: plan.observe ?? null, reasoning: plan.reasoning ?? null, conclusion: plan.conclusion ?? null, pairId, at })
+      records.push({ id: pairId, secid: plan.secid, name: pos.name, day, direction: plan.direction, buyPrice: plan.buyPrice, sellPrice: plan.sellPrice, shares: cap, status: 'waiting', observe: plan.observe ?? null, reasoning: plan.reasoning ?? null, conclusion: plan.conclusion ?? null, gateCode: 'ok', gateDetail: '条件满足', gateVersion: AUTO_T_RULES.version, spreadPct: (plan.sellPrice / plan.buyPrice - 1) * 100, netYuan: gateResult?.netYuan ?? null, pairId, at })
     }
     const killed = new Set<string>()
     for (const [pairId, v] of pairs) {

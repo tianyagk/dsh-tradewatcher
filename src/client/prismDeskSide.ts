@@ -321,6 +321,12 @@ export interface AutoTPlan {
   conclusion: string | null
   /** 计划生成时刻（取最新计划用） */
   at: number | null
+  /** v0.252.0：门槛结果 */
+  gateCode: string | null
+  gateDetail: string | null
+  gateVersion: string | null
+  spreadPct: number | null
+  netYuan: number | null
 }
 
 export interface AutoTTrade {
@@ -381,6 +387,11 @@ function planOf(v: unknown): AutoTPlan | null {
     reasoning: textOf(o.reasoning),
     conclusion: textOf(o.conclusion),
     at: finite(o.at as number),
+    gateCode: textOf(o.gateCode),
+    gateDetail: textOf(o.gateDetail),
+    gateVersion: textOf(o.gateVersion),
+    spreadPct: finite(o.spreadPct as number),
+    netYuan: finite(o.netYuan as number),
   }
 }
 
@@ -528,13 +539,11 @@ function winRateTitleOf(winRate: number | null | undefined, n: number | null | u
   return `胜率 = 盈利轮次 / 总轮次（n=${sample}）`
 }
 
-/** 今日轮次：`1 / 2`；缺一项如实留 `—` */
+/** 今日轮次：`3 轮`（全部标的完成轮次；每标的上限见 title，不写错分母） */
 export function autoTTodayRoundsTextOf(a: PrismAutoT | null): string {
   const rounds = finite(a?.today.rounds)
-  const limit = finite(a?.today.limit)
-  if (rounds === null && limit === null) return '—'
-  if (limit === null) return String(rounds)
-  return `${rounds === null ? '—' : String(rounds)} / ${String(limit)}`
+  if (rounds === null) return '—'
+  return `${rounds} 轮`
 }
 
 /** 顶部 5 个统计 chip（唯一汇总口径；表格不再出合计行） */
@@ -565,7 +574,7 @@ export function autoTChipsOf(a: PrismAutoT | null): AutoTChip[] {
 
 /** 单只统计（名称下方一行）：做T N 次 · +X · 胜率 Y%（n=）；整条缺 ⇒ —（不写 0 次冒充真实统计） */
 export function autoTPerPositionTextOf(stat: AutoTStats | null | undefined): string {
-  if (stat === null || stat === undefined) return '做T — · — · 胜率 —（n=0）'
+  if (stat === null || stat === undefined) return '做T — · — · 胜率 —（宿主未给统计）'
   const rounds = finite(stat.rounds)
   const profit = stat.profit
   const win = autoTWinRateTextOf(stat.winRate, stat.n)
@@ -612,7 +621,10 @@ export function autoTJudgeOf(a: PrismAutoT | null, secid: string): AutoTJudgeVie
   if (flag === undefined || !flag.enabled) return { text: '未开启做T', muted: true, title: '该标的的自动做T 开关当前为关闭', plan: null, direction: null }
   if (!flag.hold) return { text: '非中长期持有', muted: true, title: '该标的未标记为中长期持有，不做T', plan: null, direction: null }
   const plan = autoTPlanOf(a, secid)
-  if (plan === null) return { text: '今日无计划', muted: true, title: '今日该标的没有做T计划（价差不足/风控/数据缺失）', plan: null, direction: null }
+  if (plan === null) return { text: '—（今日无计划）', muted: true, title: '今日该标的没有做T计划（价差不足/风控/数据缺失）', plan: null, direction: null }
+  if (plan.gateCode !== null && plan.gateCode !== 'ok') {
+    return { text: `条件不足 · ${plan.gateDetail ?? plan.gateCode}`, muted: true, title: `${plan.gateDetail ?? plan.gateCode}（门槛 ${plan.gateVersion ?? '—'}）`, plan, direction: null }
+  }
   const parts = [`${priceTextOf(plan.buyPrice)} ↔ ${priceTextOf(plan.sellPrice)}`, plan.shares === null ? '— 股' : `${moneyOf(plan.shares, 0)} 股`]
   return { text: parts.join(' · '), muted: false, title: `计划 ${plan.id}`, plan, direction: autoTDirectionLabelOf(plan) }
 }
