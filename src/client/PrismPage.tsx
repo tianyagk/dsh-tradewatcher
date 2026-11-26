@@ -230,6 +230,22 @@ function AutoTModal(props: {
   useEscapeLayer(() => { if (!props.saving) props.onClose() })
   const dialogRef = React.useRef<HTMLElement | null>(null)
   React.useEffect(() => { dialogRef.current?.querySelector<HTMLElement>('button:not([disabled])')?.focus() }, [])
+  // 焦点陷阱 + 关闭后归还焦点（a11y）
+  React.useEffect(() => {
+    const prev = document.activeElement as HTMLElement | null
+    const onKey = (e: KeyboardEvent): void => {
+      const el = dialogRef.current
+      if (e.key !== 'Tab' || el === null) return
+      const list = [...el.querySelectorAll<HTMLElement>('button:not([disabled]),[href],input:not([disabled]),select,textarea,[tabindex]:not([tabindex="-1"])')].filter((x) => x.offsetParent !== null)
+      if (list.length === 0) return
+      const first = list[0]
+      const last = list[list.length - 1]
+      if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus() }
+      else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus() }
+    }
+    document.addEventListener('keydown', onKey)
+    return () => { document.removeEventListener('keydown', onKey); prev?.focus?.() }
+  }, [])
   const a = props.autoT
   const chips = autoTChipsOf(a)
   const focusPlan = autoTFocusPlanOf(a)
@@ -346,7 +362,7 @@ function AutoTModal(props: {
         React.createElement('div', { className: 'tw-ad-autot-meta' },
           metaOf('方向 / 股数', focusPlan === null ? '—' : `${autoTDirectionLabelOf(focusPlan)} · ${focusPlan.shares === null ? '—' : `${groupOf(focusPlan.shares)} 股`}`, focusPlan === null ? '今日无做T计划' : null),
           metaOf('买卖价', focusPlan === null ? '—' : `${focusPlan.buyPrice === null ? '—' : focusPlan.buyPrice.toFixed(2)} / ${focusPlan.sellPrice === null ? '—' : focusPlan.sellPrice.toFixed(2)}`, focusPlan === null ? '今日无做T计划' : null),
-          metaOf('价差（扣费前）', spread === null ? '—' : `${spread.toFixed(2)}%`, spread === null ? '缺买价或卖价，价差不可算' : '买价与卖价的价差（未扣费用）'))),
+          metaOf('价差（扣费前）', spread === null ? '—' : `${spread > 0 ? '+' : ''}${spread.toFixed(2)}%`, spread === null ? '缺买价或卖价，价差不可算' : '买价与卖价的价差（未扣费用）'))),
       React.createElement('div', { className: 'tw-ad-autot-panel' },
         React.createElement('h3', null, '今日流水'),
         flow.length === 0
