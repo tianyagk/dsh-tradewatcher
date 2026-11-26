@@ -2011,6 +2011,11 @@ async function matchTickLocked(
           if (typeof px === 'number' && Number.isFinite(px) && px > 0) {
             const side: 'buy' | 'sell' = delta > 0 ? 'sell' : 'buy'
             const shares = Math.abs(delta)
+            const avail = account.positions.find((p) => p.secid === plan.secid)?.available ?? 0
+            if (side === 'sell' && shares > avail) {
+              plan.failReason = `强制回补失败：T+1 可卖 ${avail} < 需回补 ${shares} 股`
+              throw new Error(plan.failReason)
+            }
             const fee = feesOf(side, px, shares, 0, 0, /ETF/i.test(plan.name)).total
             const fill = { orderId: `${plan.id}-forced`, secid: plan.secid, name: plan.name, side, price: px, shares, amount: Math.round(px * shares * 100) / 100, fee, at: now, source: '1min' as const }
             account = applyFill(account, { ...(buyLeg ?? sellLeg)!, id: `${plan.id}-forced`, side, price: px, shares, status: 'pending', day }, fill)

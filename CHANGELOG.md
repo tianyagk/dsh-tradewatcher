@@ -11,6 +11,19 @@
 
 ---
 
+## v0.251.0 — 做T 门槛接线：evaluateAutoT + 关闭保留回补腿 + 强制回补 T+1
+
+`npm run check` **2067 / 2067 × 2 时区** + build（73 项）+ `tsc` 0。
+
+| 审计/需求 | 修法 |
+| --- | --- |
+| P1 门槛接线 | `placeAutoTPairs` 用 `factorMetricsOf`（只用 date<day 的已完成 bar）+ `evaluateAutoT()` 取代旧的价差/费用判断；不通过不挂单 |
+| #10 关闭开关 | 只撤**未成交的开腿**；`leg:'close'` 回补腿与已有成交的开腿保留，避免裸敞口 |
+| #16 强制回补 | 卖出回补前检查 T+1 可卖数量；不足写 `failReason`，不硬平 |
+
+### 尚未做
+- payload 未暴露 `positions[].gate`，UI 的「条件不足」原因尚未展示；
+- 因子日志、影子 A/B 未开始。
 ## v0.250.1 — 自动做T 收盘净持仓对账（审计 #11）
 
 `npm run check` **2067 / 2067 × 2 时区** + build（73 项）+ `tsc` 0。

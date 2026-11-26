@@ -25,6 +25,8 @@ import { backfillNews, incrementalNews } from './prismNews.ts'
 import { runPrismAnalysis, type PrismInputs } from './prismPipeline.ts'
 import { fetchIndustryOverview, fetchKline, fetchQuotes, fetchValuationBatch } from './em.ts'
 import { atrFromBars } from './atr.ts'
+import { factorMetricsOf } from './prismFactors.ts'
+import { evaluateAutoT } from './prismGates.ts'
 import { assemblePortfolio } from './portfolio.ts'
 import { industryExposureOf, needsIndustryOf, unavailableExposure } from './prismExposure.ts'
 import { applyDrawdownGate, drawdownGateOf, evaluationOf, EVAL_MIN_SAMPLE } from './prismEval.ts'
@@ -680,12 +682,21 @@ async function placeAutoTPairs(deps: PrismRouteDeps, run: PrismRun): Promise<voi
       if (pos === undefined) continue
       const cap = Math.min(pos.available, Math.floor((pos.qty * 0.2) / 100) * 100, plan.shares)
       if (cap < 100) continue
-      if ((plan.sellPrice / plan.buyPrice - 1) * 100 < 1.2) continue
-      // 费用门槛：扣双边佣金（万3 最低5）/印花税/过户费后，净额至少 20 元且 ≥ 买入额的 0.3%
-      const gross = (plan.sellPrice - plan.buyPrice) * cap
-      const feeEst = feesOf('buy', plan.buyPrice, cap).total + feesOf('sell', plan.sellPrice, cap, 0, 0, /ETF/i.test(pos.name)).total
-      const netEst = gross - feeEst
-      if (netEst < Math.max(20, plan.buyPrice * cap * 0.003)) continue
+      // 引擎门槛：因子快照（只用已完成 bar）+ 16 原因码（t-gate-v2）
+      let gateOk = false
+      try {
+        const loadK = deps.kline ?? fetchKline
+        const k = await loadK(plan.secid, 101, 140, 1)
+        const bars = (k?.days ?? []).filter((b) => b.date < day)
+        const metrics = factorMetricsOf(bars, /ETF/i.test(pos.name) ? 'etf' : 'stock')
+        const gate = evaluateAutoT({
+          metrics, buyPrice: plan.buyPrice, sellPrice: plan.sellPrice, shares: cap, direction: plan.direction,
+          cash: account.cash, available: pos.available, positionQty: pos.qty,
+          pendingShares: 0, nowHHMM: Number(new Date().toTimeString().slice(0, 5).replace(':', '')),
+        })
+        gateOk = gate.ok
+      } catch { gateOk = false }
+      if (!gateOk) continue
       const openSide: 'buy' | 'sell' = plan.direction === 'sell-first' ? 'sell' : 'buy'
       const openPrice = openSide === 'buy' ? plan.buyPrice : plan.sellPrice
       const same = [...pairs.entries()].find(([, v]) => v.secid === plan.secid && v.shares === cap && v.orders.some((o) => o.side === openSide && o.price === openPrice && o.leg === 'open'))
@@ -1098,6 +1109,8 @@ export function makePrismRoutes(deps: PrismRouteDeps): PluginWebRoute[] {
               for (const o of orders) {
                 if (o.channel !== 'autoT' || o.status !== 'pending') continue
                 if (nextPositions[o.secid]?.enabled === true) continue
+                // 已成交/部分成交的开腿不能撤（否则裸敞口）；回补腿必须留着把持仓收回来
+                if (o.leg === 'close' || (o.filledShares ?? 0) > 0) continue
                 o.status = 'cancelled'; o.cancelledAt = Date.now(); o.cancelReason = '做T开关关闭'; changed = true
               }
               if (changed) await deps.trading.saveAll({ account: deps.trading.account(), orders, fills: deps.trading.fills() })
