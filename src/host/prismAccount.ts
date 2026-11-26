@@ -1927,6 +1927,7 @@ async function matchTickLocked(
   // 三账本一次写：账户（钱）、委托/成交（流水）、净值点必须在同一把文件锁内提交
   // 取价失败 ⇒ 不写净值点（否则整仓按成本计，会打出假的日跌幅/假熔断）
   // 自动做T：两腿都成交 ⇒ 结算；到截止时间未完成 ⇒ 撤单并标记 aborted
+  let autoTPending: AutoTFile | null = null
   try {
     const file = await store.autoT()
     let changed = false
@@ -1983,7 +1984,7 @@ async function matchTickLocked(
           buyPrice: buy.fillPrice ?? plan.buyPrice ?? 0, sellPrice: sell.fillPrice ?? plan.sellPrice ?? 0,
           shares: plan.shares, fees: Math.round((sumOf(buy.id, 'fee') + sumOf(sell.id, 'fee')) * 100) / 100, net, at: now,
         }
-        file.results.push(rec)
+        if (!file.results.some((r) => r.id === rec.id)) file.results.push(rec)
         plan.status = 'done'
         changed = true
         continue
@@ -2019,7 +2020,7 @@ async function matchTickLocked(
         changed = true
       }
     }
-    if (changed) await store.saveAutoT(file)
+    if (changed) autoTPending = file
   } catch { /* 自动做T 账本异常不影响主账 */ }
 
   let quoteMap: Record<string, { price?: number | null }> | null = null
@@ -2028,5 +2029,7 @@ async function matchTickLocked(
     ? store.equity()
     : upsertEquity(store.equity(), equityPointOf(account, (secid) => quoteMap![secid]?.price ?? null, now))
   await store.saveAll({ account, orders, fills, equity })
+  // 先落三账本、再落 autoT：写失败时宁可计划待定，也不出现「计划 done 但成交没落盘」
+  if (autoTPending !== null) await store.saveAutoT(autoTPending).catch((error) => { void error })
   return { filled, rejected, skipped, rejects: skipped }
 }
