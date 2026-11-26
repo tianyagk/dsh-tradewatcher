@@ -6,7 +6,7 @@
  *   · 起点持仓**按真实成本价复制**（只读 `assemblePortfolio`），可随时重copy（留痕：时间 + 前后差异）；
  *   · 挂单当日有效；后续研判可撤销（留痕）；跨日自动失效；
  *   · 撮合：1 分钟 `high/low` 触及即按**挂单价**成交；缺 1 分钟退回分时并标注来源；
- *   · 费用：佣金万 2.5（最低 5 元）+ 卖出印花税千 1 + 过户费万 0.1；不计滑点；
+ *   · 费用：佣金万 3（最低 5 元）+ 卖出印花税千 1 + 过户费万 0.1；不计滑点；
  *   · A股：T+1、涨跌停不可成交、停牌不可成交、100 股整手；违反 → `rejected` + 原因（不静默丢）。
  *
  * 三个账本文件（account / orders / equity）走 `updateJsonLocked` + `ReadGuard`。
@@ -45,7 +45,7 @@ import { writeFileAtomic, writeFileSetAtomic, type AtomicFileSetEntry } from './
 
 import { PRISM_DEFAULT_CAPITAL } from '../shared/prism.ts'
 export const PRISM_INITIAL_CAPITAL = PRISM_DEFAULT_CAPITAL
-export const COMMISSION_RATE = 0.00025
+export const COMMISSION_RATE = 0.0003
 export const COMMISSION_MIN = 5
 export const STAMP_RATE = 0.001
 export const TRANSFER_RATE = 0.00001

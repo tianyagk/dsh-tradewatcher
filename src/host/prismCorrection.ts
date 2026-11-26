@@ -6,7 +6,7 @@
  *
  * 口径：
  *   · 只改「已成交」委托；未成交/已撤单不适用；
- *   · 每笔 fill 的 amount 与 fee 按新价重算（佣金万 2.5 最低 5 + 过户费万 0.1；卖出另有印花税千 1）；
+ *   · 每笔 fill 的 amount 与 fee 按新价重算（佣金万 3 最低 5 + 过户费万 0.1；卖出另有印花税千 1）；
  *   · 现金差额 = Σ(旧 amount + 旧 fee) − Σ(新 amount + 新 fee)（买入多付 ⇒ 退回；卖出少收 ⇒ 补回用负号）；
  *   · 持仓 netCost 同步扣减同一差额，cost = netCost / qty；
  *   · 订正留痕写进 order.corrections 与返回的 note，不静默。
@@ -14,7 +14,7 @@
 import type { PrismAccount, PrismFill, PrismOrder } from '../shared/prism.ts'
 
 const money = (n: number): number => Math.round(n * 100) / 100
-const COMMISSION_RATE = 0.00025
+const COMMISSION_RATE = 0.0003
 const COMMISSION_MIN = 5
 const STAMP_RATE = 0.001
 const TRANSFER_RATE = 0.00001

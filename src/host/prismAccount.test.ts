@@ -58,7 +58,7 @@ test('⑤ 费用三项逐笔正确、佣金最低 5 元', () => {
   assert.equal(sell.stamp, 1)
   assert.equal(sell.total, 6.01)
   const big = feesOf('buy', 100, 1_000)
-  assert.equal(big.commission, 25)
+  assert.equal(big.commission, 30)
   assert.equal(big.transfer, 1)
 })
 

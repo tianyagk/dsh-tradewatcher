@@ -13,7 +13,7 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { PluginWebRoute } from './context.ts'
 import type { AutoTFile, AutoTPlanRec, AutoTResultRec, PrismStore } from './prismStore.ts'
-import { LedgerUnreadableError, PrismTradingStore, applyFeeCorrection, avgCostFromHistory, clampDecision, copyAtCost, dayStartMismatchOf, equityPointOf, isEtfName, matchTick, placeDecision, productKeyOf, realizedFromIdentity, rebuildFromOrders, upsertEquity, type QuoteLite } from './prismAccount.ts'
+import { LedgerUnreadableError, PrismTradingStore, applyFeeCorrection, avgCostFromHistory, feesOf, clampDecision, copyAtCost, dayStartMismatchOf, equityPointOf, isEtfName, matchTick, placeDecision, productKeyOf, realizedFromIdentity, rebuildFromOrders, upsertEquity, type QuoteLite } from './prismAccount.ts'
 import { dataHome, type DataStore } from './store.ts'
 import type { PrismAccount, PrismFill, PrismOrder, PrismRun, PrismSettings, PrismState } from '../shared/prism.ts'
 import { PRISM_INTERVAL_OPTIONS, PRISM_MAX_TIMES, PRISM_SKELETON_MAX } from '../shared/prism.ts'
@@ -660,6 +660,11 @@ async function placeAutoTPairs(deps: PrismRouteDeps, run: PrismRun): Promise<voi
       const cap = Math.min(pos.available, Math.floor((pos.qty * 0.2) / 100) * 100, plan.shares)
       if (cap < 100) continue
       if ((plan.sellPrice / plan.buyPrice - 1) * 100 < 1.2) continue
+      // 费用门槛：扣双边佣金（万3 最低5）/印花税/过户费后，净额至少 20 元且 ≥ 买入额的 0.3%
+      const gross = (plan.sellPrice - plan.buyPrice) * cap
+      const feeEst = feesOf('buy', plan.buyPrice, cap).total + feesOf('sell', plan.sellPrice, cap, 0, 0, /ETF/i.test(pos.name)).total
+      const netEst = gross - feeEst
+      if (netEst < Math.max(20, plan.buyPrice * cap * 0.003)) continue
       const openSide: 'buy' | 'sell' = plan.direction === 'sell-first' ? 'sell' : 'buy'
       const openPrice = openSide === 'buy' ? plan.buyPrice : plan.sellPrice
       const same = [...pairs.entries()].find(([, v]) => v.secid === plan.secid && v.shares === cap && v.orders.some((o) => o.side === openSide && o.price === openPrice && o.leg === 'open'))
