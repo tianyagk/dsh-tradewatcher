@@ -618,22 +618,31 @@ async function placeAutoTPairs(deps: PrismRouteDeps, run: PrismRun): Promise<voi
     const account = deps.trading.account()
     const orders = deps.trading.orders().slice()
     const fills = deps.trading.fills()
-    // 每轮重新审计：先撤掉上一轮所有未成交 T 腿（计划随之作废），再按本轮判断重新挂
-    const killed = new Set<string>()
+    // 每轮重审计：同参数的旧腿保留；变了的/本轮没有的旧腿撤销（避免重复挂单与无谓撤单噪音）
+    const pairs = new Map<string, { secid: string; buyPrice: number; sellPrice: number; shares: number; orders: typeof orders }>()
     for (const o of orders) {
       if (o.channel !== 'autoT' || o.status !== 'pending') continue
-      o.status = 'cancelled'; o.cancelledAt = Date.now(); o.cancelReason = '每轮重审计：撤销旧 T 腿'; killed.add(String(o.pairId))
+      const key = String(o.pairId)
+      const cur = pairs.get(key) ?? { secid: o.secid, buyPrice: 0, sellPrice: 0, shares: o.shares, orders: [] }
+      if (o.side === 'buy') cur.buyPrice = o.price
+      if (o.side === 'sell') cur.sellPrice = o.price
+      cur.orders.push(o)
+      pairs.set(key, cur)
     }
-    const file0 = deps.store.autoT()
-    const plansNext = file0.plans.map((p) => killed.has(String(p.pairId)) && (p.status === 'waiting' || p.status === 'planned') ? { ...p, status: 'aborted' as const } : p)
+    const keep = new Set<string>()
+    const seen = new Set<string>()
     const records: AutoTPlanRec[] = []
     for (const plan of plans) {
+      if (seen.has(plan.secid)) continue
+      seen.add(plan.secid)
       if (cfg.positions?.[plan.secid]?.enabled !== true) continue
       const pos = account.positions.find((p) => p.secid === plan.secid)
       if (pos === undefined) continue
       const cap = Math.min(pos.available, Math.floor((pos.qty * 0.2) / 100) * 100, plan.shares)
       if (cap < 100) continue
       if ((plan.sellPrice / plan.buyPrice - 1) * 100 < 1.2) continue
+      const same = [...pairs.entries()].find(([, v]) => v.secid === plan.secid && v.buyPrice === plan.buyPrice && v.sellPrice === plan.sellPrice && v.shares === cap)
+      if (same !== undefined) { keep.add(same[0]); continue }
       const pairId = `T-${day.replace(/-/g, '')}-${plan.secid}-${Date.now().toString(36)}`
       const at = Date.now()
       orders.push(
@@ -642,6 +651,14 @@ async function placeAutoTPairs(deps: PrismRouteDeps, run: PrismRun): Promise<voi
       )
       records.push({ id: pairId, secid: plan.secid, name: pos.name, day, direction: plan.direction, buyPrice: plan.buyPrice, sellPrice: plan.sellPrice, shares: cap, status: 'waiting', observe: plan.observe ?? null, reasoning: plan.reasoning ?? null, conclusion: plan.conclusion ?? null, pairId, at })
     }
+    const killed = new Set<string>()
+    for (const [pairId, v] of pairs) {
+      if (keep.has(pairId)) continue
+      for (const o of v.orders) { o.status = 'cancelled'; o.cancelledAt = Date.now(); o.cancelReason = '每轮重审计：计划变更或本轮不计划' }
+      killed.add(pairId)
+    }
+    const file0 = deps.store.autoT()
+    const plansNext = file0.plans.map((p) => killed.has(String(p.pairId)) && (p.status === 'waiting' || p.status === 'planned') ? { ...p, status: 'aborted' as const } : p)
     await deps.trading.saveAll({ account, orders, fills })
     await deps.store.saveAutoT({ ...file0, plans: [...plansNext, ...records] })
   })
