@@ -1582,6 +1582,32 @@ color-scheme:dark}
 .tw-dw-skel-row{height:32px;border-radius:6px;background:var(--tw-card2);animation:twDwPulse 1.4s ease-in-out infinite}
 @keyframes twDwPulse{0%,100%{opacity:.55}50%{opacity:.95}}
 
+
+/* ── 因子库抽屉（v0.255.0，原型 docs/prototype/prism-factors.html）── */
+.tw-ad-factor-mask{position:fixed;inset:0;background:rgba(20,24,35,.30);z-index:60}
+.tw-ad-factor{position:fixed;top:0;right:0;height:100vh;width:min(1080px,96vw);background:var(--tw-card);box-shadow:-18px 0 48px rgba(16,24,40,.18);display:flex;flex-direction:column;z-index:61}
+.tw-ad-factor-head{display:flex;align-items:flex-start;gap:10px;padding:14px 18px;border-bottom:1px solid var(--tw-border)}
+.tw-ad-factor-head h2{margin:0;font-size:15px}
+.tw-ad-factor-head p{margin:3px 0 0;font-size:12px;color:var(--tw-muted)}
+.tw-ad-factor-head .right{margin-left:auto;display:flex;align-items:center;gap:8px}
+.tw-ad-factor-chips{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;padding:12px 18px 0}
+.tw-ad-factor-chips .chip{background:var(--tw-bg2);border-radius:8px;padding:7px 10px;display:flex;flex-direction:column;gap:1px}
+.tw-ad-factor-chips .k{font-size:12px;color:var(--tw-muted)}
+.tw-ad-factor-bar{display:flex;align-items:center;gap:10px;padding:10px 18px;flex-wrap:wrap}
+.tw-ad-factor-picker{display:flex;gap:10px;flex-wrap:wrap;font-size:12px;color:var(--tw-dim)}
+.tw-ad-factor-picker label{display:flex;align-items:center;gap:4px;cursor:pointer}
+.tw-ad-factor-table{flex:1 1 auto;min-height:0;overflow:auto;margin:0 18px;border:1px solid var(--tw-border);border-radius:8px;scrollbar-width:thin}
+.tw-ad-factor-table table{width:100%;border-collapse:collapse;font-size:12px;min-width:900px}
+.tw-ad-factor-table th,.tw-ad-factor-table td{padding:6px;border-bottom:1px solid var(--tw-border);text-align:right;white-space:nowrap}
+.tw-ad-factor-table th{position:sticky;top:0;background:var(--tw-card);color:var(--tw-muted);font-weight:500;z-index:1}
+.tw-ad-factor-table td.name,.tw-ad-factor-table th:first-child{text-align:left;position:sticky;left:0;background:var(--tw-card);z-index:1;border-right:1px solid var(--tw-border)}
+.tw-ad-factor-table td.name b{font-weight:600}
+.tw-ad-factor-table td.name .code{color:var(--tw-muted);font-family:var(--tw-mono);margin-left:4px}
+.tw-ad-factor-table td.name .sub2{display:block;color:var(--tw-muted);font-size:12px}
+.tw-ad-factor-foot{padding:10px 18px 14px;font-size:12px;color:var(--tw-muted)}
+@media (max-width:1100px){.tw-ad-factor{width:100vw}}
+@media (max-width:860px){.tw-ad-factor-chips{grid-template-columns:repeat(2,minmax(0,1fr))}}
+
 `
 
 let injected = false

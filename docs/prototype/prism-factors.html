@@ -1,0 +1,220 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>棱镜 · 因子库（设计稿 v2）</title>
+<style>
+  :root{
+    --bg:#f6f7f9; --card:#fff; --line:#e6e8ec; --text:#1f2329; --muted:#6b7280;
+    --up:#d64545; --down:#1a9c6b; --accent:#3b6ef6; --chip:#f1f3f7; --warn:#b7791f;
+    --font:12px/1.5 -apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);font:var(--font);overflow:hidden}
+  .app{max-width:1180px;margin:0 auto;padding:16px 20px}
+  .top{display:flex;align-items:center;gap:10px;margin-bottom:12px}
+  .brand{font-weight:700;font-size:14px}
+  .tabs{display:flex;gap:6px;margin-left:10px}
+  .tab{font-size:12px;padding:4px 10px;border-radius:999px;background:var(--chip);color:var(--muted)}
+  .tab.on{background:#e8efff;color:var(--accent);font-weight:600}
+  .tools{margin-left:auto;display:flex;gap:8px;align-items:center}
+  .btn{font:inherit;border:1px solid var(--line);background:#fff;border-radius:8px;padding:5px 10px;cursor:pointer}
+  .entry{display:inline-flex;align-items:center;gap:6px;border:1px solid #cdd9ff;background:#eef3ff;color:var(--accent);border-radius:8px;padding:5px 10px;font-weight:600}
+  .dot{width:7px;height:7px;border-radius:50%;background:var(--down)}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px 16px;margin-bottom:12px}
+  .card h2{font-size:13px;margin:0 0 10px}
+  table{width:100%;border-collapse:collapse;font-size:12px}
+  th,td{padding:6px;border-bottom:1px solid var(--line);text-align:right;white-space:nowrap}
+  th{color:var(--muted);font-weight:500}
+  th:first-child,td:first-child{text-align:left}
+  .muted{color:var(--muted)} .up{color:var(--up)} .down{color:var(--down)} .warn{color:var(--warn)}
+  .dim{filter:blur(1px);opacity:.45;pointer-events:none;user-select:none}
+
+  .backdrop{position:fixed;inset:0;background:rgba(20,24,35,.30);z-index:40}
+  .drawer{position:fixed;z-index:50;top:0;right:0;height:100vh;width:min(1080px,96vw);
+    background:#fff;box-shadow:-18px 0 48px rgba(16,24,40,.18);display:flex;flex-direction:column}
+  .d-head{display:flex;align-items:flex-start;gap:10px;padding:14px 18px;border-bottom:1px solid var(--line)}
+  .d-head h1{font-size:15px;margin:0}
+  .d-head .sub{font-size:12px;color:var(--muted);margin:3px 0 0}
+  .d-head .right{margin-left:auto;display:flex;align-items:center;gap:8px}
+  .icon{width:26px;height:26px;border-radius:6px;border:1px solid var(--line);background:#fff;cursor:pointer;line-height:24px;text-align:center}
+  .d-body{padding:12px 18px 16px;display:flex;flex-direction:column;gap:10px;min-height:0;flex:1 1 auto;overflow:hidden}
+  .chips{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px}
+  .chip{background:var(--chip);border-radius:8px;padding:7px 10px}
+  .chip .k{font-size:12px;color:var(--muted)}
+  .chip .v{font-size:14px;font-weight:600;margin-top:1px}
+  .chip .s{font-size:12px;color:var(--muted);margin-top:1px}
+  .bar{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+  .ftab{font-size:12px;padding:4px 10px;border-radius:999px;background:var(--chip);color:var(--muted);border:0;cursor:pointer}
+  .ftab.on{background:#e8efff;color:var(--accent);font-weight:600}
+  .search{margin-left:auto;border:1px solid var(--line);border-radius:8px;padding:5px 10px;font:inherit;color:var(--muted);width:190px}
+  .count{font-size:12px;color:var(--muted)}
+  .tablebox{flex:1 1 auto;min-height:0;overflow:auto;border:1px solid var(--line);border-radius:8px;scrollbar-width:thin}
+  table.factors{min-width:1050px}
+  table.factors th{position:sticky;top:0;background:#fafbfc;z-index:2}
+  table.factors td:first-child,table.factors th:first-child{position:sticky;left:0;background:#fff;z-index:1;min-width:170px;border-right:1px solid var(--line)}
+  table.factors tr.is-on td{background:#f4f7ff}
+  table.factors tr.is-on td:first-child{background:#f4f7ff}
+  .name b{font-weight:600}
+  .name .code{color:var(--muted);font-family:ui-monospace,SFMono-Regular,Menlo,monospace;margin-left:4px}
+  .name .sub2{display:block;color:var(--muted);margin-top:1px}
+  .tag{display:inline-block;padding:1px 6px;border-radius:999px;font-size:12px;background:var(--chip);color:var(--muted);margin-right:4px}
+  .tag.main{background:#e8efff;color:var(--accent)}
+  .tag.t{background:#fff3e2;color:#a16207}
+  .tag.only{background:#f3f4f6;color:var(--muted)}
+  .detail{display:grid;grid-template-columns:1.15fr .85fr;gap:12px;border:1px solid var(--line);border-radius:8px;padding:10px 12px;background:#fcfcfd}
+  .detail h3{margin:0 0 6px;font-size:12px;color:var(--muted)}
+  .kv{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:6px 10px}
+  .kv .k{color:var(--muted)} .kv .v{font-weight:600;font-variant-numeric:tabular-nums}
+  .use{font-size:12px;color:var(--dim);line-height:1.7}
+  .use b{color:var(--text)}
+  .opt{display:none}
+  table.factors th:nth-child(7),table.factors td:nth-child(7),table.factors th:nth-child(11),table.factors td:nth-child(11){display:none}
+  .picker{position:relative}
+  .picker .menu{position:absolute;top:28px;left:0;z-index:5;display:none;grid-template-columns:repeat(2,minmax(0,1fr));gap:4px 12px;background:#fff;border:1px solid var(--line);border-radius:8px;padding:10px 12px;box-shadow:0 10px 26px rgba(16,24,40,.16);width:300px}
+  .picker:hover .menu{display:grid}
+  .picker .menu label{display:flex;gap:5px;align-items:center;color:var(--text);font-size:12px}
+  .foot{display:flex;gap:12px;flex-wrap:wrap;font-size:12px;color:var(--muted);padding-top:2px}
+
+  @media (max-width:1000px){
+    .drawer{width:100vw}
+  }
+  @media (max-width:860px){
+    .chips{grid-template-columns:repeat(2,minmax(0,1fr))}
+    .detail{grid-template-columns:1fr}
+    .search{width:100%;margin-left:0}
+  }
+  @media (max-width:560px){
+    .d-body{padding:10px 12px}
+    .kv{grid-template-columns:repeat(2,minmax(0,1fr))}
+    table.factors{min-width:920px}
+  }
+</style>
+</head>
+<body>
+  <div class="app dim">
+    <div class="top">
+      <div class="brand">棱镜</div>
+      <div class="tabs"><span class="tab">决策流</span><span class="tab">持仓</span><span class="tab">绩效</span><span class="tab on">因子库</span></div>
+      <div class="tools"><button class="entry">因子库</button><button class="btn">自动做T</button><button class="btn">重放今日</button></div>
+    </div>
+    <div class="card"><h2>账户总览</h2><div class="muted">总资产 1 456 404.58 · 仓位 95.88% · 现金 60 000</div></div>
+    <div class="card"><h2>决策流</h2><div class="muted">本轮不买不卖：指数均线空头排列，量比 0.8，等待止损线或配置上限触发。</div></div>
+    <div class="card"><h2>持仓明细</h2><div class="muted">招商轮船 · 工商银行 · 沪深300ETF · 中证1000ETF …</div></div>
+  </div>
+
+  <div class="backdrop"></div>
+  <aside class="drawer" role="dialog" aria-modal="true" aria-label="因子库">
+    <header class="d-head">
+      <div>
+        <h1>因子库</h1>
+        <div class="sub">只提供因子事实，默认向决策流暴露；做T 受主决策管控，不在本页做用途筛选</div>
+      </div>
+      <div class="right">
+        <span class="tag main">t-gate-v2</span>
+        <button class="icon" title="关闭">×</button>
+      </div>
+    </header>
+
+    <div class="d-body">
+      <div class="chips">
+        <div class="chip"><div class="k">覆盖标的</div><div class="v">51</div><div class="s">持仓 11 · 自选 40</div></div>
+        <div class="chip"><div class="k">日线截止</div><div class="v">11-25</div><div class="s">只用已完成 bar · 前复权</div></div>
+        <div class="chip"><div class="k">因子版本</div><div class="v">factor-v1</div><div class="s">缓存 5 分钟</div></div>
+        <div class="chip"><div class="k">因子缺失</div><div class="v">2</div><div class="s">日K 不足 · 已写原因</div></div>
+      </div>
+
+      <div class="bar">
+        <button class="ftab on">全部 51</button>
+        <button class="ftab">持仓 11</button>
+        <button class="ftab">自选 40</button>
+        <div class="picker"><button class="ftab on">显示因子 9 / 12 ▾</button><div class="menu"><label><input type="checkbox" checked /> 收盘</label><label><input type="checkbox" checked /> ATR%</label><label><input type="checkbox" checked /> ATR分位</label><label><input type="checkbox" checked /> 日均振幅</label><label><input type="checkbox" checked /> MA20偏离</label><label><input type="checkbox" /> MA60偏离</label><label><input type="checkbox" checked /> RSI14</label><label><input type="checkbox" checked /> 20日位置</label><label><input type="checkbox" checked /> 5/20/60日</label><label><input type="checkbox" /> 趋势效率</label></div></div>
+        <input class="search" placeholder="搜索名称 / 代码" />
+        <span class="count">按「20日位置」降序</span>
+      </div>
+
+      <div class="tablebox">
+        <table class="factors">
+          <thead><tr>
+            <th>标的</th><th>收盘</th><th>ATR%</th><th>ATR分位</th><th>日均振幅</th>
+            <th>MA20偏离</th><th>MA60偏离</th><th>RSI14</th><th>20日位置</th><th>5/20/60日</th><th class="opt col-eff">趋势效率</th>
+          </tr></thead>
+          <tbody>
+            <tr class="is-on">
+              <td class="name"><b>招商轮船</b><span class="code">601872</span><span class="sub2">持仓 18 000 · 可卖 18 000</span></td>
+              <td>15.40</td><td>3.21%</td><td>82</td><td>4.12%</td><td class="down">−3.8%</td><td class="down">−6.1%</td><td>38</td><td>23</td><td class="down">−2.1 / −5.4 / −11.8%</td><td>31</td>
+            </tr>
+            <tr>
+              <td class="name"><b>工商银行</b><span class="code">601398</span><span class="sub2">持仓 22 000 · 可卖 22 000</span></td>
+              <td>9.19</td><td>0.84%</td><td>18</td><td>0.92%</td><td class="up">+1.2%</td><td class="up">+3.4%</td><td>63</td><td>77</td><td class="up">+0.6 / +2.1 / +4.8%</td><td>22</td>
+            </tr>
+            <tr>
+              <td class="name"><b>沪深300ETF华泰柏瑞</b><span class="code">510300</span><span class="sub2">持仓 93 800 · 可卖 75 800</span></td>
+              <td>4.21</td><td>1.04%</td><td>19</td><td>1.18%</td><td class="down">−0.9%</td><td class="down">−2.2%</td><td>44</td><td>41</td><td class="down">−0.4 / −1.1 / −3.0%</td><td>18</td>
+            </tr>
+            <tr>
+              <td class="name"><b>中证1000ETF广发</b><span class="code">560010</span><span class="sub2">持仓 89 990 · 可卖 89 990</span></td>
+              <td>2.31</td><td>1.62%</td><td>56</td><td>1.94%</td><td class="down">−1.4%</td><td class="down">−4.0%</td><td>41</td><td>36</td><td class="down">−0.8 / −2.6 / −6.2%</td><td>27</td>
+            </tr>
+            <tr>
+              <td class="name"><b>科创50ETF华夏</b><span class="code">588000</span><span class="sub2">持仓 50 000 · 可卖 50 000</span></td>
+              <td>1.25</td><td>1.88%</td><td>71</td><td>2.20%</td><td class="down">−2.0%</td><td class="down">−5.5%</td><td>36</td><td>29</td><td class="down">−1.2 / −3.9 / −8.4%</td><td>24</td>
+            </tr>
+            <tr>
+              <td class="name"><b>长江电力</b><span class="code">600900</span><span class="sub2">持仓 1 598 · 可卖 1 598</span></td>
+              <td>30.68</td><td>0.96%</td><td>24</td><td>1.05%</td><td class="up">+0.8%</td><td class="up">+2.7%</td><td>72</td><td>91</td><td class="up">+1.0 / +3.2 / +6.5%</td><td>44</td>
+            </tr>
+            <tr>
+              <td class="name"><b>30年国债ETF鹏扬</b><span class="code">511090</span><span class="sub2">持仓 1 000 · 可卖 800</span></td>
+              <td>121.63</td><td>0.58%</td><td>12</td><td>0.62%</td><td class="up">+0.3%</td><td class="up">+1.1%</td><td>58</td><td>63</td><td class="up">+0.1 / +0.5 / +1.8%</td><td>15</td>
+            </tr>
+            <tr>
+              <td class="name"><b>黄金ETF华安</b><span class="code">518880</span><span class="sub2">自选 · 未持仓</span></td>
+              <td>8.46</td><td>1.34%</td><td>47</td><td>1.41%</td><td class="up">+0.4%</td><td class="down">−1.0%</td><td>49</td><td>52</td><td class="up">+0.3 / +1.2 / −2.0%</td><td>20</td>
+            </tr>
+            <tr>
+              <td class="name"><b>中国海油</b><span class="code">600938</span><span class="sub2">自选 · 未持仓</span></td>
+              <td>30.50</td><td>1.72%</td><td>64</td><td>1.88%</td><td class="down">−0.7%</td><td class="down">−2.4%</td><td>45</td><td>38</td><td class="down">−0.5 / −1.8 / −4.1%</td><td>26</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="detail">
+        <div>
+          <h3>招商轮船 · 因子明细</h3>
+          <div class="kv">
+            <div><span class="k">ATR14</span> <span class="v">3.21%</span></div>
+            <div><span class="k">ATR分位120</span> <span class="v">82</span></div>
+            <div><span class="k">日均振幅20</span> <span class="v">4.12%</span></div>
+            <div><span class="k">一跳占比</span> <span class="v">0.065%</span></div>
+            <div><span class="k">MA20偏离</span> <span class="v down">−3.8%</span></div>
+            <div><span class="k">RSI14</span> <span class="v">38</span></div>
+            <div><span class="k">20日位置</span> <span class="v">23</span></div>
+            <div><span class="k">趋势效率20</span> <span class="v">31</span></div>
+            <div><span class="k">5日收益</span> <span class="v down">−2.1%</span></div>
+            <div><span class="k">20日收益</span> <span class="v down">−5.4%</span></div>
+            <div><span class="k">60日收益</span> <span class="v down">−11.8%</span></div>
+            <div><span class="k">数据截止</span> <span class="v">11-25 收盘</span></div>
+          </div>
+        </div>
+        <div class="use">
+          <h3>口径与来源</h3>
+          <div><b>日线</b>：前复权，只用已完成 bar；截止 11-25 收盘。</div>
+          <div><b>计算</b>：宿主引擎计算并缓存 5 分钟；前端不重算。</div>
+          <div><b>暴露</b>：因子表默认随每轮研判进入决策流；做T 是否执行由主决策管控。</div>
+          <div><b>不参与</b>：不评分、不排序、不生成买卖建议。</div>
+        </div>
+      </div>
+
+      <div class="foot">
+        <span>口径：前复权 · 只用已完成 bar · 缺数写 — + 原因</span>
+        <span>·</span>
+        <span>因子缓存 5 分钟；日线截止 11-25，盘中价格不进因子</span>
+        <span style="margin-left:auto">设计稿 v2 · 2026-11-26</span>
+      </div>
+    </div>
+  </aside>
+</body>
+</html>

@@ -379,6 +379,70 @@ function AutoTModal(props: {
     props.error === null ? null : React.createElement('div', { className: 'tw-ad-autot-err', role: 'alert' }, props.error))))
 }
 
+const FACTOR_COLS: Array<{ key: string; label: string; def: boolean }> = [
+  { key: 'lastClose', label: '收盘', def: true },
+  { key: 'atrPct', label: 'ATR%', def: true },
+  { key: 'atrRank120', label: 'ATR分位', def: true },
+  { key: 'amp20Pct', label: '日均振幅', def: true },
+  { key: 'distMa20Pct', label: 'MA20偏离', def: true },
+  { key: 'distMa60Pct', label: 'MA60偏离', def: false },
+  { key: 'rsi14', label: 'RSI14', def: true },
+  { key: 'pos20', label: '20日位置', def: true },
+  { key: 'ret', label: '5/20/60日', def: true },
+  { key: 'eff20', label: '趋势效率', def: false },
+]
+
+function FactorDrawer(props: {
+  open: boolean
+  rows: Array<Record<string, unknown>>
+  error: string | null
+  loading: boolean
+  cols: Set<string>
+  onToggle: (key: string) => void
+  onClose: () => void
+}): React.ReactElement | null {
+  if (!props.open) return null
+  const num = (v: unknown, d = 2): string => (typeof v === 'number' && Number.isFinite(v) ? v.toFixed(d) : '—')
+  const cell = (r: Record<string, unknown>, key: string): string => {
+    if (key === 'ret') return `${num(r['ret5'])} / ${num(r['ret20'])} / ${num(r['ret60'])}%`
+    if (key === 'pos20' || key === 'rsi14' || key === 'atrRank120' || key === 'eff20') return num(r[key], 0)
+    if (key === 'lastClose') return num(r[key], 2)
+    return `${num(r[key])}%`
+  }
+  return React.createElement('div', { className: 'tw-ad-factor-mask', onMouseDown: (e: React.MouseEvent) => { if (e.target === e.currentTarget) props.onClose() } },
+    React.createElement('section', { className: 'tw-ad-factor', role: 'dialog', 'aria-modal': 'true', 'aria-label': '因子库' },
+      React.createElement('header', { className: 'tw-ad-factor-head' },
+        React.createElement('div', null,
+          React.createElement('h2', null, '因子库'),
+          React.createElement('p', null, '只提供因子事实，默认进入决策流；做T 受主决策管控')),
+        React.createElement('div', { className: 'right' },
+          React.createElement('span', { className: 'tw-ad-tag is-blue' }, 'factor-v1'),
+          React.createElement('button', { type: 'button', className: 'tw-ad-autot-icon', title: '关闭', onClick: props.onClose }, '×'))),
+      React.createElement('div', { className: 'tw-ad-factor-chips' },
+        React.createElement('div', { className: 'chip' }, React.createElement('span', { className: 'k' }, '覆盖标的'), React.createElement('b', null, String(props.rows.length))),
+        React.createElement('div', { className: 'chip' }, React.createElement('span', { className: 'k' }, '日线截止'), React.createElement('b', null, String(props.rows[0]?.['asOf'] ?? '—'))),
+        React.createElement('div', { className: 'chip' }, React.createElement('span', { className: 'k' }, '缺失'), React.createElement('b', null, String(props.rows.filter((r) => r['missing'] != null).length)))),
+      React.createElement('div', { className: 'tw-ad-factor-bar' },
+        React.createElement('span', { className: 'muted' }, `显示因子 ${props.cols.size} / ${FACTOR_COLS.length}`),
+        React.createElement('div', { className: 'tw-ad-factor-picker' },
+          ...FACTOR_COLS.map((c) => React.createElement('label', { key: c.key },
+            React.createElement('input', { type: 'checkbox', checked: props.cols.has(c.key), onChange: () => props.onToggle(c.key) }), c.label)))),
+      props.error !== null
+        ? React.createElement('div', { className: 'tw-ad-empty' }, props.error)
+        : React.createElement('div', { className: 'tw-ad-factor-table' },
+            React.createElement('table', null,
+              React.createElement('thead', null, React.createElement('tr', null,
+                React.createElement('th', null, '标的'),
+                ...FACTOR_COLS.filter((c) => props.cols.has(c.key)).map((c) => React.createElement('th', { key: c.key }, c.label)))),
+              React.createElement('tbody', null, ...props.rows.map((r) => React.createElement('tr', { key: String(r['secid']) },
+                React.createElement('td', { className: 'name' },
+                  React.createElement('b', null, String(r['name'] ?? r['secid'])),
+                  React.createElement('span', { className: 'code' }, String(r['secid'])),
+                  r['held'] === true ? React.createElement('span', { className: 'sub2' }, '持仓') : null),
+                ...FACTOR_COLS.filter((c) => props.cols.has(c.key)).map((c) => React.createElement('td', { key: c.key, title: r['missing'] != null ? String(r['missing']) : undefined }, r['missing'] != null ? '—' : cell(r, c.key)))))))),
+      React.createElement('div', { className: 'tw-ad-factor-foot' }, '前复权 · 已完成 bar · 缺数 —+原因')))
+}
+
 export function PrismPage(props: { active?: boolean; redUp?: boolean } = {}): React.ReactElement {
   const redUp = props.redUp !== false
   const [state, setState] = React.useState<Awaited<ReturnType<typeof api.prismState>> | null>(null)
@@ -399,6 +463,10 @@ export function PrismPage(props: { active?: boolean; redUp?: boolean } = {}): Re
   const [helpOpen, setHelpOpen] = React.useState(false)
   /** 自动做T 弹窗：draft 只存逐只开关（关闭时脏值直接提交） */
   const [autoTOpen, setAutoTOpen] = React.useState(false)
+  const [factorOpen, setFactorOpen] = React.useState(false)
+  const [factorRows, setFactorRows] = React.useState<Array<Record<string, unknown>>>([])
+  const [factorErr, setFactorErr] = React.useState<string | null>(null)
+  const [factorCols, setFactorCols] = React.useState<Set<string>>(() => new Set(FACTOR_COLS.filter((c) => c.def).map((c) => c.key)))
   const [autoTMin, setAutoTMin] = React.useState(false)
   const [autoTDraft, setAutoTDraft] = React.useState<Record<string, boolean> | null>(null)
   const [autoTSaving, setAutoTSaving] = React.useState(false)
@@ -693,6 +761,14 @@ export function PrismPage(props: { active?: boolean; redUp?: boolean } = {}): Re
   const autoTEffective = { ...autoTSaved, ...(autoTDraft ?? {}) }
   const autoTEntryStatus = autoTEntryStatusOf(autoT)
   const autoTEntryTitle = autoTEntryTitleOf(autoT)
+  const loadFactors = React.useCallback(async (): Promise<void> => {
+    setFactorErr(null)
+    try {
+      const r = await api.prismFactors()
+      if (!r.ok) { setFactorErr(r.error ?? '因子库加载失败'); return }
+      setFactorRows(r.rows)
+    } catch (e) { setFactorErr((e as Error).message) }
+  }, [])
   const openAutoT = React.useCallback((): void => {
     setAutoTErr(null)
     setAutoTMin(false)
@@ -1039,6 +1115,11 @@ export function PrismPage(props: { active?: boolean; redUp?: boolean } = {}): Re
       React.createElement('h2', null, '决策流'),
       React.createElement('span', { className: 'tw-ad-flow-meta', 'data-role': 'ad-flow-meta' }, `只读 · ${flowCounts.all} 条留痕`),
       React.createElement('span', { className: 'tw-ad-sp' }),
+      // 「自动做T」左侧：因子库入口（大改原型已审核）
+      React.createElement('button', {
+        type: 'button', className: 'tw-ad-fchip', 'data-role': 'ad-factor-entry',
+        title: '查看因子库（因子仅提供事实，不生成买卖建议）', onClick: () => { setFactorOpen(true); void loadFactors() },
+      }, '因子库'),
       // 「重放今日」左侧：自动做T 入口（状态点 灰=关闭 / 绿=运行中 / 橙=有未完成 T 单）
       React.createElement('button', {
         type: 'button', className: `tw-ad-autot-entry is-${autoTEntryStatus}`,
@@ -1265,6 +1346,15 @@ export function PrismPage(props: { active?: boolean; redUp?: boolean } = {}): Re
       : React.createElement(Modal, { title: '移除持仓', onClose: () => setConfirmDel(null) },
           React.createElement('div', { className: 'tw-ad-empty' }, '确认移除该持仓？'),
           React.createElement('button', { className: 'tw-ad-primary', onClick: () => removePos(confirmDel), disabled: saving }, saving ? '保存中…' : '确认移除')),
+    React.createElement(FactorDrawer, {
+      open: factorOpen,
+      rows: factorRows,
+      error: factorErr,
+      loading: false,
+      cols: factorCols,
+      onToggle: (key: string) => setFactorCols((prev) => { const next = new Set(prev); if (next.has(key)) next.delete(key); else next.add(key); return next }),
+      onClose: () => setFactorOpen(false),
+    }),
     autoTOpen
       ? React.createElement(AutoTModal, {
           autoT,

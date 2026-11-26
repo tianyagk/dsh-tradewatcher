@@ -392,6 +392,34 @@ async function autoTContextOf(deps: PrismRouteDeps, account: PrismAccount): Prom
   return ['【自动做T·可计划标的】（只对这些持仓给 tPlans；ATR14 与 20 日振幅已算好，直接用）', ...lines].join('\n')
 }
 
+/** 因子库行数据（前端抽屉用）：持仓 + 自选，PIT 日线，5 分钟缓存 */
+let factorRowsCache: { key: string; at: number; rows: Array<Record<string, unknown>> } | null = null
+async function factorRowsOf(deps: PrismRouteDeps, watch: ReadonlyArray<{ secid: string; name: string }>): Promise<Array<Record<string, unknown>>> {
+  const account = deps.trading.account()
+  const held = account.positions.map((p) => ({ secid: p.secid, name: p.name, held: true }))
+  const seen = new Set(held.map((h) => h.secid))
+  const rest = watch.filter((w) => !seen.has(w.secid)).slice(0, 40).map((w) => ({ ...w, held: false }))
+  const list = [...held, ...rest].filter((x) => isValidSecid(x.secid))
+  const key = list.map((x) => `${x.secid}:${x.held ? 1 : 0}`).join(',')
+  if (factorRowsCache !== null && factorRowsCache.key === key && Date.now() - factorRowsCache.at < 5 * 60_000) return factorRowsCache.rows
+  const today = dayOf(Date.now())
+  const loadK = deps.kline ?? fetchKline
+  const rows = await Promise.all(list.map(async (x) => {
+    const base = { secid: x.secid, name: x.name, held: x.held, asOf: today }
+    try {
+      const k = await loadK(x.secid, 101, 140, 1)
+      const bars = (k?.days ?? []).filter((b) => b.date < today)
+      const m = factorMetricsOf(bars, /ETF|基金/i.test(x.name) ? 'etf' : 'stock')
+      if (m === null) return { ...base, missing: '无日K' }
+      return { ...base, ...m, missing: null }
+    } catch (e) {
+      return { ...base, missing: String((e as Error)?.message ?? e).slice(0, 40) }
+    }
+  }))
+  factorRowsCache = { key, at: Date.now(), rows }
+  return rows
+}
+
 /** 主决策因子表：持仓 + 自选，日线只用已完成 bar，现价来自行情摘要；5 分钟缓存 */
 let factorsCache: { key: string; at: number; text: string } | null = null
 async function factorsCachedOf(deps: PrismRouteDeps, watch: ReadonlyArray<{ secid: string; name: string }>): Promise<string> {
@@ -1129,6 +1157,12 @@ export function makePrismRoutes(deps: PrismRouteDeps): PluginWebRoute[] {
             await recordEquity(deps)
             if (slot !== 'manual') await store.markFired(dayOf(Date.now()), slot)
             send(res, 200, { ok: true, asOf: Date.now(), run, orders: deps.trading.orders() })
+            return
+          }
+          if (action === 'factors') {
+            const watch = deps.data.watchData().items
+            const rows = await factorRowsOf(deps, watch)
+            send(res, 200, { ok: true, rows, asOf: dayOf(Date.now()) })
             return
           }
           if (action === 'autoT') {
