@@ -260,6 +260,7 @@ export function autoTPayloadOf(
   store: { autoT: () => AutoTFile; settings: () => PrismSettings },
   account: PrismAccount,
   today: string,
+  orders: Array<{ pairId?: string; status: string }> = [],
   degraded = false,
 ): Record<string, unknown> {
   const file = store.autoT()
@@ -271,7 +272,12 @@ export function autoTPayloadOf(
     if (p.qty <= 0) continue
     positions[p.secid] = { enabled: cfg?.positions?.[p.secid]?.enabled === true, hold: true }
   }
-  const plans = file.plans.filter((p) => p.day === today)
+  const plans = file.plans.filter((p) => p.day === today).map((p) => {
+    // 委托已被撤/全部失败 ⇒ 计划如实显示 aborted，不把「等待」挂成僵尸
+    const pair = orders.filter((o) => o.pairId === p.pairId)
+    const alive = pair.some((o) => o.status === 'pending' || o.status === 'filled')
+    return pair.length > 0 && !alive && (p.status === 'waiting' || p.status === 'planned') ? { ...p, status: 'aborted' as const } : p
+  })
   const planIds = new Set(plans.map((p) => p.id))
   const trades = file.trades.filter((t) => planIds.has(t.planId))
   const results = file.results.filter((r) => r.day === today)
@@ -768,7 +774,7 @@ export function makePrismRoutes(deps: PrismRouteDeps): PluginWebRoute[] {
           const latestDecision = store.runs().at(-1)?.decision ?? null
           const tradingWithDecision = { ...trading, decision: latestDecision }
           const modelCatalog = await modelCatalogOf(deps.get)
-          const autoT = autoTPayloadOf(store, account, dayOf(Date.now()))
+          const autoT = autoTPayloadOf(store, account, dayOf(Date.now()), deps.trading.orders())
           // v0.202.0：AGENT DESK 六区块新增字段（只读追加，旧字段一个不删）
           const desk = prismDeskOf({
             account: accountView,
@@ -997,8 +1003,20 @@ export function makePrismRoutes(deps: PrismRouteDeps): PluginWebRoute[] {
             // 总状态由逐只开关派生（不单独暴露总开关）
             const enabled = Object.values(nextPositions).some((v) => v.enabled === true)
             await deps.store.patchSettings({ autoT: { enabled, positions: nextPositions } })
+            // 关闭某只 ⇒ 撤销它未成交的 T 腿（设计语义：关闭即停）
+            await deps.trading.runExclusive(async () => {
+              await deps.trading.reloadForWrite()
+              const orders = deps.trading.orders()
+              let changed = false
+              for (const o of orders) {
+                if (o.channel !== 'autoT' || o.status !== 'pending') continue
+                if (nextPositions[o.secid]?.enabled === true) continue
+                o.status = 'cancelled'; o.cancelledAt = Date.now(); o.cancelReason = '做T开关关闭'; changed = true
+              }
+              if (changed) await deps.trading.saveAll({ account: deps.trading.account(), orders, fills: deps.trading.fills() })
+            })
             const accountNow = deps.trading.account()
-            send(res, 200, { ok: true, autoT: autoTPayloadOf(deps.store, accountNow, dayOf(Date.now())) })
+            send(res, 200, { ok: true, autoT: autoTPayloadOf(deps.store, accountNow, dayOf(Date.now()), deps.trading.orders()) })
             return
           }
           if (action === 'cash') {
