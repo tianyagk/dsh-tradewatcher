@@ -94,7 +94,6 @@ const compileInput = (inputs: PrismInputs, withNews = true): string => {
     ...(inputs.candidates !== undefined && inputs.candidates.trim() !== '' ? [inputs.candidates] : []),
     ...(inputs.limits !== undefined && inputs.limits.trim() !== '' ? [inputs.limits] : []),
     ...(inputs.drawdown !== undefined && inputs.drawdown.trim() !== '' ? [inputs.drawdown] : []),
-    ...(inputs.autoT !== undefined && inputs.autoT.trim() !== '' ? [inputs.autoT] : []),
     '【真实账户持仓（只读参考 —— 禁止用于计算棱镜仓位/权重）】',
     inputs.positions || '—',
     // 同键 ETF 合并成一行：让模型看见「这两只是同一条腿」，不重复建仓
@@ -180,7 +179,7 @@ export async function runPrismAnalysis(
       model,
       [{
         role: 'user',
-        content: `${contextNoNews}\n\n【四路结论】\n${digest}\n\n【任务】把四路结论汇总成 5 条以内的要点，指出分歧与需要盯的变量。` +
+        content: `${contextNoNews}\n\n${inputs.autoT !== undefined && inputs.autoT.trim() !== '' ? inputs.autoT + '\n\n' : ''}【四路结论】\n${digest}\n\n【任务】把四路结论汇总成 5 条以内的要点，指出分歧与需要盯的变量。` +
           '\n必须依据【账户快照】计算仓位上限；正常应当给出 singlePct/totalPct，确实无法计算时才用 null 并在 limits.note 说明原因。' +
           '\n【强制·风险暴露】必须先判断是否需要降低风险暴露（减仓/止损/清仓），给出结论与理由；若判断不减，必须写明为什么满仓是合理的。' +
           '\n【强制·双侧】orders 允许卖单，卖单字段同样是 {secid, side:\'sell\', price, shares, reason}；不能只考虑买入侧。' +
