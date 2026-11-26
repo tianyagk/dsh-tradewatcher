@@ -1937,6 +1937,19 @@ async function matchTickLocked(
       const buy = pair.find((o) => o.side === 'buy')
       const sell = pair.find((o) => o.side === 'sell')
       if (buy === undefined || sell === undefined) continue
+      // 逐腿写 trades（含部分成交），供弹窗「今日流水」与对账使用
+      for (const legOrder of [buy, sell]) {
+        if ((legOrder.filledShares ?? 0) <= 0) continue
+        for (const f of fills.filter((x) => x.orderId === legOrder.id)) {
+          const id = `${legOrder.id}-${f.at}-${f.shares}`
+          if (!file.trades.some((t) => t.id === id)) {
+            file.trades.push({ id, planId: plan.id, secid: plan.secid, side: f.side, shares: f.shares, price: f.price, at: f.at, leg: legOrder.leg ?? 'open', forced: false })
+            changed = true
+          }
+        }
+      }
+      if ((buy.filledShares ?? 0) > 0 && buy.status !== 'filled') { plan.status = 'open-filled'; changed = true }
+      if ((sell.filledShares ?? 0) > 0 && sell.status !== 'filled') { plan.status = 'open-filled'; changed = true }
       if (buy.status === 'filled' && sell.status === 'filled') {
         const sumOf = (id: string, key: 'amount' | 'fee'): number => fills.filter((f) => f.orderId === id).reduce((a, f) => a + f[key], 0)
         const net = Math.round((sumOf(sell.id, 'amount') - sumOf(buy.id, 'amount') - sumOf(buy.id, 'fee') - sumOf(sell.id, 'fee')) * 100) / 100

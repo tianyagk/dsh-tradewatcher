@@ -610,6 +610,10 @@ async function placeAutoTPairs(deps: PrismRouteDeps, run: PrismRun): Promise<voi
   const plans = run.decision.tPlans ?? []
   const anyOn = Object.values(cfg?.positions ?? {}).some((v) => v?.enabled === true)
   if (!anyOn) return
+  // 风控联动：闸门触发 / 主决策减仓同标的 ⇒ 不新挂 T，并撤掉该标的未成交腿
+  const blocked = new Set<string>()
+  if (run.drawdown?.triggered === true) blocked.add('*')
+  for (const o of run.decision.orders) if (o.side === 'sell') blocked.add(o.secid)
   const day = dayOf(Date.now())
   const deadline = Date.parse(`${day}T14:50:00+08:00`)
   if (!(Date.now() < deadline)) return
@@ -631,6 +635,7 @@ async function placeAutoTPairs(deps: PrismRouteDeps, run: PrismRun): Promise<voi
       cur.orders.push(o)
       pairs.set(key, cur)
     }
+    const file0 = await deps.trading.autoT()
     const keep = new Set<string>()
     const protectedSecids = new Set<string>()
     for (const [pairId, v] of pairs) {
@@ -642,7 +647,12 @@ async function placeAutoTPairs(deps: PrismRouteDeps, run: PrismRun): Promise<voi
       if (seen.has(plan.secid)) continue
       seen.add(plan.secid)
       if (cfg.positions?.[plan.secid]?.enabled !== true) continue
+      if (blocked.has('*') || blocked.has(plan.secid)) continue
       if (protectedSecids.has(plan.secid)) continue
+      // 每日轮次上限：完成 + 未完成计划合计 ≥2 不再新挂
+      const used = file0.results.filter((r) => r.secid === plan.secid && r.day === day).length +
+        file0.plans.filter((p) => p.secid === plan.secid && p.day === day && (p.status === 'waiting' || p.status === 'planned')).length
+      if (used >= 2) continue
       const pos = account.positions.find((p) => p.secid === plan.secid)
       if (pos === undefined) continue
       const cap = Math.min(pos.available, Math.floor((pos.qty * 0.2) / 100) * 100, plan.shares)
@@ -661,10 +671,10 @@ async function placeAutoTPairs(deps: PrismRouteDeps, run: PrismRun): Promise<voi
     const killed = new Set<string>()
     for (const [pairId, v] of pairs) {
       if (keep.has(pairId)) continue
+      if (blocked.size > 0) { /* 风控/减仓冲突：一并撤 */ }
       for (const o of v.orders) { o.status = 'cancelled'; o.cancelledAt = Date.now(); o.cancelReason = '每轮重审计：计划变更或本轮不计划' }
       killed.add(pairId)
     }
-    const file0 = await deps.trading.autoT()
     const plansNext = file0.plans.map((p) => killed.has(String(p.pairId)) && (p.status === 'waiting' || p.status === 'planned') ? { ...p, status: 'aborted' as const } : p)
     await deps.trading.saveAll({ account, orders, fills })
     await deps.trading.saveAutoT({ ...file0, plans: [...plansNext, ...records] })
