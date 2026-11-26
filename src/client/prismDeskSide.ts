@@ -319,6 +319,8 @@ export interface AutoTPlan {
   observe: string | null
   reasoning: string | null
   conclusion: string | null
+  /** 计划生成时刻（取最新计划用） */
+  at: number | null
 }
 
 export interface AutoTTrade {
@@ -378,6 +380,7 @@ function planOf(v: unknown): AutoTPlan | null {
     observe: textOf(o.observe),
     reasoning: textOf(o.reasoning),
     conclusion: textOf(o.conclusion),
+    at: finite(o.at as number),
   }
 }
 
@@ -576,17 +579,20 @@ export function autoTPillTextOf(a: PrismAutoT | null): string {
   return `自动做T · ${rounds === '—' ? '—' : `${rounds} 轮`} · ${profit}`
 }
 
-/** 该标的今日计划：优先取未中止的计划，没有则回退最后一条 */
+/** 取最新一条（按 at 倒序；缺 at 视为最旧） */
+const newestPlanOf = (list: readonly AutoTPlan[]): AutoTPlan | null =>
+  list.length === 0 ? null : [...list].sort((x, y) => (y.at ?? 0) - (x.at ?? 0)).find((p) => p.status !== 'aborted') ?? [...list].sort((x, y) => (y.at ?? 0) - (x.at ?? 0))[0] ?? null
+
+/** 该标的今日计划：取最新的未中止计划，没有则最新一条 */
 export function autoTPlanOf(a: PrismAutoT | null, secid: string): AutoTPlan | null {
   if (a === null) return null
-  const list = a.today.plans.filter((p) => p.secid === secid)
-  return list.find((p) => p.status !== 'aborted') ?? list[list.length - 1] ?? null
+  return newestPlanOf(a.today.plans.filter((p) => p.secid === secid))
 }
 
-/** 弹窗左下「Agent 判断」面板选中的计划：第一条未中止的计划（没有则第一条） */
+/** 弹窗左下「Agent 判断」面板选中的计划：最新一条未中止计划 */
 export function autoTFocusPlanOf(a: PrismAutoT | null): AutoTPlan | null {
   if (a === null) return null
-  return a.today.plans.find((p) => p.status !== 'aborted') ?? a.today.plans[0] ?? null
+  return newestPlanOf(a.today.plans)
 }
 
 export interface AutoTJudgeView { text: string; muted: boolean; title: string; plan: AutoTPlan | null; direction: string | null }

@@ -658,13 +658,15 @@ async function placeAutoTPairs(deps: PrismRouteDeps, run: PrismRun): Promise<voi
       const cap = Math.min(pos.available, Math.floor((pos.qty * 0.2) / 100) * 100, plan.shares)
       if (cap < 100) continue
       if ((plan.sellPrice / plan.buyPrice - 1) * 100 < 1.2) continue
-      const same = [...pairs.entries()].find(([, v]) => v.secid === plan.secid && v.buyPrice === plan.buyPrice && v.sellPrice === plan.sellPrice && v.shares === cap)
+      const openSide: 'buy' | 'sell' = plan.direction === 'sell-first' ? 'sell' : 'buy'
+      const openPrice = openSide === 'buy' ? plan.buyPrice : plan.sellPrice
+      const same = [...pairs.entries()].find(([, v]) => v.secid === plan.secid && v.shares === cap && v.orders.some((o) => o.side === openSide && o.price === openPrice && o.leg === 'open'))
       if (same !== undefined) { keep.add(same[0]); continue }
       const pairId = `T-${day.replace(/-/g, '')}-${plan.secid}-${Date.now().toString(36)}`
       const at = Date.now()
+      // 只挂第一腿：正T 先买、反T 先卖；第二腿在成交后由撮合创建（避免同时挂造成裸敞口）
       orders.push(
-        { id: `${pairId}-buy`, secid: plan.secid, name: pos.name, side: 'buy', price: plan.buyPrice, shares: cap, reason: '自动做T·买入腿', decidedAt: at, day, status: 'pending', channel: 'autoT', tPlanId: pairId, pairId, leg: 'open', expireAt: deadline },
-        { id: `${pairId}-sell`, secid: plan.secid, name: pos.name, side: 'sell', price: plan.sellPrice, shares: cap, reason: '自动做T·卖出腿', decidedAt: at, day, status: 'pending', channel: 'autoT', tPlanId: pairId, pairId, leg: 'close', expireAt: deadline },
+        { id: `${pairId}-${openSide}`, secid: plan.secid, name: pos.name, side: openSide, price: openPrice, shares: cap, reason: `自动做T·${openSide === 'buy' ? '买入' : '卖出'}腿`, decidedAt: at, day, status: 'pending', channel: 'autoT', tPlanId: pairId, pairId, leg: 'open', expireAt: deadline },
       )
       records.push({ id: pairId, secid: plan.secid, name: pos.name, day, direction: plan.direction, buyPrice: plan.buyPrice, sellPrice: plan.sellPrice, shares: cap, status: 'waiting', observe: plan.observe ?? null, reasoning: plan.reasoning ?? null, conclusion: plan.conclusion ?? null, pairId, at })
     }

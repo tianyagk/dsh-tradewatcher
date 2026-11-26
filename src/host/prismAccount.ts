@@ -1933,7 +1933,32 @@ async function matchTickLocked(
     for (const plan of file.plans) {
       if (plan.status === 'done' || plan.status === 'aborted') continue
       const pair = orders.filter((o) => o.pairId === plan.pairId)
-      if (pair.length < 2) continue
+      if (pair.length < 2) {
+        // 只挂了第一腿：成交后创建第二腿；到截止仍未成交则撤单作废
+        const open = pair[0]
+        if (open === undefined) continue
+        const filled = open.filledShares ?? 0
+        const deadline = open.expireAt ?? 0
+        if (filled > 0) {
+          const closeSide: 'buy' | 'sell' = open.side === 'buy' ? 'sell' : 'buy'
+          const closePrice = closeSide === 'sell' ? plan.sellPrice : plan.buyPrice
+          const closeId = `${plan.id}-close`
+          if (closePrice !== null && !orders.some((o) => o.id === closeId)) {
+            orders.push({
+              id: closeId, secid: plan.secid, name: plan.name, side: closeSide, price: closePrice, shares: filled,
+              reason: `自动做T·${closeSide === 'buy' ? '买入' : '卖出'}腿`, decidedAt: now, day, status: 'pending',
+              channel: 'autoT', tPlanId: plan.id, pairId: plan.pairId, leg: 'close', expireAt: deadline,
+            })
+            plan.status = 'open-filled'
+            changed = true
+          }
+        } else if (deadline > 0 && now >= deadline) {
+          open.status = 'cancelled'; open.cancelledAt = now; open.cancelReason = '自动做T截止（未成交）'
+          plan.status = 'aborted'
+          changed = true
+        }
+        continue
+      }
       const buy = pair.find((o) => o.side === 'buy')
       const sell = pair.find((o) => o.side === 'sell')
       if (buy === undefined || sell === undefined) continue
