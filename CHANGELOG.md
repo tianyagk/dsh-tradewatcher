@@ -11,6 +11,20 @@
 
 ---
 
+## v0.244.0 — 自动做T 审计首批修复（P0×2 + 单账本）
+
+`npm run check` **2062 / 2062 × 2 时区** + build（73 项）+ `tsc` 0。
+新增审计：`docs/AUDIT-AUTOT-HOST.md`（24 条：P0 3 / P1 10 / P2 11）。
+
+| # | 问题 | 修法 |
+| --- | --- | --- |
+| 1 | P0 一腿成交后，下一轮重审计把它当“计划变更”撤掉回补腿 ⇒ 净持仓永久偏离 | 收集 pair 时包含已成交/部分成交腿；有成交的 pair **锁定保留**，本轮不再替换 |
+| 2 | P0 14:50 强制回补按 `plan.shares` 全量平仓 ⇒ 部分成交时过度平仓 | 改为按 `买入已成交 − 卖出已成交` 的**净差额**回补 |
+| 3 | P0 autoT 双缓存：GET 读 PrismStore 内存、撮合写磁盘，下一轮旧内存覆盖 | 单一 owner：`autoTPayloadOf` 与 `placeAutoTPairs` 统一走 `PrismTradingStore.autoT()/saveAutoT()`（每次读盘） |
+| 4 | 决策流长「依据」文本溢出卡片被裁切 | `.tw-ad-ev-r .v` 强制块级换行 + `is-clamp` 4 行，`.tw-ad-ev-vw` 撑满列宽 |
+
+### 尚未修（审计剩余）
+P1：闸门/止损/减仓不联动撤 T、无每日轮次上限、强制回补失败无 forced-fail、autoT 与三账本非原子写、sell-first 未真正先卖后买、tPlans 缺失被当空数组等。
 ## v0.243.2 — 做T 去重：同标的每轮只留一对；同参数不重挂
 
 `npm run check` **2062 / 2062 × 2 时区** + build（73 项）+ `tsc` 0。

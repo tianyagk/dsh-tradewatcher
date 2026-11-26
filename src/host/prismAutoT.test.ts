@@ -15,15 +15,13 @@ test('① tPlans 解析：合法项保留，非法（价差倒挂/非整手/负�
 })
 
 test('② 回包统计：次数/收益/胜率/有效成本（无结果 ⇒ null 不写 0）', () => {
-  const store = {
-    autoT: () => ({ plans: [], trades: [], results: [
+  const file = { plans: [], trades: [], results: [
       { id: 'r1', planId: 'p1', secid: '1.601872', day: '2026-11-25', buyPrice: 15.2, sellPrice: 15.45, shares: 500, fees: 12.6, net: 112.3, at: 1 },
       { id: 'r2', planId: 'p2', secid: '1.601872', day: '2026-11-25', buyPrice: 15.3, sellPrice: 15.2, shares: 500, fees: 12.6, net: -62.6, at: 2 },
-    ] }),
-    settings: () => ({ autoT: { enabled: true, positions: { '1.601872': { enabled: true } } } }),
-  } as never
+    ] } as never
+  const settings = { autoT: { enabled: true, positions: { '1.601872': { enabled: true } } } } as never
   const account = { positions: [{ secid: '1.601872', name: '招商轮船', qty: 1000, available: 1000, cost: 18.21 }] } as never
-  const p = autoTPayloadOf(store, account, '2026-11-25') as { stats: { rounds: number; profit: number; winRate: number; n: number }; effectiveCost: Record<string, number> }
+  const p = autoTPayloadOf(file, settings, account, '2026-11-25', []) as { stats: { rounds: number; profit: number; winRate: number; n: number }; effectiveCost: Record<string, number> }
   assert.equal(p.stats.rounds, 2)
   assert.ok(Math.abs(p.stats.profit - 49.7) < 0.01, `profit=${p.stats.profit}`)
   assert.equal(p.stats.winRate, 50)

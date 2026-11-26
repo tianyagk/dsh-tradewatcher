@@ -257,14 +257,14 @@ async function indexTechCachedOf(): Promise<string> {
 
 /** 自动做T 回包：计划/成交/结算 → 界面结构（缺数据一律 null，不编 0） */
 export function autoTPayloadOf(
-  store: { autoT: () => AutoTFile; settings: () => PrismSettings },
+  file: AutoTFile,
+  settings: PrismSettings,
   account: PrismAccount,
   today: string,
   orders: Array<{ pairId?: string; status: string }> = [],
   degraded = false,
 ): Record<string, unknown> {
-  const file = store.autoT()
-  const cfg = store.settings().autoT
+  const cfg = settings.autoT
   // 没有总开关：只要任意一只持仓开启做T，整体即视为运行（v2 设计：人类只开关仓位）
   const enabled = Object.values(cfg?.positions ?? {}).some((v) => v?.enabled === true)
   const positions: Record<string, { enabled: boolean; hold: boolean }> = {}
@@ -621,7 +621,9 @@ async function placeAutoTPairs(deps: PrismRouteDeps, run: PrismRun): Promise<voi
     // 每轮重审计：同参数的旧腿保留；变了的/本轮没有的旧腿撤销（避免重复挂单与无谓撤单噪音）
     const pairs = new Map<string, { secid: string; buyPrice: number; sellPrice: number; shares: number; orders: typeof orders }>()
     for (const o of orders) {
-      if (o.channel !== 'autoT' || o.status !== 'pending') continue
+      if (o.channel !== 'autoT') continue
+      // 已成交（含部分）的腿也要收进来：有成交的 pair 绝不能撤，否则回补腿会丢
+      if (o.status !== 'pending' && !((o.filledShares ?? 0) > 0)) continue
       const key = String(o.pairId)
       const cur = pairs.get(key) ?? { secid: o.secid, buyPrice: 0, sellPrice: 0, shares: o.shares, orders: [] }
       if (o.side === 'buy') cur.buyPrice = o.price
@@ -630,12 +632,17 @@ async function placeAutoTPairs(deps: PrismRouteDeps, run: PrismRun): Promise<voi
       pairs.set(key, cur)
     }
     const keep = new Set<string>()
+    const protectedSecids = new Set<string>()
+    for (const [pairId, v] of pairs) {
+      if (v.orders.some((o) => (o.filledShares ?? 0) > 0)) { keep.add(pairId); protectedSecids.add(v.secid) }
+    }
     const seen = new Set<string>()
     const records: AutoTPlanRec[] = []
     for (const plan of plans) {
       if (seen.has(plan.secid)) continue
       seen.add(plan.secid)
       if (cfg.positions?.[plan.secid]?.enabled !== true) continue
+      if (protectedSecids.has(plan.secid)) continue
       const pos = account.positions.find((p) => p.secid === plan.secid)
       if (pos === undefined) continue
       const cap = Math.min(pos.available, Math.floor((pos.qty * 0.2) / 100) * 100, plan.shares)
@@ -657,10 +664,10 @@ async function placeAutoTPairs(deps: PrismRouteDeps, run: PrismRun): Promise<voi
       for (const o of v.orders) { o.status = 'cancelled'; o.cancelledAt = Date.now(); o.cancelReason = '每轮重审计：计划变更或本轮不计划' }
       killed.add(pairId)
     }
-    const file0 = deps.store.autoT()
+    const file0 = await deps.trading.autoT()
     const plansNext = file0.plans.map((p) => killed.has(String(p.pairId)) && (p.status === 'waiting' || p.status === 'planned') ? { ...p, status: 'aborted' as const } : p)
     await deps.trading.saveAll({ account, orders, fills })
-    await deps.store.saveAutoT({ ...file0, plans: [...plansNext, ...records] })
+    await deps.trading.saveAutoT({ ...file0, plans: [...plansNext, ...records] })
   })
 }
 
@@ -797,7 +804,7 @@ export function makePrismRoutes(deps: PrismRouteDeps): PluginWebRoute[] {
           const latestDecision = store.runs().at(-1)?.decision ?? null
           const tradingWithDecision = { ...trading, decision: latestDecision }
           const modelCatalog = await modelCatalogOf(deps.get)
-          const autoT = autoTPayloadOf(store, account, dayOf(Date.now()), deps.trading.orders())
+          const autoT = autoTPayloadOf(await deps.trading.autoT(), store.settings(), account, dayOf(Date.now()), deps.trading.orders())
           // v0.202.0：AGENT DESK 六区块新增字段（只读追加，旧字段一个不删）
           const desk = prismDeskOf({
             account: accountView,
@@ -1039,7 +1046,7 @@ export function makePrismRoutes(deps: PrismRouteDeps): PluginWebRoute[] {
               if (changed) await deps.trading.saveAll({ account: deps.trading.account(), orders, fills: deps.trading.fills() })
             })
             const accountNow = deps.trading.account()
-            send(res, 200, { ok: true, autoT: autoTPayloadOf(deps.store, accountNow, dayOf(Date.now()), deps.trading.orders()) })
+            send(res, 200, { ok: true, autoT: autoTPayloadOf(await deps.trading.autoT(), deps.store.settings(), accountNow, dayOf(Date.now()), deps.trading.orders()) })
             return
           }
           if (action === 'cash') {

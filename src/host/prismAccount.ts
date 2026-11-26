@@ -1952,17 +1952,22 @@ async function matchTickLocked(
       }
       const deadline = Math.max(...pair.map((o) => o.expireAt ?? 0))
       if (deadline > 0 && now >= deadline) {
-        const filledLeg = pair.find((o) => o.status === 'filled' || (o.filledShares ?? 0) > 0)
+        const buyLeg = pair.find((o) => o.side === 'buy')
+        const sellLeg = pair.find((o) => o.side === 'sell')
+        const buyFilled = buyLeg?.filledShares ?? 0
+        const sellFilled = sellLeg?.filledShares ?? 0
         for (const o of pair) if (o.status === 'pending') { o.status = 'cancelled'; o.cancelledAt = now; o.cancelReason = '自动做T截止' }
-        if (filledLeg !== undefined) {
-          // 已成交一腿：按现价强制平掉，保证收盘净持仓不变（失败也会体现在净收益里）
+        // 只回补「净差额」：买成交 − 卖成交；部分成交不会过度平仓（审计 #2）
+        const delta = buyFilled - sellFilled
+        if (delta !== 0) {
           const q = await deps.quotes([plan.secid]).catch(() => ({}))
           const px = q[plan.secid]?.price
           if (typeof px === 'number' && Number.isFinite(px) && px > 0) {
-            const side: 'buy' | 'sell' = filledLeg.side === 'buy' ? 'sell' : 'buy'
-            const fee = feesOf(side, px, plan.shares, 0, 0, /ETF/i.test(plan.name)).total
-            const fill = { orderId: `${plan.id}-forced`, secid: plan.secid, name: plan.name, side, price: px, shares: plan.shares, amount: Math.round(px * plan.shares * 100) / 100, fee, at: now, source: '1min' as const }
-            account = applyFill(account, { ...filledLeg, id: `${plan.id}-forced`, side, price: px, shares: plan.shares, status: 'pending', day }, fill)
+            const side: 'buy' | 'sell' = delta > 0 ? 'sell' : 'buy'
+            const shares = Math.abs(delta)
+            const fee = feesOf(side, px, shares, 0, 0, /ETF/i.test(plan.name)).total
+            const fill = { orderId: `${plan.id}-forced`, secid: plan.secid, name: plan.name, side, price: px, shares, amount: Math.round(px * shares * 100) / 100, fee, at: now, source: '1min' as const }
+            account = applyFill(account, { ...(buyLeg ?? sellLeg)!, id: `${plan.id}-forced`, side, price: px, shares, status: 'pending', day }, fill)
             fills.push(fill)
           }
         }
