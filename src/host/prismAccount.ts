@@ -39,7 +39,7 @@ import { dataHome } from './store.ts'
 import { LockTimeoutError, readJsonForUpdate, updateJsonLocked, withFileLocks } from './lock.ts'
 import { ReadGuard, isFirstBoot, quarantineFile } from './readGuard.ts'
 import { dayOf, hhmmOf } from './time.ts'
-import type { AutoTFile, AutoTResultRec } from './prismStore.ts'
+import type { AutoTFile, AutoTResultRec, AutoTTradeRec } from './prismStore.ts'
 import { withHostBreaker } from './breakerFetch.ts'
 import { writeFileAtomic, writeFileSetAtomic, type AtomicFileSetEntry } from './atomic.ts'
 
@@ -997,7 +997,17 @@ export class PrismTradingStore {
   }
 
   async saveAutoT(next: AutoTFile): Promise<void> {
-    await updateJsonLocked(this.pathOf('prism-autot.json'), () => ({ v: 1, ...next })).catch(() => undefined)
+    // 保留上限：30 天 + 每类最多 1000 条，防止 prism-autot.json 无限膨胀（审计 #20）
+    const cutoff = dayOf(Date.now() - 30 * 86_400_000)
+    const trim = <T extends { day?: string; at?: number }>(list: T[] | undefined, cap: number): T[] =>
+      (list ?? []).filter((x) => (x.day ?? dayOf(x.at ?? 0)) >= cutoff).slice(-cap)
+    const capped: AutoTFile = {
+      plans: trim(next.plans, 1000),
+      trades: trim(next.trades as Array<AutoTTradeRec & { day?: string }>, 1000) as AutoTTradeRec[],
+      results: trim(next.results, 1000),
+      recons: trim(next.recons, 1000),
+    }
+    await updateJsonLocked(this.pathOf('prism-autot.json'), () => ({ v: 1, ...capped })).catch(() => undefined)
   }
 
   async saveEquity(points: PrismEquityPoint[]): Promise<void> {

@@ -11,6 +11,15 @@
 
 ---
 
+## v0.253.0 — 因子日志 + autoT 保留上限 + U3 空态
+
+`npm run check` **2067 / 2067 × 2 时区** + build（73 项）+ `tsc` 0。
+
+| 项 | 修法 |
+| --- | --- |
+| 因子日志 | 新增 `src/host/prismFactorLog.ts`：`prism-factor/<day>.jsonl`，每次 gate 记录 secid/因子/gate 结果/版本；30 天滚动清理；写失败不影响交易 |
+| 审计 #20 | `saveAutoT` 保留 30 天 + 每类最多 1000 条，防止文件无限膨胀 |
+| U3 | 左面板空态 `—（今日无计划：N 只条件不足）`，不再笼统 |
 ## v0.252.0 — 做T 门槛结果进 payload + 弹窗三处文案（PRD U1/U2/N-1/N-3）
 
 `npm run check` **2067 / 2067 × 2 时区** + build（73 项）+ `tsc` 0。

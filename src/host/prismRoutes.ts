@@ -27,6 +27,7 @@ import { fetchIndustryOverview, fetchKline, fetchQuotes, fetchValuationBatch } f
 import { atrFromBars } from './atr.ts'
 import { factorMetricsOf } from './prismFactors.ts'
 import { AUTO_T_RULES, evaluateAutoT } from './prismGates.ts'
+import { appendFactorLog, pruneFactorLogs, type FactorLogEntry } from './prismFactorLog.ts'
 import { assemblePortfolio } from './portfolio.ts'
 import { industryExposureOf, needsIndustryOf, unavailableExposure } from './prismExposure.ts'
 import { applyDrawdownGate, drawdownGateOf, evaluationOf, EVAL_MIN_SAMPLE } from './prismEval.ts'
@@ -642,6 +643,7 @@ async function placeAutoTPairs(deps: PrismRouteDeps, run: PrismRun): Promise<voi
   const day = dayOf(Date.now())
   const deadline = Date.parse(`${day}T14:50:00+08:00`)
   if (!(Date.now() < deadline)) return
+  const factorLogs: FactorLogEntry[] = []
   await deps.trading.runExclusive(async () => {
     await deps.trading.reloadForWrite()
     const account = deps.trading.account()
@@ -693,10 +695,15 @@ async function placeAutoTPairs(deps: PrismRouteDeps, run: PrismRun): Promise<voi
         const gate = evaluateAutoT({
           metrics, buyPrice: plan.buyPrice, sellPrice: plan.sellPrice, shares: cap, direction: plan.direction,
           cash: account.cash, available: pos.available, positionQty: pos.qty,
-          pendingShares: 0, nowHHMM: Number(new Date().toTimeString().slice(0, 5).replace(':', '')),
+          pendingShares: 0, nowHHMM: Number(hhmmOf(Date.now()).replace(':', '')),
         })
         gateResult = gate
         gateOk = gate.ok
+        factorLogs.push({
+          at: Date.now(), day, version: AUTO_T_RULES.version, secid: plan.secid, name: pos.name, cutoff: day,
+          gate: { code: gate.code, detail: gate.detail, spreadPct: gate.spreadPct, netYuan: gate.netYuan },
+          factors: { atrPct: metrics?.atrPct ?? null, atrRank120: metrics?.atrRank120 ?? null, amp20Pct: metrics?.amp20Pct ?? null, tickPct: metrics?.tickPct ?? null, bars: metrics?.bars ?? 0 },
+        })
         if (!gate.ok) {
           records.push({ id: `T-${day.replace(/-/g, '')}-${plan.secid}-${Date.now().toString(36)}`, secid: plan.secid, name: pos.name, day, direction: plan.direction, buyPrice: plan.buyPrice, sellPrice: plan.sellPrice, shares: 0, status: 'aborted', observe: plan.observe ?? null, reasoning: plan.reasoning ?? null, conclusion: plan.conclusion ?? null, gateCode: gate.code ?? 'unknown', gateDetail: gate.detail, gateVersion: AUTO_T_RULES.version, spreadPct: gate.spreadPct, netYuan: gate.netYuan, at: Date.now() })
         }
@@ -725,6 +732,10 @@ async function placeAutoTPairs(deps: PrismRouteDeps, run: PrismRun): Promise<voi
     await deps.trading.saveAll({ account, orders, fills })
     await deps.trading.saveAutoT({ ...file0, plans: [...plansNext, ...records] })
   })
+  // 因子日志：只记录，失败不影响交易
+  const logDir = `${dataHome()}/prism-factor`
+  for (const entry of factorLogs) await appendFactorLog(logDir, entry)
+  if (factorLogs.length > 0) await pruneFactorLogs(logDir)
 }
 
 /** 主决策费用门槛：少而准确——成交额 ≥5000 元且单边费用 ≤0.2%，否则拒绝并留原因 */

@@ -631,6 +631,13 @@ export function autoTJudgeOf(a: PrismAutoT | null, secid: string): AutoTJudgeVie
 
 export interface AutoTResultView { label: string; tone: AutoTResultTone; title: string }
 
+/** 左面板空态：说明有几只被门槛挡住，而不是笼统「今日无计划」 */
+export function autoTEmptyTextOf(a: PrismAutoT | null): string {
+  if (a === null) return '—（自动做T 未启用）'
+  const bad = a.today.plans.filter((p) => p.gateCode !== null && p.gateCode !== 'ok').length
+  return bad > 0 ? `—（今日无计划：${bad} 只条件不足）` : '—（今日无计划）'
+}
+
 /** 计划结果徽标（只描述状态；金额在页面按成交腿价差估算并标注未扣费） */
 export function autoTPlanResultOf(plan: AutoTPlan | null): AutoTResultView {
   if (plan === null) return { label: '—', tone: 'flat', title: '今日无做T计划' }

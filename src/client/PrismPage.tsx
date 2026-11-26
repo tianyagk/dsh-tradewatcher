@@ -36,7 +36,7 @@ import {
 } from './prismDeskMid.ts'
 import {
   accountViewOf, blockedTodayOf, autoTChipsOf, autoTCostTextOf, autoTDirectionLabelOf,
-  autoTEffectiveCostTextOf, autoTEntryStatusOf, autoTEntryTitleOf, autoTFlowOf, autoTFocusPlanOf,
+  autoTEffectiveCostTextOf, autoTEmptyTextOf, autoTEntryStatusOf, autoTEntryTitleOf, autoTFlowOf, autoTFocusPlanOf,
   autoTJudgeOf, autoTPerPositionTextOf, autoTPillTextOf, autoTPlanResultOf, autoTPlanSettlementOf,
   autoTSpreadPctOf, autoTStateTextOf, autoTSwitchDraftOf, autoTSwitchPatchOf, autoTOf,
   signedMoneyOf, intervalSecOf, orderProgressOf, pendingOrdersOf, perfCellsOf, sparkOf, statusFactsOf,
@@ -355,7 +355,7 @@ function AutoTModal(props: {
       React.createElement('div', { className: 'tw-ad-autot-panel' },
         React.createElement('h3', null, focusPlan === null ? 'Agent 判断（今日）' : `Agent 判断 · ${focusPlan.name}（今日）`),
         focusPlan === null
-          ? React.createElement('div', { className: 'tw-ad-autot-panel-empty' }, '—（今日无做T计划）')
+          ? React.createElement('div', { className: 'tw-ad-autot-panel-empty' }, autoTEmptyTextOf(a))
           : React.createElement('div', { className: 'tw-ad-autot-tri' },
               ...tri.map(([label, text]) => React.createElement('div', { key: label, className: 'row' },
                 React.createElement('span', { className: 'lab' }, label),
