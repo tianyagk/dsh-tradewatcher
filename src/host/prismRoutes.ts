@@ -405,7 +405,8 @@ async function factorRowsOf(deps: PrismRouteDeps, watch: ReadonlyArray<{ secid: 
   const today = dayOf(Date.now())
   const loadK = deps.kline ?? fetchKline
   const rows = await Promise.all(list.map(async (x) => {
-    const base = { secid: x.secid, name: x.name, held: x.held, asOf: today }
+    const pos = account.positions.find((p) => p.secid === x.secid)
+    const base = { secid: x.secid, name: x.name, held: x.held, qty: pos?.qty ?? null, available: pos?.available ?? null, asOf: today }
     try {
       const k = await loadK(x.secid, 101, 140, 1)
       const bars = (k?.days ?? []).filter((b) => b.date < today)

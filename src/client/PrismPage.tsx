@@ -401,6 +401,9 @@ function FactorDrawer(props: {
   onToggle: (key: string) => void
   onClose: () => void
 }): React.ReactElement | null {
+  const [filter, setFilter] = React.useState<'all' | 'held' | 'watch'>('all')
+  const [q, setQ] = React.useState('')
+  const [sel, setSel] = React.useState<string | null>(null)
   if (!props.open) return null
   const num = (v: unknown, d = 2): string => (typeof v === 'number' && Number.isFinite(v) ? v.toFixed(d) : '—')
   const cell = (r: Record<string, unknown>, key: string): string => {
@@ -409,24 +412,35 @@ function FactorDrawer(props: {
     if (key === 'lastClose') return num(r[key], 2)
     return `${num(r[key])}%`
   }
+  const byFilter = props.rows.filter((r) => filter === 'all' || (filter === 'held' ? r['held'] === true : r['held'] !== true))
+  const rows = byFilter.filter((r) => q.trim() === '' || `${String(r['name'] ?? '')}${String(r['secid'] ?? '')}`.includes(q.trim()))
+  const selected = rows.find((r) => r['secid'] === sel) ?? rows[0] ?? null
+  const heldCount = props.rows.filter((r) => r['held'] === true).length
+  const detail = (k: string, v: string): React.ReactElement => React.createElement('div', { key: k }, React.createElement('span', { className: 'k' }, k), ' ', React.createElement('span', { className: 'v' }, v))
   return React.createElement('div', { className: 'tw-ad-factor-mask', onMouseDown: (e: React.MouseEvent) => { if (e.target === e.currentTarget) props.onClose() } },
     React.createElement('section', { className: 'tw-ad-factor', role: 'dialog', 'aria-modal': 'true', 'aria-label': '因子库' },
       React.createElement('header', { className: 'tw-ad-factor-head' },
         React.createElement('div', null,
           React.createElement('h2', null, '因子库'),
-          React.createElement('p', null, '只提供因子事实，默认进入决策流；做T 受主决策管控')),
+          React.createElement('p', null, '只提供因子事实，默认进入决策流')),
         React.createElement('div', { className: 'right' },
           React.createElement('span', { className: 'tw-ad-tag is-blue' }, 'factor-v1'),
           React.createElement('button', { type: 'button', className: 'tw-ad-autot-icon', title: '关闭', onClick: props.onClose }, '×'))),
       React.createElement('div', { className: 'tw-ad-factor-chips' },
-        React.createElement('div', { className: 'chip' }, React.createElement('span', { className: 'k' }, '覆盖标的'), React.createElement('b', null, String(props.rows.length))),
-        React.createElement('div', { className: 'chip' }, React.createElement('span', { className: 'k' }, '日线截止'), React.createElement('b', null, String(props.rows[0]?.['asOf'] ?? '—'))),
-        React.createElement('div', { className: 'chip' }, React.createElement('span', { className: 'k' }, '缺失'), React.createElement('b', null, String(props.rows.filter((r) => r['missing'] != null).length)))),
+        React.createElement('div', { className: 'chip' }, React.createElement('span', { className: 'k' }, '覆盖标的'), React.createElement('b', null, String(props.rows.length)), React.createElement('span', { className: 's' }, `持仓 ${heldCount} · 自选 ${props.rows.length - heldCount}`)),
+        React.createElement('div', { className: 'chip' }, React.createElement('span', { className: 'k' }, '日线截止'), React.createElement('b', null, String(props.rows[0]?.['asOf'] ?? '—')), React.createElement('span', { className: 's' }, '只用已完成 bar · 前复权')),
+        React.createElement('div', { className: 'chip' }, React.createElement('span', { className: 'k' }, '因子版本'), React.createElement('b', null, 'factor-v1'), React.createElement('span', { className: 's' }, '缓存 5 分钟')),
+        React.createElement('div', { className: 'chip' }, React.createElement('span', { className: 'k' }, '因子缺失'), React.createElement('b', null, String(props.rows.filter((r) => r['missing'] != null).length)), React.createElement('span', { className: 's' }, '日K 不足 · 已写原因'))),
       React.createElement('div', { className: 'tw-ad-factor-bar' },
-        React.createElement('span', { className: 'muted' }, `显示因子 ${props.cols.size} / ${FACTOR_COLS.length}`),
-        React.createElement('div', { className: 'tw-ad-factor-picker' },
-          ...FACTOR_COLS.map((c) => React.createElement('label', { key: c.key },
+        ...(['all', 'held', 'watch'] as const).map((k) => React.createElement('button', {
+          key: k, type: 'button', className: `tw-ad-factor-tab${filter === k ? ' on' : ''}`,
+          onClick: () => setFilter(k),
+        }, k === 'all' ? `全部 ${props.rows.length}` : k === 'held' ? `持仓 ${heldCount}` : `自选 ${props.rows.length - heldCount}`)),
+        React.createElement('details', { className: 'tw-ad-factor-picker' },
+          React.createElement('summary', null, `显示因子 ${props.cols.size} / ${FACTOR_COLS.length} ▾`),
+          React.createElement('div', { className: 'menu' }, ...FACTOR_COLS.map((c) => React.createElement('label', { key: c.key },
             React.createElement('input', { type: 'checkbox', checked: props.cols.has(c.key), onChange: () => props.onToggle(c.key) }), c.label)))),
+        React.createElement('input', { className: 'tw-ad-factor-search', placeholder: '搜索名称 / 代码', value: q, onChange: (e: React.ChangeEvent<HTMLInputElement>) => setQ(e.target.value) })),
       props.error !== null
         ? React.createElement('div', { className: 'tw-ad-empty' }, props.error)
         : React.createElement('div', { className: 'tw-ad-factor-table' },
@@ -434,12 +448,32 @@ function FactorDrawer(props: {
               React.createElement('thead', null, React.createElement('tr', null,
                 React.createElement('th', null, '标的'),
                 ...FACTOR_COLS.filter((c) => props.cols.has(c.key)).map((c) => React.createElement('th', { key: c.key }, c.label)))),
-              React.createElement('tbody', null, ...props.rows.map((r) => React.createElement('tr', { key: String(r['secid']) },
+              React.createElement('tbody', null, ...rows.map((r) => React.createElement('tr', {
+                key: String(r['secid']), className: selected?.['secid'] === r['secid'] ? 'is-on' : undefined,
+                onClick: () => setSel(String(r['secid'])),
+              },
                 React.createElement('td', { className: 'name' },
                   React.createElement('b', null, String(r['name'] ?? r['secid'])),
                   React.createElement('span', { className: 'code' }, String(r['secid'])),
-                  r['held'] === true ? React.createElement('span', { className: 'sub2' }, '持仓') : null),
+                  React.createElement('span', { className: 'sub2' }, r['held'] === true ? `持仓 ${groupOf(Number(r['qty'] ?? 0))} · 可卖 ${r['available'] === null || r['available'] === undefined ? '—' : groupOf(Number(r['available']))}` : '自选 · 未持仓')),
                 ...FACTOR_COLS.filter((c) => props.cols.has(c.key)).map((c) => React.createElement('td', { key: c.key, title: r['missing'] != null ? String(r['missing']) : undefined }, r['missing'] != null ? '—' : cell(r, c.key)))))))),
+      selected === null
+        ? null
+        : React.createElement('div', { className: 'tw-ad-factor-detail' },
+            React.createElement('div', null,
+              React.createElement('h3', null, `${String(selected['name'])} · 因子明细`),
+              React.createElement('div', { className: 'kv' },
+                detail('ATR14', `${num(selected['atrPct'])}%`), detail('ATR分位120', num(selected['atrRank120'], 0)),
+                detail('日均振幅20', `${num(selected['amp20Pct'])}%`), detail('一跳占比', `${num(selected['tickPct'], 3)}%`),
+                detail('MA20偏离', `${num(selected['distMa20Pct'])}%`), detail('RSI14', num(selected['rsi14'], 0)),
+                detail('20日位置', num(selected['pos20'], 0)), detail('趋势效率20', num(selected['eff20'], 0)),
+                detail('5日收益', `${num(selected['ret5'])}%`), detail('20日收益', `${num(selected['ret20'])}%`),
+                detail('60日收益', `${num(selected['ret60'])}%`), detail('数据截止', String(selected['asOf'] ?? '—')))),
+            React.createElement('div', { className: 'use' },
+              React.createElement('h3', null, '口径与来源'),
+              React.createElement('div', null, '日线：前复权，只用已完成 bar。'),
+              React.createElement('div', null, '计算：宿主引擎计算并缓存 5 分钟；前端不重算。'),
+              React.createElement('div', null, '暴露：因子表默认进入决策流；做T 由主决策管控。'))),
       React.createElement('div', { className: 'tw-ad-factor-foot' }, '前复权 · 已完成 bar · 缺数 —+原因')))
 }
 
