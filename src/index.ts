@@ -23,7 +23,6 @@ import { PrismScheduler } from './host/prismScheduler.ts'
 import { runPrismForSlot } from './host/prismRoutes.ts'
 import { incrementalNews } from './host/prismNews.ts'
 import { inTradingWindow } from './host/rescue.ts'
-import { FupanStore } from './host/fupan.ts'
 import { setQuoteFreshnessMs } from './host/em.ts'
 import { log, type PluginContext, type PluginWebRoute } from './host/context.ts'
 
@@ -34,7 +33,7 @@ export const name = 'dsh-tradewatcher'
 export const inject = ['webServer', 'webStartup', 'llm']
 
 /** 行标识（配置里写 `config: { row: watchlist }`） */
-export type RowId = 'core' | 'calendar' | 'watchlist' | 'portfolio' | 'market' | 'cloudmap' | 'tools' | 'fupan' | 'prism'
+export type RowId = 'core' | 'calendar' | 'watchlist' | 'portfolio' | 'market' | 'cloudmap' | 'tools' | 'prism'
 
 /**
  * 行 → 该行独占的路由前缀（core 注册**其余全部**；P2–P4 再把别的行兑现）。
@@ -79,17 +78,6 @@ export const ROW_ROUTES: Record<Exclude<RowId, 'core'>, readonly string[]> = {
    */
   tools: ['/tradewatcher/tools/global-flow', '/tradewatcher/leverage'],
   /**
-   * 复盘（第 8 行，v0.111.0）。
-   *
-   * 归属判据（§2.2）：这三条路由**只被复盘页消费**（`src/client/FupanPage.tsx` → `api.fupanMonth/fupanNote/fupanTrades`）
-   * ⇒ 归本行；关掉复盘行时它们随之 404，其它页面一个都不受影响（`FupanPage` 也只被本行加载）。
-   *   · `/tradewatcher/fupan/month`  整月视图（每天是否有笔记 + 该日是否交易日）
-   *   · `/tradewatcher/fupan/note`   新增/更新/删除一条笔记（GET 与 POST 不同路径，各自独立）
-   *   · `/tradewatcher/fupan/trades` 某一天的持仓交易记录（逐笔 + 汇总 + 当日盈亏，只读）
-   * 存储是本地 `fupan.json` + 既有流水；零新增上游请求（细节见 `src/host/fupan.ts`、`src/host/fupanTrades.ts` 文件头）。
-   */
-  fupan: ['/tradewatcher/fupan/month', '/tradewatcher/fupan/note', '/tradewatcher/fupan/trades'],
-  /**
    * 棱镜（第 9 行，v0.130.0 批次 1+2）：只被 `PrismPage.tsx` 消费 ⇒ 归本行。
    *   · `/state`   页面首屏（设置 + 骨架 + 新闻状态 + 最近运行 + 默认模型）
    *   · `/settings` 时点增删（GET/POST 同路径）
@@ -110,8 +98,6 @@ export const ROW_TOOLS: Record<Exclude<RowId, 'core'>, readonly string[]> = {
   cloudmap: [],
   // tools 行：本批不带 agent 工具（工具目录/详情是纯 UI）。下一批若加"工具"类 agent 工具 ⇒ 写进本数组
   tools: [],
-  // 复盘行：同样不带 agent 工具（月历 + 当日笔记是纯 UI；写作接口只给界面用）
-  fupan: [],
   // 棱镜：本批不带 agent 工具（研判管线在宿主内跑，页面只读）
   prism: [],
 }
@@ -134,14 +120,6 @@ export interface CoreKernel {
   prismTrading: PrismTradingStore
   /** 棱镜时点调度（30s 节拍；非交易日不跑） */
   prismScheduler: PrismScheduler
-  /**
-   * 复盘笔记存储（第 8 行 `fupan` 的独占数据面）。
-   *
-   * 放在内核里（而不是让 fupan 行自己 new）的理由与 store/calendar 同款：
-   * `apply` 会被调用 N 次，多个实例会各自持一份内存镜像；写入虽走 `updateJsonLocked`
-   * 仍不会丢数据，但读取会看到旧镜像 ⇒ 同一进程里只允许一个实例。
-   */
-  fupan: FupanStore
   /** 当前活跃行（`/tradewatcher/rows` 的数据源） */
   activeRows: Set<RowId>
   /** 一次性启动是否已完成（幂等标记） */
@@ -187,7 +165,7 @@ export function rowOf(config: unknown, ctxConfig?: unknown): RowId | 'all' {
   const pick = (src: unknown): unknown => (typeof src === 'object' && src !== null ? (src as { row?: unknown }).row : undefined)
   const raw = pick(config) ?? pick(ctxConfig) ?? 'all'
   const row = typeof raw === 'string' ? raw.trim() : 'all'
-  return (['core', 'calendar', 'watchlist', 'portfolio', 'market', 'cloudmap', 'tools', 'fupan', 'prism'] as const).includes(row as RowId)
+  return (['core', 'calendar', 'watchlist', 'portfolio', 'market', 'cloudmap', 'tools', 'prism'] as const).includes(row as RowId)
     ? (row as RowId)
     : 'all'
 }
@@ -239,7 +217,6 @@ function applyCore(ctx: PluginContext, full = false): void {
       prismScheduler,
       calendar: new CalendarStore(),
       rescue: new RescueMonitor(),
-      fupan: new FupanStore(),
       activeRows: new Set<RowId>(['core']),
       started: false,
       starts: 0,
@@ -288,7 +265,7 @@ function applyCore(ctx: PluginContext, full = false): void {
   }
 
   ctx.effect(() => {
-    const { routes: all } = makeTradeRoutes(k.store, ctx.webStartup.trustedHosts, k.calendar, k.rescue, undefined, undefined, () => [...k.activeRows], k.fupan, undefined, { store: k.prism, trading: k.prismTrading, data: k.store, get: (name) => { try { return ctx.get(name) } catch { return undefined } } })
+    const { routes: all } = makeTradeRoutes(k.store, ctx.webStartup.trustedHosts, k.calendar, k.rescue, undefined, undefined, () => [...k.activeRows], undefined, { store: k.prism, trading: k.prismTrading, data: k.store, get: (name) => { try { return ctx.get(name) } catch { return undefined } } })
     // core 注册**除功能行独占前缀之外**的全部路由（老 profile 只有 core ⇒ 与拆分前逐字一致）
     const owned = full ? [] : Object.values(ROW_ROUTES).flat()
     const mine = all.filter((r) => !owned.some((p) => r.path.startsWith(p)))
@@ -346,7 +323,7 @@ function applyFeatureRow(ctx: PluginContext, row: Exclude<RowId, 'core'>): void 
   const prefixes = ROW_ROUTES[row]
   const tools = ROW_TOOLS[row]
   ctx.effect(() => {
-    const { routes: all } = makeTradeRoutes(k.store, ctx.webStartup.trustedHosts, k.calendar, k.rescue, undefined, undefined, () => [...k.activeRows], k.fupan, undefined, { store: k.prism, trading: k.prismTrading, data: k.store, get: (name) => { try { return ctx.get(name) } catch { return undefined } } })
+    const { routes: all } = makeTradeRoutes(k.store, ctx.webStartup.trustedHosts, k.calendar, k.rescue, undefined, undefined, () => [...k.activeRows], undefined, { store: k.prism, trading: k.prismTrading, data: k.store, get: (name) => { try { return ctx.get(name) } catch { return undefined } } })
     const mine = all.filter((r) => prefixes.some((p) => r.path.startsWith(p)))
     const disposers = mine.map((route: PluginWebRoute) => {
       try {
@@ -390,7 +367,7 @@ export function apply(ctx: PluginContext, config?: unknown): void {
     // 老单行装载：全量注册（与拆分前逐字一致），并把七个功能行都标为活跃 ⇒ 客户端 gate 显示全部 tab
     applyCore(ctx, true)
     const k = kernel as CoreKernel | null
-    if (k !== null) for (const r of ['calendar', 'watchlist', 'portfolio', 'market', 'cloudmap', 'tools', 'fupan'] as const) k.activeRows.add(r)
+    if (k !== null) for (const r of ['calendar', 'watchlist', 'portfolio', 'market', 'cloudmap', 'tools'] as const) k.activeRows.add(r)
   } else if (row === 'core') applyCore(ctx)
   else applyFeatureRow(ctx, row)
 }

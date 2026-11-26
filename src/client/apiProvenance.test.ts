@@ -66,14 +66,6 @@ export const EXEMPT: ReadonlyArray<{ name: string; why: string; carrier?: string
   { name: 'ChipDayDto', why: '行内小类型：筹码分布里的一天（属于 ChipsPayload，出处由它统一交代）' },
   { name: 'GlobalFlowMarketDto', why: '行内小类型：五个市场的一行（属于 GlobalFlowPayloadDto）' },
   { name: 'GlobalFlowPointDto', why: '行内小类型：曲线上的一个序列日（属于 GlobalFlowPayloadDto）' },
-  { name: 'FupanDateDto', why: '行内小类型：复盘月历的一天（属于 FupanMonthPayload）' },
-  { name: 'FupanNoteDto', why: '行内小类型：一条复盘笔记（属于 FupanMonthPayload）' },
-  { name: 'FupanTradeDto', why: '行内小类型：当日一笔交易（属于 FupanTradesPayload）' },
-  {
-    name: 'FupanTradesPayload',
-    why: '出处载体是**逐字段原因**（dayPnlWhy / dayPnlReason / readFailedReason），不是聚合 missing[]：当日盈亏缺时界面写「未取到」，每笔交易自带 note',
-    carrier: 'dayPnlReason',
-  },
   {
     name: 'LeveragePayloadDto',
     why: '契约例外：缺数据一律 null、页面不写口径（用户明确要求）；出处在 payloadGate 的 payload 档显式声明（gateInputOfLeverage）',
@@ -99,7 +91,7 @@ test('api.ts 的每个顶层载荷类型都带 `asOf` + `missing`（例外逐条
   const bad = offenders(API_SRC)
   assert.deepEqual(bad, [], `以下载荷缺少出处字段（新增载荷必须带 asOf + missing，否则加进 EXEMPT 并写理由）：\n  ${bad.join('\n  ')}`)
   // 条数锁定：新增一条豁免必须改这里的数字 —— 这是"不许悄悄降低要求"的闸门
-  assert.equal(EXEMPT.length, 8, `豁免清单目前锁定 8 条（实得 ${EXEMPT.length}）`)
+  assert.equal(EXEMPT.length, 4, `豁免清单目前锁定 8 条（实得 ${EXEMPT.length}）`)
   for (const e of EXEMPT) assert.ok(e.why.trim().length >= 8, `豁免 ${e.name} 的理由太短（要能说清为什么它不需要自带出处）`)
   const bodies = interfaceBodies(API_SRC)
   for (const e of EXEMPT) assert.equal(bodies.has(e.name), true, `豁免清单里的 ${e.name} 必须真的存在于 api.ts（否则是死条目）`)
@@ -137,7 +129,7 @@ test('`missing` 的写法只有已知几类（新增第五类必须改这里）�
     for (const m of body.matchAll(/\bmissing(\??):\s*([^\n;]+)/g)) {
       const type = (m[2] as string).replace(/\s+/g, ' ')
       if (/^number$/.test(type)) buckets.add('count')
-      else if (/MissingField\[\]|FupanMissing\[\]|string\[\]/.test(type)) buckets.add('array')
+      else if (/MissingField\[\]|string\[\]/.test(type)) buckets.add('array')
       else if (/Array</.test(type)) buckets.add('object-array')
       else if (/\| null/.test(type)) buckets.add('nullable-string')
       else buckets.add(`unknown:${type}`)

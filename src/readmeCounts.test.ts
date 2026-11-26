@@ -132,21 +132,17 @@ test('④ README 的行数 == ROW_ROUTES 键数 + 1（core）== cordis.patch.yml
 })
 
 test('⚠ 反例注入：把 README 改回「六个页签」/「七行」⇒ 判据必红（证明它不是恒真）', () => {
-  const tabsBack = README.replace('八个页签', '七个页签')
+  const tabsBack = README.replace('七个页签', '六个页签')
   assert.notEqual(tabsBack, README, '注入必须真的改到那句')
   const tabClaim = parseTabClaim(tabsBack) as CountClaim
   assert.equal(tabClaim.count === tabClaim.items.length, false, '「六个」+ 七个名字 ⇒ 必须自相矛盾（否则判据没锁住）')
   assert.throws(() => assert.equal(tabClaim.count, tabClaim.items.length, '反例'), /反例/, '⚠ 反例下必须失败')
 
-  const rowsBack = README.replace('九行', '八行')
+  const rowsBack = README.replace('八行', '七行')
   assert.notEqual(rowsBack, README, '注入必须真的改到那句')
   const rowClaim = parseRowClaim(rowsBack) as CountClaim
-  assert.equal(rowClaim.count, 8)
-  assert.throws(() => assert.equal(rowClaim.count, 9, '反例'), /反例/, '⚠ 行数改回旧值必须失败')
-  // 同时证明：清单里少列 fupan 也会被 ③ 抓住
-  const dropped = README.replace(' / fupan', '')
-  const droppedClaim = parseRowClaim(dropped) as CountClaim
-  assert.notEqual(droppedClaim.count, droppedClaim.items.length, '少了 fupan ⇒ 「八行」与 7 个名字对不上（②③ 必红）')
+  assert.equal(rowClaim.count, 7)
+  assert.throws(() => assert.equal(rowClaim.count, 8, '反例'), /反例/, '⚠ 行数改回旧值必须失败')
 })
 
 test('README 不再引用 `cordis.patch.yml` 的**行号**（行号会随插入漂；改为引用章节/块）', () => {

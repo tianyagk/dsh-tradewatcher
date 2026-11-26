@@ -9,7 +9,7 @@ const tok = (name: string, fallback: string): string => {
   return m[1] ?? fallback
 }
 
-const PAGES = ['Market', 'Prism', 'Watchlist', 'Portfolio', 'Calendar', 'Fupan', 'leverage', 'Tools', 'GlobalClock']
+const PAGES = ['Market', 'Prism', 'Watchlist', 'Portfolio', 'Calendar', 'leverage', 'Tools', 'GlobalClock']
 const lum = (hex: string): number => {
   const v = hex.replace('#', '')
   const ch = [0, 2, 4].map((i) => parseInt(v.slice(i, i + 2), 16) / 255).map((x) => (x <= 0.03928 ? x / 12.92 : ((x + 0.055) / 1.055) ** 2.4))
@@ -34,7 +34,7 @@ test('① 54 组对比度全部达标（任一组 < 阈值 ⇒ 败）', () => {
     const r = ratio(fg, card)
     if (r < need) bad.push(`${page}/${name} ${r.toFixed(2)} < ${need}`)
   }
-  assert.equal(n, 54, `组数 ${n}`)
+  assert.equal(n, 48, `组数 ${n}`)
   assert.deepEqual(bad, [], bad.join('; '))
   assert.throws(() => assert.ok(ratio('#111111', card) >= 3, '注入低对比 ⇒ 败'), /注入低对比/)
 })

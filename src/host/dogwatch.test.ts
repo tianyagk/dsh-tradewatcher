@@ -124,13 +124,13 @@ test('⑦ 缓存：同一日期第二次请求 0 次上游（重复拉取 ⇒ �
   } finally { globalThis.fetch = orig }
 })
 
-test('⑧ 路由账：/tradewatcher/dogwatch 已注册，设计文档账目同步（35 = core 18）', () => {
+test('⑧ 路由账：/tradewatcher/dogwatch 已注册，设计文档账目同步（32 = core 18）', () => {
   const routes = readFileSync(new URL('./routes.ts', import.meta.url), 'utf8')
   assert.ok(routes.includes("path: '/tradewatcher/dogwatch'"), '路由必须注册')
   assert.ok(/fetchDogwatch\(\s*window/.test(routes), '路由必须调用聚合函数')
   const design = readFileSync(new URL('../../docs/DESIGN-SUBPLUGINS.md', import.meta.url), 'utf8')
-  assert.match(design, /路由账 35 = core 18/, '设计文档账目必须同步')
-  assert.throws(() => assert.equal(design.includes('路由账 35 = core 18'), false, '反例上：账目未更新'), /反例上/, '⚠ 反例注入必须失败')
+  assert.match(design, /路由账 32 = core 18/, '设计文档账目必须同步')
+  assert.throws(() => assert.equal(design.includes('路由账 32 = core 18'), false, '反例上：账目未更新'), /反例上/, '⚠ 反例注入必须失败')
 })
 
 // ── v0.188.0：分页修复 / 聚合不从第一行退化 / 残缺缓存重拉 ────────────────

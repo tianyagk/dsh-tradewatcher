@@ -4,7 +4,6 @@
  * 用户口径：状态只在内存 —— **不改 URL**（不写 `#hash`/`pushState`）、**不改偏好**
  * （不写 `prefs.json`）、不闪烁。所以这里既不是路由也不是持久化，只有一个模块级变量
  * 加一份订阅表：
- *   · `FupanPage` 点某笔 ⇒ `requestTradeJump({ ledgerId, day })`（顺手把页面喊过去）；
  *   · `index.tsx`（唯一页签容器）订阅它 ⇒ `goPage('portfolio')`；
  *   · `PortfolioPage` 挂载时 `takeTradeFocus()` **读一次并清空** ⇒ 开流水弹窗 + 静态高亮那一行。
  *

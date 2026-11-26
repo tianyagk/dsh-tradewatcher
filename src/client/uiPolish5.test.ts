@@ -10,9 +10,9 @@ import { fileURLToPath } from 'node:url'
 const HERE = fileURLToPath(new URL('.', import.meta.url))
 const read = (f: string): string => readFileSync(join(HERE, f), 'utf8')
 const CSS = read('styles.ts')
-const PAGES = ['MarketPage.tsx', 'PrismPage.tsx', 'WatchlistPage.tsx', 'PortfolioPage.tsx', 'CalendarPage.tsx', 'FupanPage.tsx', 'leveragePage.tsx', 'ToolsPage.tsx', 'GlobalClockPage.tsx']
+const PAGES = ['MarketPage.tsx', 'PrismPage.tsx', 'WatchlistPage.tsx', 'PortfolioPage.tsx', 'CalendarPage.tsx', 'leveragePage.tsx', 'ToolsPage.tsx', 'GlobalClockPage.tsx']
 
-test('① 9 个页面都有骨架或加载态（GlobalClockPage 缺 ⇒ 败）', () => {
+test('① 8 个页面都有骨架或加载态（GlobalClockPage 缺 ⇒ 败）', () => {
   const missing = PAGES.filter((f) => !/tw-skel|Skeleton|加载中/.test(read(f)))
   assert.deepEqual(missing, [], `缺加载态：${missing.join(',')}`)
   const injected = PAGES.filter((f) => f !== 'GlobalClockPage.tsx' && !/tw-skel|Skeleton|加载中/.test(read(f)))

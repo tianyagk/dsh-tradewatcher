@@ -10,7 +10,7 @@
 
 ## 功能
 
-面板由**八个页签**组成：**自选 / 持仓 / 大盘（含护盘信号与底部位置分析）/ 云图 / 日历 / 工具箱 / 复盘 / 棱镜**。下面按模块说明。
+面板由**七个页签**组成：**自选 / 持仓 / 大盘（含护盘信号与底部位置分析）/ 云图 / 日历 / 工具箱 / 棱镜**。下面按模块说明。
 
 ### 行情条与详情图
 
@@ -212,7 +212,6 @@ bash scripts/install.sh
 | `~/.dsh/dsh-tradewatcher/prism-orders.json` | 棱镜挂单/成交：`{orders, fills}`；挂单**当日有效**，跨日失效；撤销/不可成交（T+1/涨跌停/停牌/整手）都留原因 |
 | `~/.dsh/dsh-tradewatcher/prism-autot.json` | 自动做T 账本：`{plans, trades, results}`；只存计划/成交腿/结算（成交金额仍以 `prism-orders.json` 的 fills 为准），与主三账本分开，失败不影响主账 |
 | `~/.dsh/dsh-tradewatcher/prism-equity.json` | 棱镜每日净值曲线（一天一点）：`{points:[{day,equity,cash,positionsValue,realized,unrealized,at}]}` |
-| `~/.dsh/dsh-tradewatcher/fupan.json` | 复盘笔记（第 8 行 `fupan`）：`{ v:1, notes:[{id,date,text,pinnedTo?,source,at}] }`，`at` = 最后一次写入时刻。有界：单条正文 ≤4000 字、≤2000 条、序列化后 ≤512 KB；条数/体积超限时按「最久未更新」丢弃并在回包 `dropped` 段**逐条**留痕（置顶的最后才丢），单条超长直接 400 **不截断**。读不到（权限/磁盘）≠ 没有笔记 ⇒ 本次启动拒绝写回并如实披露；坏 JSON 先隔离保留原字节再从容开始 |
 | `~/.dsh/dsh-tradewatcher/global-flow.json` | 工具箱「全球资金流蛋糕模型」的每日份额快照：一天一条、保留 90 天（一天 ≈ 0.9KB）；**成分一变，旧快照整份作废并留痕**，不与新成分混用 |
 | `~/.dsh/dsh-tradewatcher/macro-log.json` | 工具箱「全球资金流蛋糕模型」的宏观两档**自采样**：每个交易日一条（广义美元指数 / 美国 10Y 收益率）+ **每源诊断留痕**（`diag`：本次各源是否可用、值、原因 —— 真机排障的现场证据），保留 120 天。用途：两个源都没有可无歧义解读的"昨收"字段 ⇒ 「较上日」与「5 日变化」只由本插件自采样算，绝不用来源不明的字段充当变化量；不足 ⇒ 界面显示「未取到」+ 原因，不写 0 |
 | `~/.dsh/dsh-tradewatcher/market-extras.json` | 大宗商品/债券等扩展行情缓存（last-known-good；上游失败时回退上次成功结果并标注时间） |
@@ -397,9 +396,9 @@ bash scripts/install.sh
 
 ## 子组件与开关
 
-本插件在一个 bundle 内拆成**九行**（core / calendar / cloudmap / market / watchlist / portfolio / tools / fupan / prism），**各自可独立开关**：
+本插件在一个 bundle 内拆成**八行**（core / calendar / cloudmap / market / watchlist / portfolio / tools / prism），**各自可独立开关**：
 停用某一行 = 该行的**路由 404** + **工具从列表消失** + **侧栏 tab 消失**（不灰显、不留空壳）。
-**行清单的唯一权威处是本包的 `cordis.patch.yml`**（该文件的 `- insert:` 块，共九行：`tradewatcher-core`/`-calendar`/`-watchlist`/`-portfolio`/`-market`/`-cloudmap`/`-tools`（v0.71.0）/`-fupan`（v0.111.0）/`-prism`（v0.130.0），全部启用、每行 `config: { row: … }`）；
+**行清单的唯一权威处是本包的 `cordis.patch.yml`**（该文件的 `- insert:` 块，共八行：`tradewatcher-core`/`-calendar`/`-watchlist`/`-portfolio`/`-market`/`-cloudmap`/`-tools`（v0.71.0）/`-prism`（v0.130.0），全部启用、每行 `config: { row: … }`）；
 行归属与设计见 `docs/DESIGN-SUBPLUGINS.md`，落地与验证记录见 `docs/AUDIT-IMPL35.md`。
 > 本节的行数与页签数、`cordis.patch.yml` 的行、`src/index.ts` 的 `ROW_ROUTES`、`src/client/index.tsx` 的 `tabs` 五处**由 `src/readmeCounts.test.ts` 锁死**（改一处不改另一处 ⇒ 测试红）。
 

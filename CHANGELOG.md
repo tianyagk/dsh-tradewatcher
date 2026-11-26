@@ -11,6 +11,21 @@
 
 ---
 
+## v0.258.0 — 完全移除「复盘」行组件（dsh-tradewatcher-fupan）
+
+`npm run check` **2012 / 2012 × 2 时区** + build（73 项）+ `tsc` 0。
+
+### 移除范围
+- 行注册：`RowId` / `ROW_ROUTES` / `ROW_TOOLS` / `CoreKernel.fupan` / `apply` 活跃行；
+- 宿主：`src/host/fupan.ts`、`fupanTrades.ts`、三条路由（`/tradewatcher/fupan/month|note|trades`）；
+- 客户端：`FupanPage.tsx`、`fupanView.ts`、`fupanTrades.ts`、api 中全部 fupan 类型与方法、页签与保活；
+- locale：`locale/rows/fupan/`；`package.json` 的 `./rows/fupan` 导出；
+- 配置：仓库 `cordis.patch.yml` 与已装 profile `~/.dsh/profiles/web/cordis.patch.yml` 的 `tradewatcher-fupan` 行（profile 原文已备份为 `cordis.patch.yml.bak-20261126-fupan`）；
+- 文档/计数：README、DESIGN-SUBPLUGINS、测试镜像同步（9 行→8 行，8 页签→7 页签）；
+- 数据：`~/.dsh/dsh-tradewatcher/fupan.json` 已改名归档为 `fupan.json.deprecated-20261126`（未删除用户笔记）。
+
+### 验证
+`npm run check` **2012 / 2012 × 2 时区** + build（73 项）+ `tsc` 0；`grep fupan src` 为空。
 ## v0.257.1 — 新因子同步进主决策因子表
 
 `npm run check` **2070 / 2070 × 2 时区** + build（73 项）+ `tsc` 0。

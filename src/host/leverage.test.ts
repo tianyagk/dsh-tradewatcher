@@ -139,7 +139,7 @@ function fakeUpstream(opts: { pages?: number; perPage?: number; rows?: LeverageR
 }
 
 function leverageRoutes(service: LeverageService, dir: string) {
-  return makeTradeRoutes(new DataStore(dir), [], new CalendarStore(dir), undefined, undefined, undefined, () => ['core', 'tools'], undefined, service).routes
+  return makeTradeRoutes(new DataStore(dir), [], new CalendarStore(dir), undefined, undefined, undefined, () => ['core', 'tools'], service).routes
 }
 
 function routesWith(service: LeverageService): ReadonlyArray<{ path: string; handler: (req: IncomingMessage, res: ServerResponse) => unknown }> {

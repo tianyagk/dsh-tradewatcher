@@ -15,12 +15,7 @@
 #                                            `/tradewatcher/leverage`（杠杆温度计；只被工具页的 leverage 详情消费，
 #                                            v0.116.0 起归本行；契约：永远 200、缺数据一律 null）。
 #                                            本行不带 agent 工具；与 cloudmap 一样贡献 activeRows ⇒ 页签门控照常工作。
-#   tradewatcher-fupan     → row: fupan      **复盘**（第 8 行，v0.111.0）：复盘页签（月历 + 当日笔记 + 钉到未来日期
-#                                            + 当日交易记录）+
-#                                            `/tradewatcher/fupan/month` `/tradewatcher/fupan/note` `/tradewatcher/fupan/trades`
-#                                            （只被复盘页消费 ⇒ 按 §2.2 判据归本行；数据是本地笔记文件、
-#                                            既有交易日历与既有流水，零新增上游请求；本行同样不带 agent 工具）。
-#   tradewatcher-prism     → row: prism      **棱镜**（第 9 行，v0.130.0）：研判时点 + 金十 24h 快讯 + 4+1 研判；
+#   tradewatcher-prism     → row: prism      **棱镜**（第 8 行，v0.130.0）：研判时点 + 金十 24h 快讯 + 4+1 研判；
 #                                            `/tradewatcher/prism`（GET=状态；POST action=settings/skeleton/news/run/capital/copy/cancel/match）
 #                                            `/tradewatcher/prism/selftest`（真实调一次 ctx.llm.stream，永远 200）
 #                                            （只被棱镜页消费 ⇒ 按 §2.2 判据归本行；本行不带 agent 工具）。
@@ -84,11 +79,6 @@
     - id: tradewatcher-tools
       name: 'dsh-tradewatcher/rows/tools'
       config: { row: tools }
-    # 复盘（第 8 行）：复盘页签 + 本地笔记与当日交易记录的三条路由
-    # （`/tradewatcher/fupan/month`、`/tradewatcher/fupan/note`、`/tradewatcher/fupan/trades`）
-    - id: tradewatcher-fupan
-      name: 'dsh-tradewatcher/rows/fupan'
-      config: { row: fupan }
     # 棱镜（第 9 行）：研判时点（cron 语义的自研节拍）+ 金十 24h 快讯 + 4+1 研判；只读页面 + 两个编辑面
     - id: tradewatcher-prism
       name: 'dsh-tradewatcher/rows/prism'

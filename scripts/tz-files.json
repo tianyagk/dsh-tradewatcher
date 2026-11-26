@@ -7,8 +7,6 @@
  "src/host/auctionBatch.test.ts",
  "src/host/auctionDecouple.test.ts",
  "src/host/auctionSeries.test.ts",
- "src/host/fupan.test.ts",
- "src/host/fupanTrades.test.ts",
  "src/host/impl80.test.ts",
  "src/host/intlMinute.test.ts",
  "src/host/klineToday.test.ts",
