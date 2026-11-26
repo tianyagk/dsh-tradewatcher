@@ -1268,6 +1268,7 @@ color-scheme:dark}
 .tw-ad-ev.is-hold .tw-ad-ev-dot{border-color:rgba(240,169,59,.8);background:rgba(240,169,59,.35)}
 .tw-ad-ev.is-risk .tw-ad-ev-dot{border-color:rgba(255,92,92,.9);background:rgba(255,92,92,.45)}
 .tw-ad-ev-body{padding:10px 0 12px;min-width:0}
+.tw-ad-tag.is-t{background:var(--tw-accent);color:#fff;border-color:transparent;font-weight:700;padding:0 5px}
 .tw-ad-ev-top{display:flex;align-items:center;gap:7px;flex-wrap:wrap}
 .tw-ad-tag{padding:2px 6px;border-radius:4px;font-size:12px;font-weight:700;letter-spacing:.6px;line-height:1.3;font-variant-numeric:tabular-nums}
 .tw-ad-tag.is-scan{color:var(--tw-accent);background:rgba(91,140,255,.15);border:1px solid rgba(91,140,255,.3)}
@@ -1370,7 +1371,7 @@ color-scheme:dark}
 
 /* ── 底部状态条（28px）── */
 .tw-ad-sbar{display:flex;align-items:center;gap:12px;flex:0 0 auto;height:28px;padding:0 14px;border-top:1px solid var(--tw-border);background:linear-gradient(180deg,var(--tw-card),var(--tw-bg));font-size:12px;color:var(--tw-muted);letter-spacing:.2px;overflow:hidden}
-.tw-ad-sb-item{white-space:nowrap;display:inline-flex;align-items:center;gap:4px;min-width:0}display:flex;align-items:center;gap:5px;white-space:nowrap;min-width:0}
+.tw-ad-sb-item{display:inline-flex;align-items:center;gap:4px;white-space:nowrap;min-width:0}
 .tw-ad-sb-item b{font-weight:500;color:var(--tw-dim);font-variant-numeric:tabular-nums;overflow:hidden;text-overflow:ellipsis}
 .tw-ad-sb-dot{width:5px;height:5px;border-radius:50%;background:var(--tw-ok);flex:0 0 auto}
 .tw-ad-sb-dot.is-na{background:var(--tw-muted)}

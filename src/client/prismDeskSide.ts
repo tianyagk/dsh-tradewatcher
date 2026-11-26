@@ -487,7 +487,7 @@ export function autoTHasUnfinishedOf(a: PrismAutoT | null): boolean {
 export function autoTEntryStatusOf(a: PrismAutoT | null): 'closed' | 'running' | 'unfinished' {
   if (a === null || !a.enabled || a.state === 'closed') return 'closed'
   if (autoTHasUnfinishedOf(a)) return 'unfinished'
-  return a.state === 'running' ? 'running' : 'closed'
+  return a.state === 'running' ? 'running' : a.state === 'paused' ? 'unfinished' : 'closed'
 }
 
 /** 入口按钮 / 标题的无障碍说明 */
@@ -685,11 +685,11 @@ export function autoTFlowOf(a: PrismAutoT | null): AutoTFlowEvent[] {
   for (const t of a.today.trades) {
     const plan = planById.get(t.planId) ?? null
     const amount = t.price === null || t.shares === null ? null : (t.side === 'sell' ? 1 : -1) * t.price * t.shares
-    const failure = t.forced
+    // forced = 14:50 强制回补，不是失败；失败由宿主的 failReason 另表（当前流水无此字段）
     events.push({
       id: `trade-${t.id}`,
-      kind: failure ? 'fail' : t.side,
-      label: failure ? 'T·失败' : (t.side === 'sell' ? 'T·卖出' : 'T·买入'),
+      kind: t.side,
+      label: t.forced ? 'T·强平' : (t.side === 'sell' ? 'T·卖出' : 'T·买入'),
       at: t.at,
       timeText: t.at === null ? '—' : shClockText(t.at).slice(0, 5),
       timeTitle: t.at === null ? '宿主未给出成交时刻' : `成交时刻（北京时间）${shClockText(t.at)}`,

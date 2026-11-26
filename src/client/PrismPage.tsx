@@ -167,6 +167,7 @@ function flowEntryNode(e: DeskFlowEntry): React.ReactElement {
     React.createElement('div', { className: 'tw-ad-ev-body' },
       React.createElement('div', { className: 'tw-ad-ev-top' },
         React.createElement('span', { className: `tw-ad-tag is-${e.kind.toLowerCase()}` }, e.kind),
+        e.channel === 'autoT' ? React.createElement('span', { className: 'tw-ad-tag is-t', title: '自动做T 委托' }, 'T') : null,
         React.createElement('span', { className: 'tw-ad-ev-title' }, e.title),
         // 正文 `MM-DD HH:MM`（北京时间，一律带月日）；title 给完整 `YYYY-MM-DD HH:MM:SS`
         React.createElement('span', { className: 'tw-ad-ev-time', title: flowTimeTitleOf(e.at), 'data-role': 'ad-flow-time' }, flowTimeOf(e.at))),
@@ -702,24 +703,24 @@ export function PrismPage(props: { active?: boolean; redUp?: boolean } = {}): Re
     setAutoTErr(null)
     setAutoTDraft((prev) => ({ ...(prev ?? {}), [secid]: enabled }))
   }
-  const minimizeAutoT = (): void => { setAutoTOpen(false); setAutoTMin(true) }
-  const closeAutoT = (): void => {
+  const minimizeAutoT = (): void => { closeAutoT(true) }
+  const closeAutoT = (minimize = false): void => {
     if (autoTSaving) return
     if (autoT === null) {
-      setAutoTOpen(false); setAutoTMin(false); setAutoTDraft(null); setAutoTErr(null)
+      setAutoTOpen(false); setAutoTMin(minimize); setAutoTDraft(null); setAutoTErr(null)
       return
     }
     const patch = autoTSwitchPatchOf(autoTEffective, autoTSaved)
     if (patch.ok === false) { setAutoTErr(patch.error); return }
     if (patch.patch.changed === 0) {
-      setAutoTOpen(false); setAutoTMin(false); setAutoTDraft(null); setAutoTErr(null)
+      setAutoTOpen(false); setAutoTMin(minimize); setAutoTDraft(null); setAutoTErr(null)
       return
     }
     setAutoTSaving(true); setAutoTErr(null)
     api.prismAutoT({ positions: patch.patch.positions })
       .then((r) => {
         if (!r.ok) { setAutoTErr(r.error ?? '保存失败'); return }
-        setAutoTOpen(false); setAutoTMin(false); setAutoTDraft(null)
+        setAutoTOpen(false); setAutoTMin(minimize); setAutoTDraft(null)
         load()
       })
       .catch((e: Error) => setAutoTErr(e.message))

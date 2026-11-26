@@ -254,6 +254,8 @@ export interface DeskFlowEntry {
   cats: DeskFlowTab[]
   /** v0.244.1：委托状态（做T tab 默认隐藏已撤单） */
   orderStatus?: string
+  /** 自动做T 委托（决策流显示 T 徽标） */
+  channel?: 'autoT'
   title: string
   action: string
   basis: string | null
@@ -577,6 +579,7 @@ export function flowEntriesOf(input: {
       // T 委托只进「做T」，不进「挂单」（用户要求两类分开统计）
       cats: o.channel === 'autoT' ? (rejected ? ['autoT', 'risk'] : ['autoT']) : rejected ? ['order', 'risk'] : ['order'],
       orderStatus: o.status,
+      ...(o.channel === 'autoT' ? { channel: 'autoT' as const } : {}),
       title: `${sideLabelOf(o.side)} ${o.name} ${groupInt(o.shares)} 股`,
       action: `${sideLabelOf(o.side)} ${groupInt(o.shares)} 股 @${num2(o.price)} · ${orderStatusOf(o.status)}${tag}${src === null ? '' : ` · ${src}`}`,
       basis: plainOf(o.rejectReason ?? o.reason ?? o.skipReason) ?? null,
