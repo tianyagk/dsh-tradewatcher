@@ -264,7 +264,8 @@ export function autoTPayloadOf(
 ): Record<string, unknown> {
   const file = store.autoT()
   const cfg = store.settings().autoT
-  const enabled = cfg?.enabled === true
+  // 没有总开关：只要任意一只持仓开启做T，整体即视为运行（v2 设计：人类只开关仓位）
+  const enabled = Object.values(cfg?.positions ?? {}).some((v) => v?.enabled === true)
   const positions: Record<string, { enabled: boolean; hold: boolean }> = {}
   for (const p of account.positions) {
     if (p.qty <= 0) continue
@@ -408,7 +409,8 @@ export const prismInputsOf = async (deps: PrismRouteDeps): Promise<PrismInputs> 
     limits: limitsTextOf(deps.store.settings()),
     autoT: (() => {
       const cfg = deps.store.settings().autoT
-      if (cfg?.enabled !== true) return '【自动做T·可计划标的】未开启（不要输出 tPlans，给空数组）'
+      const anyOn = Object.values(cfg?.positions ?? {}).some((v) => v?.enabled === true)
+      if (!anyOn) return '【自动做T·可计划标的】未开启（不要输出 tPlans，给空数组）'
       const rows = account.positions.filter((p) => cfg.positions?.[p.secid]?.enabled === true && p.qty > 0)
       if (rows.length === 0) return '【自动做T·可计划标的】无（没有开启做T的持仓；tPlans 给空数组）'
       return ['【自动做T·可计划标的】（只对这些持仓给 tPlans）', ...rows.map((p) => `- ${p.name}（${p.secid}）：持仓 ${p.qty}，可卖 ${p.available}，买入均价 ${p.avgCost ?? p.cost}`)].join('\n')
@@ -470,7 +472,7 @@ export function equityRecordAllowed(hhmm: string): boolean {
 }
 
 const recordEquity = async (deps: PrismRouteDeps, now = Date.now(), quotesGiven?: Record<string, QuoteLite>): Promise<boolean> => {
-  if (!equityRecordAllowed(hhmmOf(now))) return false
+  const preOpen = !equityRecordAllowed(hhmmOf(now))
   const account = deps.trading.account()
   const before = deps.trading.equity()
   const last = before.at(-1) ?? null
@@ -478,6 +480,8 @@ const recordEquity = async (deps: PrismRouteDeps, now = Date.now(), quotesGiven?
   const priceOf = (secid: string): number | null => quotes[secid]?.price ?? null
   // 先用**不含基准**的净值判断要不要写：跳过时连基准 K 线都不用取
   const probe = equityPointOf(account, priceOf, now, null)
+  // 盘前只拦「会覆盖上一交易日收盘」的写入；当天还没有点（新账本）时允许建首个点
+  if (preOpen && probe.day !== dayOf(now)) return false
   if (last !== null && last.day === probe.day && last.cash === probe.cash && last.equity === probe.equity) return false
   let benchmarkClose: number | null = null
   try {
@@ -990,7 +994,8 @@ export function makePrismRoutes(deps: PrismRouteDeps): PluginWebRoute[] {
                 if (typeof flag === 'boolean') nextPositions[secid] = { enabled: flag }
               }
             }
-            const enabled = typeof bodyObj.enabled === 'boolean' ? bodyObj.enabled : current.enabled
+            // 总状态由逐只开关派生（不单独暴露总开关）
+            const enabled = Object.values(nextPositions).some((v) => v.enabled === true)
             await deps.store.patchSettings({ autoT: { enabled, positions: nextPositions } })
             const accountNow = deps.trading.account()
             send(res, 200, { ok: true, autoT: autoTPayloadOf(deps.store, accountNow, dayOf(Date.now())) })
