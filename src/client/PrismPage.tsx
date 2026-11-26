@@ -312,7 +312,7 @@ function AutoTModal(props: {
                 const result = autoTPlanResultOf(plan)
                 const settle = plan === null ? null : autoTPlanSettlementOf(a, plan)
                 const resultText = settle === null ? result.label : `${result.label} ${signedMoneyOf(settle)}`
-                const resultTitle = settle === null ? result.title : '今日做T结算（宿主值）'
+                const resultTitle = settle === null ? (plan?.status === 'done' ? '今日多计划，宿主未提供单轮净额（不拿成交腿价差冒充）' : result.title) : '今日做T结算（宿主值）'
                 const off = flag !== undefined && !flag.hold
                 return React.createElement('tr', { key: row.secid, className: off ? 'is-off' : undefined, 'data-secid': row.secid },
                   React.createElement('td', { className: 'tw-ad-autot-name-cell' },
@@ -1056,6 +1056,7 @@ export function PrismPage(props: { active?: boolean; redUp?: boolean } = {}): Re
       ...FLOW_TABS.map((t) => React.createElement('button', {
         key: t.id, type: 'button', role: 'tab', 'aria-selected': flowTab === t.id, 'data-tab': t.id,
         className: `tw-ad-fchip${flowTab === t.id ? ' on' : ''}`,
+        title: `${t.label}：全部历史计数（非仅今日）`,
         onClick: () => setFlowTab(t.id),
       }, t.label, React.createElement('b', { className: 'cn', 'data-role': `ad-flow-count-${t.id}` }, String(flowCounts[t.id]))))),
     flowEntries.length === 0

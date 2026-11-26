@@ -1424,8 +1424,9 @@ color-scheme:dark}
 .tw-ad-autot-chip .k{font-size:12px;color:var(--tw-muted);line-height:1.35;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .tw-ad-autot-chip .v{font-size:15px;font-weight:600;line-height:1.25;margin-top:1px;font-variant-numeric:tabular-nums;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 
-.tw-ad-autot-tablewrap{flex:0 1 auto;min-height:0;overflow-x:hidden;overflow-y:auto;border:1px solid var(--tw-border);border-radius:8px;scrollbar-width:none}
-.tw-ad-autot-tablewrap::-webkit-scrollbar{display:none}
+.tw-ad-autot-tablewrap{flex:0 1 auto;min-height:0;overflow-x:hidden;overflow-y:auto;border:1px solid var(--tw-border);border-radius:8px;scrollbar-width:thin}
+.tw-ad-autot-tablewrap::-webkit-scrollbar{width:6px}
+.tw-ad-autot-tablewrap::-webkit-scrollbar-thumb{background:var(--tw-border-strong);border-radius:3px}
 .tw-ad-autot-table{width:100%;border-collapse:collapse;table-layout:fixed;font-size:12px}
 .tw-ad-autot-table th,.tw-ad-autot-table td{padding:5px 6px;border-bottom:1px solid var(--tw-border);text-align:right;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .tw-ad-autot-table th{font-weight:500;color:var(--tw-muted);background:var(--tw-card2)}
