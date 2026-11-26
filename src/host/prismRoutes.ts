@@ -24,6 +24,7 @@ import { isValidSecid, readPrismLedger } from './prismDeskWrite.ts'
 import { backfillNews, incrementalNews } from './prismNews.ts'
 import { runPrismAnalysis, type PrismInputs } from './prismPipeline.ts'
 import { fetchIndustryOverview, fetchKline, fetchQuotes, fetchValuationBatch } from './em.ts'
+import { atrFromBars } from './atr.ts'
 import { assemblePortfolio } from './portfolio.ts'
 import { industryExposureOf, needsIndustryOf, unavailableExposure } from './prismExposure.ts'
 import { applyDrawdownGate, drawdownGateOf, evaluationOf, EVAL_MIN_SAMPLE } from './prismEval.ts'
@@ -361,6 +362,33 @@ async function candidatesCachedOf(deps: PrismRouteDeps, watch: ReadonlyArray<{ s
   return text
 }
 
+/** 自动做T 上下文：把 ATR14 / 20 日振幅随标的直接给模型，避免「缺数据无法验证门槛」 */
+async function autoTContextOf(deps: PrismRouteDeps, account: PrismAccount): Promise<string> {
+  const cfg = deps.store.settings().autoT
+  const anyOn = Object.values(cfg?.positions ?? {}).some((v) => v?.enabled === true)
+  if (!anyOn) return '【自动做T·可计划标的】未开启（不要输出 tPlans，给空数组）'
+  const rows = account.positions.filter((p) => cfg.positions?.[p.secid]?.enabled === true && p.qty > 0)
+  if (rows.length === 0) return '【自动做T·可计划标的】无（没有开启做T的持仓；tPlans 给空数组）'
+  const load = deps.kline ?? fetchKline
+  const lines = await Promise.all(rows.map(async (p) => {
+    const base = `- ${p.name}（${p.secid}）：持仓 ${p.qty}，可卖 ${p.available}，买入均价 ${p.avgCost ?? p.cost}`
+    try {
+      const k = await load(p.secid, 101, 30, 1)
+      const bars = (k?.days ?? []).map((d) => ({ high: d.high, low: d.low, close: d.close }))
+      const atr = atrFromBars(bars, 14)
+      const last = bars.at(-1)
+      const win = bars.slice(-20)
+      const amp = last !== undefined && win.length >= 20
+        ? ((Math.max(...win.map((b) => b.high)) - Math.min(...win.map((b) => b.low))) / last.close) * 100
+        : null
+      return `${base}，ATR14 ${atr === null ? '—（日K不足15根）' : atr.pct.toFixed(2) + '%'}，20日振幅 ${amp === null ? '—（日K不足20根）' : amp.toFixed(2) + '%'}`
+    } catch (error) {
+      return `${base}，ATR14 —（${String((error as Error)?.message ?? error).slice(0, 30)}），20日振幅 —（同上）`
+    }
+  }))
+  return ['【自动做T·可计划标的】（只对这些持仓给 tPlans；ATR14 与 20 日振幅已算好，直接用）', ...lines].join('\n')
+}
+
 export const prismInputsOf = async (deps: PrismRouteDeps): Promise<PrismInputs> => {
   const watch = deps.data.watchData().items
   const port = deps.data.portData()
@@ -413,14 +441,7 @@ export const prismInputsOf = async (deps: PrismRouteDeps): Promise<PrismInputs> 
     tech: await indexTechCachedOf().catch(() => '【指数技术面（由本地日线计算；缺数据写 —）】\n—（本轮取数失败）'),
     candidates: await candidatesCachedOf(deps, watch).catch(() => '【候选池（持仓 + 自选）】\n—（本轮取数失败）'),
     limits: limitsTextOf(deps.store.settings()),
-    autoT: (() => {
-      const cfg = deps.store.settings().autoT
-      const anyOn = Object.values(cfg?.positions ?? {}).some((v) => v?.enabled === true)
-      if (!anyOn) return '【自动做T·可计划标的】未开启（不要输出 tPlans，给空数组）'
-      const rows = account.positions.filter((p) => cfg.positions?.[p.secid]?.enabled === true && p.qty > 0)
-      if (rows.length === 0) return '【自动做T·可计划标的】无（没有开启做T的持仓；tPlans 给空数组）'
-      return ['【自动做T·可计划标的】（只对这些持仓给 tPlans）', ...rows.map((p) => `- ${p.name}（${p.secid}）：持仓 ${p.qty}，可卖 ${p.available}，买入均价 ${p.avgCost ?? p.cost}`)].join('\n')
-    })(),
+    autoT: await autoTContextOf(deps, account).catch(() => '【自动做T·可计划标的】\n—（ATR/振幅取数失败，本轮不要给 tPlans）'),
     drawdown: (() => {
       const st = deps.store.settings()
       const g = drawdownGateOf(deps.trading.equity(), deps.store.runs().at(-1)?.drawdown ?? null, Date.now(), {
