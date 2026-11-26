@@ -608,16 +608,25 @@ const tradingOf = (trading: PrismTradingStore, prices: Record<string, number | n
 async function placeAutoTPairs(deps: PrismRouteDeps, run: PrismRun): Promise<void> {
   const cfg = deps.store.settings().autoT
   const plans = run.decision.tPlans ?? []
-  if (cfg?.enabled !== true || plans.length === 0) return
+  const anyOn = Object.values(cfg?.positions ?? {}).some((v) => v?.enabled === true)
+  if (!anyOn) return
   const day = dayOf(Date.now())
   const deadline = Date.parse(`${day}T14:50:00+08:00`)
   if (!(Date.now() < deadline)) return
-  const records: AutoTPlanRec[] = []
   await deps.trading.runExclusive(async () => {
     await deps.trading.reloadForWrite()
     const account = deps.trading.account()
     const orders = deps.trading.orders().slice()
     const fills = deps.trading.fills()
+    // 每轮重新审计：先撤掉上一轮所有未成交 T 腿（计划随之作废），再按本轮判断重新挂
+    const killed = new Set<string>()
+    for (const o of orders) {
+      if (o.channel !== 'autoT' || o.status !== 'pending') continue
+      o.status = 'cancelled'; o.cancelledAt = Date.now(); o.cancelReason = '每轮重审计：撤销旧 T 腿'; killed.add(String(o.pairId))
+    }
+    const file0 = deps.store.autoT()
+    const plansNext = file0.plans.map((p) => killed.has(String(p.pairId)) && (p.status === 'waiting' || p.status === 'planned') ? { ...p, status: 'aborted' as const } : p)
+    const records: AutoTPlanRec[] = []
     for (const plan of plans) {
       if (cfg.positions?.[plan.secid]?.enabled !== true) continue
       const pos = account.positions.find((p) => p.secid === plan.secid)
@@ -634,10 +643,7 @@ async function placeAutoTPairs(deps: PrismRouteDeps, run: PrismRun): Promise<voi
       records.push({ id: pairId, secid: plan.secid, name: pos.name, day, direction: plan.direction, buyPrice: plan.buyPrice, sellPrice: plan.sellPrice, shares: cap, status: 'waiting', observe: plan.observe ?? null, reasoning: plan.reasoning ?? null, conclusion: plan.conclusion ?? null, pairId, at })
     }
     await deps.trading.saveAll({ account, orders, fills })
-    if (records.length > 0) {
-      const file = deps.store.autoT()
-      await deps.store.saveAutoT({ ...file, plans: [...file.plans, ...records] })
-    }
+    await deps.store.saveAutoT({ ...file0, plans: [...plansNext, ...records] })
   })
 }
 

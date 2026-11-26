@@ -621,12 +621,12 @@ export function flowEntriesOf(input: {
   return out
 }
 
-export interface FlowCounts { all: number; scan: number; analyze: number; holding: number; order: number; risk: number; cons: number }
+export interface FlowCounts { all: number; scan: number; analyze: number; holding: number; order: number; autoT: number; risk: number; cons: number }
 
 /** 七个 tab 的计数（同一份 entries 逐条数；被拦截委托在「挂单」「风控」各记一次，`all` 是去重条数） */
 export function flowCountsOf(entries: readonly DeskFlowEntry[]): FlowCounts {
   const n = (tab: DeskFlowTab): number => entries.filter((e) => e.cats.includes(tab)).length
-  return { all: entries.length, scan: n('scan'), analyze: n('analyze'), holding: n('holding'), order: n('order'), risk: n('risk'), cons: n('cons') }
+  return { all: entries.length, scan: n('scan'), analyze: n('analyze'), holding: n('holding'), order: n('order'), autoT: n('autoT'), risk: n('risk'), cons: n('cons') }
 }
 
 /** 按 tab 过滤（`all` 原样返回） */
