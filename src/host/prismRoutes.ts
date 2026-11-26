@@ -607,7 +607,9 @@ const tradingOf = (trading: PrismTradingStore, prices: Record<string, number | n
 /** 把 tPlans 转成配对挂单（channel:'autoT'），与主委托同管线 */
 async function placeAutoTPairs(deps: PrismRouteDeps, run: PrismRun): Promise<void> {
   const cfg = deps.store.settings().autoT
-  const plans = run.decision.tPlans ?? []
+  // 字段缺失 ≠ 明确空计划：缺字段说明模型没按契约输出，不能据此把所有旧腿撤掉
+  if (run.decision.tPlans === undefined) return
+  const plans = run.decision.tPlans
   const anyOn = Object.values(cfg?.positions ?? {}).some((v) => v?.enabled === true)
   if (!anyOn) return
   // 风控联动：闸门触发 / 主决策减仓同标的 ⇒ 不新挂 T，并撤掉该标的未成交腿

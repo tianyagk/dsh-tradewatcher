@@ -286,7 +286,7 @@ function AutoTModal(props: {
             React.createElement('th', { className: 'tw-ad-autot-switch-col' }, '做T'))),
         React.createElement('tbody', null,
           props.rows.length === 0
-            ? React.createElement('tr', null, React.createElement('td', { colSpan: 7, className: 'tw-ad-autot-cell-empty' }, missText('持仓')))
+            ? React.createElement('tr', null, React.createElement('td', { colSpan: 7, className: 'tw-ad-autot-cell-empty' }, '当前无持仓，无法开启做T'))
             : props.rows.map((row) => {
                 const enabled = a !== null && props.draft[row.secid] === true
                 const flag = a?.positions[row.secid]
@@ -326,6 +326,7 @@ function AutoTModal(props: {
                   React.createElement('td', { className: 'tw-ad-autot-switch-col' },
                     React.createElement('button', {
                       type: 'button', role: 'switch', 'data-role': 'ad-autot-switch', 'data-secid': row.secid,
+                      'aria-label': `自动做T开关 ${row.name}`,
                       'aria-checked': enabled, 'aria-disabled': none || props.saving ? 'true' : 'false',
                       disabled: none || props.saving,
                       className: `tw-ad-autot-switch${enabled ? ' on' : ''}`,
