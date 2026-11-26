@@ -23,7 +23,7 @@ import { candidatesTextOf, type CandidateInput } from './candidateStats.ts'
 import { isValidSecid, readPrismLedger } from './prismDeskWrite.ts'
 import { backfillNews, incrementalNews } from './prismNews.ts'
 import { runPrismAnalysis, type PrismInputs } from './prismPipeline.ts'
-import { fetchIndustryOverview, fetchKline, fetchQuotes, fetchValuationBatch } from './em.ts'
+import { fetchIndustryOverview, fetchKline, fetchQuotes, fetchTrend, fetchValuationBatch } from './em.ts'
 import { atrFromBars } from './atr.ts'
 import { factorMetricsOf } from './prismFactors.ts'
 import { AUTO_T_RULES, evaluateAutoT } from './prismGates.ts'
@@ -393,6 +393,35 @@ async function autoTContextOf(deps: PrismRouteDeps, account: PrismAccount): Prom
 }
 
 /** 因子库行数据（前端抽屉用）：持仓 + 自选，PIT 日线，5 分钟缓存 */
+/** 日内因子：VWAP 偏离、当日位置、量能节奏（只对持仓算，最多 11 只） */
+async function intradayFactorsOf(secid: string): Promise<{ vwapDevPct: number | null; posDay: number | null; rvol: number | null }> {
+  const trend = await fetchTrend(secid, 5).catch(() => null)
+  const pts = trend?.points ?? []
+  if (pts.length < 10) return { vwapDevPct: null, posDay: null, rvol: null }
+  const today = dayOf(Date.now())
+  const todayPts = pts.filter((p) => dayOf(p.t) === today)
+  const use = todayPts.length >= 10 ? todayPts : pts.filter((p) => dayOf(p.t) === dayOf(pts[pts.length - 1]!.t))
+  const last = use[use.length - 1]
+  if (last === undefined) return { vwapDevPct: null, posDay: null, rvol: null }
+  const vwap = last.avg ?? (use.every((p) => p.amount !== undefined && p.vol !== null)
+    ? use.reduce((a, p) => a + (p.amount ?? 0), 0) / Math.max(1, use.reduce((a, p) => a + (p.vol ?? 0) * 100, 0))
+    : null)
+  const vwapDevPct = vwap !== null && vwap > 0 ? (last.price / vwap - 1) * 100 : null
+  const hi = Math.max(...use.map((p) => p.price))
+  const lo = Math.min(...use.map((p) => p.price))
+  const posDay = hi > lo ? ((last.price - lo) / (hi - lo)) * 100 : null
+  // RVOL：今日累计量 ÷ 过去 5 日同一时刻累计量均值
+  const byDay = new Map<string, typeof use>()
+  for (const p of pts) { const d = dayOf(p.t); byDay.set(d, [...(byDay.get(d) ?? []), p]) }
+  const cutoff = Number(hhmmOf(last.t).replace(':', ''))
+  const cum = (arr: typeof use): number => arr.filter((p) => Number(hhmmOf(p.t).replace(':', '')) <= cutoff).reduce((a, p) => a + (p.vol ?? 0), 0)
+  const todayCum = cum(use)
+  const prior = [...byDay.entries()].filter(([d]) => d !== dayOf(last.t)).slice(-5).map(([, arr]) => cum(arr))
+  const priorAvg = prior.length >= 2 ? prior.reduce((a, b) => a + b, 0) / prior.length : null
+  const rvol = priorAvg !== null && priorAvg > 0 ? todayCum / priorAvg : null
+  return { vwapDevPct, posDay, rvol }
+}
+
 let factorRowsCache: { key: string; at: number; rows: Array<Record<string, unknown>> } | null = null
 async function factorRowsOf(deps: PrismRouteDeps, watch: ReadonlyArray<{ secid: string; name: string }>): Promise<Array<Record<string, unknown>>> {
   const account = deps.trading.account()
@@ -412,7 +441,10 @@ async function factorRowsOf(deps: PrismRouteDeps, watch: ReadonlyArray<{ secid: 
       const bars = (k?.days ?? []).filter((b) => b.date < today)
       const m = factorMetricsOf(bars, /ETF|基金/i.test(x.name) ? 'etf' : 'stock')
       if (m === null) return { ...base, missing: '无日K' }
-      return { ...base, ...m, missing: null }
+      const intra = x.held ? await intradayFactorsOf(x.secid).catch(() => ({ vwapDevPct: null, posDay: null, rvol: null })) : { vwapDevPct: null, posDay: null, rvol: null }
+      const cap = pos !== undefined ? Math.floor((pos.qty * 0.2) / 100) * 100 : 0
+      const fillMinutes = m.adv20 !== null && m.adv20 !== undefined && m.adv20 > 0 && cap > 0 ? cap / ((m.adv20 / 240) * 0.1) : null
+      return { ...base, ...m, ...intra, fillMinutes, missing: null }
     } catch (e) {
       return { ...base, missing: String((e as Error)?.message ?? e).slice(0, 40) }
     }

@@ -390,6 +390,13 @@ const FACTOR_COLS: Array<{ key: string; label: string; def: boolean; signed?: bo
   { key: 'pos20', label: '20日位置', def: true },
   { key: 'ret', label: '5/20/60日', def: true, signed: true },
   { key: 'eff20', label: '趋势效率', def: false },
+  { key: 'vwapDevPct', label: 'VWAP偏离', def: false },
+  { key: 'posDay', label: '当日位置', def: false },
+  { key: 'rvol', label: '量能节奏', def: false },
+  { key: 'onshare20', label: '隔夜贡献', def: false },
+  { key: 'adv20', label: 'ADV20(亿)', def: false },
+  { key: 'fillMinutes', label: '预计成交(分)', def: false },
+  { key: 'distLimitUpPct', label: '距涨停', def: false },
 ]
 
 function FactorDrawer(props: {
@@ -410,6 +417,9 @@ function FactorDrawer(props: {
     if (key === 'ret') return `${num(r['ret5'])} / ${num(r['ret20'])} / ${num(r['ret60'])}%`
     if (key === 'pos20' || key === 'rsi14' || key === 'atrRank120' || key === 'eff20') return num(r[key], 0)
     if (key === 'lastClose') return num(r[key], 2)
+    if (key === 'adv20') return typeof r[key] === 'number' ? (r[key] as number / 1e8).toFixed(2) : '—'
+    if (key === 'fillMinutes') return num(r[key], 1)
+    if (key === 'vwapDevPct' || key === 'onshare20' || key === 'distLimitUpPct') return `${num(r[key])}%`
     return `${num(r[key])}%`
   }
   const byFilter = props.rows.filter((r) => filter === 'all' || (filter === 'held' ? r['held'] === true : r['held'] !== true))

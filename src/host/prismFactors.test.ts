@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { amp20PctOf, atrPctOf, atrRank120Of, factorMetricsOf } from './prismFactors.ts'
+import { adv20Of, amp20PctOf, atrPctOf, atrRank120Of, factorMetricsOf, onshare20Of } from './prismFactors.ts'
 import { evaluateAutoT, AUTO_T_RULES } from './prismGates.ts'
 import type { DayBar } from '../shared/model.ts'
 
@@ -56,4 +56,15 @@ test('门槛：净额/现金/可卖/pending/tick', () => {
   assert.equal(evaluateAutoT({ ...base, metrics: { ...m, tickPct: 0.1 }, available: 10 }).code, 'available-low')
   assert.equal(evaluateAutoT({ ...base, metrics: { ...m, tickPct: 0.1 }, pendingShares: 100 }).code, 'pending-conflict')
   assert.equal(evaluateAutoT({ ...base, metrics: { ...m, tickPct: 0.1 }, shares: 100 }).code, 'net-low')
+})
+
+test('ADV20 与隔夜贡献：可算且边界正确', () => {
+  const b = bars(40)
+  const adv = adv20Of(b)
+  assert.ok(adv !== null && adv > 0)
+  const varied = bars(40).map((x, i) => ({ ...x, open: 10 + (i % 2 === 0 ? 0.05 : -0.05), close: 10 + (i % 3 === 0 ? 0.02 : -0.02) }))
+  const on = onshare20Of(varied)
+  assert.ok(on !== null && on >= 0 && on <= 100)
+  assert.equal(adv20Of(bars(10)), null)
+  assert.equal(onshare20Of(bars(10)), null)
 })

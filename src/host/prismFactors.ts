@@ -36,6 +36,13 @@ export interface FactorMetrics {
   pos20?: number | null
   /** 20 日趋势效率（0–100，越高越单边） */
   eff20?: number | null
+  /** 20 日均成交额（元；按 close×vol×100 估算，vol 为手） */
+  adv20?: number | null
+  /** 隔夜波动贡献（0–100） */
+  onshare20?: number | null
+  /** 距涨停/跌停（%；仅股票按 10%，ETF/指数 null） */
+  distLimitUpPct?: number | null
+  distLimitDownPct?: number | null
   /** 实际使用的已完成 bar 数 */
   bars: number
 }
@@ -126,6 +133,36 @@ const rsiOf = (bars: readonly DayBar[], n = 14): number | null => {
   return (gain / (gain + loss)) * 100
 }
 
+/** ADV20：20 日均成交额（close×vol×100，vol 按手） */
+export function adv20Of(bars: readonly DayBar[]): number | null {
+  const win = bars.slice(-20).filter((b) => b.vol !== null && b.vol > 0 && b.close > 0)
+  if (win.length < 20) return null
+  return win.reduce((a, b) => a + b.close * (b.vol as number) * 100, 0) / win.length
+}
+
+/** 隔夜波动贡献：Var(ln(open/prevClose)) / Var(ln(close/prevClose)) × 100，20 日 */
+export function onshare20Of(bars: readonly DayBar[]): number | null {
+  if (bars.length < 21) return null
+  const win = bars.slice(-21)
+  const on: number[] = []
+  const all: number[] = []
+  for (let i = 1; i < win.length; i += 1) {
+    const prev = win[i - 1]!
+    const cur = win[i]!
+    if (!(prev.close > 0) || !(cur.open > 0) || !(cur.close > 0)) continue
+    on.push(Math.log(cur.open / prev.close))
+    all.push(Math.log(cur.close / prev.close))
+  }
+  if (on.length < 15) return null
+  const variance = (xs: number[]): number => {
+    const m = xs.reduce((a, b) => a + b, 0) / xs.length
+    return xs.reduce((a, b) => a + (b - m) ** 2, 0) / xs.length
+  }
+  const vAll = variance(all)
+  if (!(vAll > 0)) return null
+  return Math.max(0, Math.min(100, (variance(on) / vAll) * 100))
+}
+
 /** 只保留 date <= cutoff 的 bar（回测/PIT 用；cutoff 为空则全量） */
 export function barsAt(bars: readonly DayBar[], cutoff?: string): DayBar[] {
   if (cutoff === undefined) return [...bars]
@@ -147,6 +184,9 @@ export function factorMetricsOf(bars: readonly DayBar[], assetType: AssetType, c
   const changes = use.slice(-21).map((b, i, arr) => (i === 0 ? 0 : Math.abs(b.close - arr[i - 1]!.close)))
   const path = changes.reduce((a, b) => a + b, 0)
   const eff20 = use.length >= 21 && path > 0 ? (Math.abs(last.close - use[use.length - 21]!.close) / path) * 100 : null
+  const prevClose = use[use.length - 2]?.close ?? null
+  const distLimitUpPct = assetType === 'stock' && prevClose !== null && prevClose > 0 && last.close > 0 ? ((prevClose * 1.1) / last.close - 1) * 100 : null
+  const distLimitDownPct = assetType === 'stock' && prevClose !== null && prevClose > 0 && last.close > 0 ? ((last.close - prevClose * 0.9) / last.close) * 100 : null
   return {
     lastClose: last.close,
     atrPct: atrPctOf(use),
@@ -163,6 +203,10 @@ export function factorMetricsOf(bars: readonly DayBar[], assetType: AssetType, c
     rsi14: rsiOf(use),
     pos20,
     eff20,
+    adv20: adv20Of(use),
+    onshare20: onshare20Of(use),
+    distLimitUpPct,
+    distLimitDownPct,
     bars: use.length,
   }
 }
