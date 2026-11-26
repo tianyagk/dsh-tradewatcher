@@ -11,6 +11,19 @@
 
 ---
 
+## v0.250.0 — 因子层地基：prismFactors / prismGates（纯函数，未接线）
+
+`npm run check` **2066 / 2066 × 2 时区** + build（73 项）+ `tsc` 0。
+
+| 模块 | 内容 |
+| --- | --- |
+| `src/host/prismFactors.ts` | `factorMetricsOf(bars, assetType, cutoff)`：ATR14%、ATR120 日分位、日均振幅 AMP20、一跳占比、实际 bar 数；`barsAt` 支持 PIT cutoff；缺数返回 null |
+| `src/host/prismGates.ts` | `AUTO_T_RULES` 单一常量源（t-gate-v2）+ `evaluateAutoT()` 16 个原因码：数据/波动/分位/振幅/tick/价差/净额/现金/可卖/pending/仓位/时间/涨跌停/LKG/stale |
+| 测试 | `prismFactors.test.ts`：ATR/AMP20/分位/tick 与门槛优先级、LKG、时间窗、整手 |
+
+### 状态
+**未接线**：`placeAutoTPairs` 仍走旧逻辑；本轮只落纯函数与测试，下一步接 P1 快照与 gate。
+新增文档：`docs/FACTOR-SPEC.md`、`docs/PRD-FACTOR.md`、`docs/FACTOR-VALIDATION.md`、`docs/FACTOR-IMPLEMENTATION.md`、`docs/FACTOR-DECISIONS.md`。
 ## v0.249.1 — 自动做T 上下文只注入汇总，四路不再重复
 
 `npm run check` **2064 / 2064 × 2 时区** + build（73 项）+ `tsc` 0。
