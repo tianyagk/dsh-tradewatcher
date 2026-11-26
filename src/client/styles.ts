@@ -378,6 +378,10 @@ color-scheme:dark}
 .tw-group > *:last-child{border-bottom-left-radius:10px;border-bottom-right-radius:10px}
 .tw-group-h{display:flex;flex-direction:column;gap:4px;padding:7px 10px;background:var(--tw-card);border-bottom:1px solid var(--tw-border)}
 .tw-gh-row{display:flex;align-items:center;gap:8px;flex-wrap:wrap;min-height:20px}
+.tw-group-drag{display:inline-flex;align-items:center;justify-content:center;width:18px;height:20px;color:var(--tw-muted);cursor:grab;flex:none;border-radius:4px}
+.tw-group-drag:hover{color:var(--tw-text);background:var(--tw-bg2)}
+.tw-group-drag:active{cursor:grabbing}
+.tw-group.is-drag-over{outline:1px dashed var(--tw-accent);outline-offset:-1px;background:var(--tw-bg2)}
 .tw-gh-metrics{display:flex;gap:14px;flex-wrap:wrap;color:var(--tw-muted);font-size:12px;font-family:var(--tw-mono);padding-left:16px}
 .tw-gh-metrics b{font-weight:600;color:var(--tw-text)}
 .tw-group-h .gname{font-weight:650;font-size:13px;flex:none;letter-spacing:-0.2px}

@@ -1170,6 +1170,7 @@ export interface LedgerView {
 export interface MutateWatchBody {
   op:
     | 'addGroup'
+    | 'reorderGroups'
     | 'renameGroup'
     | 'noteGroup'
     | 'archiveGroup'
@@ -1179,6 +1180,8 @@ export interface MutateWatchBody {
     | 'removeItem'
     | 'moveItem'
   groupId?: string
+  /** 自选分组拖动排序：按给定顺序重排（只允许活跃分组） */
+  groupIds?: string[]
   itemId?: string
   name?: string
   note?: string

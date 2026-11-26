@@ -881,6 +881,15 @@ export class DataStore {
         this.watch.groups.push({ id: this.newId('wg'), name, order })
         break
       }
+      case 'reorderGroups': {
+        const ids = body.groupIds
+        if (!Array.isArray(ids) || ids.length === 0) throw new Error('分组顺序不能为空')
+        const uniq = new Set(ids)
+        if (uniq.size !== ids.length) throw new Error('分组顺序里有重复 id')
+        for (const id of ids) this.groupOfWatch(this.requireId(id))
+        ids.forEach((id, i) => { this.groupOfWatch(id).order = i + 1 })
+        break
+      }
       case 'renameGroup': {
         const g = this.groupOfWatch(this.requireId(body.groupId))
         g.name = this.sanitizeText(body.name, NAME_MAX, '分组名')

@@ -11,6 +11,14 @@
 
 ---
 
+## v0.259.0 — 自选分组支持拖动排序
+
+`npm run check` **2014 / 2014 × 2 时区** + build（73 项）+ `tsc` 0。
+
+- 分组标题最左侧新增四横线拖动图标（`data-role="watch-group-drag"`，仅图标可拖）；
+- 拖到另一分组上松手 ⇒ 按新顺序调用 `mutateWatch({op:'reorderGroups', groupIds})`；
+- 后端新增 `reorderGroups`：校验 id 唯一/存在，按数组顺序写 `order`；
+- 拖动中目标分组有虚线高亮；移动端同款 HTML5 drag。
 ## v0.258.0 — 完全移除「复盘」行组件（dsh-tradewatcher-fupan）
 
 `npm run check` **2012 / 2012 × 2 时区** + build（73 项）+ `tsc` 0。

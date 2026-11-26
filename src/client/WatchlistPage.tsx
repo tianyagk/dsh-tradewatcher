@@ -54,6 +54,8 @@ export function WatchlistPage(props: {
   const [modal, setModal] = useState<ModalState>(null)
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({})
   const [showArchived, setShowArchived] = useState(false)
+  const [dragGroup, setDragGroup] = useState<string | null>(null)
+  const [dragOverGroup, setDragOverGroup] = useState<string | null>(null)
   const miniIds = React.useMemo(() => {
     const ids = new Set<string>()
     if (watch !== null) for (const it of watch.items) ids.add(it.secid)
@@ -209,6 +211,15 @@ export function WatchlistPage(props: {
   const groups = [...watch.groups].sort((a, b) => a.order - b.order)
   const active = groups.filter((g) => g.archived !== true)
   const archived = groups.filter((g) => g.archived === true)
+  const moveGroupTo = (fromId: string, toId: string): void => {
+    if (fromId === toId) return
+    const ids = active.map((g) => g.id)
+    const from = ids.indexOf(fromId)
+    const to = ids.indexOf(toId)
+    if (from < 0 || to < 0) return
+    ids.splice(to, 0, ...ids.splice(from, 1))
+    mutatePage({ op: 'reorderGroups', groupIds: ids })
+  }
 
   const itemsOf = (groupId: string): Array<{ id: string; groupId: string; name: string; secid: string; note?: string }> =>
     watch.items.filter((i) => i.groupId === groupId)
@@ -336,9 +347,21 @@ export function WatchlistPage(props: {
       const isCollapsed = collapsed[g.id] === true
       return React.createElement(
         'div',
-        { key: g.id, className: 'tw-group' },
+        {
+          key: g.id,
+          className: `tw-group${dragOverGroup === g.id ? ' is-drag-over' : ''}`,
+          onDragOver: (e: React.DragEvent) => { if (dragGroup !== null) { e.preventDefault(); setDragOverGroup(g.id) } },
+          onDragLeave: () => setDragOverGroup((cur) => (cur === g.id ? null : cur)),
+          onDrop: (e: React.DragEvent) => { e.preventDefault(); if (dragGroup !== null) moveGroupTo(dragGroup, g.id); setDragGroup(null); setDragOverGroup(null) },
+        },
         React.createElement('div', { className: 'tw-group-h' },
           React.createElement('div', { className: 'tw-gh-row' },
+          React.createElement('span', {
+            className: 'tw-group-drag', 'data-role': 'watch-group-drag', draggable: true, title: '拖动调整分组顺序', 'aria-label': `拖动调整分组 ${g.name} 的顺序`,
+            onDragStart: (e: React.DragEvent) => { e.dataTransfer.effectAllowed = 'move'; setDragGroup(g.id) },
+            onDragEnd: () => { setDragGroup(null); setDragOverGroup(null) },
+          }, React.createElement('svg', { width: 12, height: 12, viewBox: '0 0 12 12', 'aria-hidden': true },
+            React.createElement('path', { d: 'M2 3h8M2 5h8M2 7h8M2 9h8', stroke: 'currentColor', strokeWidth: 1.2, strokeLinecap: 'round' }))),
           React.createElement('button', {
             className: 'gname',
             title: isCollapsed ? '展开' : '折叠',
