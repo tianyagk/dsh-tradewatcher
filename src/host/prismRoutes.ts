@@ -15,7 +15,7 @@ import type { PluginWebRoute } from './context.ts'
 import type { AutoTFile, AutoTPlanRec, AutoTResultRec, PrismStore } from './prismStore.ts'
 import { LedgerUnreadableError, PrismTradingStore, applyFeeCorrection, avgCostFromHistory, feesOf, clampDecision, copyAtCost, dayStartMismatchOf, equityPointOf, isEtfName, matchTick, placeDecision, productKeyOf, realizedFromIdentity, rebuildFromOrders, upsertEquity, type QuoteLite } from './prismAccount.ts'
 import { dataHome, type DataStore } from './store.ts'
-import type { PrismAccount, PrismFill, PrismOrder, PrismRun, PrismSettings, PrismState } from '../shared/prism.ts'
+import type { PrismAccount, PrismDecision, PrismFill, PrismOrder, PrismRun, PrismSettings, PrismState } from '../shared/prism.ts'
 import { PRISM_INTERVAL_OPTIONS, PRISM_MAX_TIMES, PRISM_SKELETON_MAX } from '../shared/prism.ts'
 import { applyPriceCorrection } from './prismCorrection.ts'
 import { indexTechTextOf } from './indexTech.ts'
@@ -690,6 +690,22 @@ async function placeAutoTPairs(deps: PrismRouteDeps, run: PrismRun): Promise<voi
   })
 }
 
+/** 主决策费用门槛：少而准确——成交额 ≥5000 元且单边费用 ≤0.2%，否则拒绝并留原因 */
+function applyFeeGate(dec: PrismDecision): PrismDecision {
+  const orders: PrismDecision['orders'] = []
+  const rejects = [...dec.rejects]
+  for (const o of dec.orders) {
+    const notional = o.price * o.shares
+    const fee = feesOf(o.side, o.price, o.shares).total
+    if (notional < 5000 || fee > notional * 0.002) {
+      rejects.push({ ...o, reason: `费用不经济：成交额 ${Math.round(notional)} 元，单边费用 ${fee.toFixed(2)} 元（要求 ≥5000 元且费用 ≤0.2%）` })
+      continue
+    }
+    orders.push(o)
+  }
+  return { ...dec, orders, rejects }
+}
+
 export async function runPrismForSlot(deps: PrismRouteDeps, slot: string): Promise<Awaited<ReturnType<typeof runPrismAnalysis>>> {
   // P0-2：账本读不到时，连研判落单都不许开始（先给明确的 400，而不是跑完 LLM 再报错）
   deps.trading.assertWritable('棱镜研判落单')
@@ -757,6 +773,7 @@ export async function runPrismForSlot(deps: PrismRouteDeps, slot: string): Promi
   run.decision = applyDrawdownGate(clamped.decision, drawdown)
   run.drawdown = drawdown
   // 边界口径：用 run 触发时刻（startedAt），不是分析结束后的墙钟；14:59:09 ⇒ 14:59 可下单
+  run.decision = applyFeeGate(run.decision)
   const result = await placeDecision(deps.trading, run.decision, run.startedAt, quotes)
   // 保留裁剪/去重阶段的 rejects（此前被 placeDecision 的 rejects 覆盖 ⇒ 去重闸留痕会消失）
   run.decision = { ...run.decision, rejects: [...run.decision.rejects, ...result.rejects] }

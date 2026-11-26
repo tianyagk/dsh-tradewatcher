@@ -78,7 +78,7 @@ test('④ 自动 run 路径落单并写 placement（只写 runs ⇒ 败）', asy
     const llm = {
       stream: () => {
         n += 1
-        const text = n <= 4 ? `报告${n}` : '汇总\n```json\n{"note":"不买：无现金；不卖：未破位","limits":{"singlePct":20,"totalPct":50,"note":"x"},"orders":[{"secid":"1.600519","side":"buy","price":10,"shares":100,"reason":"测试"}],"cancel":[]}\n```'
+        const text = n <= 4 ? `报告${n}` : '汇总\n```json\n{"note":"不买：无现金；不卖：未破位","limits":{"singlePct":20,"totalPct":50,"note":"x"},"orders":[{"secid":"1.600519","side":"buy","price":10,"shares":1000,"reason":"测试"}],"cancel":[]}\n```'
         return (async function* () { yield { type: 'text-delta', text } })()
       },
     }
