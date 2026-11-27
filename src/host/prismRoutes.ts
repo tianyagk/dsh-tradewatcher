@@ -190,10 +190,8 @@ export function rejectedTodayOf(
   runs: readonly PrismRun[] = [],
   limit = 10,
 ): RejectedTodayOrder[] {
-  return orders
+  const fromOrders = orders
     .filter((o) => o.status === 'rejected' && o.day === day)
-    .sort((a, b) => b.decidedAt - a.decidedAt)
-    .slice(0, limit)
     .map((o) => ({
       id: o.id,
       secid: o.secid,
@@ -204,6 +202,28 @@ export function rejectedTodayOf(
       decidedAt: o.decidedAt,
       reason: rejectedReasonOf(o, runs),
     }))
+  // 费用门槛/裁剪在 placeDecision 之前就被拒的委托不会生成 PrismOrder ⇒ 必须从 run.decision.rejects 补进来
+  const seen = new Set(fromOrders.map((o) => `${o.secid}|${o.side}|${o.shares}|${o.price}`))
+  const fromRuns: RejectedTodayOrder[] = []
+  for (const run of runs) {
+    if (run.day !== day) continue
+    for (const [i, r] of (run.decision?.rejects ?? []).entries()) {
+      const key = `${r.secid}|${r.side}|${r.shares}|${r.price}`
+      if (seen.has(key)) continue
+      seen.add(key)
+      fromRuns.push({
+        id: `run-${run.startedAt}-${i}`,
+        secid: r.secid,
+        name: orders.find((o) => o.secid === r.secid)?.name ?? r.secid,
+        side: r.side,
+        price: r.price,
+        shares: r.shares,
+        decidedAt: run.startedAt,
+        reason: r.reason,
+      })
+    }
+  }
+  return [...fromOrders, ...fromRuns].sort((a, b) => b.decidedAt - a.decidedAt).slice(0, limit)
 }
 
 /** 提示词里的「今日已被风控拒绝的委托」段落正文；无 ⇒ `—（今日无被拒委托）` */

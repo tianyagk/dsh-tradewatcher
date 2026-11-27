@@ -11,6 +11,21 @@
 
 ---
 
+## v0.259.1 — 修「费用门槛被拒不进下一轮提示词」
+
+`npm run check` **2015 / 2015 × 2 时区** + build（73 项）+ `tsc` 0。
+
+### 问题
+`rejectedTodayOf()` 只扫 `orders` 里 `status:'rejected'` 的委托；
+`applyFeeGate()` 在 `placeDecision` **之前**就把不经济委托从 `decision.orders` 移除并写进 `decision.rejects`，
+没有生成 `PrismOrder` ⇒ 下一轮【今日已被风控拒绝的委托】为空，模型原样重复提交。
+
+### 修法
+`rejectedTodayOf()` 除 orders 外，合并当日各 run 的 `decision.rejects`（无订单的裁剪/费用拒绝），
+按 secid/side/shares/price 去重，取最近 10 条写进提示词；名称从同标的订单回填，无则用 secid。
+
+### 验证
+新增断言：无 `PrismOrder` 的费用拒绝也能出现在 `rejectedTodayOf` 与提示词文本。
 ## v0.259.0 — 自选分组支持拖动排序
 
 `npm run check` **2014 / 2014 × 2 时区** + build（73 项）+ `tsc` 0。

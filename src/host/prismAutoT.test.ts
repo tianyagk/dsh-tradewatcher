@@ -60,3 +60,12 @@ test('⑤ 换日生成 dayOpenQty 开盘快照（收盘对账基线）', async (
   const same = rollDay(next, '2026-11-26', 1_000_000)
   assert.equal(same.dayOpenQty?.['1.601872'], 1000)
 })
+
+test('⑥ 费用门槛被拒（无 PrismOrder）也会进入下一轮提示词', async () => {
+  const { rejectedTodayOf, rejectedTodayTextOf } = await import('./prismRoutes.ts')
+  const run = { day: '2026-11-27', startedAt: Date.parse('2026-11-27T10:30:00+08:00'), decision: { rejects: [{ secid: '1.601872', side: 'sell', price: 15.17, shares: 120, reason: '费用不经济：成交额 1820 元' }] } }
+  const items = rejectedTodayOf([], '2026-11-27', [run] as never)
+  assert.equal(items.length, 1)
+  assert.equal(items[0]?.reason, '费用不经济：成交额 1820 元')
+  assert.match(rejectedTodayTextOf(items), /1\.601872|费用不经济/)
+})
