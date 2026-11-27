@@ -530,6 +530,27 @@ export async function autoTContextOf(deps: PrismRouteDeps, account: PrismAccount
   ].join('\n')
 }
 
+
+/** 外盘/大宗只读快照（5 分钟缓存；缺数据写 —，不拿 A 股代理） */
+let macroCache: { at: number; text: string } | null = null
+async function macroContextOf(deps: PrismRouteDeps): Promise<string> {
+  if (macroCache !== null && Date.now() - macroCache.at < 5 * 60_000) return macroCache.text
+  const ids = ['100.SPX', '100.NDX', '100.DJI', '100.HSI', '100.N225', '100.KOSPI200', '100.UDI', '101.GC00Y', '101.CL', '101.HG00Y']
+  const q = await (deps.quotes ?? fetchQuotes)(ids).catch(() => ({}))
+  const fmt = (id: string, name: string): string => {
+    const r = (q as Record<string, { price?: number | null; pct?: number | null }>)[id]
+    if (r === undefined || typeof r.price !== 'number') return `- ${name}：—（未取到）`
+    const pct = typeof r.pct === 'number' ? `${r.pct >= 0 ? '+' : ''}${r.pct.toFixed(2)}%` : '—'
+    return `- ${name}：${r.price}（${pct}）`
+  }
+  const text = ['【外盘与大宗（只读事实；缺失写 —，不得用 A 股代理）】',
+    fmt('100.SPX', '标普500'), fmt('100.NDX', '纳斯达克100'), fmt('100.DJI', '道指'), fmt('100.HSI', '恒生'),
+    fmt('100.N225', '日经225'), fmt('100.KOSPI200', '韩国KOSPI200'), fmt('100.UDI', '美元指数'),
+    fmt('101.GC00Y', '黄金'), fmt('101.CL', '原油'), fmt('101.HG00Y', '铜')].join('\n')
+  macroCache = { at: Date.now(), text }
+  return text
+}
+
 /** 因子库行数据（前端抽屉用）：持仓 + 自选，PIT 日线，5 分钟缓存 */
 /** 日内因子：VWAP 偏离、当日位置、量能节奏（只对持仓算，最多 11 只） */
 async function intradayFactorsOf(secid: string): Promise<{ vwapDevPct: number | null; posDay: number | null; rvol: number | null }> {
@@ -669,6 +690,10 @@ export const prismInputsOf = async (deps: PrismRouteDeps, slot = ''): Promise<Pr
   const rejectedText = rejectedTodayTextOf(rejectedTodayOf(allOrders, dayOf((deps.now ?? Date.now)()), deps.store.runs()))
   const stRound = deps.store.settings()
   const nowMs = (deps.now ?? Date.now)()
+  const priorPlan = deps.store.planState()
+  const planText = priorPlan === null || priorPlan.day !== dayOf(nowMs)
+    ? '【上一轮决策与计划状态】—（今日上一轮无记录）'
+    : `【上一轮决策与计划状态】${priorPlan.roundType} · ${priorPlan.tPlanPairIds.length} 条 T 计划 · ${priorPlan.mainOrderIds.length} 笔主单${priorPlan.note === null ? '' : `；上轮 note：${priorPlan.note}`}。失败原因只作事实，本轮独立判断。`
   const hm = hhmmOf(nowMs)
   const mins = Number(hm.slice(0, 2)) * 60 + Number(hm.slice(3, 5))
   const closeMins = mins < 11 * 60 + 30 ? 11 * 60 + 30 : mins < 13 * 60 ? 13 * 60 : 15 * 60
@@ -679,6 +704,8 @@ export const prismInputsOf = async (deps: PrismRouteDeps, slot = ''): Promise<Pr
     products,
     account: accountSnapshot,
     round: roundText,
+    plan: planText,
+    macro: await macroContextOf(deps).catch(() => '【外盘与大宗】—（取数失败）'),
     quotes: `${quoteText}\n【待成交挂单】\n${pendingText}\n【今日已被风控拒绝的委托】\n${rejectedText}`,
     news,
     skeleton: deps.store.skeleton(),
@@ -975,7 +1002,7 @@ async function placeAutoTPairs(deps: PrismRouteDeps, run: PrismRun): Promise<voi
     for (const [pairId, v] of pairs) {
       if (keep.has(pairId)) continue
       if (blocked.size > 0) { /* 风控/减仓冲突：一并撤 */ }
-      for (const o of v.orders) { o.status = 'cancelled'; o.cancelledAt = Date.now(); o.cancelReason = '每轮重审计：计划变更或本轮不计划' }
+      for (const o of v.orders) { o.status = 'cancelled'; o.cancelledAt = Date.now(); o.cancelReason = '每轮重审计：计划变更或本轮不计划'; o.cancelCode = 'replaced' }
       killed.add(pairId)
     }
     const plansNext = file0.plans.map((p) => killed.has(String(p.pairId)) && (p.status === 'waiting' || p.status === 'planned') ? { ...p, status: 'aborted' as const } : p)
@@ -1038,6 +1065,27 @@ export function applyCandidatePoolGate(dec: PrismDecision, pool: ReadonlySet<str
     })
   }
   return { ...dec, orders, rejects }
+}
+
+
+/** 每轮动作预算：新买入主单最多 4 笔、T 计划最多 2 条；卖出/平仓不受限 */
+export const ROUND_BUDGET = { maxBuyOrders: 4, maxTPlans: 2 } as const
+export function applyRoundBudget(dec: PrismDecision): PrismDecision {
+  const orders: PrismDecision['orders'] = []
+  const rejects = [...dec.rejects]
+  let buys = 0
+  for (const o of dec.orders) {
+    if (o.side === 'buy') {
+      if (buys >= ROUND_BUDGET.maxBuyOrders) {
+        rejects.push({ ...o, reason: `本轮动作预算：新买入最多 ${ROUND_BUDGET.maxBuyOrders} 笔，本笔未提交` })
+        continue
+      }
+      buys += 1
+    }
+    orders.push(o)
+  }
+  const tPlans = (dec.tPlans ?? []).slice(0, ROUND_BUDGET.maxTPlans)
+  return { ...dec, orders, rejects, ...(dec.tPlans === undefined ? {} : { tPlans }) }
 }
 
 export async function runPrismForSlot(deps: PrismRouteDeps, slot: string): Promise<Awaited<ReturnType<typeof runPrismAnalysis>>> {
@@ -1110,11 +1158,21 @@ export async function runPrismForSlot(deps: PrismRouteDeps, slot: string): Promi
   run.decision = applyDrawdownGate(clamped.decision, drawdown)
   run.drawdown = drawdown
   // 边界口径：用 run 触发时刻（startedAt），不是分析结束后的墙钟；14:59:09 ⇒ 14:59 可下单
-  run.decision = applyFeeGate(run.decision, account.positions)
+  run.decision = applyRoundBudget(applyFeeGate(run.decision, account.positions))
   const result = await placeDecision(deps.trading, run.decision, run.startedAt, quotes)
   // 保留裁剪/去重阶段的 rejects（此前被 placeDecision 的 rejects 覆盖 ⇒ 去重闸留痕会消失）
   run.decision = { ...run.decision, rejects: [...run.decision.rejects, ...result.rejects] }
   await placeAutoTPairs(deps, run).catch((error) => { run.error = `自动做T下单失败：${String((error as Error)?.message ?? error)}` })
+  // P1-4：持久化本轮计划状态，供下一轮提示词回灌（跨重启可见）
+  const autoTNow = await deps.trading.autoT()
+  await deps.store.savePlanState({
+    day: dayOf(run.startedAt),
+    updatedAt: Date.now(),
+    roundType: slot === '09:30' || slot === '13:00' ? '开盘计划' : '常规执行',
+    note: run.decision.note ?? null,
+    mainOrderIds: deps.trading.orders().filter((o) => o.day === dayOf(run.startedAt) && o.channel !== 'autoT').map((o) => o.id),
+    tPlanPairIds: autoTNow.plans.filter((p) => p.day === dayOf(run.startedAt) && (p.status === 'waiting' || p.status === 'planned')).map((p) => p.pairId),
+  }).catch(() => undefined)
   // P0-1：`limits` 只回显 settings 的权威值（模型自报值既不参与裁剪，也不得落盘冒充上限）。
   // 未配置 maxPosPct ⇒ 回显引擎安全默认（默认值 95%），与 clamp 使用的 effectiveTotal 一致。
   run.decision = {
@@ -1426,7 +1484,7 @@ export function makePrismRoutes(deps: PrismRouteDeps): PluginWebRoute[] {
                 if (nextPositions[o.secid]?.enabled === true) continue
                 // 已成交/部分成交的开腿不能撤（否则裸敞口）；回补腿必须留着把持仓收回来
                 if (o.leg === 'close' || (o.filledShares ?? 0) > 0) continue
-                o.status = 'cancelled'; o.cancelledAt = Date.now(); o.cancelReason = '做T开关关闭'; changed = true
+                o.status = 'cancelled'; o.cancelledAt = Date.now(); o.cancelReason = '做T开关关闭'; o.cancelCode = 'switch-off'; changed = true
               }
               if (changed) await deps.trading.saveAll({ account: deps.trading.account(), orders, fills: deps.trading.fills() })
             })
@@ -1597,7 +1655,7 @@ export function makePrismRoutes(deps: PrismRouteDeps): PluginWebRoute[] {
               result.account.capital = capitalAfter
               // 复制 = 新账本：旧挂单全部作废（否则旧买单用新现金成交、旧卖单卖掉新持仓）
               for (const o of deps.trading.orders()) {
-                if (o.status === 'pending') { o.status = 'cancelled'; o.cancelledAt = Date.now(); o.cancelReason = '复制重置' }
+                if (o.status === 'pending') { o.status = 'cancelled'; o.cancelledAt = Date.now(); o.cancelReason = '复制重置'; o.cancelCode = 'copy-reset' }
               }
               await deps.trading.saveAll({ account: result.account, orders: deps.trading.orders(), fills: deps.trading.fills() })
               return { result, capitalBefore, capitalAfter, raised }
@@ -1638,7 +1696,7 @@ export function makePrismRoutes(deps: PrismRouteDeps): PluginWebRoute[] {
               if (order === undefined) return { ok: false as const, error: '没有可撤销的挂单' }
               order.status = 'cancelled'
               order.cancelledAt = Date.now()
-              order.cancelReason = '手动撤销'
+              order.cancelReason = '手动撤销'; order.cancelCode = 'manual'
               await deps.trading.saveAll({ account: deps.trading.account(), orders, fills: deps.trading.fills() })
               return { ok: true as const, orders }
             })

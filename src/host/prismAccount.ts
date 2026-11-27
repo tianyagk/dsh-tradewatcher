@@ -1734,7 +1734,7 @@ async function placeDecisionLocked(
     if (o !== undefined) {
       o.status = 'cancelled'
       o.cancelledAt = now
-      o.cancelReason = '后续研判撤销'
+      o.cancelReason = '后续研判撤销'; o.cancelCode = 'model-cancel'
     }
   }
   const out: PrismOrder[] = []
@@ -1866,7 +1866,7 @@ async function matchTickLocked(
     if (order.day !== day) {
       order.status = 'cancelled'
       order.cancelledAt = now
-      order.cancelReason = '当日未成交，次日失效'
+      order.cancelReason = '当日未成交，次日失效'; order.cancelCode = 'expired'
       continue
     }
     const quoteMap = await deps.quotes([order.secid])
@@ -2012,7 +2012,7 @@ async function matchTickLocked(
             changed = true
           }
         } else if (deadline > 0 && now >= deadline) {
-          open.status = 'cancelled'; open.cancelledAt = now; open.cancelReason = '自动做T截止（未成交）'
+          open.status = 'cancelled'; open.cancelledAt = now; open.cancelReason = '自动做T截止（未成交）'; open.cancelCode = 'expired'
           plan.status = 'aborted'
           changed = true
         }
@@ -2053,7 +2053,7 @@ async function matchTickLocked(
         const sellLeg = pair.find((o) => o.side === 'sell')
         const buyFilled = buyLeg?.filledShares ?? 0
         const sellFilled = sellLeg?.filledShares ?? 0
-        for (const o of pair) if (o.status === 'pending') { o.status = 'cancelled'; o.cancelledAt = now; o.cancelReason = '自动做T截止' }
+        for (const o of pair) if (o.status === 'pending') { o.status = 'cancelled'; o.cancelledAt = now; o.cancelReason = '自动做T截止'; o.cancelCode = 'expired' }
         // 只回补「净差额」：买成交 − 卖成交；部分成交不会过度平仓（审计 #2）
         const delta = buyFilled - sellFilled
         if (delta !== 0) {

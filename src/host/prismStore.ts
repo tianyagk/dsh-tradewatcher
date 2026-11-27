@@ -68,6 +68,16 @@ export interface AutoTResultRec {
 export interface AutoTRecon { day: string; secid: string; openQty: number; closeQty: number; diff: number; at: number }
 export interface AutoTFile { plans: AutoTPlanRec[]; trades: AutoTTradeRec[]; results: AutoTResultRec[]; recons?: AutoTRecon[] }
 
+/** P1-4/P1-3：每轮决策的持久化计划状态（跨进程/重启可见，供下一轮提示词回灌） */
+export interface PrismPlanState {
+  day: string
+  updatedAt: number
+  roundType: string
+  note: string | null
+  mainOrderIds: string[]
+  tPlanPairIds: string[]
+}
+
 export class PrismStore {
   private readonly dir: string
   private readonly guard = new ReadGuard()
@@ -77,6 +87,7 @@ export class PrismStore {
   private newsItems: PrismNewsItem[] = []
   private runsValue: PrismRun[] = []
   private autoTValue: AutoTFile = { plans: [], trades: [], results: [] }
+  private planStateValue: PrismPlanState | null = null
   private initialized = false
 
   constructor(dir = dataHome()) {
@@ -215,6 +226,19 @@ export class PrismStore {
   }
 
   private async loadAutoT(): Promise<void> {
+    const planDisk = await this.loadJson<{ plan?: unknown }>('prism-plan.json')
+    if (planDisk !== null && typeof planDisk.plan === 'object' && planDisk.plan !== null) {
+      const p = planDisk.plan as Record<string, unknown>
+      if (typeof p['day'] === 'string' && typeof p['updatedAt'] === 'number') {
+        this.planStateValue = {
+          day: p['day'], updatedAt: p['updatedAt'], roundType: typeof p['roundType'] === 'string' ? p['roundType'] : '常规执行',
+          note: typeof p['note'] === 'string' ? p['note'] : null,
+          mainOrderIds: Array.isArray(p['mainOrderIds']) ? p['mainOrderIds'].filter((x): x is string => typeof x === 'string') : [],
+          tPlanPairIds: Array.isArray(p['tPlanPairIds']) ? p['tPlanPairIds'].filter((x): x is string => typeof x === 'string') : [],
+        }
+      }
+    }
+
     const disk = await this.loadJson<{ plans?: unknown; trades?: unknown; results?: unknown }>('prism-autot.json')
     if (disk === null) return
     const arr = (v: unknown): unknown[] => (Array.isArray(v) ? v : [])
@@ -227,6 +251,15 @@ export class PrismStore {
 
   autoT(): AutoTFile {
     return JSON.parse(JSON.stringify(this.autoTValue)) as AutoTFile
+  }
+
+  planState(): PrismPlanState | null {
+    return this.planStateValue === null ? null : JSON.parse(JSON.stringify(this.planStateValue)) as PrismPlanState
+  }
+
+  async savePlanState(next: PrismPlanState): Promise<void> {
+    this.planStateValue = next
+    await updateJsonLocked(this.pathOf('prism-plan.json'), () => ({ v: 1, plan: next })).catch(() => undefined)
   }
 
   /** 写入自动做T 账本（计划/成交/结算）；与主三账本分开，失败不影响主账 */

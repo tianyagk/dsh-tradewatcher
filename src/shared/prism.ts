@@ -255,6 +255,8 @@ export interface PrismOrder {
   origin?: 'auto' | 'manual'
   cancelledAt?: number
   cancelReason?: string
+  /** 撤单原因码：manual / model-cancel / replaced / gate-triggered / expired / switch-off / copy-reset */
+  cancelCode?: string
   /** 人工错价订正留痕：每次订正一条，不覆盖历史 */
   corrections?: Array<{ at: number; oldPrice: number; newPrice: number; delta: number; basis: string }>
 }

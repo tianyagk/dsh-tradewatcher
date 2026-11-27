@@ -11,6 +11,27 @@
 
 ---
 
+## v0.261.0 — 棱镜提示词 v2 + PlanState + 撤单码 + 动作预算 + 外盘/大宗
+
+`npm run check` **2035 / 2035 × 2 时区** + build（73 项）+ `tsc` 0。
+
+### 提示词 v2（第一批全量块）
+- 新增【强制·A股制度与引擎闸门】：T+1、整手/一次性清仓、涨跌停/停牌、±3% 价格带、5000 元/0.2% 费用门槛、同产品 ETF、候选池白名单；
+- 新增【强制·note 契约】：≤120 字；空单固定「不买：…；不卖：…」；`limits.note` 可省略；
+- 汇总任务由「5 条以内」改为 **3 行：结论 / 分歧 / 盯什么**，每行 ≤50 字；
+- 输出 schema 的 `note` 描述同步。
+
+### PlanState / 撤单 / 预算
+- 新增 `prism-plan.json`：保存 `{day, updatedAt, roundType, note, mainOrderIds, tPlanPairIds}`，下一轮提示词注入【上一轮决策与计划状态】；
+- `PrismOrder.cancelCode`：`manual/model-cancel/replaced/gate-triggered/expired/switch-off/copy-reset`，各撤单点已回填；
+- 每轮动作预算：新买入主单最多 4 笔、T 计划最多 2 条；卖出/平仓不占额度，超额写 rejects。
+
+### 新闻 / 外盘
+- 新闻保持 24h 入库；提示词上限提高到 24K 字符、最多 500 条，超出报省略数量；
+- 新增【外盘与大宗】只读段：标普/纳指/道指/恒生/日经/KOSPI/美元指数/黄金/原油/铜，5 分钟缓存，缺数据写 —。
+
+### 验证
+`npm run check` **2035 / 2035 × 2 时区** + build 73 + `tsc` 0；新增动作预算、PlanState 持久化测试。
 ## v0.260.0 — 棱镜决策链 P0 引擎正确性（第一批）
 
 `npm run check` **2033 / 2033 × 2 时区** + build（73 项）+ `tsc` 0。设计依据：`docs/PRD-PRISM-PROMPT-V2.md`；评审：`docs/REVIEW-PRISM-DECISION-LOGIC.md`。

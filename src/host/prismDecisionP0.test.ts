@@ -345,3 +345,26 @@ test('P0-10 ② 端到端：池外买单被拒并写原因，不落单；limits 
     await rm(dir, { recursive: true, force: true })
   }
 })
+
+test('P1-12 动作预算：每轮最多 4 笔新买入 / 2 条 T 计划，卖出不占额度', async () => {
+  const { applyRoundBudget } = await import('./prismRoutes.ts')
+  const orders: Array<{ secid: string; side: 'buy' | 'sell'; price: number; shares: number; reason: string }> = Array.from({ length: 6 }, (_, i) => ({ secid: `1.60000${i}`, side: 'buy', price: 10, shares: 100, reason: 'x' }))
+  orders.push({ secid: '1.600009', side: 'sell', price: 10, shares: 100, reason: '卖' })
+  const tPlans = Array.from({ length: 3 }, (_, i) => ({ secid: `1.60001${i}`, direction: 'buy-first' as const, buyPrice: 10, sellPrice: 11, shares: 100 }))
+  const d = { limits: { singlePct: null, totalPct: null, note: null }, orders, cancel: [], rejects: [], parseError: null, tPlans }
+  const out = applyRoundBudget(d as never)
+  assert.equal(out.orders.filter((o) => o.side === 'buy').length, 4)
+  assert.equal(out.orders.some((o) => o.side === 'sell'), true)
+  assert.equal(out.tPlans?.length, 2)
+  assert.equal(out.rejects.length, 2)
+})
+
+test('P1-4 PlanState 持久化：保存后新实例可读回', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'prism-plan-'))
+  try {
+    const a = new PrismStore(dir); await a.init()
+    await a.savePlanState({ day: '2026-11-27', updatedAt: 1, roundType: '常规执行', note: 'n', mainOrderIds: ['o1'], tPlanPairIds: ['p1'] })
+    const b = new PrismStore(dir); await b.init()
+    assert.deepEqual(b.planState(), { day: '2026-11-27', updatedAt: 1, roundType: '常规执行', note: 'n', mainOrderIds: ['o1'], tPlanPairIds: ['p1'] })
+  } finally { await rm(dir, { recursive: true, force: true }) }
+})
