@@ -841,14 +841,17 @@ async function placeAutoTPairs(deps: PrismRouteDeps, run: PrismRun): Promise<voi
   if (factorLogs.length > 0) await pruneFactorLogs(logDir)
 }
 
-/** 主决策费用门槛：少而准确——成交额 ≥5000 元且单边费用 ≤0.2%，否则拒绝并留原因 */
-function applyFeeGate(dec: PrismDecision): PrismDecision {
+/** 主决策费用门槛：少而准确——成交额 ≥5000 元且单边费用 ≤0.2%，否则拒绝并留原因。
+ *  例外：卖出后清仓（shares ≥ 持仓）或持仓本身 <100 股碎股 ⇒ 豁免，避免零股永远卖不掉。 */
+export function applyFeeGate(dec: PrismDecision, positions: ReadonlyArray<{ secid: string; qty: number }> = []): PrismDecision {
   const orders: PrismDecision['orders'] = []
   const rejects = [...dec.rejects]
   for (const o of dec.orders) {
+    const pos = positions.find((p) => p.secid === o.secid)
+    const cleanup = o.side === 'sell' && pos !== undefined && pos.qty > 0 && (pos.qty < 100 || o.shares >= pos.qty)
     const notional = o.price * o.shares
     const fee = feesOf(o.side, o.price, o.shares).total
-    if (notional < 5000 || fee > notional * 0.002) {
+    if (!cleanup && (notional < 5000 || fee > notional * 0.002)) {
       rejects.push({ ...o, reason: `费用不经济：成交额 ${Math.round(notional)} 元，单边费用 ${fee.toFixed(2)} 元（要求 ≥5000 元且费用 ≤0.2%）` })
       continue
     }
@@ -924,7 +927,7 @@ export async function runPrismForSlot(deps: PrismRouteDeps, slot: string): Promi
   run.decision = applyDrawdownGate(clamped.decision, drawdown)
   run.drawdown = drawdown
   // 边界口径：用 run 触发时刻（startedAt），不是分析结束后的墙钟；14:59:09 ⇒ 14:59 可下单
-  run.decision = applyFeeGate(run.decision)
+  run.decision = applyFeeGate(run.decision, account.positions)
   const result = await placeDecision(deps.trading, run.decision, run.startedAt, quotes)
   // 保留裁剪/去重阶段的 rejects（此前被 placeDecision 的 rejects 覆盖 ⇒ 去重闸留痕会消失）
   run.decision = { ...run.decision, rejects: [...run.decision.rejects, ...result.rejects] }

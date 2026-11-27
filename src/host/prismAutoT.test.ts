@@ -69,3 +69,12 @@ test('⑥ 费用门槛被拒（无 PrismOrder）也会进入下一轮提示词',
   assert.equal(items[0]?.reason, '费用不经济：成交额 1820 元')
   assert.match(rejectedTodayTextOf(items), /1\.601872|费用不经济/)
 })
+
+test('⑦ 清仓/碎股卖出豁免费用门槛', async () => {
+  const { applyFeeGate } = await import('./prismRoutes.ts')
+  const dec = (side: 'buy' | 'sell', shares: number) => ({ limits: { singlePct: 30, totalPct: null, note: null }, orders: [{ secid: '1.601872', side, price: 15.17, shares, reason: 'x' }], cancel: [], rejects: [] })
+  const held = [{ secid: '1.601872', qty: 120 }]
+  assert.equal(applyFeeGate(dec('sell', 120) as never, held).orders.length, 1, '清仓卖出必须放行')
+  assert.equal(applyFeeGate(dec('sell', 120) as never, [{ secid: '1.601872', qty: 1000 }]).orders.length, 0, '非清仓小额卖出仍拒')
+  assert.equal(applyFeeGate(dec('buy', 100) as never, [{ secid: '1.601872', qty: 100 }]).orders.length, 0, '买入不豁免')
+})
