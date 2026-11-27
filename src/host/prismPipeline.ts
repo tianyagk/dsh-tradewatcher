@@ -44,6 +44,8 @@ export interface PrismInputs {
   limits?: string
   /** v0.241.0：【自动做T·可计划标的】 */
   autoT?: string
+  /** P0-4：【本轮时点与节奏】周期/轮次/距收盘 */
+  round?: string
   /** v0.226.0：【回撤闸门】引擎判定，模型必须看到 */
   drawdown?: string
 }
@@ -68,7 +70,8 @@ export function decisionProblems(decision: PrismDecision | null): string[] {
     if (!/买|加仓|建仓/.test(note)) bad.push('orders=[] 但 note 未说明不买/不加仓')
     if (!/卖|减仓|清仓|止损/.test(note)) bad.push('orders=[] 但 note 未说明不卖/减仓/止损')
   }
-  if (decision.limits.singlePct === null || decision.limits.totalPct === null) bad.push('limits 有空值')
+  // P0-1：`totalPct === null` 是合法值（settings 未配置 maxPosPct ⇒ 引擎不按总仓裁剪），不再算空值
+  if (decision.limits.singlePct === null) bad.push('limits 有空值')
   return bad
 }
 
@@ -86,11 +89,22 @@ export function mandateHashOf(skeleton: string, settings: Record<string, unknown
 }
 
 const compileInput = (inputs: PrismInputs, withNews = true): string => {
-  const news = inputs.news.slice(0, 30).map((n) => `- ${n.time} ${n.text}`).join('\n')
+  // P1-7a：新闻按重要优先 + 8K 字符上限，超出的只报数量，不静默截断
+  const newsLines: string[] = []
+  let newsChars = 0
+  let omitted = 0
+  for (const n of inputs.news.slice(0, 200)) {
+    const line = `- ${n.time} ${n.text}`
+    if (newsChars + line.length + 1 > 8000) { omitted += 1; continue }
+    newsLines.push(line)
+    newsChars += line.length + 1
+  }
+  const news = newsLines.join('\n') + (omitted > 0 ? `\n—（更多 ${omitted} 条未展开，按重要度优先）` : '')
   return [
     '【研判骨架】',
     inputs.skeleton.trim() || '—',
-    '【账户快照（模拟盘，只读；数字均带单位）】',
+    ...(inputs.round !== undefined && inputs.round.trim() !== '' ? [inputs.round] : []),
+    '【账户快照（模拟盘，唯一账户事实源；可买额度已由引擎扣最低现金留存/费用预留并按整手取整）】',
     inputs.account || '—（未取到账户快照）',
     ...(inputs.tech !== undefined && inputs.tech.trim() !== '' ? [inputs.tech] : []),
     ...(inputs.factors !== undefined && inputs.factors.trim() !== '' ? [inputs.factors] : []),
@@ -183,13 +197,13 @@ export async function runPrismAnalysis(
       [{
         role: 'user',
         content: `${contextNoNews}\n\n${inputs.autoT !== undefined && inputs.autoT.trim() !== '' ? inputs.autoT + '\n\n' : ''}【四路结论】\n${digest}\n\n【任务】把四路结论汇总成 5 条以内的要点，指出分歧与需要盯的变量。` +
-          '\n必须依据【账户快照】计算仓位上限；正常应当给出 singlePct/totalPct，确实无法计算时才用 null 并在 limits.note 说明原因。' +
+          '\n仓位上限一律「回显」【约束（用户配置，硬边界）】里的值：limits.singlePct = 单票上限、limits.totalPct = 最大总仓位（未设置 ⇒ 写 null），不得自行计算或改写；引擎按权威值裁剪。' +
           '\n【强制·因子表】技术面/波动/位置/动量一律以【因子表】的引擎值为准（前复权、已完成 bar）；不得自行从 K 线重算，缺数写 — + 原因；因子表不构成买卖建议，只作事实依据。' +
           '\n【强制·风险暴露】必须先判断是否需要降低风险暴露（减仓/止损/清仓），给出结论与理由；若判断不减，必须写明为什么满仓是合理的。' +
           '\n【强制·双侧】orders 允许卖单，卖单字段同样是 {secid, side:\'sell\', price, shares, reason}；不能只考虑买入侧。' +
           '\n【强制·空单说明】orders 为空时，note 必须分两段：「不买的理由」与「不卖的理由」；缺一段即视为不合格。' +
           '\n【强制·不得重复被拒】今日已因同一原因被拒的委托，不得原样重发；若仍要交易，必须先核对可用数量/可用资金，并说明与上次不同的依据。' +
-          '\n【强制·自动做T】只对【自动做T·可计划标的】里的持仓给 tPlans；其余一律不给。tPlans 每项 {secid,direction,buyPrice,sellPrice,shares,observe,reasoning,conclusion}；direction 只有 buy-first（正T，先买后卖，需要现金）与 sell-first（反T，先卖底仓再买回，不需要现金）；shares 必须是 100 的倍数且 ≤ 可卖数量与底仓 20%；价差（sellPrice/buyPrice−1）必须 ≥1.2% 且覆盖双边费用（低于 1.2% 的价差不足以覆盖一个最小变动单位的逆向风险）。先判断近期波动是否适合做T：ATR14/现价 ≥1.5% 且 20 日振幅 ≥3% 才考虑，否则给空数组；买卖界必须基于 ATR 与支撑/压力给出，不得只做 1–2 个最小变动单位；现金不足时优先判断反T，不要因为没现金就一律不做；每轮都会重新审计，旧 T 腿会被本轮判断替换；确实没有可做的才给空数组，并在 observe 里写一句为什么不做（空数组时也允许给一条「不做」说明项，shares=0 不落单）。禁止编造。' +
+          '\n【强制·自动做T】只对【自动做T·可计划标的】里的持仓给 tPlans；其余一律不给。tPlans 每项 {secid,direction,buyPrice,sellPrice,shares,observe,reasoning,conclusion}；direction 只有 buy-first（正T，先买后卖，需要现金）与 sell-first（反T，先卖底仓再买回，不需要现金）；shares 必须是 100 的倍数且 ≤ 可卖数量与底仓 20%；价差（sellPrice/buyPrice−1）必须覆盖双边费用（低于最小价差的 T 腿会被引擎拒）。先看【自动做T·可计划标的】里引擎给出的门槛（ATR14 / ATR 分位 / 日均振幅）是否全部满足：不满足就给空数组，门槛数字以引擎段为准、不要自己定阈值；买卖界必须基于 ATR 与支撑/压力给出，不得只做 1–2 个最小变动单位；现金不足时优先判断反T，不要因为没现金就一律不做；已有未成交 T 腿若条件不变优先保留，不要逐轮按新价重挂；只有条件失效才替换；确实没有可做的才给空数组，并在 observe 里写一句为什么不做（空数组时也允许给一条「不做」说明项，shares=0 不落单）。禁止编造。' +
           '\n【强制·措辞】不得使用「唯一 / 全部 / 所有」等绝对量词，除非逐只对照候选池确认只有一只；两笔委托不得都称「唯一」。' +
           '\n【强制·止损口径】判断「浮亏是否触及止损线」必须用「买入均价」（卖出不变），不得用摊薄成本——摊薄成本会被亏损卖出推高，越卖越亏。' +
           '\n【强制·单票以配置为准】limits.singlePct 必须等于【约束（用户配置，硬边界）】里的单票上限（不是骨架里的历史数字）；超限减仓按配置值算，不得引用骨架旧值。' +
@@ -215,6 +229,12 @@ export async function runPrismAnalysis(
     ?? (summary === null
       ? null
       : { limits: { singlePct: null, totalPct: null, note: null }, orders: [], cancel: [], rejects: [], parseError: parsed.parseError })
+  /**
+   * P0-8：解析失败/有委托或计划被丢弃时，**必须让 `run.error` 非空**——
+   * 旧实现只把 `parseError` 藏在 `decision` 里，0 笔会被当成「模型没动作」，用户看不到解析失败。
+   */
+  const parseFailure = parsed.parseError ?? decision?.parseError ?? null
+  const parseErrorText = parseFailure === null ? null : `决策解析失败：${parseFailure}`
   const run: PrismRun = {
     slot,
     day: dayOf(startedAt),
@@ -225,7 +245,7 @@ export async function runPrismAnalysis(
     analyses,
     summary,
     decision,
-    error: summaryError,
+    error: summaryError ?? parseErrorText,
     codeVersion: base.codeVersion,
     mandateHash: base.mandateHash,
   }

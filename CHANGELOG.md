@@ -11,6 +11,31 @@
 
 ---
 
+## v0.260.0 — 棱镜决策链 P0 引擎正确性（第一批）
+
+`npm run check` **2033 / 2033 × 2 时区** + build（73 项）+ `tsc` 0。设计依据：`docs/PRD-PRISM-PROMPT-V2.md`；评审：`docs/REVIEW-PRISM-DECISION-LOGIC.md`。
+
+### 权限与账户
+- P0-1 总仓上限只认 settings：模型 `limits.totalPct` 不再参与裁剪；未配置 `maxPosPct` ⇒ 安全默认 **95%**（`DEFAULT_MAX_POS_PCT`），`limits` 回显引擎值。
+- P0-2 账户快照缺价一律 `—` + 原因，不再用摊薄成本冒充市值；市值/总资产/仓位/可买额度同一口径。
+- P0-3 新增 `buyBudgetOf`：现金 − 最低现金留存 − 费用预留，再按 100 股整手向下取整；提示词只给元，不把参考价股数写进快照。
+- P0-11 行业上限只认 `settings.industryLimits`；模型 `limits.byIndustry` 只回显，不再把“当前暴露”当上限冻结板块。
+
+### 执行闸门
+- P0-7 一次性清仓允许零股：`sell` 且 `shares === 持仓` 时 120 股可全卖；其余仍要求 100 股整数倍。
+- P0-8 `parseDecisionDetailed` 的 `parseError`/丢弃项抬升为 `run.error`，不再把解析失败当“模型没动作”。
+- P0-10 候选池白名单：`orders.secid` 必须是“持仓 + 可交易自选”，池外拒单并写原因。
+- P0-5b `evaluateAutoT` 支持 ETF 免印花税，T 门槛不再多算 0.1%。
+
+### 做T 与上下文
+- P0-5 `autoTContextOf` 改用 `factorMetricsOf` + `date<今日` 已完成 bar；ATR/分位/振幅/价差全部引用 `AUTO_T_RULES`，删除提示词里的 1.5%/3% 硬编码。
+- P0-4 提示词注入【本轮时点与节奏】：决策周期、轮次（开盘计划/常规执行）、触发时点、距收盘。
+- P1-3 支持 `tPlans[].pairId` 回显：条件不变保留原腿，不再因 1 分钱漂移逐轮重挂；提示词同步改为“条件不变优先保留”。
+- 每日 T 计划上限把 `aborted` 也计入，避免同标的连续绕过 2 次/日。
+- P1-7a 新闻改重要优先 + 8K 字符上限，超出部分报数量。
+
+### 验证
+`npm run check` **2033 / 2033 × 2 时区** + build 73 + `tsc` 0；新增 `prismDecisionP0.test.ts` 17 条。
 ## v0.259.3 — 修「做T 很久不触发」：昨日已成交腿把今日计划全部拦住
 
 `npm run check` **2016 / 2016 × 2 时区** + build（73 项）+ `tsc` 0。

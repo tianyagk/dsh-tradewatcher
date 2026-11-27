@@ -83,7 +83,8 @@ test('④ 自动 run 路径落单并写 placement（只写 runs ⇒ 败）', asy
       },
     }
     const get = (name: string): unknown => name === 'llm' ? llm : name === 'agentDefaultModel' ? { currentSelection: () => ({ provider: 'p', model: 'm' }) } : undefined
-    const data = { portData: () => ({ groups: [], items: [] }), watchData: () => ({ groups: [], items: [] }), ledgerEntries: () => [] }
+    // P0-10：候选池 = 持仓 + 可交易自选 ⇒ 下单标的必须在自选里（池外会被引擎拒单）
+    const data = { portData: () => ({ groups: [], items: [] }), watchData: () => ({ groups: [], items: [{ id: 'w1', groupId: 'g1', secid: '1.600519', name: '贵州茅台', createdAt: 1 }] }), ledgerEntries: () => [] }
     const quotes = async () => ({ '1.600519': { name: '贵州茅台', price: 10, prev: 10 } })
     const run = await runPrismForSlot({ store, trading, data: data as never, get, quotes: quotes as never, now: () => Date.parse('2026-10-23T14:59:09+08:00') }, '09:35')
     assert.notEqual(run.placement, undefined, '每个 run 必须有 placement')

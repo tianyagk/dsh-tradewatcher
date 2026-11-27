@@ -73,6 +73,8 @@ export interface AutoTGateInput {
   nowHHMM?: number
   /** 涨跌停锁死（买不进/卖不出） */
   limitLocked?: boolean
+  /** 标的为 ETF ⇒ 卖出免印花税（P0-5b） */
+  isEtf?: boolean
 }
 
 export interface AutoTGateResult {
@@ -108,8 +110,7 @@ export function evaluateAutoT(input: AutoTGateInput): AutoTGateResult {
 
   const spreadPct = input.buyPrice > 0 ? (input.sellPrice / input.buyPrice - 1) * 100 : null
   const gross = (input.sellPrice - input.buyPrice) * input.shares
-  const isEtf = false
-  const fees = feeRoundTripOf(input.buyPrice, input.sellPrice, input.shares, isEtf)
+  const fees = feeRoundTripOf(input.buyPrice, input.sellPrice, input.shares, input.isEtf === true)
   const netYuan = Math.round((gross - fees) * 100) / 100
   const extra = { netYuan, spreadPct }
 

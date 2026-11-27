@@ -26,7 +26,8 @@ test('账户快照 7 项齐全（少一项 ⇒ 败）', () => {
   assert.match(snapshot, /现金：1\.12 元/)
   assert.match(snapshot, /持仓市值：\d+\.\d{2} 元/)
   assert.match(snapshot, /当前仓位占比：\d+\.\d{2}%/)
-  assert.match(snapshot, /可买额度：1\.12 元/)
+  // P0-3：可买额度不再等于现金——现金 1.12 扣掉费用预留（最低佣金 5 元）后为 0
+  assert.match(snapshot, /可买额度：0\.00 元（现金 1\.12 − 最低现金留存 0\.00 − 费用预留 5\.00/)
   assert.match(snapshot, /当日已成交笔数：1 笔/)
   assert.match(snapshot, /未成交挂单：2 笔/)
   const injected = snapshot.replace('现金：', '')

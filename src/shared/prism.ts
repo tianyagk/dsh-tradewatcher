@@ -344,6 +344,8 @@ export interface PrismDecision {
   tPlans?: Array<{
     secid: string; direction: 'buy-first' | 'sell-first'
     buyPrice: number; sellPrice: number; shares: number
+    /** P1-3：回显已有计划的 pairId ⇒ 引擎保留该腿（条件不变不要逐轮重挂） */
+    pairId?: string
     observe?: string | null; reasoning?: string | null; conclusion?: string | null
   }>
   /** 引擎拒绝的委托（盘后/资金/约束），带原因；不是「模型没动作」 */

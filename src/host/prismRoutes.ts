@@ -13,7 +13,7 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { PluginWebRoute } from './context.ts'
 import type { AutoTFile, AutoTPlanRec, AutoTResultRec, PrismStore } from './prismStore.ts'
-import { LedgerUnreadableError, PrismTradingStore, applyFeeCorrection, avgCostFromHistory, feesOf, clampDecision, copyAtCost, dayStartMismatchOf, equityPointOf, isEtfName, matchTick, placeDecision, productKeyOf, realizedFromIdentity, rebuildFromOrders, upsertEquity, type QuoteLite } from './prismAccount.ts'
+import { COMMISSION_MIN, COMMISSION_RATE, DEFAULT_MAX_POS_PCT, TRANSFER_RATE, LedgerUnreadableError, PrismTradingStore, applyFeeCorrection, avgCostFromHistory, feesOf, clampDecision, copyAtCost, dayStartMismatchOf, equityPointOf, isEtfName, matchTick, placeDecision, productKeyOf, realizedFromIdentity, rebuildFromOrders, upsertEquity, type QuoteLite } from './prismAccount.ts'
 import { dataHome, type DataStore } from './store.ts'
 import type { PrismAccount, PrismDecision, PrismFill, PrismOrder, PrismRun, PrismSettings, PrismState } from '../shared/prism.ts'
 import { PRISM_INTERVAL_OPTIONS, PRISM_MAX_TIMES, PRISM_SKELETON_MAX } from '../shared/prism.ts'
@@ -24,7 +24,6 @@ import { isValidSecid, readPrismLedger } from './prismDeskWrite.ts'
 import { backfillNews, incrementalNews } from './prismNews.ts'
 import { runPrismAnalysis, type PrismInputs } from './prismPipeline.ts'
 import { fetchIndustryOverview, fetchKline, fetchQuotes, fetchTrend, fetchValuationBatch } from './em.ts'
-import { atrFromBars } from './atr.ts'
 import { factorMetricsOf } from './prismFactors.ts'
 import { AUTO_T_RULES, evaluateAutoT } from './prismGates.ts'
 import { appendFactorLog, pruneFactorLogs, type FactorLogEntry } from './prismFactorLog.ts'
@@ -71,39 +70,146 @@ const readBody = async (req: IncomingMessage): Promise<unknown> => {
   return JSON.parse(text) as unknown
 }
 
-/** 账户快照：七项数字/单位必须同时出现（提示词用，缺项写 — 与原因） */
+/** 买入费用预留口径：一笔买入的佣金（万 3，最低 5 元）+ 过户费（万 0.1）；印花税只在卖出收 */
+const BUY_FEE_RATE = COMMISSION_RATE + TRANSFER_RATE
+
+const floor2 = (n: number): number => Math.floor(n * 100) / 100
+const ceil2 = (n: number): number => Math.ceil(n * 100) / 100
+const round2 = (n: number): number => Math.round(n * 100) / 100
+
+export interface BuyBudgetInput {
+  cash: number
+  /** 总资产（现金 + 实时市值）；缺价不可算 ⇒ null */
+  totalAssets: number | null
+  /** 持仓市值（算总仓剩余空间用）；缺价不可算 ⇒ null */
+  marketValue?: number | null
+  /** 最低现金留存（%）：缺省/0 ⇒ 不扣 */
+  minCashPct?: number | null
+  /** 总仓上限（%）：缺省 ⇒ 不按总仓限制（P0-1：只认 settings 值） */
+  maxPosPct?: number | null
+  /** 整手折算参考价（元/股）；缺省 ⇒ 只按分取整 */
+  refPrice?: number | null
+}
+
+/**
+ * P0-3 可买额度：**引擎算，模型只读**。
+ *
+ * `可买额度 = min(现金 − 最低现金留存 − 费用预留, 总仓剩余空间)`，再按 100 股整手向下取整。
+ * - 最低现金留存 = 总资产 × `minCashPct`；总资产不可算（持仓缺现价）⇒ 整条写 `—` + 原因；
+ * - 费用预留 = max(最低佣金 5 元, 可花金额 × (佣金万 3 + 过户万 0.1))，向上取整（宁可少买，不可超支）；
+ * - 总仓剩余 = 总资产 × `maxPosPct` − 持仓市值；未配置 `maxPosPct` ⇒ 不限制（不拿模型自报值补位）。
+ */
+export interface BuyBudget {
+  cash: number
+  minCashReserve: number
+  feeReserve: number
+  /** 现金侧额度（已扣最低现金留存与费用预留） */
+  cashBudget: number
+  /** 总仓剩余空间（未配置 maxPosPct 或不可算 ⇒ null） */
+  totalRoom: number | null
+  /** 最终额度（按整手向下取整，元） */
+  yuan: number
+  /** 按参考价能买的最大整手股数（无参考价 ⇒ null） */
+  shares: number | null
+  refPrice: number | null
+  /** 受哪个维度限制 */
+  limitedBy: 'cash' | 'total'
+  /** 不可算原因（非 null ⇒ 快照写 `—` + 原因，不拿 0 冒充） */
+  reason: string | null
+}
+
+export function buyBudgetOf(input: BuyBudgetInput): BuyBudget {
+  const cash = Math.max(0, Number.isFinite(input.cash) ? input.cash : 0)
+  const totalAssets = typeof input.totalAssets === 'number' && Number.isFinite(input.totalAssets) && input.totalAssets > 0 ? input.totalAssets : null
+  let reason: string | null = null
+  let minCashReserve = 0
+  if (typeof input.minCashPct === 'number' && input.minCashPct > 0) {
+    if (totalAssets === null) reason = '总资产不可算（持仓缺现价），无法扣最低现金留存'
+    else minCashReserve = round2(totalAssets * input.minCashPct / 100)
+  }
+  const spendable = Math.max(0, cash - minCashReserve)
+  const feeReserve = spendable > 0 ? ceil2(Math.max(COMMISSION_MIN, spendable * BUY_FEE_RATE)) : 0
+  const cashBudget = Math.max(0, floor2(spendable - feeReserve))
+  let totalRoom: number | null = null
+  if (typeof input.maxPosPct === 'number' && totalAssets !== null) {
+    if (typeof input.marketValue !== 'number' || !Number.isFinite(input.marketValue)) {
+      reason = reason ?? '持仓市值不可算（缺现价），无法算总仓剩余空间'
+    } else {
+      totalRoom = Math.max(0, round2(totalAssets * input.maxPosPct / 100 - input.marketValue))
+    }
+  }
+  const limit = totalRoom === null ? cashBudget : Math.min(cashBudget, totalRoom)
+  const refPrice = typeof input.refPrice === 'number' && Number.isFinite(input.refPrice) && input.refPrice > 0 ? input.refPrice : null
+  const shares = refPrice === null ? null : Math.floor(limit / (refPrice * 100)) * 100
+  const yuan = refPrice === null ? floor2(limit) : floor2(shares! * refPrice)
+  return {
+    cash, minCashReserve, feeReserve, cashBudget, totalRoom, yuan, shares, refPrice,
+    limitedBy: totalRoom !== null && totalRoom < cashBudget ? 'total' : 'cash',
+    reason,
+  }
+}
+
+/**
+ * 账户快照：七项数字/单位必须同时出现（提示词用，缺项写 — 与原因）。
+ *
+ * P0-2：**缺价不再用成本冒充市值**——与 `clampDecision` 的实时价口径一致：
+ * 任一持仓缺现价 ⇒ 市值/总资产/仓位占比/可买额度 一律 `—` + 原因（不拿摊薄成本算权重）。
+ * P0-3：`可买额度` 由 `buyBudgetOf` 算好（扣最低现金留存、费用预留、整手），模型不再自己推。
+ */
 export function accountSnapshotOf(
   account: PrismAccount,
   prices: Readonly<Record<string, number | null>>,
   fills: readonly PrismFill[],
   pendingCount: number,
   now: number = Date.now(),
+  options: { minCashPct?: number | null; maxPosPct?: number | null; refPrice?: number | null } = {},
 ): string {
-  const value = account.positions.reduce((sum, p) => sum + p.qty * (prices[p.secid] ?? p.cost), 0)
-  const total = account.cash + value
-  const weight = total > 0 ? (value / total) * 100 : null
+  const missing = account.positions.filter((p) => typeof prices[p.secid] !== 'number' || !(prices[p.secid]! > 0))
+  const missingText = missing.map((p) => p.name).join('、')
+  const value = account.positions.reduce((sum, p) => {
+    const px = prices[p.secid]
+    return sum + (typeof px === 'number' && px > 0 ? p.qty * px : 0)
+  }, 0)
+  const total = missing.length === 0 ? account.cash + value : null
+  const weight = total !== null && total > 0 ? (value / total) * 100 : null
+  const budget = buyBudgetOf({
+    cash: account.cash,
+    totalAssets: total,
+    marketValue: total === null ? null : value,
+    minCashPct: options.minCashPct ?? null,
+    // P0-1：未配置时用引擎安全默认（与 clampDecision 的 effectiveTotal 同一个常量）
+    maxPosPct: typeof options.maxPosPct === 'number' ? options.maxPosPct : DEFAULT_MAX_POS_PCT,
+    // P0-3：只用来把额度折成整手（元），**不输出股数**——股数按目标标的现价在裁剪时算
+    refPrice: options.refPrice ?? null,
+  })
+  const budgetText = budget.reason !== null
+    ? `—（${budget.reason}）`
+    : `${budget.yuan.toFixed(2)} 元（现金 ${budget.cash.toFixed(2)} − 最低现金留存 ${budget.minCashReserve.toFixed(2)} − 费用预留 ${budget.feeReserve.toFixed(2)}`
+      + `${budget.totalRoom === null ? '' : `；总仓上限剩余 ${budget.totalRoom.toFixed(2)}`}`
+      + `${budget.refPrice === null ? '；未取到参考价，未按整手折算' : '；按 100 股整手向下取整（股数按目标标的现价算）'}）`
   const today = dayOf(now)
   const filledToday = fills.filter((f) => dayOf(f.at) === today).length
   return [
-    `总资产：${total.toFixed(2)} 元`,
+    `总资产：${total === null ? `—（${missing.length} 只持仓缺现价：${missingText}；不拿成本冒充市值）` : `${total.toFixed(2)} 元`}`,
     `现金：${account.cash.toFixed(2)} 元`,
-    `持仓市值：${value.toFixed(2)} 元`,
-    `当前仓位占比：${weight === null ? '—（总资产为 0）' : `${weight.toFixed(2)}%`}`,
-    `可买额度：${account.cash.toFixed(2)} 元`,
+    `持仓市值：${total === null ? `—（缺现价未计入：${missingText}）` : `${value.toFixed(2)} 元`}`,
+    `当前仓位占比：${weight === null ? (total === null ? '—（同上，缺现价）' : '—（总资产为 0）') : `${weight.toFixed(2)}%`}`,
+    `可买额度：${budgetText}`,
     `当日已成交笔数：${filledToday} 笔`,
     `未成交挂单：${pendingCount} 笔`,
     '棱镜持仓明细（模拟盘，权重 = 市值 ÷ 总资产）：',
     ...(account.positions.length === 0
       ? ['—（空仓）']
       : account.positions.map((p) => {
-        const mv = p.qty * (prices[p.secid] ?? p.cost)
-        const w = total > 0 ? (mv / total) * 100 : null
         const px = prices[p.secid]
+        const hasPrice = typeof px === 'number' && px > 0
+        const mv = hasPrice ? p.qty * px : null
+        const w = mv !== null && total !== null && total > 0 ? (mv / total) * 100 : null
         const avg = typeof (p as { avgCost?: number }).avgCost === 'number' ? (p as { avgCost?: number }).avgCost as number : null
         const costText = avg === null
           ? `摊薄成本 ${p.cost.toFixed(3)}（无买入均价，止损暂按此值）`
           : `成本（止损口径=买入均价） ${avg.toFixed(3)}；摊薄成本 ${p.cost.toFixed(3)}（仅展示，不用于止损）`
-        return `- ${p.name}（${p.secid}）：${p.qty} 股（可卖 ${p.available} 股），${costText}，现价 ${px === null || px === undefined ? '—（未取到）' : px.toFixed(3)}，市值 ${mv.toFixed(2)}，权重 ${w === null ? '—' : `${w.toFixed(2)}%`}`
+        return `- ${p.name}（${p.secid}）：${p.qty} 股（可卖 ${p.available} 股），${costText}，现价 ${hasPrice ? (px as number).toFixed(3) : '—（未取到现价）'}，市值 ${mv === null ? '—（缺现价，不用成本冒充）' : mv.toFixed(2)}，权重 ${w === null ? '—' : `${w.toFixed(2)}%`}`
       })),
   ].join('\n')
 }
@@ -354,11 +460,11 @@ export function limitsTextOf(settings: {
     `单票上限：${pct(settings.perStockPct)}（limits.singlePct 必须填这个值）`,
     `单票止损线：${pct(settings.stopLossPct)}`,
     `单笔金额上限：${yuan(settings.perOrderYuan)}`,
-    `最大总仓位：${pct(settings.maxPosPct)}`,
+    `最大总仓位：${typeof settings.maxPosPct === 'number' ? `${settings.maxPosPct}%（用户配置）` : `${DEFAULT_MAX_POS_PCT}%（默认值；maxPosPct 未设置）`}（limits.totalPct 回显该值；引擎按此裁剪）`,
     `日回撤熔断：${pct(settings.maxDDPct)}`,
-    `最低现金留存：${pct(settings.minCashPct)}`,
+    `最低现金留存：${pct(settings.minCashPct)}（引擎已从「可买额度」里扣掉，不得再加回）`,
     `单板块上限：${ind}`,
-    '（与研判骨架里的旧数值冲突时，一律以本段配置为准）',
+    '（与研判骨架里的旧数值冲突时，一律以本段配置为准；limits 只回显本段，不得自行推导）',
   ].join('\n')
 }
 
@@ -385,31 +491,43 @@ async function candidatesCachedOf(deps: PrismRouteDeps, watch: ReadonlyArray<{ s
   return text
 }
 
-/** 自动做T 上下文：把 ATR14 / 20 日振幅随标的直接给模型，避免「缺数据无法验证门槛」 */
-async function autoTContextOf(deps: PrismRouteDeps, account: PrismAccount): Promise<string> {
+/**
+ * 自动做T 上下文：把 ATR14 / ATR 分位 / 日均振幅随标的直接给模型，避免「缺数据无法验证门槛」。
+ *
+ * P0-5：与【因子表】**同一口径**——`factorMetricsOf` + 只用已完成 bar（`date < 今日`），
+ * 不再自己用 30 根 K 线（含当日未完成 bar）算 ATR/振幅；门槛数字全部从 `AUTO_T_RULES` 派生，
+ * 提示词里不再写 1.5% / 3% 这类硬编码常量。
+ */
+export async function autoTContextOf(deps: PrismRouteDeps, account: PrismAccount): Promise<string> {
   const cfg = deps.store.settings().autoT
   const anyOn = Object.values(cfg?.positions ?? {}).some((v) => v?.enabled === true)
   if (!anyOn) return '【自动做T·可计划标的】未开启（不要输出 tPlans，给空数组）'
   const rows = account.positions.filter((p) => cfg.positions?.[p.secid]?.enabled === true && p.qty > 0)
   if (rows.length === 0) return '【自动做T·可计划标的】无（没有开启做T的持仓；tPlans 给空数组）'
   const load = deps.kline ?? fetchKline
+  const today = dayOf((deps.now ?? Date.now)())
+  const pct = (v: number | null): string => (v === null ? '—' : `${v.toFixed(2)}%`)
   const lines = await Promise.all(rows.map(async (p) => {
     const base = `- ${p.name}（${p.secid}）：持仓 ${p.qty}，可卖 ${p.available}，买入均价 ${p.avgCost ?? p.cost}`
     try {
-      const k = await load(p.secid, 101, 30, 1)
-      const bars = (k?.days ?? []).map((d) => ({ high: d.high, low: d.low, close: d.close }))
-      const atr = atrFromBars(bars, 14)
-      const last = bars.at(-1)
-      const win = bars.slice(-20)
-      const amp = last !== undefined && win.length >= 20
-        ? ((Math.max(...win.map((b) => b.high)) - Math.min(...win.map((b) => b.low))) / last.close) * 100
-        : null
-      return `${base}，ATR14 ${atr === null ? '—（日K不足15根）' : atr.pct.toFixed(2) + '%'}，20日振幅 ${amp === null ? '—（日K不足20根）' : amp.toFixed(2) + '%'}`
+      const k = await load(p.secid, 101, 140, 1)
+      // 与 factorRowsOf 完全同口径：剔除当日未完成 bar（date < 今日），再用同一个 factorMetricsOf
+      const bars = (k?.days ?? []).filter((b) => b.date < today)
+      const m = factorMetricsOf(bars, /ETF|基金/i.test(p.name) ? 'etf' : 'stock')
+      if (m === null) return `${base}，ATR14 —（无已完成日K），ATR分位 —（同上），日均振幅 —（同上）`
+      return `${base}，ATR14 ${pct(m.atrPct)}（引擎门槛 ≥${AUTO_T_RULES.minAtrPct}%），ATR分位 ${m.atrRank120 === null ? '—' : m.atrRank120.toFixed(1)}（门槛 ≥${AUTO_T_RULES.minAtrRank}），日均振幅 ${pct(m.amp20Pct)}（门槛 ≥${AUTO_T_RULES.minAmpPct}%），已完成 bar ${m.bars} 根`
     } catch (error) {
-      return `${base}，ATR14 —（${String((error as Error)?.message ?? error).slice(0, 30)}），20日振幅 —（同上）`
+      return `${base}，ATR14 —（${String((error as Error)?.message ?? error).slice(0, 30)}），ATR分位 —（同上），日均振幅 —（同上）`
     }
   }))
-  return ['【自动做T·可计划标的】（只对这些持仓给 tPlans；ATR14 与 20 日振幅已算好，直接用）', ...lines].join('\n')
+  const activePlans = (deps.trading?.autoT === undefined ? [] : (await deps.trading.autoT()).plans)
+    .filter((p) => p.day === today && (p.status === 'waiting' || p.status === 'planned'))
+    .map((p) => `- ${p.name}（${p.secid}）pairId=${p.pairId}：${p.direction === 'sell-first' ? '反T' : '正T'} ${p.shares} 份 @${p.buyPrice}/${p.sellPrice}；条件不变请回显该 pairId 保留，不要重挂`)
+  return [
+    `【自动做T·可计划标的】（只对这些持仓给 tPlans；指标与【因子表】同口径：已完成 bar、前复权；门槛来自引擎 ${AUTO_T_RULES.version}：ATR14 ≥${AUTO_T_RULES.minAtrPct}%、ATR 分位 ≥${AUTO_T_RULES.minAtrRank}%、日均振幅 ≥${AUTO_T_RULES.minAmpPct}%、价差 ≥${AUTO_T_RULES.minSpreadPct}%，直接用）`,
+    ...lines,
+    ...(activePlans.length === 0 ? [] : ['【今日已有 T 计划（条件不变回显 pairId；条件失效才不报）】', ...activePlans]),
+  ].join('\n')
 }
 
 /** 因子库行数据（前端抽屉用）：持仓 + 自选，PIT 日线，5 分钟缓存 */
@@ -494,10 +612,12 @@ async function factorsCachedOf(deps: PrismRouteDeps, watch: ReadonlyArray<{ seci
   return text
 }
 
-export const prismInputsOf = async (deps: PrismRouteDeps): Promise<PrismInputs> => {
+export const prismInputsOf = async (deps: PrismRouteDeps, slot = ''): Promise<PrismInputs> => {
   const watch = deps.data.watchData().items
   const port = deps.data.portData()
-  const secids = [...new Set([...watch.map((w) => w.secid), ...port.items.map((p) => p.secid)])]
+  const account = deps.trading.account()
+  // P0-2：棱镜持仓的 secid 也必须在本次行情请求里——否则快照只能写「缺现价」（不能拿成本顶）
+  const secids = [...new Set([...watch.map((w) => w.secid), ...port.items.map((p) => p.secid), ...account.positions.map((p) => p.secid)])]
   const quotes = await loadQuotes(deps, secids).catch(() => ({}))
   const assembly = assemblePortfolio(port.groups, port.items, deps.data.ledgerEntries(), quotes)
   const positions = assembly.view.positions
@@ -512,15 +632,27 @@ export const prismInputsOf = async (deps: PrismRouteDeps): Promise<PrismInputs> 
     .map((secid) => {
       const q = quotes[secid]
       if (q === undefined || q.price === null) return `${secid}：—（未取到行情）`
-      return `${q.name ?? secid}：${q.price}（${q.pct === null ? '—' : `${q.pct.toFixed(2)}%`}）`
+      // 缺 pct（上游未给/测试桩）⇒ 写 —，不拿 undefined 崩掉整段上下文
+      const pct = typeof q.pct === 'number' && Number.isFinite(q.pct) ? `${q.pct.toFixed(2)}%` : '—'
+      return `${q.name ?? secid}：${q.price}（${pct}）`
     })
     .join('\n')
   const allOrders = deps.trading.orders()
   const pending = allOrders.filter((o) => o.status === 'pending')
-  const account = deps.trading.account()
   const accountPrices: Record<string, number | null> = {}
   for (const p of account.positions) accountPrices[p.secid] = quotes[p.secid]?.price ?? null
-  const accountSnapshot = accountSnapshotOf(account, accountPrices, deps.trading.fills(), pending.length)
+  const settingsNow = deps.store.settings()
+  // P0-3：整手折算参考价 = 可交易候选里最低的现价（对预算的折扣最小）；没有可用行情 ⇒ null（只按分取整）
+  const tradablePrices = secids
+    .filter((secid) => isValidSecid(secid))
+    .map((secid) => quotes[secid]?.price)
+    .filter((v): v is number => typeof v === 'number' && Number.isFinite(v) && v > 0)
+  const accountSnapshot = accountSnapshotOf(account, accountPrices, deps.trading.fills(), pending.length, (deps.now ?? Date.now)(), {
+    minCashPct: settingsNow.minCashPct ?? null,
+    // P0-1：与 clamp 同一个安全默认（未配置 maxPosPct 时按 95% 算总仓剩余）
+    maxPosPct: typeof settingsNow.maxPosPct === 'number' ? settingsNow.maxPosPct : DEFAULT_MAX_POS_PCT,
+    refPrice: tradablePrices.length === 0 ? null : Math.min(...tradablePrices),
+  })
   const pendingText = pending.length === 0
     ? '—'
     : pending.map((o) => `${o.id} ${o.side === 'buy' ? '买' : '卖'} ${o.name} ${o.shares}@${o.price}`).join('\n')
@@ -535,10 +667,18 @@ export const prismInputsOf = async (deps: PrismRouteDeps): Promise<PrismInputs> 
         `\n已归类 ${exposure.classifiedPct.toFixed(2)}% + 未归类 ${exposure.unclassifiedPct.toFixed(2)}% = 100.00%`
   // 今日（北京时间）已被风控拒绝的委托：模型必须看见上一轮为何被拒，避免按周期重复提交
   const rejectedText = rejectedTodayTextOf(rejectedTodayOf(allOrders, dayOf((deps.now ?? Date.now)()), deps.store.runs()))
+  const stRound = deps.store.settings()
+  const nowMs = (deps.now ?? Date.now)()
+  const hm = hhmmOf(nowMs)
+  const mins = Number(hm.slice(0, 2)) * 60 + Number(hm.slice(3, 5))
+  const closeMins = mins < 11 * 60 + 30 ? 11 * 60 + 30 : mins < 13 * 60 ? 13 * 60 : 15 * 60
+  const roundType = slot === '09:30' || slot === '13:00' ? '开盘计划' : '常规执行'
+  const roundText = `【本轮时点与节奏】周期 ${stRound.intervalSec ?? 600} 秒；轮次 ${roundType}；触发时点 ${slot || hm}；距收盘 ${Math.max(0, closeMins - mins)} 分钟；当前 ${hm}（北京时间）。短周期只做小调整，不要每轮重写计划；尾盘 30 分钟内不再开新 T。`
   return {
     positions,
     products,
     account: accountSnapshot,
+    round: roundText,
     quotes: `${quoteText}\n【待成交挂单】\n${pendingText}\n【今日已被风控拒绝的委托】\n${rejectedText}`,
     news,
     skeleton: deps.store.skeleton(),
@@ -781,9 +921,14 @@ async function placeAutoTPairs(deps: PrismRouteDeps, run: PrismRun): Promise<voi
       if (cfg.positions?.[plan.secid]?.enabled !== true) continue
       if (blocked.has('*') || blocked.has(plan.secid)) continue
       if (protectedSecids.has(plan.secid)) continue
-      // 每日轮次上限：完成 + 未完成计划合计 ≥2 不再新挂
+      // P1-3：模型回显已有 pairId ⇒ 原腿保留，不按新价重挂
+      if (typeof plan.pairId === 'string') {
+        const echoed = pairs.get(plan.pairId)
+        if (echoed !== undefined && echoed.secid === plan.secid) { keep.add(plan.pairId); continue }
+      }
+      // 每日轮次上限：完成 + 未完成计划合计 ≥2 不再新挂（未完成 = waiting/planned/open-filled；aborted 不计）
       const used = file0.results.filter((r) => r.secid === plan.secid && r.day === day).length +
-        file0.plans.filter((p) => p.secid === plan.secid && p.day === day && (p.status === 'waiting' || p.status === 'planned')).length
+        file0.plans.filter((p) => p.secid === plan.secid && p.day === day && p.status !== 'done' && p.status !== 'aborted').length
       if (used >= 2) continue
       const pos = account.positions.find((p) => p.secid === plan.secid)
       if (pos === undefined) continue
@@ -800,7 +945,7 @@ async function placeAutoTPairs(deps: PrismRouteDeps, run: PrismRun): Promise<voi
         const gate = evaluateAutoT({
           metrics, buyPrice: plan.buyPrice, sellPrice: plan.sellPrice, shares: cap, direction: plan.direction,
           cash: account.cash, available: pos.available, positionQty: pos.qty,
-          pendingShares: 0, nowHHMM: Number(hhmmOf(Date.now()).replace(':', '')),
+          pendingShares: 0, nowHHMM: Number(hhmmOf(Date.now()).replace(':', '')), isEtf: /ETF/i.test(pos.name),
         })
         gateResult = gate
         gateOk = gate.ok
@@ -862,10 +1007,43 @@ export function applyFeeGate(dec: PrismDecision, positions: ReadonlyArray<{ seci
   return { ...dec, orders, rejects }
 }
 
+/**
+ * P0-10 候选池白名单：`orders.secid` 必须属于「**持仓 + 可交易自选**」。
+ *
+ * 与 `candidatesCachedOf` 同口径（持仓永远在内；自选只保留 `isValidSecid` 的沪深 A 股/ETF）。
+ * 池外委托直接拒单并写原因——这是**引擎闸门**，不靠提示词自觉。
+ */
+export function candidatePoolOf(
+  positions: ReadonlyArray<{ secid: string }>,
+  watch: ReadonlyArray<{ secid: string }>,
+): Set<string> {
+  const pool = new Set<string>()
+  for (const p of positions) if (isValidSecid(p.secid)) pool.add(p.secid)
+  for (const w of watch) if (isValidSecid(w.secid)) pool.add(w.secid)
+  return pool
+}
+
+/** 池外拒单：进 `rejects`（带原因），不进 `orders`（不撮合/不写 pending） */
+export function applyCandidatePoolGate(dec: PrismDecision, pool: ReadonlySet<string>): PrismDecision {
+  const orders: PrismDecision['orders'] = []
+  const rejects = [...dec.rejects]
+  for (const o of dec.orders) {
+    if (pool.has(o.secid)) { orders.push(o); continue }
+    rejects.push({
+      secid: o.secid,
+      side: o.side,
+      price: o.price,
+      shares: o.shares,
+      reason: `候选池外标的（不在「持仓 + 可交易自选」内），拒绝下单`,
+    })
+  }
+  return { ...dec, orders, rejects }
+}
+
 export async function runPrismForSlot(deps: PrismRouteDeps, slot: string): Promise<Awaited<ReturnType<typeof runPrismAnalysis>>> {
   // P0-2：账本读不到时，连研判落单都不许开始（先给明确的 400，而不是跑完 LLM 再报错）
   deps.trading.assertWritable('棱镜研判落单')
-  const inputs = await prismInputsOf(deps)
+  const inputs = await prismInputsOf(deps, slot)
   const now = deps.now ?? Date.now
   const run = await runPrismAnalysis(deps.store, slot, inputs, { get: deps.get, model: deps.store.settings().model ?? null, now })
   if (run.decision === null) {
@@ -874,14 +1052,17 @@ export async function runPrismForSlot(deps: PrismRouteDeps, slot: string): Promi
     return run
   }
   const account = deps.trading.account()
+  // P0-10：候选池白名单闸（持仓 + 可交易自选）。池外委托在这里就被拒并留原因，
+  // 不进入后面的裁剪/费用闸/撮合（提示词只是第一道，引擎闸门才是执行点）。
+  const pool = candidatePoolOf(account.positions, deps.data.watchData().items)
+  run.decision = applyCandidatePoolGate(run.decision, pool)
   const quotes = run.decision.orders.length > 0 ? await quoteLiteOf(deps, run.decision.orders.map((o) => o.secid)) : {}
   // 行业归属要覆盖「本轮新开仓」的标的：只查已持仓会让新开仓的行业上限永远不生效（审计 F3）
   const industrySecids = [...new Set([...account.positions.map((p) => p.secid), ...run.decision.orders.map((o) => o.secid)])]
-  const industries = await fetchIndustryOverview(industrySecids).catch(() => ({}))
+  const industries = await (deps.industry ?? fetchIndustryOverview)(industrySecids).catch(() => ({}))
   const settings = deps.store.settings()
-  const decisionIndustry = Array.isArray(run.decision.limits.byIndustry) ? Object.fromEntries(run.decision.limits.byIndustry.map((x) => [x.name, x.limitPct])) : (run.decision.limits.byIndustry ?? {})
-  // 行业上限：**用户配置优先**，模型自报只补未配置的行业（否则模型可自证放宽上限）
-  const limits = { ...run.decision.limits, byIndustry: { ...decisionIndustry, ...(settings.industryLimits ?? {}) } }
+  // 行业上限：**只认用户配置**；模型 `limits.byIndustry` 只回显，不参与裁剪（P0-11）
+  const limits = { ...run.decision.limits, byIndustry: { ...(settings.industryLimits ?? {}) } }
   const eq = deps.trading.equity()
   const lastEq = eq.at(-1)
   const dayDrawdownPct = lastEq !== undefined && lastEq.equity > 0 && account.dayStartEquity !== null
@@ -934,9 +1115,15 @@ export async function runPrismForSlot(deps: PrismRouteDeps, slot: string): Promi
   // 保留裁剪/去重阶段的 rejects（此前被 placeDecision 的 rejects 覆盖 ⇒ 去重闸留痕会消失）
   run.decision = { ...run.decision, rejects: [...run.decision.rejects, ...result.rejects] }
   await placeAutoTPairs(deps, run).catch((error) => { run.error = `自动做T下单失败：${String((error as Error)?.message ?? error)}` })
-  // 单票上限以配置为准：模型自报值可能照抄骨架里的旧数字，落盘前统一成配置值（否则界面显示 20%、实际按 30% 裁）
-  if (typeof settingsNow.perStockPct === 'number') {
-    run.decision = { ...run.decision, limits: { ...run.decision.limits, singlePct: settingsNow.perStockPct } }
+  // P0-1：`limits` 只回显 settings 的权威值（模型自报值既不参与裁剪，也不得落盘冒充上限）。
+  // 未配置 maxPosPct ⇒ 回显引擎安全默认（默认值 95%），与 clamp 使用的 effectiveTotal 一致。
+  run.decision = {
+    ...run.decision,
+    limits: {
+      ...run.decision.limits,
+      singlePct: typeof settingsNow.perStockPct === 'number' ? settingsNow.perStockPct : run.decision.limits.singlePct,
+      totalPct: typeof settingsNow.maxPosPct === 'number' ? settingsNow.maxPosPct : DEFAULT_MAX_POS_PCT,
+    },
   }
   run.placement = result.placement
   await deps.store.replaceRun(run)
@@ -983,9 +1170,7 @@ export function makePrismRoutes(deps: PrismRouteDeps): PluginWebRoute[] {
           const industryData = await industryDataOf(deps, accountView.positions.map((p) => p.secid))
           let exposure
           try {
-            const latestIndustry = store.runs().at(-1)?.decision?.limits.byIndustry
-            const latestIndustryMap = Array.isArray(latestIndustry) ? Object.fromEntries(latestIndustry.map((x) => [x.name, x.limitPct])) : (latestIndustry ?? {})
-            exposure = industryExposureOf(accountView, prices, industryData.map, { ...(settings.industryLimits ?? {}), ...latestIndustryMap }, industryData.reason)
+            exposure = industryExposureOf(accountView, prices, industryData.map, { ...(settings.industryLimits ?? {}) }, industryData.reason)
           } catch (error) {
             exposure = unavailableExposure(`行业暴露计算失败：${String(error).slice(0, 80)}`)
           }

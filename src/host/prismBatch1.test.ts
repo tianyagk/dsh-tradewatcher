@@ -135,7 +135,8 @@ test('P-08 夹掉不重分配：两个买单的总仓不因第一个被裁而变
       { secid: '1.600001', side: 'buy', price: 10, shares: 7000, reason: '' },
     ], cancel: [], rejects: [], parseError: null,
   }
-  const r = clampDecision(d, { cash: 100000, positions: [], limits: d.limits, industries: {}, at })
+  // P0-1：总仓上限只认用户配置（constraints.maxPosPct），模型自报的 limits.totalPct=60 不参与裁剪
+  const r = clampDecision(d, { cash: 100000, positions: [], limits: d.limits, industries: {}, at, constraints: { maxPosPct: 60 } })
   assert.equal(r.decision.orders.reduce((s, o) => s + o.shares * o.price, 0), 60000)
   assert.equal(r.decision.orders[0]?.shares, 6000)
   assert.equal(r.decision.orders.length, 1, '第二个单被拒，不把第一个裁掉的额度补给它')

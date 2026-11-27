@@ -71,6 +71,10 @@ test('④ clampDecision 六维度各一条裁剪用例（缺维度 ⇒ 败）', 
   assert.ok(run({ minCashPct: 99 }).events.some((e) => e.dimension === 'minCash'), 'minCashPct')
   assert.ok(run({ maxDDPct: 2 }, { dayDrawdownPct: -3 }).events.some((e) => e.dimension === 'maxDD'), 'maxDDPct')
   assert.ok(run({ stopLossPct: 5 }, { costs: { '1.510300': 10 } }).events.some((e) => e.dimension === 'stopLoss'), 'stopLossPct')
+  // P0-1（用户口径）：未配置 maxPosPct ⇒ 「未设置」，不套 95%/100 的默认总仓上限
+  // （minCashPct 仍是独立硬顶：上面的 minCash 用例已覆盖）
+  const big: PrismDecision = { ...dec, orders: [{ secid: '1.510300', side: 'buy', price: 4, shares: 60_000, reason: 'x' }] }
+  assert.equal(clampDecision(big, { cash: 200_000, positions: [], limits: { singlePct: null, totalPct: null }, at: 1, constraints: {} }).events.some((e) => e.dimension === 'total'), true, '未配置 maxPosPct ⇒ 默认 95% 总仓上限')
   assert.throws(() => assert.equal(run({}).events.length, 1, '反例上：无约束也裁剪'), /反例上/, '⚠ 反例注入必须失败')
 })
 

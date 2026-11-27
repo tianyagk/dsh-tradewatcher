@@ -109,6 +109,9 @@ test('④ 汇总不是严格 JSON ⇒ decision.parseError 带原文（不是 0 �
     assert.equal(run.decision?.orders.length, 0)
     assert.match(String(run.decision?.parseError), /没有 JSON/)
     assert.notEqual(run.decision, null, '解析失败也必须留 decision 记录')
+    // P0-8：解析失败必须抬升到 run.error（不得静默当成「模型没动作」）
+    assert.match(String(run.error), /决策解析失败/)
+    assert.match(String(run.error), /没有 JSON/)
   } finally {
     await rm(dir, { recursive: true, force: true })
   }

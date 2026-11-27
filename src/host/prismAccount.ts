@@ -49,6 +49,13 @@ export const COMMISSION_RATE = 0.0003
 export const COMMISSION_MIN = 5
 export const STAMP_RATE = 0.001
 export const TRANSFER_RATE = 0.00001
+/**
+ * P0-1：未配置 `maxPosPct` 时引擎使用的**安全默认总仓上限**（%）。
+ *
+ * 模型自报的 `limits.totalPct` 永远不参与裁剪；这个默认值来自引擎（不是模型、不是 100），
+ * 提示词里显示为「95%（默认值）」，避免 `minCashPct=0` 时完全没有总仓上限。
+ */
+export const DEFAULT_MAX_POS_PCT = 95
 
 const money = (n: number): number => Math.round(n * 100) / 100
 
@@ -154,7 +161,17 @@ export interface OrderCheckContext {
 /** 挂单的静态约束（T+1/涨跌停/停牌/整手）；返回拒绝原因或 null */
 export function rejectReasonOf(order: PrismOrder, ctx: OrderCheckContext): string | null {
   if (!(order.price > 0) || !Number.isFinite(order.price)) return '价格无效'
-  if (!(order.shares > 0) || order.shares % 100 !== 0) return '非100股整手'
+  if (!(order.shares > 0)) return '非100股整手'
+  // 必须比「**剩余未成交**股数」：用原始 shares 比较时，部分成交后（如 1000 股成交 789、剩 211）
+  // 会把剩余 211 误判成 T+1 不可卖——而它正是今天可卖的那 211 股（实测 2026-11-24 儒意电影）。
+  const remaining = Math.max(0, order.shares - (order.filledShares ?? 0))
+  /**
+   * P0-7 零股卖出：**一次性清仓**允许不是 100 的整数倍（A 股规则：零股可一次性卖出）。
+   * 判据 = 委托股数（或已部分成交后的剩余）与「当前持仓」完全相同。
+   * 其余卖出仍要求整手——否则 120 股持仓永远卖不掉（100 股整手 + 20 股零股锁死）。
+   */
+  const fullLiquidation = order.side === 'sell' && ctx.positionQty > 0 && (order.shares === ctx.positionQty || remaining === ctx.positionQty)
+  if (order.shares % 100 !== 0 && !fullLiquidation) return '非100股整手（仅一次性清仓可含零股）'
   if (ctx.suspended) return '停牌不可成交'
   const { upper, lower } = ctx.limits
   if (upper !== null && lower !== null) {
@@ -164,9 +181,6 @@ export function rejectReasonOf(order: PrismOrder, ctx: OrderCheckContext): strin
   }
   if (order.side === 'sell') {
     if (ctx.positionQty <= 0) return '无持仓不可卖'
-    // 必须比「**剩余未成交**股数」：用原始 shares 比较时，部分成交后（如 1000 股成交 789、剩 211）
-    // 会把剩余 211 误判成 T+1 不可卖——而它正是今天可卖的那 211 股（实测 2026-11-24 儒意电影）。
-    const remaining = Math.max(0, order.shares - (order.filledShares ?? 0))
     if (ctx.availableQty < remaining) return `T+1 不可卖（今日可卖 ${ctx.availableQty} 股，剩余 ${remaining} 股）`
   }
   return null
@@ -503,7 +517,12 @@ export function parseDecisionDetailed(text: string | null): { decision: PrismDec
   try {
     const raw = JSON.parse(source) as Record<string, unknown>
     const limitsRaw = (raw['limits'] ?? {}) as Record<string, unknown>
-    const ordersRaw = Array.isArray(raw['orders']) ? raw['orders'] : []
+    // P0-8：`orders` 缺省 ⇒ []（模型明确没有委托）；**出现过但不是数组** ⇒ 解析失败，不得静默成 0 笔。
+    const ordersField = raw['orders']
+    const ordersAbsent = ordersField === undefined || ordersField === null
+    const ordersRaw = Array.isArray(ordersField) ? ordersField : []
+    const shapeErrors: string[] = []
+    if (!ordersAbsent && !Array.isArray(ordersField)) shapeErrors.push(`orders 不是数组（实际 ${typeof ordersField}）`)
     const orders = ordersRaw
       .filter((o): o is Record<string, unknown> => o !== null && typeof o === 'object')
       .map((o) => ({
@@ -518,7 +537,6 @@ export function parseDecisionDetailed(text: string | null): { decision: PrismDec
       .map((o) => ({ ...o, side: o.side as 'buy' | 'sell' }))
     const cancel = Array.isArray(raw['cancel']) ? raw['cancel'].filter((x): x is string => typeof x === 'string') : []
     const dropped = ordersRaw.length - orders.length
-    const parseError = dropped > 0 ? `orders 中有 ${dropped} 笔字段非法被丢弃（原始 ${ordersRaw.length} 笔）` : null
     const byIndustryRaw = limitsRaw['byIndustry']
     const byIndustry: Record<string, number> = {}
     if (byIndustryRaw !== null && typeof byIndustryRaw === 'object' && !Array.isArray(byIndustryRaw)) {
@@ -526,18 +544,28 @@ export function parseDecisionDetailed(text: string | null): { decision: PrismDec
         if (typeof v === 'number' && Number.isFinite(v) && v >= 0 && v <= 100) byIndustry[name] = v
       }
     }
-    const tPlansRaw = Array.isArray(raw['tPlans']) ? raw['tPlans'] : []
+    const tPlansField = raw['tPlans']
+    const tPlansRaw = Array.isArray(tPlansField) ? tPlansField : []
+    if (tPlansField !== undefined && tPlansField !== null && !Array.isArray(tPlansField)) shapeErrors.push(`tPlans 不是数组（实际 ${typeof tPlansField}）`)
     const tPlans = tPlansRaw
       .filter((p): p is Record<string, unknown> => p !== null && typeof p === 'object')
       .map((p) => ({
         secid: typeof p['secid'] === 'string' ? p['secid'] : '',
         direction: p['direction'] === 'sell-first' ? ('sell-first' as const) : ('buy-first' as const),
         buyPrice: Number(p['buyPrice']), sellPrice: Number(p['sellPrice']), shares: Math.round(Number(p['shares'])),
+        pairId: typeof p['pairId'] === 'string' ? p['pairId'] : undefined,
         observe: typeof p['observe'] === 'string' ? p['observe'] : null,
         reasoning: typeof p['reasoning'] === 'string' ? p['reasoning'] : null,
         conclusion: typeof p['conclusion'] === 'string' ? p['conclusion'] : null,
       }))
       .filter((p) => /^[0-9]{1,3}\.[A-Za-z0-9]+$/.test(p.secid) && p.buyPrice > 0 && p.sellPrice > p.buyPrice && p.shares >= 100 && p.shares % 100 === 0)
+    // 只有「明确想落单」（shares > 0）的 tPlan 被丢弃才算解析问题；shares=0 的说明项属已知容忍项
+    const tPlansIntended = tPlansRaw.filter((p) => p !== null && typeof p === 'object' && Number((p as Record<string, unknown>)['shares']) > 0).length
+    const tPlansDropped = Math.max(0, tPlansIntended - tPlans.length)
+    const problems: string[] = [...shapeErrors]
+    if (dropped > 0) problems.push(`orders 中有 ${dropped} 笔字段非法被丢弃（原始 ${ordersRaw.length} 笔）`)
+    if (tPlansDropped > 0) problems.push(`tPlans 中有 ${tPlansDropped} 笔字段非法被丢弃（原始 ${tPlansIntended} 笔）`)
+    const parseError = problems.length > 0 ? problems.join('；') : null
     const decision: PrismDecision = {
       limits: {
         singlePct: typeof limitsRaw['singlePct'] === 'number' && limitsRaw['singlePct'] >= 0 && limitsRaw['singlePct'] <= 100 ? limitsRaw['singlePct'] : null,
@@ -556,7 +584,8 @@ export function parseDecisionDetailed(text: string | null): { decision: PrismDec
       rejects: [],
       parseError,
     }
-    return { decision, parseError: null }
+    // P0-8：`parseError` 同时从返回值抬升到 `run.error`（调用方不用再翻 decision）
+    return { decision, parseError }
   } catch {
     return { decision: null, parseError: source.slice(0, 4000) }
   }
@@ -1389,6 +1418,10 @@ export interface ClampContext {
   cash: number
   /** `name` 用于同产品闸（缺 ⇒ 该持仓不参与判据，并记 skipped） */
   positions: ReadonlyArray<{ secid: string; qty: number; price: number | null; name?: string | null; industry?: string | null; available?: number }>
+  /**
+   * 模型回显的仓位上限：`singlePct` 仅在未配置 `perStockPct` 时兜底；
+   * `totalPct` **不参与裁剪**（P0-1：总仓只认 `constraints.maxPosPct`，模型值只回显）。
+   */
   limits: { singlePct?: number | null; totalPct?: number | null; byIndustry?: PrismIndustryLimits }
   industries?: Record<string, string | null>
   at: number
@@ -1515,9 +1548,16 @@ export function clampDecision(decision: PrismDecision, ctx: ClampContext): Clamp
       const pos = positions.find((p) => p.secid === order.secid)
       // 持仓不存在 ⇒ 不在这里裁（交给下单时的「无持仓不可卖」拒绝，保持旧行为）
       if (pos === undefined) { orders.push(order); continue }
+      const heldQty = Math.max(0, pos.qty)
       // 旧夹具/旧账本没有 available 字段 ⇒ 视为全部可卖（不改变历史行为）
-      const avail = Math.max(0, Math.floor((pos.available ?? pos.qty) / 100) * 100)
-      const wanted = lot(order.shares)
+      const availRaw = Math.max(0, pos.available ?? pos.qty)
+      /**
+       * P0-7：**一次性清仓**（委托股数 = 当前持仓，且今日全部可卖）允许含零股，
+       * 不得再向下取整成 100 的倍数——否则 120 股持仓的「清仓」会被裁成 100 股。
+       */
+      const fullLiquidation = order.shares === heldQty && heldQty > 0 && availRaw >= heldQty
+      const avail = fullLiquidation ? heldQty : Math.floor(availRaw / 100) * 100
+      const wanted = fullLiquidation ? heldQty : lot(order.shares)
       if (avail <= 0) {
         rejected.push({ secid: order.secid, side: 'sell', price: order.price, shares: order.shares, reason: '今日可卖 0 股（T+1），本轮不下单' })
         continue
@@ -1577,13 +1617,15 @@ export function clampDecision(decision: PrismDecision, ctx: ClampContext): Clamp
       const currentIndustry = industryValue(industry) + accepted.filter((x) => x.industry === industry).reduce((sum, x) => sum + x.value, 0)
       dims.push({ dimension: 'industry', max: totalAssets * indLimit / 100, current: currentIndustry, basis: `行业 ${industry} ${indLimit}% × 总资产` })
     }
-    // 总仓上限：配置优先（maxPosPct），模型自报 totalPct 只在未配置时兜底
-    const totalPct = typeof ctx.constraints?.maxPosPct === 'number' ? ctx.constraints.maxPosPct : ctx.limits.totalPct
-    if (!missingPrice && typeof totalPct === 'number' && totalAssets > 0) {
-      const currentTotal = positions.reduce((sum, p) => sum + p.value, 0) + accepted.reduce((sum, x) => sum + x.value, 0)
-      dims.push({ dimension: 'total', max: totalAssets * totalPct / 100, current: currentTotal, basis: `总仓 ${totalPct}% × 总资产${typeof ctx.constraints?.maxPosPct === 'number' ? '（用户配置）' : ''}` })
-    }
+    // 总仓上限：**只认用户配置**（P0-1）。模型自报的 limits.totalPct 只回显、不参与裁剪。
+    // 未配置 maxPosPct ⇒ 安全默认 95%（minCashPct 仍是独立硬顶，不并入 total）。
     const c = ctx.constraints ?? {}
+    const configuredTotal = typeof c.maxPosPct === 'number' ? c.maxPosPct : null
+    const effectiveTotal = configuredTotal ?? DEFAULT_MAX_POS_PCT
+    if (!missingPrice && totalAssets > 0) {
+      const currentTotal = positions.reduce((sum, p) => sum + p.value, 0) + accepted.reduce((sum, x) => sum + x.value, 0)
+      dims.push({ dimension: 'total', max: totalAssets * effectiveTotal / 100, current: currentTotal, basis: `总仓 ${effectiveTotal}% × 总资产${configuredTotal === null ? '（默认值）' : '（用户配置）'}` })
+    }
     // 配置了 perStockPct 时，上面 single 维度已经用它 ⇒ 不再重复加一条同义的 perStock 维度
     if (configuredSingle === null && !missingPrice && typeof c.perStockPct === 'number' && totalAssets > 0) {
       dims.push({ dimension: 'perStock', max: totalAssets * c.perStockPct / 100, current: existing, basis: `单票上限 ${c.perStockPct}% × 总资产` })
