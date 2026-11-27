@@ -756,6 +756,8 @@ async function placeAutoTPairs(deps: PrismRouteDeps, run: PrismRun): Promise<voi
     const pairs = new Map<string, { secid: string; buyPrice: number; sellPrice: number; shares: number; orders: typeof orders }>()
     for (const o of orders) {
       if (o.channel !== 'autoT') continue
+      // 只看今天的 T 腿：昨天的已成交腿不能让今天的同标的计划永久进入 protectedSecids
+      if (o.day !== day) continue
       // 已成交（含部分）的腿也要收进来：有成交的 pair 绝不能撤，否则回补腿会丢
       if (o.status !== 'pending' && !((o.filledShares ?? 0) > 0)) continue
       const key = String(o.pairId)

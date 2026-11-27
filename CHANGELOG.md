@@ -11,6 +11,21 @@
 
 ---
 
+## v0.259.3 — 修「做T 很久不触发」：昨日已成交腿把今日计划全部拦住
+
+`npm run check` **2016 / 2016 × 2 时区** + build（73 项）+ `tsc` 0。
+
+### 根因
+`placeAutoTPairs()` 收集 pairs 时只按 `channel:'autoT'`，**没有按 `day` 过滤**；
+昨天已成交的 T 腿仍带 `filledShares>0` ⇒ 这些标的被加入 `protectedSecids`，
+今天同标的的 tPlans 在进入门槛前就被 `continue` 跳过，**既不挂单也不写 factor 日志/计划记录**。
+实机：11-27 五轮 `tPlans` 1–4 条，`prism-autot.json` 今日 0 条计划、`prism-factor/` 目录都不存在。
+
+### 修法
+pairs 收集增加 `if (o.day !== day) continue`，只保护**当天**已成交的 T 腿；历史腿不再阻止今日计划。
+
+### 验证
+`npm run check` **2016 / 2016 × 2 时区** + build（73 项）+ `tsc` 0。
 ## v0.259.2 — 清仓/碎股卖出豁免费用门槛
 
 `npm run check` **2016 / 2016 × 2 时区** + build（73 项）+ `tsc` 0。
